@@ -12,6 +12,7 @@
 - Agents exist: visitors, residents, crew with basic needs and pathfinding.
 - Economy exists: credits/materials/raw food trade, payroll, hiring/firing.
 - Diagnostics exist: room activation reasons (door/pressure/staff/path).
+- Stability hotfix shipped: crew shift staggering + anti-pingpong rest/emergency behavior for life support response.
 
 Key gaps against vision/product plan:
 - No module/furniture requirements.
@@ -20,6 +21,8 @@ Key gaps against vision/product plan:
 - No detect-dispatch-resolve security pipeline.
 - No workshop/market specialization loop.
 - Pathing lacks reservation/congestion sophistication and recovery behaviors.
+- Full workforce scheduler/planner is deferred to Phase 3+ (current hotfix is rules-based only).
+- Resident-specific behavior layers remain deferred until dedicated resident phase.
 
 ## 3. Phase Size Rules (Context-Window Safe)
 Each phase is split into 1-3 implementation packets with this hard budget:
@@ -65,7 +68,8 @@ Scope:
 - Keep rooms functional as they are (no gating yet).
 
 Initial module set:
-- Bed, Stove, Prep, Table, GrowTray, Terminal, MedBed, Workbench, Stall.
+- Bed (Dorm), Table (Cafeteria), GrowTray (Hydroponics), Terminal (Security).
+- Defer future-room modules until those rooms exist (Kitchen, Medbay, Workshop, Market).
 
 Suggested files:
 - `src/sim/types.ts`
@@ -88,6 +92,17 @@ Scope:
 - Extend room operational checks to include module requirements.
 - Extend room diagnostic text to include missing modules.
 - Update panel UX copy to clarify "painted room" vs "active room".
+- Apply gating only to currently implemented room types in this phase:
+  - Dorm requires Bed
+  - Cafeteria requires Table
+  - Hydroponics requires GrowTray
+  - Security requires Terminal
+
+Deferred module pack (future phase with new rooms):
+- Kitchen: Stove + Prep
+- Medbay: MedBed
+- Workshop: Workbench
+- Market: Stall
 
 Suggested files:
 - `src/sim/sim.ts`
@@ -99,6 +114,28 @@ Definition of done:
 - Required rooms do not activate without required modules.
 - Hover diagnostics identify exact missing requirement in under 5 seconds.
 - Existing staffing/door/pressure checks still work with module checks layered in.
+
+---
+
+## Phase 2.5 - Baseline Variety + Kitchen Strict Chain
+Goal: make short runs feel different and strategic before deeper system expansion.
+
+Scope:
+- Add `Kitchen` room + `Stove` module as a strict bottleneck in the food chain.
+- Enforce `Hydroponics -> Kitchen -> Cafeteria` meal flow.
+- Add per-ship visible visitor manifests and archetype mixes.
+- Add visitor behavior variance (preference, patience, spend, tax sensitivity).
+- Surface demand + archetype distribution in compact UI lines.
+
+Definition of done:
+- Same layout produces meaningfully different outcomes across seeds due manifest mix.
+- No-kitchen layouts lose sustained meal throughput once starter stock drains.
+- Tax slider shows visible tradeoff under shopper-heavy demand (not pure upside).
+- Build and sim regression tests remain green.
+
+Deferred follow-up:
+- `Kitchen Prep` module remains deferred to later content phase.
+- Full trade goods/workshop loop remains Phase 7.
 
 ---
 
@@ -273,3 +310,141 @@ Start with Phase 0, Packet A:
 - Add `npm run test:sim` script to execute scenarios.
 
 This gives fast feedback for all upcoming systems and keeps future phase work small and verifiable.
+
+## 8. Stabilization Milestone (Completed)
+Applied before new room/layer expansion:
+1. Clarity pass:
+- Agent legend, room usage section, crew state breakdown, idle/stall reason diagnostics.
+- Morale contributor strip and aggregated room warning output.
+
+2. Air consequence pass:
+- Deterministic low-air health progression with death and recovery windows.
+- Distressed/critical visualization and death/body counters.
+
+3. Utility/balance observability:
+- Room throughput metrics and failed need-attempt counters.
+- Jobs diagnostics expanded with oldest pending and stalled reason mix.
+- Scenario tests extended for air collapse/recovery and room usage visibility.
+
+## 9. Now-Scope Deferral Ledger (Active)
+This ledger tracks features intentionally removed/hidden from the current playable build so they are restored in the correct phase.
+
+1. Deferred from current build to **Phase 4 / Phase 5**:
+- Full resident simulation as a first-class gameplay population (beyond current internal scaffolding).
+- Resident-driven health/death consequences as a primary loop.
+
+2. Deferred from current build to **Phase 5**:
+- Medical/morgue logistics chains and explicit body transport jobs.
+- Deep injury/recovery treatment flow.
+
+3. Deferred from current build to **Phase 7**:
+- Trade item families (`trade goods`) and market conversion chains.
+
+4. Deferred from current build to **Phase 9**:
+- Always-visible deep diagnostics in sidebar.
+- Rich explainability overlays as default UI (kept available via collapsible advanced sections only for now).
+
+5. Current enforced now-scope:
+- Crew + visitor playable loop only.
+- Active logistics chain limited to food transport.
+- Sidebar prioritizes core operational controls/status; diagnostics are collapsed by default.
+
+6. Pulled forward intentionally (lightweight only):
+- `Lounge` and `Market` room types introduced early as visitor destinations to improve baseline fun/flow.
+- Full trade/production depth for Market remains deferred to **Phase 7**.
+
+## 10. Stability v2 (Implemented)
+Current-scope polish pass applied before further feature expansion:
+
+1. Crew coherence:
+- Replaced fixed crew-priority enum with weighted priorities and preset profiles.
+- Added assignment stickiness to prevent leave/return oscillation.
+- Added retarget-rate diagnostics to quantify thrash.
+
+2. Food-chain reliability:
+- Added starvation-aware staffing floors to favor Hydroponics/Kitchen/Cafeteria when meals/raw buffers are low.
+- Added food-chain blocked warnings in diagnostics.
+
+3. Visitor variety + feedback:
+- Added per-visitor seeded preference jitter (manifest + archetype influenced, not hard-quota split).
+- Added service-failure pressure to morale/incident channel.
+- Added destination-share metrics for scenario validation.
+
+4. Economy explainability:
+- Added `credits/min` gross/payroll/net visibility in panel.
+- Added backing metrics and scenario assertions for accounting consistency.
+
+5. Deferred to future workforce phase:
+- Per-crew specialized roles (maintenance/cook/cleaner splits and role-locked staffing) remains explicitly deferred and tracked.
+
+## 11. Phase 2.6B - Directional Docking + Core Constraints + Rating Split (Implemented)
+Scope added after Phase 2.5 baseline variety:
+
+1. Core + build constraints:
+- Added structural core anchor and distance-scaled build costs.
+- Added soft connectivity enforcement for new build edits.
+
+2. Directional docking:
+- Added explicit dock entities with orientation/lane.
+- Added hard placement validation (outer hull + outward facing + clear approach lane).
+- Added dock approach preview feedback.
+
+3. Lane traffic + typed ships:
+- Added seeded lane profiles by edge.
+- Added typed ships (`tourist`, `trader`) assigned by lane profile.
+- Added dock type filtering controls.
+
+4. Queue + sentiment split:
+- Added dock queue timeout handling.
+- Added `stationRating` as visitor/public reputation channel.
+- Moved visitor dissatisfaction pressure from morale paths to station-rating pressure.
+- Re-scoped morale to crew-only operational condition.
+
+5. Deferred:
+- `industrial` and `military` ship types remain deferred.
+- Their specialized service chains remain deferred with those types.
+
+## 12. Phase 2.6B Hotfix - Dock Zoning + Dock Config Popup + Sealed Edge Docks (Implemented)
+Follow-up usability and stability patch on top of 2.6B:
+
+1. Dock zoning restored:
+- Dock entities are zone-backed clusters (not single-tile only).
+- Zone area now gates ship-size capacity (`small`/`medium`/`large`).
+- One ship occupancy enforced per dock zone.
+
+2. Dock configuration UX:
+- Added click-open Dock Config modal.
+- Modal controls dock facing, allowed ship types, and allowed ship sizes.
+- Size toggles are constrained by zone area capacity.
+
+3. Edge dock pressure behavior:
+- Edge dock tiles are treated as pressure-sealed barriers in pressurization flood-fill.
+- Docks can remain on hull edges without collapsing station oxygen.
+
+4. Deferred unchanged:
+- No new ship families beyond `tourist`/`trader`.
+- No new logistics branches or room families in this hotfix.
+
+## 13. Phase 2.6C Hotfix - Crew Staffing Stickiness + Critical Service Floors (Implemented)
+Stability patch focused on crew assignment coherence for current scope:
+
+1. Crew anti-thrash:
+- Added hard assignment hold windows (`assignmentHoldUntil`) layered over sticky locks.
+- Added explicit `assignedSystem` tracking to preserve valid held assignments.
+- Reduced avoidable retarget churn under normal load.
+
+2. Critical floor staffing:
+- Added non-negotiable staffing floors for life support (low-air) and hydro/kitchen/cafeteria (food starvation).
+- Disabled logistics reserve while critical floors are unmet to prevent avoidable idle crew.
+
+3. Activation hysteresis:
+- Added deactivation grace (`2.5s`) for critical staffed rooms (LifeSupport/Hydroponics/Kitchen/Cafeteria).
+- Prevented false active/inactive flicker caused by transient movement gaps.
+
+4. Diagnostics:
+- Added critical staffing drop and unstaffed-duration metrics.
+- Exposed compact advanced diagnostics for LS/HY/KI staffing and outage seconds.
+- Prioritized critical staffing warnings above generic blocked warnings.
+
+5. Validation:
+- Added scenarios/tests for thrash regression guard, life-support floor hold, and activation hysteresis behavior.

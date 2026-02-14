@@ -32,7 +32,8 @@ export function findPath(
   state: StationState,
   start: number,
   goal: number,
-  allowRestricted: boolean
+  allowRestricted: boolean,
+  occupancyByTile?: Map<number, number>
 ): number[] | null {
   if (start === goal) return [];
 
@@ -69,7 +70,10 @@ export function findPath(
       if (!allowRestricted && state.zones[next] === ZoneType.Restricted && next !== goal) {
         continue;
       }
-      const tentativeG = currentG + 1;
+      const occupancyPenalty = Math.min(3, (occupancyByTile?.get(next) ?? 0) * 0.45);
+      const blockedUntil = state.effects.blockedUntilByTile.get(next) ?? 0;
+      const blockedPenalty = state.now < blockedUntil ? 4 : 0;
+      const tentativeG = currentG + 1 + occupancyPenalty + blockedPenalty;
       if (tentativeG < (gScore.get(next) ?? Number.POSITIVE_INFINITY)) {
         cameFrom.set(next, current);
         gScore.set(next, tentativeG);

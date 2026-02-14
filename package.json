@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-tests.js"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

@@ -22,7 +22,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr 300px;
   gap: 12px;
   min-height: 100vh;
   padding: 12px;
@@ -46,8 +46,9 @@ canvas {
   background: linear-gradient(180deg, var(--panel) 0%, #141d29 100%);
   border: 1px solid #2f3f53;
   border-radius: 8px;
-  padding: 12px;
-  font-size: 14px;
+  padding: 10px;
+  font-size: 13px;
+  overflow: auto;
 }
 
 h1 {
@@ -73,15 +74,32 @@ h1 {
 }
 
 .section {
-  margin-top: 16px;
+  margin-top: 12px;
   border-top: 1px solid #2f3f53;
-  padding-top: 12px;
+  padding-top: 10px;
 }
 
 .panel-first {
   margin-top: 0;
   border-top: 0;
   padding-top: 0;
+}
+
+.top-controls {
+  padding-top: 2px;
+}
+
+.controls-row {
+  display: flex;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: auto;
+  min-width: 84px;
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1.1;
 }
 
 .section-title {
@@ -153,9 +171,36 @@ kbd {
 small {
   color: var(--muted);
   display: block;
-  margin-top: 8px;
+  margin-top: 6px;
   line-height: 1.25;
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.mini-collapse {
+  border-top: 1px dashed rgba(88, 110, 138, 0.45);
+  margin-top: 8px;
+  padding-top: 6px;
+}
+
+.mini-collapse > summary {
+  cursor: pointer;
+  color: #9fb4cd;
+  font-size: 11px;
+  list-style: none;
+  margin-bottom: 4px;
+  user-select: none;
+}
+
+.mini-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mini-collapse > summary::before {
+  content: '▸ ';
+}
+
+.mini-collapse[open] > summary::before {
+  content: '▾ ';
 }
 
 #ops-extra {
@@ -225,6 +270,14 @@ small {
   background: rgba(245, 245, 170, 0.5);
 }
 
+.chip-lounge {
+  background: rgba(196, 140, 255, 0.5);
+}
+
+.chip-market {
+  background: rgba(255, 188, 120, 0.5);
+}
+
 .modal {
   position: fixed;
   inset: 0;
@@ -266,6 +319,20 @@ h2 {
 .ghost-btn {
   width: auto;
   padding: 6px 10px;
+}
+
+.priority-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.priority-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 22px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
 }
 
 @media (max-width: 1100px) {

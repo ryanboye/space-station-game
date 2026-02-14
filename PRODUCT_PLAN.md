@@ -421,3 +421,23 @@ This checklist maps Vision Draft areas to explicit requirement coverage in this 
 ## 15) Immediate Next Step
 With decisions now locked, next deliverable is:
 - phased implementation roadmap with milestone order, dependencies, and DoD per phase.
+
+## 16) Stabilization Milestone Baseline (Implemented)
+Before adding new room/layer branches, the project now carries a stabilization baseline focused on clarity + core balance:
+1. Panel clarity:
+- Agent role legend (visitor/resident/crew).
+- Room usage, crew status breakdown, idle reason histogram, stalled job reasons.
+- Morale top contributors and room warning aggregation.
+
+2. Air credibility:
+- Deterministic low-air progression (`healthy -> distressed -> critical -> death`) with recovery window when air is restored early.
+- Deaths are visible in metrics (`deaths`, `recent deaths`, `body count`) and on-map resident state tinting.
+
+3. Utility observability:
+- Room usage throughput fields (`dorm/hygiene/meals per min`) and failed need-attempt counters.
+- Jobs visibility expanded (`oldest pending age`, `stalled jobs`, `stall reason mix`).
+
+4. Test coverage additions:
+- Air collapse deterministic deterioration/death scenario.
+- Air recovery window scenario.
+- Room usage and diagnostics assertions integrated into `test:sim`.
