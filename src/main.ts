@@ -7,6 +7,7 @@ import {
   createInitialState,
   fireCrew,
   getRoomDiagnosticAt,
+  getRoomInspectorAt,
   getDockByTile,
   hireCrew,
   setModule,
@@ -98,6 +99,17 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Exits / min</span><span class="value" id="exits-per-min">0</span></div>
       <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
       <small id="walk-stats">Visitor walk avg: 0.0</small>
+      <details class="mini-collapse" open>
+        <summary>Station Rating Insight</summary>
+        <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
+        <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
+        <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0</small>
+        <small id="rating-insight-service">Service/min: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
+        <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
+        <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0</small>
+        <small id="rating-insight-service-total">Service total: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
+        <small id="rating-insight-events">Events: skipped docks 0 | queue timeouts 0 | service fails/min 0.0</small>
+      </details>
       <small id="dock-info">Dock: none selected</small>
       <small id="dock-preview">Dock preview: n/a</small>
     </details>
@@ -116,6 +128,7 @@ app.innerHTML = `
         <small id="crew-breakdown">Crew: work 0 | idle 0 | resting 0 | logistics 0 | blocked 0</small>
         <small id="crew-shifts">Shifts: resting 0/0 | wake budget 0 | woken 0</small>
         <small id="crew-lockouts">Emergency lockouts prevented: 0</small>
+        <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
         <small id="ops-extra">Kitchen 0/0 | Hygiene 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
         <small id="kitchen-status">Kitchen: active 0/0 | raw 0.0 | meal +0.0/s</small>
         <small id="room-usage">Usage: to dorm 0 | resting 0 | hygiene 0 | queue 0 | eating 0 | hydro staff 0/0</small>
@@ -258,6 +271,25 @@ app.innerHTML = `
       <label><input type="checkbox" id="dock-modal-large" checked /> Large</label>
     </div>
   </div>
+  <div id="room-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Room Inspector</h2>
+        <button id="close-room" class="ghost-btn">Close</button>
+      </div>
+      <div class="row compact list-row"><span>Room</span><span class="value" id="room-modal-type">none</span></div>
+      <div class="row compact list-row"><span>Status</span><span class="value" id="room-modal-status">inactive</span></div>
+      <div class="row compact list-row"><span>Cluster</span><span class="value" id="room-modal-cluster">0 tiles</span></div>
+      <div class="row compact list-row"><span>Doors</span><span class="value" id="room-modal-doors">0</span></div>
+      <div class="row compact list-row"><span>Pressurization</span><span class="value" id="room-modal-pressure">0%</span></div>
+      <div class="row compact list-row"><span>Staff</span><span class="value" id="room-modal-staff">0/0</span></div>
+      <div class="row compact list-row"><span>Service Nodes</span><span class="value" id="room-modal-nodes">0</span></div>
+      <small id="room-modal-capacity">Capacity: n/a</small>
+      <small id="room-modal-reasons">Inactive reasons: none</small>
+      <small id="room-modal-warnings">Warnings: none</small>
+      <small id="room-modal-hints">Hints: none</small>
+    </div>
+  </div>
 `;
 
 const canvasEl = document.querySelector<HTMLCanvasElement>('#game');
@@ -293,6 +325,7 @@ const ratingReasonsEl = document.querySelector<HTMLElement>('#rating-reasons')!;
 const crewBreakdownEl = document.querySelector<HTMLElement>('#crew-breakdown')!;
 const crewShiftsEl = document.querySelector<HTMLElement>('#crew-shifts')!;
 const crewLockoutsEl = document.querySelector<HTMLElement>('#crew-lockouts')!;
+const criticalStaffingLineEl = document.querySelector<HTMLElement>('#critical-staffing-line')!;
 const roomUsageEl = document.querySelector<HTMLElement>('#room-usage')!;
 const roomFlowEl = document.querySelector<HTMLElement>('#room-flow')!;
 const kitchenStatusEl = document.querySelector<HTMLElement>('#kitchen-status')!;
@@ -344,6 +377,14 @@ const bayUtilizationEl = document.querySelector<HTMLSpanElement>('#bay-utilizati
 const exitsPerMinEl = document.querySelector<HTMLSpanElement>('#exits-per-min')!;
 const laneQueuesEl = document.querySelector<HTMLElement>('#lane-queues')!;
 const walkStatsEl = document.querySelector<HTMLElement>('#walk-stats')!;
+const ratingInsightTrendEl = document.querySelector<HTMLElement>('#rating-insight-trend')!;
+const ratingInsightRateEl = document.querySelector<HTMLElement>('#rating-insight-rate')!;
+const ratingInsightBonusEl = document.querySelector<HTMLElement>('#rating-insight-bonus')!;
+const ratingInsightServiceEl = document.querySelector<HTMLElement>('#rating-insight-service')!;
+const ratingInsightTotalEl = document.querySelector<HTMLElement>('#rating-insight-total')!;
+const ratingInsightBonusTotalEl = document.querySelector<HTMLElement>('#rating-insight-bonus-total')!;
+const ratingInsightServiceTotalEl = document.querySelector<HTMLElement>('#rating-insight-service-total')!;
+const ratingInsightEventsEl = document.querySelector<HTMLElement>('#rating-insight-events')!;
 const dockInfoEl = document.querySelector<HTMLElement>('#dock-info')!;
 const dockPreviewEl = document.querySelector<HTMLElement>('#dock-preview')!;
 const dockModal = document.querySelector<HTMLDivElement>('#dock-modal')!;
@@ -359,6 +400,19 @@ const dockModalTraderCheckbox = document.querySelector<HTMLInputElement>('#dock-
 const dockModalSmallCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-small')!;
 const dockModalMediumCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-medium')!;
 const dockModalLargeCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-large')!;
+const roomModal = document.querySelector<HTMLDivElement>('#room-modal')!;
+const closeRoomBtn = document.querySelector<HTMLButtonElement>('#close-room')!;
+const roomModalTypeEl = document.querySelector<HTMLElement>('#room-modal-type')!;
+const roomModalStatusEl = document.querySelector<HTMLElement>('#room-modal-status')!;
+const roomModalClusterEl = document.querySelector<HTMLElement>('#room-modal-cluster')!;
+const roomModalDoorsEl = document.querySelector<HTMLElement>('#room-modal-doors')!;
+const roomModalPressureEl = document.querySelector<HTMLElement>('#room-modal-pressure')!;
+const roomModalStaffEl = document.querySelector<HTMLElement>('#room-modal-staff')!;
+const roomModalNodesEl = document.querySelector<HTMLElement>('#room-modal-nodes')!;
+const roomModalCapacityEl = document.querySelector<HTMLElement>('#room-modal-capacity')!;
+const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
+const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
+const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
 const roomDiagnosticEl = document.querySelector<HTMLElement>('#room-diagnostic')!;
 const paintGuidanceEl = document.querySelector<HTMLElement>('#paint-guidance')!;
 const moduleGuideEl = document.querySelector<HTMLElement>('#module-guide')!;
@@ -409,6 +463,7 @@ const market = {
 };
 let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
 let selectedDockId: number | null = null;
+let selectedRoomTile: number | null = null;
 let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
@@ -488,6 +543,37 @@ function refreshDockModal(): void {
   dockModalLargeCheckbox.disabled = !canEnableSize('large', dock.maxSizeByArea);
 }
 
+function refreshRoomModal(): void {
+  if (selectedRoomTile === null) return;
+  const inspector = getRoomInspectorAt(state, selectedRoomTile);
+  if (!inspector) {
+    roomModal.classList.add('hidden');
+    selectedRoomTile = null;
+    return;
+  }
+  roomModalTypeEl.textContent = inspector.room;
+  roomModalStatusEl.textContent = inspector.active ? 'active' : 'inactive';
+  roomModalStatusEl.style.color = inspector.active ? '#6edb8f' : '#ff7676';
+  roomModalClusterEl.textContent = `${inspector.clusterSize} tiles`;
+  roomModalDoorsEl.textContent = String(inspector.doorCount);
+  roomModalPressureEl.textContent = `${inspector.pressurizedPct.toFixed(0)}%`;
+  roomModalStaffEl.textContent = `${inspector.staffCount}/${inspector.requiredStaff}`;
+  roomModalNodesEl.textContent = `${inspector.serviceNodeCount}${inspector.hasServiceNode ? '' : ' (missing)'}`;
+  if (inspector.room === 'cafeteria' && inspector.cafeteriaLoad) {
+    const load = inspector.cafeteriaLoad;
+    roomModalCapacityEl.textContent =
+      `Capacity: tables ${load.tableNodes} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
+    roomModalCapacityEl.style.color =
+      load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
+  } else {
+    roomModalCapacityEl.textContent = 'Capacity: n/a';
+    roomModalCapacityEl.style.color = '#8ea2bd';
+  }
+  roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
+  roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;
+  roomModalHintsEl.textContent = `Hints: ${inspector.hints.join(' | ') || 'none'}`;
+}
+
 function toTileCoords(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = canvas.getBoundingClientRect();
   const x = Math.floor((clientX - rect.left) / TILE_SIZE);
@@ -528,11 +614,14 @@ canvas.addEventListener('mousedown', (e) => {
   const tile = toTileCoords(e.clientX, e.clientY);
   if (!tile) return;
   const idx = toIndex(tile.x, tile.y, state.width);
+  const canOpenInspectors = currentTool.kind === 'none';
   const dock = getDockByTile(state, idx);
-  selectedDockId = dock?.id ?? null;
-  if (dock) {
+  selectedDockId = canOpenInspectors ? (dock?.id ?? null) : null;
+  if (canOpenInspectors && dock) {
+    selectedRoomTile = null;
     refreshDockModal();
     dockModal.classList.remove('hidden');
+    roomModal.classList.add('hidden');
     isPainting = false;
     paintStart = null;
     paintCurrent = null;
@@ -553,7 +642,18 @@ canvas.addEventListener('mouseleave', () => {
 });
 canvas.addEventListener('mouseup', () => {
   if (isPainting && paintStart && paintCurrent) {
-    applyRectPaint(paintStart, paintCurrent);
+    const canOpenInspectors = currentTool.kind === 'none';
+    const singleClick = paintStart.x === paintCurrent.x && paintStart.y === paintCurrent.y;
+    const clickedTile = singleClick ? toIndex(paintStart.x, paintStart.y, state.width) : null;
+    if (canOpenInspectors && singleClick && clickedTile !== null && state.rooms[clickedTile] !== RoomType.None) {
+      selectedRoomTile = clickedTile;
+      selectedDockId = null;
+      refreshRoomModal();
+      roomModal.classList.remove('hidden');
+      dockModal.classList.add('hidden');
+    } else {
+      applyRectPaint(paintStart, paintCurrent);
+    }
   }
   isPainting = false;
   paintStart = null;
@@ -666,6 +766,11 @@ window.addEventListener('keydown', (e) => {
       marketModal.classList.add('hidden');
       priorityModal.classList.add('hidden');
       dockModal.classList.add('hidden');
+      roomModal.classList.add('hidden');
+      currentTool = { kind: 'none' };
+      isPainting = false;
+      paintStart = null;
+      paintCurrent = null;
       break;
     default:
       break;
@@ -748,6 +853,16 @@ closeDockBtn.addEventListener('click', () => {
 dockModal.addEventListener('click', (e) => {
   if (e.target === dockModal) {
     dockModal.classList.add('hidden');
+  }
+});
+
+closeRoomBtn.addEventListener('click', () => {
+  roomModal.classList.add('hidden');
+});
+
+roomModal.addEventListener('click', (e) => {
+  if (e.target === roomModal) {
+    roomModal.classList.add('hidden');
   }
 });
 
@@ -906,6 +1021,12 @@ function frame(now: number): void {
   crewBreakdownEl.textContent = `Crew: work ${state.metrics.crewAssignedWorking} | idle ${state.metrics.crewIdleAvailable} | resting ${state.metrics.crewResting} | logistics ${state.metrics.crewOnLogisticsJobs} | blocked ${state.metrics.crewBlockedNoPath}`;
   crewShiftsEl.textContent = `Shifts: resting ${state.metrics.crewRestingNow}/${state.metrics.crewRestCap} | wake budget ${state.metrics.crewEmergencyWakeBudget} | woken ${state.metrics.crewWokenForAir}`;
   crewLockoutsEl.textContent = `Emergency lockouts prevented: ${state.metrics.crewPingPongPreventions}`;
+  criticalStaffingLineEl.textContent =
+    `Critical staffing R ${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor} | ` +
+    `LS ${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport} | ` +
+    `HY ${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics} | ` +
+    `KI ${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen} | ` +
+    `CF ${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}`;
   opsEl.textContent = `Cafeteria ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | Security ${state.ops.securityActive}/${state.ops.securityTotal} | Reactor ${state.ops.reactorsActive}/${state.ops.reactorsTotal} | Dorms ${state.ops.dormsActive}/${state.ops.dormsTotal}`;
   opsExtraEl.textContent = `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | Market ${state.ops.marketActive}/${state.ops.marketTotal}`;
   kitchenStatusEl.textContent = `Kitchen: active ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | raw ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`;
@@ -925,12 +1046,10 @@ function frame(now: number): void {
   crewRetargetsEl.textContent =
     `Crew retargets/min: ${state.metrics.crewRetargetsPerMin.toFixed(1)} | ` +
     `critical drops/min: ${state.metrics.criticalStaffDropsPerMin.toFixed(1)} | ` +
-    `Critical staffing LS ${state.ops.lifeSupportActive > 0 ? 1 : 0}/${state.ops.lifeSupportTotal > 0 ? 1 : 0} ` +
-    `HY ${state.ops.hydroponicsActive > 0 ? 1 : 0}/${state.ops.hydroponicsTotal > 0 ? 1 : 0} ` +
-    `KI ${state.ops.kitchenActive > 0 ? 1 : 0}/${state.ops.kitchenTotal > 0 ? 1 : 0}`;
+    `dispatch ${state.metrics.logisticsDispatchSlots} | pressure ${(state.metrics.logisticsPressure * 100).toFixed(0)}%`;
   jobsExtraEl.textContent =
     `Avg age ${state.metrics.avgJobAgeSec.toFixed(1)}s | Oldest ${state.metrics.oldestPendingJobAgeSec.toFixed(1)}s | Delivery ${state.metrics.deliveryLatencySec.toFixed(1)}s | Stalled ${state.metrics.stalledJobs} | ` +
-    `unstaffed sec LS ${state.metrics.criticalUnstaffedSec.lifeSupport.toFixed(1)} HY ${state.metrics.criticalUnstaffedSec.hydroponics.toFixed(1)} KI ${state.metrics.criticalUnstaffedSec.kitchen.toFixed(1)}`;
+    `shortfall sec R ${state.metrics.criticalShortfallSec.reactor.toFixed(1)} LS ${state.metrics.criticalShortfallSec.lifeSupport.toFixed(1)} HY ${state.metrics.criticalShortfallSec.hydroponics.toFixed(1)} KI ${state.metrics.criticalShortfallSec.kitchen.toFixed(1)} CF ${state.metrics.criticalShortfallSec.cafeteria.toFixed(1)}`;
   const foodBlocked =
     state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:')) ??
     state.metrics.topRoomWarnings.find((w) => w.startsWith('food chain blocked:'));
@@ -971,6 +1090,50 @@ function frame(now: number): void {
   exitsPerMinEl.textContent = String(state.metrics.exitsPerMin);
   laneQueuesEl.textContent = `Lane queues N/E/S/W: ${state.metrics.dockQueueLengthByLane.north}/${state.metrics.dockQueueLengthByLane.east}/${state.metrics.dockQueueLengthByLane.south}/${state.metrics.dockQueueLengthByLane.west}`;
   walkStatsEl.textContent = `Visitor walk avg: ${state.metrics.avgVisitorWalkDistance.toFixed(1)} | skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | queue timeouts ${state.metrics.shipsTimedOutInQueue}`;
+  const ratingTrend = state.metrics.stationRatingTrendPerMin;
+  ratingInsightTrendEl.textContent = `Trend: ${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(2)}/min ${ratingTrend >= 0 ? '(stable/improving)' : '(declining)'}`;
+  ratingInsightTrendEl.style.color = ratingTrend >= 0 ? '#6edb8f' : '#ff7676';
+  ratingInsightRateEl.textContent =
+    `Penalty/min: timeout ${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(2)} | ` +
+    `no dock ${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(2)} | ` +
+    `service ${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(2)} | ` +
+    `walk ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)}`;
+  ratingInsightBonusEl.textContent =
+    `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
+    `leisure ${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(2)} | ` +
+    `exits ${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(2)}`;
+  ratingInsightBonusEl.style.color =
+    state.metrics.stationRatingBonusPerMin.mealService +
+      state.metrics.stationRatingBonusPerMin.leisureService +
+      state.metrics.stationRatingBonusPerMin.successfulExit >
+    0
+      ? '#6edb8f'
+      : '#8ea2bd';
+  ratingInsightServiceEl.textContent =
+    `Service/min: no path ${state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath.toFixed(2)} | ` +
+    `missing services ${state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing.toFixed(2)} | ` +
+    `patience bail ${state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail.toFixed(2)} | ` +
+    `dock timeout ${state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout.toFixed(2)} | ` +
+    `trespass ${state.metrics.stationRatingServiceFailureByReasonPerMin.trespass.toFixed(2)}`;
+  ratingInsightTotalEl.textContent =
+    `Total penalty: timeout ${state.metrics.stationRatingPenaltyTotal.queueTimeout.toFixed(1)} | ` +
+    `no dock ${state.metrics.stationRatingPenaltyTotal.noEligibleDock.toFixed(1)} | ` +
+    `service ${state.metrics.stationRatingPenaltyTotal.serviceFailure.toFixed(1)} | ` +
+    `walk ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)}`;
+  ratingInsightBonusTotalEl.textContent =
+    `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
+    `leisure ${state.metrics.stationRatingBonusTotal.leisureService.toFixed(1)} | ` +
+    `exits ${state.metrics.stationRatingBonusTotal.successfulExit.toFixed(1)}`;
+  ratingInsightServiceTotalEl.textContent =
+    `Service total: no path ${state.metrics.stationRatingServiceFailureByReasonTotal.noLeisurePath.toFixed(1)} | ` +
+    `missing services ${state.metrics.stationRatingServiceFailureByReasonTotal.shipServicesMissing.toFixed(1)} | ` +
+    `patience bail ${state.metrics.stationRatingServiceFailureByReasonTotal.patienceBail.toFixed(1)} | ` +
+    `dock timeout ${state.metrics.stationRatingServiceFailureByReasonTotal.dockTimeout.toFixed(1)} | ` +
+    `trespass ${state.metrics.stationRatingServiceFailureByReasonTotal.trespass.toFixed(1)}`;
+  ratingInsightEventsEl.textContent =
+    `Events: skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | ` +
+    `queue timeouts ${state.metrics.shipsTimedOutInQueue} | ` +
+    `service fails/min ${state.metrics.visitorServiceFailuresPerMin.toFixed(1)}`;
   if (selectedDockId !== null) {
     const dock = state.docks.find((d) => d.id === selectedDockId) ?? null;
     if (dock) {
@@ -985,6 +1148,15 @@ function frame(now: number): void {
     dockInfoEl.textContent = 'Dock: none selected';
     dockModal.classList.add('hidden');
   }
+  if (selectedRoomTile !== null) {
+    const inspector = getRoomInspectorAt(state, selectedRoomTile);
+    if (inspector) {
+      refreshRoomModal();
+    } else {
+      selectedRoomTile = null;
+      roomModal.classList.add('hidden');
+    }
+  }
   if (currentTool.kind === 'tile' && currentTool.tile === TileType.Dock && hoveredTile !== null) {
     const preview = validateDockPlacement(state, hoveredTile);
     dockPreviewEl.textContent = `Dock preview: ${preview.valid ? 'valid' : `invalid (${preview.reason})`}`;
@@ -998,11 +1170,11 @@ function frame(now: number): void {
   if (diagnostic) {
     if (diagnostic.active) {
       const warningSuffix = diagnostic.warnings.length > 0 ? ` | warning: ${diagnostic.warnings.join(', ')}` : '';
-      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} active (${diagnostic.clusterSize} tiles)${warningSuffix}`;
+      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} active (${diagnostic.clusterSize} tiles)${warningSuffix} | click for details`;
       roomDiagnosticEl.style.color = '#6edb8f';
     } else {
       const warningSuffix = diagnostic.warnings.length > 0 ? ` | warning: ${diagnostic.warnings.join(', ')}` : '';
-      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} inactive - ${diagnostic.reasons.join(', ')}${warningSuffix}`;
+      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} inactive - ${diagnostic.reasons.join(', ')}${warningSuffix} | click for details`;
       roomDiagnosticEl.style.color = '#ffcf6e';
     }
   } else {

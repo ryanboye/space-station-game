@@ -448,3 +448,35 @@ Stability patch focused on crew assignment coherence for current scope:
 
 5. Validation:
 - Added scenarios/tests for thrash regression guard, life-support floor hold, and activation hysteresis behavior.
+
+## 14. Phase 2.6D - Staffing Control Loop Rework (Capacity-SLO + Utility Scheduler) (Implemented)
+Principal-level staffing and dispatch stabilization pass:
+
+1. Capacity-SLO critical staffing:
+- Added computed critical capacity targets for Reactor + Life Support and food-chain minimums.
+- Scheduler now honors hard minima derived from live demand (not static policy toggles).
+
+2. Duty post model refactor:
+- Crew duty posts now come from room clusters across systems.
+- Service nodes remain throughput/target inputs for visitors and logistics, not mandatory crew post multipliers.
+
+3. Utility scheduler with bounded preemption:
+- Added score-based assignment using priority weights, urgency, diminishing returns, and path cost.
+- Added preemption threshold gate and lock-aware retention to avoid pathological churn.
+- Preserved emergency wake behavior for low-air conditions.
+
+4. Demand-driven logistics dispatch:
+- Removed idle-only logistics gating behavior.
+- Added backlog/starvation-driven logistics pressure and dispatch slots.
+- Added meal-horizon and stock-target suppression so hauling recedes when meal/kitchen buffers are healthy.
+
+5. Diagnostics truth split:
+- Added required/assigned/active critical staffing metrics.
+- Added per-system in-transit staff metrics and critical shortfall timers.
+- Added warning categorization (`under_capacity`, `no_assigned_staff`, `staff_in_transit`, `no_path`) for clearer debugging.
+
+6. Air/power tuning:
+- Increased life-support per-cluster air contribution and passive pressure contribution to reduce artificial collapse at realistic staffing.
+
+7. Validation:
+- Added scenarios/tests for critical capacity targets, service-node staffing decoupling, hauling suppression at high stock, high-crew stability, and in-transit diagnostics.

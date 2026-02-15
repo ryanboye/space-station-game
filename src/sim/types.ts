@@ -120,6 +120,23 @@ export type CrewPrioritySystem =
   | 'security'
   | 'hygiene';
 export type CrewPriorityWeights = Record<CrewPrioritySystem, number>;
+export type CrewTaskKind = 'critical_post' | 'post' | 'logistics';
+export interface CrewTaskCandidate {
+  id: string;
+  kind: CrewTaskKind;
+  system: CrewPrioritySystem | 'logistics';
+  tileIndex: number;
+  score: number;
+  critical: boolean;
+  protectedMinimum: boolean;
+}
+export interface CriticalCapacityTargets {
+  requiredReactorPosts: number;
+  requiredLifeSupportPosts: number;
+  requiredHydroPosts: number;
+  requiredKitchenPosts: number;
+  requiredCafeteriaPosts: number;
+}
 export type JobStallReason =
   | 'none'
   | 'stalled_path_blocked'
@@ -368,11 +385,84 @@ export interface Metrics {
   stalledJobsByReason: Record<JobStallReason, number>;
   crewMoraleDrivers: string[];
   stationRatingDrivers: string[];
+  stationRatingPenaltyPerMin: {
+    queueTimeout: number;
+    noEligibleDock: number;
+    serviceFailure: number;
+    longWalks: number;
+  };
+  stationRatingPenaltyTotal: {
+    queueTimeout: number;
+    noEligibleDock: number;
+    serviceFailure: number;
+    longWalks: number;
+  };
+  stationRatingBonusPerMin: {
+    mealService: number;
+    leisureService: number;
+    successfulExit: number;
+  };
+  stationRatingBonusTotal: {
+    mealService: number;
+    leisureService: number;
+    successfulExit: number;
+  };
+  stationRatingServiceFailureByReasonPerMin: {
+    noLeisurePath: number;
+    shipServicesMissing: number;
+    patienceBail: number;
+    dockTimeout: number;
+    trespass: number;
+  };
+  stationRatingServiceFailureByReasonTotal: {
+    noLeisurePath: number;
+    shipServicesMissing: number;
+    patienceBail: number;
+    dockTimeout: number;
+    trespass: number;
+  };
   topRoomWarnings: string[];
   criticalUnstaffedSec: {
     lifeSupport: number;
     hydroponics: number;
     kitchen: number;
+  };
+  requiredCriticalStaff: {
+    reactor: number;
+    lifeSupport: number;
+    hydroponics: number;
+    kitchen: number;
+    cafeteria: number;
+  };
+  assignedCriticalStaff: {
+    reactor: number;
+    lifeSupport: number;
+    hydroponics: number;
+    kitchen: number;
+    cafeteria: number;
+  };
+  activeCriticalStaff: {
+    reactor: number;
+    lifeSupport: number;
+    hydroponics: number;
+    kitchen: number;
+    cafeteria: number;
+  };
+  criticalShortfallSec: {
+    reactor: number;
+    lifeSupport: number;
+    hydroponics: number;
+    kitchen: number;
+    cafeteria: number;
+  };
+  logisticsDispatchSlots: number;
+  logisticsPressure: number;
+  staffInTransitBySystem: {
+    reactor: number;
+    lifeSupport: number;
+    hydroponics: number;
+    kitchen: number;
+    cafeteria: number;
   };
 }
 
@@ -382,6 +472,30 @@ export interface RoomDiagnostic {
   reasons: string[];
   clusterSize: number;
   warnings: string[];
+}
+
+export interface RoomInspector {
+  room: RoomType;
+  active: boolean;
+  clusterSize: number;
+  doorCount: number;
+  pressurizedPct: number;
+  staffCount: number;
+  requiredStaff: number;
+  hasServiceNode: boolean;
+  serviceNodeCount: number;
+  hasPath: boolean;
+  reasons: string[];
+  warnings: string[];
+  hints: string[];
+  cafeteriaLoad?: {
+    tableNodes: number;
+    queueNodes: number;
+    queueingVisitors: number;
+    eatingVisitors: number;
+    highPatienceWaiting: number;
+    pressure: 'low' | 'medium' | 'high';
+  };
 }
 
 export interface CrewState {
@@ -474,9 +588,11 @@ export interface StationState {
   recentDeathTimes: number[];
   clusterActivationState: Map<string, { active: boolean; failedSec: number }>;
   criticalStaffPrevUnmet: {
+    reactor: boolean;
     lifeSupport: boolean;
     hydroponics: boolean;
     kitchen: boolean;
+    cafeteria: boolean;
   };
   usageTotals: {
     dorm: number;
@@ -497,6 +613,18 @@ export interface StationState {
     ratingFromShipSkip: number;
     ratingFromVisitorFailure: number;
     ratingFromWalkDissatisfaction: number;
+    ratingFromVisitorFailureByReason: {
+      noLeisurePath: number;
+      shipServicesMissing: number;
+      patienceBail: number;
+      dockTimeout: number;
+      trespass: number;
+    };
+    ratingFromVisitorSuccessByReason: {
+      mealService: number;
+      leisureService: number;
+      successfulExit: number;
+    };
     visitorWalkDistance: number;
     visitorWalkTrips: number;
     criticalStaffDrops: number;
@@ -517,7 +645,7 @@ export interface StationState {
 }
 
 export interface BuildTool {
-  kind: 'tile' | 'zone' | 'room' | 'module';
+  kind: 'none' | 'tile' | 'zone' | 'room' | 'module';
   tile?: TileType;
   zone?: ZoneType;
   room?: RoomType;

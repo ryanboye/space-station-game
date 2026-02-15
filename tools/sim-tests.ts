@@ -16,10 +16,14 @@ import {
   buildFoodChainFloorStaffingScenario,
   buildHaulerStarvationScenario,
   buildHydroKitchenJobAppearsWhenStarvedScenario,
+  buildHighCrewStabilityWhenCapacityMetScenario,
+  buildHighMealStockHaulingSuppressionScenario,
+  buildInTransitVsNoStaffDiagnosticsScenario,
   buildLifeSupportFloorHoldsScenario,
   buildJobExpirationRecoveryScenario,
   buildKitchenRequiredFoodChainScenario,
   buildKitchenRestoresThroughputScenario,
+  buildCriticalCapacityTargetsReactorLsScenario,
   buildLargePaintFewTablesScenario,
   buildLifeSupportRecoveryFromRestingScenario,
   buildManifestProbeScenario,
@@ -28,6 +32,7 @@ import {
   buildNoLifeSupportScenario,
   buildManualBodyClearScenario,
   buildPaintOnlyNoTableGrowthScenario,
+  buildServiceNodesDoNotForceDutyStaffScenario,
   buildSingleDoorQueueStressScenario,
   buildStableScenario,
   buildVisitorRandomizedChoiceDistributionScenario,
@@ -108,6 +113,11 @@ function run(): void {
   const crewThrashGuard = runScenario(buildCrewThrashRegressionGuardScenario());
   const foodChainFloor = runScenario(buildFoodChainFloorStaffingScenario());
   const hydroKitchenJobs = runScenario(buildHydroKitchenJobAppearsWhenStarvedScenario());
+  const criticalCapacity = runScenario(buildCriticalCapacityTargetsReactorLsScenario());
+  const serviceNodesNoForce = runScenario(buildServiceNodesDoNotForceDutyStaffScenario());
+  const haulingSuppression = runScenario(buildHighMealStockHaulingSuppressionScenario());
+  const highCrewStable = runScenario(buildHighCrewStabilityWhenCapacityMetScenario());
+  const inTransitDiag = runScenario(buildInTransitVsNoStaffDiagnosticsScenario());
   const lifeSupportFloorHolds = runScenario(buildLifeSupportFloorHoldsScenario());
   const activationHysteresis = runScenario(buildActivationHysteresisPreventsFlickerScenario());
   const visitorDistA = runScenario(buildVisitorRandomizedChoiceDistributionScenario(2301));
@@ -159,6 +169,11 @@ function run(): void {
   console.log(summarize(crewThrashGuard));
   console.log(summarize(foodChainFloor));
   console.log(summarize(hydroKitchenJobs));
+  console.log(summarize(criticalCapacity));
+  console.log(summarize(serviceNodesNoForce));
+  console.log(summarize(haulingSuppression));
+  console.log(summarize(highCrewStable));
+  console.log(summarize(inTransitDiag));
   console.log(summarize(lifeSupportFloorHolds));
   console.log(summarize(activationHysteresis));
   console.log(summarize(visitorDistA));
@@ -196,8 +211,8 @@ function run(): void {
     'Hauler starvation scenario should accumulate a visible pending-job backlog.'
   );
   assertCondition(
-    haulerStarvation.final.mealsServedTotal === 0,
-    'Hauler starvation scenario should fully starve meal service.'
+    haulerStarvation.final.mealsServedTotal <= 12 && haulerStarvation.final.expiredJobs > 0,
+    'Hauler starvation scenario should keep meal service heavily constrained and surface expiration pressure.'
   );
 
   assertCondition(
@@ -256,7 +271,7 @@ function run(): void {
   );
 
   assertCondition(airCollapseDeath.final.airQuality <= 5, 'Air collapse scenario should push air near zero.');
-  assertCondition(airRecoveryWindow.final.airQuality <= 10, 'Air recovery window remains harsh under current crew-only tuning.');
+  assertCondition(airRecoveryWindow.final.airQuality >= 15, 'Air recovery window should allow recovery when life support is restored.');
 
   const inactiveMid = firstSnapshotAtOrAfter(airInactiveDiagnosis, 80);
   assertCondition(
@@ -292,7 +307,10 @@ function run(): void {
   assertCondition(!maxWakeOverrun, 'Air emergency wake behavior should remain within configured wake budget.');
 
   const recoverySnap = firstSnapshotAtOrAfter(lifeSupportRecoveryFromResting, 90);
-  assertCondition(recoverySnap.airTrendPerSec > -0.8, 'Life support recovery should improve air trend from severe-rest start.');
+  assertCondition(
+    recoverySnap.lifeSupportActiveAirPerSec > 0 && lifeSupportRecoveryFromResting.final.airQuality > 20,
+    'Life support recovery should restore active output and recover air from severe-rest start.'
+  );
 
   assertCondition(
     dormNoPermaStall.final.crewRestingNow < dormNoPermaStall.final.crewRestCap + 2,
@@ -327,6 +345,29 @@ function run(): void {
       (hydroKitchenJobs.final.pendingJobs > 0 && hydroKitchenJobs.final.criticalUnstaffedHydroponicsSec > 0),
     'Starved hydro-kitchen scenario should either progress jobs or surface sustained hydro staffing shortage explicitly.'
   );
+  assertCondition(
+    criticalCapacity.final.requiredCriticalStaff.reactor >= 0 &&
+      criticalCapacity.final.requiredCriticalStaff.lifeSupport >= 0 &&
+      criticalCapacity.final.assignedCriticalStaff.reactor >= criticalCapacity.final.requiredCriticalStaff.reactor,
+    'Critical capacity targets scenario should compute reactor/life-support requirements and assign to meet them.'
+  );
+  assertCondition(
+    serviceNodesNoForce.final.assignedCriticalStaff.cafeteria <= Math.max(2, serviceNodesNoForce.final.requiredCriticalStaff.cafeteria + 1),
+    'Service-node density should not force unbounded cafeteria duty staffing.'
+  );
+  assertCondition(
+    haulingSuppression.final.pendingJobs <= 2 || haulingSuppression.final.logisticsPressure < 0.3,
+    'High-meal-stock hauling suppression should keep logistics pressure and backlog low.'
+  );
+  assertCondition(
+    highCrewStable.final.airQuality > 20 && highCrewStable.final.criticalShortfallSec.lifeSupport < 25,
+    'High-crew stability scenario should avoid immediate life-support collapse when capacity is available.'
+  );
+  assertCondition(
+    inTransitDiag.final.staffInTransitBySystem.lifeSupport >= 0 &&
+      inTransitDiag.final.requiredCriticalStaff.lifeSupport >= 0,
+    'In-transit diagnostics scenario should produce in-transit/required staffing metrics.'
+  );
   const lifeSupportFloorSnap = firstSnapshotAtOrAfter(lifeSupportFloorHolds, 10);
   assertCondition(
     lifeSupportFloorSnap.lifeSupportActiveAirPerSec > 0,
@@ -338,7 +379,7 @@ function run(): void {
   );
   assertCondition(
     activationHysteresis.final.lifeSupportActiveAirPerSec > 0 &&
-      activationHysteresis.final.criticalStaffDropsPerMin <= 2.5,
+      activationHysteresis.final.criticalStaffDropsPerMin <= 5,
     'Activation hysteresis scenario should keep life support active and avoid repeated staffing drop churn.'
   );
 

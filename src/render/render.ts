@@ -3,6 +3,7 @@ import {
   RoomType,
   TILE_SIZE,
   TileType,
+  VisitorState,
   ZoneType,
   fromIndex,
   isWalkable,
@@ -214,6 +215,47 @@ function agentOffset(id: number): { x: number; y: number } {
   const ox = ((id * 17) % 7) - 3;
   const oy = ((id * 29) % 7) - 3;
   return { x: ox * 0.08, y: oy * 0.08 };
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function mixChannel(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+function toHex(r: number, g: number, b: number): string {
+  const hex = (n: number): string => n.toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+function visitorMoodScore(state: StationState, visitorIndex: number): number {
+  const v = state.visitors[visitorIndex];
+  const patiencePressure = clamp01(v.patience / 80);
+  let score = 0.55 - patiencePressure * 0.6;
+  if (v.servedMeal) score += 0.22;
+  if (v.state === VisitorState.Eating || v.state === VisitorState.Leisure) score += 0.14;
+  if (v.state === VisitorState.ToDock) score -= 0.1;
+  if (v.state === VisitorState.Queueing || v.state === VisitorState.ToCafeteria) score -= 0.05;
+  return clamp01(score);
+}
+
+function visitorMoodColor(state: StationState, visitorIndex: number): string {
+  // 0.0 -> red, 0.5 -> yellow, 1.0 -> green.
+  const t = visitorMoodScore(state, visitorIndex);
+  if (t <= 0.5) {
+    const k = clamp01(t / 0.5);
+    const r = mixChannel(232, 244, k);
+    const g = mixChannel(97, 229, k);
+    const b = mixChannel(97, 140, k);
+    return toHex(r, g, b);
+  }
+  const k = clamp01((t - 0.5) / 0.5);
+  const r = mixChannel(244, 128, k);
+  const g = mixChannel(229, 231, k);
+  const b = mixChannel(140, 142, k);
+  return toHex(r, g, b);
 }
 
 function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState, widthPx: number, heightPx: number): void {
@@ -475,9 +517,10 @@ export function renderWorld(
     }
   }
 
-  for (const v of state.visitors) {
+  for (let vi = 0; vi < state.visitors.length; vi++) {
+    const v = state.visitors[vi];
     const o = agentOffset(v.id);
-    ctx.fillStyle = '#f4e58c';
+    ctx.fillStyle = visitorMoodColor(state, vi);
     ctx.beginPath();
     ctx.arc((v.x + o.x) * TILE_SIZE, (v.y + o.y) * TILE_SIZE, TILE_SIZE * 0.22, 0, Math.PI * 2);
     ctx.fill();
@@ -538,7 +581,9 @@ export function renderWorld(
   }
 
   const toolText =
-    currentTool.kind === 'tile'
+    currentTool.kind === 'none'
+      ? 'Tool: Inspect'
+      : currentTool.kind === 'tile'
       ? `Tool: ${currentTool.tile}`
       : currentTool.kind === 'zone'
         ? `Tool: Zone ${currentTool.zone}`
@@ -554,7 +599,7 @@ export function renderWorld(
   ctx.fillStyle = 'rgba(8, 16, 28, 0.72)';
   ctx.fillRect(6, 42, 220, 34);
   const legendItems: Array<{ color: string; label: string; y: number }> = [
-    { color: '#f4e58c', label: 'Visitor', y: 56 },
+    { color: '#f4e58c', label: 'Visitor mood (red->yellow->green)', y: 56 },
     { color: '#7ec8ff', label: 'Crew', y: 70 }
   ];
   for (let i = 0; i < legendItems.length; i++) {

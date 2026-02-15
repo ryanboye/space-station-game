@@ -58,6 +58,43 @@ export interface ScenarioResult {
     criticalUnstaffedLifeSupportSec: number;
     criticalUnstaffedHydroponicsSec: number;
     criticalUnstaffedKitchenSec: number;
+    requiredCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    assignedCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    activeCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    criticalShortfallSec: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    logisticsDispatchSlots: number;
+    logisticsPressure: number;
+    staffInTransitBySystem: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
     visitorDestinationCafeteriaShare: number;
     visitorDestinationMarketShare: number;
     visitorDestinationLoungeShare: number;
@@ -118,6 +155,43 @@ export interface ScenarioResult {
     criticalUnstaffedLifeSupportSec: number;
     criticalUnstaffedHydroponicsSec: number;
     criticalUnstaffedKitchenSec: number;
+    requiredCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    assignedCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    activeCriticalStaff: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    criticalShortfallSec: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
+    logisticsDispatchSlots: number;
+    logisticsPressure: number;
+    staffInTransitBySystem: {
+      reactor: number;
+      lifeSupport: number;
+      hydroponics: number;
+      kitchen: number;
+      cafeteria: number;
+    };
     visitorDestinationCafeteriaShare: number;
     visitorDestinationMarketShare: number;
     visitorDestinationLoungeShare: number;
@@ -276,6 +350,13 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       criticalUnstaffedLifeSupportSec: state.metrics.criticalUnstaffedSec.lifeSupport,
       criticalUnstaffedHydroponicsSec: state.metrics.criticalUnstaffedSec.hydroponics,
       criticalUnstaffedKitchenSec: state.metrics.criticalUnstaffedSec.kitchen,
+      requiredCriticalStaff: state.metrics.requiredCriticalStaff,
+      assignedCriticalStaff: state.metrics.assignedCriticalStaff,
+      activeCriticalStaff: state.metrics.activeCriticalStaff,
+      criticalShortfallSec: state.metrics.criticalShortfallSec,
+      logisticsDispatchSlots: state.metrics.logisticsDispatchSlots,
+      logisticsPressure: state.metrics.logisticsPressure,
+      staffInTransitBySystem: state.metrics.staffInTransitBySystem,
       visitorDestinationCafeteriaShare: state.metrics.visitorDestinationShares.cafeteria,
       visitorDestinationMarketShare: state.metrics.visitorDestinationShares.market,
       visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge
@@ -342,6 +423,13 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       criticalUnstaffedLifeSupportSec: state.metrics.criticalUnstaffedSec.lifeSupport,
       criticalUnstaffedHydroponicsSec: state.metrics.criticalUnstaffedSec.hydroponics,
       criticalUnstaffedKitchenSec: state.metrics.criticalUnstaffedSec.kitchen,
+      requiredCriticalStaff: state.metrics.requiredCriticalStaff,
+      assignedCriticalStaff: state.metrics.assignedCriticalStaff,
+      activeCriticalStaff: state.metrics.activeCriticalStaff,
+      criticalShortfallSec: state.metrics.criticalShortfallSec,
+      logisticsDispatchSlots: state.metrics.logisticsDispatchSlots,
+      logisticsPressure: state.metrics.logisticsPressure,
+      staffInTransitBySystem: state.metrics.staffInTransitBySystem,
       visitorDestinationCafeteriaShare: state.metrics.visitorDestinationShares.cafeteria,
       visitorDestinationMarketShare: state.metrics.visitorDestinationShares.market,
       visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge
@@ -972,6 +1060,110 @@ export function buildActivationHysteresisPreventsFlickerScenario(): ScenarioSpec
           }
         }
       }
+    }
+  };
+}
+
+export function buildCriticalCapacityTargetsReactorLsScenario(): ScenarioSpec {
+  return {
+    name: 'critical-capacity-targets-reactor-ls',
+    seed: 3001,
+    durationSec: 180,
+    stepSec: 0.25,
+    snapshotEverySec: 15,
+    setup: (state) => {
+      buildBaseStation(state);
+      state.crew.total = 26;
+      state.controls.shipsPerCycle = 1;
+      state.metrics.airQuality = 34;
+      state.metrics.mealStock = 80;
+      state.metrics.kitchenRawBuffer = 20;
+    }
+  };
+}
+
+export function buildServiceNodesDoNotForceDutyStaffScenario(): ScenarioSpec {
+  return {
+    name: 'service-nodes-do-not-force-duty-staff',
+    seed: 3002,
+    durationSec: 180,
+    stepSec: 0.25,
+    snapshotEverySec: 15,
+    setup: (state) => {
+      buildBaseStation(state);
+      roomRect(state, 27, 13, 33, 20, RoomType.Cafeteria);
+      for (let y = 13; y <= 20; y++) {
+        for (let x = 27; x <= 33; x++) {
+          setModule(state, toIndex(x, y, state.width), ModuleType.Table);
+        }
+      }
+      state.crew.total = 18;
+      state.controls.shipsPerCycle = 1;
+    }
+  };
+}
+
+export function buildHighMealStockHaulingSuppressionScenario(): ScenarioSpec {
+  return {
+    name: 'high-meal-stock-hauling-suppression',
+    seed: 3003,
+    durationSec: 180,
+    stepSec: 0.25,
+    snapshotEverySec: 15,
+    setup: (state) => {
+      buildBaseStation(state);
+      state.controls.shipsPerCycle = 0;
+      state.metrics.mealStock = 220;
+      state.metrics.kitchenRawBuffer = 80;
+      state.metrics.rawFoodStock = 180;
+      state.crew.total = 20;
+    }
+  };
+}
+
+export function buildHighCrewStabilityWhenCapacityMetScenario(): ScenarioSpec {
+  return {
+    name: 'high-crew-stability-when-capacity-met',
+    seed: 3004,
+    durationSec: 220,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      // Add extra staffed critical clusters with guaranteed door adjacency.
+      setRoom(state, toIndex(24, 18, state.width), RoomType.LifeSupport);
+      setRoom(state, toIndex(30, 18, state.width), RoomType.LifeSupport);
+      setRoom(state, toIndex(32, 18, state.width), RoomType.LifeSupport);
+      setRoom(state, toIndex(22, 18, state.width), RoomType.Reactor);
+      setRoom(state, toIndex(28, 18, state.width), RoomType.Reactor);
+      setRoom(state, toIndex(32, 20, state.width), RoomType.Reactor);
+      addDoor(state, 30, 17);
+      addDoor(state, 32, 17);
+      addDoor(state, 28, 17);
+      addDoor(state, 32, 19);
+      state.crew.total = 32;
+      state.controls.shipsPerCycle = 0;
+      state.metrics.airQuality = 60;
+      state.metrics.mealStock = 120;
+      state.metrics.kitchenRawBuffer = 30;
+    }
+  };
+}
+
+export function buildInTransitVsNoStaffDiagnosticsScenario(): ScenarioSpec {
+  return {
+    name: 'in-transit-vs-no-staff-diagnostics',
+    seed: 3005,
+    durationSec: 160,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      state.crew.total = 12;
+      state.controls.shipsPerCycle = 0;
+      state.metrics.airQuality = 20;
+      setTile(state, toIndex(24, 14, state.width), TileType.Door);
+      setTile(state, toIndex(24, 15, state.width), TileType.Wall);
     }
   };
 }

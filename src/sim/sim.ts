@@ -4,7 +4,9 @@ import {
   type CrewIdleReason,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
+  type CrewTaskCandidate,
   type CrewPriorityWeights,
+  type CriticalCapacityTargets,
   type DockEntity,
   type DockQueueEntry,
   GRID_HEIGHT,
@@ -19,6 +21,7 @@ import {
   type Resident,
   ResidentState,
   type RoomDiagnostic,
+  type RoomInspector,
   RoomType,
   type ShipSize,
   TileType,
@@ -119,6 +122,9 @@ const CREW_ASSIGNMENT_HOLD_SEC = 12;
 const CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS = 6;
 const FOOD_CHAIN_LOW_MEAL_STOCK = 45;
 const FOOD_CHAIN_LOW_KITCHEN_RAW = 14;
+const FOOD_CHAIN_TARGET_MEAL_STOCK = 120;
+const FOOD_CHAIN_TARGET_KITCHEN_RAW = 40;
+const FOOD_CHAIN_MEAL_HORIZON_SEC = 45;
 const ROOM_DEACTIVATE_GRACE_SEC = 2.5;
 const VISITOR_PREFERENCE_JITTER = 0.22;
 const BUILD_DISTANCE_MULTIPLIER = 0.04;
@@ -128,6 +134,12 @@ const VISITOR_MIN_STAY_SEC = 4;
 const STATION_RATING_START = 70;
 const VISITOR_COMFORT_WALK_THRESHOLD = 10;
 const VISITOR_WALK_PENALTY_RATE = 0.03;
+const LIFE_SUPPORT_AIR_PER_CLUSTER = 1.55;
+const PASSIVE_AIR_PER_SEC_AT_100_PRESSURE = 0.45;
+const AIR_SAFETY_BUFFER = 0.24;
+const ASSIGNMENT_PREEMPT_MULTIPLIER = 1.25;
+const ASSIGNMENT_PREEMPT_DELTA = 2;
+const ASSIGNMENT_PATH_COST_WEIGHT = 0.14;
 
 const ACTIVATION_DEBOUNCE_ROOMS = new Set<RoomType>([
   RoomType.Cafeteria,
@@ -204,6 +216,24 @@ function serviceFailureRatingPenalty(
 ): void {
   state.usageTotals.ratingDelta -= amount;
   state.usageTotals[bucket] += amount;
+}
+
+function visitorSuccessRatingBonus(
+  state: StationState,
+  amount: number,
+  reason: 'mealService' | 'leisureService' | 'successfulExit'
+): void {
+  state.usageTotals.ratingDelta += amount;
+  state.usageTotals.ratingFromVisitorSuccessByReason[reason] += amount;
+}
+
+function addVisitorFailurePenalty(
+  state: StationState,
+  amount: number,
+  reason: 'noLeisurePath' | 'shipServicesMissing' | 'patienceBail' | 'dockTimeout' | 'trespass'
+): void {
+  serviceFailureRatingPenalty(state, amount, 'ratingFromVisitorFailure');
+  state.usageTotals.ratingFromVisitorFailureByReason[reason] += amount;
 }
 
 function tileCenter(index: number, width: number): { x: number; y: number } {
@@ -353,6 +383,99 @@ function roomClusterAnchors(state: StationState, room: RoomType): number[] {
   return clusters
     .map((cluster) => cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]))
     .sort((a, b) => a - b);
+}
+
+const CREW_SYSTEMS: CrewPrioritySystem[] = [
+  'life-support',
+  'reactor',
+  'hydroponics',
+  'kitchen',
+  'cafeteria',
+  'market',
+  'lounge',
+  'security',
+  'hygiene'
+];
+
+const CRITICAL_TRACKED_SYSTEMS: Array<'reactor' | 'life-support' | 'hydroponics' | 'kitchen' | 'cafeteria'> = [
+  'reactor',
+  'life-support',
+  'hydroponics',
+  'kitchen',
+  'cafeteria'
+];
+
+function roleForSystem(system: CrewPrioritySystem): CrewRole {
+  if (system === 'security') return 'security';
+  if (system === 'reactor' || system === 'hydroponics' || system === 'life-support') return 'reactor';
+  return 'cafeteria';
+}
+
+function dutyAnchorsForSystem(state: StationState, system: CrewPrioritySystem): number[] {
+  if (system === 'reactor') return roomClusterAnchors(state, RoomType.Reactor);
+  if (system === 'life-support') return roomClusterAnchors(state, RoomType.LifeSupport);
+  if (system === 'hydroponics') return roomClusterAnchors(state, RoomType.Hydroponics);
+  if (system === 'kitchen') return roomClusterAnchors(state, RoomType.Kitchen);
+  if (system === 'cafeteria') return roomClusterAnchors(state, RoomType.Cafeteria);
+  if (system === 'security') return roomClusterAnchors(state, RoomType.Security);
+  if (system === 'hygiene') return roomClusterAnchors(state, RoomType.Hygiene);
+  if (system === 'lounge') return roomClusterAnchors(state, RoomType.Lounge);
+  if (system === 'market') return roomClusterAnchors(state, RoomType.Market);
+  return [];
+}
+
+function systemRoomType(system: CrewPrioritySystem): RoomType {
+  if (system === 'reactor') return RoomType.Reactor;
+  if (system === 'life-support') return RoomType.LifeSupport;
+  if (system === 'hydroponics') return RoomType.Hydroponics;
+  if (system === 'kitchen') return RoomType.Kitchen;
+  if (system === 'cafeteria') return RoomType.Cafeteria;
+  if (system === 'security') return RoomType.Security;
+  if (system === 'hygiene') return RoomType.Hygiene;
+  if (system === 'lounge') return RoomType.Lounge;
+  return RoomType.Market;
+}
+
+function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTargets {
+  const reactorTotal = roomClusterAnchors(state, RoomType.Reactor).length;
+  const lifeSupportTotal = roomClusterAnchors(state, RoomType.LifeSupport).length;
+  const hydroTotal = roomClusterAnchors(state, RoomType.Hydroponics).length;
+  const kitchenTotal = roomClusterAnchors(state, RoomType.Kitchen).length;
+  const cafeteriaTotal = roomClusterAnchors(state, RoomType.Cafeteria).length;
+  const expectedPowerRatio = clamp(
+    state.metrics.powerSupply > 0 ? state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand) : 1,
+    0.35,
+    1
+  );
+  const airDemand =
+    state.residents.length * 0.12 +
+    state.visitors.length * 0.05 +
+    state.crewMembers.length * 0.08;
+  const passiveAir = (state.metrics.pressurizationPct / 100) * PASSIVE_AIR_PER_SEC_AT_100_PRESSURE;
+  const requiredReactorPosts = clamp(
+    Math.ceil(Math.max(0, state.metrics.powerDemand - BASE_POWER_SUPPLY) / POWER_PER_REACTOR),
+    0,
+    reactorTotal
+  );
+  const requiredLifeSupportPosts = clamp(
+    Math.ceil(
+      Math.max(0, airDemand + AIR_SAFETY_BUFFER - passiveAir) /
+        Math.max(0.001, LIFE_SUPPORT_AIR_PER_CLUSTER * expectedPowerRatio)
+    ),
+    0,
+    lifeSupportTotal
+  );
+
+  const needsFoodSupport =
+    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK ||
+    state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
+  return {
+    requiredReactorPosts,
+    requiredLifeSupportPosts,
+    requiredHydroPosts: needsFoodSupport && hydroTotal > 0 ? 1 : 0,
+    requiredKitchenPosts: needsFoodSupport && kitchenTotal > 0 ? 1 : 0,
+    requiredCafeteriaPosts: needsFoodSupport && cafeteriaTotal > 0 ? 1 : 0
+  };
 }
 
 function getDockBays(state: StationState): number[][] {
@@ -1115,94 +1238,78 @@ function rebuildDockEntities(state: StationState): void {
 }
 
 function assignCrewJobs(state: StationState): void {
-  const reactors = roomClusterAnchors(state, RoomType.Reactor);
-  const cafeterias = collectServiceTargets(state, RoomType.Cafeteria);
-  const kitchens = roomClusterAnchors(state, RoomType.Kitchen);
-  const security = collectServiceTargets(state, RoomType.Security);
-  const hygiene = roomClusterAnchors(state, RoomType.Hygiene);
-  const hydroponics = collectServiceTargets(state, RoomType.Hydroponics);
-  const lifeSupport = roomClusterAnchors(state, RoomType.LifeSupport);
-  const lounges = roomClusterAnchors(state, RoomType.Lounge);
-  const markets = roomClusterAnchors(state, RoomType.Market);
+  const jobsBySystem = new Map<CrewPrioritySystem, CrewTaskCandidate[]>();
+  const targetBySystem = {
+    reactor: dutyAnchorsForSystem(state, 'reactor'),
+    'life-support': dutyAnchorsForSystem(state, 'life-support'),
+    hydroponics: dutyAnchorsForSystem(state, 'hydroponics'),
+    kitchen: dutyAnchorsForSystem(state, 'kitchen'),
+    cafeteria: dutyAnchorsForSystem(state, 'cafeteria'),
+    security: dutyAnchorsForSystem(state, 'security'),
+    hygiene: dutyAnchorsForSystem(state, 'hygiene'),
+    lounge: dutyAnchorsForSystem(state, 'lounge'),
+    market: dutyAnchorsForSystem(state, 'market')
+  } satisfies Record<CrewPrioritySystem, number[]>;
+  const slotsPerSystem: Record<CrewPrioritySystem, number> = {
+    reactor: CREW_PER_REACTOR,
+    'life-support': CREW_PER_LIFE_SUPPORT,
+    hydroponics: CREW_PER_HYDROPONICS,
+    kitchen: CREW_PER_KITCHEN,
+    cafeteria: CREW_PER_CAFETERIA,
+    security: CREW_PER_SECURITY,
+    hygiene: CREW_PER_HYGIENE,
+    lounge: CREW_PER_LOUNGE,
+    market: CREW_PER_MARKET
+  };
 
-  const jobsBySystem = new Map<CrewPrioritySystem, Array<{ role: CrewRole; tileIndex: number; system: CrewPrioritySystem }>>();
-  jobsBySystem.set('reactor', []);
-  jobsBySystem.set('cafeteria', []);
-  jobsBySystem.set('kitchen', []);
-  jobsBySystem.set('security', []);
-  jobsBySystem.set('hygiene', []);
-  jobsBySystem.set('hydroponics', []);
-  jobsBySystem.set('life-support', []);
-  jobsBySystem.set('lounge', []);
-  jobsBySystem.set('market', []);
+  const criticalTargets = computeCriticalCapacityTargets(state);
+  const requiredMinimum = new Map<CrewPrioritySystem, number>([
+    ['reactor', criticalTargets.requiredReactorPosts],
+    ['life-support', criticalTargets.requiredLifeSupportPosts],
+    ['hydroponics', criticalTargets.requiredHydroPosts],
+    ['kitchen', criticalTargets.requiredKitchenPosts],
+    ['cafeteria', criticalTargets.requiredCafeteriaPosts]
+  ]);
+  state.metrics.requiredCriticalStaff = {
+    reactor: criticalTargets.requiredReactorPosts,
+    lifeSupport: criticalTargets.requiredLifeSupportPosts,
+    hydroponics: criticalTargets.requiredHydroPosts,
+    kitchen: criticalTargets.requiredKitchenPosts,
+    cafeteria: criticalTargets.requiredCafeteriaPosts
+  };
 
-  for (const tile of reactors) {
-    for (let i = 0; i < CREW_PER_REACTOR; i++) jobsBySystem.get('reactor')!.push({ role: 'reactor', tileIndex: tile, system: 'reactor' });
-  }
-  for (const tile of cafeterias) {
-    for (let i = 0; i < CREW_PER_CAFETERIA; i++) jobsBySystem.get('cafeteria')!.push({ role: 'cafeteria', tileIndex: tile, system: 'cafeteria' });
-  }
-  for (const tile of kitchens) {
-    for (let i = 0; i < CREW_PER_KITCHEN; i++) jobsBySystem.get('kitchen')!.push({ role: 'cafeteria', tileIndex: tile, system: 'kitchen' });
-  }
-  for (const tile of security) {
-    for (let i = 0; i < CREW_PER_SECURITY; i++) jobsBySystem.get('security')!.push({ role: 'security', tileIndex: tile, system: 'security' });
-  }
-  for (const tile of hygiene) {
-    for (let i = 0; i < CREW_PER_HYGIENE; i++) jobsBySystem.get('hygiene')!.push({ role: 'cafeteria', tileIndex: tile, system: 'hygiene' });
-  }
-  for (const tile of hydroponics) {
-    for (let i = 0; i < CREW_PER_HYDROPONICS; i++) jobsBySystem.get('hydroponics')!.push({ role: 'reactor', tileIndex: tile, system: 'hydroponics' });
-  }
-  for (const tile of lifeSupport) {
-    for (let i = 0; i < CREW_PER_LIFE_SUPPORT; i++) jobsBySystem.get('life-support')!.push({ role: 'reactor', tileIndex: tile, system: 'life-support' });
-  }
-  for (const tile of lounges) {
-    for (let i = 0; i < CREW_PER_LOUNGE; i++) jobsBySystem.get('lounge')!.push({ role: 'cafeteria', tileIndex: tile, system: 'lounge' });
-  }
-  for (const tile of markets) {
-    for (let i = 0; i < CREW_PER_MARKET; i++) jobsBySystem.get('market')!.push({ role: 'cafeteria', tileIndex: tile, system: 'market' });
-  }
-  const jobs: Array<{ role: CrewRole; tileIndex: number; system: CrewPrioritySystem }> = [];
-  const weightedOrder = (Object.keys(state.controls.crewPriorityWeights) as CrewPrioritySystem[])
-    .sort((a, b) => state.controls.crewPriorityWeights[b] - state.controls.crewPriorityWeights[a] || a.localeCompare(b));
-  const needsAirFloor = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
-  const needsFoodChainFloor =
-    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
-  const floorSystems: CrewPrioritySystem[] = [];
-  if (needsAirFloor) floorSystems.push('life-support');
-  const foodFloorOrder: CrewPrioritySystem[] = ['hydroponics', 'kitchen', 'cafeteria'];
-  if (needsFoodChainFloor) floorSystems.push(...foodFloorOrder);
-  for (const system of floorSystems) {
-    const candidates = jobsBySystem.get(system) ?? [];
-    if (candidates.length > 0) jobs.push(candidates[0]);
-  }
-  for (const key of weightedOrder) {
-    for (const job of jobsBySystem.get(key) ?? []) {
-      if (
-        floorSystems.includes(key) &&
-        jobs.some((j) => j.tileIndex === job.tileIndex && j.system === key)
-      ) {
-        continue;
+  for (const system of CREW_SYSTEMS) {
+    const anchors = targetBySystem[system];
+    const tasks: CrewTaskCandidate[] = [];
+    for (const anchor of anchors) {
+      for (let i = 0; i < slotsPerSystem[system]; i++) {
+        tasks.push({
+          id: `${system}:${anchor}:${i}`,
+          kind: (requiredMinimum.get(system) ?? 0) > 0 ? 'critical_post' : 'post',
+          system,
+          tileIndex: anchor,
+          score: 0,
+          critical: (requiredMinimum.get(system) ?? 0) > 0,
+          protectedMinimum: false
+        });
       }
-      jobs.push(job);
     }
+    jobsBySystem.set(system, tasks);
   }
 
   const airEmergency = state.metrics.airQuality < 25 || state.metrics.airBlockedWarningActive;
   const criticalAirEmergency = state.metrics.airQuality < AIR_CRITICAL_THRESHOLD;
   const totalCrew = state.crewMembers.length;
   const emergencyWakeBudget = airEmergency ? Math.ceil(totalCrew * CREW_EMERGENCY_WAKE_RATIO) : 0;
-  const requiredLifeSupportStaff = jobsBySystem.get('life-support')?.length ?? 0;
   const lockoutCandidates = state.crewMembers.filter((c) => c.resting && state.now < c.restLockUntil);
   state.metrics.crewPingPongPreventions = airEmergency ? lockoutCandidates.length : 0;
   state.metrics.crewEmergencyWakeBudget = emergencyWakeBudget;
   state.metrics.crewWokenForAir = 0;
 
+  const requiredLifeSupportStaff = requiredMinimum.get('life-support') ?? 0;
   if (airEmergency && requiredLifeSupportStaff > 0) {
     const awakeCrew = state.crewMembers.filter((c) => !c.resting);
-    const currentlyAssignableLifeSupport = awakeCrew.length;
-    const deficit = Math.max(0, requiredLifeSupportStaff - currentlyAssignableLifeSupport);
+    const deficit = Math.max(0, requiredLifeSupportStaff - awakeCrew.length);
     if (deficit > 0 && emergencyWakeBudget > 0) {
       const wakingCandidates = state.crewMembers
         .filter((c) => c.resting)
@@ -1223,120 +1330,189 @@ function assignCrewJobs(state: StationState): void {
     }
   }
 
-  let availableCrew = state.crewMembers.filter((c) => !c.resting);
-  if (airEmergency) {
-    const emergencyOrder = ['life-support', 'reactor', 'kitchen', 'cafeteria', 'market', 'lounge', 'hydroponics', 'security', 'hygiene'];
-    jobs.length = 0;
-    for (const key of emergencyOrder as CrewPrioritySystem[]) {
-      jobs.push(...(jobsBySystem.get(key) ?? []));
-    }
-    availableCrew = availableCrew.sort((a, b) => a.id - b.id);
-  }
-  const logisticsNeeded =
-    collectServiceTargets(state, RoomType.Hydroponics).length > 0 &&
-    collectServiceTargets(state, RoomType.Kitchen).length > 0 &&
-    state.metrics.rawFoodStock > 0.5 &&
-    state.metrics.mealStock < 140;
-  const hasPendingLogisticsJobs = state.jobs.some((j) => j.state === 'pending');
-  const hasUnmetCriticalFloors = floorSystems.some((system) => (jobsBySystem.get(system)?.length ?? 0) > 0);
-  let logisticsReserve = 0;
-  if (!airEmergency && logisticsNeeded && hasPendingLogisticsJobs) {
-    if (hasUnmetCriticalFloors) {
-      // Keep a tiny logistics lane alive for food-haul recovery while critical floors are active.
-      logisticsReserve = Math.min(1, Math.floor(availableCrew.length / 6));
-    } else {
-      logisticsReserve = Math.min(1, Math.floor(availableCrew.length / 5));
+  const availableCrew = state.crewMembers.filter((c) => !c.resting).sort((a, b) => a.id - b.id);
+  const assignedBySystem = new Map<CrewPrioritySystem, number>();
+  const assignedTargetCounts = new Map<string, number>();
+  const capacityByTarget = new Map<string, number>();
+  const taskByKey = new Map<string, CrewTaskCandidate>();
+  for (const system of CREW_SYSTEMS) {
+    const tasks = jobsBySystem.get(system) ?? [];
+    for (const t of tasks) {
+      const key = `${system}:${t.tileIndex}`;
+      taskByKey.set(key, t);
+      if (!assignedTargetCounts.has(key)) assignedTargetCounts.set(key, 0);
+      capacityByTarget.set(key, (capacityByTarget.get(key) ?? 0) + 1);
     }
   }
-  let assignedCount = 0;
-  const maxPlannedAssignments = Math.max(0, availableCrew.length - logisticsReserve);
-  const plannedJobs = jobs.slice(0, maxPlannedAssignments);
-  const consumeMatchingPlannedJob = (targetTile: number | null, system: CrewPrioritySystem | null): boolean => {
-    if (targetTile === null || system === null) return false;
-    const idx = plannedJobs.findIndex((job) => job.tileIndex === targetTile && job.system === system);
-    if (idx < 0) return false;
-    plannedJobs.splice(idx, 1);
+
+  const availableCountBySystem = new Map<CrewPrioritySystem, number>();
+  for (const system of CREW_SYSTEMS) {
+    availableCountBySystem.set(system, (jobsBySystem.get(system) ?? []).length);
+  }
+
+  const isCurrentAssignmentValid = (crew: CrewMember): boolean => {
+    if (crew.assignedSystem === null || crew.targetTile === null) return false;
+    const key = `${crew.assignedSystem}:${crew.targetTile}`;
+    if (!taskByKey.has(key)) return false;
+    if (state.rooms[crew.targetTile] !== systemRoomType(crew.assignedSystem)) return false;
     return true;
   };
-  for (let i = 0; i < availableCrew.length; i++) {
-    const cm = availableCrew[i];
-    if (cm.activeJobId !== null) continue;
-    const currentAssignmentStillValid =
-      cm.targetTile !== null &&
-      cm.assignedSystem !== null &&
-      (jobsBySystem.get(cm.assignedSystem) ?? []).some((j) => j.tileIndex === cm.targetTile);
-    const hasHoldLock =
-      state.now < cm.assignmentHoldUntil &&
-      !criticalAirEmergency &&
-      cm.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
-      currentAssignmentStillValid;
-    if (hasHoldLock) {
-      consumeMatchingPlannedJob(cm.targetTile, cm.assignedSystem);
-      assignedCount += 1;
-      continue;
+
+  // Pre-seed counts from valid existing assignments so critical shortfall is computed
+  // against current staffing, not against an empty map each tick.
+  for (const crew of availableCrew) {
+    if (crew.activeJobId !== null) continue;
+    if (!isCurrentAssignmentValid(crew)) continue;
+    const key = `${crew.assignedSystem}:${crew.targetTile}`;
+    const cap = capacityByTarget.get(key) ?? 0;
+    const used = assignedTargetCounts.get(key) ?? 0;
+    if (used >= cap) continue;
+    assignedTargetCounts.set(key, used + 1);
+    assignedBySystem.set(crew.assignedSystem!, (assignedBySystem.get(crew.assignedSystem!) ?? 0) + 1);
+  }
+
+  const criticalRemaining = new Map<CrewPrioritySystem, number>();
+  for (const [system, min] of requiredMinimum.entries()) {
+    const remaining = Math.max(0, Math.min(min, availableCountBySystem.get(system) ?? 0) - (assignedBySystem.get(system) ?? 0));
+    criticalRemaining.set(system, remaining);
+  }
+
+  const anyCriticalShortfall = (): boolean => {
+    for (const system of CRITICAL_TRACKED_SYSTEMS) {
+      if ((criticalRemaining.get(system as CrewPrioritySystem) ?? 0) > 0) return true;
     }
-    if (currentAssignmentStillValid && !airEmergency) {
-      consumeMatchingPlannedJob(cm.targetTile, cm.assignedSystem);
-      assignedCount += 1;
-      continue;
+    return false;
+  };
+
+  let assignedCount = 0;
+  for (const crew of availableCrew) {
+    if (crew.activeJobId !== null) continue;
+    const currentSystem = crew.assignedSystem;
+    const currentKey =
+      currentSystem !== null && crew.targetTile !== null ? `${currentSystem}:${crew.targetTile}` : null;
+    const currentValid = isCurrentAssignmentValid(crew);
+    const hardShortfall = anyCriticalShortfall();
+
+    // Keep valid assignments sticky by default. Only reconsider non-critical assignments
+    // when a critical shortfall exists, or when the current assignment can no longer be used.
+    if (currentValid && currentSystem && currentKey) {
+      const hasHoldLock =
+        state.now < crew.assignmentHoldUntil &&
+        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
+        !criticalAirEmergency;
+      const hasStickyLock =
+        state.now < crew.assignmentStickyUntil &&
+        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
+        !airEmergency;
+      const inCriticalShortfallSet = (criticalRemaining.get(currentSystem) ?? 0) > 0;
+      const shouldKeep =
+        hasHoldLock ||
+        hasStickyLock ||
+        !hardShortfall ||
+        inCriticalShortfallSet;
+
+      if (shouldKeep) {
+        assignedCount += 1;
+        continue;
+      }
+
+      // Re-evaluate this crew for potential preemption: temporarily release its count.
+      assignedBySystem.set(currentSystem, Math.max(0, (assignedBySystem.get(currentSystem) ?? 1) - 1));
+      assignedTargetCounts.set(currentKey, Math.max(0, (assignedTargetCounts.get(currentKey) ?? 1) - 1));
     }
-    const proposedJob = plannedJobs.shift();
-    const hasStickyLock =
-      state.now < cm.assignmentStickyUntil &&
-      !airEmergency &&
-      cm.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS;
-    if (proposedJob && (!hasStickyLock || cm.targetTile === proposedJob.tileIndex || !currentAssignmentStillValid)) {
-      const changed = cm.role !== proposedJob.role || cm.targetTile !== proposedJob.tileIndex || cm.assignedSystem !== proposedJob.system;
-      const changedSystem = cm.assignedSystem !== null && cm.assignedSystem !== proposedJob.system;
-      cm.role = proposedJob.role;
-      cm.targetTile = proposedJob.tileIndex;
-      cm.lastSystem = proposedJob.system;
-      cm.assignedSystem = proposedJob.system;
-      if (changed) {
-        cm.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
-        cm.assignmentStickyUntil = state.now + CREW_ASSIGNMENT_STICKY_SEC;
-        cm.assignmentHoldUntil = state.now + CREW_ASSIGNMENT_HOLD_SEC;
-        cm.path = [];
-        if (changedSystem) {
-          cm.retargetCountWindow += 1;
-          state.usageTotals.crewRetargets += 1;
+
+    let best: CrewTaskCandidate | null = null;
+    for (const system of CREW_SYSTEMS) {
+      const tasks = jobsBySystem.get(system) ?? [];
+      if (tasks.length === 0) continue;
+      const remainingCritical = criticalRemaining.get(system) ?? 0;
+      const systemAssigned = assignedBySystem.get(system) ?? 0;
+      const totalSlots = availableCountBySystem.get(system) ?? 0;
+      if (systemAssigned >= totalSlots) continue;
+      const targetCountsByTile = assignedTargetCounts;
+      for (const task of tasks) {
+        const key = `${system}:${task.tileIndex}`;
+        const taskCount = targetCountsByTile.get(key) ?? 0;
+        const taskCapacity = capacityByTarget.get(key) ?? 1;
+        if (taskCount >= taskCapacity) continue;
+        const path = findPath(state, crew.tileIndex, task.tileIndex, true, state.pathOccupancyByTile);
+        if (!path) continue;
+        const weight = state.controls.crewPriorityWeights[system];
+        const criticalUrgency = remainingCritical > 0 ? 4 : 1;
+        const baseUrgency = airEmergency && (system === 'life-support' || system === 'reactor') ? 2.4 : 1;
+        const diminishing = 1 / (1 + 0.75 * systemAssigned);
+        const score = weight * criticalUrgency * baseUrgency * diminishing - path.length * ASSIGNMENT_PATH_COST_WEIGHT;
+        if (!best || score > best.score) {
+          best = { ...task, score, critical: remainingCritical > 0, protectedMinimum: remainingCritical > 0 };
         }
       }
-      assignedCount += 1;
+    }
+
+    if (!best) {
+      const changed = crew.role !== 'idle' || crew.targetTile !== null || crew.lastSystem !== null || crew.assignedSystem !== null;
+      crew.role = 'idle';
+      crew.targetTile = null;
+      crew.lastSystem = null;
+      crew.assignedSystem = null;
+      if (changed) {
+        crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
+        crew.path = [];
+      }
       continue;
     }
 
-    if (currentAssignmentStillValid) {
-      consumeMatchingPlannedJob(cm.targetTile, cm.assignedSystem);
-      assignedCount += 1;
-      continue;
+    const oldScore =
+      currentSystem !== null
+        ? (state.controls.crewPriorityWeights[currentSystem] *
+            ((criticalRemaining.get(currentSystem) ?? 0) > 0 ? 4 : 1)) -
+          (crew.path.length > 0 ? crew.path.length * ASSIGNMENT_PATH_COST_WEIGHT : 0)
+        : -999;
+    const canPreempt =
+      best.score >= oldScore * ASSIGNMENT_PREEMPT_MULTIPLIER + ASSIGNMENT_PREEMPT_DELTA ||
+      (best.critical && (criticalRemaining.get(best.system as CrewPrioritySystem) ?? 0) > 0);
+    const hasHoldLock =
+      state.now < crew.assignmentHoldUntil &&
+      !criticalAirEmergency &&
+      crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS;
+    const hasStickyLock =
+      state.now < crew.assignmentStickyUntil &&
+      !airEmergency &&
+      crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS;
+    if ((hasHoldLock || hasStickyLock) && !canPreempt) {
+      if (currentSystem && currentKey && currentValid) {
+        assignedBySystem.set(currentSystem, (assignedBySystem.get(currentSystem) ?? 0) + 1);
+        assignedTargetCounts.set(currentKey, (assignedTargetCounts.get(currentKey) ?? 0) + 1);
+        assignedCount += 1;
+        continue;
+      }
     }
 
-    const changed = cm.role !== 'idle' || cm.targetTile !== null || cm.lastSystem !== null || cm.assignedSystem !== null;
-    cm.role = 'idle';
-    cm.targetTile = null;
-    cm.lastSystem = null;
-    cm.assignedSystem = null;
+    const changed = crew.role !== roleForSystem(best.system as CrewPrioritySystem) ||
+      crew.targetTile !== best.tileIndex ||
+      crew.assignedSystem !== best.system;
+    const changedSystem = crew.assignedSystem !== null && crew.assignedSystem !== best.system;
+    crew.role = roleForSystem(best.system as CrewPrioritySystem);
+    crew.targetTile = best.tileIndex;
+    crew.lastSystem = best.system as CrewPrioritySystem;
+    crew.assignedSystem = best.system as CrewPrioritySystem;
+    assignedBySystem.set(best.system as CrewPrioritySystem, (assignedBySystem.get(best.system as CrewPrioritySystem) ?? 0) + 1);
+    assignedTargetCounts.set(`${best.system}:${best.tileIndex}`, (assignedTargetCounts.get(`${best.system}:${best.tileIndex}`) ?? 0) + 1);
+    criticalRemaining.set(best.system as CrewPrioritySystem, Math.max(0, (criticalRemaining.get(best.system as CrewPrioritySystem) ?? 0) - 1));
     if (changed) {
-      cm.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
-      cm.path = [];
+      crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
+      crew.assignmentStickyUntil = state.now + CREW_ASSIGNMENT_STICKY_SEC;
+      crew.assignmentHoldUntil = state.now + CREW_ASSIGNMENT_HOLD_SEC;
+      crew.path = [];
+      if (changedSystem) {
+        crew.retargetCountWindow += 1;
+        state.usageTotals.crewRetargets += 1;
+      }
     }
+    assignedCount += 1;
   }
+
   for (const c of state.crewMembers) {
     if (c.resting) c.role = 'idle';
-  }
-
-  if (airEmergency && lifeSupport.length > 0) {
-    const hasLifeSupportAssignee = availableCrew.some((c) => c.targetTile !== null && state.rooms[c.targetTile] === RoomType.LifeSupport);
-    if (!hasLifeSupportAssignee && availableCrew.length > 0) {
-      const candidate = availableCrew[0];
-      candidate.role = 'reactor';
-      candidate.targetTile = lifeSupport[0];
-      candidate.lastSystem = 'life-support';
-      candidate.assignedSystem = 'life-support';
-      candidate.assignmentHoldUntil = state.now + CREW_ASSIGNMENT_HOLD_SEC;
-      candidate.path = [];
-    }
   }
 
   state.crew.assigned = assignedCount;
@@ -1498,17 +1674,28 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
 }
 
 function updateCriticalStaffTracking(state: StationState, dt: number): void {
+  const criticalTargets = computeCriticalCapacityTargets(state);
   const needsAirFloor = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
   const needsFoodFloor =
     state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
   const deficits = {
-    lifeSupport: needsAirFloor && state.ops.lifeSupportTotal > 0 && state.ops.lifeSupportActive <= 0,
+    reactor: criticalTargets.requiredReactorPosts > 0 && state.ops.reactorsActive < criticalTargets.requiredReactorPosts,
+    lifeSupport:
+      (needsAirFloor && state.ops.lifeSupportTotal > 0 && state.ops.lifeSupportActive <= 0) ||
+      state.ops.lifeSupportActive < criticalTargets.requiredLifeSupportPosts,
     hydroponics: needsFoodFloor && state.ops.hydroponicsTotal > 0 && state.ops.hydroponicsActive <= 0,
-    kitchen: needsFoodFloor && state.ops.kitchenTotal > 0 && state.ops.kitchenActive <= 0
+    kitchen: needsFoodFloor && state.ops.kitchenTotal > 0 && state.ops.kitchenActive <= 0,
+    cafeteria: needsFoodFloor && state.ops.cafeteriasTotal > 0 && state.ops.cafeteriasActive <= 0
   };
+  if (deficits.reactor) state.metrics.criticalShortfallSec.reactor += dt;
+  if (deficits.lifeSupport) state.metrics.criticalShortfallSec.lifeSupport += dt;
+  if (deficits.hydroponics) state.metrics.criticalShortfallSec.hydroponics += dt;
+  if (deficits.kitchen) state.metrics.criticalShortfallSec.kitchen += dt;
+  if (deficits.cafeteria) state.metrics.criticalShortfallSec.cafeteria += dt;
   if (deficits.lifeSupport) state.usageTotals.criticalUnstaffedSec.lifeSupport += dt;
   if (deficits.hydroponics) state.usageTotals.criticalUnstaffedSec.hydroponics += dt;
   if (deficits.kitchen) state.usageTotals.criticalUnstaffedSec.kitchen += dt;
+  if (deficits.reactor && !state.metrics.assignedCriticalStaff.reactor) state.usageTotals.criticalStaffDrops += 1;
   if (deficits.lifeSupport && !state.criticalStaffPrevUnmet.lifeSupport) state.usageTotals.criticalStaffDrops += 1;
   if (deficits.hydroponics && !state.criticalStaffPrevUnmet.hydroponics) state.usageTotals.criticalStaffDrops += 1;
   if (deficits.kitchen && !state.criticalStaffPrevUnmet.kitchen) state.usageTotals.criticalStaffDrops += 1;
@@ -1616,6 +1803,9 @@ export function getRoomDiagnosticAt(state: StationState, tileIndex: number): Roo
   for (const tile of cluster) {
     staffCount += staffByTile.get(tile) ?? 0;
   }
+  const assignedToCluster = state.crewMembers.filter(
+    (c) => !c.resting && c.targetTile !== null && cluster.includes(c.targetTile)
+  ).length;
 
   const requiredStaff = staffRequiredForRoom(room);
   const pressurizedEnough = room === RoomType.Reactor || pressurizedCount / cluster.length >= 0.7;
@@ -1642,7 +1832,11 @@ export function getRoomDiagnosticAt(state: StationState, tileIndex: number): Roo
   if (!hasDoor) reasons.push('missing door');
   if (!pressurizedEnough) reasons.push('not pressurized');
   if (!hasServiceNode) reasons.push('no service node');
-  if (requiredStaff > 0 && staffCount < requiredStaff) reasons.push('no staff');
+  if (requiredStaff > 0 && staffCount < requiredStaff) {
+    if (assignedToCluster <= 0) reasons.push('no_assigned_staff');
+    else if (staffCount <= 0) reasons.push('staff_in_transit');
+    else reasons.push('under_capacity');
+  }
   if (!hasPath) reasons.push('no path');
 
   const warnings: string[] = [];
@@ -1660,6 +1854,162 @@ export function getRoomDiagnosticAt(state: StationState, tileIndex: number): Roo
     reasons,
     clusterSize: cluster.length,
     warnings
+  };
+}
+
+export function getRoomInspectorAt(state: StationState, tileIndex: number): RoomInspector | null {
+  if (tileIndex < 0 || tileIndex >= state.rooms.length) return null;
+  const room = state.rooms[tileIndex];
+  if (room === RoomType.None) return null;
+
+  const clusters = roomClusters(state, room);
+  const cluster = clusters.find((c) => c.includes(tileIndex));
+  if (!cluster || cluster.length === 0) return null;
+
+  let hasDoor = false;
+  let pressurizedCount = 0;
+  let doorCount = 0;
+  for (const tile of cluster) {
+    const adjacentDoor = hasAdjacentDoor(state, tile);
+    if (adjacentDoor) doorCount += 1;
+    if (!hasDoor && adjacentDoor) hasDoor = true;
+    if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount++;
+  }
+
+  const staffByTile = countStaffAtAssignedTiles(state);
+  let staffCount = 0;
+  for (const tile of cluster) {
+    staffCount += staffByTile.get(tile) ?? 0;
+  }
+  const assignedToCluster = state.crewMembers.filter(
+    (c) => !c.resting && c.targetTile !== null && cluster.includes(c.targetTile)
+  ).length;
+
+  const requiredStaff = staffRequiredForRoom(room);
+  const pressurizedPct = cluster.length > 0 ? (pressurizedCount / cluster.length) * 100 : 0;
+  const pressurizedEnough = room === RoomType.Reactor || pressurizedPct >= 70;
+  const hasServiceNode = clusterHasServiceNode(state, room, cluster);
+  const serviceTargetSet = roomRequiresServiceNode(room) ? new Set(collectServiceTargets(state, room)) : null;
+  const serviceTargets = serviceTargetSet ? cluster.filter((tile) => serviceTargetSet.has(tile)) : cluster;
+  const serviceNodeCount = roomRequiresServiceNode(room) ? serviceTargets.length : cluster.length;
+
+  const starts = collectTiles(state, TileType.Dock);
+  if (starts.length === 0) starts.push(...collectTiles(state, TileType.Floor));
+  let hasPath = starts.length === 0;
+  if (!hasPath) {
+    for (const start of starts) {
+      const path = chooseNearestPath(state, start, serviceTargets, true);
+      if (path !== null) {
+        hasPath = true;
+        break;
+      }
+    }
+  }
+
+  const reasons: string[] = [];
+  if (!hasDoor) reasons.push('missing door');
+  if (!pressurizedEnough) reasons.push('not pressurized');
+  if (!hasServiceNode) reasons.push('no service node');
+  if (requiredStaff > 0 && staffCount < requiredStaff) {
+    if (assignedToCluster <= 0) reasons.push('no_assigned_staff');
+    else if (staffCount <= 0) reasons.push('staff_in_transit');
+    else reasons.push('under_capacity');
+  }
+  if (!hasPath) reasons.push('no path');
+
+  const warnings: string[] = [];
+  if (roomRequiresServiceNode(room) && cluster.length >= 10 && serviceTargets.length <= 2) {
+    warnings.push('room too large for service nodes');
+  }
+  if (doorCount <= 1 && cluster.length >= 6) {
+    warnings.push('single-door bottleneck risk');
+  }
+
+  const hints: string[] = [];
+  if (room === RoomType.Kitchen) {
+    hints.push(`raw buffer ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`);
+    if (state.ops.hydroponicsActive <= 0) hints.push('upstream hydroponics inactive');
+  }
+  if (room === RoomType.Hydroponics) {
+    hints.push(`hydro staffed ${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes}`);
+    if (state.metrics.rawFoodStock < 5) hints.push('low raw-food stock');
+  }
+  if (room === RoomType.Cafeteria) {
+    hints.push(`meal stock ${state.metrics.mealStock.toFixed(1)} | queue ${state.metrics.cafeteriaQueueingCount}`);
+  }
+  if (room === RoomType.LifeSupport) {
+    hints.push(`air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential`);
+  }
+
+  let cafeteriaLoad: RoomInspector['cafeteriaLoad'] | undefined;
+  if (room === RoomType.Cafeteria) {
+    const clusterSet = new Set(cluster);
+    const tableNodes = serviceTargets.length;
+    const queueNodes = collectQueueTargets(state, RoomType.Cafeteria).filter((q) => {
+      const p = fromIndex(q, state.width);
+      const deltas = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1]
+      ];
+      for (const [dx, dy] of deltas) {
+        const nx = p.x + dx;
+        const ny = p.y + dy;
+        if (!inBounds(nx, ny, state.width, state.height)) continue;
+        if (clusterSet.has(toIndex(nx, ny, state.width))) return true;
+      }
+      return false;
+    }).length;
+    const queueingVisitors = state.visitors.filter(
+      (v) =>
+        (v.state === VisitorState.ToCafeteria || v.state === VisitorState.Queueing) &&
+        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) || clusterSet.has(v.tileIndex))
+    ).length;
+    const eatingVisitors = state.visitors.filter(
+      (v) => v.state === VisitorState.Eating && clusterSet.has(v.tileIndex)
+    ).length;
+    const highPatienceWaiting = state.visitors.filter(
+      (v) =>
+        (v.state === VisitorState.ToCafeteria || v.state === VisitorState.Queueing) &&
+        v.patience > 22 &&
+        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) || clusterSet.has(v.tileIndex))
+    ).length;
+    const effectiveCapacity = Math.max(1, tableNodes + Math.floor(queueNodes / 2));
+    const pressureRatio = queueingVisitors / effectiveCapacity;
+    const pressure: 'low' | 'medium' | 'high' = pressureRatio > 1.6 || highPatienceWaiting > 3
+      ? 'high'
+      : pressureRatio > 0.8 || highPatienceWaiting > 0
+        ? 'medium'
+        : 'low';
+    cafeteriaLoad = {
+      tableNodes,
+      queueNodes,
+      queueingVisitors,
+      eatingVisitors,
+      highPatienceWaiting,
+      pressure
+    };
+    if (pressure === 'high') warnings.push('cafeteria queue overloaded');
+    if (tableNodes <= 1 && queueingVisitors >= 3) warnings.push('too few tables for demand');
+    if (queueNodes <= 1 && queueingVisitors >= 2) warnings.push('queue access bottleneck');
+  }
+
+  return {
+    room,
+    active: reasons.length === 0,
+    clusterSize: cluster.length,
+    doorCount,
+    pressurizedPct,
+    staffCount,
+    requiredStaff,
+    hasServiceNode,
+    serviceNodeCount,
+    hasPath,
+    reasons,
+    warnings,
+    hints,
+    cafeteriaLoad
   };
 }
 
@@ -1936,7 +2286,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
 
     if (ship.stage === 'depart' && ship.stageTime >= SHIP_DEPART_TIME) {
       if (!shipServicesSatisfied(state, ship.shipType)) {
-        serviceFailureRatingPenalty(state, 0.25, 'ratingFromVisitorFailure');
+        addVisitorFailurePenalty(state, 0.25, 'shipServicesMissing');
       }
       if (ship.dockedAt > 0) {
         state.dockedTimeTotal += Math.max(0, state.now - ship.dockedAt);
@@ -2139,6 +2489,20 @@ function createFoodTransportJobs(state: StationState): void {
   const kitchenTargets = collectServiceTargets(state, RoomType.Kitchen);
   if (hydroTargets.length === 0 || kitchenTargets.length === 0) return;
   if (state.metrics.rawFoodStock < 1) return;
+  if (
+    state.metrics.mealStock >= FOOD_CHAIN_TARGET_MEAL_STOCK &&
+    state.metrics.kitchenRawBuffer >= FOOD_CHAIN_TARGET_KITCHEN_RAW
+  ) {
+    return;
+  }
+  const mealUse = Math.max(0.01, state.metrics.mealUseRate);
+  const projectedMealHorizonSec = state.metrics.mealStock / mealUse;
+  if (
+    projectedMealHorizonSec > FOOD_CHAIN_MEAL_HORIZON_SEC &&
+    state.metrics.kitchenRawBuffer >= FOOD_CHAIN_TARGET_KITCHEN_RAW
+  ) {
+    return;
+  }
   if (state.metrics.kitchenRawBuffer > 90 || state.metrics.mealStock > 220) return;
 
   const openJobs = state.jobs.filter(
@@ -2166,13 +2530,106 @@ function createFoodTransportJobs(state: StationState): void {
 
 function assignJobsToIdleCrew(state: StationState): void {
   const pendingJobs = state.jobs.filter((j) => j.state === 'pending');
-  if (pendingJobs.length === 0) return;
+  if (pendingJobs.length === 0) {
+    state.metrics.logisticsDispatchSlots = 0;
+    state.metrics.logisticsPressure = 0;
+    return;
+  }
+  const airEmergency = state.metrics.airQuality < 25 || state.metrics.airBlockedWarningActive;
+  const criticalAirEmergency = state.metrics.airQuality < AIR_CRITICAL_THRESHOLD;
+  const needsAirFloor = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
+  const needsFoodFloor =
+    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
+  const protectedMinimumBySystem = new Map<CrewPrioritySystem, number>();
+  const setProtectedMinimum = (system: CrewPrioritySystem, min: number): void => {
+    if (min <= 0) return;
+    protectedMinimumBySystem.set(system, Math.max(protectedMinimumBySystem.get(system) ?? 0, min));
+  };
+  if (needsAirFloor && roomClusterAnchors(state, RoomType.LifeSupport).length > 0) {
+    setProtectedMinimum('life-support', 1);
+  }
+  if (state.metrics.powerDemand > state.metrics.powerSupply && roomClusterAnchors(state, RoomType.Reactor).length > 0) {
+    setProtectedMinimum('reactor', 1);
+  }
+  if (needsFoodFloor) {
+    if (collectServiceTargets(state, RoomType.Hydroponics).length > 0) setProtectedMinimum('hydroponics', 1);
+    if (roomClusterAnchors(state, RoomType.Kitchen).length > 0) setProtectedMinimum('kitchen', 1);
+    if (collectServiceTargets(state, RoomType.Cafeteria).length > 0) setProtectedMinimum('cafeteria', 1);
+  }
 
-  for (const crew of state.crewMembers) {
-    if (crew.resting) continue;
+  const nonRestingCrew = state.crewMembers.filter((c) => !c.resting);
+  const assignedBySystem = new Map<CrewPrioritySystem, number>();
+  for (const crew of nonRestingCrew) {
     if (crew.activeJobId !== null) continue;
-    if (crew.role !== 'idle') continue;
+    if (!crew.assignedSystem) continue;
+    assignedBySystem.set(crew.assignedSystem, (assignedBySystem.get(crew.assignedSystem) ?? 0) + 1);
+  }
+  const activeLogisticsCrew = nonRestingCrew.filter((c) => c.activeJobId !== null).length;
+  const pendingPressure = clamp(pendingJobs.length / 6, 0, 1);
+  const foodPressure = clamp(
+    Math.max(
+      (FOOD_CHAIN_LOW_MEAL_STOCK - state.metrics.mealStock) / Math.max(1, FOOD_CHAIN_LOW_MEAL_STOCK),
+      (FOOD_CHAIN_LOW_KITCHEN_RAW - state.metrics.kitchenRawBuffer) / Math.max(1, FOOD_CHAIN_LOW_KITCHEN_RAW)
+    ),
+    0,
+    1
+  );
+  const logisticsPressure = Math.max(pendingPressure, foodPressure);
+  let maxLogisticsCrew = Math.ceil(nonRestingCrew.length * (0.12 + logisticsPressure * 0.5));
+  if (needsFoodFloor) {
+    const foodFloorHaulers = nonRestingCrew.length >= 6 ? 2 : 1;
+    maxLogisticsCrew = Math.max(maxLogisticsCrew, foodFloorHaulers);
+  }
+  if (airEmergency) {
+    const emergencyCap = Math.max(1, Math.floor(nonRestingCrew.length * (criticalAirEmergency ? 0.22 : 0.35)));
+    maxLogisticsCrew = Math.min(maxLogisticsCrew, emergencyCap);
+  }
+  const dispatchSlots = Math.max(0, maxLogisticsCrew - activeLogisticsCrew);
+  state.metrics.logisticsDispatchSlots = dispatchSlots;
+  state.metrics.logisticsPressure = logisticsPressure;
+  if (dispatchSlots <= 0) return;
 
+  const candidates = state.crewMembers
+    .filter((crew) => !crew.resting && crew.activeJobId === null)
+    .filter((crew) => {
+      if (crew.role === 'idle') return true;
+      if (crew.energy <= CREW_REST_ENERGY_THRESHOLD + 8) return false;
+      if (logisticsPressure < 0.55) return false;
+      if (crew.assignedSystem === null) return true;
+      const requiredMinimum = protectedMinimumBySystem.get(crew.assignedSystem) ?? 0;
+      const currentlyAssigned = assignedBySystem.get(crew.assignedSystem) ?? 0;
+      if (requiredMinimum > 0 && currentlyAssigned <= requiredMinimum) return false;
+      if (
+        state.now < crew.assignmentHoldUntil &&
+        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
+        logisticsPressure < 0.65 &&
+        !criticalAirEmergency
+      ) {
+        return false;
+      }
+      if (
+        state.now < crew.assignmentStickyUntil &&
+        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
+        logisticsPressure < 0.65 &&
+        !airEmergency
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const aIdle = a.role === 'idle' ? 0 : 1;
+      const bIdle = b.role === 'idle' ? 0 : 1;
+      if (aIdle !== bIdle) return aIdle - bIdle;
+      const aw = a.assignedSystem ? state.controls.crewPriorityWeights[a.assignedSystem] : 0;
+      const bw = b.assignedSystem ? state.controls.crewPriorityWeights[b.assignedSystem] : 0;
+      if (aw !== bw) return aw - bw;
+      return a.id - b.id;
+    });
+
+  let assignedNow = 0;
+  for (const crew of candidates) {
+    if (assignedNow >= dispatchSlots) break;
     let bestJob: (typeof pendingJobs)[number] | null = null;
     let bestLen = Number.POSITIVE_INFINITY;
     for (const job of pendingJobs) {
@@ -2186,6 +2643,18 @@ function assignJobsToIdleCrew(state: StationState): void {
     }
     if (!bestJob) continue;
 
+    if (crew.role !== 'idle' || crew.targetTile !== null || crew.assignedSystem !== null) {
+      if (crew.assignedSystem) {
+        assignedBySystem.set(crew.assignedSystem, Math.max(0, (assignedBySystem.get(crew.assignedSystem) ?? 1) - 1));
+      }
+      crew.role = 'idle';
+      crew.targetTile = null;
+      crew.lastSystem = null;
+      crew.assignedSystem = null;
+      crew.assignmentHoldUntil = 0;
+      crew.assignmentStickyUntil = 0;
+    }
+
     bestJob.state = 'assigned';
     bestJob.assignedCrewId = crew.id;
     bestJob.lastProgressAt = state.now;
@@ -2195,6 +2664,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
       markJobStall(state, bestJob, 'stalled_unreachable_source');
     }
+    assignedNow += 1;
   }
 }
 
@@ -2616,7 +3086,7 @@ function addVisitorPatience(state: StationState, visitor: Visitor, amount: numbe
 
 function registerVisitorServiceFailure(state: StationState, amount: number): void {
   state.usageTotals.visitorServiceFailures += amount;
-  serviceFailureRatingPenalty(state, Math.min(0.12, amount * 0.03), 'ratingFromVisitorFailure');
+  addVisitorFailurePenalty(state, Math.min(0.12, amount * 0.03), 'noLeisurePath');
 }
 
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
@@ -2695,7 +3165,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
       visitor.trespassed = true;
       const multiplier = state.now < state.effects.securityDelayUntil ? 2 : 1;
       registerIncident(state, multiplier);
-      serviceFailureRatingPenalty(state, 0.2 * multiplier, 'ratingFromVisitorFailure');
+      addVisitorFailurePenalty(state, 0.2 * multiplier, 'trespass');
     }
 
     if (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing) {
@@ -2775,6 +3245,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
       if (visitor.eatTimer <= 0) {
         visitor.servedMeal = true;
         state.metrics.mealsServedTotal += 1;
+        visitorSuccessRatingBonus(state, 0.08, 'mealService');
         if (shouldLeisureAfterMeal(state, visitor) && assignPathToLeisure(state, visitor)) {
           visitor.state = VisitorState.ToLeisure;
         } else {
@@ -2808,6 +3279,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt * 0.4);
       if (state.rooms[visitor.tileIndex] === RoomType.Lounge || state.rooms[visitor.tileIndex] === RoomType.Market) {
         visitor.state = VisitorState.Leisure;
+        visitorSuccessRatingBonus(state, 0.04, 'leisureService');
         if (state.rooms[visitor.tileIndex] === RoomType.Market) {
           state.usageTotals.visitorLeisureEntries.market += 1;
         } else {
@@ -2847,6 +3319,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
           state.now - state.lastCycleTime > state.cycleDuration * 0.2 &&
           state.now - visitor.spawnedAt >= VISITOR_MIN_STAY_SEC;
         if (boarded || canExitNormally) {
+          visitorSuccessRatingBonus(state, visitor.servedMeal ? 0.03 : 0.015, 'successfulExit');
           if (visitor.servedMeal) {
             const payout = mealExitPayout(state, visitor);
             state.metrics.credits += payout;
@@ -2870,7 +3343,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
       visitor.reservedTargetTile = null;
       assignPathToDock(state, visitor);
       visitor.patience = 12;
-      serviceFailureRatingPenalty(state, 0.05, 'ratingFromVisitorFailure');
+      addVisitorFailurePenalty(state, 0.05, 'patienceBail');
     }
     if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
       visitor.path = [];
@@ -2882,11 +3355,11 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
         );
         continue;
       }
-      serviceFailureRatingPenalty(state, 0.12, 'ratingFromVisitorFailure');
+      addVisitorFailurePenalty(state, 0.12, 'dockTimeout');
       visitor.patience = 20;
     }
     if (visitor.patience > 120 && visitor.state === VisitorState.ToDock) {
-      serviceFailureRatingPenalty(state, 0.2, 'ratingFromVisitorFailure');
+      addVisitorFailurePenalty(state, 0.2, 'dockTimeout');
       occupancyByTile.set(
         visitor.tileIndex,
         Math.max(0, (occupancyByTile.get(visitor.tileIndex) ?? 1) - 1)
@@ -3151,9 +3624,9 @@ function updateResources(state: StationState, dt: number): void {
   );
 
   const airDemand = state.residents.length * 0.12 + state.visitors.length * 0.05 + state.crewMembers.length * 0.08;
-  const lifeSupportPotentialAirPerSec = state.ops.lifeSupportTotal * 0.9;
-  const lifeSupportActiveAirPerSec = state.ops.lifeSupportActive * 0.9 * powerRatio;
-  const airSupply = lifeSupportActiveAirPerSec + (state.metrics.pressurizationPct / 100) * 0.35;
+  const lifeSupportPotentialAirPerSec = state.ops.lifeSupportTotal * LIFE_SUPPORT_AIR_PER_CLUSTER;
+  const lifeSupportActiveAirPerSec = state.ops.lifeSupportActive * LIFE_SUPPORT_AIR_PER_CLUSTER * powerRatio;
+  const airSupply = lifeSupportActiveAirPerSec + (state.metrics.pressurizationPct / 100) * PASSIVE_AIR_PER_SEC_AT_100_PRESSURE;
   const airDeltaPerSec = (airSupply - airDemand) * 1.7 - leakPenalty * 1.2;
   state.metrics.lifeSupportPotentialAirPerSec = lifeSupportPotentialAirPerSec;
   state.metrics.lifeSupportActiveAirPerSec = lifeSupportActiveAirPerSec;
@@ -3193,7 +3666,8 @@ function updateResources(state: StationState, dt: number): void {
   }
 
   state.metrics.rawFoodProdRate = hydroRate;
-  state.metrics.kitchenMealProdRate = dt > 0 ? kitchenMealProd / dt : 0;
+  const instantKitchenRate = dt > 0 ? kitchenMealProd / dt : 0;
+  state.metrics.kitchenMealProdRate = state.metrics.kitchenMealProdRate * 0.82 + instantKitchenRate * 0.18;
   state.metrics.mealPrepRate = state.metrics.kitchenMealProdRate;
   state.metrics.mealUseRate = mealUseRate;
 }
@@ -3461,6 +3935,51 @@ function computeMetrics(state: StationState): void {
       state.rooms[c.targetTile] === RoomType.Hydroponics &&
       c.tileIndex === c.targetTile
   ).length;
+  const criticalTargets = computeCriticalCapacityTargets(state);
+  const staffForRoom = (room: RoomType): { assigned: number; active: number; transit: number } => {
+    let assigned = 0;
+    let active = 0;
+    for (const crew of state.crewMembers) {
+      if (crew.resting || crew.targetTile === null) continue;
+      if (state.rooms[crew.targetTile] !== room) continue;
+      assigned += 1;
+      if (crew.tileIndex === crew.targetTile) active += 1;
+    }
+    return { assigned, active, transit: Math.max(0, assigned - active) };
+  };
+  const reactorStaff = staffForRoom(RoomType.Reactor);
+  const lifeSupportStaff = staffForRoom(RoomType.LifeSupport);
+  const hydroStaff = staffForRoom(RoomType.Hydroponics);
+  const kitchenStaff = staffForRoom(RoomType.Kitchen);
+  const cafeteriaStaff = staffForRoom(RoomType.Cafeteria);
+  state.metrics.requiredCriticalStaff = {
+    reactor: criticalTargets.requiredReactorPosts,
+    lifeSupport: criticalTargets.requiredLifeSupportPosts,
+    hydroponics: criticalTargets.requiredHydroPosts,
+    kitchen: criticalTargets.requiredKitchenPosts,
+    cafeteria: criticalTargets.requiredCafeteriaPosts
+  };
+  state.metrics.assignedCriticalStaff = {
+    reactor: reactorStaff.assigned,
+    lifeSupport: lifeSupportStaff.assigned,
+    hydroponics: hydroStaff.assigned,
+    kitchen: kitchenStaff.assigned,
+    cafeteria: cafeteriaStaff.assigned
+  };
+  state.metrics.activeCriticalStaff = {
+    reactor: reactorStaff.active,
+    lifeSupport: lifeSupportStaff.active,
+    hydroponics: hydroStaff.active,
+    kitchen: kitchenStaff.active,
+    cafeteria: cafeteriaStaff.active
+  };
+  state.metrics.staffInTransitBySystem = {
+    reactor: reactorStaff.transit,
+    lifeSupport: lifeSupportStaff.transit,
+    hydroponics: hydroStaff.transit,
+    kitchen: kitchenStaff.transit,
+    cafeteria: cafeteriaStaff.transit
+  };
 
   const idleCrewByReason: Record<CrewIdleReason, number> = {
     idle_available: 0,
@@ -3526,22 +4045,39 @@ function computeMetrics(state: StationState): void {
   state.metrics.lifeSupportInactiveReasons = collectLifeSupportInactiveReasons(state);
   const roomWarnings = collectTopRoomWarnings(state);
   const criticalFloorWarnings: string[] = [];
-  if (state.metrics.airQuality < 35 && state.ops.lifeSupportTotal > 0 && state.ops.lifeSupportActive <= 0) {
-    criticalFloorWarnings.push('critical staffing: life-support unstaffed');
+  if (
+    state.metrics.requiredCriticalStaff.lifeSupport > 0 &&
+    state.metrics.activeCriticalStaff.lifeSupport < state.metrics.requiredCriticalStaff.lifeSupport
+  ) {
+    if (state.metrics.assignedCriticalStaff.lifeSupport <= 0) criticalFloorWarnings.push('critical staffing: life-support no_assigned_staff');
+    else if (state.metrics.staffInTransitBySystem.lifeSupport > 0) criticalFloorWarnings.push('critical staffing: life-support staff_in_transit');
+    else criticalFloorWarnings.push('critical staffing: life-support under_capacity');
+  }
+  if (
+    state.metrics.requiredCriticalStaff.reactor > 0 &&
+    state.metrics.activeCriticalStaff.reactor < state.metrics.requiredCriticalStaff.reactor
+  ) {
+    if (state.metrics.assignedCriticalStaff.reactor <= 0) criticalFloorWarnings.push('critical staffing: reactor no_assigned_staff');
+    else if (state.metrics.staffInTransitBySystem.reactor > 0) criticalFloorWarnings.push('critical staffing: reactor staff_in_transit');
+    else criticalFloorWarnings.push('critical staffing: reactor under_capacity');
   }
   if (
     (state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW) &&
     state.ops.hydroponicsTotal > 0 &&
     state.ops.hydroponicsActive <= 0
   ) {
-    criticalFloorWarnings.push('critical staffing: hydroponics unstaffed');
+    if (state.metrics.assignedCriticalStaff.hydroponics <= 0) criticalFloorWarnings.push('critical staffing: hydroponics no_assigned_staff');
+    else if (state.metrics.staffInTransitBySystem.hydroponics > 0) criticalFloorWarnings.push('critical staffing: hydroponics staff_in_transit');
+    else criticalFloorWarnings.push('critical staffing: hydroponics under_capacity');
   }
   if (
     (state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW) &&
     state.ops.kitchenTotal > 0 &&
     state.ops.kitchenActive <= 0
   ) {
-    criticalFloorWarnings.push('critical staffing: kitchen unstaffed');
+    if (state.metrics.assignedCriticalStaff.kitchen <= 0) criticalFloorWarnings.push('critical staffing: kitchen no_assigned_staff');
+    else if (state.metrics.staffInTransitBySystem.kitchen > 0) criticalFloorWarnings.push('critical staffing: kitchen staff_in_transit');
+    else criticalFloorWarnings.push('critical staffing: kitchen under_capacity');
   }
   if (state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW) {
     if (state.metrics.hydroponicsActiveGrowNodes > 0 && state.metrics.hydroponicsStaffed <= 0) {
@@ -3555,6 +4091,14 @@ function computeMetrics(state: StationState): void {
     if (state.ops.cafeteriasTotal > 0 && state.ops.cafeteriasActive <= 0) {
       roomWarnings.unshift('food chain blocked: cafeteria inactive');
     }
+  }
+  if (
+    state.metrics.pendingJobs > 0 &&
+    state.metrics.crewOnLogisticsJobs <= 0 &&
+    state.metrics.rawFoodProdRate > 0 &&
+    state.metrics.kitchenMealProdRate <= 0.01
+  ) {
+    roomWarnings.unshift('food chain blocked: no logistics hauler');
   }
   if (state.metrics.airQuality < 20 && state.metrics.lifeSupportInactiveReasons.length > 0) {
     roomWarnings.unshift(`life-support blocked: ${state.metrics.lifeSupportInactiveReasons.join(', ')}`);
@@ -3593,6 +4137,42 @@ function computeMetrics(state: StationState): void {
     .slice(0, 3)
     .map((p) => `${p.label} -${p.value.toFixed(1)}`);
   state.metrics.stationRatingDrivers = ratingParts.length > 0 ? ratingParts : ['none'];
+  state.metrics.stationRatingPenaltyTotal = {
+    queueTimeout: state.usageTotals.ratingFromShipTimeout,
+    noEligibleDock: state.usageTotals.ratingFromShipSkip,
+    serviceFailure: state.usageTotals.ratingFromVisitorFailure,
+    longWalks: state.usageTotals.ratingFromWalkDissatisfaction
+  };
+  state.metrics.stationRatingPenaltyPerMin = {
+    queueTimeout: state.usageTotals.ratingFromShipTimeout / runMinutes,
+    noEligibleDock: state.usageTotals.ratingFromShipSkip / runMinutes,
+    serviceFailure: state.usageTotals.ratingFromVisitorFailure / runMinutes,
+    longWalks: state.usageTotals.ratingFromWalkDissatisfaction / runMinutes
+  };
+  state.metrics.stationRatingBonusTotal = {
+    mealService: state.usageTotals.ratingFromVisitorSuccessByReason.mealService,
+    leisureService: state.usageTotals.ratingFromVisitorSuccessByReason.leisureService,
+    successfulExit: state.usageTotals.ratingFromVisitorSuccessByReason.successfulExit
+  };
+  state.metrics.stationRatingBonusPerMin = {
+    mealService: state.usageTotals.ratingFromVisitorSuccessByReason.mealService / runMinutes,
+    leisureService: state.usageTotals.ratingFromVisitorSuccessByReason.leisureService / runMinutes,
+    successfulExit: state.usageTotals.ratingFromVisitorSuccessByReason.successfulExit / runMinutes
+  };
+  state.metrics.stationRatingServiceFailureByReasonTotal = {
+    noLeisurePath: state.usageTotals.ratingFromVisitorFailureByReason.noLeisurePath,
+    shipServicesMissing: state.usageTotals.ratingFromVisitorFailureByReason.shipServicesMissing,
+    patienceBail: state.usageTotals.ratingFromVisitorFailureByReason.patienceBail,
+    dockTimeout: state.usageTotals.ratingFromVisitorFailureByReason.dockTimeout,
+    trespass: state.usageTotals.ratingFromVisitorFailureByReason.trespass
+  };
+  state.metrics.stationRatingServiceFailureByReasonPerMin = {
+    noLeisurePath: state.usageTotals.ratingFromVisitorFailureByReason.noLeisurePath / runMinutes,
+    shipServicesMissing: state.usageTotals.ratingFromVisitorFailureByReason.shipServicesMissing / runMinutes,
+    patienceBail: state.usageTotals.ratingFromVisitorFailureByReason.patienceBail / runMinutes,
+    dockTimeout: state.usageTotals.ratingFromVisitorFailureByReason.dockTimeout / runMinutes,
+    trespass: state.usageTotals.ratingFromVisitorFailureByReason.trespass / runMinutes
+  };
 }
 
 function expireEffects(state: StationState): void {
@@ -3788,11 +4368,84 @@ export function createInitialState(options?: { seed?: number }): StationState {
       },
       crewMoraleDrivers: [],
       stationRatingDrivers: ['none'],
+      stationRatingPenaltyPerMin: {
+        queueTimeout: 0,
+        noEligibleDock: 0,
+        serviceFailure: 0,
+        longWalks: 0
+      },
+      stationRatingPenaltyTotal: {
+        queueTimeout: 0,
+        noEligibleDock: 0,
+        serviceFailure: 0,
+        longWalks: 0
+      },
+      stationRatingBonusPerMin: {
+        mealService: 0,
+        leisureService: 0,
+        successfulExit: 0
+      },
+      stationRatingBonusTotal: {
+        mealService: 0,
+        leisureService: 0,
+        successfulExit: 0
+      },
+      stationRatingServiceFailureByReasonPerMin: {
+        noLeisurePath: 0,
+        shipServicesMissing: 0,
+        patienceBail: 0,
+        dockTimeout: 0,
+        trespass: 0
+      },
+      stationRatingServiceFailureByReasonTotal: {
+        noLeisurePath: 0,
+        shipServicesMissing: 0,
+        patienceBail: 0,
+        dockTimeout: 0,
+        trespass: 0
+      },
       topRoomWarnings: [],
       criticalUnstaffedSec: {
         lifeSupport: 0,
         hydroponics: 0,
         kitchen: 0
+      },
+      requiredCriticalStaff: {
+        reactor: 0,
+        lifeSupport: 0,
+        hydroponics: 0,
+        kitchen: 0,
+        cafeteria: 0
+      },
+      assignedCriticalStaff: {
+        reactor: 0,
+        lifeSupport: 0,
+        hydroponics: 0,
+        kitchen: 0,
+        cafeteria: 0
+      },
+      activeCriticalStaff: {
+        reactor: 0,
+        lifeSupport: 0,
+        hydroponics: 0,
+        kitchen: 0,
+        cafeteria: 0
+      },
+      criticalShortfallSec: {
+        reactor: 0,
+        lifeSupport: 0,
+        hydroponics: 0,
+        kitchen: 0,
+        cafeteria: 0
+      },
+      logisticsDispatchSlots: 0,
+      logisticsPressure: 0,
+      staffInTransitBySystem: {
+        reactor: 0,
+        lifeSupport: 0,
+        hydroponics: 0,
+        kitchen: 0,
+        cafeteria: 0
       }
     },
     controls: {
@@ -3831,9 +4484,11 @@ export function createInitialState(options?: { seed?: number }): StationState {
     recentDeathTimes: [],
     clusterActivationState: new Map(),
     criticalStaffPrevUnmet: {
+      reactor: false,
       lifeSupport: false,
       hydroponics: false,
-      kitchen: false
+      kitchen: false,
+      cafeteria: false
     },
     usageTotals: {
       dorm: 0,
@@ -3854,6 +4509,18 @@ export function createInitialState(options?: { seed?: number }): StationState {
       ratingFromShipSkip: 0,
       ratingFromVisitorFailure: 0,
       ratingFromWalkDissatisfaction: 0,
+      ratingFromVisitorFailureByReason: {
+        noLeisurePath: 0,
+        shipServicesMissing: 0,
+        patienceBail: 0,
+        dockTimeout: 0,
+        trespass: 0
+      },
+      ratingFromVisitorSuccessByReason: {
+        mealService: 0,
+        leisureService: 0,
+        successfulExit: 0
+      },
       visitorWalkDistance: 0,
       visitorWalkTrips: 0,
       criticalStaffDrops: 0,
