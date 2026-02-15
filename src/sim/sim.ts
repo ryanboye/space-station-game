@@ -1,5 +1,13 @@
 import { findPath } from './path';
 import {
+  MODULE_DEFINITIONS,
+  PROCESS_RATES,
+  ROOM_DEFINITIONS,
+  SERVICE_CAPACITY,
+  TASK_TIMINGS,
+  normalizeModuleType
+} from './balance';
+import {
   type ArrivingShip,
   type CrewIdleReason,
   type CrewPriorityPreset,
@@ -15,9 +23,12 @@ import {
   type CrewMember,
   type CrewRole,
   type JobStallReason,
+  type ItemType,
   type ShipType,
   type SpaceLane,
   ModuleType,
+  type ModuleInstance,
+  type ModuleRotation,
   type Resident,
   ResidentState,
   type RoomDiagnostic,
@@ -46,6 +57,7 @@ const MAX_OCCUPANTS_PER_TILE = 4;
 
 const CREW_PER_CAFETERIA = 1;
 const CREW_PER_KITCHEN = 1;
+const CREW_PER_WORKSHOP = 1;
 const CREW_PER_SECURITY = 2;
 const CREW_PER_REACTOR = 1;
 const CREW_PER_HYGIENE = 1;
@@ -56,11 +68,11 @@ const CREW_PER_MARKET = 1;
 
 const BASE_POWER_SUPPLY = 14;
 const POWER_PER_REACTOR = 22;
-const SHIP_APPROACH_TIME = 2;
-const SHIP_DOCKED_TIME = 2;
-const SHIP_DEPART_TIME = 2;
-const SHIP_MAX_DOCKED_TIME = 28;
-const MAX_DINERS_PER_CAF_TILE = 3;
+const SHIP_APPROACH_TIME = TASK_TIMINGS.shipApproachSec;
+const SHIP_DOCKED_TIME = TASK_TIMINGS.shipDockedPassengerSpawnSec;
+const SHIP_DEPART_TIME = TASK_TIMINGS.shipDepartSec;
+const SHIP_MAX_DOCKED_TIME = TASK_TIMINGS.shipMaxDockedSec;
+const MAX_DINERS_PER_CAF_TILE = SERVICE_CAPACITY.tableMaxDiners;
 
 const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Space]: 0,
@@ -90,10 +102,10 @@ const HIRE_COST = 14;
 const BLOCKED_REPATH_TICKS = 3;
 const BLOCKED_LOCAL_REROUTE_TICKS = 6;
 const BLOCKED_FULL_REROUTE_TICKS = 10;
-const MAX_RESERVATIONS_PER_TABLE = 4;
+const MAX_RESERVATIONS_PER_TABLE = SERVICE_CAPACITY.tableReservationLimit;
 const MAX_PENDING_FOOD_JOBS = 10;
-const JOB_TTL_SEC = 45;
-const JOB_STALE_SEC = 12;
+const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
+const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const AIR_DISTRESS_THRESHOLD = 15;
 const AIR_CRITICAL_THRESHOLD = 8;
 const AIR_DISTRESS_EXPOSURE_SEC = 18;
@@ -116,7 +128,13 @@ const CREW_SHIFT_WINDOW_SEC = 10;
 const CREW_MAX_RESTING_RATIO = 0.35;
 const CREW_EMERGENCY_WAKE_RATIO = 0.15;
 const CREW_CLEAN_HYGIENE_THRESHOLD = 38;
-const KITCHEN_CONVERSION_RATE = 0.95;
+const KITCHEN_CONVERSION_RATE = PROCESS_RATES.kitchenMealPerSecPerStove;
+const WORKSHOP_TRADE_GOOD_RATE = PROCESS_RATES.workshopTradeGoodPerSecPerWorkbench;
+const WORKSHOP_MATERIALS_PER_TRADE_GOOD = PROCESS_RATES.workshopRawMaterialPerTradeGood;
+const MARKET_TRADE_GOOD_USE_PER_SEC = PROCESS_RATES.marketTradeGoodUsePerVisitorPerSec;
+const MAX_PENDING_TRADE_JOBS = 10;
+const MARKET_TRADE_GOOD_TARGET_STOCK = 26;
+const MARKET_TRADE_GOOD_LOW_STOCK = 8;
 const CREW_ASSIGNMENT_STICKY_SEC = 10;
 const CREW_ASSIGNMENT_HOLD_SEC = 12;
 const CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS = 6;
@@ -129,8 +147,8 @@ const ROOM_DEACTIVATE_GRACE_SEC = 2.5;
 const VISITOR_PREFERENCE_JITTER = 0.22;
 const BUILD_DISTANCE_MULTIPLIER = 0.04;
 const DOCK_APPROACH_LENGTH = 4;
-const DOCK_QUEUE_MAX_TIME_SEC = 18;
-const VISITOR_MIN_STAY_SEC = 4;
+const DOCK_QUEUE_MAX_TIME_SEC = TASK_TIMINGS.dockQueueMaxSec;
+const VISITOR_MIN_STAY_SEC = TASK_TIMINGS.visitorMinStaySec;
 const STATION_RATING_START = 70;
 const VISITOR_COMFORT_WALK_THRESHOLD = 10;
 const VISITOR_WALK_PENALTY_RATE = 0.03;
@@ -153,6 +171,7 @@ function randomInt(min: number, max: number, rng: () => number): number {
 }
 
 const LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
+const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
 
 function laneFromFacing(facing: SpaceLane): SpaceLane {
   return facing;
@@ -166,21 +185,27 @@ function laneStep(lane: SpaceLane): { dx: number; dy: number } {
 }
 
 function normalizeTrafficWeights(weights: Record<ShipType, number>): Record<ShipType, number> {
-  const total = Math.max(0.0001, weights.tourist + weights.trader);
+  const total = Math.max(0.0001, weights.tourist + weights.trader + weights.industrial);
   return {
     tourist: weights.tourist / total,
-    trader: weights.trader / total
+    trader: weights.trader / total,
+    industrial: weights.industrial / total
   };
 }
 
 function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfile> {
   const profiles = {} as Record<SpaceLane, LaneProfile>;
   for (const lane of LANES) {
-    const tourist = clamp(0.35 + state.rng() * 0.45, 0.2, 0.8);
-    const trader = clamp(1 - tourist, 0.2, 0.8);
+    const touristBase = 0.25 + state.rng() * 0.45;
+    const traderBase = 0.2 + state.rng() * 0.45;
+    const industrialBase = 0.15 + state.rng() * 0.35;
     profiles[lane] = {
       trafficVolume: clamp(0.6 + state.rng() * 0.8, 0.4, 1.6),
-      weights: normalizeTrafficWeights({ tourist, trader })
+      weights: normalizeTrafficWeights({
+        tourist: touristBase,
+        trader: traderBase,
+        industrial: industrialBase
+      })
     };
   }
   return profiles;
@@ -199,14 +224,20 @@ function pickLaneByTraffic(state: StationState): SpaceLane {
 
 function pickShipTypeForLane(state: StationState, lane: SpaceLane): ShipType {
   const weights = state.laneProfiles[lane].weights;
-  return state.rng() <= weights.tourist ? 'tourist' : 'trader';
+  const roll = state.rng();
+  if (roll <= weights.tourist) return 'tourist';
+  if (roll <= weights.tourist + weights.trader) return 'trader';
+  return 'industrial';
 }
 
 function shipServicesSatisfied(state: StationState, shipType: ShipType): boolean {
   if (shipType === 'tourist') {
     return state.ops.loungeActive > 0 || state.ops.cafeteriasActive > 0;
   }
-  return state.ops.marketActive > 0 || state.ops.cafeteriasActive > 0;
+  if (shipType === 'trader') {
+    return state.ops.marketActive > 0 || state.ops.cafeteriasActive > 0;
+  }
+  return state.ops.marketActive > 0 || state.ops.workshopActive > 0;
 }
 
 function serviceFailureRatingPenalty(
@@ -284,29 +315,112 @@ function collectRooms(state: StationState, room: RoomType): number[] {
   return out;
 }
 
-function moduleTypeForRoomServiceNode(room: RoomType): ModuleType | null {
-  if (room === RoomType.Dorm) return ModuleType.Bed;
-  if (room === RoomType.Cafeteria) return ModuleType.Table;
-  if (room === RoomType.Kitchen) return ModuleType.Stove;
-  if (room === RoomType.Hydroponics) return ModuleType.GrowTray;
-  if (room === RoomType.Security) return ModuleType.Terminal;
-  return null;
+function moduleFootprint(type: ModuleType, rotation: ModuleRotation): { width: number; height: number } {
+  const def = MODULE_DEFINITIONS[type];
+  if (!def) return { width: 1, height: 1 };
+  if (rotation === 90 && def.rotatable) {
+    return { width: def.height, height: def.width };
+  }
+  return { width: def.width, height: def.height };
 }
 
-export function collectServiceTargets(state: StationState, room: RoomType): number[] {
-  const roomTiles = collectRooms(state, room);
-  const requiredModule = moduleTypeForRoomServiceNode(room);
-  if (!requiredModule) return roomTiles;
+function footprintTiles(
+  state: StationState,
+  originTile: number,
+  width: number,
+  height: number
+): number[] {
+  const origin = fromIndex(originTile, state.width);
   const out: number[] = [];
-  for (const tile of roomTiles) {
-    if (state.modules[tile] === requiredModule) out.push(tile);
+  for (let dy = 0; dy < height; dy++) {
+    for (let dx = 0; dx < width; dx++) {
+      const x = origin.x + dx;
+      const y = origin.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) return [];
+      out.push(toIndex(x, y, state.width));
+    }
   }
   return out;
 }
 
+function syncModuleOccupancy(state: StationState): void {
+  state.modules.fill(ModuleType.None);
+  state.moduleOccupancyByTile.fill(null);
+  for (const module of state.moduleInstances) {
+    for (const tile of module.tiles) {
+      state.modules[tile] = module.type;
+      state.moduleOccupancyByTile[tile] = module.id;
+    }
+  }
+}
+
+function removeModuleById(state: StationState, moduleId: number): boolean {
+  const idx = state.moduleInstances.findIndex((m) => m.id === moduleId);
+  if (idx < 0) return false;
+  state.moduleInstances.splice(idx, 1);
+  syncModuleOccupancy(state);
+  return true;
+}
+
+function collectModuleAnchors(
+  state: StationState,
+  moduleType: ModuleType,
+  room?: RoomType
+): number[] {
+  const out: number[] = [];
+  for (const module of state.moduleInstances) {
+    if (module.type !== moduleType) continue;
+    if (room !== undefined && state.rooms[module.originTile] !== room) continue;
+    out.push(module.originTile);
+  }
+  return out;
+}
+
+function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
+  if (room === RoomType.Dorm) return [ModuleType.Bed];
+  if (room === RoomType.Cafeteria) return [ModuleType.ServingStation];
+  if (room === RoomType.Kitchen) return [ModuleType.Stove];
+  if (room === RoomType.Workshop) return [ModuleType.Workbench];
+  if (room === RoomType.Hydroponics) return [ModuleType.GrowStation];
+  if (room === RoomType.Security) return [ModuleType.Terminal];
+  if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation];
+  if (room === RoomType.Market) return [ModuleType.MarketStall];
+  if (room === RoomType.LogisticsStock) return [ModuleType.IntakePallet];
+  if (room === RoomType.Storage) return [ModuleType.StorageRack];
+  return [];
+}
+
+function moduleCountsForCluster(state: StationState, cluster: number[]): Map<ModuleType, number> {
+  const clusterSet = new Set(cluster);
+  const counts = new Map<ModuleType, number>();
+  for (const module of state.moduleInstances) {
+    if (!clusterSet.has(module.originTile)) continue;
+    counts.set(module.type, (counts.get(module.type) ?? 0) + 1);
+  }
+  return counts;
+}
+
+export function collectServiceTargets(state: StationState, room: RoomType): number[] {
+  const serviceModules = moduleTypesForRoomServices(room);
+  if (serviceModules.length === 0) return collectRooms(state, room);
+  const out = new Set<number>();
+  for (const moduleType of serviceModules) {
+    for (const tile of collectModuleAnchors(state, moduleType, room)) out.add(tile);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function collectServingTargets(state: StationState): number[] {
+  return collectModuleAnchors(state, ModuleType.ServingStation, RoomType.Cafeteria);
+}
+
+function collectCafeteriaTableTargets(state: StationState): number[] {
+  return collectModuleAnchors(state, ModuleType.Table, RoomType.Cafeteria);
+}
+
 export function collectQueueTargets(state: StationState, room: RoomType): number[] {
   if (room !== RoomType.Cafeteria) return [];
-  const serviceTargets = collectServiceTargets(state, RoomType.Cafeteria);
+  const serviceTargets = collectServingTargets(state);
   if (serviceTargets.length === 0) return [];
   const out = new Set<number>();
   for (const target of serviceTargets) {
@@ -323,7 +437,7 @@ export function collectQueueTargets(state: StationState, room: RoomType): number
       if (!inBounds(nx, ny, state.width, state.height)) continue;
       const ni = toIndex(nx, ny, state.width);
       if (!isWalkable(state.tiles[ni])) continue;
-      if (state.rooms[ni] === RoomType.Cafeteria) continue;
+      if (state.moduleOccupancyByTile[ni] !== null) continue;
       out.add(ni);
     }
   }
@@ -390,6 +504,7 @@ const CREW_SYSTEMS: CrewPrioritySystem[] = [
   'reactor',
   'hydroponics',
   'kitchen',
+  'workshop',
   'cafeteria',
   'market',
   'lounge',
@@ -416,6 +531,7 @@ function dutyAnchorsForSystem(state: StationState, system: CrewPrioritySystem): 
   if (system === 'life-support') return roomClusterAnchors(state, RoomType.LifeSupport);
   if (system === 'hydroponics') return roomClusterAnchors(state, RoomType.Hydroponics);
   if (system === 'kitchen') return roomClusterAnchors(state, RoomType.Kitchen);
+  if (system === 'workshop') return roomClusterAnchors(state, RoomType.Workshop);
   if (system === 'cafeteria') return roomClusterAnchors(state, RoomType.Cafeteria);
   if (system === 'security') return roomClusterAnchors(state, RoomType.Security);
   if (system === 'hygiene') return roomClusterAnchors(state, RoomType.Hygiene);
@@ -429,6 +545,7 @@ function systemRoomType(system: CrewPrioritySystem): RoomType {
   if (system === 'life-support') return RoomType.LifeSupport;
   if (system === 'hydroponics') return RoomType.Hydroponics;
   if (system === 'kitchen') return RoomType.Kitchen;
+  if (system === 'workshop') return RoomType.Workshop;
   if (system === 'cafeteria') return RoomType.Cafeteria;
   if (system === 'security') return RoomType.Security;
   if (system === 'hygiene') return RoomType.Hygiene;
@@ -437,44 +554,12 @@ function systemRoomType(system: CrewPrioritySystem): RoomType {
 }
 
 function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTargets {
-  const reactorTotal = roomClusterAnchors(state, RoomType.Reactor).length;
-  const lifeSupportTotal = roomClusterAnchors(state, RoomType.LifeSupport).length;
-  const hydroTotal = roomClusterAnchors(state, RoomType.Hydroponics).length;
-  const kitchenTotal = roomClusterAnchors(state, RoomType.Kitchen).length;
-  const cafeteriaTotal = roomClusterAnchors(state, RoomType.Cafeteria).length;
-  const expectedPowerRatio = clamp(
-    state.metrics.powerSupply > 0 ? state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand) : 1,
-    0.35,
-    1
-  );
-  const airDemand =
-    state.residents.length * 0.12 +
-    state.visitors.length * 0.05 +
-    state.crewMembers.length * 0.08;
-  const passiveAir = (state.metrics.pressurizationPct / 100) * PASSIVE_AIR_PER_SEC_AT_100_PRESSURE;
-  const requiredReactorPosts = clamp(
-    Math.ceil(Math.max(0, state.metrics.powerDemand - BASE_POWER_SUPPLY) / POWER_PER_REACTOR),
-    0,
-    reactorTotal
-  );
-  const requiredLifeSupportPosts = clamp(
-    Math.ceil(
-      Math.max(0, airDemand + AIR_SAFETY_BUFFER - passiveAir) /
-        Math.max(0.001, LIFE_SUPPORT_AIR_PER_CLUSTER * expectedPowerRatio)
-    ),
-    0,
-    lifeSupportTotal
-  );
-
-  const needsFoodSupport =
-    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK ||
-    state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
   return {
-    requiredReactorPosts,
-    requiredLifeSupportPosts,
-    requiredHydroPosts: needsFoodSupport && hydroTotal > 0 ? 1 : 0,
-    requiredKitchenPosts: needsFoodSupport && kitchenTotal > 0 ? 1 : 0,
-    requiredCafeteriaPosts: needsFoodSupport && cafeteriaTotal > 0 ? 1 : 0
+    requiredReactorPosts: 0,
+    requiredLifeSupportPosts: 0,
+    requiredHydroPosts: 0,
+    requiredKitchenPosts: 0,
+    requiredCafeteriaPosts: 0
   };
 }
 
@@ -572,6 +657,7 @@ const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-c
     reactor: 9,
     hydroponics: 7,
     kitchen: 7,
+    workshop: 6,
     cafeteria: 7,
     market: 5,
     lounge: 5,
@@ -583,6 +669,7 @@ const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-c
     reactor: 9,
     hydroponics: 7,
     kitchen: 6,
+    workshop: 4,
     cafeteria: 5,
     market: 2,
     lounge: 2,
@@ -594,6 +681,7 @@ const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-c
     reactor: 8,
     hydroponics: 10,
     kitchen: 10,
+    workshop: 5,
     cafeteria: 9,
     market: 3,
     lounge: 3,
@@ -605,6 +693,7 @@ const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-c
     reactor: 8,
     hydroponics: 6,
     kitchen: 6,
+    workshop: 10,
     cafeteria: 6,
     market: 10,
     lounge: 8,
@@ -619,6 +708,7 @@ function cloneCrewPriorityWeights(weights: CrewPriorityWeights): CrewPriorityWei
     reactor: weights.reactor,
     hydroponics: weights.hydroponics,
     kitchen: weights.kitchen,
+    workshop: weights.workshop,
     cafeteria: weights.cafeteria,
     market: weights.market,
     lounge: weights.lounge,
@@ -645,15 +735,22 @@ function normalizeDemand(demand: ManifestDemand): ManifestDemand {
   };
 }
 
-function generateShipManifest(state: StationState): {
+function generateShipManifest(state: StationState, shipType: ShipType): {
   demand: ManifestDemand;
   mix: Record<VisitorArchetype, number>;
 } {
-  const base: ManifestDemand = {
-    cafeteria: 0.42,
-    market: 0.36,
-    lounge: 0.22
-  };
+  const base: ManifestDemand =
+    shipType === 'industrial'
+      ? {
+          cafeteria: 0.22,
+          market: 0.58,
+          lounge: 0.2
+        }
+      : {
+          cafeteria: 0.42,
+          market: 0.36,
+          lounge: 0.22
+        };
   const dominant: VisitorPreference[] = ['cafeteria', 'market', 'lounge'];
   const dominantAxis = dominant[randomInt(0, dominant.length - 1, state.rng)];
   const dominantBoost = 0.12 + state.rng() * 0.18;
@@ -671,21 +768,44 @@ function generateShipManifest(state: StationState): {
     adjusted.cafeteria -= dominantBoost * 0.4;
     adjusted.market -= dominantBoost * 0.4;
   }
-  adjusted.cafeteria = clamp(adjusted.cafeteria, 0.3, 0.65);
-  adjusted.market = clamp(adjusted.market, 0.2, 0.55);
-  adjusted.lounge = clamp(adjusted.lounge, 0.1, 0.35);
+  if (shipType === 'industrial') {
+    adjusted.cafeteria = clamp(adjusted.cafeteria, 0.15, 0.45);
+    adjusted.market = clamp(adjusted.market, 0.4, 0.75);
+    adjusted.lounge = clamp(adjusted.lounge, 0.08, 0.28);
+  } else {
+    adjusted.cafeteria = clamp(adjusted.cafeteria, 0.3, 0.65);
+    adjusted.market = clamp(adjusted.market, 0.2, 0.55);
+    adjusted.lounge = clamp(adjusted.lounge, 0.1, 0.35);
+  }
   const demand = normalizeDemand(adjusted);
 
-  const rusher = clamp(0.08 + state.rng() * 0.1, 0.08, 0.18);
+  const rusher = shipType === 'industrial' ? clamp(0.14 + state.rng() * 0.14, 0.14, 0.28) : clamp(0.08 + state.rng() * 0.1, 0.08, 0.18);
   const remaining = 1 - rusher;
   const weighted = normalizeDemand(demand);
-  const mix: Record<VisitorArchetype, number> = {
-    diner: weighted.cafeteria * remaining,
-    shopper: weighted.market * remaining,
-    lounger: weighted.lounge * remaining,
-    rusher
+  const mix: Record<VisitorArchetype, number> =
+    shipType === 'industrial'
+      ? {
+          diner: weighted.cafeteria * remaining * 0.75,
+          shopper: weighted.market * remaining * 1.2,
+          lounger: weighted.lounge * remaining * 0.55,
+          rusher
+        }
+      : {
+          diner: weighted.cafeteria * remaining,
+          shopper: weighted.market * remaining,
+          lounger: weighted.lounge * remaining,
+          rusher
+        };
+  const mixTotal = Math.max(0.0001, mix.diner + mix.shopper + mix.lounger + mix.rusher);
+  return {
+    demand,
+    mix: {
+      diner: mix.diner / mixTotal,
+      shopper: mix.shopper / mixTotal,
+      lounger: mix.lounger / mixTotal,
+      rusher: mix.rusher / mixTotal
+    }
   };
-  return { demand, mix };
 }
 
 function pickArchetypeFromMix(state: StationState, mix: Record<VisitorArchetype, number>): VisitorArchetype {
@@ -1063,6 +1183,40 @@ function registerIncident(state: StationState, amount = 1): void {
   state.incidentHeat += amount;
 }
 
+function applyAirExposure(
+  actor: { airExposureSec: number; healthState: 'healthy' | 'distressed' | 'critical' },
+  airQuality: number,
+  dt: number
+): { died: boolean } {
+  if (airQuality <= AIR_CRITICAL_THRESHOLD) {
+    actor.airExposureSec += dt * 1.35;
+  } else if (airQuality <= AIR_DISTRESS_THRESHOLD) {
+    actor.airExposureSec += dt;
+  } else {
+    actor.airExposureSec = Math.max(0, actor.airExposureSec - dt * 1.8);
+  }
+
+  if (actor.airExposureSec >= AIR_DEATH_EXPOSURE_SEC) {
+    return { died: true };
+  }
+
+  actor.healthState =
+    actor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
+      ? 'critical'
+      : actor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
+        ? 'distressed'
+        : 'healthy';
+  return { died: false };
+}
+
+function registerBodyDeathAtTile(state: StationState, tileIndex: number, occupancyByTile: Map<number, number>): void {
+  state.metrics.deathsTotal += 1;
+  state.metrics.bodyCount += 1;
+  state.bodyTiles.push(tileIndex);
+  state.recentDeathTimes.push(state.now);
+  occupancyByTile.set(tileIndex, Math.max(0, (occupancyByTile.get(tileIndex) ?? 1) - 1));
+}
+
 function makeCrewMember(id: number, tileIndex: number, width: number): CrewMember {
   return {
     id,
@@ -1092,7 +1246,9 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     assignmentHoldUntil: 0,
     lastSystem: null,
     assignedSystem: null,
-    retargetCountWindow: 0
+    retargetCountWindow: 0,
+    airExposureSec: 0,
+    healthState: 'healthy'
   };
 }
 
@@ -1138,6 +1294,8 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     eatTimer: 0,
     trespassed: false,
     servedMeal: false,
+    carryingMeal: false,
+    reservedServingTile: null,
     reservedTargetTile: null,
     blockedTicks: 0,
     archetype,
@@ -1145,7 +1303,9 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     spendMultiplier: profile.spendMultiplier,
     patienceMultiplier: profile.patienceMultiplier,
     primaryPreference,
-    spawnedAt: state.now
+    spawnedAt: state.now,
+    airExposureSec: 0,
+    healthState: 'healthy'
   };
   state.visitors.push(visitor);
 }
@@ -1175,7 +1335,7 @@ function ensureResidentPopulation(state: StationState): void {
     return;
   }
   const baseCapacity = 0;
-  const dormCapacity = activeRoomTargets(state, RoomType.Dorm).length * 2;
+  const dormCapacity = activeRoomTargets(state, RoomType.Dorm).length * SERVICE_CAPACITY.bedResidentsPerModule;
   const targetResidents = clamp(baseCapacity + dormCapacity, 0, 40);
 
   while (
@@ -1244,6 +1404,7 @@ function assignCrewJobs(state: StationState): void {
     'life-support': dutyAnchorsForSystem(state, 'life-support'),
     hydroponics: dutyAnchorsForSystem(state, 'hydroponics'),
     kitchen: dutyAnchorsForSystem(state, 'kitchen'),
+    workshop: dutyAnchorsForSystem(state, 'workshop'),
     cafeteria: dutyAnchorsForSystem(state, 'cafeteria'),
     security: dutyAnchorsForSystem(state, 'security'),
     hygiene: dutyAnchorsForSystem(state, 'hygiene'),
@@ -1255,6 +1416,7 @@ function assignCrewJobs(state: StationState): void {
     'life-support': CREW_PER_LIFE_SUPPORT,
     hydroponics: CREW_PER_HYDROPONICS,
     kitchen: CREW_PER_KITCHEN,
+    workshop: CREW_PER_WORKSHOP,
     cafeteria: CREW_PER_CAFETERIA,
     security: CREW_PER_SECURITY,
     hygiene: CREW_PER_HYGIENE,
@@ -1281,6 +1443,12 @@ function assignCrewJobs(state: StationState): void {
   for (const system of CREW_SYSTEMS) {
     const anchors = targetBySystem[system];
     const tasks: CrewTaskCandidate[] = [];
+    const room = systemRoomType(system);
+    const requiresPost = ROOM_DEFINITIONS[room]?.staffedPostMode === 'required';
+    if (!requiresPost) {
+      jobsBySystem.set(system, tasks);
+      continue;
+    }
     for (const anchor of anchors) {
       for (let i = 0; i < slotsPerSystem[system]; i++) {
         tasks.push({
@@ -1521,6 +1689,7 @@ function assignCrewJobs(state: StationState): void {
   state.ops.reactorsTotal = roomClusters(state, RoomType.Reactor).length;
   state.ops.cafeteriasTotal = roomClusters(state, RoomType.Cafeteria).length;
   state.ops.kitchenTotal = roomClusters(state, RoomType.Kitchen).length;
+  state.ops.workshopTotal = roomClusters(state, RoomType.Workshop).length;
   state.ops.securityTotal = roomClusters(state, RoomType.Security).length;
   state.ops.dormsTotal = roomClusters(state, RoomType.Dorm).length;
   state.ops.hygieneTotal = roomClusters(state, RoomType.Hygiene).length;
@@ -1528,6 +1697,8 @@ function assignCrewJobs(state: StationState): void {
   state.ops.lifeSupportTotal = roomClusters(state, RoomType.LifeSupport).length;
   state.ops.loungeTotal = roomClusters(state, RoomType.Lounge).length;
   state.ops.marketTotal = roomClusters(state, RoomType.Market).length;
+  state.ops.logisticsStockTotal = roomClusters(state, RoomType.LogisticsStock).length;
+  state.ops.storageTotal = roomClusters(state, RoomType.Storage).length;
 }
 
 function countStaffAtAssignedTiles(state: StationState): Map<number, number> {
@@ -1539,6 +1710,112 @@ function countStaffAtAssignedTiles(state: StationState): Map<number, number> {
     counts.set(crew.tileIndex, (counts.get(crew.tileIndex) ?? 0) + 1);
   }
   return counts;
+}
+
+type ClusterInspection = {
+  room: RoomType;
+  cluster: number[];
+  clusterSize: number;
+  minTilesRequired: number;
+  minTilesMet: boolean;
+  doorCount: number;
+  hasDoor: boolean;
+  pressurizedPct: number;
+  pressurizedEnough: boolean;
+  staffCount: number;
+  requiredStaff: number;
+  hasServiceNode: boolean;
+  serviceNodeCount: number;
+  hasPath: boolean;
+  reasons: string[];
+  warnings: string[];
+  moduleProgress: Array<{ module: ModuleType; have: number; need: number }>;
+  anyOfProgress: { modules: ModuleType[]; satisfied: boolean };
+};
+
+function inspectRoomCluster(
+  state: StationState,
+  room: RoomType,
+  cluster: number[],
+  staffByTile: Map<number, number>
+): ClusterInspection {
+  const definition = ROOM_DEFINITIONS[room] ?? ROOM_DEFINITIONS[RoomType.None];
+  let pressurizedCount = 0;
+  let doorCount = 0;
+  let staffCount = 0;
+  for (const tile of cluster) {
+    const hasDoor = hasAdjacentDoor(state, tile);
+    if (hasDoor) doorCount += 1;
+    if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount += 1;
+    staffCount += staffByTile.get(tile) ?? 0;
+  }
+  const minTilesMet = cluster.length >= definition.minTiles;
+  const pressurizedPct = cluster.length > 0 ? (pressurizedCount / cluster.length) * 100 : 0;
+  const pressurizedEnough = room === RoomType.Reactor || pressurizedPct >= 70;
+
+  const moduleCounts = moduleCountsForCluster(state, cluster);
+  const moduleProgress = definition.requiredModules.map((req) => ({
+    module: req.module,
+    have: moduleCounts.get(req.module) ?? 0,
+    need: req.count
+  }));
+  const modulesMet = moduleProgress.every((p) => p.have >= p.need);
+  const anyOfSatisfied =
+    definition.requiredAnyOf.length === 0 ||
+    definition.requiredAnyOf.some((module) => (moduleCounts.get(module) ?? 0) > 0);
+  const hasServiceNode = moduleTypesForRoomServices(room).length === 0 || collectServiceTargets(state, room).some((t) => cluster.includes(t));
+  const serviceTargets =
+    moduleTypesForRoomServices(room).length > 0
+      ? collectServiceTargets(state, room).filter((tile) => cluster.includes(tile))
+      : [...cluster];
+  const serviceNodeCount = serviceTargets.length;
+
+  const starts = collectTiles(state, TileType.Dock);
+  if (starts.length === 0) starts.push(...collectTiles(state, TileType.Floor));
+  let hasPath = starts.length === 0;
+  if (!hasPath) {
+    for (const start of starts) {
+      const path = chooseNearestPath(state, start, serviceTargets.length > 0 ? serviceTargets : cluster, true);
+      if (path !== null) {
+        hasPath = true;
+        break;
+      }
+    }
+  }
+
+  const requiredStaff = definition.staffedPostMode === 'required' ? 1 : 0;
+  const reasons: string[] = [];
+  if (!minTilesMet) reasons.push('below minimum size');
+  if (!modulesMet || !anyOfSatisfied) reasons.push('missing required modules');
+  if (definition.activationChecks.door && doorCount <= 0) reasons.push('missing door');
+  if (definition.activationChecks.pressurization && !pressurizedEnough) reasons.push('not pressurized');
+  if (definition.activationChecks.path && !hasPath) reasons.push('no path');
+  if (requiredStaff > 0 && staffCount < requiredStaff) reasons.push('no_assigned_staff');
+
+  const warnings: string[] = [];
+  if (serviceNodeCount <= 1 && cluster.length >= 10) warnings.push('room too large for service nodes');
+  if (doorCount <= 1 && cluster.length >= 6) warnings.push('single-door bottleneck risk');
+
+  return {
+    room,
+    cluster,
+    clusterSize: cluster.length,
+    minTilesRequired: definition.minTiles,
+    minTilesMet,
+    doorCount,
+    hasDoor: doorCount > 0,
+    pressurizedPct,
+    pressurizedEnough,
+    staffCount,
+    requiredStaff,
+    hasServiceNode,
+    serviceNodeCount,
+    hasPath,
+    reasons,
+    warnings,
+    moduleProgress,
+    anyOfProgress: { modules: definition.requiredAnyOf, satisfied: anyOfSatisfied }
+  };
 }
 
 function operationalClustersForRoom(
@@ -1557,18 +1834,8 @@ function operationalClustersForRoom(
     const clusterAnchor = cluster.reduce((best, t) => Math.min(best, t), Number.POSITIVE_INFINITY);
     const key = `${room}:${clusterAnchor}`;
     seenKeys.add(key);
-    let hasDoor = false;
-    let pressurizedCount = 0;
-    let staffCount = 0;
-    for (const tile of cluster) {
-      if (!hasDoor && hasAdjacentDoor(state, tile)) hasDoor = true;
-      if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount++;
-      staffCount += staffByTile.get(tile) ?? 0;
-    }
-    const pressurizedEnough = pressurizedCount / cluster.length >= 0.7 || room === RoomType.Reactor;
-    const hasServiceNode = clusterHasServiceNode(state, room, cluster);
-    const satisfiesRequirements =
-      hasDoor && pressurizedEnough && hasServiceNode && (!needsStaff || staffCount >= requiredStaff);
+    const inspection = inspectRoomCluster(state, room, cluster, staffByTile);
+    const satisfiesRequirements = inspection.reasons.length === 0;
 
     const useDebounce = ACTIVATION_DEBOUNCE_ROOMS.has(room);
     if (!useDebounce) {
@@ -1616,7 +1883,7 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Reactor,
     CREW_PER_REACTOR,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1624,7 +1891,7 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Cafeteria,
     CREW_PER_CAFETERIA,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1632,7 +1899,15 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Kitchen,
     CREW_PER_KITCHEN,
-    true,
+    false,
+    dt,
+    updateDebounce
+  ).length;
+  state.ops.workshopActive = operationalClustersForRoom(
+    state,
+    RoomType.Workshop,
+    CREW_PER_WORKSHOP,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1640,7 +1915,7 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Security,
     CREW_PER_SECURITY,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1648,7 +1923,7 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Hygiene,
     CREW_PER_HYGIENE,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1656,7 +1931,7 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.Hydroponics,
     CREW_PER_HYDROPONICS,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
@@ -1664,12 +1939,14 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     state,
     RoomType.LifeSupport,
     CREW_PER_LIFE_SUPPORT,
-    true,
+    false,
     dt,
     updateDebounce
   ).length;
-  state.ops.loungeActive = operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, true, dt, updateDebounce).length;
-  state.ops.marketActive = operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, true, dt, updateDebounce).length;
+  state.ops.loungeActive = operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, false, dt, updateDebounce).length;
+  state.ops.marketActive = operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, false, dt, updateDebounce).length;
+  state.ops.logisticsStockActive = operationalClustersForRoom(state, RoomType.LogisticsStock, 0, false, dt, updateDebounce).length;
+  state.ops.storageActive = operationalClustersForRoom(state, RoomType.Storage, 0, false, dt, updateDebounce).length;
   state.ops.dormsActive = operationalClustersForRoom(state, RoomType.Dorm, 0, false, dt, updateDebounce).length;
 }
 
@@ -1711,38 +1988,49 @@ function activeRoomTargets(state: StationState, room: RoomType): number[] {
   };
   if (room === RoomType.Cafeteria) {
     return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Cafeteria, CREW_PER_CAFETERIA, true))
+      flatten(operationalClustersForRoom(state, RoomType.Cafeteria, CREW_PER_CAFETERIA, false))
     );
   }
   if (room === RoomType.Kitchen) {
     return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Kitchen, CREW_PER_KITCHEN, true))
+      flatten(operationalClustersForRoom(state, RoomType.Kitchen, CREW_PER_KITCHEN, false))
+    );
+  }
+  if (room === RoomType.Workshop) {
+    return filterActiveServiceTargets(
+      flatten(operationalClustersForRoom(state, RoomType.Workshop, CREW_PER_WORKSHOP, false))
     );
   }
   if (room === RoomType.Reactor) {
-    return flatten(operationalClustersForRoom(state, RoomType.Reactor, CREW_PER_REACTOR, true));
+    return flatten(operationalClustersForRoom(state, RoomType.Reactor, CREW_PER_REACTOR, false));
   }
   if (room === RoomType.Security) {
     return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Security, CREW_PER_SECURITY, true))
+      flatten(operationalClustersForRoom(state, RoomType.Security, CREW_PER_SECURITY, false))
     );
   }
   if (room === RoomType.Hygiene) {
-    return flatten(operationalClustersForRoom(state, RoomType.Hygiene, CREW_PER_HYGIENE, true));
+    return flatten(operationalClustersForRoom(state, RoomType.Hygiene, CREW_PER_HYGIENE, false));
   }
   if (room === RoomType.Hydroponics) {
     return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Hydroponics, CREW_PER_HYDROPONICS, true))
+      flatten(operationalClustersForRoom(state, RoomType.Hydroponics, CREW_PER_HYDROPONICS, false))
     );
   }
   if (room === RoomType.LifeSupport) {
-    return flatten(operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, true));
+    return flatten(operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false));
   }
   if (room === RoomType.Lounge) {
-    return flatten(operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, true));
+    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, false)));
   }
   if (room === RoomType.Market) {
-    return flatten(operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, true));
+    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, false)));
+  }
+  if (room === RoomType.LogisticsStock) {
+    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.LogisticsStock, 0, false)));
+  }
+  if (room === RoomType.Storage) {
+    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Storage, 0, false)));
   }
   if (room === RoomType.Dorm) {
     return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Dorm, 0, false)));
@@ -1751,35 +2039,73 @@ function activeRoomTargets(state: StationState, room: RoomType): number[] {
 }
 
 function staffRequiredForRoom(room: RoomType): number {
-  if (room === RoomType.Cafeteria) return CREW_PER_CAFETERIA;
-  if (room === RoomType.Kitchen) return CREW_PER_KITCHEN;
-  if (room === RoomType.Reactor) return CREW_PER_REACTOR;
-  if (room === RoomType.Security) return CREW_PER_SECURITY;
-  if (room === RoomType.Hygiene) return CREW_PER_HYGIENE;
-  if (room === RoomType.Hydroponics) return CREW_PER_HYDROPONICS;
-  if (room === RoomType.LifeSupport) return CREW_PER_LIFE_SUPPORT;
-  if (room === RoomType.Lounge) return CREW_PER_LOUNGE;
-  if (room === RoomType.Market) return CREW_PER_MARKET;
-  return 0;
+  const definition = ROOM_DEFINITIONS[room];
+  if (!definition || definition.staffedPostMode === 'none') return 0;
+  return 1;
 }
 
 function roomRequiresServiceNode(room: RoomType): boolean {
-  return (
-    room === RoomType.Dorm ||
-    room === RoomType.Cafeteria ||
-    room === RoomType.Kitchen ||
-    room === RoomType.Hydroponics ||
-    room === RoomType.Security
-  );
+  return moduleTypesForRoomServices(room).length > 0;
 }
 
 function clusterHasServiceNode(state: StationState, room: RoomType, cluster: number[]): boolean {
-  const moduleType = moduleTypeForRoomServiceNode(room);
-  if (!moduleType) return true;
-  for (const tile of cluster) {
-    if (state.modules[tile] === moduleType) return true;
+  if (!roomRequiresServiceNode(room)) return true;
+  const clusterSet = new Set(cluster);
+  return collectServiceTargets(state, room).some((t) => clusterSet.has(t));
+}
+
+function summarizeInventoryAtTargets(state: StationState, targets: number[]): RoomInspector['inventory'] {
+  const nodeByTile = new Map<number, StationState['itemNodes'][number]>();
+  for (const node of state.itemNodes) nodeByTile.set(node.tileIndex, node);
+  const byItem: Partial<Record<ItemType, number>> = {};
+  let used = 0;
+  let capacity = 0;
+  let nodeCount = 0;
+  for (const tile of targets) {
+    const node = nodeByTile.get(tile);
+    if (!node) continue;
+    nodeCount += 1;
+    capacity += node.capacity;
+    used += totalItemsInNode(node);
+    for (const itemType of ITEM_TYPES) {
+      const amount = node.items[itemType] ?? 0;
+      if (amount <= 0) continue;
+      byItem[itemType] = (byItem[itemType] ?? 0) + amount;
+    }
   }
-  return false;
+  const fillPct = capacity > 0 ? clamp((used / capacity) * 100, 0, 100) : 0;
+  return {
+    used,
+    capacity,
+    fillPct,
+    nodeCount,
+    byItem
+  };
+}
+
+type RouteJobCounts = { pending: number; assigned: number; inProgress: number };
+
+function countRouteJobs(
+  state: StationState,
+  itemType: ItemType,
+  fromTiles: number[],
+  toTiles: number[]
+): RouteJobCounts {
+  const fromSet = new Set(fromTiles);
+  const toSet = new Set(toTiles);
+  const counts: RouteJobCounts = { pending: 0, assigned: 0, inProgress: 0 };
+  for (const job of state.jobs) {
+    if (job.itemType !== itemType) continue;
+    if (!fromSet.has(job.fromTile) || !toSet.has(job.toTile)) continue;
+    if (job.state === 'pending') counts.pending += 1;
+    else if (job.state === 'assigned') counts.assigned += 1;
+    else if (job.state === 'in_progress') counts.inProgress += 1;
+  }
+  return counts;
+}
+
+function formatRouteJobCounts(counts: RouteJobCounts): string {
+  return `${counts.pending}/${counts.assigned}/${counts.inProgress}`;
 }
 
 export function getRoomDiagnosticAt(state: StationState, tileIndex: number): RoomDiagnostic | null {
@@ -1790,70 +2116,15 @@ export function getRoomDiagnosticAt(state: StationState, tileIndex: number): Roo
   const clusters = roomClusters(state, room);
   const cluster = clusters.find((c) => c.includes(tileIndex));
   if (!cluster || cluster.length === 0) return null;
-
-  let hasDoor = false;
-  let pressurizedCount = 0;
-  for (const tile of cluster) {
-    if (!hasDoor && hasAdjacentDoor(state, tile)) hasDoor = true;
-    if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount++;
-  }
-
-  const staffByTile = countStaffAtAssignedTiles(state);
-  let staffCount = 0;
-  for (const tile of cluster) {
-    staffCount += staffByTile.get(tile) ?? 0;
-  }
-  const assignedToCluster = state.crewMembers.filter(
-    (c) => !c.resting && c.targetTile !== null && cluster.includes(c.targetTile)
-  ).length;
-
-  const requiredStaff = staffRequiredForRoom(room);
-  const pressurizedEnough = room === RoomType.Reactor || pressurizedCount / cluster.length >= 0.7;
-  const hasServiceNode = clusterHasServiceNode(state, room, cluster);
-  const serviceTargetSet = roomRequiresServiceNode(room) ? new Set(collectServiceTargets(state, room)) : null;
-  const serviceTargets = serviceTargetSet ? cluster.filter((tile) => serviceTargetSet.has(tile)) : cluster;
-
-  const starts = collectTiles(state, TileType.Dock);
-  if (starts.length === 0) {
-    starts.push(...collectTiles(state, TileType.Floor));
-  }
-  let hasPath = starts.length === 0;
-  if (!hasPath) {
-    for (const start of starts) {
-      const path = chooseNearestPath(state, start, serviceTargets, true);
-      if (path !== null) {
-        hasPath = true;
-        break;
-      }
-    }
-  }
-
-  const reasons: string[] = [];
-  if (!hasDoor) reasons.push('missing door');
-  if (!pressurizedEnough) reasons.push('not pressurized');
-  if (!hasServiceNode) reasons.push('no service node');
-  if (requiredStaff > 0 && staffCount < requiredStaff) {
-    if (assignedToCluster <= 0) reasons.push('no_assigned_staff');
-    else if (staffCount <= 0) reasons.push('staff_in_transit');
-    else reasons.push('under_capacity');
-  }
-  if (!hasPath) reasons.push('no path');
-
-  const warnings: string[] = [];
-  if (roomRequiresServiceNode(room) && cluster.length >= 10 && serviceTargets.length <= 2) {
-    warnings.push('room too large for service nodes');
-  }
-  const doorCount = cluster.reduce((acc, tile) => acc + (hasAdjacentDoor(state, tile) ? 1 : 0), 0);
-  if (doorCount <= 1 && cluster.length >= 6) {
-    warnings.push('single-door bottleneck risk');
-  }
+  const inspection = inspectRoomCluster(state, room, cluster, countStaffAtAssignedTiles(state));
+  const warnings = [...inspection.warnings];
 
   return {
     room,
-    active: reasons.length === 0,
-    reasons,
+    active: inspection.reasons.length === 0,
+    reasons: inspection.reasons,
     clusterSize: cluster.length,
-    warnings
+    warnings: inspection.warnings
   };
 }
 
@@ -1865,86 +2136,89 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   const clusters = roomClusters(state, room);
   const cluster = clusters.find((c) => c.includes(tileIndex));
   if (!cluster || cluster.length === 0) return null;
+  const inspection = inspectRoomCluster(state, room, cluster, countStaffAtAssignedTiles(state));
+  const clusterSet = new Set(cluster);
+  const serviceTargetsInCluster = collectServiceTargets(state, room).filter((t) => clusterSet.has(t));
+  const inventory = summarizeInventoryAtTargets(state, serviceTargetsInCluster);
 
-  let hasDoor = false;
-  let pressurizedCount = 0;
-  let doorCount = 0;
-  for (const tile of cluster) {
-    const adjacentDoor = hasAdjacentDoor(state, tile);
-    if (adjacentDoor) doorCount += 1;
-    if (!hasDoor && adjacentDoor) hasDoor = true;
-    if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount++;
-  }
-
-  const staffByTile = countStaffAtAssignedTiles(state);
-  let staffCount = 0;
-  for (const tile of cluster) {
-    staffCount += staffByTile.get(tile) ?? 0;
-  }
-  const assignedToCluster = state.crewMembers.filter(
-    (c) => !c.resting && c.targetTile !== null && cluster.includes(c.targetTile)
-  ).length;
-
-  const requiredStaff = staffRequiredForRoom(room);
-  const pressurizedPct = cluster.length > 0 ? (pressurizedCount / cluster.length) * 100 : 0;
-  const pressurizedEnough = room === RoomType.Reactor || pressurizedPct >= 70;
-  const hasServiceNode = clusterHasServiceNode(state, room, cluster);
-  const serviceTargetSet = roomRequiresServiceNode(room) ? new Set(collectServiceTargets(state, room)) : null;
-  const serviceTargets = serviceTargetSet ? cluster.filter((tile) => serviceTargetSet.has(tile)) : cluster;
-  const serviceNodeCount = roomRequiresServiceNode(room) ? serviceTargets.length : cluster.length;
-
-  const starts = collectTiles(state, TileType.Dock);
-  if (starts.length === 0) starts.push(...collectTiles(state, TileType.Floor));
-  let hasPath = starts.length === 0;
-  if (!hasPath) {
-    for (const start of starts) {
-      const path = chooseNearestPath(state, start, serviceTargets, true);
-      if (path !== null) {
-        hasPath = true;
-        break;
-      }
-    }
-  }
-
-  const reasons: string[] = [];
-  if (!hasDoor) reasons.push('missing door');
-  if (!pressurizedEnough) reasons.push('not pressurized');
-  if (!hasServiceNode) reasons.push('no service node');
-  if (requiredStaff > 0 && staffCount < requiredStaff) {
-    if (assignedToCluster <= 0) reasons.push('no_assigned_staff');
-    else if (staffCount <= 0) reasons.push('staff_in_transit');
-    else reasons.push('under_capacity');
-  }
-  if (!hasPath) reasons.push('no path');
-
-  const warnings: string[] = [];
-  if (roomRequiresServiceNode(room) && cluster.length >= 10 && serviceTargets.length <= 2) {
-    warnings.push('room too large for service nodes');
-  }
-  if (doorCount <= 1 && cluster.length >= 6) {
-    warnings.push('single-door bottleneck risk');
-  }
-
+  const warnings = [...inspection.warnings];
   const hints: string[] = [];
+  const flowHints: string[] = [];
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const servingTargets = collectServingTargets(state);
+  const intakeTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const storageTargets = collectServiceTargets(state, RoomType.Storage);
+  const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
+  const marketTargets = collectServiceTargets(state, RoomType.Market);
+  const hydroToKitchenJobs = countRouteJobs(state, 'rawMeal', growTargets, stoveTargets);
+  const kitchenToCafeteriaJobs = countRouteJobs(state, 'meal', stoveTargets, servingTargets);
+  const intakeToStorageJobs = countRouteJobs(state, 'rawMaterial', intakeTargets, storageTargets);
+  const storageToWorkshopJobs = countRouteJobs(state, 'rawMaterial', storageTargets, workshopTargets);
+  const workshopToMarketJobs = countRouteJobs(state, 'tradeGood', workshopTargets, marketTargets);
+  const rawMealAtHydro = growTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
+  const rawMealAtKitchen = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
+  const mealAtKitchen = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
+  const mealAtServing = servingTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
+  const rawMaterialAtIntake = intakeTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
+  const rawMaterialAtStorage = storageTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
+  const rawMaterialAtWorkshop = workshopTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
+  const tradeGoodAtWorkshop = workshopTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'tradeGood'), 0);
+  const tradeGoodAtMarket = marketTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'tradeGood'), 0);
   if (room === RoomType.Kitchen) {
+    hints.push('chain: hydroponics -> kitchen -> cafeteria');
     hints.push(`raw buffer ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`);
     if (state.ops.hydroponicsActive <= 0) hints.push('upstream hydroponics inactive');
+    flowHints.push(
+      `rawMeal ${rawMealAtKitchen.toFixed(1)} | meal ${mealAtKitchen.toFixed(1)} | to cafeteria jobs ${formatRouteJobCounts(kitchenToCafeteriaJobs)}`
+    );
+  }
+  if (room === RoomType.Workshop) {
+    hints.push('chain: workshop -> market');
+    hints.push(`trade +${state.metrics.workshopTradeGoodProdRate.toFixed(1)}/s | market stock ${state.metrics.marketTradeGoodStock.toFixed(1)}`);
+    if (state.metrics.materials < 20) hints.push('low materials for trade-goods');
+    flowHints.push(
+      `rawMaterial ${rawMaterialAtWorkshop.toFixed(1)} | tradeGood ${tradeGoodAtWorkshop.toFixed(1)} | to market jobs ${formatRouteJobCounts(workshopToMarketJobs)}`
+    );
   }
   if (room === RoomType.Hydroponics) {
+    hints.push('chain: hydroponics -> kitchen');
     hints.push(`hydro staffed ${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes}`);
-    if (state.metrics.rawFoodStock < 5) hints.push('low raw-food stock');
+    if (state.metrics.rawFoodStock < 5) hints.push('low raw-meal stock');
+    flowHints.push(`rawMeal here ${rawMealAtHydro.toFixed(1)} | to kitchen jobs ${formatRouteJobCounts(hydroToKitchenJobs)}`);
   }
   if (room === RoomType.Cafeteria) {
+    hints.push('chain: kitchen -> cafeteria');
     hints.push(`meal stock ${state.metrics.mealStock.toFixed(1)} | queue ${state.metrics.cafeteriaQueueingCount}`);
+    flowHints.push(
+      `serving meal ${mealAtServing.toFixed(1)} | waiting ${state.metrics.cafeteriaQueueingCount} | eating ${state.metrics.cafeteriaEatingCount}`
+    );
+  }
+  if (room === RoomType.Market) {
+    hints.push('chain: workshop -> market');
+    hints.push(`trade stock ${state.metrics.marketTradeGoodStock.toFixed(1)} | use ${state.metrics.marketTradeGoodUseRate.toFixed(1)}/s`);
+    if (state.ops.workshopActive <= 0) hints.push('upstream workshop inactive');
+    flowHints.push(
+      `tradeGood ${tradeGoodAtMarket.toFixed(1)} | use/s ${state.metrics.marketTradeGoodUseRate.toFixed(1)} | stockouts/min ${state.metrics.marketStockoutsPerMin.toFixed(1)}`
+    );
   }
   if (room === RoomType.LifeSupport) {
     hints.push(`air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential`);
   }
+  if (room === RoomType.LogisticsStock) {
+    flowHints.push(
+      `rawMaterial ${rawMaterialAtIntake.toFixed(1)} | to storage jobs ${formatRouteJobCounts(intakeToStorageJobs)}`
+    );
+  }
+  if (room === RoomType.Storage) {
+    flowHints.push(
+      `rawMaterial ${rawMaterialAtStorage.toFixed(1)} | to workshop jobs ${formatRouteJobCounts(storageToWorkshopJobs)}`
+    );
+  }
 
   let cafeteriaLoad: RoomInspector['cafeteriaLoad'] | undefined;
   if (room === RoomType.Cafeteria) {
-    const clusterSet = new Set(cluster);
-    const tableNodes = serviceTargets.length;
+    const tableNodes = collectModuleAnchors(state, ModuleType.Table, RoomType.Cafeteria).filter((t) => clusterSet.has(t)).length;
     const queueNodes = collectQueueTargets(state, RoomType.Cafeteria).filter((q) => {
       const p = fromIndex(q, state.width);
       const deltas = [
@@ -1964,7 +2238,10 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     const queueingVisitors = state.visitors.filter(
       (v) =>
         (v.state === VisitorState.ToCafeteria || v.state === VisitorState.Queueing) &&
-        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) || clusterSet.has(v.tileIndex))
+        !v.carryingMeal &&
+        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) ||
+          (v.reservedServingTile !== null && clusterSet.has(v.reservedServingTile)) ||
+          clusterSet.has(v.tileIndex))
     ).length;
     const eatingVisitors = state.visitors.filter(
       (v) => v.state === VisitorState.Eating && clusterSet.has(v.tileIndex)
@@ -1972,10 +2249,13 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     const highPatienceWaiting = state.visitors.filter(
       (v) =>
         (v.state === VisitorState.ToCafeteria || v.state === VisitorState.Queueing) &&
+        !v.carryingMeal &&
         v.patience > 22 &&
-        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) || clusterSet.has(v.tileIndex))
+        ((v.reservedTargetTile !== null && clusterSet.has(v.reservedTargetTile)) ||
+          (v.reservedServingTile !== null && clusterSet.has(v.reservedServingTile)) ||
+          clusterSet.has(v.tileIndex))
     ).length;
-    const effectiveCapacity = Math.max(1, tableNodes + Math.floor(queueNodes / 2));
+    const effectiveCapacity = Math.max(1, tableNodes * MAX_DINERS_PER_CAF_TILE + Math.floor(queueNodes / 2));
     const pressureRatio = queueingVisitors / effectiveCapacity;
     const pressure: 'low' | 'medium' | 'high' = pressureRatio > 1.6 || highPatienceWaiting > 3
       ? 'high'
@@ -1997,18 +2277,24 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
 
   return {
     room,
-    active: reasons.length === 0,
+    active: inspection.reasons.length === 0,
     clusterSize: cluster.length,
-    doorCount,
-    pressurizedPct,
-    staffCount,
-    requiredStaff,
-    hasServiceNode,
-    serviceNodeCount,
-    hasPath,
-    reasons,
+    minTilesRequired: inspection.minTilesRequired,
+    minTilesMet: inspection.minTilesMet,
+    doorCount: inspection.doorCount,
+    pressurizedPct: inspection.pressurizedPct,
+    staffCount: inspection.staffCount,
+    requiredStaff: inspection.requiredStaff,
+    hasServiceNode: inspection.hasServiceNode,
+    serviceNodeCount: inspection.serviceNodeCount,
+    moduleProgress: inspection.moduleProgress,
+    anyOfProgress: inspection.anyOfProgress,
+    hasPath: inspection.hasPath,
+    reasons: inspection.reasons,
     warnings,
     hints,
+    inventory,
+    flowHints,
     cafeteriaLoad
   };
 }
@@ -2016,11 +2302,12 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
 function countCafeteriaDemandByTile(state: StationState): Map<number, number> {
   const demand = new Map<number, number>();
   for (const v of state.visitors) {
-    if (
-      v.state === VisitorState.Eating ||
-      v.state === VisitorState.ToCafeteria ||
-      v.state === VisitorState.Queueing
-    ) {
+    if (v.state === VisitorState.Eating) {
+      const key = v.tileIndex;
+      demand.set(key, (demand.get(key) ?? 0) + 1);
+      continue;
+    }
+    if ((v.state === VisitorState.ToCafeteria || v.state === VisitorState.Queueing) && v.carryingMeal) {
       const key = v.path.length > 0 ? v.path[v.path.length - 1] : v.tileIndex;
       demand.set(key, (demand.get(key) ?? 0) + 1);
     }
@@ -2047,11 +2334,26 @@ function countReservedServiceTargets(state: StationState): Map<number, number> {
   return counts;
 }
 
+function countReservedServingTargets(state: StationState): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const v of state.visitors) {
+    if (v.reservedServingTile === null) continue;
+    counts.set(v.reservedServingTile, (counts.get(v.reservedServingTile) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function countQueuePressureByTile(state: StationState): Map<number, number> {
   const pressure = new Map<number, number>();
   for (const v of state.visitors) {
     if (v.state !== VisitorState.ToCafeteria && v.state !== VisitorState.Queueing) continue;
-    const key = v.path.length > 0 ? v.path[v.path.length - 1] : v.tileIndex;
+    if (v.carryingMeal) continue;
+    const key =
+      !v.carryingMeal && v.reservedServingTile !== null
+        ? v.reservedServingTile
+        : v.path.length > 0
+          ? v.path[v.path.length - 1]
+          : v.tileIndex;
     pressure.set(key, (pressure.get(key) ?? 0) + 1);
   }
   for (const r of state.residents) {
@@ -2066,7 +2368,7 @@ function pickLeastLoadedCafeteriaPath(
   state: StationState,
   start: number
 ): { path: number[]; target: number | null } {
-  const cafeterias = collectServiceTargets(state, RoomType.Cafeteria);
+  const cafeterias = collectCafeteriaTableTargets(state);
   const demandByTile = countCafeteriaDemandByTile(state);
   const reservedByTile = countReservedServiceTargets(state);
   let bestPath: number[] | null = null;
@@ -2087,6 +2389,30 @@ function pickLeastLoadedCafeteriaPath(
     const doorwayPenalty = hasAdjacentDoor(state, target) ? 8 : 0;
     const seatedPenalty = seated >= MAX_DINERS_PER_CAF_TILE ? 30 : seated * 10;
     const score = demand * 14 + seatedPenalty + doorwayPenalty + reserved * 6 + occupancy * 3 + path.length;
+    if (score < bestScore) {
+      bestScore = score;
+      bestPath = path;
+      bestTarget = target;
+    }
+  }
+  return { path: bestPath ?? [], target: bestTarget };
+}
+
+function pickServingStationPath(state: StationState, start: number): { path: number[]; target: number | null } {
+  const servingTargets = collectServingTargets(state);
+  const reservedByTile = countReservedServingTargets(state);
+  const queuePressureByTile = countQueuePressureByTile(state);
+  let bestPath: number[] | null = null;
+  let bestTarget: number | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const target of servingTargets) {
+    const path = findPath(state, start, target, false, state.pathOccupancyByTile);
+    if (!path) continue;
+    const reserved = reservedByTile.get(target) ?? 0;
+    const queued = queuePressureByTile.get(target) ?? 0;
+    const stock = itemStockAtNode(state, target, 'meal');
+    const stockPenalty = stock <= 0.05 ? 14 : stock < 1 ? 5 : 0;
+    const score = path.length + reserved * 5 + queued * 6 + stockPenalty;
     if (score < bestScore) {
       bestScore = score;
       bestPath = path;
@@ -2154,14 +2480,20 @@ function scheduleCycleArrivals(state: StationState): void {
     }
 
     const weights = state.laneProfiles[lane].weights;
-    const shipType: ShipType =
-      availableTypes.has('tourist') && availableTypes.has('trader')
-        ? state.rng() <= weights.tourist
-          ? 'tourist'
-          : 'trader'
-        : availableTypes.has('tourist')
-          ? 'tourist'
-          : 'trader';
+    const candidates = [...availableTypes];
+    const candidateWeightTotal = Math.max(
+      0.0001,
+      candidates.reduce((acc, type) => acc + Math.max(0.0001, weights[type]), 0)
+    );
+    let cursor = state.rng() * candidateWeightTotal;
+    let shipType: ShipType = candidates[0];
+    for (const type of candidates) {
+      cursor -= Math.max(0.0001, weights[type]);
+      if (cursor <= 0) {
+        shipType = type;
+        break;
+      }
+    }
 
     const preferred = preferredShipSize(state.rng);
     const sizeOrder: ShipSize[] =
@@ -2329,7 +2661,7 @@ function spawnShipAtDock(
   const sizeWanted = forcedSize ?? preferredShipSize(state.rng);
   const size = shipSizeForBay(dock.area, sizeWanted) ?? 'small';
   const passengersTotal = Math.round(SHIP_BASE_PASSENGERS[size] * (0.78 + state.rng() * 0.7));
-  const manifest = generateShipManifest(state);
+  const manifest = generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
   dock.occupiedByShipId = shipId;
   const center = dock.tiles
@@ -2361,6 +2693,7 @@ function spawnShipAtDock(
     manifestDemand: manifest.demand,
     manifestMix: manifest.mix
   });
+  state.usageTotals.shipsByType[shipType] += 1;
 }
 
 function buildOccupancyMap(state: StationState): Map<number, number> {
@@ -2427,27 +2760,201 @@ function rebuildItemNodes(state: StationState): void {
   for (const node of state.itemNodes) previousByTile.set(node.tileIndex, node);
 
   const next: typeof state.itemNodes = [];
-  const targets = [
-    ...collectServiceTargets(state, RoomType.Hydroponics),
-    ...collectServiceTargets(state, RoomType.Cafeteria)
-  ];
-
-  for (const tileIndex of targets) {
-    const prev = previousByTile.get(tileIndex);
+  for (const module of state.moduleInstances) {
+    const capacity = MODULE_DEFINITIONS[module.type]?.itemNodeCapacity ?? 0;
+    if (capacity <= 0) continue;
+    const prev = previousByTile.get(module.originTile);
     next.push({
-      tileIndex,
-      capacity: 8,
+      tileIndex: module.originTile,
+      capacity,
       items: prev?.items ?? {}
     });
   }
 
-  state.itemNodes = next;
+  state.itemNodes = next.sort((a, b) => a.tileIndex - b.tileIndex);
+}
+
+function itemNodeAt(state: StationState, tileIndex: number): StationState['itemNodes'][number] | undefined {
+  return state.itemNodes.find((node) => node.tileIndex === tileIndex);
+}
+
+function totalItemsInNode(node: StationState['itemNodes'][number]): number {
+  return ITEM_TYPES.reduce((acc, itemType) => acc + (node.items[itemType] ?? 0), 0);
+}
+
+function itemStockAtNode(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
+): number {
+  const node = itemNodeAt(state, tileIndex);
+  return node ? node.items[itemType] ?? 0 : 0;
+}
+
+function addItemStockAtNode(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body',
+  amount: number
+): number {
+  if (amount <= 0) return 0;
+  const node = itemNodeAt(state, tileIndex);
+  if (!node) return 0;
+  const current = node.items[itemType] ?? 0;
+  const totalItems = totalItemsInNode(node);
+  const freeCapacity = Math.max(0, node.capacity - totalItems);
+  const added = Math.min(amount, freeCapacity);
+  if (added <= 0) return 0;
+  node.items[itemType] = current + added;
+  return added;
+}
+
+function takeItemStockAtNode(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body',
+  amount: number
+): number {
+  if (amount <= 0) return 0;
+  const node = itemNodeAt(state, tileIndex);
+  if (!node) return 0;
+  const current = node.items[itemType] ?? 0;
+  const taken = Math.min(current, amount);
+  if (taken <= 0) return 0;
+  node.items[itemType] = current - taken;
+  return taken;
+}
+
+function sumItemStockForRoom(
+  state: StationState,
+  room: RoomType,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
+): number {
+  const targets = collectServiceTargets(state, room);
+  let total = 0;
+  for (const tileIndex of targets) {
+    total += itemStockAtNode(state, tileIndex, itemType);
+  }
+  return total;
+}
+
+function consumeTradeGoodsFromMarket(state: StationState, amount: number): number {
+  if (amount <= 0) return 0;
+  const targets = collectServiceTargets(state, RoomType.Market);
+  if (targets.length === 0) return 0;
+  let remaining = amount;
+  let consumed = 0;
+  for (const tileIndex of targets) {
+    if (remaining <= 0) break;
+    const taken = takeItemStockAtNode(state, tileIndex, 'tradeGood', remaining);
+    consumed += taken;
+    remaining -= taken;
+  }
+  return consumed;
+}
+
+function itemNodeFreeCapacity(state: StationState, tileIndex: number): number {
+  const node = itemNodeAt(state, tileIndex);
+  if (!node) return 0;
+  const used = totalItemsInNode(node);
+  return Math.max(0, node.capacity - used);
+}
+
+function totalItemCapacityAtTargets(state: StationState, tileIndices: number[]): number {
+  let total = 0;
+  for (const tileIndex of tileIndices) {
+    total += itemNodeFreeCapacity(state, tileIndex);
+  }
+  return total;
+}
+
+function addItemAcrossTargets(
+  state: StationState,
+  tileIndices: number[],
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body',
+  amount: number,
+  fromTile?: number
+): number {
+  if (amount <= 0 || tileIndices.length === 0) return 0;
+  const source = fromTile ?? state.core.serviceTile;
+  const sourcePos = fromIndex(source, state.width);
+  const sorted = [...tileIndices].sort((a, b) => {
+    const pa = fromIndex(a, state.width);
+    const pb = fromIndex(b, state.width);
+    const da = Math.abs(pa.x - sourcePos.x) + Math.abs(pa.y - sourcePos.y);
+    const db = Math.abs(pb.x - sourcePos.x) + Math.abs(pb.y - sourcePos.y);
+    return da - db;
+  });
+  let remaining = amount;
+  let addedTotal = 0;
+  for (const tileIndex of sorted) {
+    if (remaining <= 0) break;
+    const added = addItemStockAtNode(state, tileIndex, itemType, remaining);
+    if (added <= 0) continue;
+    remaining -= added;
+    addedTotal += added;
+  }
+  return addedTotal;
+}
+
+function takeItemAcrossTargets(
+  state: StationState,
+  tileIndices: number[],
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body',
+  amount: number
+): number {
+  if (amount <= 0 || tileIndices.length === 0) return 0;
+  let remaining = amount;
+  let removed = 0;
+  for (const tileIndex of tileIndices) {
+    if (remaining <= 0) break;
+    const taken = takeItemStockAtNode(state, tileIndex, itemType, remaining);
+    if (taken <= 0) continue;
+    remaining -= taken;
+    removed += taken;
+  }
+  return removed;
+}
+
+function materialInventoryTiles(state: StationState): number[] {
+  const logisticsTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const storageTargets = collectServiceTargets(state, RoomType.Storage);
+  return [...new Set([...logisticsTargets, ...storageTargets])];
+}
+
+function materialInventoryTotal(state: StationState): number {
+  return materialInventoryTiles(state).reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
+}
+
+function consumeConstructionMaterials(state: StationState, amount: number): boolean {
+  if (amount <= 0) return true;
+  const inventoryTiles = materialInventoryTiles(state);
+  if (inventoryTiles.length === 0) {
+    if (state.legacyMaterialStock < amount) return false;
+    state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - amount);
+    state.metrics.materials = state.legacyMaterialStock;
+    return true;
+  }
+  const inventoryAvailable = materialInventoryTotal(state);
+  const totalAvailable = inventoryAvailable + state.legacyMaterialStock;
+  if (totalAvailable < amount) return false;
+  const consumeFromInventory = Math.min(amount, inventoryAvailable);
+  if (consumeFromInventory > 0) {
+    const removed = takeItemAcrossTargets(state, inventoryTiles, 'rawMaterial', consumeFromInventory);
+    if (removed < consumeFromInventory) return false;
+  }
+  const consumeFromLegacy = amount - consumeFromInventory;
+  if (consumeFromLegacy > 0) {
+    state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - consumeFromLegacy);
+  }
+  state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
+  return true;
 }
 
 function enqueueTransportJob(
   state: StationState,
   type: 'pickup' | 'deliver',
-  itemType: 'rawFood' | 'meal' | 'body',
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body',
   amount: number,
   fromTile: number,
   toTile: number
@@ -2485,36 +2992,109 @@ function markJobStall(state: StationState, job: StationState['jobs'][number], re
 }
 
 function createFoodTransportJobs(state: StationState): void {
-  const hydroTargets = collectServiceTargets(state, RoomType.Hydroponics);
-  const kitchenTargets = collectServiceTargets(state, RoomType.Kitchen);
-  if (hydroTargets.length === 0 || kitchenTargets.length === 0) return;
-  if (state.metrics.rawFoodStock < 1) return;
-  if (
-    state.metrics.mealStock >= FOOD_CHAIN_TARGET_MEAL_STOCK &&
-    state.metrics.kitchenRawBuffer >= FOOD_CHAIN_TARGET_KITCHEN_RAW
-  ) {
-    return;
-  }
-  const mealUse = Math.max(0.01, state.metrics.mealUseRate);
-  const projectedMealHorizonSec = state.metrics.mealStock / mealUse;
-  if (
-    projectedMealHorizonSec > FOOD_CHAIN_MEAL_HORIZON_SEC &&
-    state.metrics.kitchenRawBuffer >= FOOD_CHAIN_TARGET_KITCHEN_RAW
-  ) {
-    return;
-  }
-  if (state.metrics.kitchenRawBuffer > 90 || state.metrics.mealStock > 220) return;
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const servingTargets = collectServingTargets(state);
+  if (growTargets.length === 0 || stoveTargets.length === 0) return;
 
-  const openJobs = state.jobs.filter(
-    (j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress'
-  );
-  const openFoodJobs = openJobs.filter((j) => j.itemType === 'rawFood');
+  const openJobs = state.jobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
+  const openFoodJobs = openJobs.filter((j) => j.itemType === 'rawMeal' || j.itemType === 'meal');
   if (openFoodJobs.length >= MAX_PENDING_FOOD_JOBS) return;
 
-  const fromTile = hydroTargets[randomInt(0, hydroTargets.length - 1, state.rng)];
-  let bestTo = kitchenTargets[0];
+  const rawMealSources = growTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMeal') > 0.3);
+  const rawMealDestinations = stoveTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMeal') < 8);
+  if (rawMealSources.length > 0 && rawMealDestinations.length > 0) {
+    let best: { from: number; to: number; dist: number } | null = null;
+    for (const from of rawMealSources) {
+      for (const to of rawMealDestinations) {
+        const path = findPath(state, from, to, false, state.pathOccupancyByTile);
+        if (!path) continue;
+        if (!best || path.length < best.dist) best = { from, to, dist: path.length };
+      }
+    }
+    if (best) {
+      const amount = best.dist <= 8 ? 1.4 : 1.0;
+      enqueueTransportJob(state, 'deliver', 'rawMeal', amount, best.from, best.to);
+    }
+  }
+
+  if (servingTargets.length > 0) {
+    const mealSources = stoveTargets.filter((tile) => itemStockAtNode(state, tile, 'meal') > 0.3);
+    const mealDestinations = servingTargets.filter((tile) => itemStockAtNode(state, tile, 'meal') < 10);
+    if (mealSources.length > 0 && mealDestinations.length > 0) {
+      let best: { from: number; to: number; dist: number } | null = null;
+      for (const from of mealSources) {
+        for (const to of mealDestinations) {
+          const path = findPath(state, from, to, false, state.pathOccupancyByTile);
+          if (!path) continue;
+          if (!best || path.length < best.dist) best = { from, to, dist: path.length };
+        }
+      }
+      if (best) {
+        const amount = best.dist <= 8 ? 1.2 : 0.9;
+        enqueueTransportJob(state, 'deliver', 'meal', amount, best.from, best.to);
+      }
+    }
+  }
+}
+
+function createRawMaterialTransportJobs(state: StationState): void {
+  const intakeTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const storageTargets = collectServiceTargets(state, RoomType.Storage);
+  const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
+
+  const openMaterialJobs = state.jobs.filter(
+    (j) =>
+      (j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress') &&
+      j.itemType === 'rawMaterial'
+  );
+  if (openMaterialJobs.length >= MAX_PENDING_TRADE_JOBS) return;
+
+  if (intakeTargets.length > 0 && storageTargets.length > 0) {
+    const intakeSources = intakeTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') > 0.3);
+    const storageDestinations = storageTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') < 12);
+    if (intakeSources.length > 0 && storageDestinations.length > 0) {
+      const from = intakeSources[randomInt(0, intakeSources.length - 1, state.rng)];
+      const to = storageDestinations[randomInt(0, storageDestinations.length - 1, state.rng)];
+      enqueueTransportJob(state, 'deliver', 'rawMaterial', 1.2, from, to);
+    }
+  }
+
+  if (storageTargets.length > 0 && workshopTargets.length > 0) {
+    const storageSources = storageTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') > 0.3);
+    const workshopDestinations = workshopTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') < 8);
+    if (storageSources.length > 0 && workshopDestinations.length > 0) {
+      const from = storageSources[randomInt(0, storageSources.length - 1, state.rng)];
+      const to = workshopDestinations[randomInt(0, workshopDestinations.length - 1, state.rng)];
+      enqueueTransportJob(state, 'deliver', 'rawMaterial', 1.0, from, to);
+    }
+  }
+}
+
+function createTradeGoodTransportJobs(state: StationState): void {
+  const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
+  const marketTargets = collectServiceTargets(state, RoomType.Market);
+  if (workshopTargets.length === 0 || marketTargets.length === 0) return;
+  if (state.ops.workshopActive <= 0 || state.ops.marketActive <= 0) return;
+  const liveMarketStock = sumItemStockForRoom(state, RoomType.Market, 'tradeGood');
+  if (liveMarketStock >= MARKET_TRADE_GOOD_TARGET_STOCK) return;
+  const openTradeJobs = state.jobs.filter(
+    (j) =>
+      (j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress') &&
+      j.itemType === 'tradeGood'
+  );
+  if (openTradeJobs.length >= MAX_PENDING_TRADE_JOBS) return;
+
+  const fromCandidates = workshopTargets
+    .map((tile) => ({ tile, stock: itemStockAtNode(state, tile, 'tradeGood') }))
+    .filter((entry) => entry.stock > 0.25)
+    .sort((a, b) => b.stock - a.stock);
+  if (fromCandidates.length === 0) return;
+
+  const fromTile = fromCandidates[0].tile;
+  let bestTo = marketTargets[0];
   let bestDist = Number.POSITIVE_INFINITY;
-  for (const to of kitchenTargets) {
+  for (const to of marketTargets) {
     const path = findPath(state, fromTile, to, false, state.pathOccupancyByTile);
     if (!path) continue;
     if (path.length < bestDist) {
@@ -2522,10 +3102,9 @@ function createFoodTransportJobs(state: StationState): void {
       bestTo = to;
     }
   }
-
   if (!Number.isFinite(bestDist)) return;
   const amount = bestDist <= 8 ? 1.2 : 0.9;
-  enqueueTransportJob(state, 'deliver', 'rawFood', amount, fromTile, bestTo);
+  enqueueTransportJob(state, 'deliver', 'tradeGood', amount, fromTile, bestTo);
 }
 
 function assignJobsToIdleCrew(state: StationState): void {
@@ -2752,7 +3331,39 @@ function refreshJobMetrics(state: StationState): void {
   state.metrics.stalledJobsByReason = stalledByReason;
 }
 
+function releaseCrewJobsOnDeath(state: StationState, crewId: number): void {
+  for (const job of state.jobs) {
+    if (job.assignedCrewId !== crewId) continue;
+    if (job.state !== 'assigned' && job.state !== 'in_progress') continue;
+    job.assignedCrewId = null;
+    job.state = 'pending';
+    job.pickedUpAmount = 0;
+    job.expiresAt = Math.max(job.expiresAt, state.now + JOB_TTL_SEC);
+    job.lastProgressAt = state.now;
+    markJobStall(state, job, 'none');
+  }
+}
+
+function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
+  if (state.crewMembers.length <= 0) return;
+  const keep: CrewMember[] = [];
+  for (const crew of state.crewMembers) {
+    const exposure = applyAirExposure(crew, state.metrics.airQuality, dt);
+    if (exposure.died) {
+      releaseCrewJobsOnDeath(state, crew.id);
+      registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
+      continue;
+    }
+    keep.push(crew);
+  }
+  if (keep.length !== state.crewMembers.length) {
+    state.crewMembers = keep;
+    state.crew.total = Math.min(state.crew.total, keep.length);
+  }
+}
+
 function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
+  purgeDeadCrewFromAir(state, dt, occupancyByTile);
   const idleTargets = collectIdleWalkTiles(state);
   const hasPendingJobs = state.jobs.some((j) => j.state === 'pending');
   const airEmergency = state.metrics.airQuality < 25 || state.metrics.airBlockedWarningActive;
@@ -2924,7 +3535,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         const targetTile = crew.carryingAmount > 0 ? job.toTile : job.fromTile;
         if (crew.tileIndex === targetTile) {
           if (crew.carryingAmount <= 0) {
-            const pickup = Math.min(job.amount, state.metrics.rawFoodStock);
+            const availableSupply = itemStockAtNode(state, job.fromTile, job.itemType);
+            const pickup = Math.min(job.amount, availableSupply);
             if (pickup <= 0) {
               markJobStall(state, job, 'stalled_no_supply');
               job.state = 'pending';
@@ -2934,18 +3546,25 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               crew.activeJobId = null;
               crew.path = [];
             } else {
-              state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - pickup, 0, 260);
+              takeItemStockAtNode(state, job.fromTile, job.itemType, pickup);
               crew.carryingItemType = job.itemType;
               crew.carryingAmount = pickup;
               job.pickedUpAmount = pickup;
               job.state = 'in_progress';
               job.lastProgressAt = state.now;
-               markJobStall(state, job, 'none');
+              markJobStall(state, job, 'none');
               crew.path = [];
             }
           } else {
-            if (job.itemType === 'rawFood') {
-              state.metrics.kitchenRawBuffer = clamp(state.metrics.kitchenRawBuffer + crew.carryingAmount, 0, 260);
+            const delivered = addItemStockAtNode(state, job.toTile, job.itemType, crew.carryingAmount);
+            if (delivered <= 0) {
+              markJobStall(state, job, 'stalled_unreachable_dropoff');
+              continue;
+            }
+            crew.carryingAmount = Math.max(0, crew.carryingAmount - delivered);
+            if (crew.carryingAmount > 0) {
+              markJobStall(state, job, 'stalled_unreachable_dropoff');
+              continue;
             }
             job.state = 'done';
             job.completedAt = state.now;
@@ -3031,27 +3650,31 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
 }
 
 function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
-  visitor.reservedTargetTile = null;
-  if (isCafeteriaQueueSpot(state, visitor.tileIndex)) {
-    const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-    visitor.path = next.path;
-    visitor.reservedTargetTile = next.target;
-    visitor.state = VisitorState.Queueing;
+  if (visitor.carryingMeal) {
+    const nextTable = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
+    visitor.path = nextTable.path;
+    visitor.reservedTargetTile = nextTable.target;
+    visitor.state = VisitorState.ToCafeteria;
     return;
   }
-  visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+  visitor.reservedTargetTile = null;
+  const nextServing = pickServingStationPath(state, visitor.tileIndex);
+  visitor.path = nextServing.path;
+  visitor.reservedServingTile = nextServing.target;
   visitor.state = VisitorState.ToCafeteria;
-  if (visitor.path.length === 0) {
-    const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-    visitor.path = next.path;
-    visitor.reservedTargetTile = next.target;
-    visitor.state = VisitorState.Queueing;
+  if (visitor.path.length > 0 || (nextServing.target !== null && visitor.tileIndex === nextServing.target)) {
+    return;
   }
+  const queuePath = pickQueueSpotPath(state, visitor.tileIndex);
+  visitor.path = queuePath;
+  visitor.state = VisitorState.Queueing;
 }
 
 function assignPathToDock(state: StationState, visitor: Visitor): void {
   const docks = collectTiles(state, TileType.Dock);
   visitor.reservedTargetTile = null;
+  visitor.reservedServingTile = null;
+  visitor.carryingMeal = false;
   visitor.path = chooseNearestPath(state, visitor.tileIndex, docks, false) ?? [];
 }
 
@@ -3157,10 +3780,24 @@ function assignPathToLeisure(state: StationState, visitor: Visitor): boolean {
   return true;
 }
 
+function assignPathToTable(state: StationState, visitor: Visitor): boolean {
+  const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
+  visitor.path = next.path;
+  visitor.reservedTargetTile = next.target;
+  return visitor.path.length > 0 || (next.target !== null && next.target === visitor.tileIndex);
+}
+
 function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
   const keep: Visitor[] = [];
+  let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
+    const exposure = applyAirExposure(visitor, state.metrics.airQuality, dt);
+    if (exposure.died) {
+      registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
+      continue;
+    }
+
     if (state.zones[visitor.tileIndex] === ZoneType.Restricted && !visitor.trespassed) {
       visitor.trespassed = true;
       const multiplier = state.now < state.effects.securityDelayUntil ? 2 : 1;
@@ -3170,6 +3807,9 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
 
     if (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing) {
       if (state.ops.cafeteriasActive <= 0) {
+        visitor.carryingMeal = false;
+        visitor.reservedServingTile = null;
+        visitor.reservedTargetTile = null;
         if (!visitor.servedMeal && assignPathToLeisure(state, visitor)) {
           visitor.state = VisitorState.ToLeisure;
         } else {
@@ -3177,8 +3817,36 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
           assignPathToDock(state, visitor);
         }
       } else {
+        if (!visitor.carryingMeal) {
+          const servingTargets = collectServingTargets(state);
+          if (
+            visitor.reservedServingTile === null ||
+            !servingTargets.includes(visitor.reservedServingTile)
+          ) {
+            assignPathToCafeteria(state, visitor);
+          }
+        } else if (visitor.reservedTargetTile === null && visitor.path.length === 0) {
+          assignPathToTable(state, visitor);
+        }
+
         if (visitor.path.length === 0) {
-          assignPathToCafeteria(state, visitor);
+          if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
+            visitor.path = findPath(
+              state,
+              visitor.tileIndex,
+              visitor.reservedServingTile,
+              false,
+              state.pathOccupancyByTile
+            ) ?? [];
+          } else if (visitor.carryingMeal && visitor.reservedTargetTile !== null && visitor.tileIndex !== visitor.reservedTargetTile) {
+            visitor.path = findPath(
+              state,
+              visitor.tileIndex,
+              visitor.reservedTargetTile,
+              false,
+              state.pathOccupancyByTile
+            ) ?? [];
+          }
         }
         const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
         if (moveResult === 'blocked') {
@@ -3188,7 +3856,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
           visitor.blockedTicks = 0;
         }
         if (moveResult !== 'moved') {
-          const hasAnyCafeteria = collectServiceTargets(state, RoomType.Cafeteria).length > 0;
+          const hasAnyCafeteria = collectServingTargets(state).length > 0;
           addVisitorPatience(state, visitor, hasAnyCafeteria ? dt * 0.35 : dt * 0.08);
         }
 
@@ -3197,29 +3865,51 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
         }
         if (visitor.blockedTicks >= BLOCKED_LOCAL_REROUTE_TICKS) {
           visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
-          visitor.state = VisitorState.ToCafeteria;
+          visitor.state = VisitorState.Queueing;
         }
         if (visitor.blockedTicks >= BLOCKED_FULL_REROUTE_TICKS) {
           visitor.blockedTicks = 0;
           assignPathToCafeteria(state, visitor);
         }
 
-        if (isCafeteriaQueueSpot(state, visitor.tileIndex) && visitor.path.length === 0) {
-          const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-          visitor.path = next.path;
-          visitor.reservedTargetTile = next.target;
-          visitor.state = VisitorState.Queueing;
-        }
-
-        if (
+        if (!visitor.carryingMeal) {
+          const servingTile = visitor.reservedServingTile;
+          if (servingTile !== null && visitor.tileIndex === servingTile) {
+            const picked = takeItemStockAtNode(state, servingTile, 'meal', 1);
+            if (picked > 0.01) {
+              visitor.carryingMeal = true;
+              visitor.reservedServingTile = null;
+              visitor.state = VisitorState.ToCafeteria;
+              if (!assignPathToTable(state, visitor)) {
+                visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+                visitor.state = VisitorState.Queueing;
+              }
+            } else {
+              addVisitorFailurePenalty(state, 0.012 * dt, 'patienceBail');
+              if (!isCafeteriaQueueSpot(state, visitor.tileIndex)) {
+                visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+              }
+              visitor.state = VisitorState.Queueing;
+            }
+          } else if (visitor.state === VisitorState.Queueing && visitor.path.length === 0) {
+            const reservedServingHasMeal =
+              visitor.reservedServingTile !== null &&
+              itemStockAtNode(state, visitor.reservedServingTile, 'meal') > 0.2;
+            if (reservedServingHasMeal || sumItemStockForRoom(state, RoomType.Cafeteria, 'meal') > 0.2) {
+              assignPathToCafeteria(state, visitor);
+            }
+          }
+        } else if (
+          visitor.reservedTargetTile !== null &&
+          visitor.tileIndex === visitor.reservedTargetTile &&
           state.rooms[visitor.tileIndex] === RoomType.Cafeteria &&
           state.modules[visitor.tileIndex] === ModuleType.Table &&
           state.now >= state.effects.cafeteriaStallUntil &&
           dinersOnTile(state, visitor.tileIndex) < MAX_DINERS_PER_CAF_TILE
         ) {
           visitor.state = VisitorState.Eating;
-          const eatBase = visitor.archetype === 'rusher' ? 1.4 : visitor.archetype === 'diner' ? 2.8 : 2.2;
-          visitor.eatTimer = eatBase + state.rng() * 1.2;
+          const eatBase = TASK_TIMINGS.visitorEatBaseSec[visitor.archetype];
+          visitor.eatTimer = eatBase + state.rng() * TASK_TIMINGS.visitorEatJitterSec;
           visitor.path = [];
           state.usageTotals.meals += 1;
           state.usageTotals.visitorLeisureEntries.cafeteria += 1;
@@ -3228,21 +3918,19 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
             state.metrics.cafeteriaNonNodeSeatedCount++;
           }
           visitor.reservedTargetTile = null;
-        } else if (state.rooms[visitor.tileIndex] === RoomType.Cafeteria) {
-          const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-          visitor.path = next.path;
-          visitor.reservedTargetTile = next.target;
+        } else if (visitor.carryingMeal && state.rooms[visitor.tileIndex] === RoomType.Cafeteria && visitor.path.length === 0) {
+          assignPathToTable(state, visitor);
         }
       }
     } else if (visitor.state === VisitorState.Eating) {
-      if (state.now < state.effects.cafeteriaStallUntil || state.metrics.mealStock <= 0.15) {
+      if (state.now < state.effects.cafeteriaStallUntil) {
         addVisitorPatience(state, visitor, dt * 0.8);
       } else {
         visitor.eatTimer -= dt;
-        state.metrics.mealStock = Math.max(0, state.metrics.mealStock - dt * 0.2);
       }
 
       if (visitor.eatTimer <= 0) {
+        visitor.carryingMeal = false;
         visitor.servedMeal = true;
         state.metrics.mealsServedTotal += 1;
         visitorSuccessRatingBonus(state, 0.08, 'mealService');
@@ -3277,26 +3965,42 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
       }
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt * 0.4);
-      if (state.rooms[visitor.tileIndex] === RoomType.Lounge || state.rooms[visitor.tileIndex] === RoomType.Market) {
+      const atLoungeModule =
+        state.modules[visitor.tileIndex] === ModuleType.Couch || state.modules[visitor.tileIndex] === ModuleType.GameStation;
+      const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
+      if (atLoungeModule || atMarketModule) {
         visitor.state = VisitorState.Leisure;
         visitorSuccessRatingBonus(state, 0.04, 'leisureService');
-        if (state.rooms[visitor.tileIndex] === RoomType.Market) {
+        if (atMarketModule) {
           state.usageTotals.visitorLeisureEntries.market += 1;
         } else {
           state.usageTotals.visitorLeisureEntries.lounge += 1;
         }
-        const baseDwell =
-          visitor.archetype === 'lounger' ? 3.4 : visitor.archetype === 'shopper' ? 3.0 : visitor.archetype === 'rusher' ? 1.4 : 2.2;
-        visitor.eatTimer = baseDwell + state.rng() * 1.5;
+        const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
+        visitor.eatTimer = baseDwell + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
         visitor.path = [];
         applyVisitorWalkDissatisfaction(state, visitor.tileIndex);
       }
     } else if (visitor.state === VisitorState.Leisure) {
       visitor.eatTimer -= dt;
-      if (state.rooms[visitor.tileIndex] === RoomType.Market) {
-        const spend = dt * marketSpendPerSec(state, visitor);
+      if (state.modules[visitor.tileIndex] === ModuleType.MarketStall) {
+        const requestedGoods = MARKET_TRADE_GOOD_USE_PER_SEC * dt * clamp(visitor.spendMultiplier, 0.7, 1.8);
+        const consumedGoods = consumeTradeGoodsFromMarket(state, requestedGoods);
+        let spendMultiplier = 0.26;
+        if (consumedGoods > 0) {
+          spendMultiplier = 1 + consumedGoods * 0.9;
+          state.usageTotals.tradeGoodsSold += consumedGoods;
+          marketTradeGoodsUsed += consumedGoods;
+          visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
+        } else {
+          state.usageTotals.marketStockouts += dt;
+          addVisitorPatience(state, visitor, dt * 0.35);
+          addVisitorFailurePenalty(state, 0.01 * dt, 'shipServicesMissing');
+        }
+        const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
         state.metrics.credits += spend;
         state.usageTotals.creditsMarketGross += spend;
+        state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
       if (visitor.eatTimer <= 0) {
         if (!visitor.servedMeal && state.ops.cafeteriasActive > 0 && shouldTryMealAfterLeisure(state, visitor)) {
@@ -3371,6 +4075,7 @@ function updateVisitorLogic(state: StationState, dt: number, occupancyByTile: Ma
   }
 
   state.visitors = keep;
+  state.metrics.marketTradeGoodUseRate = dt > 0 ? marketTradeGoodsUsed / dt : 0;
 }
 
 function noteFailedNeedAttempt(state: StationState, need: 'hunger' | 'energy' | 'hygiene' | 'dorm'): void {
@@ -3436,31 +4141,11 @@ function assignResidentTarget(state: StationState, resident: Resident): void {
 function updateResidentLogic(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
   const keep: Resident[] = [];
   for (const resident of state.residents) {
-    if (state.metrics.airQuality <= AIR_CRITICAL_THRESHOLD) {
-      resident.airExposureSec += dt * 1.35;
-    } else if (state.metrics.airQuality <= AIR_DISTRESS_THRESHOLD) {
-      resident.airExposureSec += dt;
-    } else {
-      resident.airExposureSec = Math.max(0, resident.airExposureSec - dt * 1.8);
-    }
-
-    if (resident.airExposureSec >= AIR_DEATH_EXPOSURE_SEC) {
-      state.metrics.deathsTotal += 1;
-      state.metrics.bodyCount += 1;
-      state.bodyTiles.push(resident.tileIndex);
-      state.recentDeathTimes.push(state.now);
-      occupancyByTile.set(
-        resident.tileIndex,
-        Math.max(0, (occupancyByTile.get(resident.tileIndex) ?? 1) - 1)
-      );
+    const exposure = applyAirExposure(resident, state.metrics.airQuality, dt);
+    if (exposure.died) {
+      registerBodyDeathAtTile(state, resident.tileIndex, occupancyByTile);
       continue;
     }
-    resident.healthState =
-      resident.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
-        ? 'critical'
-        : resident.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
-          ? 'distressed'
-          : 'healthy';
 
     const airPenalty = state.metrics.airQuality < 40 ? 0.25 : 0;
     const healthPenalty = resident.healthState === 'critical' ? 0.35 : resident.healthState === 'distressed' ? 0.18 : 0;
@@ -3540,7 +4225,7 @@ function updateResidentLogic(state: StationState, dt: number, occupancyByTile: M
           dinersOnTile(state, resident.tileIndex) < MAX_DINERS_PER_CAF_TILE
         ) {
           resident.state = ResidentState.Eating;
-          resident.actionTimer = 2.4;
+          resident.actionTimer = TASK_TIMINGS.residentEatSec;
           resident.path = [];
           state.usageTotals.meals += 1;
           if (resident.reservedTargetTile !== null && resident.reservedTargetTile !== resident.tileIndex) {
@@ -3558,12 +4243,12 @@ function updateResidentLogic(state: StationState, dt: number, occupancyByTile: M
         resident.reservedTargetTile = next.target;
       } else if (resident.state === ResidentState.ToDorm && state.rooms[resident.tileIndex] === RoomType.Dorm) {
         resident.state = ResidentState.Sleeping;
-        resident.actionTimer = 3.2;
+        resident.actionTimer = TASK_TIMINGS.residentSleepSec;
         resident.path = [];
         state.usageTotals.dorm += 1;
       } else if (resident.state === ResidentState.ToHygiene && state.rooms[resident.tileIndex] === RoomType.Hygiene) {
         resident.state = ResidentState.Cleaning;
-        resident.actionTimer = 2.2;
+        resident.actionTimer = TASK_TIMINGS.residentCleanSec;
         resident.path = [];
         state.usageTotals.hygiene += 1;
       } else if (
@@ -3591,29 +4276,80 @@ function updateResources(state: StationState, dt: number): void {
   const leakPenalty = state.metrics.leakingTiles * 0.03;
   const powerRatio = clamp(state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand), 0.35, 1);
   const hydroRate = state.ops.hydroponicsActive * 1.25 * powerRatio;
-  const activeKitchenNodes = activeRoomTargets(state, RoomType.Kitchen).length;
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
+  const servingTargets = collectServingTargets(state);
   const residentMealUsePerSec = state.residents.length * 0.11;
   const visitorMealUsePerSec = state.visitors.length * 0.04;
   const crewMealUsePerSec = state.crewMembers.length * 0.06;
   const mealUseRate = residentMealUsePerSec + visitorMealUsePerSec + crewMealUsePerSec;
 
-  state.metrics.rawFoodStock = clamp(
-    state.metrics.rawFoodStock + hydroRate * dt,
-    0,
-    260
-  );
-  const kitchenMealProd = Math.min(
-    state.metrics.kitchenRawBuffer,
-    activeKitchenNodes * KITCHEN_CONVERSION_RATE * powerRatio * dt
-  );
-  state.metrics.kitchenRawBuffer = clamp(state.metrics.kitchenRawBuffer - kitchenMealProd, 0, 260);
-  state.metrics.mealStock = clamp(state.metrics.mealStock + kitchenMealProd, 0, 260);
-  state.metrics.mealStock = clamp(state.metrics.mealStock - mealUseRate * dt * 0.06, 0, 260);
-  state.metrics.rawFoodStock = clamp(
-    state.metrics.rawFoodStock - (state.residents.length * 0.01 + state.crewMembers.length * 0.008) * dt,
-    0,
-    260
-  );
+  let hydroProduced = 0;
+  if (growTargets.length > 0) {
+    let remaining = hydroRate * dt;
+    for (const tileIndex of growTargets) {
+      if (remaining <= 0) break;
+      const added = addItemStockAtNode(state, tileIndex, 'rawMeal', remaining);
+      hydroProduced += added;
+      remaining -= added;
+    }
+  }
+
+  let kitchenMealProd = 0;
+  const kitchenPerNodeProd = KITCHEN_CONVERSION_RATE * powerRatio * dt;
+  for (const tileIndex of stoveTargets) {
+    const availableRaw = itemStockAtNode(state, tileIndex, 'rawMeal');
+    if (availableRaw <= 0) continue;
+    const produced = Math.min(availableRaw, kitchenPerNodeProd);
+    if (produced <= 0) continue;
+    takeItemStockAtNode(state, tileIndex, 'rawMeal', produced);
+    const added = addItemStockAtNode(state, tileIndex, 'meal', produced);
+    kitchenMealProd += added;
+  }
+
+  const marketTradeGoodStock = sumItemStockForRoom(state, RoomType.Market, 'tradeGood');
+  let workshopProduced = 0;
+  if (workshopTargets.length > 0 && marketTradeGoodStock < MARKET_TRADE_GOOD_TARGET_STOCK * 1.45) {
+    const nodeProdCap = WORKSHOP_TRADE_GOOD_RATE * powerRatio * dt;
+    for (const tileIndex of workshopTargets) {
+      const rawMaterialAtNode = itemStockAtNode(state, tileIndex, 'rawMaterial');
+      if (rawMaterialAtNode <= 0) continue;
+      const producibleBySupply = rawMaterialAtNode / WORKSHOP_MATERIALS_PER_TRADE_GOOD;
+      const producible = Math.min(nodeProdCap, producibleBySupply);
+      if (producible <= 0) continue;
+      const rawConsumed = producible * WORKSHOP_MATERIALS_PER_TRADE_GOOD;
+      takeItemStockAtNode(state, tileIndex, 'rawMaterial', rawConsumed);
+      const added = addItemStockAtNode(state, tileIndex, 'tradeGood', producible);
+      workshopProduced += added;
+    }
+  }
+
+  const rawMealAtGrow = growTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
+  const rawMealAtStove = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
+  const mealAtStove = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
+  const mealAtServing = servingTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
+  let logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
+  let storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
+  state.metrics.rawFoodStock = clamp(rawMealAtGrow + rawMealAtStove, 0, 260);
+  state.metrics.kitchenRawBuffer = clamp(rawMealAtStove, 0, 260);
+  state.metrics.mealStock = clamp(mealAtStove + mealAtServing, 0, 260);
+  const inventoryTiles = materialInventoryTiles(state);
+  if (inventoryTiles.length > 0 && state.legacyMaterialStock > 0.01) {
+    const migrated = addItemAcrossTargets(
+      state,
+      inventoryTiles,
+      'rawMaterial',
+      state.legacyMaterialStock,
+      state.core.serviceTile
+    );
+    if (migrated > 0) {
+      state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - migrated);
+      logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
+      storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
+    }
+  }
+  state.metrics.materials = Math.max(0, state.legacyMaterialStock + logisticsRawMaterial + storageRawMaterial);
 
   state.metrics.waterStock = clamp(
     state.metrics.waterStock +
@@ -3668,6 +4404,11 @@ function updateResources(state: StationState, dt: number): void {
   state.metrics.rawFoodProdRate = hydroRate;
   const instantKitchenRate = dt > 0 ? kitchenMealProd / dt : 0;
   state.metrics.kitchenMealProdRate = state.metrics.kitchenMealProdRate * 0.82 + instantKitchenRate * 0.18;
+  const instantWorkshopRate = dt > 0 ? workshopProduced / dt : 0;
+  state.metrics.workshopTradeGoodProdRate =
+    state.metrics.workshopTradeGoodProdRate * 0.8 + instantWorkshopRate * 0.2;
+  state.metrics.marketTradeGoodStock = sumItemStockForRoom(state, RoomType.Market, 'tradeGood');
+  state.metrics.marketTradeGoodUseRate = 0;
   state.metrics.mealPrepRate = state.metrics.kitchenMealProdRate;
   state.metrics.mealUseRate = mealUseRate;
 }
@@ -3727,6 +4468,7 @@ function collectTopRoomWarnings(state: StationState): string[] {
   const roomTypes = [
     RoomType.Cafeteria,
     RoomType.Kitchen,
+    RoomType.Workshop,
     RoomType.Dorm,
     RoomType.Hygiene,
     RoomType.Hydroponics,
@@ -3812,6 +4554,7 @@ function computeMetrics(state: StationState): void {
     residentsCount * 0.52 +
     state.ops.cafeteriasActive * 1.3 +
     state.ops.kitchenActive * 1.2 +
+    state.ops.workshopActive * 1.15 +
     state.ops.securityActive * 1.2 +
     state.ops.hygieneActive * 1.0 +
     state.ops.hydroponicsActive * 1.1 +
@@ -3859,6 +4602,7 @@ function computeMetrics(state: StationState): void {
     BASE_CAPACITY +
     state.ops.cafeteriasActive * 14 +
     state.ops.kitchenActive * 9 +
+    state.ops.workshopActive * 10 +
     state.ops.securityActive * 10 +
     state.ops.reactorsActive * 14 +
     state.ops.lifeSupportActive * 10 +
@@ -3909,6 +4653,7 @@ function computeMetrics(state: StationState): void {
   state.metrics.shipDemandCafeteriaPct = manifestDemand.cafeteria * 100;
   state.metrics.shipDemandMarketPct = manifestDemand.market * 100;
   state.metrics.shipDemandLoungePct = manifestDemand.lounge * 100;
+  state.metrics.marketTradeGoodStock = sumItemStockForRoom(state, RoomType.Market, 'tradeGood');
   state.metrics.visitorsByArchetype = visitorsByArchetype;
   state.metrics.distressedResidents = distressedResidents;
   state.metrics.criticalResidents = criticalResidents;
@@ -4014,6 +4759,8 @@ function computeMetrics(state: StationState): void {
   state.metrics.creditsGrossPerMin = grossCredits / runMinutes;
   state.metrics.creditsPayrollPerMin = payrollCredits / runMinutes;
   state.metrics.creditsNetPerMin = (grossCredits - payrollCredits) / runMinutes;
+  state.metrics.tradeGoodsSoldPerMin = state.usageTotals.tradeGoodsSold / runMinutes;
+  state.metrics.marketStockoutsPerMin = state.usageTotals.marketStockouts / runMinutes;
   state.metrics.crewRetargetsPerMin = state.usageTotals.crewRetargets / runMinutes;
   state.metrics.criticalStaffDropsPerMin = state.usageTotals.criticalStaffDrops / runMinutes;
   state.metrics.visitorServiceFailuresPerMin = state.usageTotals.visitorServiceFailures / runMinutes;
@@ -4027,6 +4774,11 @@ function computeMetrics(state: StationState): void {
     cafeteria: state.usageTotals.visitorLeisureEntries.cafeteria / destinationTotal,
     market: state.usageTotals.visitorLeisureEntries.market / destinationTotal,
     lounge: state.usageTotals.visitorLeisureEntries.lounge / destinationTotal
+  };
+  state.metrics.shipsByTypePerMin = {
+    tourist: state.usageTotals.shipsByType.tourist / runMinutes,
+    trader: state.usageTotals.shipsByType.trader / runMinutes,
+    industrial: state.usageTotals.shipsByType.industrial / runMinutes
   };
   state.metrics.avgVisitorWalkDistance =
     state.usageTotals.visitorWalkTrips > 0
@@ -4102,6 +4854,15 @@ function computeMetrics(state: StationState): void {
   }
   if (state.metrics.airQuality < 20 && state.metrics.lifeSupportInactiveReasons.length > 0) {
     roomWarnings.unshift(`life-support blocked: ${state.metrics.lifeSupportInactiveReasons.join(', ')}`);
+  }
+  if (state.ops.marketTotal > 0) {
+    if (state.ops.marketActive <= 0) {
+      roomWarnings.unshift('trade chain blocked: market inactive');
+    } else if (state.ops.workshopTotal > 0 && state.ops.workshopActive <= 0) {
+      roomWarnings.unshift('trade chain blocked: workshop inactive');
+    } else if (state.metrics.marketStockoutsPerMin > 0.25) {
+      roomWarnings.unshift('trade chain strained: market stockouts');
+    }
   }
   if (
     state.ops.dormsActive > 0 &&
@@ -4189,6 +4950,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
   const zones = new Array<ZoneType>(GRID_WIDTH * GRID_HEIGHT).fill(ZoneType.Public);
   const rooms = new Array<RoomType>(GRID_WIDTH * GRID_HEIGHT).fill(RoomType.None);
   const modules = new Array<ModuleType>(GRID_WIDTH * GRID_HEIGHT).fill(ModuleType.None);
+  const moduleOccupancyByTile = new Array<number | null>(GRID_WIDTH * GRID_HEIGHT).fill(null);
 
   for (let y = 14; y < 24; y++) {
     for (let x = 25; x < 35; x++) {
@@ -4230,6 +4992,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
     zones,
     rooms,
     modules,
+    moduleInstances: [],
+    moduleOccupancyByTile,
     core: {
       centerTile: toIndex(coreX, coreY, GRID_WIDTH),
       serviceTile: toIndex(coreX, coreY, GRID_WIDTH),
@@ -4242,6 +5006,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     pathOccupancyByTile: new Map(),
     jobs: [],
     itemNodes: [],
+    legacyMaterialStock: 420,
     visitors: [],
     residents: [],
     crewMembers: [],
@@ -4271,6 +5036,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       rawFoodProdRate: 0,
       mealPrepRate: 0,
       kitchenMealProdRate: 0,
+      workshopTradeGoodProdRate: 0,
+      marketTradeGoodUseRate: 0,
+      marketTradeGoodStock: 0,
       mealUseRate: 0,
       dockedShips: 0,
       averageDockTime: 0,
@@ -4337,6 +5105,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       creditsGrossPerMin: 0,
       creditsPayrollPerMin: 0,
       creditsNetPerMin: 0,
+      tradeGoodsSoldPerMin: 0,
+      marketStockoutsPerMin: 0,
       crewRetargetsPerMin: 0,
       criticalStaffDropsPerMin: 0,
       visitorServiceFailuresPerMin: 0,
@@ -4404,6 +5174,11 @@ export function createInitialState(options?: { seed?: number }): StationState {
         dockTimeout: 0,
         trespass: 0
       },
+      shipsByTypePerMin: {
+        tourist: 0,
+        trader: 0,
+        industrial: 0
+      },
       topRoomWarnings: [],
       criticalUnstaffedSec: {
         lifeSupport: 0,
@@ -4454,8 +5229,10 @@ export function createInitialState(options?: { seed?: number }): StationState {
       shipsPerCycle: 1,
       showZones: true,
       showServiceNodes: false,
+      showInventoryOverlay: false,
       taxRate: 0.2,
       dockPlacementFacing: 'north',
+      moduleRotation: 0,
       crewPriorityPreset: 'balanced',
       crewPriorityWeights: cloneCrewPriorityWeights(CREW_PRIORITY_PRESET_WEIGHTS.balanced)
     },
@@ -4474,6 +5251,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     crewSpawnCounter: 1,
     residentSpawnCounter: 1,
     lastResidentSpawnAt: -999,
+    moduleSpawnCounter: 1,
     jobSpawnCounter: 1,
     incidentHeat: 0,
     lastPayrollAt: 0,
@@ -4497,8 +5275,16 @@ export function createInitialState(options?: { seed?: number }): StationState {
       crewRetargets: 0,
       visitorServiceFailures: 0,
       creditsMarketGross: 0,
+      creditsTradeGoodsGross: 0,
       creditsMealPayoutGross: 0,
       payrollPaid: 0,
+      tradeGoodsSold: 0,
+      marketStockouts: 0,
+      shipsByType: {
+        tourist: 0,
+        trader: 0,
+        industrial: 0
+      },
       visitorLeisureEntries: {
         cafeteria: 0,
         market: 0,
@@ -4558,10 +5344,16 @@ export function createInitialState(options?: { seed?: number }): StationState {
       hydroponicsActive: 0,
       lifeSupportTotal: 0,
       lifeSupportActive: 0,
+      workshopTotal: 0,
+      workshopActive: 0,
       loungeTotal: 0,
       loungeActive: 0,
       marketTotal: 0,
-      marketActive: 0
+      marketActive: 0,
+      logisticsStockTotal: 0,
+      logisticsStockActive: 0,
+      storageTotal: 0,
+      storageActive: 0
     }
   };
 }
@@ -4569,8 +5361,11 @@ export function createInitialState(options?: { seed?: number }): StationState {
 export function setTile(state: StationState, index: number, tile: TileType): void {
   state.tiles[index] = tile;
   if (!isWalkable(tile)) {
+    const moduleId = state.moduleOccupancyByTile[index];
+    if (moduleId !== null) {
+      removeModuleById(state, moduleId);
+    }
     state.rooms[index] = RoomType.None;
-    state.modules[index] = ModuleType.None;
     if (state.bodyTiles.length > 0) {
       state.bodyTiles = state.bodyTiles.filter((t) => t !== index);
       state.metrics.bodyVisibleCount = state.bodyTiles.length;
@@ -4593,7 +5388,6 @@ export function trySetTile(state: StationState, index: number, tile: TileType): 
   const oldCost = tileDistanceBuildCost(state, index, old);
   const newCost = tileDistanceBuildCost(state, index, tile);
   const delta = Math.max(0, newCost - oldCost);
-  if (state.metrics.materials < delta) return false;
   const proposedTiles = state.tiles.slice();
   proposedTiles[index] = tile;
   if (tile === TileType.Space) {
@@ -4601,7 +5395,7 @@ export function trySetTile(state: StationState, index: number, tile: TileType): 
   } else if (!isConnectedToCore(state, proposedTiles)) {
     return false;
   }
-  state.metrics.materials -= delta;
+  if (!consumeConstructionMaterials(state, delta)) return false;
   setTile(state, index, tile);
   return true;
 }
@@ -4618,23 +5412,223 @@ export function setRoom(state: StationState, index: number, room: RoomType): voi
   }
 }
 
+export function tryPlaceModule(
+  state: StationState,
+  moduleType: ModuleType,
+  originTile: number,
+  rotation: ModuleRotation = 0
+): { ok: boolean; reason?: string } {
+  if (!isWalkable(state.tiles[originTile])) return { ok: false, reason: 'target not walkable' };
+  const module = normalizeModuleType(moduleType);
+  if (module === ModuleType.None) return { ok: false, reason: 'cannot place none' };
+  const def = MODULE_DEFINITIONS[module];
+  if (!def) return { ok: false, reason: 'unknown module' };
+  const appliedRotation: ModuleRotation = rotation === 90 && def.rotatable ? 90 : 0;
+  const footprint = moduleFootprint(module, appliedRotation);
+  const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
+  if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
+
+  const roomAtOrigin = state.rooms[originTile];
+  for (const tile of tiles) {
+    if (!isWalkable(state.tiles[tile])) return { ok: false, reason: 'footprint blocked' };
+    if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
+    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) {
+      return { ok: false, reason: 'invalid room for module' };
+    }
+    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
+      return { ok: false, reason: 'footprint crosses room boundary' };
+    }
+  }
+
+  state.moduleInstances.push({
+    id: state.moduleSpawnCounter++,
+    type: module,
+    originTile,
+    rotation: appliedRotation,
+    width: footprint.width,
+    height: footprint.height,
+    tiles
+  });
+  syncModuleOccupancy(state);
+  return { ok: true };
+}
+
+export function removeModuleAtTile(state: StationState, tileIndex: number): boolean {
+  const moduleId = state.moduleOccupancyByTile[tileIndex];
+  if (moduleId === null) return false;
+  return removeModuleById(state, moduleId);
+}
+
 export function setModule(state: StationState, index: number, module: ModuleType): void {
   if (!isWalkable(state.tiles[index])) return;
-  state.modules[index] = module;
+  if (module === ModuleType.None) {
+    removeModuleAtTile(state, index);
+    return;
+  }
+  const placed = tryPlaceModule(state, module, index, 0);
+  if (placed.ok) return;
+
+  const existing = state.moduleOccupancyByTile[index];
+  if (existing !== null) {
+    removeModuleById(state, existing);
+  }
+  state.moduleInstances.push({
+    id: state.moduleSpawnCounter++,
+    type: normalizeModuleType(module),
+    originTile: index,
+    rotation: 0,
+    width: 1,
+    height: 1,
+    tiles: [index],
+    legacyForced: true
+  });
+  syncModuleOccupancy(state);
 }
 
 export function buyMaterials(state: StationState, creditCost: number, materialsGain: number): boolean {
-  if (state.metrics.credits < creditCost) return false;
+  return buyMaterialsDetailed(state, creditCost, materialsGain).ok;
+}
+
+export type BuyMaterialsFailureReason =
+  | 'insufficient_credits'
+  | 'no_logistics_stock'
+  | 'insufficient_storage_capacity';
+
+type BuyMaterialsDetailedFailure = {
+  ok: false;
+  reason: BuyMaterialsFailureReason;
+  requiredAmount: number;
+  freeCapacity: number;
+  targetNodeCount: number;
+};
+
+type BuyMaterialsDetailedSuccess = {
+  ok: true;
+  added: number;
+};
+
+export function buyMaterialsDetailed(
+  state: StationState,
+  creditCost: number,
+  materialsGain: number
+): BuyMaterialsDetailedSuccess | BuyMaterialsDetailedFailure {
+  rebuildItemNodes(state);
+  const intakeTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const freeCapacity = totalItemCapacityAtTargets(state, intakeTargets);
+  if (state.metrics.credits < creditCost) {
+    return {
+      ok: false,
+      reason: 'insufficient_credits',
+      requiredAmount: materialsGain,
+      freeCapacity,
+      targetNodeCount: intakeTargets.length
+    };
+  }
+  if (intakeTargets.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_logistics_stock',
+      requiredAmount: materialsGain,
+      freeCapacity: 0,
+      targetNodeCount: 0
+    };
+  }
+  if (freeCapacity < materialsGain) {
+    return {
+      ok: false,
+      reason: 'insufficient_storage_capacity',
+      requiredAmount: materialsGain,
+      freeCapacity,
+      targetNodeCount: intakeTargets.length
+    };
+  }
+  const added = addItemAcrossTargets(state, intakeTargets, 'rawMaterial', materialsGain, state.core.serviceTile);
+  if (added < materialsGain) {
+    return {
+      ok: false,
+      reason: 'insufficient_storage_capacity',
+      requiredAmount: materialsGain,
+      freeCapacity,
+      targetNodeCount: intakeTargets.length
+    };
+  }
   state.metrics.credits -= creditCost;
-  state.metrics.materials += materialsGain;
-  return true;
+  state.metrics.materials += added;
+  return { ok: true, added };
 }
 
 export function buyRawFood(state: StationState, creditCost: number, rawFoodGain: number): boolean {
-  if (state.metrics.credits < creditCost) return false;
+  return buyRawFoodDetailed(state, creditCost, rawFoodGain).ok;
+}
+
+export type BuyRawFoodFailureReason =
+  | 'insufficient_credits'
+  | 'no_food_destinations'
+  | 'insufficient_food_capacity';
+
+type BuyRawFoodDetailedFailure = {
+  ok: false;
+  reason: BuyRawFoodFailureReason;
+  requiredAmount: number;
+  freeCapacity: number;
+  targetNodeCount: number;
+};
+
+type BuyRawFoodDetailedSuccess = {
+  ok: true;
+  added: number;
+};
+
+export function buyRawFoodDetailed(
+  state: StationState,
+  creditCost: number,
+  rawFoodGain: number
+): BuyRawFoodDetailedSuccess | BuyRawFoodDetailedFailure {
+  rebuildItemNodes(state);
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const destinations = [...growTargets, ...stoveTargets];
+  const freeCapacity = totalItemCapacityAtTargets(state, destinations);
+  if (state.metrics.credits < creditCost) {
+    return {
+      ok: false,
+      reason: 'insufficient_credits',
+      requiredAmount: rawFoodGain,
+      freeCapacity,
+      targetNodeCount: destinations.length
+    };
+  }
+  if (destinations.length === 0) {
+    return {
+      ok: false,
+      reason: 'no_food_destinations',
+      requiredAmount: rawFoodGain,
+      freeCapacity: 0,
+      targetNodeCount: 0
+    };
+  }
+  if (freeCapacity < rawFoodGain) {
+    return {
+      ok: false,
+      reason: 'insufficient_food_capacity',
+      requiredAmount: rawFoodGain,
+      freeCapacity,
+      targetNodeCount: destinations.length
+    };
+  }
+  const added = addItemAcrossTargets(state, destinations, 'rawMeal', rawFoodGain, state.core.serviceTile);
+  if (added < rawFoodGain) {
+    return {
+      ok: false,
+      reason: 'insufficient_food_capacity',
+      requiredAmount: rawFoodGain,
+      freeCapacity,
+      targetNodeCount: destinations.length
+    };
+  }
   state.metrics.credits -= creditCost;
-  state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock + rawFoodGain, 0, 260);
-  return true;
+  state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock + added, 0, 260);
+  return { ok: true, added };
 }
 
 export function hireCrew(state: StationState, creditCost = HIRE_COST): boolean {
@@ -4656,8 +5650,7 @@ export function fireCrew(state: StationState, creditRefund = 0): boolean {
 
 export function clearBodies(state: StationState): boolean {
   if (state.bodyTiles.length <= 0) return false;
-  if (state.metrics.materials < BODY_CLEAR_MATERIAL_COST) return false;
-  state.metrics.materials -= BODY_CLEAR_MATERIAL_COST;
+  if (!consumeConstructionMaterials(state, BODY_CLEAR_MATERIAL_COST)) return false;
   const removed = Math.min(BODY_CLEAR_BATCH, state.bodyTiles.length);
   state.bodyTiles.splice(0, removed);
   state.metrics.bodyCount = Math.max(0, state.metrics.bodyCount - removed);
@@ -4668,15 +5661,31 @@ export function clearBodies(state: StationState): boolean {
 }
 
 export function sellMaterials(state: StationState, materialsCost: number, creditGain: number): boolean {
-  if (state.metrics.materials < materialsCost) return false;
-  state.metrics.materials -= materialsCost;
+  rebuildItemNodes(state);
+  const logisticsTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const storageTargets = collectServiceTargets(state, RoomType.Storage);
+  const sources = [...logisticsTargets, ...storageTargets];
+  if (sources.length === 0) return false;
+  const available = sources.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
+  if (available < materialsCost) return false;
+  const removed = takeItemAcrossTargets(state, sources, 'rawMaterial', materialsCost);
+  if (removed < materialsCost) return false;
+  state.metrics.materials = Math.max(0, state.metrics.materials - removed);
   state.metrics.credits += creditGain;
   return true;
 }
 
 export function sellRawFood(state: StationState, rawFoodCost: number, creditGain: number): boolean {
-  if (state.metrics.rawFoodStock < rawFoodCost) return false;
-  state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - rawFoodCost, 0, 260);
+  rebuildItemNodes(state);
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const sources = [...growTargets, ...stoveTargets];
+  if (sources.length === 0) return false;
+  const available = sources.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
+  if (available < rawFoodCost) return false;
+  const removed = takeItemAcrossTargets(state, sources, 'rawMeal', rawFoodCost);
+  if (removed < rawFoodCost) return false;
+  state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - removed, 0, 260);
   state.metrics.credits += creditGain;
   return true;
 }
@@ -4766,6 +5775,8 @@ export function tick(state: StationState, frameDt: number): void {
   expireEffects(state);
   applyCrewPayroll(state);
   createFoodTransportJobs(state);
+  createRawMaterialTransportJobs(state);
+  createTradeGoodTransportJobs(state);
   assignJobsToIdleCrew(state);
   requeueStalledJobs(state);
   expireJobs(state);

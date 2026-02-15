@@ -1,1 +1,1 @@
-{"root":["./src/main.ts","./src/render/render.ts","./src/sim/path.ts","./src/sim/scenarios.ts","./src/sim/sim.ts","./src/sim/types.ts"],"version":"5.9.3"}
+{"root":["./src/main.ts","./src/render/render.ts","./src/sim/balance.ts","./src/sim/path.ts","./src/sim/scenarios.ts","./src/sim/sim.ts","./src/sim/types.ts"],"version":"5.9.3"}

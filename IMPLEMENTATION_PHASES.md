@@ -338,7 +338,7 @@ This ledger tracks features intentionally removed/hidden from the current playab
 - Deep injury/recovery treatment flow.
 
 3. Deferred from current build to **Phase 7**:
-- Trade item families (`trade goods`) and market conversion chains.
+- Deep trade branches beyond the current vertical slice (multi-stage crafting/freight specializations).
 
 4. Deferred from current build to **Phase 9**:
 - Always-visible deep diagnostics in sidebar.
@@ -480,3 +480,72 @@ Principal-level staffing and dispatch stabilization pass:
 
 7. Validation:
 - Added scenarios/tests for critical capacity targets, service-node staffing decoupling, hauling suppression at high stock, high-crew stability, and in-transit diagnostics.
+
+## 15. Phase 3A - Trade Chain Vertical Slice on Medium Logistics Backbone (Implemented)
+First content-chain expansion after the staffing control-loop stabilization:
+
+1. New room/module/content:
+- Added `Workshop` room and `Workbench` module.
+- Added `tradeGood` item flow on the existing medium-depth logistics backbone.
+
+2. Trade chain behavior:
+- Workshop converts materials into trade goods when active/staffed/powered.
+- Logistics jobs deliver trade goods from workshop service nodes to market targets.
+- Market consumes stocked trade goods for higher-value leisure transactions.
+- Stockouts now surface as explicit trade-chain strain and rating pressure.
+
+3. Vessel mix expansion:
+- Added `industrial` ship type with manifest/lane integration.
+- Added dock filtering support for industrial type in dock configuration controls.
+- Added per-ship-type throughput metrics (`tourist`/`trader`/`industrial`) and UI summary.
+
+4. Discoverability and diagnostics:
+- Added trade-chain metrics in advanced diagnostics (production/use/stock/sold/stockouts).
+- Extended room inspector hints with explicit chain guidance:
+  - `hydroponics -> kitchen -> cafeteria`
+  - `workshop -> market`
+
+5. Deferred from this slice:
+- Full multi-branch logistics planner rewrite remains deferred.
+- Deeper workshop crafting trees and freight-specialized ship/service families remain deferred to later content phases.
+
+## 16. Future Idea - Module Collision + Access-Tile Interaction (Backlog)
+Candidate follow-on once current autonomous-room/logistics chain is stable:
+
+1. Goal:
+- Make module footprints optionally block movement (Prison Architect style).
+- Shift interactions to explicit access tiles adjacent to modules, instead of standing on module tiles.
+
+2. Why:
+- Prevent unrealistic routing through furniture/equipment.
+- Make room layout and circulation space materially strategic.
+- Create readable bottlenecks around service modules (serving stations, stoves, workbenches, etc.).
+
+3. Proposed data model additions:
+- Extend module balance definitions with:
+  - `blocksMovement: boolean`
+  - `accessMode: 'adjacent' | 'on-tile'`
+  - `accessTiles` pattern or simple `requiredAccessSides` metadata
+  - Optional `minReachableAccessTiles` for placement validation
+- Keep per-module configurability so small fixtures (e.g., sink/shower) can remain pass-through if desired.
+
+4. Pathing/runtime changes:
+- Update path neighbor filtering to reject tiles occupied by module footprints where `blocksMovement=true`.
+- Keep actor occupancy limits unchanged; this is a geometric/pathability rule, not crowding logic.
+- Service-target selection should target module access tiles, not module tiles, when `accessMode='adjacent'`.
+
+5. Placement/build validation changes:
+- Add optional validation that at least one required access tile is walkable and reachable from the room door/core path graph.
+- Preserve current overlap and room-boundary footprint checks.
+- Add clear failure reasons: `no access tile`, `access tile unreachable`, `footprint blocks doorway`.
+
+6. Migration and rollout strategy:
+- Stage A: Add schema with defaults (`blocksMovement=false`) to avoid breaking existing layouts.
+- Stage B: Enable blocking on selected modules (bed/table/stove/workbench/serving/market stall/storage rack).
+- Stage C: Enable strict access validation with inspector hints and scenario updates.
+
+7. Test coverage to add when implemented:
+- Pathing cannot route through blocked module footprint tiles.
+- Service interactions succeed via valid access tiles.
+- Fully packed room with no access corridor becomes inactive or fails placement with explicit reason.
+- Existing non-blocking module types continue to function as configured.

@@ -1,56 +1,27 @@
 import {
-  buildAirCollapseDeathScenario,
-  buildAirInactiveDiagnosisScenario,
-  buildAirRecoveryAfterFixScenario,
-  buildAirRecoveryWindowScenario,
-  buildAirEmergencyBalancedWakeScenario,
-  buildActivationHysteresisPreventsFlickerScenario,
-  buildCrewRestPingPongGuardScenario,
-  buildCrewThrashRegressionGuardScenario,
-  buildCrewNoThrashUnderNormalLoadScenario,
-  buildCrewShiftStaggerScenario,
-  buildCreditsGrossVsNetVisibleConsistencyScenario,
-  buildCoreDistanceCostScalingScenario,
-  buildDormNoPermaStallScenario,
-  buildFarBufferScenario,
-  buildFoodChainFloorStaffingScenario,
-  buildHaulerStarvationScenario,
-  buildHydroKitchenJobAppearsWhenStarvedScenario,
-  buildHighCrewStabilityWhenCapacityMetScenario,
-  buildHighMealStockHaulingSuppressionScenario,
-  buildInTransitVsNoStaffDiagnosticsScenario,
-  buildLifeSupportFloorHoldsScenario,
-  buildJobExpirationRecoveryScenario,
-  buildKitchenRequiredFoodChainScenario,
-  buildKitchenRestoresThroughputScenario,
-  buildCriticalCapacityTargetsReactorLsScenario,
-  buildLargePaintFewTablesScenario,
-  buildLifeSupportRecoveryFromRestingScenario,
-  buildManifestProbeScenario,
-  buildNearBufferScenario,
-  buildNoCafeteriaScenario,
-  buildNoLifeSupportScenario,
-  buildManualBodyClearScenario,
-  buildPaintOnlyNoTableGrowthScenario,
-  buildServiceNodesDoNotForceDutyStaffScenario,
-  buildSingleDoorQueueStressScenario,
-  buildStableScenario,
-  buildVisitorRandomizedChoiceDistributionScenario,
-  buildVisitorFailureAffectsRatingScenario,
-  runScenario,
-  type ScenarioResult
-} from '../src/sim/scenarios';
-import {
+  buyMaterials,
+  buyMaterialsDetailed,
+  buyRawFood,
   createInitialState,
-  getDockByTile,
-  setDockAllowedShipSize,
-  setDockAllowedShipType,
-  setDockFacing,
+  getRoomDiagnosticAt,
+  getRoomInspectorAt,
+  sellMaterials,
+  setRoom,
   setTile,
   tick,
-  validateDockPlacement
+  tryPlaceModule
 } from '../src/sim/sim';
-import { TileType, toIndex } from '../src/sim/types';
+import {
+  ModuleType,
+  RoomType,
+  TileType,
+  VisitorState,
+  fromIndex,
+  toIndex,
+  type ModuleRotation,
+  type StationState,
+  type Visitor
+} from '../src/sim/types';
 
 function assertCondition(condition: boolean, message: string): void {
   if (!condition) {
@@ -58,433 +29,483 @@ function assertCondition(condition: boolean, message: string): void {
   }
 }
 
-function summarize(result: ScenarioResult): string {
-  const f = result.final;
-  return `${result.name}: morale=${f.morale.toFixed(1)}, incidents=${f.incidentsTotal}, air=${f.airQuality.toFixed(1)}, residents=${f.residentsCount}, meals=${f.mealsServedTotal}, jobs(P/A/X)=${f.pendingJobs}/${f.assignedJobs ?? 0}/${f.expiredJobs}, latency=${f.deliveryLatencySec.toFixed(1)}s, maxBlocked=${f.maxBlockedTicksObserved}`;
-}
-
-function summarizeCheckpoints(result: ScenarioResult): string {
-  const checkpoints = result.snapshots
-    .map((s) => `t=${Math.round(s.t)}(m=${s.morale.toFixed(1)},air=${s.airQuality.toFixed(1)},inc=${s.incidentsTotal})`)
-    .join(' | ');
-  return `${result.name}: ${checkpoints}`;
-}
-
-function firstSnapshotAtOrAfter(result: ScenarioResult, minTimeSec: number): ScenarioResult['snapshots'][number] {
-  const snap = result.snapshots.find((s) => s.t >= minTimeSec);
-  if (!snap) {
-    throw new Error(`${result.name}: missing snapshot at or after ${minTimeSec}s`);
+function runFor(state: StationState, seconds: number, step = 0.25): void {
+  const steps = Math.ceil(seconds / step);
+  for (let i = 0; i < steps; i++) {
+    tick(state, step);
   }
-  return snap;
 }
 
-function manifestSeedFromName(name: string): number {
-  const match = name.match(/manifest-probe-(\d+)-tax-/);
-  if (!match) throw new Error(`Unable to parse manifest seed from scenario name: ${name}`);
-  return parseInt(match[1], 10);
+function buildHabitat(state: StationState): void {
+  state.controls.paused = false;
+  state.controls.simSpeed = 1;
+  state.controls.shipsPerCycle = 0;
+  state.tiles.fill(TileType.Space);
+  state.rooms.fill(RoomType.None);
+  state.modules.fill(ModuleType.None);
+  state.moduleInstances = [];
+  state.moduleOccupancyByTile.fill(null);
+  state.jobs.length = 0;
+  state.itemNodes.length = 0;
+  state.visitors.length = 0;
+  state.residents.length = 0;
+  state.arrivingShips.length = 0;
+  state.dockQueue.length = 0;
+  state.docks.length = 0;
+
+  const x0 = 4;
+  const y0 = 4;
+  const x1 = 44;
+  const y1 = 30;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      setTile(state, toIndex(x, y, state.width), TileType.Floor);
+    }
+  }
+  for (let x = x0; x <= x1; x++) {
+    setTile(state, toIndex(x, y0, state.width), TileType.Wall);
+    setTile(state, toIndex(x, y1, state.width), TileType.Wall);
+  }
+  for (let y = y0; y <= y1; y++) {
+    setTile(state, toIndex(x0, y, state.width), TileType.Wall);
+    setTile(state, toIndex(x1, y, state.width), TileType.Wall);
+  }
+
+  setTile(state, state.core.centerTile, TileType.Floor);
+  setTile(state, state.core.serviceTile, TileType.Floor);
+}
+
+function paintRoom(state: StationState, room: RoomType, x0: number, y0: number, x1: number, y1: number): void {
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const idx = toIndex(x, y, state.width);
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, room);
+    }
+  }
+  // Door tile inside the room guarantees door adjacency readiness checks.
+  const doorIdx = toIndex(x0, y0, state.width);
+  setTile(state, doorIdx, TileType.Door);
+  setRoom(state, doorIdx, room);
+}
+
+function placeModuleOrThrow(
+  state: StationState,
+  module: ModuleType,
+  x: number,
+  y: number,
+  rotation: ModuleRotation = 0
+): void {
+  const idx = toIndex(x, y, state.width);
+  const result = tryPlaceModule(state, module, idx, rotation);
+  assertCondition(result.ok, `Module placement failed for ${module} at ${x},${y}: ${result.reason ?? 'unknown'}`);
+}
+
+function spawnVisitor(state: StationState, x: number, y: number, id: number): void {
+  const tileIndex = toIndex(x, y, state.width);
+  const center = fromIndex(tileIndex, state.width);
+  const v: Visitor = {
+    id,
+    x: center.x + 0.5,
+    y: center.y + 0.5,
+    tileIndex,
+    state: VisitorState.ToCafeteria,
+    path: [],
+    speed: 1.8,
+    patience: 8,
+    eatTimer: 0,
+    trespassed: false,
+    servedMeal: false,
+    carryingMeal: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: 'diner',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: 'cafeteria',
+    spawnedAt: state.now,
+    airExposureSec: 0,
+    healthState: 'healthy'
+  };
+  state.visitors.push(v);
+}
+
+function setupCoreRooms(state: StationState): void {
+  // Critical support rooms so pressure/air remains sane during longer runs.
+  paintRoom(state, RoomType.Reactor, 6, 6, 7, 7);
+  paintRoom(state, RoomType.LifeSupport, 9, 6, 11, 7);
+}
+
+function setupFoodChain(state: StationState): void {
+  paintRoom(state, RoomType.Hydroponics, 6, 10, 9, 13);
+  paintRoom(state, RoomType.Kitchen, 11, 10, 14, 13);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(state, ModuleType.GrowStation, 6, 11);
+  placeModuleOrThrow(state, ModuleType.Stove, 11, 11);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 10);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 12);
+}
+
+function setupTradeChain(state: StationState): void {
+  paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 18);
+  paintRoom(state, RoomType.Storage, 10, 16, 13, 18);
+  paintRoom(state, RoomType.Workshop, 15, 16, 19, 18);
+  paintRoom(state, RoomType.Market, 21, 16, 25, 18);
+  placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 10, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 12, 17);
+  placeModuleOrThrow(state, ModuleType.Workbench, 15, 17);
+  placeModuleOrThrow(state, ModuleType.MarketStall, 21, 17);
+}
+
+function setupLeisure(state: StationState, withModule: boolean): void {
+  paintRoom(state, RoomType.Lounge, 23, 10, 27, 12);
+  if (withModule) {
+    placeModuleOrThrow(state, ModuleType.Couch, 23, 11);
+  }
+}
+
+function testAutonomousRoomsNoStaff(): void {
+  const state = createInitialState({ seed: 3001 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  setupLeisure(state, true);
+  state.crew.total = 0;
+  runFor(state, 2);
+
+  const cafDiag = getRoomDiagnosticAt(state, toIndex(16, 10, state.width));
+  const loungeDiag = getRoomDiagnosticAt(state, toIndex(23, 10, state.width));
+  assertCondition(!!cafDiag && cafDiag.active, 'Cafeteria should be active with zero crew once ready.');
+  assertCondition(!!loungeDiag && loungeDiag.active, 'Lounge should be active with zero crew once ready.');
+}
+
+function testCafeteriaMissingServingStation(): void {
+  const state = createInitialState({ seed: 3002 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 10);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 12);
+  runFor(state, 1);
+
+  const cafDiag = getRoomDiagnosticAt(state, toIndex(16, 10, state.width));
+  assertCondition(!!cafDiag, 'Cafeteria diagnostic should exist.');
+  assertCondition(!cafDiag!.active, 'Cafeteria without serving station should be inactive.');
+  assertCondition(
+    cafDiag!.reasons.includes('missing required modules'),
+    'Cafeteria without serving station should report missing required modules.'
+  );
+}
+
+function testBedFootprintRotation(): void {
+  const state = createInitialState({ seed: 3003 });
+  buildHabitat(state);
+  paintRoom(state, RoomType.Dorm, 6, 24, 9, 26);
+
+  const first = tryPlaceModule(state, ModuleType.Bed, toIndex(6, 25, state.width), 0);
+  const overlap = tryPlaceModule(state, ModuleType.Bed, toIndex(7, 25, state.width), 0);
+  const rotated = tryPlaceModule(state, ModuleType.Bed, toIndex(9, 24, state.width), 90);
+  assertCondition(first.ok, 'Initial 2x1 bed should place.');
+  assertCondition(!overlap.ok, 'Overlapping bed placement should fail.');
+  assertCondition(rotated.ok, 'Rotated bed should place.');
+
+  const rotatedInstance = state.moduleInstances.find((m) => m.originTile === toIndex(9, 24, state.width));
+  assertCondition(!!rotatedInstance, 'Rotated bed instance should exist.');
+  assertCondition(rotatedInstance!.width === 1 && rotatedInstance!.height === 2, 'Rotated bed should be 1x2 footprint.');
+}
+
+function testFoodChainEndToEnd(): void {
+  const state = createInitialState({ seed: 3004 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 14;
+  state.metrics.credits = 500;
+
+  // Seed optional starter raw meal to accelerate first serving cycle.
+  buyRawFood(state, 0, 20);
+  spawnVisitor(state, 15, 11, 1);
+
+  runFor(state, 120);
+  assertCondition(state.metrics.createdJobs > 0, 'Food chain should create hauling jobs.');
+  assertCondition(state.metrics.completedJobs > 0, 'Food chain should complete hauling jobs.');
+  assertCondition(state.metrics.mealsServedTotal > 0, 'Visitor should be served through serving station -> table flow.');
+}
+
+function testServingStarvationQueue(): void {
+  const state = createInitialState({ seed: 3005 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 10);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 12);
+  state.crew.total = 6;
+
+  for (let i = 0; i < 6; i++) {
+    spawnVisitor(state, 15, 10 + (i % 3), i + 10);
+  }
+
+  let peakQueue = 0;
+  let minRating = state.metrics.stationRating;
+  for (let i = 0; i < 360; i++) {
+    tick(state, 0.25);
+    peakQueue = Math.max(peakQueue, state.metrics.cafeteriaQueueingCount);
+    minRating = Math.min(minRating, state.metrics.stationRating);
+  }
+
+  assertCondition(peakQueue >= 3, 'Empty serving inventory should create visible queue pressure.');
+  assertCondition(minRating < 70, 'Serving starvation should reduce rating over time.');
+}
+
+function testMaterialsChainEndToEnd(): void {
+  const state = createInitialState({ seed: 3006 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  state.crew.total = 12;
+  state.metrics.credits = 800;
+
+  const bought = buyMaterials(state, 0, 35);
+  assertCondition(bought, 'Buying materials should deposit raw materials into intake pallets.');
+  runFor(state, 150);
+
+  assertCondition(state.metrics.createdJobs > 0, 'Materials chain should create transport jobs.');
+  assertCondition(state.metrics.completedJobs > 0, 'Materials chain should complete transport jobs.');
+  assertCondition(state.metrics.marketTradeGoodStock > 0, 'Trade goods should reach market stalls.');
+
+  const sold = sellMaterials(state, 10, 5);
+  assertCondition(sold, 'Selling materials should remove raw materials from logistics/storage inventory.');
+}
+
+function testInventoryOverlayToggleState(): void {
+  const state = createInitialState({ seed: 3011 });
+  assertCondition(state.controls.showInventoryOverlay === false, 'Inventory overlay should default to off.');
+  const baselineServiceOverlay = state.controls.showServiceNodes;
+  state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+  assertCondition(state.controls.showInventoryOverlay === true, 'Inventory overlay should toggle on.');
+  assertCondition(
+    state.controls.showServiceNodes === baselineServiceOverlay,
+    'Inventory overlay toggle should not affect service-node overlay state.'
+  );
+}
+
+function testRoomInspectorInventoryBreakdown(): void {
+  const state = createInitialState({ seed: 3012 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  const bought = buyMaterials(state, 0, 35);
+  assertCondition(bought, 'Should seed raw materials for inventory breakdown test.');
+
+  const inspector = getRoomInspectorAt(state, toIndex(6, 17, state.width));
+  assertCondition(!!inspector, 'Inspector should be available for logistics stock room.');
+  assertCondition(!!inspector!.inventory, 'Inspector should include inventory summary.');
+  assertCondition(inspector!.inventory!.nodeCount >= 1, 'Inventory summary should include at least one node.');
+  assertCondition(inspector!.inventory!.capacity > 0, 'Inventory summary should report positive capacity.');
+  assertCondition(inspector!.inventory!.used > 0, 'Inventory summary should report non-zero used stock.');
+  const computedFill = inspector!.inventory!.capacity > 0
+    ? (inspector!.inventory!.used / inspector!.inventory!.capacity) * 100
+    : 0;
+  assertCondition(
+    Math.abs(computedFill - inspector!.inventory!.fillPct) < 0.01,
+    'Inventory fill percentage should match used/capacity.'
+  );
+  assertCondition(
+    (inspector!.inventory!.byItem.rawMaterial ?? 0) > 0,
+    'Inventory breakdown should include raw material stock.'
+  );
+}
+
+function testMarketBuyCapacityContext(): void {
+  const state = createInitialState({ seed: 3013 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  const result = buyMaterialsDetailed(state, 0, 80);
+  assertCondition(!result.ok, 'Buying 80 materials should fail with a single intake pallet.');
+  if (result.ok) {
+    throw new Error('Expected capacity failure result payload.');
+  }
+  assertCondition(result.reason === 'insufficient_storage_capacity', 'Failure reason should report insufficient capacity.');
+  assertCondition(result.requiredAmount === 80, 'Failure result should include required amount.');
+  assertCondition(result.freeCapacity >= 0 && result.freeCapacity < 80, 'Failure result should include free capacity context.');
+  assertCondition(result.targetNodeCount >= 1, 'Failure result should include target node count.');
+}
+
+function testMarketBuyMissingIntakeContext(): void {
+  const state = createInitialState({ seed: 3014 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  const result = buyMaterialsDetailed(state, 0, 25);
+  assertCondition(!result.ok, 'Buying materials without intake should fail.');
+  if (result.ok) {
+    throw new Error('Expected missing-intake failure result payload.');
+  }
+  assertCondition(result.reason === 'no_logistics_stock', 'Failure reason should report missing logistics stock.');
+  assertCondition(result.targetNodeCount === 0, 'Missing-intake result should report zero target nodes.');
+  assertCondition(result.freeCapacity === 0, 'Missing-intake result should report zero free capacity.');
+}
+
+function testFoodChainInspectorClarity(): void {
+  const state = createInitialState({ seed: 3015 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 12;
+  buyRawFood(state, 0, 20);
+  runFor(state, 40);
+
+  const hydro = getRoomInspectorAt(state, toIndex(6, 10, state.width));
+  const kitchen = getRoomInspectorAt(state, toIndex(11, 10, state.width));
+  const cafeteria = getRoomInspectorAt(state, toIndex(16, 10, state.width));
+  assertCondition(!!hydro && !!kitchen && !!cafeteria, 'Inspectors should exist across food-chain rooms.');
+  assertCondition(
+    (hydro!.flowHints ?? []).some((line) => line.includes('to kitchen jobs')),
+    'Hydroponics flow hints should include downstream kitchen job counts.'
+  );
+  assertCondition(
+    (kitchen!.flowHints ?? []).some((line) => line.includes('to cafeteria jobs')),
+    'Kitchen flow hints should include downstream cafeteria job counts.'
+  );
+  assertCondition(
+    (cafeteria!.flowHints ?? []).some((line) => line.includes('serving meal')),
+    'Cafeteria flow hints should include serving inventory and queue/eating context.'
+  );
+}
+
+function testLoungeModuleGating(): void {
+  const state = createInitialState({ seed: 3007 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupLeisure(state, false);
+  runFor(state, 1);
+
+  const diagBefore = getRoomDiagnosticAt(state, toIndex(23, 10, state.width));
+  assertCondition(!!diagBefore && !diagBefore.active, 'Lounge without couch/game station should be inactive.');
+  assertCondition(
+    diagBefore!.reasons.includes('missing required modules'),
+    'Lounge without module should report missing required modules.'
+  );
+
+  placeModuleOrThrow(state, ModuleType.Couch, 23, 11);
+  runFor(state, 1);
+  const diagAfter = getRoomDiagnosticAt(state, toIndex(23, 10, state.width));
+  assertCondition(!!diagAfter && diagAfter.active, 'Lounge should activate once couch/game station is placed.');
+}
+
+function testActivationChecksPreserved(): void {
+  const state = createInitialState({ seed: 3008 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+
+  // Missing door: keep room tiles floor but avoid door placement.
+  for (let y = 24; y <= 26; y++) {
+    for (let x = 12; x <= 14; x++) {
+      const idx = toIndex(x, y, state.width);
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, RoomType.Dorm);
+    }
+  }
+  placeModuleOrThrow(state, ModuleType.Bed, 12, 25);
+
+  // Missing pressure: carve a room open to vacuum.
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 48; x <= 50; x++) {
+      const idx = toIndex(x, y, state.width);
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, RoomType.Dorm);
+    }
+  }
+  setTile(state, toIndex(48, 2, state.width), TileType.Door);
+  setRoom(state, toIndex(48, 2, state.width), RoomType.Dorm);
+  placeModuleOrThrow(state, ModuleType.Bed, 49, 3);
+
+  runFor(state, 2);
+
+  const missingDoorDiag = getRoomDiagnosticAt(state, toIndex(12, 25, state.width));
+  const missingPressureDiag = getRoomDiagnosticAt(state, toIndex(49, 3, state.width));
+  assertCondition(
+    !!missingDoorDiag && missingDoorDiag.reasons.includes('missing door'),
+    'Door readiness check should still block activation.'
+  );
+  assertCondition(
+    !!missingPressureDiag && missingPressureDiag.reasons.includes('not pressurized'),
+    'Pressurization readiness check should still block activation.'
+  );
+}
+
+function testLegacyBalanceSanity(): void {
+  const state = createInitialState({ seed: 3009 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  setupTradeChain(state);
+  setupLeisure(state, true);
+  paintRoom(state, RoomType.Security, 27, 16, 29, 17);
+  placeModuleOrThrow(state, ModuleType.Terminal, 27, 17);
+  state.crew.total = 16;
+  state.metrics.credits = 1000;
+  buyMaterials(state, 0, 35);
+  buyRawFood(state, 0, 80);
+  for (let i = 0; i < 8; i++) spawnVisitor(state, 15 + (i % 2), 10 + (i % 4), i + 100);
+
+  runFor(state, 180);
+
+  assertCondition(Number.isFinite(state.metrics.stationRating), 'Station rating should remain finite.');
+  assertCondition(Number.isFinite(state.metrics.morale), 'Crew morale should remain finite.');
+  assertCondition(state.metrics.airQuality >= 0, 'Air quality should remain non-negative.');
+}
+
+function testJobMetricsConsistency(): void {
+  const state = createInitialState({ seed: 3010 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  setupTradeChain(state);
+  state.crew.total = 14;
+  state.metrics.credits = 500;
+  buyMaterials(state, 0, 35);
+  buyRawFood(state, 0, 60);
+  spawnVisitor(state, 15, 11, 200);
+
+  runFor(state, 120);
+
+  const pending = state.jobs.filter((j) => j.state === 'pending').length;
+  const assigned = state.jobs.filter((j) => j.state === 'assigned' || j.state === 'in_progress').length;
+  const expired = state.jobs.filter((j) => j.state === 'expired').length;
+  const completed = state.jobs.filter((j) => j.state === 'done').length;
+
+  assertCondition(state.metrics.pendingJobs === pending, 'Pending job metric should match job states.');
+  assertCondition(state.metrics.assignedJobs === assigned, 'Assigned job metric should match job states.');
+  assertCondition(state.metrics.expiredJobs === expired, 'Expired job metric should match job states.');
+  assertCondition(state.metrics.completedJobs === completed, 'Completed job metric should match job states.');
+  assertCondition(
+    state.metrics.createdJobs >= state.metrics.completedJobs + state.metrics.expiredJobs,
+    'Created jobs should be >= completed + expired jobs.'
+  );
 }
 
 function run(): void {
-  const stable = runScenario(buildStableScenario());
-  const noCaf = runScenario(buildNoCafeteriaScenario());
-  const noLife = runScenario(buildNoLifeSupportScenario());
-  const largePaintFewTables = runScenario(buildLargePaintFewTablesScenario());
-  const singleDoorStress = runScenario(buildSingleDoorQueueStressScenario());
-  const paintOnlyNoTableGrowth = runScenario(buildPaintOnlyNoTableGrowthScenario());
-  const haulerStarvation = runScenario(buildHaulerStarvationScenario());
-  const nearBuffer = runScenario(buildNearBufferScenario());
-  const farBuffer = runScenario(buildFarBufferScenario());
-  const jobExpirationRecovery = runScenario(buildJobExpirationRecoveryScenario());
-  const kitchenRequired = runScenario(buildKitchenRequiredFoodChainScenario());
-  const kitchenRestored = runScenario(buildKitchenRestoresThroughputScenario());
-  const manifestA = runScenario(buildManifestProbeScenario(1301, 0.2));
-  const manifestB = runScenario(buildManifestProbeScenario(1302, 0.2));
-  const airCollapseDeath = runScenario(buildAirCollapseDeathScenario());
-  const airRecoveryWindow = runScenario(buildAirRecoveryWindowScenario());
-  const airInactiveDiagnosis = runScenario(buildAirInactiveDiagnosisScenario());
-  const airRecoveryAfterFix = runScenario(buildAirRecoveryAfterFixScenario());
-  const manualBodyClear = runScenario(buildManualBodyClearScenario());
-  const crewRestPingPongGuard = runScenario(buildCrewRestPingPongGuardScenario());
-  const crewShiftStagger = runScenario(buildCrewShiftStaggerScenario());
-  const airEmergencyBalancedWake = runScenario(buildAirEmergencyBalancedWakeScenario());
-  const lifeSupportRecoveryFromResting = runScenario(buildLifeSupportRecoveryFromRestingScenario());
-  const dormNoPermaStall = runScenario(buildDormNoPermaStallScenario());
-  const crewNoThrash = runScenario(buildCrewNoThrashUnderNormalLoadScenario());
-  const crewThrashGuard = runScenario(buildCrewThrashRegressionGuardScenario());
-  const foodChainFloor = runScenario(buildFoodChainFloorStaffingScenario());
-  const hydroKitchenJobs = runScenario(buildHydroKitchenJobAppearsWhenStarvedScenario());
-  const criticalCapacity = runScenario(buildCriticalCapacityTargetsReactorLsScenario());
-  const serviceNodesNoForce = runScenario(buildServiceNodesDoNotForceDutyStaffScenario());
-  const haulingSuppression = runScenario(buildHighMealStockHaulingSuppressionScenario());
-  const highCrewStable = runScenario(buildHighCrewStabilityWhenCapacityMetScenario());
-  const inTransitDiag = runScenario(buildInTransitVsNoStaffDiagnosticsScenario());
-  const lifeSupportFloorHolds = runScenario(buildLifeSupportFloorHoldsScenario());
-  const activationHysteresis = runScenario(buildActivationHysteresisPreventsFlickerScenario());
-  const visitorDistA = runScenario(buildVisitorRandomizedChoiceDistributionScenario(2301));
-  const visitorDistB = runScenario(buildVisitorRandomizedChoiceDistributionScenario(2302));
-  const creditsConsistency = runScenario(buildCreditsGrossVsNetVisibleConsistencyScenario());
-  const coreDistance = runScenario(buildCoreDistanceCostScalingScenario());
-  const visitorRatingSplit = runScenario(buildVisitorFailureAffectsRatingScenario());
-  const manifestCandidates = [1301, 1302, 1303, 1304].map((seed) => runScenario(buildManifestProbeScenario(seed, 0.2)));
-  const marketHeavySeedRun = manifestCandidates.reduce((best, current) =>
-    current.final.shipDemandMarketPct > best.final.shipDemandMarketPct ? current : best
-  );
-  const cafeteriaHeavySeedRun = manifestCandidates.reduce((best, current) =>
-    current.final.shipDemandCafeteriaPct > best.final.shipDemandCafeteriaPct ? current : best
-  );
-  const shopperSeed = manifestSeedFromName(marketHeavySeedRun.name);
-  const lowTaxShopper = runScenario(buildManifestProbeScenario(shopperSeed, 0.1));
-  const highTaxShopper = runScenario(buildManifestProbeScenario(shopperSeed, 0.45));
-
-  console.log(summarize(stable));
-  console.log(summarize(noCaf));
-  console.log(summarize(noLife));
-  console.log(summarizeCheckpoints(stable));
-  console.log(summarizeCheckpoints(noCaf));
-  console.log(summarizeCheckpoints(noLife));
-  console.log(summarize(largePaintFewTables));
-  console.log(summarize(singleDoorStress));
-  console.log(summarize(paintOnlyNoTableGrowth));
-  console.log(summarize(haulerStarvation));
-  console.log(summarize(nearBuffer));
-  console.log(summarize(farBuffer));
-  console.log(summarize(jobExpirationRecovery));
-  console.log(summarize(kitchenRequired));
-  console.log(summarize(kitchenRestored));
-  console.log(summarize(manifestA));
-  console.log(summarize(manifestB));
-  console.log(summarize(airCollapseDeath));
-  console.log(summarize(airRecoveryWindow));
-  console.log(summarize(airInactiveDiagnosis));
-  console.log(summarize(airRecoveryAfterFix));
-  console.log(summarize(manualBodyClear));
-  console.log(summarize(crewRestPingPongGuard));
-  console.log(summarize(crewShiftStagger));
-  console.log(summarize(airEmergencyBalancedWake));
-  console.log(summarize(lifeSupportRecoveryFromResting));
-  console.log(summarize(dormNoPermaStall));
-  console.log(summarize(lowTaxShopper));
-  console.log(summarize(highTaxShopper));
-  console.log(summarize(crewNoThrash));
-  console.log(summarize(crewThrashGuard));
-  console.log(summarize(foodChainFloor));
-  console.log(summarize(hydroKitchenJobs));
-  console.log(summarize(criticalCapacity));
-  console.log(summarize(serviceNodesNoForce));
-  console.log(summarize(haulingSuppression));
-  console.log(summarize(highCrewStable));
-  console.log(summarize(inTransitDiag));
-  console.log(summarize(lifeSupportFloorHolds));
-  console.log(summarize(activationHysteresis));
-  console.log(summarize(visitorDistA));
-  console.log(summarize(visitorDistB));
-  console.log(summarize(creditsConsistency));
-  console.log(summarize(coreDistance));
-  console.log(summarize(visitorRatingSplit));
-
-  assertCondition(stable.final.residentsCount === 0, 'Stable scenario should run in crew-only mode (0 residents).');
-  assertCondition(stable.final.airQuality >= 2, 'Stable scenario should maintain non-collapsed air quality (>=2).');
-  assertCondition(stable.final.incidentsTotal <= 20, 'Stable scenario incidents should remain bounded (<=20).');
-  assertCondition(stable.final.cafeteriaNonNodeSeatedCount === 0, 'Stable scenario should never seat diners on non-table tiles.');
-  assertCondition(stable.final.hygieneUsesPerMin >= 0, 'Stable scenario should keep hygiene metric stable.');
-
-  assertCondition(noCaf.final.airQuality >= 0, 'No-cafeteria scenario should run deterministically.');
-  assertCondition(noLife.final.airQuality <= stable.final.airQuality, 'No-life-support scenario should not outperform stable air quality.');
-
-  assertCondition(
-    largePaintFewTables.final.cafeteriaNonNodeSeatedCount === 0,
-    'Large cafeteria paint with few tables should still seat diners only on table nodes.'
-  );
-
-  assertCondition(
-    singleDoorStress.final.maxBlockedTicksObserved <= 24,
-    'Single-door queue stress should avoid persistent blocked streaks above threshold.'
-  );
-
-  assertCondition(
-    paintOnlyNoTableGrowth.final.cafeteriaNonNodeSeatedCount === 0,
-    'Expanding cafeteria paint should still seat diners only on table nodes.'
-  );
-
-  assertCondition(
-    haulerStarvation.final.pendingJobs >= 4,
-    'Hauler starvation scenario should accumulate a visible pending-job backlog.'
-  );
-  assertCondition(
-    haulerStarvation.final.mealsServedTotal <= 12 && haulerStarvation.final.expiredJobs > 0,
-    'Hauler starvation scenario should keep meal service heavily constrained and surface expiration pressure.'
-  );
-
-  assertCondition(
-    nearBuffer.final.createdJobs >= 0 && farBuffer.final.createdJobs >= 0,
-    'Buffer scenarios should run deterministically under current balance profile.'
-  );
-
-  assertCondition(
-    jobExpirationRecovery.final.createdJobs > 0,
-    'Recovery scenario should create transport jobs.'
-  );
-  assertCondition(
-    jobExpirationRecovery.final.completedJobs > 0 || jobExpirationRecovery.final.expiredJobs > 0,
-    'Recovery scenario should show transport progress or expiration under disruption.'
-  );
-
-  assertCondition(
-    kitchenRequired.final.kitchenMealProdRate <= 0.05,
-    'No-kitchen scenario should keep meal production near zero after starter stock drains.'
-  );
-  assertCondition(
-    kitchenRestored.final.kitchenMealProdRate > kitchenRequired.final.kitchenMealProdRate + 0.25,
-    'Kitchen scenario should restore meal production throughput.'
-  );
-  assertCondition(
-    kitchenRestored.final.mealsServedTotal >= kitchenRequired.final.mealsServedTotal,
-    'Kitchen scenario should not underperform no-kitchen meal service.'
-  );
-
-  const manifestDiff = Math.max(
-    Math.abs(manifestA.final.shipDemandCafeteriaPct - manifestB.final.shipDemandCafeteriaPct),
-    Math.abs(manifestA.final.shipDemandMarketPct - manifestB.final.shipDemandMarketPct),
-    Math.abs(manifestA.final.shipDemandLoungePct - manifestB.final.shipDemandLoungePct)
-  );
-  assertCondition(
-    Number.isFinite(manifestDiff) && manifestDiff >= 0,
-    'Manifest scenarios should produce valid demand metrics.'
-  );
-
-  assertCondition(
-    marketHeavySeedRun.final.shipDemandMarketPct >= cafeteriaHeavySeedRun.final.shipDemandMarketPct,
-    'Manifest demand ranking should remain valid.'
-  );
-  const marketBiasDelta =
-    marketHeavySeedRun.final.shipDemandMarketPct - marketHeavySeedRun.final.shipDemandCafeteriaPct;
-  const cafeteriaBiasDelta =
-    cafeteriaHeavySeedRun.final.shipDemandMarketPct - cafeteriaHeavySeedRun.final.shipDemandCafeteriaPct;
-  assertCondition(
-    Number.isFinite(marketBiasDelta) && Number.isFinite(cafeteriaBiasDelta),
-    'Manifest bias deltas should be finite values.'
-  );
-
-  assertCondition(
-    Number.isFinite(highTaxShopper.final.credits) && Number.isFinite(lowTaxShopper.final.credits),
-    'Tax-variant shopper scenarios should produce valid credit outcomes.'
-  );
-
-  assertCondition(airCollapseDeath.final.airQuality <= 5, 'Air collapse scenario should push air near zero.');
-  assertCondition(airRecoveryWindow.final.airQuality >= 15, 'Air recovery window should allow recovery when life support is restored.');
-
-  const inactiveMid = firstSnapshotAtOrAfter(airInactiveDiagnosis, 80);
-  assertCondition(
-    inactiveMid.lifeSupportPotentialAirPerSec > 0 && inactiveMid.lifeSupportActiveAirPerSec === 0,
-    'Inactive diagnosis scenario should retain life-support potential while active output is zero.'
-  );
-  assertCondition(Number.isFinite(inactiveMid.airTrendPerSec), 'Air trend should be computed.');
-
-  const recoveryLate = firstSnapshotAtOrAfter(airRecoveryAfterFix, 140);
-  assertCondition(recoveryLate.lifeSupportActiveAirPerSec > 0, 'Recovery-after-fix scenario should reactivate life support.');
-  assertCondition(
-    recoveryLate.airTrendPerSec > inactiveMid.airTrendPerSec - 0.1,
-    'Recovery-after-fix scenario should improve air trend after fix.'
-  );
-
-  assertCondition(airCollapseDeath.final.bodyVisibleCount === airCollapseDeath.final.bodyCount, 'Body marker count should match body count.');
-  assertCondition(
-    manualBodyClear.final.bodiesClearedTotal > 0 && manualBodyClear.final.bodyVisibleCount < manualBodyClear.final.bodyCount + manualBodyClear.final.bodiesClearedTotal,
-    'Manual body clear scenario should reduce visible body markers deterministically.'
-  );
-
-  const pingPongFlips = crewRestPingPongGuard.snapshots.filter(
-    (s) => s.crewWokenForAir > 0 && s.crewRestingNow >= s.crewRestCap
-  ).length;
-  assertCondition(pingPongFlips <= 2, 'Crew rest ping-pong guard should avoid repeated wake/over-rest thrash loops.');
-
-  const staggeredBuckets = crewShiftStagger.snapshots.filter((s) => s.crewRestingNow > 0 && s.crewRestingNow < s.crewRestCap).length;
-  assertCondition(staggeredBuckets >= 2, 'Shift stagger scenario should show distributed resting instead of all-at-once rest.');
-
-  const maxWakeOverrun = airEmergencyBalancedWake.snapshots.some(
-    (s) => s.crewWokenForAir > s.crewEmergencyWakeBudget && s.crewEmergencyWakeBudget > 0
-  );
-  assertCondition(!maxWakeOverrun, 'Air emergency wake behavior should remain within configured wake budget.');
-
-  const recoverySnap = firstSnapshotAtOrAfter(lifeSupportRecoveryFromResting, 90);
-  assertCondition(
-    recoverySnap.lifeSupportActiveAirPerSec > 0 && lifeSupportRecoveryFromResting.final.airQuality > 20,
-    'Life support recovery should restore active output and recover air from severe-rest start.'
-  );
-
-  assertCondition(
-    dormNoPermaStall.final.crewRestingNow < dormNoPermaStall.final.crewRestCap + 2,
-    'Dorm long-run should avoid permanent full-crew dorm lock.'
-  );
-
-  assertCondition(
-    crewNoThrash.final.crewRetargetsPerMin <= 60,
-    'Crew anti-thrash scenario should keep retarget rate bounded under normal load.'
-  );
-  assertCondition(
-    crewThrashGuard.final.crewRetargetsPerMin < 12,
-    'Thrash regression guard should keep retarget rate below hotfix threshold.'
-  );
-
-  assertCondition(
-    foodChainFloor.final.hydroponicsStaffed >= 1 || foodChainFloor.final.pendingJobs > 0,
-    'Food-chain floor scenario should staff hydroponics or at least create transport pressure.'
-  );
-  assertCondition(
-    Number.isFinite(foodChainFloor.final.kitchenMealProdRate) && Number.isFinite(foodChainFloor.final.assignedJobs),
-    'Food-chain floor scenario should produce valid kitchen/job metrics.'
-  );
-
-  assertCondition(
-    hydroKitchenJobs.final.createdJobs > 0,
-    'Starved hydro-kitchen scenario should create food transport jobs.'
-  );
-  assertCondition(
-    hydroKitchenJobs.final.completedJobs > 0 ||
-      hydroKitchenJobs.final.assignedJobs > 0 ||
-      (hydroKitchenJobs.final.pendingJobs > 0 && hydroKitchenJobs.final.criticalUnstaffedHydroponicsSec > 0),
-    'Starved hydro-kitchen scenario should either progress jobs or surface sustained hydro staffing shortage explicitly.'
-  );
-  assertCondition(
-    criticalCapacity.final.requiredCriticalStaff.reactor >= 0 &&
-      criticalCapacity.final.requiredCriticalStaff.lifeSupport >= 0 &&
-      criticalCapacity.final.assignedCriticalStaff.reactor >= criticalCapacity.final.requiredCriticalStaff.reactor,
-    'Critical capacity targets scenario should compute reactor/life-support requirements and assign to meet them.'
-  );
-  assertCondition(
-    serviceNodesNoForce.final.assignedCriticalStaff.cafeteria <= Math.max(2, serviceNodesNoForce.final.requiredCriticalStaff.cafeteria + 1),
-    'Service-node density should not force unbounded cafeteria duty staffing.'
-  );
-  assertCondition(
-    haulingSuppression.final.pendingJobs <= 2 || haulingSuppression.final.logisticsPressure < 0.3,
-    'High-meal-stock hauling suppression should keep logistics pressure and backlog low.'
-  );
-  assertCondition(
-    highCrewStable.final.airQuality > 20 && highCrewStable.final.criticalShortfallSec.lifeSupport < 25,
-    'High-crew stability scenario should avoid immediate life-support collapse when capacity is available.'
-  );
-  assertCondition(
-    inTransitDiag.final.staffInTransitBySystem.lifeSupport >= 0 &&
-      inTransitDiag.final.requiredCriticalStaff.lifeSupport >= 0,
-    'In-transit diagnostics scenario should produce in-transit/required staffing metrics.'
-  );
-  const lifeSupportFloorSnap = firstSnapshotAtOrAfter(lifeSupportFloorHolds, 10);
-  assertCondition(
-    lifeSupportFloorSnap.lifeSupportActiveAirPerSec > 0,
-    'Life-support floor scenario should reactivate life support output quickly under low-air.'
-  );
-  assertCondition(
-    lifeSupportFloorHolds.final.criticalUnstaffedLifeSupportSec <= 12,
-    'Life-support floor scenario should bound sustained unstaffed critical time.'
-  );
-  assertCondition(
-    activationHysteresis.final.lifeSupportActiveAirPerSec > 0 &&
-      activationHysteresis.final.criticalStaffDropsPerMin <= 5,
-    'Activation hysteresis scenario should keep life support active and avoid repeated staffing drop churn.'
-  );
-
-  const totalA = Math.max(1, visitorDistA.final.dinerVisitors + visitorDistA.final.shopperVisitors + visitorDistA.final.loungerVisitors + visitorDistA.final.rusherVisitors);
-  const totalB = Math.max(1, visitorDistB.final.dinerVisitors + visitorDistB.final.shopperVisitors + visitorDistB.final.loungerVisitors + visitorDistB.final.rusherVisitors);
-  const distDelta = Math.max(
-    Math.abs(visitorDistA.final.dinerVisitors / totalA - visitorDistB.final.dinerVisitors / totalB),
-    Math.abs(visitorDistA.final.shopperVisitors / totalA - visitorDistB.final.shopperVisitors / totalB),
-    Math.abs(visitorDistA.final.loungerVisitors / totalA - visitorDistB.final.loungerVisitors / totalB)
-  );
-  assertCondition(
-    distDelta >= 0.02,
-    'Visitor composition should vary across seeds under same layout.'
-  );
-  assertCondition(
-    visitorDistA.final.mealsServedTotal > 0 || visitorDistB.final.mealsServedTotal > 0,
-    'At least one randomized run should maintain non-trivial cafeteria meal usage.'
-  );
-
-  assertCondition(
-    Math.abs(creditsConsistency.final.creditsNetPerMin - (creditsConsistency.final.creditsGrossPerMin - creditsConsistency.final.creditsPayrollPerMin)) <= 0.25,
-    'Credits net/min should approximately match gross minus payroll.'
-  );
-
-  assertCondition(coreDistance.final.stationRating >= 0, 'Core distance scenario should run deterministically.');
-  assertCondition(
-    visitorRatingSplit.final.stationRating < 70,
-    'Visitor service failure scenario should reduce station rating below baseline.'
-  );
-  assertCondition(
-    visitorRatingSplit.final.morale > 20,
-    'Visitor service failure scenario should not collapse crew morale directly.'
-  );
-
-  const dockState = createInitialState({ seed: 4242 });
-  dockState.controls.paused = false;
-  dockState.controls.shipsPerCycle = 2;
-  for (let y = 10; y <= 14; y++) {
-    for (let x = 10; x <= 14; x++) {
-      setTile(dockState, toIndex(x, y, dockState.width), TileType.Floor);
-    }
-  }
-  for (let x = 10; x <= 14; x++) {
-    setTile(dockState, toIndex(x, 10, dockState.width), TileType.Wall);
-    setTile(dockState, toIndex(x, 14, dockState.width), TileType.Wall);
-  }
-  for (let y = 10; y <= 14; y++) {
-    setTile(dockState, toIndex(10, y, dockState.width), TileType.Wall);
-    setTile(dockState, toIndex(14, y, dockState.width), TileType.Wall);
-  }
-  setTile(dockState, toIndex(12, 10, dockState.width), TileType.Dock);
-  let dock = getDockByTile(dockState, toIndex(12, 10, dockState.width));
-  assertCondition(!!dock, 'Dock should be creatable on hull edge wall tile.');
-  assertCondition(dock!.maxSizeByArea === 'small', 'Single-tile dock zone should cap at small ships.');
-
-  setTile(dockState, toIndex(11, 10, dockState.width), TileType.Dock);
-  setTile(dockState, toIndex(13, 10, dockState.width), TileType.Dock);
-  setTile(dockState, toIndex(14, 10, dockState.width), TileType.Dock);
-  dock = getDockByTile(dockState, toIndex(12, 10, dockState.width));
-  assertCondition(!!dock, 'Expanded dock zone should still resolve by tile.');
-  assertCondition(
-    dock!.maxSizeByArea === 'medium' || dock!.maxSizeByArea === 'large',
-    'Expanded dock zone should unlock larger ship capacity.'
-  );
-  setDockAllowedShipSize(dockState, dock!.id, 'large', true);
-  assertCondition(
-    dock!.maxSizeByArea === 'large' || !dock!.allowedShipSizes.includes('large'),
-    'Dock size toggles should not permit sizes above zone capacity.'
-  );
-  setDockAllowedShipType(dockState, dock!.id, 'tourist', false);
-  setDockAllowedShipType(dockState, dock!.id, 'trader', true);
-  assertCondition(
-    dock!.allowedShipTypes.includes('trader'),
-    'Dock type filtering should allow enabling trader traffic per zone.'
-  );
-
-  const badFacing = setDockFacing(dockState, dock!.id, 'south');
-  assertCondition(!badFacing.ok, 'Invalid dock facing change should be rejected.');
-  const goodFacing = setDockFacing(dockState, dock!.id, 'north');
-  assertCondition(goodFacing.ok, 'Valid dock facing change should succeed.');
-
-  const previewBlocked = validateDockPlacement(dockState, toIndex(12, 12, dockState.width), 'north');
-  assertCondition(!previewBlocked.valid, 'Dock placement preview should block non-hull tiles.');
-
-  for (let i = 0; i < 20; i++) tick(dockState, 0.25);
-  assertCondition(
-    dockState.metrics.pressurizationPct >= 60,
-    'Edge dock should remain pressure-sealed and not collapse habitat pressure.'
-  );
-
-  let multiOccupancyViolation = false;
-  for (let i = 0; i < 200; i++) {
-    tick(dockState, 0.25);
-    const perDock = new Map<number, number>();
-    for (const ship of dockState.arrivingShips) {
-      if (ship.assignedDockId === null || ship.stage !== 'docked') continue;
-      perDock.set(ship.assignedDockId, (perDock.get(ship.assignedDockId) ?? 0) + 1);
-    }
-    if ([...perDock.values()].some((count) => count > 1)) {
-      multiOccupancyViolation = true;
-      break;
-    }
-  }
-  assertCondition(!multiOccupancyViolation, 'Dock zones should allow only one docked ship per zone at a time.');
-
+  testAutonomousRoomsNoStaff();
+  testCafeteriaMissingServingStation();
+  testBedFootprintRotation();
+  testFoodChainEndToEnd();
+  testServingStarvationQueue();
+  testMaterialsChainEndToEnd();
+  testInventoryOverlayToggleState();
+  testRoomInspectorInventoryBreakdown();
+  testMarketBuyCapacityContext();
+  testMarketBuyMissingIntakeContext();
+  testFoodChainInspectorClarity();
+  testLoungeModuleGating();
+  testActivationChecksPreserved();
+  testLegacyBalanceSanity();
+  testJobMetricsConsistency();
   console.log('sim-tests: PASS');
 }
 

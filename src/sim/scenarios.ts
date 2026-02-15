@@ -1,4 +1,14 @@
-import { clearBodies, createInitialState, setModule, setRoom, setTile, tick, trySetTile } from './sim';
+import {
+  clearBodies,
+  createInitialState,
+  getDockByTile,
+  setDockAllowedShipType,
+  setModule,
+  setRoom,
+  setTile,
+  tick,
+  trySetTile
+} from './sim';
 import { ModuleType, RoomType, TileType, toIndex, type StationState } from './types';
 
 export interface ScenarioResult {
@@ -33,6 +43,11 @@ export interface ScenarioResult {
     mealsConsumedPerMin: number;
     kitchenRawBuffer: number;
     kitchenMealProdRate: number;
+    workshopTradeGoodProdRate: number;
+    marketTradeGoodUseRate: number;
+    marketTradeGoodStock: number;
+    tradeGoodsSoldPerMin: number;
+    marketStockoutsPerMin: number;
     lifeSupportPotentialAirPerSec: number;
     lifeSupportActiveAirPerSec: number;
     airTrendPerSec: number;
@@ -98,6 +113,11 @@ export interface ScenarioResult {
     visitorDestinationCafeteriaShare: number;
     visitorDestinationMarketShare: number;
     visitorDestinationLoungeShare: number;
+    shipsByTypePerMin: {
+      tourist: number;
+      trader: number;
+      industrial: number;
+    };
   }>;
     final: {
       morale: number;
@@ -130,6 +150,11 @@ export interface ScenarioResult {
     mealsConsumedPerMin: number;
     kitchenRawBuffer: number;
     kitchenMealProdRate: number;
+    workshopTradeGoodProdRate: number;
+    marketTradeGoodUseRate: number;
+    marketTradeGoodStock: number;
+    tradeGoodsSoldPerMin: number;
+    marketStockoutsPerMin: number;
     lifeSupportPotentialAirPerSec: number;
     lifeSupportActiveAirPerSec: number;
     airTrendPerSec: number;
@@ -195,6 +220,11 @@ export interface ScenarioResult {
     visitorDestinationCafeteriaShare: number;
     visitorDestinationMarketShare: number;
     visitorDestinationLoungeShare: number;
+    shipsByTypePerMin: {
+      tourist: number;
+      trader: number;
+      industrial: number;
+    };
   };
 }
 
@@ -325,6 +355,11 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       mealsConsumedPerMin: state.metrics.mealsConsumedPerMin,
       kitchenRawBuffer: state.metrics.kitchenRawBuffer,
       kitchenMealProdRate: state.metrics.kitchenMealProdRate,
+      workshopTradeGoodProdRate: state.metrics.workshopTradeGoodProdRate,
+      marketTradeGoodUseRate: state.metrics.marketTradeGoodUseRate,
+      marketTradeGoodStock: state.metrics.marketTradeGoodStock,
+      tradeGoodsSoldPerMin: state.metrics.tradeGoodsSoldPerMin,
+      marketStockoutsPerMin: state.metrics.marketStockoutsPerMin,
       lifeSupportPotentialAirPerSec: state.metrics.lifeSupportPotentialAirPerSec,
       lifeSupportActiveAirPerSec: state.metrics.lifeSupportActiveAirPerSec,
       airTrendPerSec: state.metrics.airTrendPerSec,
@@ -359,7 +394,8 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       staffInTransitBySystem: state.metrics.staffInTransitBySystem,
       visitorDestinationCafeteriaShare: state.metrics.visitorDestinationShares.cafeteria,
       visitorDestinationMarketShare: state.metrics.visitorDestinationShares.market,
-      visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge
+      visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge,
+      shipsByTypePerMin: state.metrics.shipsByTypePerMin
     });
     nextSnapshotAt += sampleInterval;
   }
@@ -398,6 +434,11 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       mealsConsumedPerMin: state.metrics.mealsConsumedPerMin,
       kitchenRawBuffer: state.metrics.kitchenRawBuffer,
       kitchenMealProdRate: state.metrics.kitchenMealProdRate,
+      workshopTradeGoodProdRate: state.metrics.workshopTradeGoodProdRate,
+      marketTradeGoodUseRate: state.metrics.marketTradeGoodUseRate,
+      marketTradeGoodStock: state.metrics.marketTradeGoodStock,
+      tradeGoodsSoldPerMin: state.metrics.tradeGoodsSoldPerMin,
+      marketStockoutsPerMin: state.metrics.marketStockoutsPerMin,
       lifeSupportPotentialAirPerSec: state.metrics.lifeSupportPotentialAirPerSec,
       lifeSupportActiveAirPerSec: state.metrics.lifeSupportActiveAirPerSec,
       airTrendPerSec: state.metrics.airTrendPerSec,
@@ -432,7 +473,8 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       staffInTransitBySystem: state.metrics.staffInTransitBySystem,
       visitorDestinationCafeteriaShare: state.metrics.visitorDestinationShares.cafeteria,
       visitorDestinationMarketShare: state.metrics.visitorDestinationShares.market,
-      visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge
+      visitorDestinationLoungeShare: state.metrics.visitorDestinationShares.lounge,
+      shipsByTypePerMin: state.metrics.shipsByTypePerMin
     }
   };
 }
@@ -525,6 +567,112 @@ export function buildManifestProbeScenario(seed: number, taxRate = 0.2): Scenari
       state.controls.taxRate = taxRate;
       state.metrics.mealStock = 30;
       state.metrics.rawFoodStock = 90;
+    }
+  };
+}
+
+function configurePrimaryDockTypes(state: StationState, allowIndustrial: boolean): void {
+  const primaryDockTile = toIndex(22, 24, state.width);
+  const dock = getDockByTile(state, primaryDockTile);
+  if (!dock) return;
+  setDockAllowedShipType(state, dock.id, 'tourist', !allowIndustrial);
+  setDockAllowedShipType(state, dock.id, 'trader', true);
+  setDockAllowedShipType(state, dock.id, 'industrial', allowIndustrial);
+}
+
+function configureWorkshopMarketChain(state: StationState, withWorkshop: boolean): void {
+  const workshopIdx = toIndex(29, 16, state.width);
+  const marketIdx = toIndex(30, 16, state.width);
+  setTile(state, toIndex(29, 15, state.width), TileType.Door);
+  setTile(state, toIndex(30, 15, state.width), TileType.Door);
+  setRoom(state, marketIdx, RoomType.Market);
+  if (withWorkshop) {
+    setRoom(state, workshopIdx, RoomType.Workshop);
+    setModule(state, workshopIdx, ModuleType.Workbench);
+  } else {
+    setRoom(state, workshopIdx, RoomType.None);
+    setModule(state, workshopIdx, ModuleType.None);
+  }
+}
+
+export function buildWorkshopModuleGatingScenario(): ScenarioSpec {
+  const workshopTile = { x: 29, y: 16 };
+  return {
+    name: 'workshop-module-gating',
+    seed: 1410,
+    durationSec: 200,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      const idx = toIndex(workshopTile.x, workshopTile.y, state.width);
+      setTile(state, toIndex(29, 15, state.width), TileType.Door);
+      setTile(state, toIndex(30, 15, state.width), TileType.Door);
+      setRoom(state, idx, RoomType.Workshop);
+      setModule(state, idx, ModuleType.None);
+      state.controls.shipsPerCycle = 1;
+    },
+    onTick: (state) => {
+      configurePrimaryDockTypes(state, true);
+      if (state.now >= 95) {
+        setModule(state, toIndex(workshopTile.x, workshopTile.y, state.width), ModuleType.Workbench);
+      }
+    }
+  };
+}
+
+export function buildTradeGoodChainThroughputScenario(): ScenarioSpec {
+  return {
+    name: 'tradegood-chain-throughput',
+    seed: 1411,
+    durationSec: 220,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      configureWorkshopMarketChain(state, true);
+      state.controls.shipsPerCycle = 2;
+      state.crew.total = 18;
+    },
+    onTick: (state) => {
+      configurePrimaryDockTypes(state, true);
+    }
+  };
+}
+
+export function buildMarketStockoutPenaltyScenario(): ScenarioSpec {
+  return {
+    name: 'market-stockout-penalty',
+    seed: 1412,
+    durationSec: 220,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      configureWorkshopMarketChain(state, false);
+      state.controls.shipsPerCycle = 2;
+      state.crew.total = 16;
+    },
+    onTick: (state) => {
+      configurePrimaryDockTypes(state, true);
+    }
+  };
+}
+
+export function buildIndustrialTrafficScenario(seed: number, allowIndustrial: boolean): ScenarioSpec {
+  return {
+    name: `industrial-traffic-${allowIndustrial ? 'enabled' : 'disabled'}-${seed}`,
+    seed,
+    durationSec: 200,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      configureWorkshopMarketChain(state, true);
+      state.controls.shipsPerCycle = 3;
+    },
+    onTick: (state) => {
+      configurePrimaryDockTypes(state, allowIndustrial);
     }
   };
 }
@@ -737,6 +885,7 @@ export function buildManualBodyClearScenario(): ScenarioSpec {
       buildBaseStation(state);
       state.controls.shipsPerCycle = 0;
       state.metrics.materials = 200;
+      state.legacyMaterialStock = 200;
       const seeded = [toIndex(27, 15, state.width), toIndex(28, 15, state.width), toIndex(29, 15, state.width), toIndex(30, 15, state.width)];
       state.bodyTiles.push(...seeded);
       state.metrics.bodyCount = seeded.length;

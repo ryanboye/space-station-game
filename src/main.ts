@@ -1,8 +1,8 @@
 import './styles.css';
 import { renderWorld } from './render/render';
 import {
-  buyMaterials,
-  buyRawFood,
+  buyMaterialsDetailed,
+  buyRawFoodDetailed,
   clearBodies,
   createInitialState,
   fireCrew,
@@ -10,7 +10,7 @@ import {
   getRoomInspectorAt,
   getDockByTile,
   hireCrew,
-  setModule,
+  removeModuleAtTile,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
   setDockFacing,
@@ -21,6 +21,7 @@ import {
   setRoom,
   setZone,
   tick,
+  tryPlaceModule,
   trySetTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
@@ -52,14 +53,47 @@ app.innerHTML = `
     <h1>Station / Colony Sim MVP</h1>
 
     <div class="section panel-first top-controls">
-      <div class="controls-row">
-        <button id="pause" class="icon-btn">Play</button>
+      <div class="transport-row">
+        <button id="play" class="icon-btn transport-btn" aria-label="Play">&gt;</button>
+        <button id="pause" class="icon-btn transport-btn" aria-label="Pause">||</button>
+        <button id="speed-up" class="icon-btn transport-btn" aria-label="Speed Up">&gt;&gt;</button>
+        <span class="value speed-pill" id="speed-label">1x</span>
       </div>
-      <div class="row compact list-row"><span>Speed</span><span class="value" id="speed-label">1x</span></div>
-      <input type="range" id="speed" min="1" max="3" step="1" value="1" />
     </div>
 
-    <details class="section mini-collapse" open>
+    <details class="section mini-collapse">
+      <summary class="legend-title">Build & Room Legend</summary>
+      <div class="legend-grid">
+        <div class="legend-item"><span class="chip chip-caf"></span><span>Cafeteria (C) <kbd>C</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-caf"></span><span>Kitchen (I) <kbd>I</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-reactor"></span><span>Workshop (W) <kbd>W</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-reactor"></span><span>Reactor (R) <kbd>R</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-security"></span><span>Security (S) <kbd>S</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-dorm"></span><span>Dorm (D) <kbd>D</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-hygiene"></span><span>Hygiene (H) <kbd>H</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-hydro"></span><span>Hydroponics (F) <kbd>F</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-life"></span><span>Life Support (L) <kbd>L</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-lounge"></span><span>Lounge (U) <kbd>U</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-market"></span><span>Market (K) <kbd>K</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-market"></span><span>Logistics Stock (N) <kbd>N</kbd></span></div>
+        <div class="legend-item"><span class="chip chip-market"></span><span>Storage (B) <kbd>B</kbd></span></div>
+      </div>
+      <small class="legend-build">
+        Build: <kbd>1</kbd> Floor, <kbd>2</kbd> Wall, <kbd>3</kbd> Dock, <kbd>4</kbd> Door, <kbd>7</kbd> Erase Tile<br />
+        Zone paint: <kbd>8</kbd> Public, <kbd>9</kbd> Restricted, <kbd>0</kbd> Clear Room
+      </small>
+      <small class="legend-build">
+        Modules: <kbd>Q</kbd> Bed, <kbd>T</kbd> Table, <kbd>5</kbd> Serving, <kbd>V</kbd> Stove, <kbd>P</kbd> Workbench, <kbd>G</kbd> Grow, <kbd>M</kbd> Terminal, <kbd>6</kbd> Couch, <kbd>=</kbd> Game, <kbd>;</kbd> Shower, <kbd>'</kbd> Sink, <kbd>-</kbd> Stall, <kbd>,</kbd> Intake, <kbd>.</kbd> Rack, <kbd>X</kbd> Clear Module, <kbd>[</kbd>/<kbd>]</kbd> Rotate
+      </small>
+      <small id="module-guide" class="legend-build">
+        Module guide: Bed->Dorm, Table/Serving->Cafeteria, Stove->Kitchen, Workbench->Workshop, Grow->Hydroponics
+      </small>
+      <small id="module-phase-note" class="legend-build">
+        Readiness checks use size + required modules + door + pressure + path. Rooms are autonomous once ready.
+      </small>
+    </details>
+
+    <details class="section mini-collapse">
       <summary class="legend-title">Core Status</summary>
       <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Materials 0 | Credits 0</span></div>
       <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
@@ -70,7 +104,7 @@ app.innerHTML = `
       <small id="air-blocked-warning">Air warning: none</small>
     </details>
 
-    <details class="section mini-collapse" open>
+    <details class="section mini-collapse">
       <summary class="legend-title">Logistics & Economy</summary>
       <div class="row compact list-row"><span>Resources</span><span class="value" id="resources">Food 0 | Water 0 | Air 0%</span></div>
       <small id="food-flow">Food flow: +0.0 raw/s -> +0.0 meals/s, use 0.0 meals/s</small>
@@ -87,19 +121,20 @@ app.innerHTML = `
       </details>
     </details>
 
-    <details class="section mini-collapse" open>
+    <details class="section mini-collapse">
       <summary class="legend-title">Visitor Traffic</summary>
       <div class="row compact list-row"><span>Visitors</span><span class="value" id="visitors">0</span></div>
       <small id="visitor-feelings">Visitor feelings: none</small>
       <small id="demand-strip">Current demand: Caf 0% | Market 0% | Lounge 0%</small>
       <small id="archetype-strip">Visitors: Diner 0 | Shopper 0 | Lounger 0 | Rusher 0</small>
+      <small id="ship-type-strip">Ships/min: Tour 0.0 | Trade 0.0 | Ind 0.0</small>
       <div class="row compact list-row"><span>Docked ships</span><span class="value" id="docked-ships">0</span></div>
       <div class="row compact list-row"><span>Avg dock time</span><span class="value" id="avg-dock-time">0.0s</span></div>
       <div class="row compact list-row"><span>Bay utilization</span><span class="value" id="bay-utilization">0%</span></div>
       <div class="row compact list-row"><span>Exits / min</span><span class="value" id="exits-per-min">0</span></div>
       <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
       <small id="walk-stats">Visitor walk avg: 0.0</small>
-      <details class="mini-collapse" open>
+      <details class="mini-collapse">
         <summary>Station Rating Insight</summary>
         <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
         <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
@@ -114,7 +149,7 @@ app.innerHTML = `
       <small id="dock-preview">Dock preview: n/a</small>
     </details>
 
-    <details class="section mini-collapse" open>
+    <details class="section mini-collapse">
       <summary class="legend-title">Population & Services</summary>
       <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">0 / 0 (free 0)</span></div>
       <div class="row compact list-row"><span>Station Systems</span><span class="value" id="ops">Cafeteria 0/0 | Security 0/0 | Reactor 0/0 | Dorms 0/0</span></div>
@@ -129,53 +164,16 @@ app.innerHTML = `
         <small id="crew-shifts">Shifts: resting 0/0 | wake budget 0 | woken 0</small>
         <small id="crew-lockouts">Emergency lockouts prevented: 0</small>
         <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
-        <small id="ops-extra">Kitchen 0/0 | Hygiene 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
+        <small id="ops-extra">Kitchen 0/0 | Workshop 0/0 | Hygiene 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
         <small id="kitchen-status">Kitchen: active 0/0 | raw 0.0 | meal +0.0/s</small>
+        <small id="trade-status">Trade: workshop +0.0/s | market use 0.0/s | stock 0.0 | sold/min 0.0 | stockouts/min 0.0</small>
         <small id="room-usage">Usage: to dorm 0 | resting 0 | hygiene 0 | queue 0 | eating 0 | hydro staff 0/0</small>
         <small id="room-flow">Flow/min: dorm 0.0 | hygiene 0.0 | meals 0.0 | dorm fail 0.0</small>
       </details>
       <button id="clear-bodies">Clear Bodies (-6 materials)</button>
-      <div class="row compact list-row">
-        <span>Crew Preset</span>
-        <select id="crew-priority-preset">
-          <option value="balanced">Balanced</option>
-          <option value="life-support">Life Support</option>
-          <option value="food-chain">Food Chain</option>
-          <option value="economy">Economy</option>
-        </select>
-      </div>
       <button id="edit-priorities">Edit Priorities</button>
       <div class="row compact list-row"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
       <button id="open-market">Open Market</button>
-    </details>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Build & Room Legend</summary>
-      <div class="legend-grid">
-        <div class="legend-item"><span class="chip chip-caf"></span><span>Cafeteria (C) <kbd>C</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-caf"></span><span>Kitchen (I) <kbd>I</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-reactor"></span><span>Reactor (R) <kbd>R</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-security"></span><span>Security (S) <kbd>S</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-dorm"></span><span>Dorm (D) <kbd>D</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-hygiene"></span><span>Hygiene (H) <kbd>H</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-hydro"></span><span>Hydroponics (F) <kbd>F</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-life"></span><span>Life Support (L) <kbd>L</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-lounge"></span><span>Lounge (U) <kbd>U</kbd></span></div>
-        <div class="legend-item"><span class="chip chip-market"></span><span>Market (K) <kbd>K</kbd></span></div>
-      </div>
-      <small class="legend-build">
-        Build: <kbd>1</kbd> Floor, <kbd>2</kbd> Wall, <kbd>3</kbd> Dock, <kbd>4</kbd> Door, <kbd>7</kbd> Erase Tile<br />
-        Zone paint: <kbd>8</kbd> Public, <kbd>9</kbd> Restricted, <kbd>0</kbd> Clear Room
-      </small>
-      <small class="legend-build">
-        Modules: <kbd>Q</kbd> Bed, <kbd>T</kbd> Table, <kbd>V</kbd> Stove, <kbd>G</kbd> Grow Tray, <kbd>M</kbd> Terminal, <kbd>X</kbd> Clear Module
-      </small>
-      <small id="module-guide" class="legend-build">
-        Module guide: Bed->Dorm, Table->Cafeteria, Stove->Kitchen, Grow Tray->Hydroponics, Terminal->Security
-      </small>
-      <small id="module-phase-note" class="legend-build">
-        Note: only modules for implemented room types are enabled now; additional modules arrive with their rooms.
-      </small>
     </details>
 
     <details class="section mini-collapse">
@@ -190,6 +188,7 @@ app.innerHTML = `
       <summary class="legend-title">Build Tools</summary>
       <button id="toggle-zones">Toggle Zone Overlay</button>
       <button id="toggle-service-nodes">Toggle Service/Queue Nodes</button>
+      <button id="toggle-inventory-overlay">Inventory Overlay</button>
       <small>Drag to paint rectangle (Prison Architect style)</small>
       <small id="paint-guidance">Paint guidance: larger rooms need enough service modules and more than one door.</small>
       <small id="room-diagnostic">Inspect room: hover a room tile</small>
@@ -232,11 +231,21 @@ app.innerHTML = `
         <h2>Crew Priorities</h2>
         <button id="close-priority" class="ghost-btn">Close</button>
       </div>
+      <div class="row compact list-row">
+        <span>Preset</span>
+        <select id="crew-priority-preset">
+          <option value="balanced">Balanced</option>
+          <option value="life-support">Life Support</option>
+          <option value="food-chain">Food Chain</option>
+          <option value="economy">Economy</option>
+        </select>
+      </div>
       <div class="priority-grid">
         <label class="priority-row">Life Support <input type="range" min="1" max="10" step="1" data-priority="life-support" /><span id="prio-life-support">1</span></label>
         <label class="priority-row">Reactor <input type="range" min="1" max="10" step="1" data-priority="reactor" /><span id="prio-reactor">1</span></label>
         <label class="priority-row">Hydroponics <input type="range" min="1" max="10" step="1" data-priority="hydroponics" /><span id="prio-hydroponics">1</span></label>
         <label class="priority-row">Kitchen <input type="range" min="1" max="10" step="1" data-priority="kitchen" /><span id="prio-kitchen">1</span></label>
+        <label class="priority-row">Workshop <input type="range" min="1" max="10" step="1" data-priority="workshop" /><span id="prio-workshop">1</span></label>
         <label class="priority-row">Cafeteria <input type="range" min="1" max="10" step="1" data-priority="cafeteria" /><span id="prio-cafeteria">1</span></label>
         <label class="priority-row">Market <input type="range" min="1" max="10" step="1" data-priority="market" /><span id="prio-market">1</span></label>
         <label class="priority-row">Lounge <input type="range" min="1" max="10" step="1" data-priority="lounge" /><span id="prio-lounge">1</span></label>
@@ -265,6 +274,7 @@ app.innerHTML = `
       <div class="section-title" style="margin-top:10px;">Allowed Ship Types</div>
       <label><input type="checkbox" id="dock-modal-tourist" checked /> Tourist</label>
       <label><input type="checkbox" id="dock-modal-trader" /> Trader</label>
+      <label><input type="checkbox" id="dock-modal-industrial" /> Industrial</label>
       <div class="section-title" style="margin-top:10px;">Allowed Ship Sizes</div>
       <label><input type="checkbox" id="dock-modal-small" checked /> Small</label>
       <label><input type="checkbox" id="dock-modal-medium" checked /> Medium</label>
@@ -284,6 +294,8 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Pressurization</span><span class="value" id="room-modal-pressure">0%</span></div>
       <div class="row compact list-row"><span>Staff</span><span class="value" id="room-modal-staff">0/0</span></div>
       <div class="row compact list-row"><span>Service Nodes</span><span class="value" id="room-modal-nodes">0</span></div>
+      <small id="room-modal-inventory">Inventory: n/a</small>
+      <small id="room-modal-flow">Flow: n/a</small>
       <small id="room-modal-capacity">Capacity: n/a</small>
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
@@ -308,11 +320,13 @@ const shipsInput = document.querySelector<HTMLInputElement>('#ships')!;
 const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
+const playBtn = document.querySelector<HTMLButtonElement>('#play')!;
 const pauseBtn = document.querySelector<HTMLButtonElement>('#pause')!;
-const speedInput = document.querySelector<HTMLInputElement>('#speed')!;
+const speedUpBtn = document.querySelector<HTMLButtonElement>('#speed-up')!;
 const speedLabel = document.querySelector<HTMLSpanElement>('#speed-label')!;
 const toggleZonesBtn = document.querySelector<HTMLButtonElement>('#toggle-zones')!;
 const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle-service-nodes')!;
+const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
 const stationRatingEl = document.querySelector<HTMLSpanElement>('#station-rating')!;
@@ -329,8 +343,10 @@ const criticalStaffingLineEl = document.querySelector<HTMLElement>('#critical-st
 const roomUsageEl = document.querySelector<HTMLElement>('#room-usage')!;
 const roomFlowEl = document.querySelector<HTMLElement>('#room-flow')!;
 const kitchenStatusEl = document.querySelector<HTMLElement>('#kitchen-status')!;
+const tradeStatusEl = document.querySelector<HTMLElement>('#trade-status')!;
 const demandStripEl = document.querySelector<HTMLElement>('#demand-strip')!;
 const archetypeStripEl = document.querySelector<HTMLElement>('#archetype-strip')!;
+const shipTypeStripEl = document.querySelector<HTMLElement>('#ship-type-strip')!;
 const resourcesEl = document.querySelector<HTMLSpanElement>('#resources')!;
 const pressureEl = document.querySelector<HTMLSpanElement>('#pressure')!;
 const economyEl = document.querySelector<HTMLSpanElement>('#economy')!;
@@ -397,6 +413,7 @@ const dockModalFacingLabelEl = document.querySelector<HTMLElement>('#dock-modal-
 const dockModalErrorEl = document.querySelector<HTMLElement>('#dock-modal-error')!;
 const dockModalTouristCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-tourist')!;
 const dockModalTraderCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-trader')!;
+const dockModalIndustrialCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-industrial')!;
 const dockModalSmallCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-small')!;
 const dockModalMediumCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-medium')!;
 const dockModalLargeCheckbox = document.querySelector<HTMLInputElement>('#dock-modal-large')!;
@@ -409,6 +426,8 @@ const roomModalDoorsEl = document.querySelector<HTMLElement>('#room-modal-doors'
 const roomModalPressureEl = document.querySelector<HTMLElement>('#room-modal-pressure')!;
 const roomModalStaffEl = document.querySelector<HTMLElement>('#room-modal-staff')!;
 const roomModalNodesEl = document.querySelector<HTMLElement>('#room-modal-nodes')!;
+const roomModalInventoryEl = document.querySelector<HTMLElement>('#room-modal-inventory')!;
+const roomModalFlowEl = document.querySelector<HTMLElement>('#room-modal-flow')!;
 const roomModalCapacityEl = document.querySelector<HTMLElement>('#room-modal-capacity')!;
 const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
@@ -421,6 +440,7 @@ const prioritySystems: CrewPrioritySystem[] = [
   'reactor',
   'hydroponics',
   'kitchen',
+  'workshop',
   'cafeteria',
   'market',
   'lounge',
@@ -443,12 +463,21 @@ const moduleRoomHint: Record<ModuleType, string> = {
   [ModuleType.None]: 'clear module marker',
   [ModuleType.Bed]: 'Dorm',
   [ModuleType.Table]: 'Cafeteria',
+  [ModuleType.ServingStation]: 'Cafeteria',
   [ModuleType.Stove]: 'Kitchen',
-  [ModuleType.GrowTray]: 'Hydroponics',
-  [ModuleType.Terminal]: 'Security'
+  [ModuleType.Workbench]: 'Workshop',
+  [ModuleType.GrowStation]: 'Hydroponics',
+  [ModuleType.Terminal]: 'Security',
+  [ModuleType.Couch]: 'Lounge',
+  [ModuleType.GameStation]: 'Lounge',
+  [ModuleType.Shower]: 'Hygiene',
+  [ModuleType.Sink]: 'Hygiene',
+  [ModuleType.MarketStall]: 'Market',
+  [ModuleType.IntakePallet]: 'LogisticsStock',
+  [ModuleType.StorageRack]: 'Storage'
 };
 
-const speedMap: Record<number, 1 | 2 | 4> = { 1: 1, 2: 2, 3: 4 };
+const simSpeeds: Array<1 | 2 | 4> = [1, 2, 4];
 const market = {
   hireCost: 14,
   fireRefund: 5,
@@ -468,6 +497,13 @@ let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
 let hoveredTile: number | null = null;
+
+function refreshTransportUi(): void {
+  speedLabel.textContent = `${state.controls.simSpeed}x`;
+  playBtn.classList.toggle('active', !state.controls.paused);
+  pauseBtn.classList.toggle('active', state.controls.paused);
+}
+refreshTransportUi();
 
 function updateMarketRates(): void {
   const loadFactor = clamp(state.metrics.loadPct / 100, 0, 1.4);
@@ -535,6 +571,7 @@ function refreshDockModal(): void {
   dockModalErrorEl.style.color = '#6edb8f';
   dockModalTouristCheckbox.checked = dock.allowedShipTypes.includes('tourist');
   dockModalTraderCheckbox.checked = dock.allowedShipTypes.includes('trader');
+  dockModalIndustrialCheckbox.checked = dock.allowedShipTypes.includes('industrial');
   dockModalSmallCheckbox.checked = dock.allowedShipSizes.includes('small');
   dockModalMediumCheckbox.checked = dock.allowedShipSizes.includes('medium');
   dockModalLargeCheckbox.checked = dock.allowedShipSizes.includes('large');
@@ -554,11 +591,41 @@ function refreshRoomModal(): void {
   roomModalTypeEl.textContent = inspector.room;
   roomModalStatusEl.textContent = inspector.active ? 'active' : 'inactive';
   roomModalStatusEl.style.color = inspector.active ? '#6edb8f' : '#ff7676';
-  roomModalClusterEl.textContent = `${inspector.clusterSize} tiles`;
+  roomModalClusterEl.textContent = `${inspector.clusterSize} tiles (min ${inspector.minTilesRequired}, ${inspector.minTilesMet ? 'ok' : 'missing'})`;
   roomModalDoorsEl.textContent = String(inspector.doorCount);
   roomModalPressureEl.textContent = `${inspector.pressurizedPct.toFixed(0)}%`;
   roomModalStaffEl.textContent = `${inspector.staffCount}/${inspector.requiredStaff}`;
-  roomModalNodesEl.textContent = `${inspector.serviceNodeCount}${inspector.hasServiceNode ? '' : ' (missing)'}`;
+  const moduleProgressText = inspector.moduleProgress.length > 0
+    ? inspector.moduleProgress.map((p) => `${p.module} ${p.have}/${p.need}`).join(' | ')
+    : 'none';
+  const anyOfText = inspector.anyOfProgress.modules.length > 0
+    ? ` | any-of ${inspector.anyOfProgress.modules.join(' or ')} (${inspector.anyOfProgress.satisfied ? 'ok' : 'missing'})`
+    : '';
+  roomModalNodesEl.textContent = `service ${inspector.serviceNodeCount}${inspector.hasServiceNode ? '' : ' (missing)'} | modules ${moduleProgressText}${anyOfText}`;
+  if (inspector.inventory) {
+    const itemOrder: Array<{ key: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'; label: string }> = [
+      { key: 'rawMeal', label: 'rawMeal' },
+      { key: 'meal', label: 'meal' },
+      { key: 'rawMaterial', label: 'rawMaterial' },
+      { key: 'tradeGood', label: 'tradeGood' },
+      { key: 'body', label: 'body' }
+    ];
+    const itemText = itemOrder
+      .map(({ key, label }) => ({ label, value: inspector.inventory!.byItem[key] ?? 0 }))
+      .filter((entry) => entry.value > 0.01)
+      .map((entry) => `${entry.label} ${entry.value.toFixed(1)}`)
+      .join(' | ');
+    roomModalInventoryEl.textContent =
+      `Inventory: ${inspector.inventory.used.toFixed(1)}/${inspector.inventory.capacity.toFixed(1)} ` +
+      `(${inspector.inventory.fillPct.toFixed(0)}%) | nodes ${inspector.inventory.nodeCount}` +
+      (itemText ? ` | ${itemText}` : '');
+    roomModalInventoryEl.style.color = inspector.inventory.fillPct > 90 ? '#ffcf6e' : '#8ea2bd';
+  } else {
+    roomModalInventoryEl.textContent = 'Inventory: n/a';
+    roomModalInventoryEl.style.color = '#8ea2bd';
+  }
+  roomModalFlowEl.textContent = `Flow: ${inspector.flowHints?.join(' | ') || 'n/a'}`;
+  roomModalFlowEl.style.color = '#8ea2bd';
   if (inspector.room === 'cafeteria' && inspector.cafeteriaLoad) {
     const load = inspector.cafeteriaLoad;
     roomModalCapacityEl.textContent =
@@ -604,7 +671,11 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       } else if (currentTool.kind === 'room' && state.tiles[idx] !== TileType.Space) {
         setRoom(state, idx, currentTool.room!);
       } else if (currentTool.kind === 'module' && state.tiles[idx] !== TileType.Space) {
-        setModule(state, idx, currentTool.module!);
+        if (currentTool.module === ModuleType.None) {
+          removeModuleAtTile(state, idx);
+        } else {
+          tryPlaceModule(state, currentTool.module!, idx, state.controls.moduleRotation);
+        }
       }
     }
   }
@@ -704,13 +775,41 @@ window.addEventListener('keydown', (e) => {
     case 'V':
       currentTool = { kind: 'module', module: ModuleType.Stove };
       break;
+    case 'p':
+    case 'P':
+      currentTool = { kind: 'module', module: ModuleType.Workbench };
+      break;
     case 'g':
     case 'G':
-      currentTool = { kind: 'module', module: ModuleType.GrowTray };
+      currentTool = { kind: 'module', module: ModuleType.GrowStation };
       break;
     case 'm':
     case 'M':
       currentTool = { kind: 'module', module: ModuleType.Terminal };
+      break;
+    case '5':
+      currentTool = { kind: 'module', module: ModuleType.ServingStation };
+      break;
+    case '6':
+      currentTool = { kind: 'module', module: ModuleType.Couch };
+      break;
+    case '=':
+      currentTool = { kind: 'module', module: ModuleType.GameStation };
+      break;
+    case ';':
+      currentTool = { kind: 'module', module: ModuleType.Shower };
+      break;
+    case "'":
+      currentTool = { kind: 'module', module: ModuleType.Sink };
+      break;
+    case '-':
+      currentTool = { kind: 'module', module: ModuleType.MarketStall };
+      break;
+    case ',':
+      currentTool = { kind: 'module', module: ModuleType.IntakePallet };
+      break;
+    case '.':
+      currentTool = { kind: 'module', module: ModuleType.StorageRack };
       break;
     case 'c':
     case 'C':
@@ -727,6 +826,10 @@ window.addEventListener('keydown', (e) => {
     case 'i':
     case 'I':
       currentTool = { kind: 'room', room: RoomType.Kitchen };
+      break;
+    case 'w':
+    case 'W':
+      currentTool = { kind: 'room', room: RoomType.Workshop };
       break;
     case 'f':
     case 'F':
@@ -752,6 +855,24 @@ window.addEventListener('keydown', (e) => {
     case 'S':
       currentTool = { kind: 'room', room: RoomType.Security };
       break;
+    case 'n':
+    case 'N':
+      currentTool = { kind: 'room', room: RoomType.LogisticsStock };
+      break;
+    case 'b':
+    case 'B':
+      currentTool = { kind: 'room', room: RoomType.Storage };
+      break;
+    case '[':
+      state.controls.moduleRotation = 0;
+      break;
+    case ']':
+      state.controls.moduleRotation = 90;
+      break;
+    case 'o':
+    case 'O':
+      state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+      break;
     case '8':
       currentTool = { kind: 'zone', zone: ZoneType.Public };
       break;
@@ -760,7 +881,7 @@ window.addEventListener('keydown', (e) => {
       break;
     case ' ':
       state.controls.paused = !state.controls.paused;
-      pauseBtn.textContent = state.controls.paused ? 'Play' : 'Pause';
+      refreshTransportUi();
       break;
     case 'Escape':
       marketModal.classList.add('hidden');
@@ -798,15 +919,22 @@ crewPriorityPresetSelect.addEventListener('change', () => {
   refreshPriorityUi();
 });
 
-pauseBtn.addEventListener('click', () => {
-  state.controls.paused = !state.controls.paused;
-  pauseBtn.textContent = state.controls.paused ? 'Play' : 'Pause';
+playBtn.addEventListener('click', () => {
+  state.controls.paused = false;
+  refreshTransportUi();
 });
 
-speedInput.addEventListener('input', () => {
-  const slider = clamp(parseInt(speedInput.value, 10), 1, 3);
-  state.controls.simSpeed = speedMap[slider];
-  speedLabel.textContent = `${state.controls.simSpeed}x`;
+pauseBtn.addEventListener('click', () => {
+  state.controls.paused = true;
+  refreshTransportUi();
+});
+
+speedUpBtn.addEventListener('click', () => {
+  const currentIndex = simSpeeds.indexOf(state.controls.simSpeed as 1 | 2 | 4);
+  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % simSpeeds.length : 0;
+  state.controls.simSpeed = simSpeeds[nextIndex];
+  state.controls.paused = false;
+  refreshTransportUi();
 });
 
 toggleZonesBtn.addEventListener('click', () => {
@@ -815,6 +943,10 @@ toggleZonesBtn.addEventListener('click', () => {
 
 toggleServiceNodesBtn.addEventListener('click', () => {
   state.controls.showServiceNodes = !state.controls.showServiceNodes;
+});
+
+toggleInventoryOverlayBtn.addEventListener('click', () => {
+  state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
 });
 
 openMarketBtn.addEventListener('click', () => {
@@ -889,6 +1021,12 @@ dockModalTraderCheckbox.addEventListener('change', () => {
   refreshDockModal();
 });
 
+dockModalIndustrialCheckbox.addEventListener('change', () => {
+  if (selectedDockId === null) return;
+  setDockAllowedShipType(state, selectedDockId, 'industrial', dockModalIndustrialCheckbox.checked);
+  refreshDockModal();
+});
+
 dockModalFacingSelect.addEventListener('change', () => {
   if (selectedDockId === null) return;
   const facing = dockModalFacingSelect.value as SpaceLane;
@@ -923,13 +1061,25 @@ dockModalLargeCheckbox.addEventListener('change', () => {
 });
 
 buySmallBtn.addEventListener('click', () => {
-  const ok = buyMaterials(state, market.buyMat25Cost, 25);
-  marketNoteEl.textContent = ok ? 'Purchased +25 materials' : 'Not enough credits';
+  const result = buyMaterialsDetailed(state, market.buyMat25Cost, 25);
+  marketNoteEl.textContent = result.ok
+    ? 'Purchased +25 materials'
+    : result.reason === 'insufficient_credits'
+      ? 'Not enough credits'
+      : result.reason === 'no_logistics_stock'
+        ? 'Need Logistics Stock + Intake Pallet'
+        : `Not enough intake capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 buyLargeBtn.addEventListener('click', () => {
-  const ok = buyMaterials(state, market.buyMat80Cost, 80);
-  marketNoteEl.textContent = ok ? 'Purchased +80 materials' : 'Not enough credits';
+  const result = buyMaterialsDetailed(state, market.buyMat80Cost, 80);
+  marketNoteEl.textContent = result.ok
+    ? 'Purchased +80 materials'
+    : result.reason === 'insufficient_credits'
+      ? 'Not enough credits'
+      : result.reason === 'no_logistics_stock'
+        ? 'Need Logistics Stock + Intake Pallet'
+        : `Not enough intake capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 hireCrewBtn.addEventListener('click', () => {
@@ -953,13 +1103,25 @@ sellLargeBtn.addEventListener('click', () => {
 });
 
 buyFoodSmallBtn.addEventListener('click', () => {
-  const ok = buyRawFood(state, market.buyFood20Cost, 20);
-  marketNoteEl.textContent = ok ? 'Purchased +20 raw food' : 'Not enough credits';
+  const result = buyRawFoodDetailed(state, market.buyFood20Cost, 20);
+  marketNoteEl.textContent = result.ok
+    ? 'Purchased +20 raw food'
+    : result.reason === 'insufficient_credits'
+      ? 'Not enough credits'
+      : result.reason === 'no_food_destinations'
+        ? 'Need Hydroponics/Kitchen nodes'
+        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 buyFoodLargeBtn.addEventListener('click', () => {
-  const ok = buyRawFood(state, market.buyFood60Cost, 60);
-  marketNoteEl.textContent = ok ? 'Purchased +60 raw food' : 'Not enough credits';
+  const result = buyRawFoodDetailed(state, market.buyFood60Cost, 60);
+  marketNoteEl.textContent = result.ok
+    ? 'Purchased +60 raw food'
+    : result.reason === 'insufficient_credits'
+      ? 'Not enough credits'
+      : result.reason === 'no_food_destinations'
+        ? 'Need Hydroponics/Kitchen nodes'
+        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 sellFoodSmallBtn.addEventListener('click', () => {
@@ -990,6 +1152,9 @@ function frame(now: number): void {
 
   tick(state, dt);
   renderWorld(ctx, state, currentTool, hoveredTile);
+  toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
+    ? 'Inventory Overlay: ON'
+    : 'Inventory Overlay: OFF';
 
   if (isPainting && paintStart && paintCurrent) {
     const minX = Math.min(paintStart.x, paintCurrent.x);
@@ -1028,13 +1193,21 @@ function frame(now: number): void {
     `KI ${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen} | ` +
     `CF ${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}`;
   opsEl.textContent = `Cafeteria ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | Security ${state.ops.securityActive}/${state.ops.securityTotal} | Reactor ${state.ops.reactorsActive}/${state.ops.reactorsTotal} | Dorms ${state.ops.dormsActive}/${state.ops.dormsTotal}`;
-  opsExtraEl.textContent = `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | Market ${state.ops.marketActive}/${state.ops.marketTotal}`;
+  opsExtraEl.textContent = `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Workshop ${state.ops.workshopActive}/${state.ops.workshopTotal} | Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | Market ${state.ops.marketActive}/${state.ops.marketTotal}`;
   kitchenStatusEl.textContent = `Kitchen: active ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | raw ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`;
+  tradeStatusEl.textContent =
+    `Trade: workshop +${state.metrics.workshopTradeGoodProdRate.toFixed(1)}/s | ` +
+    `market use ${state.metrics.marketTradeGoodUseRate.toFixed(1)}/s | stock ${state.metrics.marketTradeGoodStock.toFixed(1)} | ` +
+    `sold/min ${state.metrics.tradeGoodsSoldPerMin.toFixed(1)} | stockouts/min ${state.metrics.marketStockoutsPerMin.toFixed(1)}`;
   demandStripEl.textContent = `Current demand: Caf ${Math.round(state.metrics.shipDemandCafeteriaPct)}% | Market ${Math.round(state.metrics.shipDemandMarketPct)}% | Lounge ${Math.round(state.metrics.shipDemandLoungePct)}%`;
   archetypeStripEl.textContent = `Visitors: Diner ${state.metrics.visitorsByArchetype.diner} | Shopper ${state.metrics.visitorsByArchetype.shopper} | Lounger ${state.metrics.visitorsByArchetype.lounger} | Rusher ${state.metrics.visitorsByArchetype.rusher}`;
+  shipTypeStripEl.textContent =
+    `Ships/min: Tour ${state.metrics.shipsByTypePerMin.tourist.toFixed(1)} | ` +
+    `Trade ${state.metrics.shipsByTypePerMin.trader.toFixed(1)} | ` +
+    `Ind ${state.metrics.shipsByTypePerMin.industrial.toFixed(1)}`;
   roomUsageEl.textContent = `Usage: to dorm ${state.metrics.toDormResidents} | resting ${state.metrics.dormSleepingResidents} | hygiene ${state.metrics.hygieneCleaningResidents} | queue ${state.metrics.cafeteriaQueueingCount} | eating ${state.metrics.cafeteriaEatingCount} | hydro staff ${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes} | life nodes ${state.metrics.lifeSupportActiveNodes}`;
   roomFlowEl.textContent = `Flow/min: dorm ${state.metrics.dormVisitsPerMin.toFixed(1)} | hygiene ${state.metrics.hygieneUsesPerMin.toFixed(1)} | meals ${state.metrics.mealsConsumedPerMin.toFixed(1)} | dorm fail ${state.metrics.dormFailedAttemptsPerMin.toFixed(1)} | failed needs H/E/Y ${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}`;
-  resourcesEl.textContent = `Raw Food ${Math.round(state.metrics.rawFoodStock)} -> Meals ${Math.round(state.metrics.mealStock)} | Water ${Math.round(state.metrics.waterStock)} | Air ${Math.round(state.metrics.airQuality)}%`;
+  resourcesEl.textContent = `Raw Meal ${Math.round(state.metrics.rawFoodStock)} -> Meals ${Math.round(state.metrics.mealStock)} | Water ${Math.round(state.metrics.waterStock)} | Air ${Math.round(state.metrics.airQuality)}%`;
   resourcesEl.style.color = state.metrics.airQuality < 35 ? '#ff7676' : '#d6deeb';
   pressureEl.textContent = `${Math.round(state.metrics.pressurizationPct)}% sealed | ${state.metrics.leakingTiles} leaking tiles`;
   pressureEl.style.color = state.metrics.pressurizationPct > 85 ? '#6edb8f' : state.metrics.pressurizationPct > 60 ? '#ffcf6e' : '#ff7676';
@@ -1185,10 +1358,10 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 
   if (currentTool.kind === 'module') {
-    moduleGuideEl.textContent = `Module guide: ${currentTool.module} -> ${moduleRoomHint[currentTool.module!]}`;
+    moduleGuideEl.textContent = `Module guide: ${currentTool.module} -> ${moduleRoomHint[currentTool.module!]} (rot ${state.controls.moduleRotation}deg)`;
   } else {
     moduleGuideEl.textContent =
-      'Module guide: Bed->Dorm, Table->Cafeteria, Stove->Kitchen, Grow Tray->Hydroponics, Terminal->Security';
+      'Module guide: Q bed, T table, 5 serving, V stove, P workbench, G grow, M terminal, 6 couch, = game, ; shower, \' sink, - stall, , intake, . rack | rot [ ] | inventory O';
   }
 
   if (currentTool.kind === 'room' && currentTool.room !== RoomType.None) {

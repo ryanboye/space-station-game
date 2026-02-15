@@ -5,12 +5,15 @@ import {
   TileType,
   VisitorState,
   ZoneType,
+  inBounds,
   fromIndex,
   isWalkable,
+  type ItemType,
   type BuildTool,
   type StationState
 } from '../sim/types';
-import { validateDockPlacement } from '../sim/sim';
+import { MODULE_DEFINITIONS, normalizeModuleType } from '../sim/balance';
+import { collectQueueTargets, collectServiceTargets, getRoomDiagnosticAt, validateDockPlacement } from '../sim/sim';
 
 const tileColor: Record<TileType, string> = {
   [TileType.Space]: '#071019',
@@ -27,6 +30,7 @@ const roomOverlay: Record<RoomType, string> = {
   [RoomType.None]: 'transparent',
   [RoomType.Cafeteria]: 'rgba(78, 166, 110, 0.28)',
   [RoomType.Kitchen]: 'rgba(245, 164, 92, 0.28)',
+  [RoomType.Workshop]: 'rgba(203, 157, 108, 0.28)',
   [RoomType.Reactor]: 'rgba(185, 125, 57, 0.28)',
   [RoomType.Security]: 'rgba(189, 79, 79, 0.28)',
   [RoomType.Dorm]: 'rgba(126, 200, 255, 0.22)',
@@ -34,13 +38,16 @@ const roomOverlay: Record<RoomType, string> = {
   [RoomType.Hydroponics]: 'rgba(98, 205, 120, 0.2)',
   [RoomType.LifeSupport]: 'rgba(245, 245, 170, 0.2)',
   [RoomType.Lounge]: 'rgba(196, 140, 255, 0.2)',
-  [RoomType.Market]: 'rgba(255, 188, 120, 0.2)'
+  [RoomType.Market]: 'rgba(255, 188, 120, 0.2)',
+  [RoomType.LogisticsStock]: 'rgba(150, 200, 255, 0.2)',
+  [RoomType.Storage]: 'rgba(255, 220, 155, 0.22)'
 };
 
 const roomLetter: Record<RoomType, string> = {
   [RoomType.None]: '',
   [RoomType.Cafeteria]: 'C',
   [RoomType.Kitchen]: 'I',
+  [RoomType.Workshop]: 'W',
   [RoomType.Reactor]: 'R',
   [RoomType.Security]: 'S',
   [RoomType.Dorm]: 'D',
@@ -48,34 +55,87 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Hydroponics]: 'F',
   [RoomType.LifeSupport]: 'L',
   [RoomType.Lounge]: 'U',
-  [RoomType.Market]: 'K'
+  [RoomType.Market]: 'K',
+  [RoomType.LogisticsStock]: 'N',
+  [RoomType.Storage]: 'B'
 };
 
 const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.None]: '',
   [ModuleType.Bed]: 'B',
   [ModuleType.Table]: 'T',
+  [ModuleType.ServingStation]: 'S',
   [ModuleType.Stove]: 'V',
-  [ModuleType.GrowTray]: 'G',
-  [ModuleType.Terminal]: 'M'
+  [ModuleType.Workbench]: 'W',
+  [ModuleType.GrowStation]: 'G',
+  [ModuleType.Terminal]: 'M',
+  [ModuleType.Couch]: 'C',
+  [ModuleType.GameStation]: 'J',
+  [ModuleType.Shower]: 'H',
+  [ModuleType.Sink]: 'I',
+  [ModuleType.MarketStall]: '$',
+  [ModuleType.IntakePallet]: 'P',
+  [ModuleType.StorageRack]: 'R'
 };
 
-function hasAdjacentDoor(index: number, width: number, height: number, tiles: TileType[]): boolean {
-  const p = fromIndex(index, width);
-  const deltas = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1]
-  ];
-  for (const [dx, dy] of deltas) {
-    const nx = p.x + dx;
-    const ny = p.y + dy;
-    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-    const ni = ny * width + nx;
-    if (tiles[ni] === TileType.Door) return true;
+const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const itemFillColor: Record<ItemType | 'none', string> = {
+  rawMeal: 'rgba(118, 218, 132, 0.55)',
+  meal: 'rgba(255, 216, 120, 0.58)',
+  rawMaterial: 'rgba(214, 183, 132, 0.55)',
+  tradeGood: 'rgba(128, 188, 255, 0.58)',
+  body: 'rgba(227, 110, 110, 0.6)',
+  none: 'rgba(151, 170, 192, 0.42)'
+};
+const itemShortCode: Record<ItemType, string> = {
+  rawMeal: 'RM',
+  meal: 'ME',
+  rawMaterial: 'MAT',
+  tradeGood: 'TG',
+  body: 'BD'
+};
+
+type ModuleInventoryVisual = {
+  used: number;
+  capacity: number;
+  fillPct: number;
+  dominantItem: ItemType | null;
+  mixed: boolean;
+  byItem: Partial<Record<ItemType, number>>;
+};
+
+function buildModuleInventoryVisualMap(state: StationState): Map<number, ModuleInventoryVisual> {
+  const out = new Map<number, ModuleInventoryVisual>();
+  for (const node of state.itemNodes) {
+    const byItem: Partial<Record<ItemType, number>> = {};
+    let used = 0;
+    let dominantItem: ItemType | null = null;
+    let dominantValue = -1;
+    let nonZeroItemKinds = 0;
+    for (const itemType of ITEM_TYPES) {
+      const amount = node.items[itemType] ?? 0;
+      if (amount > 0.01) {
+        byItem[itemType] = amount;
+        nonZeroItemKinds += 1;
+      }
+      used += amount;
+      if (amount > dominantValue) {
+        dominantValue = amount;
+        dominantItem = amount > 0.01 ? itemType : dominantItem;
+      }
+    }
+    if (used <= 0.01 && node.capacity <= 0) continue;
+    const fillPct = node.capacity > 0 ? clamp01(used / node.capacity) : 0;
+    out.set(node.tileIndex, {
+      used,
+      capacity: node.capacity,
+      fillPct,
+      dominantItem: used > 0.01 ? dominantItem : null,
+      mixed: nonZeroItemKinds > 1,
+      byItem
+    });
   }
-  return false;
+  return out;
 }
 
 function clusterTiles(state: StationState, room: RoomType): number[][] {
@@ -117,98 +177,95 @@ function clusterTiles(state: StationState, room: RoomType): number[][] {
   return clusters;
 }
 
-function requiredModuleForRoom(room: RoomType): ModuleType | null {
-  if (room === RoomType.Dorm) return ModuleType.Bed;
-  if (room === RoomType.Cafeteria) return ModuleType.Table;
-  if (room === RoomType.Kitchen) return ModuleType.Stove;
-  if (room === RoomType.Hydroponics) return ModuleType.GrowTray;
-  if (room === RoomType.Security) return ModuleType.Terminal;
-  return null;
-}
+const ROOM_TYPES_WITH_DIAGNOSTICS: RoomType[] = [
+  RoomType.Cafeteria,
+  RoomType.Kitchen,
+  RoomType.Workshop,
+  RoomType.Reactor,
+  RoomType.Security,
+  RoomType.Dorm,
+  RoomType.Hygiene,
+  RoomType.Hydroponics,
+  RoomType.LifeSupport,
+  RoomType.Lounge,
+  RoomType.Market,
+  RoomType.LogisticsStock,
+  RoomType.Storage
+];
 
-function collectServiceNodeTiles(state: StationState, room: RoomType): number[] {
-  const out: number[] = [];
-  const required = requiredModuleForRoom(room);
-  for (let i = 0; i < state.rooms.length; i++) {
-    if (state.rooms[i] !== room) continue;
-    if (!required || state.modules[i] === required) out.push(i);
-  }
-  return out;
-}
-
-function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
-  const service = collectServiceNodeTiles(state, RoomType.Cafeteria);
-  const out = new Set<number>();
-  for (const tile of service) {
-    const p = fromIndex(tile, state.width);
-    const deltas = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1]
-    ];
-    for (const [dx, dy] of deltas) {
-      const nx = p.x + dx;
-      const ny = p.y + dy;
-      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
-      const ni = ny * state.width + nx;
-      if (!isWalkable(state.tiles[ni])) continue;
-      if (state.rooms[ni] === RoomType.Cafeteria) continue;
-      out.add(ni);
-    }
-  }
-  return [...out];
-}
-
-function buildActiveRoomTileSet(state: StationState, staffByTile: Map<number, number>): Set<number> {
+function buildActiveRoomTileSet(state: StationState): Set<number> {
   const active = new Set<number>();
-  const requirements: Record<RoomType, number> = {
-    [RoomType.None]: 0,
-    [RoomType.Cafeteria]: 1,
-    [RoomType.Kitchen]: 1,
-    [RoomType.Reactor]: 1,
-    [RoomType.Security]: 2,
-    [RoomType.Dorm]: 0,
-    [RoomType.Hygiene]: 1,
-    [RoomType.Hydroponics]: 1,
-    [RoomType.LifeSupport]: 1,
-    [RoomType.Lounge]: 1,
-    [RoomType.Market]: 1
-  };
-  const roomTypes = [
-    RoomType.Cafeteria,
-    RoomType.Kitchen,
-    RoomType.Reactor,
-    RoomType.Security,
-    RoomType.Dorm,
-    RoomType.Hygiene,
-    RoomType.Hydroponics,
-    RoomType.LifeSupport,
-    RoomType.Lounge,
-    RoomType.Market
-  ];
-
-  for (const room of roomTypes) {
+  for (const room of ROOM_TYPES_WITH_DIAGNOSTICS) {
     for (const cluster of clusterTiles(state, room)) {
-      let hasDoor = false;
-      let pressurized = 0;
-      let staff = 0;
-      const requiredModule = requiredModuleForRoom(room);
-      let hasServiceNode = requiredModule === null;
-      for (const tile of cluster) {
-        if (!hasDoor && hasAdjacentDoor(tile, state.width, state.height, state.tiles)) hasDoor = true;
-        if (state.pressurized[tile] || room === RoomType.Reactor) pressurized++;
-        staff += staffByTile.get(tile) ?? 0;
-        if (!hasServiceNode && state.modules[tile] === requiredModule) hasServiceNode = true;
-      }
-      const pressurizedEnough = room === RoomType.Reactor || pressurized / cluster.length >= 0.7;
-      const staffEnough = staff >= requirements[room];
-      if (hasDoor && pressurizedEnough && staffEnough && hasServiceNode) {
+      if (cluster.length <= 0) continue;
+      const diag = getRoomDiagnosticAt(state, cluster[0]);
+      if (diag?.active) {
         for (const t of cluster) active.add(t);
       }
     }
   }
   return active;
+}
+
+function collectServiceNodeTiles(state: StationState): number[] {
+  const out = new Set<number>();
+  for (const room of ROOM_TYPES_WITH_DIAGNOSTICS) {
+    for (const tile of collectServiceTargets(state, room)) out.add(tile);
+  }
+  return [...out];
+}
+
+function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
+  return collectQueueTargets(state, RoomType.Cafeteria);
+}
+
+function previewFootprint(module: ModuleType, rotation: 0 | 90): { width: number; height: number } {
+  const normalized = normalizeModuleType(module);
+  const def = MODULE_DEFINITIONS[normalized] ?? MODULE_DEFINITIONS[ModuleType.None];
+  if (rotation === 90 && def.rotatable) return { width: def.height, height: def.width };
+  return { width: def.width, height: def.height };
+}
+
+function previewTiles(
+  state: StationState,
+  originTile: number,
+  width: number,
+  height: number
+): number[] | null {
+  const { x, y } = fromIndex(originTile, state.width);
+  const out: number[] = [];
+  for (let dy = 0; dy < height; dy++) {
+    for (let dx = 0; dx < width; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      if (!inBounds(tx, ty, state.width, state.height)) return null;
+      out.push(ty * state.width + tx);
+    }
+  }
+  return out;
+}
+
+function validateModulePreviewPlacement(
+  state: StationState,
+  moduleType: ModuleType,
+  originTile: number,
+  rotation: 0 | 90
+): { valid: boolean; tiles: number[] } {
+  const normalized = normalizeModuleType(moduleType);
+  if (normalized === ModuleType.None) return { valid: true, tiles: [originTile] };
+  const def = MODULE_DEFINITIONS[normalized];
+  if (!def) return { valid: false, tiles: [originTile] };
+  const footprint = previewFootprint(normalized, rotation);
+  const tiles = previewTiles(state, originTile, footprint.width, footprint.height);
+  if (!tiles) return { valid: false, tiles: [originTile] };
+  const roomAtOrigin = state.rooms[originTile];
+  for (const tile of tiles) {
+    if (!isWalkable(state.tiles[tile])) return { valid: false, tiles };
+    if (state.moduleOccupancyByTile[tile] !== null) return { valid: false, tiles };
+    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) return { valid: false, tiles };
+    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
+  }
+  return { valid: true, tiles };
 }
 
 function agentOffset(id: number): { x: number; y: number } {
@@ -284,8 +341,9 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
     const profile = state.laneProfiles[row.lane];
     const lanePct = Math.round((profile.trafficVolume / totalTraffic) * 100);
     const touristPct = Math.round(profile.weights.tourist * 100);
-    const traderPct = Math.max(0, 100 - touristPct);
-    const line = `${row.label}: ${lanePct}% | Tour ${touristPct}% / Trade ${traderPct}%`;
+    const traderPct = Math.round(profile.weights.trader * 100);
+    const industrialPct = Math.max(0, 100 - touristPct - traderPct);
+    const line = `${row.label}: ${lanePct}% | Tour ${touristPct}% / Trade ${traderPct}% / Ind ${industrialPct}%`;
     const textW = ctx.measureText(line).width;
     const pad = 3;
     const boxW = textW + pad * 2;
@@ -332,7 +390,8 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState): vo
       cx = state.width * TILE_SIZE - 22;
       cy = state.height * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
     }
-    const color = queued.shipType === 'tourist' ? '#ffe08a' : '#8fe1ff';
+    const color =
+      queued.shipType === 'tourist' ? '#ffe08a' : queued.shipType === 'trader' ? '#8fe1ff' : '#ffc07d';
     ctx.fillStyle = 'rgba(6, 16, 28, 0.75)';
     ctx.fillRect(cx - dims.w * 0.5 - 2, cy - dims.h * 0.5 - 2, dims.w + 4, dims.h + 4);
     ctx.fillStyle = color;
@@ -352,23 +411,8 @@ export function renderWorld(
   ctx.fillStyle = '#061018';
   ctx.fillRect(0, 0, widthPx, heightPx);
 
-  const staffByTile = new Map<number, number>();
-  for (const crew of state.crewMembers) {
-    if (crew.resting) continue;
-    if (crew.targetTile === null) continue;
-    if (crew.tileIndex !== crew.targetTile) continue;
-    staffByTile.set(crew.tileIndex, (staffByTile.get(crew.tileIndex) ?? 0) + 1);
-  }
-  const activeRoomTiles = buildActiveRoomTileSet(state, staffByTile);
-  const serviceNodeTiles = state.controls.showServiceNodes
-    ? [
-        ...collectServiceNodeTiles(state, RoomType.Dorm),
-        ...collectServiceNodeTiles(state, RoomType.Cafeteria),
-        ...collectServiceNodeTiles(state, RoomType.Kitchen),
-        ...collectServiceNodeTiles(state, RoomType.Hydroponics),
-        ...collectServiceNodeTiles(state, RoomType.Security)
-      ]
-    : [];
+  const activeRoomTiles = buildActiveRoomTileSet(state);
+  const serviceNodeTiles = state.controls.showServiceNodes ? collectServiceNodeTiles(state) : [];
   const queueNodeTiles = state.controls.showServiceNodes ? collectCafeteriaQueueNodeTiles(state) : [];
   const jobPickupTiles = state.controls.showServiceNodes
     ? state.jobs
@@ -380,6 +424,9 @@ export function renderWorld(
         .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
         .map((j) => j.toTile)
     : [];
+  const moduleInventoryVisualMap: Map<number, ModuleInventoryVisual> = state.controls.showInventoryOverlay
+    ? buildModuleInventoryVisualMap(state)
+    : new Map<number, ModuleInventoryVisual>();
   const bodyCountByTile = new Map<number, number>();
   for (const tile of state.bodyTiles) {
     bodyCountByTile.set(tile, (bodyCountByTile.get(tile) ?? 0) + 1);
@@ -426,19 +473,6 @@ export function renderWorld(
     if (i === state.core.serviceTile) {
       ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
       ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
-    }
-
-    const moduleType = state.modules[i];
-    if (moduleType !== ModuleType.None) {
-      ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
-      ctx.fillRect(px + 4, py + 4, TILE_SIZE - 8, TILE_SIZE - 8);
-      ctx.strokeStyle = 'rgba(214, 228, 245, 0.7)';
-      ctx.strokeRect(px + 4.5, py + 4.5, TILE_SIZE - 9, TILE_SIZE - 9);
-      ctx.fillStyle = '#e5f0ff';
-      ctx.font = 'bold 9px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(moduleLetter[moduleType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
     }
 
     if (state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall && !state.pressurized[i]) {
@@ -493,6 +527,71 @@ export function renderWorld(
     ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
   }
 
+  for (const module of state.moduleInstances) {
+    const origin = fromIndex(module.originTile, state.width);
+    const px = origin.x * TILE_SIZE;
+    const py = origin.y * TILE_SIZE;
+    const w = module.width * TILE_SIZE;
+    const h = module.height * TILE_SIZE;
+    const inventory = moduleInventoryVisualMap.get(module.originTile);
+    ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
+    ctx.fillRect(px + 3, py + 3, w - 6, h - 6);
+    if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
+      const innerX = px + 3;
+      const innerY = py + 3;
+      const innerW = w - 6;
+      const innerH = h - 6;
+      const fillHeight = Math.round(innerH * inventory.fillPct);
+      if (fillHeight > 0) {
+        const color = itemFillColor[inventory.dominantItem ?? 'none'];
+        ctx.fillStyle = color;
+        ctx.fillRect(innerX, innerY + (innerH - fillHeight), innerW, fillHeight);
+      }
+      if (inventory.mixed && inventory.used > 0.01) {
+        ctx.fillStyle = 'rgba(230, 240, 255, 0.95)';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.fillText('+', px + w - 4, py + 4);
+      }
+    }
+    ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
+    ctx.strokeRect(px + 3.5, py + 3.5, w - 7, h - 7);
+    ctx.fillStyle = '#e5f0ff';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      moduleLetter[module.type] ?? '?',
+      px + w * 0.5,
+      py + h * 0.5
+    );
+    if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
+      const usedLabel = `${Math.round(inventory.used)}/${Math.round(inventory.capacity)}`;
+      const itemCode = inventory.dominantItem ? itemShortCode[inventory.dominantItem] : '';
+      if (module.width === 1 && module.height === 1) {
+        if (itemCode) {
+          ctx.fillStyle = 'rgba(8, 12, 18, 0.8)';
+          ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, 8);
+          ctx.fillStyle = '#e5f0ff';
+          ctx.font = 'bold 7px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(itemCode, px + TILE_SIZE * 0.5, py + 3);
+        }
+      } else {
+        const text = itemCode ? `${usedLabel} ${itemCode}` : usedLabel;
+        ctx.fillStyle = 'rgba(8, 12, 18, 0.84)';
+        ctx.fillRect(px + 2, py + 2, Math.max(18, text.length * 4.8), 8);
+        ctx.fillStyle = '#dce8f9';
+        ctx.font = 'bold 7px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(text, px + 3, py + 3);
+      }
+    }
+  }
+
   if (hoveredTile !== null && hoveredTile >= 0 && hoveredTile < state.tiles.length) {
     const p = fromIndex(hoveredTile, state.width);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -514,6 +613,22 @@ export function renderWorld(
       const p = fromIndex(ti, state.width);
       ctx.fillStyle = preview.valid ? 'rgba(110,219,143,0.22)' : 'rgba(255,118,118,0.22)';
       ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    }
+  }
+
+  if (currentTool.kind === 'module' && hoveredTile !== null && currentTool.module) {
+    const preview = validateModulePreviewPlacement(
+      state,
+      currentTool.module,
+      hoveredTile,
+      state.controls.moduleRotation
+    );
+    for (const ti of preview.tiles) {
+      const p = fromIndex(ti, state.width);
+      ctx.fillStyle = preview.valid ? 'rgba(110,219,143,0.28)' : 'rgba(255,118,118,0.32)';
+      ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      ctx.strokeStyle = preview.valid ? 'rgba(110,219,143,0.95)' : 'rgba(255,118,118,0.95)';
+      ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
     }
   }
 
@@ -589,7 +704,7 @@ export function renderWorld(
         ? `Tool: Zone ${currentTool.zone}`
         : currentTool.kind === 'room'
           ? `Tool: Room ${currentTool.room}`
-          : `Tool: Module ${currentTool.module}`;
+          : `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`;
 
   ctx.fillStyle = '#d3deed';
   ctx.font = '12px monospace';

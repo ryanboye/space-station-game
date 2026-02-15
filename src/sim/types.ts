@@ -22,6 +22,7 @@ export enum RoomType {
   None = 'none',
   Cafeteria = 'cafeteria',
   Kitchen = 'kitchen',
+  Workshop = 'workshop',
   Reactor = 'reactor',
   Security = 'security',
   Dorm = 'dorm',
@@ -29,16 +30,58 @@ export enum RoomType {
   Hydroponics = 'hydroponics',
   LifeSupport = 'life-support',
   Lounge = 'lounge',
-  Market = 'market'
+  Market = 'market',
+  LogisticsStock = 'logistics-stock',
+  Storage = 'storage'
 }
 
 export enum ModuleType {
   None = 'none',
   Bed = 'bed',
   Table = 'table',
+  ServingStation = 'serving-station',
   Stove = 'stove',
-  GrowTray = 'grow-tray',
-  Terminal = 'terminal'
+  Workbench = 'workbench',
+  GrowStation = 'grow-station',
+  GrowTray = 'grow-station',
+  Terminal = 'terminal',
+  Couch = 'couch',
+  GameStation = 'game-station',
+  Shower = 'shower',
+  Sink = 'sink',
+  MarketStall = 'market-stall',
+  IntakePallet = 'intake-pallet',
+  StorageRack = 'storage-rack'
+}
+
+export type ModuleRotation = 0 | 90;
+
+export interface ModuleInstance {
+  id: number;
+  type: ModuleType;
+  originTile: number;
+  rotation: ModuleRotation;
+  width: number;
+  height: number;
+  tiles: number[];
+  legacyForced?: boolean;
+}
+
+export interface ModuleRequirement {
+  module: ModuleType;
+  count: number;
+}
+
+export interface RoomDefinition {
+  minTiles: number;
+  requiredModules: ModuleRequirement[];
+  requiredAnyOf: ModuleType[];
+  activationChecks: {
+    door: boolean;
+    path: boolean;
+    pressurization: boolean;
+  };
+  staffedPostMode: 'none' | 'required';
 }
 
 export type VisitorArchetype = 'diner' | 'shopper' | 'lounger' | 'rusher';
@@ -66,6 +109,8 @@ export interface Visitor {
   eatTimer: number;
   trespassed: boolean;
   servedMeal: boolean;
+  carryingMeal: boolean;
+  reservedServingTile: number | null;
   reservedTargetTile: number | null;
   blockedTicks: number;
   archetype: VisitorArchetype;
@@ -74,6 +119,8 @@ export interface Visitor {
   patienceMultiplier: number;
   primaryPreference: VisitorPreference;
   spawnedAt: number;
+  airExposureSec: number;
+  healthState: 'healthy' | 'distressed' | 'critical';
 }
 
 export enum ResidentState {
@@ -114,6 +161,7 @@ export type CrewPrioritySystem =
   | 'reactor'
   | 'hydroponics'
   | 'kitchen'
+  | 'workshop'
   | 'cafeteria'
   | 'market'
   | 'lounge'
@@ -174,9 +222,11 @@ export interface CrewMember {
   lastSystem: CrewPrioritySystem | null;
   assignedSystem: CrewPrioritySystem | null;
   retargetCountWindow: number;
+  airExposureSec: number;
+  healthState: 'healthy' | 'distressed' | 'critical';
 }
 
-export type ItemType = 'rawFood' | 'meal' | 'body';
+export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
 export type JobType = 'pickup' | 'deliver';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 
@@ -210,7 +260,7 @@ export interface PendingSpawn {
 }
 
 export type SpaceLane = 'north' | 'east' | 'south' | 'west';
-export type ShipType = 'tourist' | 'trader';
+export type ShipType = 'tourist' | 'trader' | 'industrial';
 
 export type ShipSize = 'small' | 'medium' | 'large';
 
@@ -305,6 +355,9 @@ export interface Metrics {
   rawFoodProdRate: number;
   mealPrepRate: number;
   kitchenMealProdRate: number;
+  workshopTradeGoodProdRate: number;
+  marketTradeGoodUseRate: number;
+  marketTradeGoodStock: number;
   mealUseRate: number;
   dockedShips: number;
   averageDockTime: number;
@@ -366,6 +419,8 @@ export interface Metrics {
   creditsGrossPerMin: number;
   creditsPayrollPerMin: number;
   creditsNetPerMin: number;
+  tradeGoodsSoldPerMin: number;
+  marketStockoutsPerMin: number;
   crewRetargetsPerMin: number;
   criticalStaffDropsPerMin: number;
   visitorServiceFailuresPerMin: number;
@@ -421,6 +476,7 @@ export interface Metrics {
     dockTimeout: number;
     trespass: number;
   };
+  shipsByTypePerMin: Record<ShipType, number>;
   topRoomWarnings: string[];
   criticalUnstaffedSec: {
     lifeSupport: number;
@@ -478,16 +534,28 @@ export interface RoomInspector {
   room: RoomType;
   active: boolean;
   clusterSize: number;
+  minTilesRequired: number;
+  minTilesMet: boolean;
   doorCount: number;
   pressurizedPct: number;
   staffCount: number;
   requiredStaff: number;
   hasServiceNode: boolean;
   serviceNodeCount: number;
+  moduleProgress: Array<{ module: ModuleType; have: number; need: number }>;
+  anyOfProgress: { modules: ModuleType[]; satisfied: boolean };
   hasPath: boolean;
   reasons: string[];
   warnings: string[];
   hints: string[];
+  inventory?: {
+    used: number;
+    capacity: number;
+    fillPct: number;
+    nodeCount: number;
+    byItem: Partial<Record<ItemType, number>>;
+  };
+  flowHints?: string[];
   cafeteriaLoad?: {
     tableNodes: number;
     queueNodes: number;
@@ -521,10 +589,16 @@ export interface RoomOps {
   hydroponicsActive: number;
   lifeSupportTotal: number;
   lifeSupportActive: number;
+  workshopTotal: number;
+  workshopActive: number;
   loungeTotal: number;
   loungeActive: number;
   marketTotal: number;
   marketActive: number;
+  logisticsStockTotal: number;
+  logisticsStockActive: number;
+  storageTotal: number;
+  storageActive: number;
 }
 
 export interface Effects {
@@ -540,8 +614,10 @@ export interface Controls {
   shipsPerCycle: number;
   showZones: boolean;
   showServiceNodes: boolean;
+  showInventoryOverlay: boolean;
   taxRate: number;
   dockPlacementFacing: SpaceLane;
+  moduleRotation: ModuleRotation;
   crewPriorityPreset: CrewPriorityPreset;
   crewPriorityWeights: CrewPriorityWeights;
 }
@@ -553,6 +629,8 @@ export interface StationState {
   zones: ZoneType[];
   rooms: RoomType[];
   modules: ModuleType[];
+  moduleInstances: ModuleInstance[];
+  moduleOccupancyByTile: Array<number | null>;
   core: CoreState;
   docks: DockEntity[];
   laneProfiles: Record<SpaceLane, LaneProfile>;
@@ -561,6 +639,7 @@ export interface StationState {
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
   itemNodes: ItemNode[];
+  legacyMaterialStock: number;
   visitors: Visitor[];
   residents: Resident[];
   crewMembers: CrewMember[];
@@ -578,6 +657,7 @@ export interface StationState {
   crewSpawnCounter: number;
   residentSpawnCounter: number;
   lastResidentSpawnAt: number;
+  moduleSpawnCounter: number;
   jobSpawnCounter: number;
   incidentHeat: number;
   lastPayrollAt: number;
@@ -601,8 +681,12 @@ export interface StationState {
     crewRetargets: number;
     visitorServiceFailures: number;
     creditsMarketGross: number;
+    creditsTradeGoodsGross: number;
     creditsMealPayoutGross: number;
     payrollPaid: number;
+    tradeGoodsSold: number;
+    marketStockouts: number;
+    shipsByType: Record<ShipType, number>;
     visitorLeisureEntries: {
       cafeteria: number;
       market: number;
