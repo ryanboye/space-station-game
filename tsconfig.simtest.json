@@ -10,5 +10,5 @@
     "outDir": ".tmp/sim-tests",
     "rootDir": "."
   },
-  "include": ["src/sim/**/*.ts", "tools/sim-tests.ts"]
+  "include": ["src/sim/**/*.ts", "tools/*.ts"]
 }

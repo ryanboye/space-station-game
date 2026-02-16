@@ -1271,6 +1271,7 @@ function refreshAgentModal(): boolean {
   agentVisitorDetailsEl.textContent = 'Visitor: n/a';
   agentResidentDetailsEl.textContent =
     `Resident: hunger ${inspector.hunger.toFixed(1)} | energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | ` +
+    `social ${inspector.social.toFixed(1)} | safety ${inspector.safety.toFixed(1)} | routine ${inspector.routinePhase} | ` +
     `stress ${inspector.stress.toFixed(1)} | agi ${inspector.agitation.toFixed(1)} | confront ${inspector.inConfrontation ? 'yes' : 'no'} | ` +
     `satisfaction ${inspector.satisfaction.toFixed(1)} | leave ${inspector.leaveIntent.toFixed(1)} | ` +
     `dominant ${inspector.dominantNeed} | home dock ${inspector.homeDockId ?? 'none'} | bed ${inspector.bedModuleId ?? 'none'}`;
@@ -2162,17 +2163,31 @@ clearBodiesBtn.addEventListener('click', () => {
 });
 
 let lastTime = performance.now();
+const UI_REFRESH_INTERVAL_MS = 125;
+const HOVER_DIAGNOSTIC_REFRESH_INTERVAL_MS = 250;
+let nextUiRefreshAt = 0;
+let nextHoverDiagnosticRefreshAt = 0;
+let lastHoverDiagnosticTile: number | null = null;
+let cachedHoverDiagnostic: ReturnType<typeof getRoomDiagnosticAt> = null;
 function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
   tick(state, dt);
+  const renderStart = performance.now();
   renderWorld(ctx, state, currentTool, hoveredTile);
+  state.metrics.renderMs = performance.now() - renderStart;
   toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
   toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
+
+  if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
+    cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
+    lastHoverDiagnosticTile = hoveredTile;
+    nextHoverDiagnosticRefreshAt = now + HOVER_DIAGNOSTIC_REFRESH_INTERVAL_MS;
+  }
 
   if (isPainting && paintStart && paintCurrent) {
     const minX = Math.min(paintStart.x, paintCurrent.x);
@@ -2189,6 +2204,10 @@ function frame(now: number): void {
     );
     ctx.setLineDash([]);
   }
+
+  const shouldRefreshUi = now >= nextUiRefreshAt;
+  if (shouldRefreshUi) {
+    nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
   visitorsEl.textContent = String(state.metrics.visitorsCount);
   moraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
@@ -2267,7 +2286,8 @@ function frame(now: number): void {
   incidentsEl.textContent =
     `${state.metrics.incidentsTotal} | open ${state.metrics.incidentsOpen} | resolved ${state.metrics.incidentsResolved} | ` +
     `failed ${state.metrics.incidentsFailed} | dispatch ${state.metrics.securityDispatches} | resp ${state.metrics.securityResponseAvgSec.toFixed(1)}s | ` +
-    `confront ${state.metrics.residentConfrontations}`;
+    `confront ${state.metrics.residentConfrontations} | defuse ${(state.metrics.immediateDefuseRate * 100).toFixed(0)}% | ` +
+    `extended ${(state.metrics.escalatedFightRate * 100).toFixed(0)}% | cover ${state.metrics.securityCoveragePct.toFixed(0)}%`;
   lifeSupportStatusEl.textContent = `Life support: active ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} (air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential)`;
   airTrendEl.textContent = `Air trend: ${state.metrics.airTrendPerSec >= 0 ? '+' : ''}${state.metrics.airTrendPerSec.toFixed(2)}/s`;
   airTrendEl.style.color = state.metrics.airTrendPerSec >= 0 ? '#6edb8f' : '#ff7676';
@@ -2291,7 +2311,8 @@ function frame(now: number): void {
     `resident ships ${state.metrics.residentShipsDocked}`;
   residentLoopSummaryEl.textContent =
     `Resident loop: convert ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ` +
-    `departures ${state.metrics.residentDepartures} | tax +${state.metrics.residentTaxPerMin.toFixed(1)}/min | sat ${state.metrics.residentSatisfactionAvg.toFixed(0)}`;
+    `departures ${state.metrics.residentDepartures} | tax +${state.metrics.residentTaxPerMin.toFixed(1)}/min | sat ${state.metrics.residentSatisfactionAvg.toFixed(0)} | ` +
+    `social ${state.metrics.residentSocialAvg.toFixed(0)} | safety ${state.metrics.residentSafetyAvg.toFixed(0)}`;
   const ratingTrend = state.metrics.stationRatingTrendPerMin;
   ratingInsightTrendEl.textContent = `Trend: ${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(2)}/min ${ratingTrend >= 0 ? '(stable/improving)' : '(declining)'}`;
   ratingInsightTrendEl.style.color = ratingTrend >= 0 ? '#6edb8f' : '#ff7676';
@@ -2384,7 +2405,7 @@ function frame(now: number): void {
     dockPreviewEl.style.color = '#8ea2bd';
   }
 
-  const diagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
+  const diagnostic = cachedHoverDiagnostic;
   if (diagnostic) {
     if (diagnostic.active) {
       const warningSuffix = diagnostic.warnings.length > 0 ? ` | warning: ${diagnostic.warnings.join(', ')}` : '';
@@ -2398,6 +2419,7 @@ function frame(now: number): void {
   } else {
     roomDiagnosticEl.textContent = 'Inspect room: hover a room tile';
     roomDiagnosticEl.style.color = '#8ea2bd';
+  }
   }
 
   requestAnimationFrame(frame);

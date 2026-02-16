@@ -3,6 +3,9 @@ import {
   RoomType,
   TILE_SIZE,
   TileType,
+  type ShipSize,
+  type ShipType,
+  type SpaceLane,
   VisitorState,
   ZoneType,
   inBounds,
@@ -14,9 +17,10 @@ import {
 } from '../sim/types';
 import { MODULE_DEFINITIONS, normalizeModuleType } from '../sim/balance';
 import {
+  collectActiveRoomTiles,
   collectQueueTargets,
   collectServiceNodeReachability,
-  getRoomDiagnosticAt,
+  getDockByTile,
   validateDockPlacement
 } from '../sim/sim';
 
@@ -100,6 +104,426 @@ const itemShortCode: Record<ItemType, string> = {
   body: 'BD'
 };
 const RESIDENT_MARK_COLOR = '#35d98a';
+const SHIP_TRANSIT_VISUAL_SEC = 2;
+const SERVICE_OVERLAY_CACHE_TTL_SEC = 0.2;
+
+type CachedLayer = {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  key: string;
+};
+
+type ServiceOverlayCache = {
+  key: string;
+  builtAt: number;
+  nodeTiles: Set<number>;
+  unreachableNodeTiles: Set<number>;
+  queueNodeTiles: Set<number>;
+  jobPickupTiles: Set<number>;
+  jobDropTiles: Set<number>;
+  reachability: { nodeTiles: number[]; unreachableNodeTiles: number[] } | null;
+};
+
+let staticLayerCache: CachedLayer | null = null;
+const serviceOverlayCache: ServiceOverlayCache = {
+  key: '',
+  builtAt: 0,
+  nodeTiles: new Set(),
+  unreachableNodeTiles: new Set(),
+  queueNodeTiles: new Set(),
+  jobPickupTiles: new Set(),
+  jobDropTiles: new Set(),
+  reachability: null
+};
+
+type ShipCell = { x: number; y: number };
+type ShipSilhouette = {
+  hull: ShipCell[];
+  cockpit: ShipCell;
+  engines: ShipCell[];
+};
+type ShipCellBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+};
+type ShipSilhouetteResolved = {
+  hull: ShipCell[];
+  cockpit: ShipCell;
+  engines: ShipCell[];
+  bounds: ShipCellBounds;
+};
+type ShipPalette = {
+  hull: string;
+  cockpit: string;
+  engine: string;
+};
+
+const SHIP_SILHOUETTES: Record<ShipSize, ShipSilhouette[]> = {
+  small: [
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 }
+      ],
+      cockpit: { x: 1, y: 0 },
+      engines: [{ x: 0, y: 0 }]
+    },
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 0, y: 1 }
+      ],
+      cockpit: { x: 1, y: 0 },
+      engines: [{ x: 0, y: 1 }]
+    },
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 0, y: -1 }
+      ],
+      cockpit: { x: 1, y: 0 },
+      engines: [{ x: 0, y: -1 }]
+    }
+  ],
+  medium: [
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 }
+      ],
+      cockpit: { x: 2, y: 0 },
+      engines: [{ x: 0, y: 0 }, { x: 0, y: 1 }]
+    },
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 1, y: -1 }
+      ],
+      cockpit: { x: 2, y: 0 },
+      engines: [{ x: 0, y: 0 }, { x: 0, y: 1 }]
+    },
+    {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 1, y: 2 }
+      ],
+      cockpit: { x: 2, y: 1 },
+      engines: [{ x: 0, y: 0 }, { x: 0, y: 1 }]
+    }
+  ],
+  large: [
+    {
+      hull: [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 3, y: 1 },
+        { x: 4, y: 1 },
+        { x: 5, y: 1 },
+        { x: 6, y: 1 },
+        { x: 0, y: 2 },
+        { x: 1, y: 2 },
+        { x: 2, y: 2 },
+        { x: 3, y: 2 },
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+        { x: 6, y: 2 },
+        { x: 1, y: 3 },
+        { x: 2, y: 3 },
+        { x: 3, y: 3 },
+        { x: 4, y: 3 },
+        { x: 5, y: 3 },
+        { x: 6, y: 3 },
+        { x: 3, y: 0 },
+        { x: 3, y: 4 }
+      ],
+      cockpit: { x: 6, y: 2 },
+      engines: [{ x: 0, y: 2 }, { x: 1, y: 2 }]
+    },
+    {
+      hull: [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 3, y: 1 },
+        { x: 4, y: 1 },
+        { x: 5, y: 1 },
+        { x: 6, y: 1 },
+        { x: 0, y: 1 },
+        { x: 0, y: 2 },
+        { x: 1, y: 2 },
+        { x: 2, y: 2 },
+        { x: 3, y: 2 },
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+        { x: 6, y: 2 },
+        { x: 1, y: 3 },
+        { x: 2, y: 3 },
+        { x: 3, y: 3 },
+        { x: 4, y: 3 },
+        { x: 5, y: 3 },
+        { x: 6, y: 3 },
+        { x: 4, y: 0 },
+        { x: 3, y: 4 }
+      ],
+      cockpit: { x: 6, y: 2 },
+      engines: [{ x: 0, y: 1 }, { x: 0, y: 2 }]
+    },
+    {
+      hull: [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 3, y: 1 },
+        { x: 4, y: 1 },
+        { x: 5, y: 1 },
+        { x: 6, y: 1 },
+        { x: 0, y: 2 },
+        { x: 1, y: 2 },
+        { x: 2, y: 2 },
+        { x: 3, y: 2 },
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+        { x: 6, y: 2 },
+        { x: 0, y: 3 },
+        { x: 1, y: 3 },
+        { x: 2, y: 3 },
+        { x: 3, y: 3 },
+        { x: 4, y: 3 },
+        { x: 5, y: 3 },
+        { x: 6, y: 3 },
+        { x: 3, y: 0 },
+        { x: 4, y: 4 }
+      ],
+      cockpit: { x: 6, y: 2 },
+      engines: [{ x: 0, y: 2 }, { x: 0, y: 3 }]
+    }
+  ]
+};
+
+function laneRotation(lane: SpaceLane): 0 | 90 | 180 | 270 {
+  if (lane === 'east') return 0;
+  if (lane === 'south') return 90;
+  if (lane === 'west') return 180;
+  return 270;
+}
+
+function rotateCell(cell: ShipCell, rotation: 0 | 90 | 180 | 270): ShipCell {
+  if (rotation === 0) return { x: cell.x, y: cell.y };
+  if (rotation === 90) return { x: cell.y, y: -cell.x };
+  if (rotation === 180) return { x: -cell.x, y: -cell.y };
+  return { x: -cell.y, y: cell.x };
+}
+
+function uniqueShipCells(cells: ShipCell[]): ShipCell[] {
+  const out: ShipCell[] = [];
+  const seen = new Set<string>();
+  for (const cell of cells) {
+    const key = `${cell.x},${cell.y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cell);
+  }
+  return out;
+}
+
+function computeShipCellBounds(cells: ShipCell[]): ShipCellBounds | null {
+  if (cells.length <= 0) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const cell of cells) {
+    if (cell.x < minX) minX = cell.x;
+    if (cell.y < minY) minY = cell.y;
+    if (cell.x > maxX) maxX = cell.x;
+    if (cell.y > maxY) maxY = cell.y;
+  }
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1
+  };
+}
+
+function hashShipVariant(shipId: number, shipType: ShipType, size: ShipSize): number {
+  const seed = `${shipId}|${shipType}|${size}`;
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function pickShipVariant(shipId: number, shipType: ShipType, size: ShipSize): ShipSilhouette {
+  const variants = SHIP_SILHOUETTES[size];
+  return variants[hashShipVariant(shipId, shipType, size) % variants.length];
+}
+
+function fallbackSilhouette(size: ShipSize): ShipSilhouette {
+  if (size === 'small') {
+    return {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 }
+      ],
+      cockpit: { x: 1, y: 0 },
+      engines: [{ x: 0, y: 0 }]
+    };
+  }
+  if (size === 'medium') {
+    return {
+      hull: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 }
+      ],
+      cockpit: { x: 2, y: 0 },
+      engines: [{ x: 0, y: 0 }, { x: 0, y: 1 }]
+    };
+  }
+  return {
+    hull: [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 2, y: 0 },
+      { x: 3, y: 0 },
+      { x: 4, y: 0 },
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+      { x: 3, y: 1 },
+      { x: 4, y: 1 },
+      { x: 0, y: 2 },
+      { x: 1, y: 2 },
+      { x: 2, y: 2 },
+      { x: 3, y: 2 },
+      { x: 4, y: 2 }
+    ],
+    cockpit: { x: 4, y: 1 },
+    engines: [{ x: 0, y: 1 }]
+  };
+}
+
+function transformSilhouette(
+  silhouette: ShipSilhouette,
+  rotation: 0 | 90 | 180 | 270
+): ShipSilhouetteResolved | null {
+  const rotatedHull = uniqueShipCells(silhouette.hull.map((cell) => rotateCell(cell, rotation)));
+  const rotatedCockpit = rotateCell(silhouette.cockpit, rotation);
+  const rotatedEngines = uniqueShipCells(silhouette.engines.map((cell) => rotateCell(cell, rotation)));
+  const allCells = [...rotatedHull, rotatedCockpit, ...rotatedEngines];
+  const allBounds = computeShipCellBounds(allCells);
+  if (!allBounds) return null;
+  const normalize = (cell: ShipCell): ShipCell => ({ x: cell.x - allBounds.minX, y: cell.y - allBounds.minY });
+  const hull = uniqueShipCells(rotatedHull.map(normalize));
+  const cockpit = normalize(rotatedCockpit);
+  const engines = uniqueShipCells(rotatedEngines.map(normalize));
+  const bounds = computeShipCellBounds(hull);
+  if (!bounds) return null;
+  return { hull, cockpit, engines, bounds };
+}
+
+function resolveShipSilhouette(
+  shipId: number,
+  shipType: ShipType,
+  size: ShipSize,
+  lane: SpaceLane
+): ShipSilhouetteResolved {
+  const rotation = laneRotation(lane);
+  const variant = pickShipVariant(shipId, shipType, size);
+  const resolved = transformSilhouette(variant, rotation);
+  if (resolved) return resolved;
+  const fallback = transformSilhouette(fallbackSilhouette(size), rotation);
+  if (fallback) return fallback;
+  return {
+    hull: [{ x: 0, y: 0 }],
+    cockpit: { x: 0, y: 0 },
+    engines: [{ x: 0, y: 0 }],
+    bounds: {
+      minX: 0,
+      minY: 0,
+      maxX: 0,
+      maxY: 0,
+      width: 1,
+      height: 1
+    }
+  };
+}
+
+function shipPalette(shipType: ShipType, docked: boolean): ShipPalette {
+  if (shipType === 'trader') {
+    return docked
+      ? { hull: '#6ecfff', cockpit: '#dff6ff', engine: '#99e6ff' }
+      : { hull: '#a6e4ff', cockpit: '#ebf9ff', engine: '#c3f0ff' };
+  }
+  if (shipType === 'industrial') {
+    return docked
+      ? { hull: '#ffb482', cockpit: '#ffe7c8', engine: '#ffc997' }
+      : { hull: '#ffd2ad', cockpit: '#fff0df', engine: '#ffe2c3' };
+  }
+  return docked
+    ? { hull: '#ffd447', cockpit: '#fff3b8', engine: '#ffe57f' }
+    : { hull: '#ffea8a', cockpit: '#fff7cd', engine: '#fff1ad' };
+}
+
+function drawShipSilhouetteCells(
+  ctx: CanvasRenderingContext2D,
+  silhouette: ShipSilhouetteResolved,
+  originPxX: number,
+  originPxY: number,
+  cellSize: number,
+  palette: ShipPalette,
+  cellInset: number
+): void {
+  for (const cell of silhouette.hull) {
+    const px = originPxX + cell.x * cellSize + cellInset;
+    const py = originPxY + cell.y * cellSize + cellInset;
+    const bodySize = Math.max(1, cellSize - cellInset * 2);
+    ctx.fillStyle = palette.hull;
+    ctx.fillRect(px, py, bodySize, bodySize);
+  }
+
+  const cockpitSize = Math.max(1, cellSize * 0.38);
+  {
+    const px = originPxX + silhouette.cockpit.x * cellSize + (cellSize - cockpitSize) * 0.5;
+    const py = originPxY + silhouette.cockpit.y * cellSize + (cellSize - cockpitSize) * 0.5;
+    ctx.fillStyle = palette.cockpit;
+    ctx.fillRect(px, py, cockpitSize, cockpitSize);
+  }
+
+  const engineSize = Math.max(1, cellSize * 0.3);
+  for (const engine of silhouette.engines) {
+    const px = originPxX + engine.x * cellSize + (cellSize - engineSize) * 0.5;
+    const py = originPxY + engine.y * cellSize + (cellSize - engineSize) * 0.5;
+    ctx.fillStyle = palette.engine;
+    ctx.fillRect(px, py, engineSize, engineSize);
+  }
+}
 
 type ModuleInventoryVisual = {
   used: number;
@@ -144,77 +568,137 @@ function buildModuleInventoryVisualMap(state: StationState): Map<number, ModuleI
   return out;
 }
 
-function clusterTiles(state: StationState, room: RoomType): number[][] {
-  const roomTiles: number[] = [];
-  for (let i = 0; i < state.rooms.length; i++) {
-    if (state.rooms[i] === room && state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall) {
-      roomTiles.push(i);
-    }
-  }
-  const remaining = new Set(roomTiles);
-  const clusters: number[][] = [];
-  while (remaining.size > 0) {
-    const seed = remaining.values().next().value as number;
-    remaining.delete(seed);
-    const queue = [seed];
-    const cluster = [seed];
-    for (let qi = 0; qi < queue.length; qi++) {
-      const idx = queue[qi];
-      const p = fromIndex(idx, state.width);
-      const deltas = [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1]
-      ];
-      for (const [dx, dy] of deltas) {
-        const nx = p.x + dx;
-        const ny = p.y + dy;
-        if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
-        const ni = ny * state.width + nx;
-        if (!remaining.has(ni)) continue;
-        remaining.delete(ni);
-        queue.push(ni);
-        cluster.push(ni);
-      }
-    }
-    clusters.push(cluster);
-  }
-  return clusters;
-}
-
-const ROOM_TYPES_WITH_DIAGNOSTICS: RoomType[] = [
-  RoomType.Cafeteria,
-  RoomType.Kitchen,
-  RoomType.Workshop,
-  RoomType.Reactor,
-  RoomType.Security,
-  RoomType.Dorm,
-  RoomType.Hygiene,
-  RoomType.Hydroponics,
-  RoomType.LifeSupport,
-  RoomType.Lounge,
-  RoomType.Market,
-  RoomType.LogisticsStock,
-  RoomType.Storage
-];
-
-function buildActiveRoomTileSet(state: StationState): Set<number> {
-  const active = new Set<number>();
-  for (const room of ROOM_TYPES_WITH_DIAGNOSTICS) {
-    for (const cluster of clusterTiles(state, room)) {
-      if (cluster.length <= 0) continue;
-      const diag = getRoomDiagnosticAt(state, cluster[0]);
-      if (diag?.active) {
-        for (const t of cluster) active.add(t);
-      }
-    }
-  }
-  return active;
-}
-
 function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
   return collectQueueTargets(state, RoomType.Cafeteria);
+}
+
+function ensureStaticLayer(state: StationState, widthPx: number, heightPx: number): CachedLayer {
+  if (!staticLayerCache || staticLayerCache.canvas.width !== widthPx || staticLayerCache.canvas.height !== heightPx) {
+    const canvas = document.createElement('canvas');
+    canvas.width = widthPx;
+    canvas.height = heightPx;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to create static render layer');
+    staticLayerCache = { canvas, ctx, key: '' };
+  }
+  const layer = staticLayerCache;
+  const key = [
+    state.width,
+    state.height,
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.controls.showZones ? 1 : 0
+  ].join('|');
+  if (layer.key === key) return layer;
+  layer.key = key;
+  const ctx = layer.ctx;
+  ctx.clearRect(0, 0, widthPx, heightPx);
+  for (let i = 0; i < state.tiles.length; i++) {
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    ctx.fillStyle = tileColor[state.tiles[i]];
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    if (state.controls.showZones && state.tiles[i] !== TileType.Space) {
+      if (state.zones[i] === ZoneType.Restricted) {
+        ctx.fillStyle = 'rgba(255, 90, 90, 0.25)';
+      } else {
+        ctx.fillStyle = 'rgba(90, 170, 255, 0.08)';
+      }
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    }
+    const roomType = state.rooms[i];
+    if (roomType !== RoomType.None) {
+      ctx.fillStyle = roomOverlay[roomType];
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
+    }
+    if (i === state.core.serviceTile) {
+      ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
+      ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+    }
+    if (state.tiles[i] === TileType.Dock) {
+      const dock = getDockByTile(state, i);
+      if (dock) {
+        ctx.fillStyle = 'rgba(8, 16, 28, 0.8)';
+        ctx.fillRect(px + 1, py + 1, 7, 7);
+        ctx.fillStyle = '#d6deeb';
+        ctx.font = 'bold 7px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const label = dock.facing === 'north' ? 'N' : dock.facing === 'east' ? 'E' : dock.facing === 'south' ? 'S' : 'W';
+        ctx.fillText(label, px + 4.5, py + 4.5);
+      }
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
+  }
+  for (const module of state.moduleInstances) {
+    const origin = fromIndex(module.originTile, state.width);
+    const px = origin.x * TILE_SIZE;
+    const py = origin.y * TILE_SIZE;
+    const w = module.width * TILE_SIZE;
+    const h = module.height * TILE_SIZE;
+    ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
+    ctx.fillRect(px + 3, py + 3, w - 6, h - 6);
+    ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
+    ctx.strokeRect(px + 3.5, py + 3.5, w - 7, h - 7);
+    ctx.fillStyle = '#e5f0ff';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
+  }
+  return layer;
+}
+
+function readServiceOverlay(state: StationState): ServiceOverlayCache {
+  if (!state.controls.showServiceNodes) {
+    serviceOverlayCache.key = '';
+    serviceOverlayCache.nodeTiles.clear();
+    serviceOverlayCache.unreachableNodeTiles.clear();
+    serviceOverlayCache.queueNodeTiles.clear();
+    serviceOverlayCache.jobPickupTiles.clear();
+    serviceOverlayCache.jobDropTiles.clear();
+    serviceOverlayCache.reachability = null;
+    return serviceOverlayCache;
+  }
+  const cacheTime = nowSec();
+  const key = [
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.dockVersion,
+    state.jobSpawnCounter,
+    state.metrics.pendingJobs,
+    state.metrics.assignedJobs
+  ].join('|');
+  if (serviceOverlayCache.key === key && cacheTime - serviceOverlayCache.builtAt <= SERVICE_OVERLAY_CACHE_TTL_SEC) {
+    return serviceOverlayCache;
+  }
+  const reachability = collectServiceNodeReachability(state);
+  serviceOverlayCache.key = key;
+  serviceOverlayCache.builtAt = cacheTime;
+  serviceOverlayCache.reachability = reachability;
+  serviceOverlayCache.nodeTiles = new Set(reachability.nodeTiles);
+  serviceOverlayCache.unreachableNodeTiles = new Set(reachability.unreachableNodeTiles);
+  serviceOverlayCache.queueNodeTiles = new Set(collectCafeteriaQueueNodeTiles(state));
+  serviceOverlayCache.jobPickupTiles = new Set(
+    state.jobs
+      .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
+      .map((j) => j.fromTile)
+  );
+  serviceOverlayCache.jobDropTiles = new Set(
+    state.jobs
+      .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
+      .map((j) => j.toTile)
+  );
+  return serviceOverlayCache;
 }
 
 function previewFootprint(module: ModuleType, rotation: 0 | 90): { width: number; height: number } {
@@ -274,6 +758,10 @@ function agentOffset(id: number): { x: number; y: number } {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function nowSec(): number {
+  return (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 }
 
 function mixChannel(a: number, b: number, t: number): number {
@@ -371,8 +859,10 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState): vo
   const laneStep = 16;
   for (const queued of state.dockQueue) {
     const idx = countsByLane[queued.lane]++;
-    const dims =
-      queued.size === 'small' ? { w: 8, h: 8 } : queued.size === 'medium' ? { w: 11, h: 9 } : { w: 14, h: 11 };
+    const silhouette = resolveShipSilhouette(queued.shipId, queued.shipType, queued.size, queued.lane);
+    const cellSize = queued.size === 'small' ? 4 : queued.size === 'medium' ? 3.5 : 2;
+    const chipW = silhouette.bounds.width * cellSize;
+    const chipH = silhouette.bounds.height * cellSize;
     let cx = 0;
     let cy = 0;
     if (queued.lane === 'north') {
@@ -388,12 +878,10 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState): vo
       cx = state.width * TILE_SIZE - 22;
       cy = state.height * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
     }
-    const color =
-      queued.shipType === 'tourist' ? '#ffe08a' : queued.shipType === 'trader' ? '#8fe1ff' : '#ffc07d';
+    const palette = shipPalette(queued.shipType, false);
     ctx.fillStyle = 'rgba(6, 16, 28, 0.75)';
-    ctx.fillRect(cx - dims.w * 0.5 - 2, cy - dims.h * 0.5 - 2, dims.w + 4, dims.h + 4);
-    ctx.fillStyle = color;
-    ctx.fillRect(cx - dims.w * 0.5, cy - dims.h * 0.5, dims.w, dims.h);
+    ctx.fillRect(cx - chipW * 0.5 - 2, cy - chipH * 0.5 - 2, chipW + 4, chipH + 4);
+    drawShipSilhouetteCells(ctx, silhouette, cx - chipW * 0.5, cy - chipH * 0.5, cellSize, palette, 0.4);
   }
 }
 
@@ -408,26 +896,17 @@ export function renderWorld(
 
   ctx.fillStyle = '#061018';
   ctx.fillRect(0, 0, widthPx, heightPx);
+  const staticLayer = ensureStaticLayer(state, widthPx, heightPx);
+  ctx.drawImage(staticLayer.canvas, 0, 0);
 
-  const activeRoomTiles = buildActiveRoomTileSet(state);
-  const serviceNodeReachability = state.controls.showServiceNodes ? collectServiceNodeReachability(state) : null;
-  const serviceNodeTiles = new Set<number>(serviceNodeReachability?.nodeTiles ?? []);
-  const unreachableServiceNodeTiles = new Set<number>(serviceNodeReachability?.unreachableNodeTiles ?? []);
-  const queueNodeTiles = new Set<number>(state.controls.showServiceNodes ? collectCafeteriaQueueNodeTiles(state) : []);
-  const jobPickupTiles = new Set<number>(
-    state.controls.showServiceNodes
-      ? state.jobs
-          .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
-          .map((j) => j.fromTile)
-      : []
-  );
-  const jobDropTiles = new Set<number>(
-    state.controls.showServiceNodes
-      ? state.jobs
-          .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
-          .map((j) => j.toTile)
-      : []
-  );
+  const activeRoomTiles = collectActiveRoomTiles(state);
+  const serviceOverlay = readServiceOverlay(state);
+  const serviceNodeReachability = serviceOverlay.reachability;
+  const serviceNodeTiles = serviceOverlay.nodeTiles;
+  const unreachableServiceNodeTiles = serviceOverlay.unreachableNodeTiles;
+  const queueNodeTiles = serviceOverlay.queueNodeTiles;
+  const jobPickupTiles = serviceOverlay.jobPickupTiles;
+  const jobDropTiles = serviceOverlay.jobDropTiles;
   const moduleInventoryVisualMap: Map<number, ModuleInventoryVisual> = state.controls.showInventoryOverlay
     ? buildModuleInventoryVisualMap(state)
     : new Map<number, ModuleInventoryVisual>();
@@ -440,43 +919,16 @@ export function renderWorld(
     const { x, y } = fromIndex(i, state.width);
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
-
-    ctx.fillStyle = tileColor[state.tiles[i]];
-    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    const roomType = state.rooms[i];
+    if (roomType !== RoomType.None && !activeRoomTiles.has(i)) {
+      ctx.fillStyle = 'rgba(8, 14, 22, 0.45)';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    }
 
     const blockedUntil = state.effects.blockedUntilByTile.get(i) ?? 0;
     if (state.now < blockedUntil) {
       ctx.fillStyle = 'rgba(255,120,120,0.55)';
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-    }
-
-    if (state.controls.showZones && state.tiles[i] !== TileType.Space) {
-      if (state.zones[i] === ZoneType.Restricted) {
-        ctx.fillStyle = 'rgba(255, 90, 90, 0.25)';
-      } else {
-        ctx.fillStyle = 'rgba(90, 170, 255, 0.08)';
-      }
-      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-    }
-
-    const roomType = state.rooms[i];
-    if (roomType !== RoomType.None) {
-      const operational = activeRoomTiles.has(i);
-      const alpha = operational ? 1 : 0.35;
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = roomOverlay[roomType];
-      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
-    }
-
-    if (i === state.core.serviceTile) {
-      ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
-      ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
     }
 
     if (state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall && !state.pressurized[i]) {
@@ -517,23 +969,6 @@ export function renderWorld(
         ctx.fillText(String(bodiesHere), px + TILE_SIZE - 2, py + TILE_SIZE - 8);
       }
     }
-
-    if (state.tiles[i] === TileType.Dock) {
-      const dock = state.docks.find((d) => d.tiles.includes(i)) ?? null;
-      if (dock) {
-        ctx.fillStyle = 'rgba(8, 16, 28, 0.8)';
-        ctx.fillRect(px + 1, py + 1, 7, 7);
-        ctx.fillStyle = '#d6deeb';
-        ctx.font = 'bold 7px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const label = dock.facing === 'north' ? 'N' : dock.facing === 'east' ? 'E' : dock.facing === 'south' ? 'S' : 'W';
-        ctx.fillText(label, px + 4.5, py + 4.5);
-      }
-    }
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
   }
 
   for (const module of state.moduleInstances) {
@@ -543,8 +978,6 @@ export function renderWorld(
     const w = module.width * TILE_SIZE;
     const h = module.height * TILE_SIZE;
     const inventory = moduleInventoryVisualMap.get(module.originTile);
-    ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
-    ctx.fillRect(px + 3, py + 3, w - 6, h - 6);
     if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
       const innerX = px + 3;
       const innerY = py + 3;
@@ -564,17 +997,6 @@ export function renderWorld(
         ctx.fillText('+', px + w - 4, py + 4);
       }
     }
-    ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
-    ctx.strokeRect(px + 3.5, py + 3.5, w - 7, h - 7);
-    ctx.fillStyle = '#e5f0ff';
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      moduleLetter[module.type] ?? '?',
-      px + w * 0.5,
-      py + h * 0.5
-    );
     if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
       const usedLabel = `${Math.round(inventory.used)}/${Math.round(inventory.capacity)}`;
       const itemCode = inventory.dominantItem ? itemShortCode[inventory.dominantItem] : '';
@@ -681,32 +1103,25 @@ export function renderWorld(
   }
 
   for (const ship of state.arrivingShips) {
-    const dims =
-      ship.size === 'small' ? { w: 2, h: 2 } : ship.size === 'medium' ? { w: 3, h: 2 } : { w: 4, h: 3 };
-    const dockX = ship.bayCenterX - dims.w * 0.5;
-    const dockY = ship.bayCenterY - dims.h * 0.5;
+    const silhouette = resolveShipSilhouette(ship.id, ship.shipType, ship.size, ship.lane);
+    const dockX = ship.bayCenterX - silhouette.bounds.width * 0.5;
+    const dockY = ship.bayCenterY - silhouette.bounds.height * 0.5;
 
     let posX = dockX;
     let posY = dockY;
     if (ship.stage === 'approach' || ship.stage === 'depart') {
-      const t = Math.min(1, ship.stageTime / 2);
+      const t = Math.min(1, ship.stageTime / SHIP_TRANSIT_VISUAL_SEC);
       const lane = ship.lane;
       const off = ship.stage === 'approach' ? 1 - t : t;
-      if (lane === 'north') posY = dockY - off * (dims.h + 1.5);
-      if (lane === 'south') posY = dockY + off * (dims.h + 1.5);
-      if (lane === 'east') posX = dockX + off * (dims.w + 1.5);
-      if (lane === 'west') posX = dockX - off * (dims.w + 1.5);
+      const travelDepth =
+        (lane === 'north' || lane === 'south' ? silhouette.bounds.height : silhouette.bounds.width) + 1.5;
+      if (lane === 'north') posY = dockY - off * travelDepth;
+      if (lane === 'south') posY = dockY + off * travelDepth;
+      if (lane === 'east') posX = dockX + off * travelDepth;
+      if (lane === 'west') posX = dockX - off * travelDepth;
     }
-
-    for (let sy = 0; sy < dims.h; sy++) {
-      for (let sx = 0; sx < dims.w; sx++) {
-        if ((sx + sy) % 2 === 1 && ship.size !== 'large') continue;
-        const px = (posX + sx) * TILE_SIZE + 2;
-        const py = (posY + sy) * TILE_SIZE + 2;
-        ctx.fillStyle = ship.stage === 'docked' ? '#ffd447' : '#ffea8a';
-        ctx.fillRect(px, py, TILE_SIZE - 4, TILE_SIZE - 4);
-      }
-    }
+    const palette = shipPalette(ship.shipType, ship.stage === 'docked');
+    drawShipSilhouetteCells(ctx, silhouette, posX * TILE_SIZE, posY * TILE_SIZE, TILE_SIZE, palette, 2);
   }
 
   drawQueuedShips(ctx, state);

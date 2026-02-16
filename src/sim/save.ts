@@ -494,6 +494,8 @@ function clearTransientState(state: StationState): void {
   state.recentExitTimes.length = 0;
   state.clusterActivationState = new Map();
   state.effects.blockedUntilByTile = new Map();
+  state.effects.trespassCooldownUntilByTile = new Map();
+  state.effects.securityAuraByTile = new Map();
   state.effects.cafeteriaStallUntil = 0;
   state.effects.brownoutUntil = 0;
   state.effects.securityDelayUntil = 0;

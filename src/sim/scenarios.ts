@@ -18,8 +18,14 @@ export interface ScenarioResult {
       morale: number;
       stationRating: number;
     incidentsTotal: number;
+    securityCoveragePct: number;
+    incidentSuppressionAvg: number;
+    immediateDefuseRate: number;
+    escalatedFightRate: number;
     airQuality: number;
     residentsCount: number;
+    residentSocialAvg: number;
+    residentSafetyAvg: number;
     visitorsCount: number;
       credits: number;
     creditsGrossPerMin: number;
@@ -123,8 +129,14 @@ export interface ScenarioResult {
       morale: number;
       stationRating: number;
     incidentsTotal: number;
+    securityCoveragePct: number;
+    incidentSuppressionAvg: number;
+    immediateDefuseRate: number;
+    escalatedFightRate: number;
     airQuality: number;
     residentsCount: number;
+    residentSocialAvg: number;
+    residentSafetyAvg: number;
     visitorsCount: number;
       credits: number;
     creditsGrossPerMin: number;
@@ -330,8 +342,14 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       morale: state.metrics.morale,
       stationRating: state.metrics.stationRating,
       incidentsTotal: state.metrics.incidentsTotal,
+      securityCoveragePct: state.metrics.securityCoveragePct,
+      incidentSuppressionAvg: state.metrics.incidentSuppressionAvg,
+      immediateDefuseRate: state.metrics.immediateDefuseRate,
+      escalatedFightRate: state.metrics.escalatedFightRate,
       airQuality: state.metrics.airQuality,
       residentsCount: state.metrics.residentsCount,
+      residentSocialAvg: state.metrics.residentSocialAvg,
+      residentSafetyAvg: state.metrics.residentSafetyAvg,
       visitorsCount: state.metrics.visitorsCount,
       credits: state.metrics.credits,
       creditsGrossPerMin: state.metrics.creditsGrossPerMin,
@@ -407,8 +425,14 @@ export function runScenario(spec: ScenarioSpec): ScenarioResult {
       morale: state.metrics.morale,
       stationRating: state.metrics.stationRating,
       incidentsTotal: state.metrics.incidentsTotal,
+      securityCoveragePct: state.metrics.securityCoveragePct,
+      incidentSuppressionAvg: state.metrics.incidentSuppressionAvg,
+      immediateDefuseRate: state.metrics.immediateDefuseRate,
+      escalatedFightRate: state.metrics.escalatedFightRate,
       airQuality: state.metrics.airQuality,
       residentsCount: state.metrics.residentsCount,
+      residentSocialAvg: state.metrics.residentSocialAvg,
+      residentSafetyAvg: state.metrics.residentSafetyAvg,
       visitorsCount: state.metrics.visitorsCount,
       credits: state.metrics.credits,
       creditsGrossPerMin: state.metrics.creditsGrossPerMin,
@@ -1313,6 +1337,62 @@ export function buildInTransitVsNoStaffDiagnosticsScenario(): ScenarioSpec {
       state.metrics.airQuality = 20;
       setTile(state, toIndex(24, 14, state.width), TileType.Door);
       setTile(state, toIndex(24, 15, state.width), TileType.Wall);
+    }
+  };
+}
+
+function configureCentralizedSecurityLayout(state: StationState): void {
+  setRoom(state, toIndex(30, 13, state.width), RoomType.Security);
+  setModule(state, toIndex(30, 13, state.width), ModuleType.Terminal);
+  for (const tile of [toIndex(25, 18, state.width), toIndex(31, 18, state.width)]) {
+    setRoom(state, tile, RoomType.None);
+    setModule(state, tile, ModuleType.None);
+  }
+}
+
+function configureDistributedSecurityLayout(state: StationState): void {
+  setRoom(state, toIndex(30, 13, state.width), RoomType.Security);
+  setModule(state, toIndex(30, 13, state.width), ModuleType.Terminal);
+  setRoom(state, toIndex(25, 18, state.width), RoomType.Security);
+  setModule(state, toIndex(25, 18, state.width), ModuleType.Terminal);
+  setRoom(state, toIndex(31, 18, state.width), RoomType.Security);
+  setModule(state, toIndex(31, 18, state.width), ModuleType.Terminal);
+}
+
+export function buildSecurityDistributedVsCentralizedDistributedScenario(): ScenarioSpec {
+  return {
+    name: 'security-distributed-vs-centralized-distributed',
+    seed: 4101,
+    durationSec: 220,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      configureDistributedSecurityLayout(state);
+      state.controls.shipsPerCycle = 2;
+      state.crew.total = 24;
+      state.metrics.mealStock = 48;
+      state.metrics.rawFoodStock = 110;
+      state.metrics.kitchenRawBuffer = 30;
+    }
+  };
+}
+
+export function buildSecurityDistributedVsCentralizedCentralizedScenario(): ScenarioSpec {
+  return {
+    name: 'security-distributed-vs-centralized-centralized',
+    seed: 4101,
+    durationSec: 220,
+    stepSec: 0.25,
+    snapshotEverySec: 20,
+    setup: (state) => {
+      buildBaseStation(state);
+      configureCentralizedSecurityLayout(state);
+      state.controls.shipsPerCycle = 2;
+      state.crew.total = 24;
+      state.metrics.mealStock = 48;
+      state.metrics.rawFoodStock = 110;
+      state.metrics.kitchenRawBuffer = 30;
     }
   };
 }

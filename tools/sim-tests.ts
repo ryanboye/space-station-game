@@ -31,6 +31,7 @@ import {
   ResidentState,
   TileType,
   VisitorState,
+  ZoneType,
   fromIndex,
   toIndex,
   type ModuleRotation,
@@ -249,6 +250,49 @@ function spawnVisitor(state: StationState, x: number, y: number, id: number): vo
     healthState: 'healthy'
   };
   state.visitors.push(v);
+}
+
+function spawnResidentActor(
+  state: StationState,
+  x: number,
+  y: number,
+  id: number,
+  overrides: Partial<StationState['residents'][number]> = {}
+): void {
+  const tileIndex = toIndex(x, y, state.width);
+  const center = fromIndex(tileIndex, state.width);
+  const resident: StationState['residents'][number] = {
+    id,
+    x: center.x + 0.5,
+    y: center.y + 0.5,
+    tileIndex,
+    path: [],
+    speed: 1.8,
+    hunger: 82,
+    energy: 82,
+    hygiene: 78,
+    social: 60,
+    safety: 55,
+    stress: 28,
+    routinePhase: 'errands',
+    state: ResidentState.Idle,
+    actionTimer: 0,
+    retargetAt: 0,
+    reservedTargetTile: null,
+    homeShipId: null,
+    homeDockId: null,
+    housingUnitId: null,
+    bedModuleId: null,
+    satisfaction: 65,
+    leaveIntent: 0,
+    blockedTicks: 0,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    agitation: 0,
+    activeIncidentId: null,
+    confrontationUntil: 0
+  };
+  state.residents.push({ ...resident, ...overrides });
 }
 
 function setupCoreRooms(state: StationState): void {
@@ -896,7 +940,10 @@ function testMapExpansionNorthRemapsRuntimeReferences(): void {
     hunger: 80,
     energy: 80,
     hygiene: 80,
+    social: 70,
+    safety: 70,
     stress: 10,
+    routinePhase: 'errands',
     state: ResidentState.Idle,
     actionTimer: 0,
     retargetAt: 0,
@@ -1219,7 +1266,10 @@ function testResidentInspectorThresholdsAndPurity(): void {
     hunger: 70,
     energy: 30,
     hygiene: 76,
+    social: 62,
+    safety: 64,
     stress: 22,
+    routinePhase: 'errands',
     state: ResidentState.Idle,
     actionTimer: 0,
     retargetAt: 0,
@@ -1268,6 +1318,312 @@ function testAgentInspectorMissingId(): void {
   assertCondition(getResidentInspectorById(state, 999999) === null, 'Unknown resident id should return null inspector.');
 }
 
+function seedAggressiveResidents(state: StationState, startId: number, pairs: number): void {
+  for (let i = 0; i < pairs; i++) {
+    const x = 19 + (i % 4) * 2;
+    const y = 15 + Math.floor(i / 4) * 2;
+    spawnResidentActor(state, x, y, startId + i * 2, {
+      agitation: 96,
+      stress: 92,
+      safety: 40,
+      social: 48,
+      satisfaction: 42,
+      leaveIntent: 0,
+      retargetAt: state.now + 999
+    });
+    spawnResidentActor(state, x + 1, y, startId + i * 2 + 1, {
+      agitation: 93,
+      stress: 88,
+      safety: 40,
+      social: 50,
+      satisfaction: 44,
+      leaveIntent: 0,
+      retargetAt: state.now + 999
+    });
+  }
+}
+
+function seedModerateConflictResidents(state: StationState, startId: number, pairs: number): void {
+  for (let i = 0; i < pairs; i++) {
+    const x = 19 + (i % 4) * 2;
+    const y = 15 + Math.floor(i / 4) * 2;
+    spawnResidentActor(state, x, y, startId + i * 2, {
+      agitation: 64,
+      stress: 22,
+      safety: 42,
+      social: 50,
+      satisfaction: 58,
+      leaveIntent: 0,
+      retargetAt: state.now + 999
+    });
+    spawnResidentActor(state, x + 1, y, startId + i * 2 + 1, {
+      agitation: 66,
+      stress: 24,
+      safety: 42,
+      social: 52,
+      satisfaction: 59,
+      leaveIntent: 0,
+      retargetAt: state.now + 999
+    });
+  }
+}
+
+function setupSecurityArena(state: StationState, posts: Array<{ x: number; y: number }>): void {
+  buildHabitat(state);
+  paintRoom(state, RoomType.Lounge, 17, 13, 31, 24);
+  setupLeisure(state, true);
+  for (const post of posts) {
+    paintRoom(state, RoomType.Security, post.x, post.y, post.x + 1, post.y + 1);
+    placeModuleOrThrow(state, ModuleType.Terminal, post.x, post.y);
+  }
+  state.crew.total = 16;
+  state.controls.shipsPerCycle = 0;
+  state.metrics.airQuality = 90;
+  state.metrics.mealStock = 130;
+  state.metrics.rawFoodStock = 140;
+  runFor(state, 3);
+  const securityTiles = posts.map((post) => toIndex(post.x, post.y, state.width));
+  for (let i = 0; i < Math.min(state.crewMembers.length, securityTiles.length); i++) {
+    const crew = state.crewMembers[i];
+    const tile = securityTiles[i];
+    const p = fromIndex(tile, state.width);
+    crew.tileIndex = tile;
+    crew.x = p.x + 0.5;
+    crew.y = p.y + 0.5;
+    crew.role = 'security';
+    crew.assignedSystem = 'security';
+    crew.targetTile = tile;
+    crew.path = [];
+    crew.activeJobId = null;
+    crew.resting = false;
+    crew.healthState = 'healthy';
+    crew.assignmentStickyUntil = state.now + 999;
+    crew.assignmentHoldUntil = state.now + 999;
+  }
+}
+
+function testImmediateDefuseMajority(): void {
+  const state = createInitialState({ seed: 4201 });
+  buildHabitat(state);
+  paintRoom(state, RoomType.Security, 10, 10, 11, 11);
+  placeModuleOrThrow(state, ModuleType.Terminal, 10, 10);
+  state.crew.total = 10;
+  state.controls.shipsPerCycle = 0;
+  runFor(state, 3);
+
+  assertCondition(state.crewMembers.length > 0, 'Expected crew pool for intervention reliability test.');
+  const responder = state.crewMembers[0];
+  const securityTile = toIndex(10, 10, state.width);
+  const center = fromIndex(securityTile, state.width);
+  responder.tileIndex = securityTile;
+  responder.x = center.x + 0.5;
+  responder.y = center.y + 0.5;
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.targetTile = securityTile;
+  responder.path = [];
+  responder.activeJobId = null;
+  responder.resting = false;
+  responder.healthState = 'healthy';
+
+  const incidentCount = 30;
+  let residentId = 8800;
+  for (let i = 0; i < incidentCount; i++) {
+    const x = 18 + (i % 6);
+    const y = 15 + Math.floor(i / 6);
+    const aId = residentId++;
+    const bId = residentId++;
+    const incidentId = state.incidentSpawnCounter++;
+    const tileIndex = toIndex(x, y, state.width);
+    const severity = i % 2 === 0 ? 1.2 : 1.8;
+
+    spawnResidentActor(state, x, y, aId, {
+      agitation: 80,
+      stress: 55,
+      safety: 45,
+      activeIncidentId: incidentId,
+      confrontationUntil: state.now + 12
+    });
+    spawnResidentActor(state, x + 1, y, bId, {
+      agitation: 82,
+      stress: 58,
+      safety: 45,
+      activeIncidentId: incidentId,
+      confrontationUntil: state.now + 12
+    });
+
+    state.incidents.push({
+      id: incidentId,
+      type: 'fight',
+      tileIndex,
+      severity,
+      createdAt: state.now - 0.5,
+      dispatchAt: state.now - 0.2,
+      interveneAt: state.now + 0.05,
+      resolveBy: state.now + 12,
+      stage: 'intervening',
+      outcome: null,
+      resolvedAt: null,
+      assignedCrewId: responder.id,
+      residentParticipantIds: [aId, bId],
+      extendedResolveAt: null
+    });
+  }
+
+  runFor(state, 12);
+
+  assertCondition(
+    state.usageTotals.securityFightInterventions >= incidentCount,
+    'Expected repeated fight interventions to evaluate immediate defuse rate.'
+  );
+  assertCondition(
+    state.metrics.immediateDefuseRate >= 0.75,
+    `Immediate defuse rate should be >= 0.75, got ${state.metrics.immediateDefuseRate.toFixed(3)}`
+  );
+  assertCondition(
+    state.metrics.escalatedFightRate <= 0.3,
+    `Escalated fight rate should remain <= 0.30, got ${state.metrics.escalatedFightRate.toFixed(3)}`
+  );
+}
+
+function testProximitySuppressionEffectiveness(): void {
+  const near = createInitialState({ seed: 4202 });
+  setupSecurityArena(near, [
+    { x: 20, y: 14 },
+    { x: 28, y: 20 }
+  ]);
+  seedAggressiveResidents(near, 8200, 8);
+  runFor(near, 70);
+
+  const far = createInitialState({ seed: 4202 });
+  setupSecurityArena(far, [
+    { x: 7, y: 7 },
+    { x: 39, y: 27 }
+  ]);
+  seedAggressiveResidents(far, 8300, 8);
+  runFor(far, 70);
+
+  const nearConfronts = near.usageTotals.residentConfrontations;
+  const farConfronts = far.usageTotals.residentConfrontations;
+  assertCondition(
+    near.metrics.incidentSuppressionAvg < far.metrics.incidentSuppressionAvg,
+    `Near posts should reduce local incident multipliers (near ${near.metrics.incidentSuppressionAvg.toFixed(3)}, far ${far.metrics.incidentSuppressionAvg.toFixed(3)}).`
+  );
+  assertCondition(
+    nearConfronts <= farConfronts + 2,
+    `Near posts should not increase confrontations materially (near ${nearConfronts}, far ${farConfronts}).`
+  );
+}
+
+function testTrespassSpamGuard(): void {
+  const state = createInitialState({ seed: 4203 });
+  buildHabitat(state);
+  const restrictedTile = toIndex(12, 12, state.width);
+  state.zones[restrictedTile] = ZoneType.Restricted;
+  for (let i = 0; i < 8; i++) {
+    spawnVisitor(state, 12, 12, 9000 + i);
+  }
+  runFor(state, 0.25);
+  const firstBurst = state.incidents.filter((incident) => incident.type === 'trespass').length;
+  assertCondition(firstBurst === 1, `Trespass cooldown should cap same-tile burst to one incident, got ${firstBurst}.`);
+
+  for (let i = 0; i < 4; i++) {
+    spawnVisitor(state, 12, 12, 9100 + i);
+  }
+  runFor(state, 1.5);
+  const secondBurst = state.incidents.filter((incident) => incident.type === 'trespass').length;
+  assertCondition(
+    secondBurst === firstBurst,
+    'Trespass cooldown should block repeated same-tile incidents inside the cooldown window.'
+  );
+}
+
+function setupNeedsRoutineArena(state: StationState, withSecurity: boolean): number {
+  buildHabitat(state);
+  paintRoom(state, RoomType.Lounge, 18, 12, 32, 24);
+  setupLeisure(state, true);
+  if (withSecurity) {
+    paintRoom(state, RoomType.Security, 19, 12, 20, 13);
+    placeModuleOrThrow(state, ModuleType.Terminal, 19, 12);
+    state.crew.total = 14;
+  } else {
+    state.crew.total = 8;
+  }
+  state.controls.shipsPerCycle = 0;
+  state.metrics.airQuality = 88;
+  state.metrics.mealStock = 140;
+  state.metrics.rawFoodStock = 150;
+  runFor(state, 3);
+  if (withSecurity && state.crewMembers.length > 0) {
+    const securityTile = toIndex(19, 12, state.width);
+    const p = fromIndex(securityTile, state.width);
+    const crew = state.crewMembers[0];
+    crew.tileIndex = securityTile;
+    crew.x = p.x + 0.5;
+    crew.y = p.y + 0.5;
+    crew.role = 'security';
+    crew.assignedSystem = 'security';
+    crew.targetTile = securityTile;
+    crew.path = [];
+    crew.activeJobId = null;
+    crew.resting = false;
+    crew.healthState = 'healthy';
+    crew.assignmentStickyUntil = state.now + 999;
+    crew.assignmentHoldUntil = state.now + 999;
+  }
+  state.now = 72; // Force socialize phase for routine-driven behavior checks.
+
+  const socialResidentId = withSecurity ? 9201 : 9301;
+  spawnResidentActor(state, 20, 20, socialResidentId, {
+    social: 12,
+    safety: 62,
+    agitation: 25,
+    stress: 22,
+    satisfaction: 58
+  });
+  for (let i = 0; i < 10; i++) {
+    const x = 22 + (i % 4);
+    const y = 16 + Math.floor(i / 4);
+    spawnResidentActor(state, x, y, socialResidentId + 10 + i, {
+      social: 42,
+      safety: 34,
+      agitation: 86,
+      stress: 72,
+      satisfaction: 48,
+      retargetAt: state.now + 999
+    });
+  }
+  return socialResidentId;
+}
+
+function testNeedsAndRoutinesBehavior(): void {
+  const withSecurity = createInitialState({ seed: 4204 });
+  const withSecuritySocialId = setupNeedsRoutineArena(withSecurity, true);
+  runFor(withSecurity, 40);
+  const withSecuritySocialResident = withSecurity.residents.find((resident) => resident.id === withSecuritySocialId);
+  assertCondition(!!withSecuritySocialResident, 'Expected social-deficit resident to remain active for routine validation.');
+  if (!withSecuritySocialResident) return;
+  assertCondition(
+    withSecuritySocialResident.social > 35,
+    `Social routine should recover low social need, got ${withSecuritySocialResident.social.toFixed(1)}.`
+  );
+
+  const withoutSecurity = createInitialState({ seed: 4204 });
+  const withoutSecuritySocialId = setupNeedsRoutineArena(withoutSecurity, false);
+  runFor(withoutSecurity, 40);
+  const withoutSecuritySocialResident = withoutSecurity.residents.find((resident) => resident.id === withoutSecuritySocialId);
+  assertCondition(!!withoutSecuritySocialResident, 'Expected no-security social resident to remain active for comparison.');
+  if (!withoutSecuritySocialResident) return;
+  assertCondition(
+    withSecurity.metrics.residentSafetyAvg > withoutSecurity.metrics.residentSafetyAvg + 5,
+    `Security aura should improve safety average (with ${withSecurity.metrics.residentSafetyAvg.toFixed(2)}, without ${withoutSecurity.metrics.residentSafetyAvg.toFixed(2)}).`
+  );
+  assertCondition(
+    withSecurity.usageTotals.residentConfrontations < withoutSecurity.usageTotals.residentConfrontations,
+    'No-security scenario should have higher confrontation pressure than security-covered scenario.'
+  );
+}
+
 function run(): void {
   testAutonomousRoomsNoStaff();
   testCafeteriaMissingServingStation();
@@ -1302,6 +1658,10 @@ function run(): void {
   testVisitorInspectorShapeAndPurity();
   testResidentInspectorThresholdsAndPurity();
   testAgentInspectorMissingId();
+  testImmediateDefuseMajority();
+  testProximitySuppressionEffectiveness();
+  testTrespassSpamGuard();
+  testNeedsAndRoutinesBehavior();
   console.log('sim-tests: PASS');
 }
 

@@ -19,7 +19,7 @@ export enum ZoneType {
 }
 
 export type IncidentType = 'fight' | 'trespass';
-export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'resolved' | 'failed';
+export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
 export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality' | 'escaped';
 
 export enum RoomType {
@@ -138,8 +138,13 @@ export enum ResidentState {
   Sleeping = 'sleeping',
   ToHygiene = 'to-hygiene',
   Cleaning = 'cleaning',
+  ToLeisure = 'to-leisure',
+  Leisure = 'leisure',
+  ToSecurity = 'to-security',
   ToHomeShip = 'to-home-ship'
 }
+
+export type ResidentRoutinePhase = 'rest' | 'errands' | 'socialize' | 'winddown';
 
 export interface Resident {
   id: number;
@@ -151,7 +156,10 @@ export interface Resident {
   hunger: number;
   energy: number;
   hygiene: number;
+  social: number;
+  safety: number;
   stress: number;
+  routinePhase: ResidentRoutinePhase;
   state: ResidentState;
   actionTimer: number;
   retargetAt: number;
@@ -369,9 +377,15 @@ export interface IncidentEntity {
   resolvedAt: number | null;
   assignedCrewId: number | null;
   residentParticipantIds: number[];
+  extendedResolveAt: number | null;
 }
 
 export interface Metrics {
+  tickMs: number;
+  renderMs: number;
+  pathMs: number;
+  pathCallsPerTick: number;
+  derivedRecomputeMs: number;
   visitorsCount: number;
   residentsCount: number;
   incidentsTotal: number;
@@ -381,6 +395,12 @@ export interface Metrics {
   securityDispatches: number;
   securityResponseAvgSec: number;
   residentConfrontations: number;
+  securityCoveragePct: number;
+  incidentSuppressionAvg: number;
+  immediateDefuseRate: number;
+  escalatedFightRate: number;
+  residentSocialAvg: number;
+  residentSafetyAvg: number;
   load: number;
   capacity: number;
   loadPct: number;
@@ -581,6 +601,42 @@ export interface Metrics {
   };
 }
 
+export interface DerivedRoomDiagnostics {
+  diagnosticsByAnchor: Map<number, RoomDiagnostic>;
+  inspectionsByAnchor: Map<number, RoomInspector>;
+}
+
+export interface ServiceReachabilityCache {
+  nodeTiles: number[];
+  unreachableNodeTiles: number[];
+}
+
+export interface DerivedCache {
+  serviceTargetsByRoom: Map<RoomType, number[]>;
+  queueTargets: number[];
+  queueTargetSet: Set<number>;
+  roomClustersByRoom: Map<RoomType, number[][]>;
+  clusterByTile: Map<number, { room: RoomType; anchor: number; cluster: number[] }>;
+  dockByTile: Map<number, DockEntity>;
+  itemNodeByTile: Map<number, ItemNode>;
+  pathCache: Map<string, { path: number[]; createdAt: number; topologyVersion: number; roomVersion: number }>;
+  activeRoomTiles: Set<number>;
+  serviceReachability: ServiceReachabilityCache;
+  diagnostics: DerivedRoomDiagnostics;
+  cacheVersions: {
+    serviceTargetsVersion: string;
+    queueTargetsVersion: string;
+    roomClustersVersion: string;
+    dockEntitiesTopologyVersion: number;
+    dockByTileDockVersion: number;
+    itemNodeByTileModuleVersion: number;
+    activeRoomTilesVersion: string;
+    serviceReachabilityVersion: string;
+    diagnosticsVersion: string;
+    pressurizationTopologyVersion: number;
+  };
+}
+
 export interface RoomDiagnostic {
   room: RoomType;
   active: boolean;
@@ -641,7 +697,7 @@ export type AgentInspectorKind = 'visitor' | 'resident';
 export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
 export type VisitorDesire = 'eat' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
-export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'wander';
+export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
 
 export interface AgentInspectorBase {
   id: number;
@@ -677,6 +733,9 @@ export interface ResidentInspector extends AgentInspectorBase {
   hunger: number;
   energy: number;
   hygiene: number;
+  social: number;
+  safety: number;
+  routinePhase: ResidentRoutinePhase;
   stress: number;
   agitation: number;
   inConfrontation: boolean;
@@ -735,6 +794,8 @@ export interface Effects {
   brownoutUntil: number;
   securityDelayUntil: number;
   blockedUntilByTile: Map<number, number>;
+  trespassCooldownUntilByTile: Map<number, number>;
+  securityAuraByTile: Map<number, number>;
 }
 
 export interface Controls {
@@ -779,6 +840,11 @@ export interface StationState {
   metrics: Metrics;
   controls: Controls;
   effects: Effects;
+  topologyVersion: number;
+  roomVersion: number;
+  moduleVersion: number;
+  dockVersion: number;
+  derived: DerivedCache;
   rng: () => number;
   now: number;
   lastCycleTime: number;
@@ -855,8 +921,13 @@ export interface StationState {
     securityDispatches: number;
     securityResolved: number;
     securityResponseSecTotal: number;
+    securityFightInterventions: number;
+    securityImmediateDefuses: number;
+    securityEscalatedFights: number;
     incidentsFailed: number;
     residentConfrontations: number;
+    incidentSuppressionSampleCount: number;
+    incidentSuppressionSampleSum: number;
     criticalUnstaffedSec: {
       lifeSupport: number;
       hydroponics: number;
