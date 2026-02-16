@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type RoomDefinition } from './types';
+import { ModuleType, RoomType, type RoomDefinition, type ShipType } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -48,6 +48,24 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: true,
     allowedRooms: [RoomType.Workshop],
     itemNodeCapacity: 18
+  },
+  [ModuleType.MedBed]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Clinic]
+  },
+  [ModuleType.CellConsole]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Brig]
+  },
+  [ModuleType.RecUnit]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.RecHall]
   },
   [ModuleType.GrowStation]: {
     width: 2,
@@ -112,6 +130,27 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   [RoomType.Workshop]: {
     minTiles: 10,
     requiredModules: [{ module: ModuleType.Workbench, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Clinic]: {
+    minTiles: 8,
+    requiredModules: [{ module: ModuleType.MedBed, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Brig]: {
+    minTiles: 8,
+    requiredModules: [{ module: ModuleType.CellConsole, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'required'
+  },
+  [RoomType.RecHall]: {
+    minTiles: 10,
+    requiredModules: [{ module: ModuleType.RecUnit, count: 1 }],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
@@ -202,7 +241,33 @@ export const PROCESS_RATES = {
   kitchenMealPerSecPerStove: 0.95,
   workshopTradeGoodPerSecPerWorkbench: 0.4,
   workshopRawMaterialPerTradeGood: 0.85,
-  marketTradeGoodUsePerVisitorPerSec: 0.32
+  marketTradeGoodUsePerVisitorPerSec: 0.32,
+  clinicDistressRecoveryPerSec: 2.4
+} as const;
+
+export const UNLOCK_CRITERIA = {
+  tier1: {
+    minMealStock: 18,
+    minAirQuality: 60,
+    minNoCriticalAirWarningSec: 12
+  },
+  tier2: {
+    minCreditsNetPerMin: 0.4,
+    minCompletedJobs: 14
+  },
+  tier3: {
+    minResidents: 4,
+    minResidentSatisfaction: 58,
+    minResolvedIncidents: 2
+  }
+} as const;
+
+export const SHIP_SERVICE_WEIGHT_BY_TYPE: Record<ShipType, number> = {
+  tourist: 1,
+  trader: 1,
+  industrial: 1.15,
+  military: 1.35,
+  colonist: 1.2
 } as const;
 
 export const TASK_TIMINGS = {

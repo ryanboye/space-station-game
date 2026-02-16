@@ -35,6 +35,45 @@ If a phase exceeds these constraints, split it before coding.
 
 ## 4. Phase Roadmap
 
+## 4.1 Parallel Rebaseline Milestones (Ships + Residents + Progression)
+This track sits above the legacy phase list as the active execution order.
+
+Milestone map:
+1. M0 Interface Freeze + Planning Rebaseline:
+- Add stable content contracts in `src/sim/content/ships.ts`, `src/sim/content/unlocks.ts`, `src/sim/content/residents.ts`.
+- Lock feature flags in sim core.
+
+2. M1 Unlock Progression v1:
+- Tier-gated room/module/tool visibility and controls.
+- Save/load persistence of unlock state with migration compatibility.
+
+3. M2 Ship Pack 1:
+- `military` and `colonist` ships with service-tag-driven outcomes.
+
+4. M3 Resident Routine v2:
+- New routine phases and role-based throughput/safety modifiers.
+
+5. M4 Room/Building Pack 1:
+- `Clinic`, `Brig`, `RecHall` and module pairs wired into loop systems.
+
+6. M5 Integration + Complexity Curve:
+- First 10-minute readability and 20-minute pacing balance pass.
+- Root-cause messaging for locked content and unmet demand.
+
+Parallel art track:
+- Nano Banana tiles run in parallel after M0 contract freeze.
+- Final atlas swap after M5 gameplay tuning.
+
+Parallel thread split:
+- Thread 1: M1 unlock framework + UI gating.
+- Thread 2: M2 ship data + service scoring.
+- Thread 3: M3 resident routine/role logic.
+- Thread 4: M4 room/module support.
+- Thread 5: art atlas + sprite mapping.
+
+Merge order:
+- `M0 -> (M1, M2, M3 in parallel) -> M4 -> M5 -> art integration`.
+
 ## Phase 0 - Simulation Test Harness + Data Scaffolding
 Goal: Make future feature phases testable without manual-only verification.
 

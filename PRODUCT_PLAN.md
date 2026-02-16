@@ -34,6 +34,42 @@ Primary gaps vs vision:
 - No market hall/workshop production loops.
 - Pathing still too uniform/robotic under crowd stress.
 
+## 3.1 Gameplay Loop Rebaseline (2026-02)
+Roadmap focus is now explicitly aligned to the core loop:
+- Ship variety and differentiated service demand.
+- Resident daily-life depth with lightweight role effects.
+- Staged unlock progression to prevent early overload.
+
+Execution milestones:
+1. M0 Interface Freeze + Planning Rebaseline:
+- Lock data extension points in `src/sim/content/*`.
+- Keep feature work behind flags (`ENABLE_UNLOCKS_V1`, `ENABLE_SHIP_PACK_V1`, `ENABLE_RESIDENT_ROUTINES_V2`).
+
+2. M1 Unlock Progression v1:
+- Tier 0 start: Reactor, Life Support, Dorm, Hygiene, Hydroponics, Kitchen, Cafeteria, Dock.
+- Tier 1: Lounge + Market.
+- Tier 2: Logistics Stock + Storage + Workshop.
+- Tier 3: Security tuning + advanced ships + resident role depth.
+
+3. M2 Ship Pack 1:
+- Add `military` and `colonist` ship families with data-driven service tags and distinct penalties/conversion behavior.
+
+4. M3 Resident Routine v2:
+- Expand routine phases to `rest`, `errands`, `work`, `socialize`, `winddown`.
+- Add roles: `market_helper`, `hydro_assist`, `civic_watch`.
+
+5. M4 Room/Building Pack 1:
+- Add `Clinic` + `MedBed`, `Brig` + `CellConsole`, `RecHall` + `RecUnit`.
+- Wire to ship service tags and resident routine targets.
+
+6. M5 Integration + Balance:
+- Tune the first 20-minute complexity curve.
+- Ensure lock/unmet-service messaging is legible and actionable.
+
+Parallel art track (Nano Banana):
+- Maintain a stable sprite-key contract and marker fallback.
+- Integrate final atlas after gameplay-loop balance stabilization.
+
 ## 4) Design Constraints
 - Platform: browser, canvas, GitHub Pages compatible.
 - Visual style: simple tile-based, readability-first.

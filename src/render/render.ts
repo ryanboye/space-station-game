@@ -40,6 +40,9 @@ const roomOverlay: Record<RoomType, string> = {
   [RoomType.Cafeteria]: 'rgba(78, 166, 110, 0.28)',
   [RoomType.Kitchen]: 'rgba(245, 164, 92, 0.28)',
   [RoomType.Workshop]: 'rgba(203, 157, 108, 0.28)',
+  [RoomType.Clinic]: 'rgba(106, 209, 224, 0.26)',
+  [RoomType.Brig]: 'rgba(191, 94, 94, 0.26)',
+  [RoomType.RecHall]: 'rgba(209, 166, 98, 0.24)',
   [RoomType.Reactor]: 'rgba(185, 125, 57, 0.28)',
   [RoomType.Security]: 'rgba(189, 79, 79, 0.28)',
   [RoomType.Dorm]: 'rgba(126, 200, 255, 0.22)',
@@ -57,6 +60,9 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Cafeteria]: 'C',
   [RoomType.Kitchen]: 'I',
   [RoomType.Workshop]: 'W',
+  [RoomType.Clinic]: '+',
+  [RoomType.Brig]: 'G',
+  [RoomType.RecHall]: 'A',
   [RoomType.Reactor]: 'R',
   [RoomType.Security]: 'S',
   [RoomType.Dorm]: 'D',
@@ -76,6 +82,9 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.ServingStation]: 'S',
   [ModuleType.Stove]: 'V',
   [ModuleType.Workbench]: 'W',
+  [ModuleType.MedBed]: '+',
+  [ModuleType.CellConsole]: 'G',
+  [ModuleType.RecUnit]: 'A',
   [ModuleType.GrowStation]: 'G',
   [ModuleType.Terminal]: 'M',
   [ModuleType.Couch]: 'C',
@@ -486,6 +495,16 @@ function shipPalette(shipType: ShipType, docked: boolean): ShipPalette {
       ? { hull: '#ffb482', cockpit: '#ffe7c8', engine: '#ffc997' }
       : { hull: '#ffd2ad', cockpit: '#fff0df', engine: '#ffe2c3' };
   }
+  if (shipType === 'military') {
+    return docked
+      ? { hull: '#8fa0b7', cockpit: '#d7deea', engine: '#b4c2d8' }
+      : { hull: '#b8c4d6', cockpit: '#e8edf6', engine: '#cfd8e6' };
+  }
+  if (shipType === 'colonist') {
+    return docked
+      ? { hull: '#8ed8ae', cockpit: '#e2f6ea', engine: '#b6e8c9' }
+      : { hull: '#b9ead0', cockpit: '#eefaf3', engine: '#cdeedb' };
+  }
   return docked
     ? { hull: '#ffd447', cockpit: '#fff3b8', engine: '#ffe57f' }
     : { hull: '#ffea8a', cockpit: '#fff7cd', engine: '#fff1ad' };
@@ -828,8 +847,12 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
     const lanePct = Math.round((profile.trafficVolume / totalTraffic) * 100);
     const touristPct = Math.round(profile.weights.tourist * 100);
     const traderPct = Math.round(profile.weights.trader * 100);
-    const industrialPct = Math.max(0, 100 - touristPct - traderPct);
-    const line = `${row.label}: ${lanePct}% | Tour ${touristPct}% / Trade ${traderPct}% / Ind ${industrialPct}%`;
+    const industrialPct = Math.round(profile.weights.industrial * 100);
+    const militaryPct = Math.round(profile.weights.military * 100);
+    const colonistPct = Math.max(0, 100 - touristPct - traderPct - industrialPct - militaryPct);
+    const line =
+      `${row.label}: ${lanePct}% | Tour ${touristPct}% / Trade ${traderPct}% / ` +
+      `Ind ${industrialPct}% / Mil ${militaryPct}% / Col ${colonistPct}%`;
     const textW = ctx.measureText(line).width;
     const pad = 3;
     const boxW = textW + pad * 2;

@@ -27,6 +27,9 @@ export enum RoomType {
   Cafeteria = 'cafeteria',
   Kitchen = 'kitchen',
   Workshop = 'workshop',
+  Clinic = 'clinic',
+  Brig = 'brig',
+  RecHall = 'rec-hall',
   Reactor = 'reactor',
   Security = 'security',
   Dorm = 'dorm',
@@ -48,6 +51,9 @@ export enum ModuleType {
   ServingStation = 'serving-station',
   Stove = 'stove',
   Workbench = 'workbench',
+  MedBed = 'med-bed',
+  CellConsole = 'cell-console',
+  RecUnit = 'rec-unit',
   GrowStation = 'grow-station',
   GrowTray = 'grow-station',
   Terminal = 'terminal',
@@ -144,7 +150,8 @@ export enum ResidentState {
   ToHomeShip = 'to-home-ship'
 }
 
-export type ResidentRoutinePhase = 'rest' | 'errands' | 'socialize' | 'winddown';
+export type ResidentRoutinePhase = 'rest' | 'errands' | 'work' | 'socialize' | 'winddown';
+export type ResidentRole = 'none' | 'market_helper' | 'hydro_assist' | 'civic_watch';
 
 export interface Resident {
   id: number;
@@ -160,6 +167,8 @@ export interface Resident {
   safety: number;
   stress: number;
   routinePhase: ResidentRoutinePhase;
+  role: ResidentRole;
+  roleAffinity: Partial<Record<RoomType, number>>;
   state: ResidentState;
   actionTimer: number;
   retargetAt: number;
@@ -286,8 +295,25 @@ export interface PendingSpawn {
 
 export type SpaceLane = 'north' | 'east' | 'south' | 'west';
 export type CardinalDirection = 'north' | 'east' | 'south' | 'west';
-export type ShipType = 'tourist' | 'trader' | 'industrial';
+export type ShipType = 'tourist' | 'trader' | 'industrial' | 'military' | 'colonist';
 export type DockPurpose = 'visitor' | 'residential';
+export type ShipServiceTag =
+  | 'cafeteria'
+  | 'market'
+  | 'lounge'
+  | 'workshop'
+  | 'security'
+  | 'hygiene'
+  | 'housing'
+  | 'clinic'
+  | 'recreation';
+export interface ShipProfile {
+  type: ShipType;
+  serviceTags: ShipServiceTag[];
+  manifestBaseline: { cafeteria: number; market: number; lounge: number };
+  militaryPenaltyWeight: number;
+  conversionChanceMultiplier: number;
+}
 
 export type ShipSize = 'small' | 'medium' | 'large';
 
@@ -409,6 +435,8 @@ export interface Metrics {
   morale: number;
   stationRating: number;
   stationRatingTrendPerMin: number;
+  unlockTier: UnlockTier;
+  unlockProgressText: string;
   rawFoodStock: number;
   mealStock: number;
   kitchenRawBuffer: number;
@@ -730,6 +758,7 @@ export interface VisitorInspector extends AgentInspectorBase {
 export interface ResidentInspector extends AgentInspectorBase {
   kind: 'resident';
   state: ResidentState;
+  role: ResidentRole;
   hunger: number;
   energy: number;
   hygiene: number;
@@ -760,6 +789,12 @@ export interface RoomOps {
   cafeteriasActive: number;
   kitchenTotal: number;
   kitchenActive: number;
+  clinicTotal: number;
+  clinicActive: number;
+  brigTotal: number;
+  brigActive: number;
+  recHallTotal: number;
+  recHallActive: number;
   securityTotal: number;
   securityActive: number;
   reactorsTotal: number;
@@ -787,6 +822,22 @@ export interface RoomOps {
 export interface MapExpansionState {
   purchased: Record<CardinalDirection, boolean>;
   purchasesMade: number;
+}
+
+export type UnlockTier = 0 | 1 | 2 | 3;
+export type UnlockId = 'tier1_stability' | 'tier2_logistics' | 'tier3_civic';
+
+export interface UnlockDefinition {
+  id: UnlockId;
+  tier: UnlockTier;
+  name: string;
+  description: string;
+}
+
+export interface UnlockState {
+  tier: UnlockTier;
+  unlockedIds: UnlockId[];
+  unlockedAtSec: Partial<Record<UnlockId, number>>;
 }
 
 export interface Effects {
@@ -943,6 +994,7 @@ export interface StationState {
   crew: CrewState;
   ops: RoomOps;
   mapExpansion: MapExpansionState;
+  unlocks: UnlockState;
 }
 
 export interface BuildTool {

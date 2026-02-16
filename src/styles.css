@@ -323,6 +323,23 @@ small {
   font-size: 11px;
 }
 
+.tier-progress-track {
+  margin-top: 8px;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid #314052;
+  background: #0f161f;
+  overflow: hidden;
+}
+
+.tier-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #4d7fb1 0%, #6edb8f 100%);
+  transition: width 180ms linear;
+}
+
 .chip {
   width: 10px;
   height: 10px;
@@ -400,12 +417,101 @@ small {
   width: min(420px, 96vw);
 }
 
+.progression-modal-card {
+  width: min(860px, 96vw);
+}
+
 .modal-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
+}
+
+.progression-hero {
+  border: 1px solid #33516b;
+  border-radius: 10px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(22, 40, 56, 0.75) 0%, rgba(18, 28, 40, 0.75) 100%);
+}
+
+.progression-tier-name {
+  font-size: 24px;
+  font-weight: 700;
+  color: #e4edf8;
+  letter-spacing: 0.02em;
+}
+
+.progression-tier-theme {
+  margin-top: 4px;
+  color: #b9cbe2;
+  font-size: 12px;
+}
+
+.tier-progress-track-lg {
+  margin-top: 10px;
+  height: 16px;
+  border-color: #3c617f;
+  background: #0d1823;
+}
+
+.tier-progress-track-lg .tier-progress-fill {
+  background: linear-gradient(90deg, #3b7ab1 0%, #54c6a6 100%);
+}
+
+.progression-section {
+  margin-top: 10px;
+  border: 1px solid #31485e;
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(15, 25, 37, 0.72);
+}
+
+#progress-modal-roadmap {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.progression-tier-card {
+  border: 1px solid #304761;
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(14, 22, 33, 0.82);
+}
+
+.progression-tier-card.done {
+  border-color: rgba(84, 198, 166, 0.72);
+}
+
+.progression-tier-card.current {
+  border-color: rgba(124, 196, 252, 0.85);
+  box-shadow: 0 0 0 1px rgba(74, 140, 194, 0.45) inset;
+}
+
+.progression-tier-card.upcoming {
+  border-color: rgba(88, 112, 138, 0.7);
+}
+
+.progression-tier-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.progression-tier-status {
+  border: 1px solid #3b4d65;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #d6deeb;
+  background: rgba(25, 36, 51, 0.75);
+}
+
+.progression-tier-theme-line {
+  color: #9eb3cb;
 }
 
 h2 {

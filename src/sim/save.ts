@@ -11,6 +11,8 @@ import {
   type DockPurpose,
   type HousingPolicy,
   type ItemType,
+  type UnlockId,
+  type UnlockTier,
   ModuleType,
   type ModuleRotation,
   RoomType,
@@ -21,13 +23,21 @@ import {
   type StationState,
   ZoneType
 } from './types';
+import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './content/unlocks';
 
-const SAVE_SCHEMA_VERSION = 1 as const;
+const SAVE_SCHEMA_VERSION = 2 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
-const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial'];
+const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
+const UNLOCK_IDS: UnlockId[] = ['tier1_stability', 'tier2_logistics', 'tier3_civic'];
+const UNLOCK_IDS_BY_TIER: Record<UnlockTier, UnlockId[]> = {
+  0: [],
+  1: ['tier1_stability'],
+  2: ['tier1_stability', 'tier2_logistics'],
+  3: ['tier1_stability', 'tier2_logistics', 'tier3_civic']
+};
 
 export interface StationSnapshotV1 {
   width: number;
@@ -62,10 +72,15 @@ export interface StationSnapshotV1 {
     shipsPerCycle: number;
     taxRate: number;
   };
+  unlocks: {
+    tier: UnlockTier;
+    unlockedIds: UnlockId[];
+    unlockedAtSec: Partial<Record<UnlockId, number>>;
+  };
 }
 
 export interface StationSaveEnvelopeV1 {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION;
+  schemaVersion: number;
   gameVersion: string;
   createdAt: string;
   name: string;
@@ -136,6 +151,46 @@ function normalizeGridEnumArray<T extends string>(
   return out;
 }
 
+function maxUnlockTier(a: UnlockTier, b: UnlockTier): UnlockTier {
+  return (a >= b ? a : b) as UnlockTier;
+}
+
+function normalizeUnlockTier(value: number): UnlockTier {
+  if (value >= 3) return 3;
+  if (value >= 2) return 2;
+  if (value >= 1) return 1;
+  return 0;
+}
+
+function requiredUnlockTierForSnapshotContent(
+  rooms: RoomType[],
+  modules: StationSnapshotV1['modules'],
+  dockConfigs: StationSnapshotV1['dockConfigs']
+): UnlockTier {
+  let required: UnlockTier = 0;
+  for (const room of rooms) {
+    required = maxUnlockTier(required, ROOM_UNLOCK_TIER[room] ?? 0);
+    if (required === 3) break;
+  }
+  if (required < 3) {
+    for (const module of modules) {
+      required = maxUnlockTier(required, MODULE_UNLOCK_TIER[module.type] ?? 0);
+      if (required === 3) break;
+    }
+  }
+  if (required < 3) {
+    for (const dock of dockConfigs) {
+      for (const shipType of dock.allowedShipTypes) {
+        const shipTier: UnlockTier = shipType === 'industrial' ? 2 : shipType === 'military' || shipType === 'colonist' ? 3 : 0;
+        required = maxUnlockTier(required, shipTier);
+        if (required === 3) break;
+      }
+      if (required === 3) break;
+    }
+  }
+  return required;
+}
+
 export function captureSnapshot(state: StationState): StationSnapshotV1 {
   const inventoryByTile: StationSnapshotV1['inventoryByTile'] = [];
   for (const node of state.itemNodes) {
@@ -189,6 +244,11 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
       taxRate: state.controls.taxRate
+    },
+    unlocks: {
+      tier: state.unlocks.tier,
+      unlockedIds: [...state.unlocks.unlockedIds],
+      unlockedAtSec: { ...state.unlocks.unlockedAtSec }
     }
   };
 }
@@ -374,6 +434,45 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     warnings.push('controls missing; defaulted.');
   }
 
+  let unlockTier: UnlockTier = defaultState.unlocks.tier;
+  const unlockedIds = new Set<UnlockId>(defaultState.unlocks.unlockedIds);
+  const unlockedAtSec: Partial<Record<UnlockId, number>> = { ...defaultState.unlocks.unlockedAtSec };
+  let hasUnlockState = false;
+  if (isRecord(snapshotRaw.unlocks)) {
+    hasUnlockState = true;
+    unlockTier = normalizeUnlockTier(Math.round(asFiniteNumber(snapshotRaw.unlocks.tier, unlockTier)));
+    if (Array.isArray(snapshotRaw.unlocks.unlockedIds)) {
+      for (const id of snapshotRaw.unlocks.unlockedIds) {
+        if (isOneOf(id, UNLOCK_IDS)) unlockedIds.add(id);
+      }
+    }
+    if (isRecord(snapshotRaw.unlocks.unlockedAtSec)) {
+      for (const id of UNLOCK_IDS) {
+        const value = snapshotRaw.unlocks.unlockedAtSec[id];
+        if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+          unlockedAtSec[id] = value;
+        }
+      }
+    }
+  } else {
+    warnings.push('unlocks missing; deriving from saved content.');
+  }
+
+  const requiredTier = requiredUnlockTierForSnapshotContent(rooms, modules, dockConfigs);
+  if (!hasUnlockState) {
+    unlockTier = requiredTier;
+    for (const id of UNLOCK_IDS_BY_TIER[requiredTier]) unlockedIds.add(id);
+    if (requiredTier > 0) {
+      warnings.push(`Derived unlock tier ${requiredTier} from saved rooms/modules/ship permissions.`);
+    }
+  } else if (unlockTier < requiredTier) {
+    warnings.push(`Unlock tier ${unlockTier} too low for saved content; elevated to tier ${requiredTier}.`);
+    unlockTier = requiredTier;
+  }
+  for (const id of UNLOCK_IDS_BY_TIER[unlockTier]) {
+    unlockedIds.add(id);
+  }
+
   return {
     width,
     height,
@@ -393,6 +492,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     controls: {
       shipsPerCycle,
       taxRate
+    },
+    unlocks: {
+      tier: unlockTier,
+      unlockedIds: UNLOCK_IDS.filter((id) => unlockedIds.has(id)),
+      unlockedAtSec
     }
   };
 }
@@ -555,6 +659,11 @@ export function hydrateStateFromSave(
   next.zones = snapshot.zones.slice();
   next.rooms = snapshot.rooms.slice();
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
+  next.unlocks = {
+    tier: normalizeUnlockTier(snapshot.unlocks.tier),
+    unlockedIds: UNLOCK_IDS.filter((id) => snapshot.unlocks.unlockedIds.includes(id)),
+    unlockedAtSec: { ...snapshot.unlocks.unlockedAtSec }
+  };
 
   next.moduleInstances = [];
   next.modules = new Array<ModuleType>(expectedLength).fill(ModuleType.None);

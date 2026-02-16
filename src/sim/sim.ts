@@ -3,10 +3,19 @@ import {
   MODULE_DEFINITIONS,
   PROCESS_RATES,
   ROOM_DEFINITIONS,
+  SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
   TASK_TIMINGS,
+  UNLOCK_CRITERIA,
   normalizeModuleType
 } from './balance';
+import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
+import { SHIP_PROFILES } from './content/ships';
+import {
+  createInitialUnlockState,
+  isModuleUnlockedAtTier,
+  isRoomUnlockedAtTier
+} from './content/unlocks';
 import {
   type ArrivingShip,
   type CardinalDirection,
@@ -36,7 +45,10 @@ import {
   type CrewRole,
   type JobStallReason,
   type ItemType,
+  type ResidentRole,
+  type ShipServiceTag,
   type ShipType,
+  type UnlockTier,
   type SpaceLane,
   ModuleType,
   type ModuleInstance,
@@ -66,10 +78,16 @@ const BASE_CAPACITY = 30;
 const CYCLE_DURATION = 15;
 const MAX_SHIPS_PER_CYCLE = 3;
 const MAX_OCCUPANTS_PER_TILE = 4;
+export const ENABLE_UNLOCKS_V1 = true;
+export const ENABLE_SHIP_PACK_V1 = true;
+export const ENABLE_RESIDENT_ROUTINES_V2 = true;
 
 const CREW_PER_CAFETERIA = 1;
 const CREW_PER_KITCHEN = 1;
 const CREW_PER_WORKSHOP = 1;
+const CREW_PER_CLINIC = 1;
+const CREW_PER_BRIG = 1;
+const CREW_PER_REC_HALL = 1;
 const CREW_PER_SECURITY = 1;
 const CREW_PER_REACTOR = 1;
 const CREW_PER_HYGIENE = 1;
@@ -229,11 +247,16 @@ function laneStep(lane: SpaceLane): { dx: number; dy: number } {
 }
 
 function normalizeTrafficWeights(weights: Record<ShipType, number>): Record<ShipType, number> {
-  const total = Math.max(0.0001, weights.tourist + weights.trader + weights.industrial);
+  const total = Math.max(
+    0.0001,
+    weights.tourist + weights.trader + weights.industrial + weights.military + weights.colonist
+  );
   return {
     tourist: weights.tourist / total,
     trader: weights.trader / total,
-    industrial: weights.industrial / total
+    industrial: weights.industrial / total,
+    military: weights.military / total,
+    colonist: weights.colonist / total
   };
 }
 
@@ -243,12 +266,16 @@ function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfil
     const touristBase = 0.25 + state.rng() * 0.45;
     const traderBase = 0.2 + state.rng() * 0.45;
     const industrialBase = 0.15 + state.rng() * 0.35;
+    const militaryBase = 0.08 + state.rng() * 0.22;
+    const colonistBase = 0.1 + state.rng() * 0.26;
     profiles[lane] = {
       trafficVolume: clamp(0.6 + state.rng() * 0.8, 0.4, 1.6),
       weights: normalizeTrafficWeights({
         tourist: touristBase,
         trader: traderBase,
-        industrial: industrialBase
+        industrial: industrialBase,
+        military: militaryBase,
+        colonist: colonistBase
       })
     };
   }
@@ -271,17 +298,119 @@ function pickShipTypeForLane(state: StationState, lane: SpaceLane): ShipType {
   const roll = state.rng();
   if (roll <= weights.tourist) return 'tourist';
   if (roll <= weights.tourist + weights.trader) return 'trader';
-  return 'industrial';
+  if (roll <= weights.tourist + weights.trader + weights.industrial) return 'industrial';
+  if (roll <= weights.tourist + weights.trader + weights.industrial + weights.military) return 'military';
+  return 'colonist';
+}
+
+function hasPrivateHousingReady(state: StationState): boolean {
+  return privateHousingUnits(state).length > 0 && privateHygieneTargets(state).length > 0;
+}
+
+function serviceTagUnlockTier(tag: ShipServiceTag): UnlockTier {
+  if (tag === 'market' || tag === 'lounge') return 1;
+  if (tag === 'workshop') return 2;
+  if (tag === 'security' || tag === 'housing' || tag === 'clinic' || tag === 'recreation') return 3;
+  return 0;
+}
+
+function isServiceTagUnlocked(state: StationState, tag: ShipServiceTag): boolean {
+  if (!ENABLE_UNLOCKS_V1) return true;
+  return state.unlocks.tier >= serviceTagUnlockTier(tag);
+}
+
+function shipServiceTagSatisfied(state: StationState, tag: ShipServiceTag): boolean {
+  if (!isServiceTagUnlocked(state, tag)) return true;
+  if (tag === 'cafeteria') return state.ops.cafeteriasActive > 0;
+  if (tag === 'market') return state.ops.marketActive > 0;
+  if (tag === 'lounge') return state.ops.loungeActive > 0 || state.ops.recHallActive > 0;
+  if (tag === 'workshop') return state.ops.workshopActive > 0;
+  if (tag === 'security') return state.ops.securityActive > 0 || state.ops.brigActive > 0;
+  if (tag === 'hygiene') return state.ops.hygieneActive > 0 || state.ops.clinicActive > 0;
+  if (tag === 'housing') return hasPrivateHousingReady(state);
+  if (tag === 'clinic') return state.ops.clinicActive > 0;
+  return state.ops.recHallActive > 0 || state.ops.loungeActive > 0;
 }
 
 function shipServicesSatisfied(state: StationState, shipType: ShipType): boolean {
-  if (shipType === 'tourist') {
-    return state.ops.loungeActive > 0 || state.ops.cafeteriasActive > 0;
+  const profile = SHIP_PROFILES[shipType];
+  if (!profile) return true;
+  for (const tag of profile.serviceTags) {
+    if (!shipServiceTagSatisfied(state, tag)) return false;
   }
-  if (shipType === 'trader') {
-    return state.ops.marketActive > 0 || state.ops.cafeteriasActive > 0;
+  return true;
+}
+
+function shipTypeUnlockTier(shipType: ShipType): UnlockTier {
+  if (shipType === 'tourist' || shipType === 'trader') return 0;
+  if (shipType === 'industrial') return 2;
+  return 3;
+}
+
+export function isShipTypeUnlocked(state: StationState, shipType: ShipType): boolean {
+  if (!ENABLE_UNLOCKS_V1) return true;
+  return state.unlocks.tier >= shipTypeUnlockTier(shipType);
+}
+
+export function isRoomUnlocked(state: StationState, room: RoomType): boolean {
+  if (!ENABLE_UNLOCKS_V1) return true;
+  return isRoomUnlockedAtTier(room, state.unlocks.tier);
+}
+
+export function isModuleUnlocked(state: StationState, module: ModuleType): boolean {
+  if (!ENABLE_UNLOCKS_V1) return true;
+  return isModuleUnlockedAtTier(module, state.unlocks.tier);
+}
+
+function unlockTierProgressText(state: StationState): string {
+  if (!ENABLE_UNLOCKS_V1) return 'Progression disabled';
+  if (state.unlocks.tier >= 3) return 'All tiers unlocked';
+  if (state.unlocks.tier === 0) {
+    return `Tier 1: air >= ${UNLOCK_CRITERIA.tier1.minAirQuality}, meals >= ${UNLOCK_CRITERIA.tier1.minMealStock}`;
   }
-  return state.ops.marketActive > 0 || state.ops.workshopActive > 0;
+  if (state.unlocks.tier === 1) {
+    return `Tier 2: net >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)}/min, jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
+  }
+  return `Tier 3: residents >= ${UNLOCK_CRITERIA.tier3.minResidents}, sat >= ${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)}`;
+}
+
+function updateUnlockProgress(state: StationState): void {
+  if (!ENABLE_UNLOCKS_V1) return;
+  const unlockIdSet = new Set(state.unlocks.unlockedIds);
+  if (
+    state.unlocks.tier < 1 &&
+    state.metrics.airQuality >= UNLOCK_CRITERIA.tier1.minAirQuality &&
+    state.metrics.mealStock >= UNLOCK_CRITERIA.tier1.minMealStock &&
+    !state.metrics.airBlockedWarningActive &&
+    state.ops.cafeteriasActive > 0 &&
+    state.ops.lifeSupportActive > 0
+  ) {
+    state.unlocks.tier = 1;
+    unlockIdSet.add('tier1_stability');
+    state.unlocks.unlockedAtSec.tier1_stability = state.now;
+  }
+  if (
+    state.unlocks.tier < 2 &&
+    state.metrics.creditsNetPerMin >= UNLOCK_CRITERIA.tier2.minCreditsNetPerMin &&
+    state.metrics.completedJobs >= UNLOCK_CRITERIA.tier2.minCompletedJobs
+  ) {
+    state.unlocks.tier = 2;
+    unlockIdSet.add('tier2_logistics');
+    state.unlocks.unlockedAtSec.tier2_logistics = state.now;
+  }
+  if (
+    state.unlocks.tier < 3 &&
+    state.residents.length >= UNLOCK_CRITERIA.tier3.minResidents &&
+    state.metrics.residentSatisfactionAvg >= UNLOCK_CRITERIA.tier3.minResidentSatisfaction &&
+    state.metrics.incidentsResolved >= UNLOCK_CRITERIA.tier3.minResolvedIncidents
+  ) {
+    state.unlocks.tier = 3;
+    unlockIdSet.add('tier3_civic');
+    state.unlocks.unlockedAtSec.tier3_civic = state.now;
+  }
+  state.unlocks.unlockedIds = [...unlockIdSet];
+  state.metrics.unlockTier = state.unlocks.tier;
+  state.metrics.unlockProgressText = unlockTierProgressText(state);
 }
 
 function serviceFailureRatingPenalty(
@@ -448,6 +577,9 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
   if (room === RoomType.Cafeteria) return [ModuleType.ServingStation];
   if (room === RoomType.Kitchen) return [ModuleType.Stove];
   if (room === RoomType.Workshop) return [ModuleType.Workbench];
+  if (room === RoomType.Clinic) return [ModuleType.MedBed];
+  if (room === RoomType.Brig) return [ModuleType.CellConsole];
+  if (room === RoomType.RecHall) return [ModuleType.RecUnit];
   if (room === RoomType.Hydroponics) return [ModuleType.GrowStation];
   if (room === RoomType.Security) return [ModuleType.Terminal];
   if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation];
@@ -461,6 +593,9 @@ const SERVICE_NODE_OVERLAY_ROOMS: RoomType[] = [
   RoomType.Cafeteria,
   RoomType.Kitchen,
   RoomType.Workshop,
+  RoomType.Clinic,
+  RoomType.Brig,
+  RoomType.RecHall,
   RoomType.Reactor,
   RoomType.Security,
   RoomType.Dorm,
@@ -478,6 +613,9 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   RoomType.Cafeteria,
   RoomType.Kitchen,
   RoomType.Workshop,
+  RoomType.Clinic,
+  RoomType.Brig,
+  RoomType.RecHall,
   RoomType.Reactor,
   RoomType.Security,
   RoomType.Dorm,
@@ -1249,18 +1387,16 @@ function generateShipManifest(state: StationState, shipType: ShipType): {
   demand: ManifestDemand;
   mix: Record<VisitorArchetype, number>;
 } {
-  const base: ManifestDemand =
-    shipType === 'industrial'
-      ? {
-          cafeteria: 0.22,
-          market: 0.58,
-          lounge: 0.2
-        }
-      : {
-          cafeteria: 0.42,
-          market: 0.36,
-          lounge: 0.22
-        };
+  const baseProfile = SHIP_PROFILES[shipType]?.manifestBaseline ?? {
+    cafeteria: 0.42,
+    market: 0.36,
+    lounge: 0.22
+  };
+  const base: ManifestDemand = {
+    cafeteria: baseProfile.cafeteria,
+    market: baseProfile.market,
+    lounge: baseProfile.lounge
+  };
   const dominant: VisitorPreference[] = ['cafeteria', 'market', 'lounge'];
   const dominantAxis = dominant[randomInt(0, dominant.length - 1, state.rng)];
   const dominantBoost = 0.12 + state.rng() * 0.18;
@@ -1282,14 +1418,36 @@ function generateShipManifest(state: StationState, shipType: ShipType): {
     adjusted.cafeteria = clamp(adjusted.cafeteria, 0.15, 0.45);
     adjusted.market = clamp(adjusted.market, 0.4, 0.75);
     adjusted.lounge = clamp(adjusted.lounge, 0.08, 0.28);
+  } else if (shipType === 'military') {
+    adjusted.cafeteria = clamp(adjusted.cafeteria, 0.28, 0.6);
+    adjusted.market = clamp(adjusted.market, 0.15, 0.4);
+    adjusted.lounge = clamp(adjusted.lounge, 0.15, 0.4);
+  } else if (shipType === 'colonist') {
+    adjusted.cafeteria = clamp(adjusted.cafeteria, 0.35, 0.62);
+    adjusted.market = clamp(adjusted.market, 0.08, 0.28);
+    adjusted.lounge = clamp(adjusted.lounge, 0.24, 0.5);
   } else {
     adjusted.cafeteria = clamp(adjusted.cafeteria, 0.3, 0.65);
     adjusted.market = clamp(adjusted.market, 0.2, 0.55);
     adjusted.lounge = clamp(adjusted.lounge, 0.1, 0.35);
   }
+  const marketUnlocked = isServiceTagUnlocked(state, 'market');
+  const loungeUnlocked = isServiceTagUnlocked(state, 'lounge');
+  if (!marketUnlocked) adjusted.market = 0;
+  if (!loungeUnlocked) adjusted.lounge = 0;
+  if (!marketUnlocked && !loungeUnlocked) {
+    adjusted.cafeteria = Math.max(0.7, adjusted.cafeteria);
+  }
   const demand = normalizeDemand(adjusted);
 
-  const rusher = shipType === 'industrial' ? clamp(0.14 + state.rng() * 0.14, 0.14, 0.28) : clamp(0.08 + state.rng() * 0.1, 0.08, 0.18);
+  const rusher =
+    shipType === 'industrial'
+      ? clamp(0.14 + state.rng() * 0.14, 0.14, 0.28)
+      : shipType === 'military'
+        ? clamp(0.2 + state.rng() * 0.16, 0.2, 0.38)
+        : shipType === 'colonist'
+          ? clamp(0.05 + state.rng() * 0.08, 0.05, 0.16)
+          : clamp(0.08 + state.rng() * 0.1, 0.08, 0.18);
   const remaining = 1 - rusher;
   const weighted = normalizeDemand(demand);
   const mix: Record<VisitorArchetype, number> =
@@ -1300,6 +1458,20 @@ function generateShipManifest(state: StationState, shipType: ShipType): {
           lounger: weighted.lounge * remaining * 0.55,
           rusher
         }
+      : shipType === 'military'
+        ? {
+            diner: weighted.cafeteria * remaining * 0.85,
+            shopper: weighted.market * remaining * 0.75,
+            lounger: weighted.lounge * remaining * 0.6,
+            rusher
+          }
+        : shipType === 'colonist'
+          ? {
+              diner: weighted.cafeteria * remaining * 1.08,
+              shopper: weighted.market * remaining * 0.62,
+              lounger: weighted.lounge * remaining * 1.18,
+              rusher
+            }
       : {
           diner: weighted.cafeteria * remaining,
           shopper: weighted.market * remaining,
@@ -1337,18 +1509,21 @@ function pickVisitorPrimaryPreference(
   const base = manifestDemand
     ? normalizeDemand(manifestDemand)
     : { cafeteria: 0.42, market: 0.36, lounge: 0.22 };
+  const marketUnlocked = isServiceTagUnlocked(state, 'market');
+  const loungeUnlocked = isServiceTagUnlocked(state, 'lounge');
+  if (!marketUnlocked && !loungeUnlocked) return 'cafeteria';
   const profilePreference = ARCHETYPE_PROFILES[archetype].primaryPreference;
   const weighted = {
     cafeteria: base.cafeteria,
-    market: base.market,
-    lounge: base.lounge
+    market: marketUnlocked ? base.market : 0,
+    lounge: loungeUnlocked ? base.lounge : 0
   };
   if (profilePreference === 'cafeteria') weighted.cafeteria += 0.18;
-  if (profilePreference === 'market') weighted.market += 0.18;
-  if (profilePreference === 'lounge') weighted.lounge += 0.18;
+  if (profilePreference === 'market' && marketUnlocked) weighted.market += 0.18;
+  if (profilePreference === 'lounge' && loungeUnlocked) weighted.lounge += 0.18;
   weighted.cafeteria = Math.max(0.05, weighted.cafeteria + (state.rng() - 0.5) * VISITOR_PREFERENCE_JITTER);
-  weighted.market = Math.max(0.05, weighted.market + (state.rng() - 0.5) * VISITOR_PREFERENCE_JITTER);
-  weighted.lounge = Math.max(0.05, weighted.lounge + (state.rng() - 0.5) * VISITOR_PREFERENCE_JITTER);
+  weighted.market = marketUnlocked ? Math.max(0.01, weighted.market + (state.rng() - 0.5) * VISITOR_PREFERENCE_JITTER) : 0;
+  weighted.lounge = loungeUnlocked ? Math.max(0.01, weighted.lounge + (state.rng() - 0.5) * VISITOR_PREFERENCE_JITTER) : 0;
   const demand = normalizeDemand(weighted);
   const roll = state.rng();
   if (roll <= demand.cafeteria) return 'cafeteria';
@@ -1896,11 +2071,21 @@ function makeResident(
   id: number,
   tileIndex: number,
   width: number,
+  rng: () => number,
   homeShipId: number,
   homeDockId: number,
   housingUnitId: number,
   bedModuleId: number
 ): Resident {
+  const role = pickResidentRole(rng);
+  const roleAffinity =
+    role === 'market_helper'
+      ? { [RoomType.Market]: 1, [RoomType.RecHall]: 0.6 }
+      : role === 'hydro_assist'
+        ? { [RoomType.Hydroponics]: 1, [RoomType.Kitchen]: 0.5 }
+        : role === 'civic_watch'
+          ? { [RoomType.Security]: 1, [RoomType.Brig]: 0.8 }
+          : {};
   return {
     id,
     ...tileCenter(tileIndex, width),
@@ -1914,6 +2099,8 @@ function makeResident(
     safety: 70,
     stress: 10,
     routinePhase: 'rest',
+    role,
+    roleAffinity,
     state: ResidentState.Idle,
     actionTimer: 0,
     retargetAt: 0,
@@ -1931,6 +2118,17 @@ function makeResident(
     activeIncidentId: null,
     confrontationUntil: 0
   };
+}
+
+function pickResidentRole(rng: () => number): ResidentRole {
+  const roll = rng();
+  let cursor = 0;
+  const ordered: ResidentRole[] = ['market_helper', 'hydro_assist', 'civic_watch'];
+  for (const role of ordered) {
+    cursor += RESIDENT_ROLE_WEIGHTS[role];
+    if (roll <= cursor) return role;
+  }
+  return 'none';
 }
 
 function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShip): void {
@@ -2168,7 +2366,13 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   state.usageTotals.residentConversionAttempts += 1;
   const ratingFactor = clamp((state.metrics.stationRating - 50) / 32, 0.3, 1.6);
   const comfortFactor = visitor.servedMeal ? 1.2 : 0.8;
-  const chance = clamp(RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor, 0.01, 0.15);
+  const shipProfile = SHIP_PROFILES[ship.shipType];
+  const conversionMultiplier = shipProfile?.conversionChanceMultiplier ?? 1;
+  const chance = clamp(
+    RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor * conversionMultiplier,
+    0.01,
+    0.35
+  );
   if (state.rng() > chance) return null;
 
   if (ship.kind === 'transient') {
@@ -2183,6 +2387,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
     state.residentSpawnCounter++,
     visitor.tileIndex,
     state.width,
+    state.rng,
     ship.id,
     ship.assignedDockId ?? residentialDock.id,
     housing.unit.cabinTile,
@@ -2490,6 +2695,9 @@ function assignCrewJobs(state: StationState): void {
   state.ops.cafeteriasTotal = roomClusters(state, RoomType.Cafeteria).length;
   state.ops.kitchenTotal = roomClusters(state, RoomType.Kitchen).length;
   state.ops.workshopTotal = roomClusters(state, RoomType.Workshop).length;
+  state.ops.clinicTotal = roomClusters(state, RoomType.Clinic).length;
+  state.ops.brigTotal = roomClusters(state, RoomType.Brig).length;
+  state.ops.recHallTotal = roomClusters(state, RoomType.RecHall).length;
   state.ops.securityTotal = roomClusters(state, RoomType.Security).length;
   state.ops.dormsTotal = roomClusters(state, RoomType.Dorm).length;
   state.ops.hygieneTotal = roomClusters(state, RoomType.Hygiene).length;
@@ -2711,6 +2919,30 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
     dt,
     updateDebounce
   ).length;
+  state.ops.clinicActive = operationalClustersForRoom(
+    state,
+    RoomType.Clinic,
+    CREW_PER_CLINIC,
+    false,
+    dt,
+    updateDebounce
+  ).length;
+  state.ops.brigActive = operationalClustersForRoom(
+    state,
+    RoomType.Brig,
+    CREW_PER_BRIG,
+    false,
+    dt,
+    updateDebounce
+  ).length;
+  state.ops.recHallActive = operationalClustersForRoom(
+    state,
+    RoomType.RecHall,
+    CREW_PER_REC_HALL,
+    false,
+    dt,
+    updateDebounce
+  ).length;
   state.ops.securityActive = operationalClustersForRoom(
     state,
     RoomType.Security,
@@ -2780,6 +3012,7 @@ function updateCriticalStaffTracking(state: StationState, dt: number): void {
 }
 
 function activeRoomTargets(state: StationState, room: RoomType): number[] {
+  if (room !== RoomType.None && !isRoomUnlocked(state, room)) return [];
   const flatten = (clusters: number[][]): number[] => clusters.flat();
   const filterActiveServiceTargets = (targets: number[]): number[] => {
     if (!roomRequiresServiceNode(room)) return targets;
@@ -2799,6 +3032,21 @@ function activeRoomTargets(state: StationState, room: RoomType): number[] {
   if (room === RoomType.Workshop) {
     return filterActiveServiceTargets(
       flatten(operationalClustersForRoom(state, RoomType.Workshop, CREW_PER_WORKSHOP, false))
+    );
+  }
+  if (room === RoomType.Clinic) {
+    return filterActiveServiceTargets(
+      flatten(operationalClustersForRoom(state, RoomType.Clinic, CREW_PER_CLINIC, false))
+    );
+  }
+  if (room === RoomType.Brig) {
+    return filterActiveServiceTargets(
+      flatten(operationalClustersForRoom(state, RoomType.Brig, CREW_PER_BRIG, false))
+    );
+  }
+  if (room === RoomType.RecHall) {
+    return filterActiveServiceTargets(
+      flatten(operationalClustersForRoom(state, RoomType.RecHall, CREW_PER_REC_HALL, false))
     );
   }
   if (room === RoomType.Reactor) {
@@ -3007,6 +3255,18 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   }
   if (room === RoomType.LifeSupport) {
     hints.push(`air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential`);
+  }
+  if (room === RoomType.Clinic) {
+    hints.push('clinic stabilizes distressed actors');
+    hints.push(`distressed ${state.metrics.distressedResidents} | critical ${state.metrics.criticalResidents}`);
+  }
+  if (room === RoomType.Brig) {
+    hints.push('brig improves fight containment time');
+    hints.push(`open incidents ${state.metrics.incidentsOpen} | response ${state.metrics.securityResponseAvgSec.toFixed(1)}s`);
+  }
+  if (room === RoomType.RecHall) {
+    hints.push('recreation sink for leisure and resident social recovery');
+    hints.push(`rating trend ${state.metrics.stationRatingTrendPerMin.toFixed(2)}/min`);
   }
   if (room === RoomType.LogisticsStock) {
     flowHints.push(
@@ -3289,7 +3549,11 @@ function scheduleCycleArrivals(state: StationState): void {
     const laneDocks = state.docks.filter((d) => d.lane === lane && d.purpose === 'visitor');
     const availableTypes = new Set<ShipType>();
     for (const dock of laneDocks) {
-      for (const type of dock.allowedShipTypes) availableTypes.add(type);
+      for (const type of dock.allowedShipTypes) {
+        if (!ENABLE_SHIP_PACK_V1 && (type === 'military' || type === 'colonist')) continue;
+        if (!isShipTypeUnlocked(state, type)) continue;
+        availableTypes.add(type);
+      }
     }
     if (availableTypes.size === 0) {
       // No configured types on this lane; skip attempt without rating penalty.
@@ -3370,6 +3634,11 @@ function updateSpawns(state: StationState): void {
 function updateArrivingShips(state: StationState, dt: number): void {
   for (let i = 0; i < state.dockQueue.length; i++) {
     const entry = state.dockQueue[i];
+    if (!isShipTypeUnlocked(state, entry.shipType)) {
+      state.dockQueue.splice(i, 1);
+      i--;
+      continue;
+    }
     const eligible = state.docks.filter(
       (d) =>
         d.purpose === 'visitor' &&
@@ -3441,7 +3710,16 @@ function updateArrivingShips(state: StationState, dt: number): void {
 
     if (ship.stage === 'depart' && ship.stageTime >= SHIP_DEPART_TIME) {
       if (ship.kind === 'transient' && !shipServicesSatisfied(state, ship.shipType)) {
-        addVisitorFailurePenalty(state, 0.25, 'shipServicesMissing');
+        const weightedPenalty = 0.25 * (SHIP_SERVICE_WEIGHT_BY_TYPE[ship.shipType] ?? 1);
+        addVisitorFailurePenalty(state, weightedPenalty, 'shipServicesMissing');
+      }
+      if (ship.kind === 'transient' && ship.shipType === 'military') {
+        const unresolvedIncidents = state.incidents.filter((incident) => isIncidentActive(incident)).length;
+        const lowCoverage = state.metrics.securityCoveragePct < 28;
+        if (unresolvedIncidents > 0 || lowCoverage) {
+          const extraPenalty = 0.18 + unresolvedIncidents * 0.03 + (lowCoverage ? 0.1 : 0);
+          addVisitorFailurePenalty(state, extraPenalty, 'shipServicesMissing');
+        }
       }
       if (ship.dockedAt > 0) {
         state.dockedTimeTotal += Math.max(0, state.now - ship.dockedAt);
@@ -4584,8 +4862,9 @@ function registerVisitorServiceFailure(state: StationState, amount: number): voi
 
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
   const loungeTargets = activeRoomTargets(state, RoomType.Lounge);
+  const recHallTargets = activeRoomTargets(state, RoomType.RecHall);
   const marketTargets = activeRoomTargets(state, RoomType.Market);
-  const allTargets = [...loungeTargets, ...marketTargets];
+  const allTargets = [...loungeTargets, ...recHallTargets, ...marketTargets];
   if (allTargets.length === 0) return false;
 
   if (visitor.archetype === 'rusher') {
@@ -4601,7 +4880,7 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
         ? ['lounge', 'market', 'cafeteria']
         : ['lounge', 'market', 'cafeteria'];
   for (const preference of preferenceOrder) {
-    const targets = preference === 'market' ? marketTargets : loungeTargets;
+    const targets = preference === 'market' ? marketTargets : [...loungeTargets, ...recHallTargets];
     if (targets.length === 0) continue;
     const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
     if (path.length === 0) continue;
@@ -4632,9 +4911,21 @@ function shouldTryMealAfterLeisure(state: StationState, visitor: Visitor): boole
   return state.rng() < chanceByArchetype[visitor.archetype];
 }
 
+function marketHelperMultiplier(state: StationState): number {
+  if (!ENABLE_RESIDENT_ROUTINES_V2) return 1;
+  let workers = 0;
+  for (const resident of state.residents) {
+    if (resident.role !== 'market_helper') continue;
+    if (resident.state !== ResidentState.Leisure || resident.routinePhase !== 'work') continue;
+    if (state.rooms[resident.tileIndex] !== RoomType.Market && state.rooms[resident.tileIndex] !== RoomType.RecHall) continue;
+    workers += 1;
+  }
+  return 1 + Math.min(0.45, workers * (RESIDENT_WORK_BONUS.marketUseMultiplier - 1) * 0.3);
+}
+
 function marketSpendPerSec(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity, 0.35, 1.05);
-  return 0.45 * visitor.spendMultiplier * taxPenalty;
+  return 0.45 * visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state);
 }
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
@@ -4671,6 +4962,16 @@ function updateVisitorLogic(
     if (exposure.died) {
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
       continue;
+    }
+
+    if (state.ops.clinicActive > 0 && state.rooms[visitor.tileIndex] === RoomType.Clinic) {
+      visitor.airExposureSec = Math.max(0, visitor.airExposureSec - PROCESS_RATES.clinicDistressRecoveryPerSec * dt);
+      visitor.healthState =
+        visitor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
+          ? 'critical'
+          : visitor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
+            ? 'distressed'
+            : 'healthy';
     }
 
     if (state.zones[visitor.tileIndex] === ZoneType.Restricted && !visitor.trespassed) {
@@ -4852,7 +5153,9 @@ function updateVisitorLogic(
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt * 0.4);
       const atLoungeModule =
-        state.modules[visitor.tileIndex] === ModuleType.Couch || state.modules[visitor.tileIndex] === ModuleType.GameStation;
+        state.modules[visitor.tileIndex] === ModuleType.Couch ||
+        state.modules[visitor.tileIndex] === ModuleType.GameStation ||
+        state.modules[visitor.tileIndex] === ModuleType.RecUnit;
       const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
       if (atLoungeModule || atMarketModule) {
         visitor.state = VisitorState.Leisure;
@@ -5002,13 +5305,31 @@ function updateResidentRoutinePhase(state: StationState, resident: Resident): Re
   const t = ((state.now % RESIDENT_ROUTINE_DAY_SEC) + RESIDENT_ROUTINE_DAY_SEC) % RESIDENT_ROUTINE_DAY_SEC;
   const pct = t / RESIDENT_ROUTINE_DAY_SEC;
   const phase: ResidentRoutinePhase =
-    pct < 0.25 ? 'rest' : pct < 0.55 ? 'errands' : pct < 0.8 ? 'socialize' : 'winddown';
+    pct < 0.2 ? 'rest' : pct < 0.45 ? 'errands' : pct < 0.68 ? 'work' : pct < 0.86 ? 'socialize' : 'winddown';
   resident.routinePhase = phase;
   return phase;
 }
 
 function residentLeisureTargets(state: StationState): number[] {
-  return [...activeRoomTargets(state, RoomType.Lounge), ...activeRoomTargets(state, RoomType.Market), ...activeRoomTargets(state, RoomType.Cafeteria)];
+  return [
+    ...activeRoomTargets(state, RoomType.Lounge),
+    ...activeRoomTargets(state, RoomType.RecHall),
+    ...activeRoomTargets(state, RoomType.Market),
+    ...activeRoomTargets(state, RoomType.Cafeteria)
+  ];
+}
+
+function residentWorkTargets(state: StationState, resident: Resident): number[] {
+  if (resident.role === 'market_helper') {
+    return [...activeRoomTargets(state, RoomType.Market), ...activeRoomTargets(state, RoomType.RecHall)];
+  }
+  if (resident.role === 'hydro_assist') {
+    return [...activeRoomTargets(state, RoomType.Hydroponics), ...activeRoomTargets(state, RoomType.Kitchen)];
+  }
+  if (resident.role === 'civic_watch') {
+    return [...activeRoomTargets(state, RoomType.Security), ...activeRoomTargets(state, RoomType.Brig)];
+  }
+  return [];
 }
 
 function residentSecurityAdjacentTargets(state: StationState): number[] {
@@ -5105,6 +5426,15 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     }
   }
 
+  if (!criticalNeed && ENABLE_RESIDENT_ROUTINES_V2 && resident.routinePhase === 'work') {
+    const workTargets = residentWorkTargets(state, resident);
+    if (workTargets.length > 0) {
+      resident.state = ResidentState.ToLeisure;
+      resident.path = chooseNearestPath(state, resident.tileIndex, workTargets, false) ?? [];
+      if (resident.path.length > 0) return;
+    }
+  }
+
   if (!criticalNeed && resident.routinePhase === 'socialize' && resident.social < 65) {
     const leisureTargets = residentLeisureTargets(state);
     if (leisureTargets.length > 0) {
@@ -5172,7 +5502,13 @@ function residentCanConfront(state: StationState, resident: Resident, securityAu
   if (suppression <= 0.5 && resident.safety > 40) return false;
   if (state.zones[resident.tileIndex] !== ZoneType.Public) return false;
   const room = state.rooms[resident.tileIndex];
-  return room === RoomType.Lounge || room === RoomType.Market || room === RoomType.Cafeteria || room === RoomType.None;
+  return (
+    room === RoomType.Lounge ||
+    room === RoomType.RecHall ||
+    room === RoomType.Market ||
+    room === RoomType.Cafeteria ||
+    room === RoomType.None
+  );
 }
 
 function tryStartResidentConfrontation(state: StationState, dt: number, securityAuraByTile: Map<number, number>): void {
@@ -5339,12 +5675,14 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
         incident.dispatchAt = state.now;
         const congestionPenalty = pathCongestion(responder.path, state.pathOccupancyByTile) * INCIDENT_CONGESTION_WEIGHT_SEC;
         const delayedSecurityPenalty = state.now < state.effects.securityDelayUntil ? 1.8 : 0;
+        const brigContainmentMultiplier = state.ops.brigActive > 0 ? 0.76 : 1;
         incident.interveneAt =
           state.now +
-          INCIDENT_INTERVENTION_BASE_SEC +
-          responder.path.length * INCIDENT_INTERVENTION_PER_TILE_SEC +
-          congestionPenalty +
-          delayedSecurityPenalty;
+          (INCIDENT_INTERVENTION_BASE_SEC +
+            responder.path.length * INCIDENT_INTERVENTION_PER_TILE_SEC +
+            congestionPenalty +
+            delayedSecurityPenalty) *
+            brigContainmentMultiplier;
         incident.stage = 'intervening';
         responder.crew.path = responder.path;
         responder.crew.targetTile = incident.tileIndex;
@@ -5385,6 +5723,9 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
     }
 
     if (incident.stage === 'intervening_extended') {
+      if (state.ops.brigActive > 0 && incident.extendedResolveAt !== null) {
+        incident.extendedResolveAt = Math.min(incident.extendedResolveAt, state.now + 0.55);
+      }
       if (state.now >= (incident.extendedResolveAt ?? Number.POSITIVE_INFINITY) && hasActiveIncidentResponder(state, incident)) {
         resolveIncident(state, incident, { fightOutcome: incident.severity >= 1.75 ? 'detained' : 'deescalated' });
       } else if (state.now >= incident.resolveBy) {
@@ -5465,6 +5806,18 @@ function updateResidentLogic(
       continue;
     }
 
+    if (state.ops.clinicActive > 0 && state.rooms[resident.tileIndex] === RoomType.Clinic) {
+      resident.airExposureSec = Math.max(0, resident.airExposureSec - PROCESS_RATES.clinicDistressRecoveryPerSec * dt);
+      resident.healthState =
+        resident.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
+          ? 'critical'
+          : resident.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
+            ? 'distressed'
+            : 'healthy';
+      resident.stress = clamp(resident.stress - dt * 1.4, 0, 120);
+      resident.safety = clamp(resident.safety + dt * 1.2, 0, 100);
+    }
+
     const airPenalty = state.metrics.airQuality < 40 ? 0.25 : 0;
     const healthPenalty = resident.healthState === 'critical' ? 0.35 : resident.healthState === 'distressed' ? 0.18 : 0;
     resident.hunger = clamp(resident.hunger - dt * (0.65 + airPenalty), 0, 100);
@@ -5475,7 +5828,7 @@ function updateResidentLogic(
     const localSuppression = incidentSuppressionAtTile(securityAuraByTile, resident.tileIndex);
     const crowdStress = clamp((localPopulation - 4) / 8, 0, 1.5);
     const incidentPressure = nearbyIncidentPressure(state, resident.tileIndex);
-    const socialRooms = new Set([RoomType.Lounge, RoomType.Market, RoomType.Cafeteria]);
+    const socialRooms = new Set([RoomType.Lounge, RoomType.RecHall, RoomType.Market, RoomType.Cafeteria]);
     const inSocialRoom = socialRooms.has(state.rooms[resident.tileIndex]);
     if (inSocialRoom && localPopulation >= 2) {
       resident.social = clamp(resident.social + dt * RESIDENT_SOCIAL_RECOVERY_PER_SEC * clamp(localPopulation / 5, 0.8, 1.6), 0, 100);
@@ -5660,6 +6013,7 @@ function updateResidentLogic(
       } else if (
         resident.state === ResidentState.ToLeisure &&
         (state.rooms[resident.tileIndex] === RoomType.Lounge ||
+          state.rooms[resident.tileIndex] === RoomType.RecHall ||
           state.rooms[resident.tileIndex] === RoomType.Market ||
           state.rooms[resident.tileIndex] === RoomType.Cafeteria)
       ) {
@@ -5703,10 +6057,36 @@ function updateResidentLogic(
   state.residents = keep;
 }
 
+function activeResidentRoleCounts(state: StationState): Record<ResidentRole, number> {
+  const counts: Record<ResidentRole, number> = {
+    none: 0,
+    market_helper: 0,
+    hydro_assist: 0,
+    civic_watch: 0
+  };
+  for (const resident of state.residents) {
+    if (resident.state !== ResidentState.Leisure || resident.routinePhase !== 'work') continue;
+    const room = state.rooms[resident.tileIndex];
+    if (resident.role === 'market_helper' && (room === RoomType.Market || room === RoomType.RecHall)) {
+      counts.market_helper += 1;
+    } else if (resident.role === 'hydro_assist' && (room === RoomType.Hydroponics || room === RoomType.Kitchen)) {
+      counts.hydro_assist += 1;
+    } else if (resident.role === 'civic_watch' && (room === RoomType.Security || room === RoomType.Brig)) {
+      counts.civic_watch += 1;
+    } else {
+      counts.none += 1;
+    }
+  }
+  return counts;
+}
+
 function updateResources(state: StationState, dt: number): void {
+  const roleWorkers = ENABLE_RESIDENT_ROUTINES_V2 ? activeResidentRoleCounts(state) : { none: 0, market_helper: 0, hydro_assist: 0, civic_watch: 0 };
   const leakPenalty = state.metrics.leakingTiles * 0.03;
   const powerRatio = clamp(state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand), 0.35, 1);
-  const hydroRate = state.ops.hydroponicsActive * 1.25 * powerRatio;
+  const hydroAssistMultiplier =
+    1 + Math.min(0.4, roleWorkers.hydro_assist * (RESIDENT_WORK_BONUS.hydroOutputMultiplier - 1) * 0.28);
+  const hydroRate = state.ops.hydroponicsActive * 1.25 * powerRatio * hydroAssistMultiplier;
   const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
   const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
   const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
@@ -5823,7 +6203,9 @@ function updateResources(state: StationState, dt: number): void {
     state.crewMembers.length > 0 ? state.crewMembers.reduce((acc, c) => acc + c.hygiene, 0) / state.crewMembers.length : 100;
   const hygieneStress = clamp((55 - avgCrewHygiene) / 55, 0, 1);
   const crowdPressure = clamp((state.visitors.length + state.crewMembers.length) / 24, 0, 2);
-  const securityFactor = state.ops.securityActive > 0 ? 0.35 : 1;
+  const civicWatchMultiplier =
+    1 / (1 + Math.min(0.35, roleWorkers.civic_watch * (RESIDENT_WORK_BONUS.securitySuppressionMultiplier - 1) * 0.35));
+  const securityFactor = (state.ops.securityActive > 0 ? 0.35 : 1) * civicWatchMultiplier;
   const ambientIncidentRate = (0.012 + crowdPressure * 0.03 + hygieneStress * 0.05) * securityFactor;
   if (state.rng() < ambientIncidentRate * dt) {
     registerIncident(state, 1);
@@ -5917,6 +6299,9 @@ function collectTopRoomWarnings(state: StationState): string[] {
     RoomType.Cafeteria,
     RoomType.Kitchen,
     RoomType.Workshop,
+    RoomType.Clinic,
+    RoomType.Brig,
+    RoomType.RecHall,
     RoomType.Dorm,
     RoomType.Hygiene,
     RoomType.Hydroponics,
@@ -6016,6 +6401,9 @@ function computeMetrics(state: StationState): void {
     state.ops.cafeteriasActive * 1.3 +
     state.ops.kitchenActive * 1.2 +
     state.ops.workshopActive * 1.15 +
+    state.ops.clinicActive * 1.1 +
+    state.ops.brigActive * 1.05 +
+    state.ops.recHallActive * 1.0 +
     state.ops.securityActive * 1.2 +
     state.ops.hygieneActive * 1.0 +
     state.ops.hydroponicsActive * 1.1 +
@@ -6064,6 +6452,9 @@ function computeMetrics(state: StationState): void {
     state.ops.cafeteriasActive * 14 +
     state.ops.kitchenActive * 9 +
     state.ops.workshopActive * 10 +
+    state.ops.clinicActive * 7 +
+    state.ops.brigActive * 6 +
+    state.ops.recHallActive * 8 +
     state.ops.securityActive * 10 +
     state.ops.reactorsActive * 14 +
     state.ops.lifeSupportActive * 10 +
@@ -6283,7 +6674,9 @@ function computeMetrics(state: StationState): void {
   state.metrics.shipsByTypePerMin = {
     tourist: state.usageTotals.shipsByType.tourist / runMinutes,
     trader: state.usageTotals.shipsByType.trader / runMinutes,
-    industrial: state.usageTotals.shipsByType.industrial / runMinutes
+    industrial: state.usageTotals.shipsByType.industrial / runMinutes,
+    military: state.usageTotals.shipsByType.military / runMinutes,
+    colonist: state.usageTotals.shipsByType.colonist / runMinutes
   };
   state.metrics.residentTaxPerMin = state.usageTotals.residentTaxesCollected / runMinutes;
   state.metrics.residentTaxCollectedTotal = state.usageTotals.residentTaxesCollected;
@@ -6562,6 +6955,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       morale: 80,
       stationRating: STATION_RATING_START,
       stationRatingTrendPerMin: 0,
+      unlockTier: 0,
+      unlockProgressText: 'Tier 1: air >= 60, meals >= 18',
       rawFoodStock: 40,
       mealStock: 20,
       kitchenRawBuffer: 0,
@@ -6722,7 +7117,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       shipsByTypePerMin: {
         tourist: 0,
         trader: 0,
-        industrial: 0
+        industrial: 0,
+        military: 0,
+        colonist: 0
       },
       residentTaxPerMin: 0,
       residentTaxCollectedTotal: 0,
@@ -6796,6 +7193,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       },
       purchasesMade: 0
     },
+    unlocks: createInitialUnlockState(),
     effects: {
       cafeteriaStallUntil: 0,
       brownoutUntil: 0,
@@ -6852,7 +7250,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       shipsByType: {
         tourist: 0,
         trader: 0,
-        industrial: 0
+        industrial: 0,
+        military: 0,
+        colonist: 0
       },
       visitorLeisureEntries: {
         cafeteria: 0,
@@ -6918,6 +7318,12 @@ export function createInitialState(options?: { seed?: number }): StationState {
       cafeteriasActive: 0,
       kitchenTotal: 0,
       kitchenActive: 0,
+      clinicTotal: 0,
+      clinicActive: 0,
+      brigTotal: 0,
+      brigActive: 0,
+      recHallTotal: 0,
+      recHallActive: 0,
       securityTotal: 0,
       securityActive: 0,
       reactorsTotal: 0,
@@ -7173,6 +7579,7 @@ export function setZone(state: StationState, index: number, zone: ZoneType): voi
 
 export function setRoom(state: StationState, index: number, room: RoomType): void {
   if (!isWalkable(state.tiles[index])) return;
+  if (room !== RoomType.None && !isRoomUnlocked(state, room)) return;
   if (state.rooms[index] === room) return;
   state.rooms[index] = room;
   if (room !== RoomType.Dorm && room !== RoomType.Hygiene) {
@@ -7186,6 +7593,14 @@ export function setRoom(state: StationState, index: number, room: RoomType): voi
     state.zones[index] = ZoneType.Restricted;
   }
   bumpRoomVersion(state);
+}
+
+export function getUnlockTier(state: StationState): UnlockTier {
+  return state.unlocks.tier;
+}
+
+export function getUnlockProgressText(state: StationState): string {
+  return state.metrics.unlockProgressText;
 }
 
 export function setRoomHousingPolicy(state: StationState, index: number, policy: HousingPolicy): boolean {
@@ -7450,6 +7865,7 @@ export function getResidentInspectorById(state: StationState, residentId: number
     social: resident.social,
     safety: resident.safety,
     routinePhase: resident.routinePhase,
+    role: resident.role,
     agitation,
     inConfrontation,
     satisfaction: resident.satisfaction,
@@ -7472,6 +7888,7 @@ export function tryPlaceModule(
   if (!isWalkable(state.tiles[originTile])) return { ok: false, reason: 'target not walkable' };
   const module = normalizeModuleType(moduleType);
   if (module === ModuleType.None) return { ok: false, reason: 'cannot place none' };
+  if (!isModuleUnlocked(state, module)) return { ok: false, reason: 'module locked by progression' };
   const def = MODULE_DEFINITIONS[module];
   if (!def) return { ok: false, reason: 'unknown module' };
   const appliedRotation: ModuleRotation = rotation === 90 && def.rotatable ? 90 : 0;
@@ -7784,6 +8201,7 @@ export function setDockFacing(state: StationState, dockId: number, facing: Space
 export function setDockAllowedShipType(state: StationState, dockId: number, shipType: ShipType, allowed: boolean): void {
   const dock = state.docks.find((d) => d.id === dockId);
   if (!dock) return;
+  if (allowed && !isShipTypeUnlocked(state, shipType)) return;
   const next = new Set(dock.allowedShipTypes);
   if (allowed) next.add(shipType);
   else next.delete(shipType);
@@ -7831,6 +8249,7 @@ export function tick(state: StationState, frameDt: number): void {
   if (state.controls.paused) {
     refreshJobMetrics(state);
     computeMetrics(state);
+    updateUnlockProgress(state);
     state.metrics.tickMs = perfNowMs() - tickStarted;
     return;
   }
@@ -7877,6 +8296,7 @@ export function tick(state: StationState, frameDt: number): void {
   refreshJobMetrics(state);
   ensureDerivedUpToDate(state);
   computeMetrics(state);
+  updateUnlockProgress(state);
   maybeTriggerFailure(state, dt);
   state.metrics.tickMs = perfNowMs() - tickStarted;
 }
