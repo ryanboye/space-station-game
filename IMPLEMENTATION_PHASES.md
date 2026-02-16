@@ -22,7 +22,7 @@ Key gaps against vision/product plan:
 - No workshop/market specialization loop.
 - Pathing lacks reservation/congestion sophistication and recovery behaviors.
 - Full workforce scheduler/planner is deferred to Phase 3+ (current hotfix is rules-based only).
-- Resident-specific behavior layers remain deferred until dedicated resident phase.
+- Resident labor/jobs and deeper civic behavior layers remain deferred.
 
 ## 3. Phase Size Rules (Context-Window Safe)
 Each phase is split into 1-3 implementation packets with this hard budget:
@@ -330,8 +330,8 @@ Applied before new room/layer expansion:
 This ledger tracks features intentionally removed/hidden from the current playable build so they are restored in the correct phase.
 
 1. Deferred from current build to **Phase 4 / Phase 5**:
-- Full resident simulation as a first-class gameplay population (beyond current internal scaffolding).
-- Resident-driven health/death consequences as a primary loop.
+- Resident labor/jobs (residents remain economy/tax + service consumers in current scope).
+- Resident-driven advanced health/death treatment chains as a primary loop.
 
 2. Deferred from current build to **Phase 5**:
 - Medical/morgue logistics chains and explicit body transport jobs.
@@ -345,8 +345,8 @@ This ledger tracks features intentionally removed/hidden from the current playab
 - Rich explainability overlays as default UI (kept available via collapsible advanced sections only for now).
 
 5. Current enforced now-scope:
-- Crew + visitor playable loop only.
-- Active logistics chain limited to food transport.
+- Crew + visitor + resident playable loop.
+- Active logistics chain centered on food + trade-good transport.
 - Sidebar prioritizes core operational controls/status; diagnostics are collapsed by default.
 
 6. Pulled forward intentionally (lightweight only):
@@ -549,3 +549,43 @@ Candidate follow-on once current autonomous-room/logistics chain is stable:
 - Service interactions succeed via valid access tiles.
 - Fully packed room with no access corridor becomes inactive or fails placement with explicit reason.
 - Existing non-blocking module types continue to function as configured.
+
+## 17. Phase 3B - Berth-Based Docking + Visitor/Resident Population Loop (Implemented)
+Resident restoration and berth-purpose docking pass applied on top of directional dock zoning:
+
+1. Locked design implementation:
+- Added berth purpose split: `visitor` vs `residential`.
+- Scheduled ship traffic + dock queue resolution now route only to `visitor` berths.
+- Preserved existing dock size/type acceptance logic and area-based ship-size gating.
+- Added room-level housing policy controls for Dorm/Hygiene (`crew`/`visitor`/`resident`/`private_resident`).
+
+2. Ship and population lifecycle:
+- Visitors are now origin-ship linked and return to board that ship first.
+- Conversion gate runs at boarding time only (no waitlist).
+- Conversion requires: free compatible residential berth + valid private resident bed/cabin+hygiene path + roll success.
+- Successful conversion changes transient ship into persistent `resident_home` ship relocated to residential berth.
+- Resident home ships remain docked until linked resident count reaches zero, then depart and free berth.
+
+3. Resident loop economics and rating:
+- Residents now track `satisfaction` and `leaveIntent`.
+- Low sustained satisfaction drives resident departure behavior to home ship.
+- Added periodic resident tax tick and resident-retention rating bonus.
+- Resident departures apply explicit station-rating penalty and free housing assignments.
+
+4. UI/inspection updates:
+- Dock modal now includes berth purpose control.
+- Room inspector/modal now includes Dorm/Hygiene housing policy controls and private-housing validity hints.
+- Sidebar metrics now expose visitor/residential berth occupancy, resident ships, conversion counters, resident departures, resident satisfaction, and resident tax flow.
+
+5. Validation coverage:
+- Added deterministic `test:sim` scenarios for:
+  - visitor-berth traffic routing vs residential exclusion,
+  - conversion blocked without residential berth,
+  - conversion blocked without private housing,
+  - successful conversion to resident-home ship with assigned housing,
+  - resident departure unlinking and resident-home ship berth release.
+
+6. Remaining deferrals after 3B:
+- No resident labor/jobs in this slice.
+- No conversion waitlist/queue (conversion is opportunistic at board time).
+- No forced evictions; departure is satisfaction-driven.

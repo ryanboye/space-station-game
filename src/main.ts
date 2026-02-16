@@ -1,24 +1,33 @@
 import './styles.css';
 import { renderWorld } from './render/render';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
+  canExpandDirection,
   clearBodies,
   createInitialState,
+  expandMap,
   fireCrew,
+  getHousingInspectorAt,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
+  getResidentInspectorById,
+  getVisitorInspectorById,
+  getNextExpansionCost,
   getDockByTile,
   hireCrew,
   removeModuleAtTile,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
   setDockFacing,
+  setDockPurpose,
   setDockAllowedShipType,
   setDockAllowedShipSize,
   sellMaterials,
   sellRawFood,
   setRoom,
+  setRoomHousingPolicy,
   setZone,
   tick,
   tryPlaceModule,
@@ -27,16 +36,19 @@ import {
   validateDockPlacement
 } from './sim/sim';
 import {
+  type CardinalDirection,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type SpaceLane,
   type ShipSize,
+  type HousingPolicy,
   ModuleType,
   RoomType,
   TILE_SIZE,
   TileType,
   ZoneType,
   clamp,
+  fromIndex,
   inBounds,
   toIndex,
   type BuildTool
@@ -46,8 +58,20 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root not found');
 
 app.innerHTML = `
+  <div id="topbar">
+    <button id="open-save-modal" class="topbar-btn">Save / Load</button>
+    <button id="open-market" class="topbar-btn">Market</button>
+    <button id="open-expansion-modal" class="topbar-btn">Map Expansion</button>
+    <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
+    <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
+    <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
+    <span class="topbar-spacer"></span>
+    <button id="camera-reset" class="topbar-btn">Fit Map</button>
+  </div>
   <div id="game-wrap">
-    <canvas id="game"></canvas>
+    <div id="game-stage">
+      <canvas id="game"></canvas>
+    </div>
   </div>
   <aside id="panel">
     <h1>Station / Colony Sim MVP</h1>
@@ -134,14 +158,16 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Exits / min</span><span class="value" id="exits-per-min">0</span></div>
       <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
       <small id="walk-stats">Visitor walk avg: 0.0</small>
+      <small id="berth-summary">Berths: visitor 0/0 | resident 0/0 | resident ships 0</small>
+      <small id="resident-loop-summary">Resident loop: convert 0/0 | departures 0 | tax +0.0/min</small>
       <details class="mini-collapse">
         <summary>Station Rating Insight</summary>
         <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
         <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
-        <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0</small>
+        <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service">Service/min: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
         <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
-        <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0</small>
+        <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service-total">Service total: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
         <small id="rating-insight-events">Events: skipped docks 0 | queue timeouts 0 | service fails/min 0.0</small>
       </details>
@@ -173,7 +199,6 @@ app.innerHTML = `
       <button id="clear-bodies">Clear Bodies (-6 materials)</button>
       <button id="edit-priorities">Edit Priorities</button>
       <div class="row compact list-row"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
-      <button id="open-market">Open Market</button>
     </details>
 
     <details class="section mini-collapse">
@@ -185,15 +210,38 @@ app.innerHTML = `
     </details>
 
     <details class="section mini-collapse">
-      <summary class="legend-title">Build Tools</summary>
-      <button id="toggle-zones">Toggle Zone Overlay</button>
-      <button id="toggle-service-nodes">Toggle Service/Queue Nodes</button>
-      <button id="toggle-inventory-overlay">Inventory Overlay</button>
+      <summary class="legend-title">Build Guidance</summary>
       <small>Drag to paint rectangle (Prison Architect style)</small>
       <small id="paint-guidance">Paint guidance: larger rooms need enough service modules and more than one door.</small>
       <small id="room-diagnostic">Inspect room: hover a room tile</small>
     </details>
   </aside>
+  <div id="save-modal" class="modal hidden">
+    <div class="modal-card save-modal-card">
+      <div class="modal-head">
+        <h2>Save / Load</h2>
+        <button id="close-save-modal" class="ghost-btn">Close</button>
+      </div>
+      <div class="row compact list-row"><span>Save Name</span><span class="value">New Slot</span></div>
+      <input id="save-name" type="text" placeholder="My test station" maxlength="80" />
+      <div class="button-row">
+        <button id="save-create">Save</button>
+        <button id="save-quicksave">Quicksave</button>
+      </div>
+      <div class="row compact list-row"><span>Saved Slots</span><span class="value" id="save-count">0</span></div>
+      <select id="save-slot-select"></select>
+      <div class="button-row">
+        <button id="save-load">Load</button>
+        <button id="save-delete">Delete</button>
+      </div>
+      <small>Export selected save (copy/paste JSON):</small>
+      <textarea id="save-export" class="save-textarea" readonly spellcheck="false"></textarea>
+      <small>Import save JSON as a new slot:</small>
+      <textarea id="save-import" class="save-textarea" spellcheck="false"></textarea>
+      <button id="save-import-btn">Import as New Save</button>
+      <small id="save-status" class="save-status">No saves yet.</small>
+    </div>
+  </div>
   <div id="market-modal" class="modal hidden">
     <div class="modal-card">
       <div class="modal-head">
@@ -223,6 +271,24 @@ app.innerHTML = `
         <button id="buy-food-large">Buy +60 Raw Food (30c)</button>
         <button id="sell-food-large">Sell -60 Raw Food (+15c)</button>
       </div>
+    </div>
+  </div>
+  <div id="expansion-modal" class="modal hidden">
+    <div class="modal-card expansion-modal-card">
+      <div class="modal-head">
+        <h2>Map Expansion</h2>
+        <button id="close-expansion-modal" class="ghost-btn">Close</button>
+      </div>
+      <small id="expansion-next-cost">Next expansion cost: 2000c</small>
+      <div class="button-row">
+        <button id="expand-north">Expand North</button>
+        <button id="expand-east">Expand East</button>
+      </div>
+      <div class="button-row">
+        <button id="expand-south">Expand South</button>
+        <button id="expand-west">Expand West</button>
+      </div>
+      <small id="expansion-status">Directions expanded: none</small>
     </div>
   </div>
   <div id="priority-modal" class="modal hidden">
@@ -263,6 +329,11 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Dock</span><span class="value" id="dock-modal-id">none</span></div>
       <div class="row compact list-row"><span>Zone Area</span><span class="value" id="dock-modal-area">0</span></div>
       <div class="row compact list-row"><span>Max Size</span><span class="value" id="dock-modal-max-size">small</span></div>
+      <div class="row" style="margin-top:8px;"><span>Purpose</span><span class="value" id="dock-modal-purpose-label">Visitor</span></div>
+      <select id="dock-modal-purpose">
+        <option value="visitor">Visitor Berth</option>
+        <option value="residential">Residential Berth</option>
+      </select>
       <div class="row" style="margin-top:8px;"><span>Facing</span><span class="value" id="dock-modal-facing-label">North</span></div>
       <select id="dock-modal-facing">
         <option value="north">North</option>
@@ -297,12 +368,48 @@ app.innerHTML = `
       <small id="room-modal-inventory">Inventory: n/a</small>
       <small id="room-modal-flow">Flow: n/a</small>
       <small id="room-modal-capacity">Capacity: n/a</small>
+      <div class="row compact list-row"><span>Housing Policy</span><span class="value" id="room-modal-housing-policy">n/a</span></div>
+      <select id="room-modal-housing-select">
+        <option value="crew">Crew</option>
+        <option value="visitor">Visitor/Shared</option>
+        <option value="resident">Resident Shared</option>
+        <option value="private_resident">Private Resident</option>
+      </select>
+      <small id="room-modal-housing">Housing: n/a</small>
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
       <small id="room-modal-hints">Hints: none</small>
     </div>
   </div>
+  <div id="agent-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Agent Inspector</h2>
+        <button id="close-agent" class="ghost-btn">Close</button>
+      </div>
+      <div class="row compact list-row"><span>Type</span><span class="value" id="agent-kind">none</span></div>
+      <div class="row compact list-row"><span>ID</span><span class="value" id="agent-id">n/a</span></div>
+      <div class="row compact list-row"><span>State</span><span class="value" id="agent-state">n/a</span></div>
+      <div class="row compact list-row"><span>Action</span><span class="value" id="agent-action">n/a</span></div>
+      <small id="agent-reason">Reason: n/a</small>
+      <div class="row compact list-row"><span>Desire</span><span class="value" id="agent-desire">n/a</span></div>
+      <div class="row compact list-row"><span>Target</span><span class="value" id="agent-target">n/a</span></div>
+      <div class="row compact list-row"><span>Path</span><span class="value" id="agent-path">0</span></div>
+      <div class="row compact list-row"><span>Health</span><span class="value" id="agent-health">healthy</span></div>
+      <div class="row compact list-row"><span>Blocked Ticks</span><span class="value" id="agent-blocked">0</span></div>
+      <small id="agent-visitor-details">Visitor: n/a</small>
+      <small id="agent-resident-details">Resident: n/a</small>
+    </div>
+  </div>
 `;
+
+const gameWrapEl = document.querySelector<HTMLDivElement>('#game-wrap');
+if (!gameWrapEl) throw new Error('Game wrapper not found');
+const gameWrap: HTMLDivElement = gameWrapEl;
+
+const gameStageEl = document.querySelector<HTMLDivElement>('#game-stage');
+if (!gameStageEl) throw new Error('Game stage not found');
+const gameStage: HTMLDivElement = gameStageEl;
 
 const canvasEl = document.querySelector<HTMLCanvasElement>('#game');
 if (!canvasEl) throw new Error('Canvas not found');
@@ -313,13 +420,35 @@ if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
 const state = createInitialState();
-canvas.width = state.width * TILE_SIZE;
-canvas.height = state.height * TILE_SIZE;
+let zoom = 1;
+const MIN_ZOOM = 0.6;
+const MAX_ZOOM = 2.5;
+const FIT_MIN_ZOOM = 0.1;
+const EXPANSION_STEP_TILES = 40;
+const PAN_PADDING_MIN = 260;
+let mapOffsetX = 0;
+let mapOffsetY = 0;
+
+function applyCanvasSize(): void {
+  const worldWidthPx = state.width * TILE_SIZE;
+  const worldHeightPx = state.height * TILE_SIZE;
+  canvas.width = worldWidthPx;
+  canvas.height = worldHeightPx;
+  canvas.style.width = `${Math.round(worldWidthPx * zoom)}px`;
+  canvas.style.height = `${Math.round(worldHeightPx * zoom)}px`;
+}
+applyCanvasSize();
 
 const shipsInput = document.querySelector<HTMLInputElement>('#ships')!;
 const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
+const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
+const expansionStatusEl = document.querySelector<HTMLElement>('#expansion-status')!;
+const expandNorthBtn = document.querySelector<HTMLButtonElement>('#expand-north')!;
+const expandEastBtn = document.querySelector<HTMLButtonElement>('#expand-east')!;
+const expandSouthBtn = document.querySelector<HTMLButtonElement>('#expand-south')!;
+const expandWestBtn = document.querySelector<HTMLButtonElement>('#expand-west')!;
 const playBtn = document.querySelector<HTMLButtonElement>('#play')!;
 const pauseBtn = document.querySelector<HTMLButtonElement>('#pause')!;
 const speedUpBtn = document.querySelector<HTMLButtonElement>('#speed-up')!;
@@ -374,9 +503,16 @@ const sellFoodSmallBtn = document.querySelector<HTMLButtonElement>('#sell-food-s
 const sellFoodLargeBtn = document.querySelector<HTMLButtonElement>('#sell-food-large')!;
 const marketCrewEl = document.querySelector<HTMLSpanElement>('#market-crew')!;
 const marketRateEl = document.querySelector<HTMLSpanElement>('#market-rate')!;
+const openSaveModalBtn = document.querySelector<HTMLButtonElement>('#open-save-modal')!;
+const cameraResetBtn = document.querySelector<HTMLButtonElement>('#camera-reset')!;
+const saveModal = document.querySelector<HTMLDivElement>('#save-modal')!;
+const closeSaveModalBtn = document.querySelector<HTMLButtonElement>('#close-save-modal')!;
 const openMarketBtn = document.querySelector<HTMLButtonElement>('#open-market')!;
 const closeMarketBtn = document.querySelector<HTMLButtonElement>('#close-market')!;
 const marketModal = document.querySelector<HTMLDivElement>('#market-modal')!;
+const openExpansionModalBtn = document.querySelector<HTMLButtonElement>('#open-expansion-modal')!;
+const closeExpansionModalBtn = document.querySelector<HTMLButtonElement>('#close-expansion-modal')!;
+const expansionModal = document.querySelector<HTMLDivElement>('#expansion-modal')!;
 const priorityModal = document.querySelector<HTMLDivElement>('#priority-modal')!;
 const closePriorityBtn = document.querySelector<HTMLButtonElement>('#close-priority')!;
 const foodFlowEl = document.querySelector<HTMLElement>('#food-flow')!;
@@ -393,6 +529,8 @@ const bayUtilizationEl = document.querySelector<HTMLSpanElement>('#bay-utilizati
 const exitsPerMinEl = document.querySelector<HTMLSpanElement>('#exits-per-min')!;
 const laneQueuesEl = document.querySelector<HTMLElement>('#lane-queues')!;
 const walkStatsEl = document.querySelector<HTMLElement>('#walk-stats')!;
+const berthSummaryEl = document.querySelector<HTMLElement>('#berth-summary')!;
+const residentLoopSummaryEl = document.querySelector<HTMLElement>('#resident-loop-summary')!;
 const ratingInsightTrendEl = document.querySelector<HTMLElement>('#rating-insight-trend')!;
 const ratingInsightRateEl = document.querySelector<HTMLElement>('#rating-insight-rate')!;
 const ratingInsightBonusEl = document.querySelector<HTMLElement>('#rating-insight-bonus')!;
@@ -408,6 +546,8 @@ const closeDockBtn = document.querySelector<HTMLButtonElement>('#close-dock')!;
 const dockModalIdEl = document.querySelector<HTMLElement>('#dock-modal-id')!;
 const dockModalAreaEl = document.querySelector<HTMLElement>('#dock-modal-area')!;
 const dockModalMaxSizeEl = document.querySelector<HTMLElement>('#dock-modal-max-size')!;
+const dockModalPurposeSelect = document.querySelector<HTMLSelectElement>('#dock-modal-purpose')!;
+const dockModalPurposeLabelEl = document.querySelector<HTMLElement>('#dock-modal-purpose-label')!;
 const dockModalFacingSelect = document.querySelector<HTMLSelectElement>('#dock-modal-facing')!;
 const dockModalFacingLabelEl = document.querySelector<HTMLElement>('#dock-modal-facing-label')!;
 const dockModalErrorEl = document.querySelector<HTMLElement>('#dock-modal-error')!;
@@ -429,12 +569,46 @@ const roomModalNodesEl = document.querySelector<HTMLElement>('#room-modal-nodes'
 const roomModalInventoryEl = document.querySelector<HTMLElement>('#room-modal-inventory')!;
 const roomModalFlowEl = document.querySelector<HTMLElement>('#room-modal-flow')!;
 const roomModalCapacityEl = document.querySelector<HTMLElement>('#room-modal-capacity')!;
+const roomModalHousingPolicyEl = document.querySelector<HTMLElement>('#room-modal-housing-policy')!;
+const roomModalHousingSelect = document.querySelector<HTMLSelectElement>('#room-modal-housing-select')!;
+const roomModalHousingEl = document.querySelector<HTMLElement>('#room-modal-housing')!;
 const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
 const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
+const agentModal = document.querySelector<HTMLDivElement>('#agent-modal')!;
+const closeAgentBtn = document.querySelector<HTMLButtonElement>('#close-agent')!;
+const agentKindEl = document.querySelector<HTMLElement>('#agent-kind')!;
+const agentIdEl = document.querySelector<HTMLElement>('#agent-id')!;
+const agentStateEl = document.querySelector<HTMLElement>('#agent-state')!;
+const agentActionEl = document.querySelector<HTMLElement>('#agent-action')!;
+const agentReasonEl = document.querySelector<HTMLElement>('#agent-reason')!;
+const agentDesireEl = document.querySelector<HTMLElement>('#agent-desire')!;
+const agentTargetEl = document.querySelector<HTMLElement>('#agent-target')!;
+const agentPathEl = document.querySelector<HTMLElement>('#agent-path')!;
+const agentHealthEl = document.querySelector<HTMLElement>('#agent-health')!;
+const agentBlockedEl = document.querySelector<HTMLElement>('#agent-blocked')!;
+const agentVisitorDetailsEl = document.querySelector<HTMLElement>('#agent-visitor-details')!;
+const agentResidentDetailsEl = document.querySelector<HTMLElement>('#agent-resident-details')!;
 const roomDiagnosticEl = document.querySelector<HTMLElement>('#room-diagnostic')!;
 const paintGuidanceEl = document.querySelector<HTMLElement>('#paint-guidance')!;
 const moduleGuideEl = document.querySelector<HTMLElement>('#module-guide')!;
+const expansionButtons: Record<CardinalDirection, HTMLButtonElement> = {
+  north: expandNorthBtn,
+  east: expandEastBtn,
+  south: expandSouthBtn,
+  west: expandWestBtn
+};
+const saveNameInput = document.querySelector<HTMLInputElement>('#save-name')!;
+const saveCreateBtn = document.querySelector<HTMLButtonElement>('#save-create')!;
+const saveQuicksaveBtn = document.querySelector<HTMLButtonElement>('#save-quicksave')!;
+const saveSlotSelect = document.querySelector<HTMLSelectElement>('#save-slot-select')!;
+const saveLoadBtn = document.querySelector<HTMLButtonElement>('#save-load')!;
+const saveDeleteBtn = document.querySelector<HTMLButtonElement>('#save-delete')!;
+const saveExportTextarea = document.querySelector<HTMLTextAreaElement>('#save-export')!;
+const saveImportTextarea = document.querySelector<HTMLTextAreaElement>('#save-import')!;
+const saveImportBtn = document.querySelector<HTMLButtonElement>('#save-import-btn')!;
+const saveStatusEl = document.querySelector<HTMLElement>('#save-status')!;
+const saveCountEl = document.querySelector<HTMLElement>('#save-count')!;
 const prioritySystems: CrewPrioritySystem[] = [
   'life-support',
   'reactor',
@@ -490,13 +664,40 @@ const market = {
   buyFood60Cost: 30,
   sellFood60Gain: 15
 };
+
+const GAME_VERSION = '0.1.0';
+const SAVE_STORE_KEY = 'stationSim.saves.v1';
+const QUICKSAVE_ID = 'quicksave';
+const MAX_SAVE_SLOTS = 30;
+
+type LocalSaveRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  payloadText: string;
+};
+
+type SaveStore = {
+  storeVersion: 1;
+  saves: LocalSaveRecord[];
+};
+
+type SelectedAgent = { kind: 'visitor' | 'resident'; id: number };
+
 let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
 let selectedDockId: number | null = null;
 let selectedRoomTile: number | null = null;
+let selectedAgent: SelectedAgent | null = null;
 let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
 let hoveredTile: number | null = null;
+let isRightPanning = false;
+let panStartClientX = 0;
+let panStartClientY = 0;
+let panStartScrollLeft = 0;
+let panStartScrollTop = 0;
 
 function refreshTransportUi(): void {
   speedLabel.textContent = `${state.controls.simSpeed}x`;
@@ -552,6 +753,298 @@ function refreshPriorityUi(): void {
 }
 refreshPriorityUi();
 
+function maxScrollX(): number {
+  return Math.max(0, gameWrap.scrollWidth - gameWrap.clientWidth);
+}
+
+function maxScrollY(): number {
+  return Math.max(0, gameWrap.scrollHeight - gameWrap.clientHeight);
+}
+
+function clampViewportScroll(): void {
+  gameWrap.scrollLeft = clamp(gameWrap.scrollLeft, 0, maxScrollX());
+  gameWrap.scrollTop = clamp(gameWrap.scrollTop, 0, maxScrollY());
+}
+
+function updateStageLayout(): void {
+  const mapDisplayWidth = canvas.clientWidth;
+  const mapDisplayHeight = canvas.clientHeight;
+  const padX = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientWidth * 0.75));
+  const padY = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientHeight * 0.75));
+  mapOffsetX = padX;
+  mapOffsetY = padY;
+  gameStage.style.width = `${Math.round(mapDisplayWidth + padX * 2)}px`;
+  gameStage.style.height = `${Math.round(mapDisplayHeight + padY * 2)}px`;
+  canvas.style.left = `${mapOffsetX}px`;
+  canvas.style.top = `${mapOffsetY}px`;
+}
+
+function getViewportCenterWorldPx(): { x: number; y: number } {
+  return {
+    x: (gameWrap.scrollLeft + gameWrap.clientWidth * 0.5 - mapOffsetX) / zoom,
+    y: (gameWrap.scrollTop + gameWrap.clientHeight * 0.5 - mapOffsetY) / zoom
+  };
+}
+
+function centerViewportOnWorldPx(worldX: number, worldY: number): void {
+  gameWrap.scrollLeft = mapOffsetX + worldX * zoom - gameWrap.clientWidth * 0.5;
+  gameWrap.scrollTop = mapOffsetY + worldY * zoom - gameWrap.clientHeight * 0.5;
+  clampViewportScroll();
+}
+
+function centerViewportOnMapCenter(): void {
+  const mapCenterX = canvas.clientWidth * 0.5;
+  const mapCenterY = canvas.clientHeight * 0.5;
+  gameWrap.scrollLeft = mapOffsetX + mapCenterX - gameWrap.clientWidth * 0.5;
+  gameWrap.scrollTop = mapOffsetY + mapCenterY - gameWrap.clientHeight * 0.5;
+  clampViewportScroll();
+}
+
+function fitMapToViewport(): void {
+  const worldWidthPx = state.width * TILE_SIZE;
+  const worldHeightPx = state.height * TILE_SIZE;
+  if (worldWidthPx <= 0 || worldHeightPx <= 0) return;
+  const fitZoom = Math.min(gameWrap.clientWidth / worldWidthPx, gameWrap.clientHeight / worldHeightPx);
+  zoom = clamp(fitZoom, FIT_MIN_ZOOM, MAX_ZOOM);
+  applyCanvasSize();
+  updateStageLayout();
+  centerViewportOnMapCenter();
+}
+
+function setZoomAtViewportPoint(nextZoom: number, viewportX: number, viewportY: number): void {
+  const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+  if (Math.abs(clampedZoom - zoom) < 0.0001) return;
+  const worldX = (gameWrap.scrollLeft + viewportX - mapOffsetX) / zoom;
+  const worldY = (gameWrap.scrollTop + viewportY - mapOffsetY) / zoom;
+  zoom = clampedZoom;
+  applyCanvasSize();
+  updateStageLayout();
+  gameWrap.scrollLeft = mapOffsetX + worldX * zoom - viewportX;
+  gameWrap.scrollTop = mapOffsetY + worldY * zoom - viewportY;
+  clampViewportScroll();
+}
+
+function directionLabel(direction: CardinalDirection): string {
+  return direction[0].toUpperCase() + direction.slice(1);
+}
+
+function expandedDirectionsText(): string {
+  const expanded = (Object.keys(expansionButtons) as CardinalDirection[]).filter((dir) => state.mapExpansion.purchased[dir]);
+  return expanded.length > 0 ? expanded.map(directionLabel).join(', ') : 'none';
+}
+
+function refreshExpansionUi(): void {
+  const nextCost = getNextExpansionCost(state);
+  expansionNextCostEl.textContent = `Next expansion cost: ${nextCost}c`;
+  expansionStatusEl.textContent = `Directions expanded: ${expandedDirectionsText()}`;
+  for (const direction of Object.keys(expansionButtons) as CardinalDirection[]) {
+    const button = expansionButtons[direction];
+    const available = canExpandDirection(state, direction);
+    if (available) {
+      button.textContent = `Expand ${directionLabel(direction)} (${nextCost}c)`;
+      button.disabled = state.metrics.credits < nextCost;
+    } else {
+      button.textContent = `Expand ${directionLabel(direction)} (Purchased)`;
+      button.disabled = true;
+    }
+  }
+}
+refreshExpansionUi();
+
+requestAnimationFrame(() => {
+  updateStageLayout();
+  centerViewportOnMapCenter();
+});
+
+cameraResetBtn.addEventListener('click', () => {
+  fitMapToViewport();
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sortSavesForUi(saves: LocalSaveRecord[]): LocalSaveRecord[] {
+  return [...saves].sort((a, b) => {
+    if (a.id === QUICKSAVE_ID && b.id !== QUICKSAVE_ID) return -1;
+    if (a.id !== QUICKSAVE_ID && b.id === QUICKSAVE_ID) return 1;
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+}
+
+function setSaveStatus(message: string, tone: 'ok' | 'warn' | 'error' | 'muted' = 'muted'): void {
+  saveStatusEl.textContent = message;
+  saveStatusEl.classList.remove('status-ok', 'status-warn', 'status-error', 'status-muted');
+  saveStatusEl.classList.add(
+    tone === 'ok' ? 'status-ok' : tone === 'warn' ? 'status-warn' : tone === 'error' ? 'status-error' : 'status-muted'
+  );
+}
+
+function readSaveStore(): { store: SaveStore; warnings: string[] } {
+  const warnings: string[] = [];
+  const fallback: SaveStore = {
+    storeVersion: 1,
+    saves: []
+  };
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(SAVE_STORE_KEY);
+  } catch {
+    warnings.push('Unable to read localStorage. Save slots are unavailable.');
+    return { store: fallback, warnings };
+  }
+  if (!raw) return { store: fallback, warnings };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    warnings.push('Save storage was corrupted and has been reset.');
+    return { store: fallback, warnings };
+  }
+  if (!isRecord(parsed) || parsed.storeVersion !== 1 || !Array.isArray(parsed.saves)) {
+    warnings.push('Save storage format was invalid and has been reset.');
+    return { store: fallback, warnings };
+  }
+
+  const saves: LocalSaveRecord[] = [];
+  for (const entry of parsed.saves) {
+    if (!isRecord(entry)) continue;
+    if (
+      typeof entry.id !== 'string' ||
+      typeof entry.name !== 'string' ||
+      typeof entry.createdAt !== 'string' ||
+      typeof entry.updatedAt !== 'string' ||
+      typeof entry.payloadText !== 'string'
+    ) {
+      continue;
+    }
+    saves.push({
+      id: entry.id,
+      name: entry.name,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      payloadText: entry.payloadText
+    });
+  }
+  return {
+    store: {
+      storeVersion: 1,
+      saves
+    },
+    warnings
+  };
+}
+
+function writeSaveStore(store: SaveStore): boolean {
+  try {
+    localStorage.setItem(SAVE_STORE_KEY, JSON.stringify(store));
+    return true;
+  } catch {
+    setSaveStatus('Failed to write localStorage save data.', 'error');
+    return false;
+  }
+}
+
+function trimSaveStore(saves: LocalSaveRecord[]): { saves: LocalSaveRecord[]; removed: number } {
+  if (saves.length <= MAX_SAVE_SLOTS) return { saves, removed: 0 };
+  const quicksave = saves.find((save) => save.id === QUICKSAVE_ID) ?? null;
+  const nonQuick = saves
+    .filter((save) => save.id !== QUICKSAVE_ID)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const keepNonQuick = nonQuick.slice(0, Math.max(0, MAX_SAVE_SLOTS - (quicksave ? 1 : 0)));
+  const trimmed = quicksave ? [quicksave, ...keepNonQuick] : keepNonQuick;
+  return {
+    saves: trimmed,
+    removed: saves.length - trimmed.length
+  };
+}
+
+function toDisplaySaveJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function getSelectedSave(store: SaveStore): LocalSaveRecord | null {
+  const selectedId = saveSlotSelect.value;
+  if (!selectedId) return null;
+  return store.saves.find((save) => save.id === selectedId) ?? null;
+}
+
+function refreshSaveUi(preferredSaveId?: string): void {
+  const { store, warnings } = readSaveStore();
+  const saves = sortSavesForUi(store.saves);
+  saveSlotSelect.innerHTML = '';
+  if (saves.length <= 0) {
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = 'No saves';
+    saveSlotSelect.appendChild(emptyOpt);
+    saveSlotSelect.disabled = true;
+    saveLoadBtn.disabled = true;
+    saveDeleteBtn.disabled = true;
+    saveExportTextarea.value = '';
+    saveCountEl.textContent = '0';
+  } else {
+    saveSlotSelect.disabled = false;
+    for (const save of saves) {
+      const opt = document.createElement('option');
+      opt.value = save.id;
+      const prefix = save.id === QUICKSAVE_ID ? '[Quick] ' : '';
+      const stamp = new Date(save.updatedAt).toLocaleString();
+      opt.textContent = `${prefix}${save.name} (${stamp})`;
+      saveSlotSelect.appendChild(opt);
+    }
+    if (preferredSaveId && saves.some((save) => save.id === preferredSaveId)) {
+      saveSlotSelect.value = preferredSaveId;
+    } else if (!saves.some((save) => save.id === saveSlotSelect.value)) {
+      saveSlotSelect.value = saves[0].id;
+    }
+    saveLoadBtn.disabled = false;
+    saveDeleteBtn.disabled = false;
+    saveCountEl.textContent = String(saves.length);
+    const selected = getSelectedSave({ storeVersion: 1, saves });
+    saveExportTextarea.value = selected ? toDisplaySaveJson(selected.payloadText) : '';
+  }
+  if (warnings.length > 0) {
+    setSaveStatus(warnings.join(' '), 'warn');
+  } else if (saves.length <= 0) {
+    setSaveStatus('No saves yet.', 'muted');
+  }
+}
+
+function syncControlsToUiFromState(): void {
+  shipsInput.value = String(clamp(state.controls.shipsPerCycle, 0, 3));
+  shipsLabel.textContent = String(clamp(state.controls.shipsPerCycle, 0, 3));
+  const taxPercent = Math.round(clamp(state.controls.taxRate, 0, 0.5) * 100);
+  taxInput.value = String(taxPercent);
+  taxLabel.textContent = `${taxPercent}%`;
+  crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
+  refreshPriorityUi();
+  refreshTransportUi();
+}
+
+function clearUiSelectionsAfterLoad(): void {
+  selectedDockId = null;
+  selectedRoomTile = null;
+  selectedAgent = null;
+  hoveredTile = null;
+  isPainting = false;
+  paintStart = null;
+  paintCurrent = null;
+  marketModal.classList.add('hidden');
+  expansionModal.classList.add('hidden');
+  priorityModal.classList.add('hidden');
+  dockModal.classList.add('hidden');
+  roomModal.classList.add('hidden');
+  agentModal.classList.add('hidden');
+  saveModal.classList.add('hidden');
+}
+refreshSaveUi();
+
 function canEnableSize(size: ShipSize, maxSize: ShipSize): boolean {
   if (maxSize === 'small') return size === 'small';
   if (maxSize === 'medium') return size !== 'large';
@@ -565,6 +1058,8 @@ function refreshDockModal(): void {
   dockModalIdEl.textContent = `#${dock.id}`;
   dockModalAreaEl.textContent = `${dock.area} tiles`;
   dockModalMaxSizeEl.textContent = dock.maxSizeByArea;
+  dockModalPurposeSelect.value = dock.purpose;
+  dockModalPurposeLabelEl.textContent = dock.purpose === 'visitor' ? 'Visitor' : 'Residential';
   dockModalFacingSelect.value = dock.facing;
   dockModalFacingLabelEl.textContent = dock.facing[0].toUpperCase() + dock.facing.slice(1);
   dockModalErrorEl.textContent = 'Facing status: ok';
@@ -601,7 +1096,10 @@ function refreshRoomModal(): void {
   const anyOfText = inspector.anyOfProgress.modules.length > 0
     ? ` | any-of ${inspector.anyOfProgress.modules.join(' or ')} (${inspector.anyOfProgress.satisfied ? 'ok' : 'missing'})`
     : '';
-  roomModalNodesEl.textContent = `service ${inspector.serviceNodeCount}${inspector.hasServiceNode ? '' : ' (missing)'} | modules ${moduleProgressText}${anyOfText}`;
+  roomModalNodesEl.textContent =
+    `service ${inspector.serviceNodeCount}${inspector.hasServiceNode ? '' : ' (missing)'} | ` +
+    `reachable ${inspector.reachableServiceNodeCount} | unreachable ${inspector.unreachableServiceNodeCount} | ` +
+    `modules ${moduleProgressText}${anyOfText}`;
   if (inspector.inventory) {
     const itemOrder: Array<{ key: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'; label: string }> = [
       { key: 'rawMeal', label: 'rawMeal' },
@@ -636,6 +1134,29 @@ function refreshRoomModal(): void {
     roomModalCapacityEl.textContent = 'Capacity: n/a';
     roomModalCapacityEl.style.color = '#8ea2bd';
   }
+  const housingRoom = inspector.room === RoomType.Dorm || inspector.room === RoomType.Hygiene;
+  if (housingRoom) {
+    roomModalHousingPolicyEl.textContent = inspector.housingPolicy ?? 'crew';
+    roomModalHousingSelect.disabled = false;
+    roomModalHousingSelect.value = inspector.housingPolicy ?? 'crew';
+    roomModalHousingSelect.style.display = 'block';
+    const housing = getHousingInspectorAt(state, selectedRoomTile!);
+    if (housing) {
+      roomModalHousingEl.textContent =
+        `Housing: beds ${housing.bedsAssigned}/${housing.bedsTotal} | hygiene targets ${housing.hygieneTargets} | ` +
+        `${housing.validPrivateHousing ? 'valid private loop' : 'private loop incomplete'}`;
+      roomModalHousingEl.style.color = housing.validPrivateHousing ? '#6edb8f' : '#ffcf6e';
+    } else {
+      roomModalHousingEl.textContent = 'Housing: n/a';
+      roomModalHousingEl.style.color = '#8ea2bd';
+    }
+  } else {
+    roomModalHousingPolicyEl.textContent = 'n/a';
+    roomModalHousingSelect.disabled = true;
+    roomModalHousingSelect.style.display = 'none';
+    roomModalHousingEl.textContent = 'Housing: n/a';
+    roomModalHousingEl.style.color = '#8ea2bd';
+  }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
   roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;
   roomModalHintsEl.textContent = `Hints: ${inspector.hints.join(' | ') || 'none'}`;
@@ -643,10 +1164,124 @@ function refreshRoomModal(): void {
 
 function toTileCoords(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = canvas.getBoundingClientRect();
-  const x = Math.floor((clientX - rect.left) / TILE_SIZE);
-  const y = Math.floor((clientY - rect.top) / TILE_SIZE);
+  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+  const canvasX = (clientX - rect.left) * scaleX;
+  const canvasY = (clientY - rect.top) * scaleY;
+  const x = Math.floor(canvasX / TILE_SIZE);
+  const y = Math.floor(canvasY / TILE_SIZE);
   if (!inBounds(x, y, state.width, state.height)) return null;
   return { x, y };
+}
+
+function toWorldCoords(clientX: number, clientY: number): { x: number; y: number } | null {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+  const canvasX = (clientX - rect.left) * scaleX;
+  const canvasY = (clientY - rect.top) * scaleY;
+  const worldX = canvasX / TILE_SIZE;
+  const worldY = canvasY / TILE_SIZE;
+  const tileX = Math.floor(worldX);
+  const tileY = Math.floor(worldY);
+  if (!inBounds(tileX, tileY, state.width, state.height)) return null;
+  return { x: worldX, y: worldY };
+}
+
+function formatTileLabel(tileIndex: number | null): string {
+  if (tileIndex === null) return 'none';
+  if (tileIndex < 0 || tileIndex >= state.tiles.length) return `unknown (#${tileIndex})`;
+  const p = fromIndex(tileIndex, state.width);
+  return `${p.x},${p.y} (#${tileIndex})`;
+}
+
+function pickInspectableAgent(worldX: number, worldY: number, clickedTile: number): SelectedAgent | null {
+  const maxDistance = 0.55;
+  const maxDistanceSq = maxDistance * maxDistance;
+  let best: { candidate: SelectedAgent; distSq: number } | null = null;
+  for (const visitor of state.visitors) {
+    const dx = visitor.x - worldX;
+    const dy = visitor.y - worldY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > maxDistanceSq) continue;
+    if (!best || distSq < best.distSq) {
+      best = { candidate: { kind: 'visitor', id: visitor.id }, distSq };
+    }
+  }
+  for (const resident of state.residents) {
+    const dx = resident.x - worldX;
+    const dy = resident.y - worldY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > maxDistanceSq) continue;
+    if (!best || distSq < best.distSq) {
+      best = { candidate: { kind: 'resident', id: resident.id }, distSq };
+    }
+  }
+  if (best) return best.candidate;
+  const residentOnTile = state.residents.find((resident) => resident.tileIndex === clickedTile);
+  if (residentOnTile) return { kind: 'resident', id: residentOnTile.id };
+  const visitorOnTile = state.visitors.find((visitor) => visitor.tileIndex === clickedTile);
+  if (visitorOnTile) return { kind: 'visitor', id: visitorOnTile.id };
+  return null;
+}
+
+function healthColor(healthState: 'healthy' | 'distressed' | 'critical'): string {
+  if (healthState === 'critical') return '#ff7676';
+  if (healthState === 'distressed') return '#ffcf6e';
+  return '#6edb8f';
+}
+
+function refreshAgentModal(): boolean {
+  if (!selectedAgent) return false;
+  if (selectedAgent.kind === 'visitor') {
+    const inspector = getVisitorInspectorById(state, selectedAgent.id);
+    if (!inspector) return false;
+    agentKindEl.textContent = 'visitor';
+    agentIdEl.textContent = String(inspector.id);
+    agentStateEl.textContent = inspector.state;
+    agentActionEl.textContent = inspector.currentAction;
+    agentReasonEl.textContent = `Reason: ${inspector.actionReason}`;
+    agentDesireEl.textContent = inspector.desire;
+    agentTargetEl.textContent = formatTileLabel(inspector.targetTile);
+    agentPathEl.textContent = `${inspector.pathLength} steps`;
+    agentHealthEl.textContent = inspector.healthState;
+    agentHealthEl.style.color = healthColor(inspector.healthState);
+    agentBlockedEl.textContent = String(inspector.blockedTicks);
+    agentVisitorDetailsEl.textContent =
+      `Visitor: ${inspector.archetype} | pref ${inspector.primaryPreference} | ` +
+      `patience ${inspector.patience.toFixed(1)} | served ${inspector.servedMeal ? 'yes' : 'no'} | carrying ${inspector.carryingMeal ? 'yes' : 'no'} | ` +
+      `serving ${formatTileLabel(inspector.reservedServingTile)} | table ${formatTileLabel(inspector.reservedTargetTile)}`;
+    agentResidentDetailsEl.textContent = 'Resident: n/a';
+    return true;
+  }
+
+  const inspector = getResidentInspectorById(state, selectedAgent.id);
+  if (!inspector) return false;
+  agentKindEl.textContent = 'resident';
+  agentIdEl.textContent = String(inspector.id);
+  agentStateEl.textContent = inspector.state;
+  agentActionEl.textContent = inspector.currentAction;
+  agentReasonEl.textContent = `Reason: ${inspector.actionReason}`;
+  agentDesireEl.textContent = inspector.desire;
+  agentTargetEl.textContent = formatTileLabel(inspector.targetTile);
+  agentPathEl.textContent = `${inspector.pathLength} steps`;
+  agentHealthEl.textContent = inspector.healthState;
+  agentHealthEl.style.color = healthColor(inspector.healthState);
+  agentBlockedEl.textContent = String(inspector.blockedTicks);
+  agentVisitorDetailsEl.textContent = 'Visitor: n/a';
+  agentResidentDetailsEl.textContent =
+    `Resident: hunger ${inspector.hunger.toFixed(1)} | energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | ` +
+    `stress ${inspector.stress.toFixed(1)} | agi ${inspector.agitation.toFixed(1)} | confront ${inspector.inConfrontation ? 'yes' : 'no'} | ` +
+    `satisfaction ${inspector.satisfaction.toFixed(1)} | leave ${inspector.leaveIntent.toFixed(1)} | ` +
+    `dominant ${inspector.dominantNeed} | home dock ${inspector.homeDockId ?? 'none'} | bed ${inspector.bedModuleId ?? 'none'}`;
+  return true;
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }): void {
@@ -681,47 +1316,170 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
   }
 }
 
+function beginRightPan(e: MouseEvent): void {
+  if (e.button !== 2) return;
+  e.preventDefault();
+  isRightPanning = true;
+  panStartClientX = e.clientX;
+  panStartClientY = e.clientY;
+  panStartScrollLeft = gameWrap.scrollLeft;
+  panStartScrollTop = gameWrap.scrollTop;
+  gameWrap.classList.add('panning');
+}
+
+function updateRightPan(e: MouseEvent): void {
+  if (!isRightPanning) return;
+  e.preventDefault();
+  const dx = e.clientX - panStartClientX;
+  const dy = e.clientY - panStartClientY;
+  gameWrap.scrollLeft = clamp(panStartScrollLeft - dx, 0, maxScrollX());
+  gameWrap.scrollTop = clamp(panStartScrollTop - dy, 0, maxScrollY());
+}
+
+function endRightPan(): void {
+  if (!isRightPanning) return;
+  isRightPanning = false;
+  gameWrap.classList.remove('panning');
+}
+
+gameWrap.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+});
+gameWrap.addEventListener('mousedown', beginRightPan);
+window.addEventListener('mousemove', updateRightPan);
+
+gameWrap.addEventListener(
+  'wheel',
+  (e) => {
+    const rect = gameWrap.getBoundingClientRect();
+    const viewportX = e.clientX - rect.left;
+    const viewportY = e.clientY - rect.top;
+    if (viewportX < 0 || viewportY < 0 || viewportX > rect.width || viewportY > rect.height) return;
+    e.preventDefault();
+    const zoomFactor = Math.exp(-e.deltaY * 0.0015);
+    setZoomAtViewportPoint(zoom * zoomFactor, viewportX, viewportY);
+  },
+  { passive: false }
+);
+
+window.addEventListener('keydown', (e) => {
+  if (isTextInputTarget(e.target)) return;
+  const step = TILE_SIZE * 3;
+  let nextLeft = gameWrap.scrollLeft;
+  let nextTop = gameWrap.scrollTop;
+  if (e.key === 'ArrowUp') {
+    nextTop -= step;
+  } else if (e.key === 'ArrowDown') {
+    nextTop += step;
+  } else if (e.key === 'ArrowLeft') {
+    nextLeft -= step;
+  } else if (e.key === 'ArrowRight') {
+    nextLeft += step;
+  } else {
+    return;
+  }
+  e.preventDefault();
+  gameWrap.scrollLeft = clamp(nextLeft, 0, maxScrollX());
+  gameWrap.scrollTop = clamp(nextTop, 0, maxScrollY());
+});
+
+window.addEventListener('resize', () => {
+  const center = getViewportCenterWorldPx();
+  updateStageLayout();
+  centerViewportOnWorldPx(center.x, center.y);
+});
+
 canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || isRightPanning) return;
   const tile = toTileCoords(e.clientX, e.clientY);
   if (!tile) return;
-  const idx = toIndex(tile.x, tile.y, state.width);
   const canOpenInspectors = currentTool.kind === 'none';
-  const dock = getDockByTile(state, idx);
-  selectedDockId = canOpenInspectors ? (dock?.id ?? null) : null;
-  if (canOpenInspectors && dock) {
+  if (!canOpenInspectors) {
+    selectedDockId = null;
     selectedRoomTile = null;
-    refreshDockModal();
-    dockModal.classList.remove('hidden');
+    selectedAgent = null;
+    dockModal.classList.add('hidden');
     roomModal.classList.add('hidden');
-    isPainting = false;
-    paintStart = null;
-    paintCurrent = null;
-    return;
+    agentModal.classList.add('hidden');
   }
   isPainting = true;
   paintStart = tile;
   paintCurrent = tile;
 });
 canvas.addEventListener('mousemove', (e) => {
+  if (isRightPanning) return;
   const tile = toTileCoords(e.clientX, e.clientY);
   hoveredTile = tile ? toIndex(tile.x, tile.y, state.width) : null;
   if (!isPainting) return;
   if (tile) paintCurrent = tile;
 });
 canvas.addEventListener('mouseleave', () => {
-  hoveredTile = null;
+  if (!isRightPanning) hoveredTile = null;
 });
-canvas.addEventListener('mouseup', () => {
+canvas.addEventListener('mouseup', (e) => {
+  if (isRightPanning) return;
   if (isPainting && paintStart && paintCurrent) {
     const canOpenInspectors = currentTool.kind === 'none';
     const singleClick = paintStart.x === paintCurrent.x && paintStart.y === paintCurrent.y;
     const clickedTile = singleClick ? toIndex(paintStart.x, paintStart.y, state.width) : null;
-    if (canOpenInspectors && singleClick && clickedTile !== null && state.rooms[clickedTile] !== RoomType.None) {
-      selectedRoomTile = clickedTile;
+    if (canOpenInspectors && singleClick && clickedTile !== null) {
+      const world = toWorldCoords(e.clientX, e.clientY);
+      if (world) {
+        const agent = pickInspectableAgent(world.x, world.y, clickedTile);
+        if (agent) {
+          selectedAgent = agent;
+          selectedDockId = null;
+          selectedRoomTile = null;
+          if (refreshAgentModal()) {
+            agentModal.classList.remove('hidden');
+          } else {
+            selectedAgent = null;
+            agentModal.classList.add('hidden');
+          }
+          dockModal.classList.add('hidden');
+          roomModal.classList.add('hidden');
+          isPainting = false;
+          paintStart = null;
+          paintCurrent = null;
+          return;
+        }
+      }
+
+      const dock = getDockByTile(state, clickedTile);
+      if (dock) {
+        selectedDockId = dock.id;
+        selectedRoomTile = null;
+        selectedAgent = null;
+        refreshDockModal();
+        dockModal.classList.remove('hidden');
+        roomModal.classList.add('hidden');
+        agentModal.classList.add('hidden');
+        isPainting = false;
+        paintStart = null;
+        paintCurrent = null;
+        return;
+      }
+
+      if (state.rooms[clickedTile] !== RoomType.None) {
+        selectedRoomTile = clickedTile;
+        selectedDockId = null;
+        selectedAgent = null;
+        refreshRoomModal();
+        roomModal.classList.remove('hidden');
+        dockModal.classList.add('hidden');
+        agentModal.classList.add('hidden');
+        isPainting = false;
+        paintStart = null;
+        paintCurrent = null;
+        return;
+      }
+
+      selectedAgent = null;
       selectedDockId = null;
-      refreshRoomModal();
-      roomModal.classList.remove('hidden');
+      selectedRoomTile = null;
+      agentModal.classList.add('hidden');
       dockModal.classList.add('hidden');
+      roomModal.classList.add('hidden');
     } else {
       applyRectPaint(paintStart, paintCurrent);
     }
@@ -731,12 +1489,16 @@ canvas.addEventListener('mouseup', () => {
   paintCurrent = null;
 });
 window.addEventListener('mouseup', () => {
+  endRightPan();
   if (isPainting && paintStart && paintCurrent) {
     applyRectPaint(paintStart, paintCurrent);
   }
   isPainting = false;
   paintStart = null;
   paintCurrent = null;
+});
+window.addEventListener('blur', () => {
+  endRightPan();
 });
 
 window.addEventListener('keydown', (e) => {
@@ -884,7 +1646,9 @@ window.addEventListener('keydown', (e) => {
       refreshTransportUi();
       break;
     case 'Escape':
+      saveModal.classList.add('hidden');
       marketModal.classList.add('hidden');
+      expansionModal.classList.add('hidden');
       priorityModal.classList.add('hidden');
       dockModal.classList.add('hidden');
       roomModal.classList.add('hidden');
@@ -898,6 +1662,30 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+function handleExpandDirection(direction: CardinalDirection): void {
+  const center = getViewportCenterWorldPx();
+  const result = expandMap(state, direction);
+  if (!result.ok) {
+    marketNoteEl.textContent =
+      result.reason === 'insufficient_credits'
+        ? `Need ${result.cost} credits to expand ${direction}.`
+        : `${directionLabel(direction)} edge already expanded.`;
+    refreshExpansionUi();
+    return;
+  }
+  const shiftX = direction === 'west' ? EXPANSION_STEP_TILES * TILE_SIZE : 0;
+  const shiftY = direction === 'north' ? EXPANSION_STEP_TILES * TILE_SIZE : 0;
+  applyCanvasSize();
+  updateStageLayout();
+  centerViewportOnWorldPx(center.x + shiftX, center.y + shiftY);
+  hoveredTile = null;
+  isPainting = false;
+  paintStart = null;
+  paintCurrent = null;
+  marketNoteEl.textContent = `Expanded ${directionLabel(direction)} for ${result.cost}c (${result.width}x${result.height}).`;
+  refreshExpansionUi();
+}
+
 shipsInput.addEventListener('input', () => {
   state.controls.shipsPerCycle = clamp(parseInt(shipsInput.value, 10), 0, 3);
   shipsLabel.textContent = String(state.controls.shipsPerCycle);
@@ -908,6 +1696,11 @@ taxInput.addEventListener('input', () => {
   state.controls.taxRate = pct / 100;
   taxLabel.textContent = `${pct}%`;
 });
+
+expandNorthBtn.addEventListener('click', () => handleExpandDirection('north'));
+expandEastBtn.addEventListener('click', () => handleExpandDirection('east'));
+expandSouthBtn.addEventListener('click', () => handleExpandDirection('south'));
+expandWestBtn.addEventListener('click', () => handleExpandDirection('west'));
 
 crewPriorityPresetSelect.addEventListener('change', () => {
   const preset = crewPriorityPresetSelect.value as CrewPriorityPreset;
@@ -949,6 +1742,21 @@ toggleInventoryOverlayBtn.addEventListener('click', () => {
   state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
 });
 
+openSaveModalBtn.addEventListener('click', () => {
+  refreshSaveUi();
+  saveModal.classList.remove('hidden');
+});
+
+closeSaveModalBtn.addEventListener('click', () => {
+  saveModal.classList.add('hidden');
+});
+
+saveModal.addEventListener('click', (e) => {
+  if (e.target === saveModal) {
+    saveModal.classList.add('hidden');
+  }
+});
+
 openMarketBtn.addEventListener('click', () => {
   marketModal.classList.remove('hidden');
 });
@@ -960,6 +1768,21 @@ closeMarketBtn.addEventListener('click', () => {
 marketModal.addEventListener('click', (e) => {
   if (e.target === marketModal) {
     marketModal.classList.add('hidden');
+  }
+});
+
+openExpansionModalBtn.addEventListener('click', () => {
+  refreshExpansionUi();
+  expansionModal.classList.remove('hidden');
+});
+
+closeExpansionModalBtn.addEventListener('click', () => {
+  expansionModal.classList.add('hidden');
+});
+
+expansionModal.addEventListener('click', (e) => {
+  if (e.target === expansionModal) {
+    expansionModal.classList.add('hidden');
   }
 });
 
@@ -989,12 +1812,26 @@ dockModal.addEventListener('click', (e) => {
 });
 
 closeRoomBtn.addEventListener('click', () => {
+  selectedRoomTile = null;
   roomModal.classList.add('hidden');
 });
 
 roomModal.addEventListener('click', (e) => {
   if (e.target === roomModal) {
+    selectedRoomTile = null;
     roomModal.classList.add('hidden');
+  }
+});
+
+closeAgentBtn.addEventListener('click', () => {
+  selectedAgent = null;
+  agentModal.classList.add('hidden');
+});
+
+agentModal.addEventListener('click', (e) => {
+  if (e.target === agentModal) {
+    selectedAgent = null;
+    agentModal.classList.add('hidden');
   }
 });
 
@@ -1024,6 +1861,12 @@ dockModalTraderCheckbox.addEventListener('change', () => {
 dockModalIndustrialCheckbox.addEventListener('change', () => {
   if (selectedDockId === null) return;
   setDockAllowedShipType(state, selectedDockId, 'industrial', dockModalIndustrialCheckbox.checked);
+  refreshDockModal();
+});
+
+dockModalPurposeSelect.addEventListener('change', () => {
+  if (selectedDockId === null) return;
+  setDockPurpose(state, selectedDockId, dockModalPurposeSelect.value as 'visitor' | 'residential');
   refreshDockModal();
 });
 
@@ -1058,6 +1901,179 @@ dockModalLargeCheckbox.addEventListener('change', () => {
   if (selectedDockId === null) return;
   setDockAllowedShipSize(state, selectedDockId, 'large', dockModalLargeCheckbox.checked);
   refreshDockModal();
+});
+
+roomModalHousingSelect.addEventListener('change', () => {
+  if (selectedRoomTile === null) return;
+  const value = roomModalHousingSelect.value as HousingPolicy;
+  const ok = setRoomHousingPolicy(state, selectedRoomTile, value);
+  if (ok) refreshRoomModal();
+});
+
+function generateSaveId(): string {
+  return `save-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function saveToSlot(saveName: string, slotId?: string): void {
+  const payloadText = serializeSave(saveName, state, GAME_VERSION);
+  const nowIso = new Date().toISOString();
+  const { store, warnings } = readSaveStore();
+  const saves = [...store.saves];
+
+  if (slotId) {
+    const existingIndex = saves.findIndex((save) => save.id === slotId);
+    if (existingIndex >= 0) {
+      saves[existingIndex] = {
+        ...saves[existingIndex],
+        name: saveName,
+        updatedAt: nowIso,
+        payloadText
+      };
+    } else {
+      saves.push({
+        id: slotId,
+        name: saveName,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        payloadText
+      });
+    }
+  } else {
+    saves.push({
+      id: generateSaveId(),
+      name: saveName,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      payloadText
+    });
+  }
+
+  const trimmed = trimSaveStore(saves);
+  if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves })) return;
+
+  const selectedId = slotId ?? trimmed.saves[trimmed.saves.length - 1]?.id;
+  refreshSaveUi(selectedId);
+  const extras: string[] = [];
+  if (trimmed.removed > 0) extras.push(`${trimmed.removed} old save(s) evicted`);
+  if (warnings.length > 0) extras.push(...warnings);
+  const suffix = extras.length > 0 ? ` (${extras.join(' | ')})` : '';
+  setSaveStatus(`Saved "${saveName}".${suffix}`, extras.length > 0 ? 'warn' : 'ok');
+}
+
+function loadSelectedSave(): void {
+  const { store, warnings: storageWarnings } = readSaveStore();
+  const selected = getSelectedSave(store);
+  if (!selected) {
+    setSaveStatus('Select a save slot first.', 'error');
+    return;
+  }
+
+  const parsed = parseAndMigrateSave(selected.payloadText);
+  if (!parsed.ok) {
+    setSaveStatus(`Selected save is invalid: ${parsed.error}`, 'error');
+    return;
+  }
+
+  try {
+    const hydrated = hydrateStateFromSave(parsed.save);
+    Object.assign(state, hydrated.state);
+    applyCanvasSize();
+    updateStageLayout();
+    centerViewportOnMapCenter();
+    clearUiSelectionsAfterLoad();
+    syncControlsToUiFromState();
+    refreshExpansionUi();
+    const warningCount = parsed.warnings.length + hydrated.warnings.length + storageWarnings.length;
+    const details = [...storageWarnings, ...parsed.warnings, ...hydrated.warnings];
+    if (warningCount > 0) {
+      setSaveStatus(`Loaded "${selected.name}" with ${warningCount} warning(s): ${details.slice(0, 3).join(' | ')}`, 'warn');
+    } else {
+      setSaveStatus(`Loaded "${selected.name}".`, 'ok');
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSaveStatus(`Load failed: ${message}`, 'error');
+  }
+}
+
+saveSlotSelect.addEventListener('change', () => {
+  const { store } = readSaveStore();
+  const selected = getSelectedSave(store);
+  saveExportTextarea.value = selected ? toDisplaySaveJson(selected.payloadText) : '';
+});
+
+saveCreateBtn.addEventListener('click', () => {
+  const name = saveNameInput.value.trim() || `Save ${new Date().toLocaleString()}`;
+  saveToSlot(name);
+});
+
+saveQuicksaveBtn.addEventListener('click', () => {
+  saveToSlot('Quicksave', QUICKSAVE_ID);
+});
+
+saveLoadBtn.addEventListener('click', () => {
+  loadSelectedSave();
+});
+
+saveDeleteBtn.addEventListener('click', () => {
+  const { store } = readSaveStore();
+  const selected = getSelectedSave(store);
+  if (!selected) {
+    setSaveStatus('Select a save slot first.', 'error');
+    return;
+  }
+  const remaining = store.saves.filter((save) => save.id !== selected.id);
+  if (!writeSaveStore({ storeVersion: 1, saves: remaining })) return;
+  refreshSaveUi();
+  setSaveStatus(`Deleted "${selected.name}".`, 'ok');
+});
+
+saveImportBtn.addEventListener('click', () => {
+  const text = saveImportTextarea.value.trim();
+  if (!text) {
+    setSaveStatus('Paste JSON into the import box first.', 'error');
+    return;
+  }
+  const parsed = parseAndMigrateSave(text);
+  if (!parsed.ok) {
+    setSaveStatus(`Import failed: ${parsed.error}`, 'error');
+    return;
+  }
+  try {
+    const hydrated = hydrateStateFromSave(parsed.save);
+    const importName = saveNameInput.value.trim() || parsed.save.name || `Imported ${new Date().toLocaleString()}`;
+    const payloadText = serializeSave(importName, hydrated.state, parsed.save.gameVersion || GAME_VERSION);
+    const nowIso = new Date().toISOString();
+    const { store, warnings } = readSaveStore();
+    const saves = [
+      ...store.saves,
+      {
+        id: generateSaveId(),
+        name: importName,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        payloadText
+      }
+    ];
+    const trimmed = trimSaveStore(saves);
+    if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves })) return;
+    const selectedId = trimmed.saves[trimmed.saves.length - 1]?.id;
+    refreshSaveUi(selectedId);
+    const warningCount = warnings.length + parsed.warnings.length + hydrated.warnings.length;
+    if (warningCount > 0) {
+      setSaveStatus(
+        `Imported "${importName}" with ${warningCount} warning(s): ${[...warnings, ...parsed.warnings, ...hydrated.warnings]
+          .slice(0, 3)
+          .join(' | ')}`,
+        'warn'
+      );
+    } else {
+      setSaveStatus(`Imported "${importName}".`, 'ok');
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSaveStatus(`Import failed: ${message}`, 'error');
+  }
 });
 
 buySmallBtn.addEventListener('click', () => {
@@ -1152,6 +2168,8 @@ function frame(now: number): void {
 
   tick(state, dt);
   renderWorld(ctx, state, currentTool, hoveredTile);
+  toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
+  toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
@@ -1230,6 +2248,7 @@ function frame(now: number): void {
   roomWarningsEl.textContent = `Room warnings: ${state.metrics.topRoomWarnings.join(' | ') || 'none'}`;
   updateMarketRates();
   refreshMarketUi();
+  refreshExpansionUi();
   crewNoteEl.textContent = `Hire ${market.hireCost}c | Payroll 0.32c/crew/30s`;
   hireCrewBtn.disabled = state.metrics.credits < market.hireCost || state.crew.total >= 40;
   fireCrewBtn.disabled = state.crew.total <= 0;
@@ -1245,7 +2264,10 @@ function frame(now: number): void {
   foodFlowEl.textContent = `Food flow: +${state.metrics.rawFoodProdRate.toFixed(1)} raw/s -> kitchen +${state.metrics.kitchenMealProdRate.toFixed(1)} meals/s, use ${state.metrics.mealUseRate.toFixed(1)} meals/s`;
   powerEl.textContent = `${Math.round(state.metrics.powerDemand)} / ${Math.round(state.metrics.powerSupply)}`;
   powerEl.style.color = state.metrics.powerDemand > state.metrics.powerSupply ? '#ff7676' : '#6edb8f';
-  incidentsEl.textContent = String(state.metrics.incidentsTotal);
+  incidentsEl.textContent =
+    `${state.metrics.incidentsTotal} | open ${state.metrics.incidentsOpen} | resolved ${state.metrics.incidentsResolved} | ` +
+    `failed ${state.metrics.incidentsFailed} | dispatch ${state.metrics.securityDispatches} | resp ${state.metrics.securityResponseAvgSec.toFixed(1)}s | ` +
+    `confront ${state.metrics.residentConfrontations}`;
   lifeSupportStatusEl.textContent = `Life support: active ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} (air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential)`;
   airTrendEl.textContent = `Air trend: ${state.metrics.airTrendPerSec >= 0 ? '+' : ''}${state.metrics.airTrendPerSec.toFixed(2)}/s`;
   airTrendEl.style.color = state.metrics.airTrendPerSec >= 0 ? '#6edb8f' : '#ff7676';
@@ -1263,6 +2285,13 @@ function frame(now: number): void {
   exitsPerMinEl.textContent = String(state.metrics.exitsPerMin);
   laneQueuesEl.textContent = `Lane queues N/E/S/W: ${state.metrics.dockQueueLengthByLane.north}/${state.metrics.dockQueueLengthByLane.east}/${state.metrics.dockQueueLengthByLane.south}/${state.metrics.dockQueueLengthByLane.west}`;
   walkStatsEl.textContent = `Visitor walk avg: ${state.metrics.avgVisitorWalkDistance.toFixed(1)} | skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | queue timeouts ${state.metrics.shipsTimedOutInQueue}`;
+  berthSummaryEl.textContent =
+    `Berths: visitor ${state.metrics.visitorBerthsOccupied}/${state.metrics.visitorBerthsTotal} | ` +
+    `resident ${state.metrics.residentBerthsOccupied}/${state.metrics.residentBerthsTotal} | ` +
+    `resident ships ${state.metrics.residentShipsDocked}`;
+  residentLoopSummaryEl.textContent =
+    `Resident loop: convert ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ` +
+    `departures ${state.metrics.residentDepartures} | tax +${state.metrics.residentTaxPerMin.toFixed(1)}/min | sat ${state.metrics.residentSatisfactionAvg.toFixed(0)}`;
   const ratingTrend = state.metrics.stationRatingTrendPerMin;
   ratingInsightTrendEl.textContent = `Trend: ${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(2)}/min ${ratingTrend >= 0 ? '(stable/improving)' : '(declining)'}`;
   ratingInsightTrendEl.style.color = ratingTrend >= 0 ? '#6edb8f' : '#ff7676';
@@ -1274,11 +2303,13 @@ function frame(now: number): void {
   ratingInsightBonusEl.textContent =
     `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
     `leisure ${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(2)} | ` +
-    `exits ${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(2)}`;
+    `exits ${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(2)} | ` +
+    `residents ${state.metrics.stationRatingBonusPerMin.residentRetention.toFixed(2)}`;
   ratingInsightBonusEl.style.color =
     state.metrics.stationRatingBonusPerMin.mealService +
       state.metrics.stationRatingBonusPerMin.leisureService +
-      state.metrics.stationRatingBonusPerMin.successfulExit >
+      state.metrics.stationRatingBonusPerMin.successfulExit +
+      state.metrics.stationRatingBonusPerMin.residentRetention >
     0
       ? '#6edb8f'
       : '#8ea2bd';
@@ -1296,7 +2327,8 @@ function frame(now: number): void {
   ratingInsightBonusTotalEl.textContent =
     `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
     `leisure ${state.metrics.stationRatingBonusTotal.leisureService.toFixed(1)} | ` +
-    `exits ${state.metrics.stationRatingBonusTotal.successfulExit.toFixed(1)}`;
+    `exits ${state.metrics.stationRatingBonusTotal.successfulExit.toFixed(1)} | ` +
+    `residents ${state.metrics.stationRatingBonusTotal.residentRetention.toFixed(1)}`;
   ratingInsightServiceTotalEl.textContent =
     `Service total: no path ${state.metrics.stationRatingServiceFailureByReasonTotal.noLeisurePath.toFixed(1)} | ` +
     `missing services ${state.metrics.stationRatingServiceFailureByReasonTotal.shipServicesMissing.toFixed(1)} | ` +
@@ -1306,11 +2338,24 @@ function frame(now: number): void {
   ratingInsightEventsEl.textContent =
     `Events: skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | ` +
     `queue timeouts ${state.metrics.shipsTimedOutInQueue} | ` +
-    `service fails/min ${state.metrics.visitorServiceFailuresPerMin.toFixed(1)}`;
+    `service fails/min ${state.metrics.visitorServiceFailuresPerMin.toFixed(1)} | ` +
+    `resident departures ${state.metrics.residentDepartures}`;
+  if (selectedAgent !== null) {
+    if (refreshAgentModal()) {
+      if (agentModal.classList.contains('hidden')) {
+        agentModal.classList.remove('hidden');
+      }
+    } else {
+      selectedAgent = null;
+      agentModal.classList.add('hidden');
+    }
+  } else {
+    agentModal.classList.add('hidden');
+  }
   if (selectedDockId !== null) {
     const dock = state.docks.find((d) => d.id === selectedDockId) ?? null;
     if (dock) {
-      dockInfoEl.textContent = `Dock #${dock.id}: ${dock.lane} facing ${dock.facing} | area ${dock.area} | type ${dock.allowedShipTypes.join(', ')} | size ${dock.allowedShipSizes.join(', ')}`;
+      dockInfoEl.textContent = `Dock #${dock.id}: ${dock.purpose} berth | ${dock.lane} facing ${dock.facing} | area ${dock.area} | type ${dock.allowedShipTypes.join(', ')} | size ${dock.allowedShipSizes.join(', ')}`;
       refreshDockModal();
     } else {
       dockInfoEl.textContent = 'Dock: none selected';

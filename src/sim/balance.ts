@@ -128,7 +128,7 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
     requiredModules: [{ module: ModuleType.Terminal, count: 1 }],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },
-    staffedPostMode: 'none'
+    staffedPostMode: 'required'
   },
   [RoomType.Dorm]: {
     minTiles: 6,

@@ -20,7 +20,7 @@ This document defines:
 The current build already includes:
 - Grid construction, zones, room painting, pressurization.
 - Visitors, residents, crew agents with pathing.
-- Docked ship traffic and throughput stats.
+- Docked ship traffic with berth purpose split (`visitor` vs `residential`) and throughput stats.
 - Food chain (hydroponics -> meals -> cafeteria consumption).
 - Room activation checks (door, pressure, staff).
 - Economy loop (credits/materials, market buy/sell, payroll/hiring).
@@ -45,8 +45,8 @@ Primary gaps vs vision:
 ### 5.1 People Simulation
 Actors:
 - Crew: hired workers with roles, wages, rest/hygiene/meal needs.
-- Residents: persistent population driven by dorm capacity.
-- Visitors: transient demand spikes tied to ship traffic.
+- Residents: persistent population created via visitor conversion, tied to resident home ships and private housing.
+- Visitors: transient demand spikes tied to ship traffic and visitor berths.
 - Bodies/Patients/Detainees: non-standard entities for consequence loops.
 
 Required behaviors:
@@ -54,6 +54,8 @@ Required behaviors:
 - Needs restoration requires physically reaching valid service locations.
 - Actors have fallback behaviors when services unavailable.
 - Extended unmet needs generate predictable consequences.
+- Visitors can convert to residents at boarding time only when residential berth + private housing are currently available.
+- Residents can later choose to leave when satisfaction remains low, freeing housing and resident berth capacity.
 
 Acceptance criteria:
 - In a station with functioning food/rest/hygiene, needs remain stable.
@@ -309,6 +311,29 @@ Acceptance criteria:
 - Crowd flow uses multiple equivalent corridors when available.
 - Service doorway clumping is greatly reduced in healthy layouts.
 
+### 5.19 Berth-Based Docking + Resident Conversion Loop
+Dock model:
+- Docks are zoned berths that can be open-ended edge pockets.
+- Berths are purpose-tagged as `visitor` or `residential`.
+- Scheduled arrivals and queue resolution target `visitor` berths only.
+- Ship size/type acceptance remains controlled by existing dock filters and berth area.
+
+Population loop:
+1. Transient ships dock at visitor berths, unload visitors, and eventually board departures.
+2. On boarding, a low-probability conversion check can move eligible visitors into residents.
+3. Conversion succeeds only if a compatible free residential berth and valid private resident housing assignment exist.
+4. Successful conversion relocates the ship to a residential berth as a persistent resident home ship.
+5. Resident home ships remain until all linked residents depart.
+
+Housing and policy:
+- Dorm/Hygiene rooms require room-level housing policy support for `crew`/`visitor`/`resident`/`private_resident`.
+- Private resident assignments require explicit bed + cabin allocation and reachable resident/private hygiene support.
+
+Economy and reputation:
+- Residents pay periodic taxes and consume station services.
+- Resident retention adds a small rating bonus.
+- Resident departures apply a station-rating penalty and free assigned housing.
+
 ## 6) Content Scope (Ideal State)
 Target room set in ideal-state design:
 - Dock, Cargo Bay, Storage, Hydroponics, Kitchen, Cafeteria, Dormitory, Hygiene, Life Support, Oxygen Plant, Water Recycler, Reactor, Battery Room, Security Office, Brig, Medbay, Morgue, Market Hall, Workshop, Recreation.
@@ -355,7 +380,7 @@ With decisions locked:
 ## 11) Founder Decisions (Locked v1.0)
 Confirmed decisions from founder:
 1. First milestone fantasy: Trade Hub + Habitat (hybrid focus).
-2. Residents spawn when there is capacity/space.
+2. Residents convert from visitors only when a residential berth + private housing are available at boarding time.
 3. Oxygen failure pacing: slow emergency window.
 4. Furniture depth next phase: minimum viable required modules only.
 5. Economy pressure: forgiving.

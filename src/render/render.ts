@@ -13,7 +13,12 @@ import {
   type StationState
 } from '../sim/types';
 import { MODULE_DEFINITIONS, normalizeModuleType } from '../sim/balance';
-import { collectQueueTargets, collectServiceTargets, getRoomDiagnosticAt, validateDockPlacement } from '../sim/sim';
+import {
+  collectQueueTargets,
+  collectServiceNodeReachability,
+  getRoomDiagnosticAt,
+  validateDockPlacement
+} from '../sim/sim';
 
 const tileColor: Record<TileType, string> = {
   [TileType.Space]: '#071019',
@@ -94,6 +99,7 @@ const itemShortCode: Record<ItemType, string> = {
   tradeGood: 'TG',
   body: 'BD'
 };
+const RESIDENT_MARK_COLOR = '#35d98a';
 
 type ModuleInventoryVisual = {
   used: number;
@@ -205,14 +211,6 @@ function buildActiveRoomTileSet(state: StationState): Set<number> {
     }
   }
   return active;
-}
-
-function collectServiceNodeTiles(state: StationState): number[] {
-  const out = new Set<number>();
-  for (const room of ROOM_TYPES_WITH_DIAGNOSTICS) {
-    for (const tile of collectServiceTargets(state, room)) out.add(tile);
-  }
-  return [...out];
 }
 
 function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
@@ -412,18 +410,24 @@ export function renderWorld(
   ctx.fillRect(0, 0, widthPx, heightPx);
 
   const activeRoomTiles = buildActiveRoomTileSet(state);
-  const serviceNodeTiles = state.controls.showServiceNodes ? collectServiceNodeTiles(state) : [];
-  const queueNodeTiles = state.controls.showServiceNodes ? collectCafeteriaQueueNodeTiles(state) : [];
-  const jobPickupTiles = state.controls.showServiceNodes
-    ? state.jobs
-        .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
-        .map((j) => j.fromTile)
-    : [];
-  const jobDropTiles = state.controls.showServiceNodes
-    ? state.jobs
-        .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
-        .map((j) => j.toTile)
-    : [];
+  const serviceNodeReachability = state.controls.showServiceNodes ? collectServiceNodeReachability(state) : null;
+  const serviceNodeTiles = new Set<number>(serviceNodeReachability?.nodeTiles ?? []);
+  const unreachableServiceNodeTiles = new Set<number>(serviceNodeReachability?.unreachableNodeTiles ?? []);
+  const queueNodeTiles = new Set<number>(state.controls.showServiceNodes ? collectCafeteriaQueueNodeTiles(state) : []);
+  const jobPickupTiles = new Set<number>(
+    state.controls.showServiceNodes
+      ? state.jobs
+          .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
+          .map((j) => j.fromTile)
+      : []
+  );
+  const jobDropTiles = new Set<number>(
+    state.controls.showServiceNodes
+      ? state.jobs
+          .filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress')
+          .map((j) => j.toTile)
+      : []
+  );
   const moduleInventoryVisualMap: Map<number, ModuleInventoryVisual> = state.controls.showInventoryOverlay
     ? buildModuleInventoryVisualMap(state)
     : new Map<number, ModuleInventoryVisual>();
@@ -480,19 +484,24 @@ export function renderWorld(
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
 
-    if (state.controls.showServiceNodes && serviceNodeTiles.includes(i)) {
-      ctx.fillStyle = 'rgba(0, 230, 180, 0.28)';
+    if (state.controls.showServiceNodes && serviceNodeTiles.has(i)) {
+      const unreachable = unreachableServiceNodeTiles.has(i);
+      ctx.fillStyle = unreachable ? 'rgba(255, 86, 86, 0.42)' : 'rgba(0, 230, 180, 0.28)';
       ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+      if (unreachable) {
+        ctx.strokeStyle = 'rgba(255, 138, 138, 0.95)';
+        ctx.strokeRect(px + 2.5, py + 2.5, TILE_SIZE - 5, TILE_SIZE - 5);
+      }
     }
-    if (state.controls.showServiceNodes && queueNodeTiles.includes(i)) {
+    if (state.controls.showServiceNodes && queueNodeTiles.has(i)) {
       ctx.fillStyle = 'rgba(255, 205, 80, 0.3)';
       ctx.fillRect(px + 5, py + 5, TILE_SIZE - 10, TILE_SIZE - 10);
     }
-    if (state.controls.showServiceNodes && jobPickupTiles.includes(i)) {
+    if (state.controls.showServiceNodes && jobPickupTiles.has(i)) {
       ctx.fillStyle = 'rgba(90, 180, 255, 0.45)';
       ctx.fillRect(px + 1, py + 1, 4, 4);
     }
-    if (state.controls.showServiceNodes && jobDropTiles.includes(i)) {
+    if (state.controls.showServiceNodes && jobDropTiles.has(i)) {
       ctx.fillStyle = 'rgba(255, 140, 90, 0.45)';
       ctx.fillRect(px + TILE_SIZE - 5, py + TILE_SIZE - 5, 4, 4);
     }
@@ -643,11 +652,24 @@ export function renderWorld(
 
   for (const r of state.residents) {
     const o = agentOffset(r.id);
-    ctx.fillStyle =
-      r.healthState === 'critical' ? '#ff8f8f' : r.healthState === 'distressed' ? '#ffd07a' : '#c7e3ff';
+    const agitation = r.agitation ?? 0;
+    const inConfrontation = (r.activeIncidentId ?? null) !== null || (r.confrontationUntil ?? 0) > state.now;
+    const residentFill = inConfrontation
+      ? '#ff2f2f'
+      : agitation >= 70
+        ? '#ff6f4d'
+        : r.healthState === 'critical'
+          ? '#ff8f8f'
+          : r.healthState === 'distressed'
+            ? '#ffd07a'
+            : '#72f3b2';
     ctx.beginPath();
+    ctx.fillStyle = residentFill;
     ctx.arc((r.x + o.x) * TILE_SIZE, (r.y + o.y) * TILE_SIZE, TILE_SIZE * 0.2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = RESIDENT_MARK_COLOR;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+    ctx.stroke();
   }
 
   for (const c of state.crewMembers) {
@@ -712,10 +734,11 @@ export function renderWorld(
   ctx.textBaseline = 'alphabetic';
   ctx.fillText(toolText, 8, 16);
   ctx.fillStyle = 'rgba(8, 16, 28, 0.72)';
-  ctx.fillRect(6, 42, 220, 34);
+  ctx.fillRect(6, 42, 220, 48);
   const legendItems: Array<{ color: string; label: string; y: number }> = [
     { color: '#f4e58c', label: 'Visitor mood (red->yellow->green)', y: 56 },
-    { color: '#7ec8ff', label: 'Crew', y: 70 }
+    { color: RESIDENT_MARK_COLOR, label: 'Resident', y: 70 },
+    { color: '#7ec8ff', label: 'Crew', y: 84 }
   ];
   for (let i = 0; i < legendItems.length; i++) {
     const item = legendItems[i];
@@ -728,6 +751,18 @@ export function renderWorld(
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(item.label, 26, item.y);
+  }
+  if (state.controls.showServiceNodes && serviceNodeReachability) {
+    const unreachableCount = serviceNodeReachability.unreachableNodeTiles.length;
+    const reachableCount = Math.max(0, serviceNodeReachability.nodeTiles.length - unreachableCount);
+    const line = `Service nodes: ok ${reachableCount} | unreachable ${unreachableCount} | queue ${queueNodeTiles.size}`;
+    ctx.fillStyle = 'rgba(8, 16, 28, 0.76)';
+    ctx.fillRect(6, 78, Math.max(220, line.length * 6), 12);
+    ctx.fillStyle = unreachableCount > 0 ? '#ff9a9a' : '#8fe8cf';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(line, 8, 84);
   }
   if (state.metrics.bodyCount > 0) {
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';

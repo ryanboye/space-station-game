@@ -2,7 +2,14 @@ import {
   buyMaterials,
   buyMaterialsDetailed,
   buyRawFood,
+  collectServiceNodeReachability,
+  expandMap,
   createInitialState,
+  getNextExpansionCost,
+  setDockPurpose,
+  getResidentInspectorById,
+  setRoomHousingPolicy,
+  getVisitorInspectorById,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
   sellMaterials,
@@ -12,13 +19,22 @@ import {
   tryPlaceModule
 } from '../src/sim/sim';
 import {
+  captureSnapshot,
+  hydrateStateFromSave,
+  parseAndMigrateSave,
+  serializeSave,
+  type StationSaveEnvelopeV1
+} from '../src/sim/save';
+import {
   ModuleType,
   RoomType,
+  ResidentState,
   TileType,
   VisitorState,
   fromIndex,
   toIndex,
   type ModuleRotation,
+  type ArrivingShip,
   type StationState,
   type Visitor
 } from '../src/sim/types';
@@ -75,6 +91,108 @@ function buildHabitat(state: StationState): void {
   setTile(state, state.core.serviceTile, TileType.Floor);
 }
 
+function dockByIdOrThrow(state: StationState, dockId: number) {
+  const dock = state.docks.find((d) => d.id === dockId);
+  assertCondition(!!dock, `Expected dock ${dockId} to exist.`);
+  return dock!;
+}
+
+function placeEastHullDock(state: StationState, y0: number, y1: number): number {
+  const x = 44;
+  for (let y = y0; y <= y1; y++) {
+    setTile(state, toIndex(x, y, state.width), TileType.Dock);
+  }
+  const anchor = toIndex(x, y0, state.width);
+  const dock = state.docks.find((d) => d.tiles.includes(anchor));
+  assertCondition(!!dock, `Expected dock cluster at east hull y=${y0}-${y1}.`);
+  return dock!.id;
+}
+
+function setupPrivateResidentHousing(state: StationState): { cabinTile: number; bedModuleId: number } {
+  paintRoom(state, RoomType.Dorm, 10, 22, 13, 25);
+  paintRoom(state, RoomType.Hygiene, 15, 22, 17, 24);
+  const dormPolicyOk = setRoomHousingPolicy(state, toIndex(10, 22, state.width), 'private_resident');
+  const hygienePolicyOk = setRoomHousingPolicy(state, toIndex(15, 22, state.width), 'resident');
+  assertCondition(dormPolicyOk, 'Expected to set dorm housing policy to private_resident.');
+  assertCondition(hygienePolicyOk, 'Expected to set hygiene housing policy to resident.');
+  placeModuleOrThrow(state, ModuleType.Bed, 11, 23);
+  const bedOrigin = toIndex(11, 23, state.width);
+  const bed = state.moduleInstances.find((m) => m.type === ModuleType.Bed && m.originTile === bedOrigin);
+  assertCondition(!!bed, 'Expected private resident bed module to exist.');
+  return {
+    cabinTile: toIndex(10, 22, state.width),
+    bedModuleId: bed!.id
+  };
+}
+
+function createDockedTransientShip(state: StationState, dockId: number, shipId: number): ArrivingShip {
+  const dock = dockByIdOrThrow(state, dockId);
+  const center = dock.tiles
+    .map((tile) => fromIndex(tile, state.width))
+    .reduce(
+      (acc, pos) => ({ x: acc.x + pos.x, y: acc.y + pos.y }),
+      { x: 0, y: 0 }
+    );
+  const ship: ArrivingShip = {
+    id: shipId,
+    kind: 'transient',
+    size: 'small',
+    bayTiles: [...dock.tiles],
+    bayCenterX: center.x / Math.max(1, dock.tiles.length) + 0.5,
+    bayCenterY: center.y / Math.max(1, dock.tiles.length) + 0.5,
+    shipType: 'tourist',
+    lane: dock.lane,
+    originDockId: dock.id,
+    assignedDockId: dock.id,
+    queueState: 'none',
+    stage: 'docked',
+    stageTime: 0,
+    passengersTotal: 1,
+    passengersSpawned: 1,
+    passengersBoarded: 0,
+    minimumBoarding: 1,
+    spawnCarry: 0,
+    dockedAt: state.now,
+    residentIds: [],
+    manifestDemand: { cafeteria: 0.5, market: 0.25, lounge: 0.25 },
+    manifestMix: { diner: 0.55, shopper: 0.2, lounger: 0.15, rusher: 0.1 }
+  };
+  dock.occupiedByShipId = ship.id;
+  state.arrivingShips.push(ship);
+  return ship;
+}
+
+function spawnReturningVisitor(state: StationState, dockTile: number, id: number, originShipId: number): void {
+  const center = fromIndex(dockTile, state.width);
+  const v: Visitor = {
+    id,
+    x: center.x + 0.5,
+    y: center.y + 0.5,
+    tileIndex: dockTile,
+    state: VisitorState.ToDock,
+    path: [],
+    speed: 2,
+    patience: 0,
+    eatTimer: 0,
+    trespassed: false,
+    servedMeal: true,
+    carryingMeal: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: 'diner',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: 'cafeteria',
+    spawnedAt: state.now - 80,
+    originShipId,
+    airExposureSec: 0,
+    healthState: 'healthy'
+  };
+  state.visitors.push(v);
+}
+
 function paintRoom(state: StationState, room: RoomType, x0: number, y0: number, x1: number, y1: number): void {
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
@@ -126,6 +244,7 @@ function spawnVisitor(state: StationState, x: number, y: number, id: number): vo
     patienceMultiplier: 1,
     primaryPreference: 'cafeteria',
     spawnedAt: state.now,
+    originShipId: null,
     airExposureSec: 0,
     healthState: 'healthy'
   };
@@ -378,6 +497,39 @@ function testFoodChainInspectorClarity(): void {
   );
 }
 
+function testServiceNodeUnreachableWarning(): void {
+  const state = createInitialState({ seed: 3030 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 18, 12);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 17, 11, 90);
+  setTile(state, toIndex(16, 11, state.width), TileType.Wall);
+  setTile(state, toIndex(18, 11, state.width), TileType.Wall);
+  setTile(state, toIndex(17, 10, state.width), TileType.Wall);
+  setTile(state, toIndex(16, 12, state.width), TileType.Wall);
+  setTile(state, toIndex(18, 12, state.width), TileType.Wall);
+  setTile(state, toIndex(17, 13, state.width), TileType.Wall);
+
+  runFor(state, 1);
+
+  const servingTile = toIndex(17, 11, state.width);
+  const reachability = collectServiceNodeReachability(state);
+  assertCondition(
+    reachability.unreachableNodeTiles.includes(servingTile),
+    'Sealed serving node should be marked unreachable.'
+  );
+  const inspector = getRoomInspectorAt(state, servingTile);
+  assertCondition(!!inspector, 'Inspector should exist for sealed serving node room.');
+  assertCondition(
+    inspector!.unreachableServiceNodeCount === 1 && inspector!.reachableServiceNodeCount === 0,
+    'Inspector should report unreachable service-node counts.'
+  );
+  assertCondition(
+    inspector!.warnings.some((warning) => warning.includes('service nodes unreachable 1/1')),
+    'Inspector should warn when service nodes are unreachable.'
+  );
+}
+
 function testLoungeModuleGating(): void {
   const state = createInitialState({ seed: 3007 });
   buildHabitat(state);
@@ -490,6 +642,632 @@ function testJobMetricsConsistency(): void {
   );
 }
 
+function testVisitorBerthsAcceptTrafficResidentialDoNot(): void {
+  const state = createInitialState({ seed: 3016 });
+  buildHabitat(state);
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  state.controls.shipsPerCycle = 2;
+  runFor(state, 70);
+
+  const shipsSpawned =
+    state.usageTotals.shipsByType.tourist +
+    state.usageTotals.shipsByType.trader +
+    state.usageTotals.shipsByType.industrial;
+  assertCondition(shipsSpawned > 0, 'Visitor berths should receive scheduled arrivals.');
+  for (const ship of state.arrivingShips) {
+    assertCondition(
+      ship.assignedDockId !== residentialDockId,
+      'Scheduled arrivals must not be assigned to residential berths.'
+    );
+  }
+  const residentialDock = dockByIdOrThrow(state, residentialDockId);
+  const visitorDock = dockByIdOrThrow(state, visitorDockId);
+  assertCondition(residentialDock.occupiedByShipId === null, 'Residential berth should stay unused by scheduled traffic.');
+  assertCondition(visitorDock.purpose === 'visitor', 'Visitor berth purpose should remain visitor.');
+}
+
+function testConversionBlockedWithoutResidentialBerth(): void {
+  const state = createInitialState({ seed: 3017 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  setupPrivateResidentHousing(state);
+  state.rng = () => 0;
+  const ship = createDockedTransientShip(state, visitorDockId, 9101);
+  const dockTile = dockByIdOrThrow(state, visitorDockId).tiles[0];
+  spawnReturningVisitor(state, dockTile, 501, ship.id);
+
+  runFor(state, 1);
+  assertCondition(state.residents.length === 0, 'Conversion should fail without an eligible residential berth.');
+  assertCondition(ship.kind === 'transient', 'Ship should remain transient when conversion prerequisites fail.');
+  assertCondition(
+    state.usageTotals.residentConversionAttempts === 0,
+    'Conversion attempts should not be counted when no residential berth is available.'
+  );
+}
+
+function testConversionBlockedWithoutPrivateHousing(): void {
+  const state = createInitialState({ seed: 3018 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  state.rng = () => 0;
+  const ship = createDockedTransientShip(state, visitorDockId, 9102);
+  const dockTile = dockByIdOrThrow(state, visitorDockId).tiles[0];
+  spawnReturningVisitor(state, dockTile, 502, ship.id);
+
+  runFor(state, 1);
+  assertCondition(state.residents.length === 0, 'Conversion should fail when no private resident housing exists.');
+  assertCondition(ship.kind === 'transient', 'Ship should remain transient when housing is unavailable.');
+  assertCondition(
+    ship.assignedDockId === visitorDockId,
+    'Ship should stay on its visitor berth when conversion cannot complete.'
+  );
+  assertCondition(
+    state.usageTotals.residentConversionAttempts === 0,
+    'Conversion attempts should not be counted when housing prerequisites fail.'
+  );
+}
+
+function testConversionCreatesResidentHomeShip(): void {
+  const state = createInitialState({ seed: 3019 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  const housing = setupPrivateResidentHousing(state);
+  state.rng = () => 0;
+  const ship = createDockedTransientShip(state, visitorDockId, 9103);
+  const dockTile = dockByIdOrThrow(state, visitorDockId).tiles[0];
+  spawnReturningVisitor(state, dockTile, 503, ship.id);
+
+  runFor(state, 1);
+  assertCondition(state.residents.length === 1, 'Eligible boarding should convert a visitor into a resident.');
+  const resident = state.residents[0];
+  const visitorDock = dockByIdOrThrow(state, visitorDockId);
+  const residentialDock = dockByIdOrThrow(state, residentialDockId);
+  assertCondition(ship.kind === 'resident_home', 'Converted ship should switch to resident_home kind.');
+  assertCondition(ship.assignedDockId === residentialDockId, 'Resident home ship should relocate to a residential berth.');
+  assertCondition(visitorDock.occupiedByShipId === null, 'Visitor berth should free occupancy after relocation.');
+  assertCondition(residentialDock.occupiedByShipId === ship.id, 'Residential berth should be occupied by resident home ship.');
+  assertCondition(resident.homeShipId === ship.id, 'Resident should track homeShipId.');
+  assertCondition(resident.homeDockId === residentialDockId, 'Resident should track homeDockId.');
+  assertCondition(resident.housingUnitId === housing.cabinTile, 'Resident should receive assigned housing unit.');
+  assertCondition(resident.bedModuleId === housing.bedModuleId, 'Resident should receive assigned bed module.');
+  assertCondition(state.usageTotals.residentConversionAttempts === 1, 'Successful conversion should count one attempt.');
+  assertCondition(state.usageTotals.residentConversionSuccesses === 1, 'Successful conversion should count one success.');
+}
+
+function testResidentDepartureFreesHomeShipBerth(): void {
+  const state = createInitialState({ seed: 3020 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  setupPrivateResidentHousing(state);
+  state.rng = () => 0;
+  const ship = createDockedTransientShip(state, visitorDockId, 9104);
+  const visitorDockTile = dockByIdOrThrow(state, visitorDockId).tiles[0];
+  spawnReturningVisitor(state, visitorDockTile, 504, ship.id);
+  runFor(state, 1);
+
+  assertCondition(state.residents.length === 1, 'Fixture should convert one resident before departure test.');
+  const resident = state.residents[0];
+  const homeDockTile = dockByIdOrThrow(state, residentialDockId).tiles[0];
+  const center = fromIndex(homeDockTile, state.width);
+  resident.state = ResidentState.ToHomeShip;
+  resident.leaveIntent = 100;
+  resident.path = [];
+  resident.tileIndex = homeDockTile;
+  resident.x = center.x + 0.5;
+  resident.y = center.y + 0.5;
+
+  runFor(state, 1);
+  assertCondition(state.residents.length === 0, 'Resident should depart once reaching home dock tile.');
+  const shipAfterResidentExit = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
+  assertCondition(!!shipAfterResidentExit, 'Resident home ship should still exist during departure stage.');
+  assertCondition(
+    shipAfterResidentExit!.residentIds.length === 0 && shipAfterResidentExit!.stage === 'depart',
+    'Resident home ship should enter depart stage when no linked residents remain.'
+  );
+  runFor(state, 8);
+  const shipAfterDepart = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
+  assertCondition(shipAfterDepart === null, 'Resident home ship should leave simulation after depart stage completes.');
+  assertCondition(
+    dockByIdOrThrow(state, residentialDockId).occupiedByShipId === null,
+    'Residential berth occupancy should be freed after home ship departure.'
+  );
+  assertCondition(state.usageTotals.residentDepartures === 1, 'Resident departure counter should increment.');
+}
+
+function testMapExpansionCostProgressionAndDirectionLock(): void {
+  const state = createInitialState({ seed: 3025 });
+  state.metrics.credits = 50000;
+
+  const order = ['north', 'east', 'south', 'west'] as const;
+  const expectedCosts = [2000, 4000, 6000, 8000];
+  let totalSpent = 0;
+
+  for (let i = 0; i < order.length; i++) {
+    assertCondition(
+      getNextExpansionCost(state) === expectedCosts[i],
+      `Expected next expansion cost ${expectedCosts[i]} before purchase ${i + 1}.`
+    );
+    const result = expandMap(state, order[i]);
+    assertCondition(result.ok, `Expansion ${order[i]} should succeed.`);
+    if (!result.ok) continue;
+    assertCondition(result.cost === expectedCosts[i], `Expansion ${order[i]} should cost ${expectedCosts[i]}.`);
+    totalSpent += expectedCosts[i];
+  }
+
+  assertCondition(state.mapExpansion.purchasesMade === 4, 'Expected four total expansion purchases.');
+  assertCondition(state.metrics.credits === 50000 - totalSpent, 'Credits should be reduced by total expansion costs.');
+  assertCondition(getNextExpansionCost(state) === 8000, 'Expansion cost should remain capped at 8000.');
+
+  const repeat = expandMap(state, 'north');
+  assertCondition(!repeat.ok, 'Repeat expansion in same direction should fail.');
+  if (repeat.ok) return;
+  assertCondition(repeat.reason === 'already_expanded_direction', 'Repeat expansion should report direction lock.');
+}
+
+function testMapExpansionCreditGatingNoMutation(): void {
+  const state = createInitialState({ seed: 3026 });
+  state.metrics.credits = 1999;
+  const beforeWidth = state.width;
+  const beforeHeight = state.height;
+  const beforeCredits = state.metrics.credits;
+  const beforeCore = state.core.serviceTile;
+
+  const result = expandMap(state, 'south');
+  assertCondition(!result.ok, 'Expansion should fail with insufficient credits.');
+  if (result.ok) return;
+  assertCondition(result.reason === 'insufficient_credits', 'Expansion failure reason should be insufficient credits.');
+  assertCondition(state.width === beforeWidth && state.height === beforeHeight, 'Failed expansion should not resize map.');
+  assertCondition(state.metrics.credits === beforeCredits, 'Failed expansion should not consume credits.');
+  assertCondition(state.core.serviceTile === beforeCore, 'Failed expansion should not mutate indices.');
+}
+
+function testMapExpansionNorthRemapsRuntimeReferences(): void {
+  const state = createInitialState({ seed: 3027 });
+  state.metrics.credits = 20000;
+  buildHabitat(state);
+  setupCoreRooms(state);
+
+  const trackedTile = toIndex(8, 8, state.width);
+  setTile(state, trackedTile, TileType.Door);
+  paintRoom(state, RoomType.Dorm, 18, 10, 20, 11);
+  placeModuleOrThrow(state, ModuleType.Bed, 18, 10);
+  const module = state.moduleInstances.find((m) => m.type === ModuleType.Bed);
+  assertCondition(!!module, 'Fixture should include module before expansion.');
+  if (!module) return;
+
+  const dockId = placeEastHullDock(state, 8, 9);
+  const dock = dockByIdOrThrow(state, dockId);
+  const dockAnchorBefore = dock.anchorTile;
+  const ship = createDockedTransientShip(state, dockId, 9300);
+  state.pendingSpawns.push({ at: state.now + 1, dockIndex: dock.tiles[0] });
+
+  tick(state, 0.1);
+  assertCondition(state.crewMembers.length > 0, 'Fixture should include crew members before expansion.');
+  const crewBefore = state.crewMembers[0];
+  crewBefore.tileIndex = toIndex(14, 14, state.width);
+  crewBefore.path = [toIndex(14, 14, state.width), toIndex(15, 14, state.width)];
+  crewBefore.targetTile = toIndex(16, 14, state.width);
+  crewBefore.y = 14.5;
+  const crewTileBefore = crewBefore.tileIndex;
+  const crewYBefore = crewBefore.y;
+
+  const fromTileBefore = toIndex(10, 10, state.width);
+  const toTileBefore = toIndex(12, 10, state.width);
+  state.jobs.push({
+    id: 77,
+    type: 'pickup',
+    itemType: 'rawMeal',
+    amount: 1,
+    fromTile: fromTileBefore,
+    toTile: toTileBefore,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + 90,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now
+  });
+
+  spawnVisitor(state, 9, 9, 1001);
+  const visitorBefore = state.visitors[0];
+  const visitorTileBefore = visitorBefore.tileIndex;
+  const visitorYBefore = visitorBefore.y;
+
+  state.residents.push({
+    id: 2001,
+    x: 11.5,
+    y: 11.5,
+    tileIndex: toIndex(11, 11, state.width),
+    path: [toIndex(11, 11, state.width), toIndex(12, 11, state.width)],
+    speed: 1.8,
+    hunger: 80,
+    energy: 80,
+    hygiene: 80,
+    stress: 10,
+    state: ResidentState.Idle,
+    actionTimer: 0,
+    retargetAt: 0,
+    reservedTargetTile: toIndex(13, 11, state.width),
+    homeShipId: null,
+    homeDockId: null,
+    housingUnitId: null,
+    bedModuleId: null,
+    satisfaction: 70,
+    leaveIntent: 0,
+    blockedTicks: 0,
+    airExposureSec: 0,
+    healthState: 'healthy'
+  });
+  const residentBefore = state.residents[0];
+
+  state.bodyTiles = [toIndex(17, 17, state.width)];
+  state.pathOccupancyByTile = new Map([[toIndex(18, 18, state.width), 2]]);
+  state.effects.blockedUntilByTile = new Map([[toIndex(19, 19, state.width), state.now + 5]]);
+
+  const result = expandMap(state, 'north');
+  assertCondition(result.ok, 'North expansion should succeed.');
+  if (!result.ok) return;
+
+  const remapNorth = (index: number): number => index + 40 * state.width;
+  assertCondition(state.height === 80, 'North expansion should increase height by 40.');
+  assertCondition(state.tiles[remapNorth(trackedTile)] === TileType.Door, 'Tracked tile should remap after north expansion.');
+  assertCondition(module.originTile !== state.moduleInstances[0].originTile, 'Module origin should be remapped.');
+  assertCondition(
+    state.moduleInstances.some((m) => m.id === module.id && m.originTile === remapNorth(module.originTile)),
+    'Module origin tile should shift north by 40 rows.'
+  );
+  assertCondition(state.visitors[0].tileIndex === remapNorth(visitorTileBefore), 'Visitor tile index should be remapped.');
+  assertCondition(Math.abs(state.visitors[0].y - (visitorYBefore + 40)) < 0.001, 'Visitor world Y should shift by 40.');
+  assertCondition(state.residents[0].tileIndex === remapNorth(residentBefore.tileIndex), 'Resident tile index should remap.');
+  assertCondition(
+    state.residents[0].reservedTargetTile === remapNorth(residentBefore.reservedTargetTile!),
+    'Resident reserved target should remap.'
+  );
+  assertCondition(state.crewMembers[0].tileIndex === remapNorth(crewTileBefore), 'Crew tile index should remap.');
+  assertCondition(state.crewMembers[0].targetTile === remapNorth(toIndex(16, 14, 60)), 'Crew target tile should remap.');
+  assertCondition(Math.abs(state.crewMembers[0].y - (crewYBefore + 40)) < 0.001, 'Crew world Y should shift by 40.');
+  assertCondition(state.jobs[0].fromTile === remapNorth(fromTileBefore), 'Job source tile should remap.');
+  assertCondition(state.jobs[0].toTile === remapNorth(toTileBefore), 'Job target tile should remap.');
+  assertCondition(state.pendingSpawns[0].dockIndex === remapNorth(dock.tiles[0]), 'Pending spawn dock index should remap.');
+  assertCondition(state.bodyTiles[0] === remapNorth(toIndex(17, 17, 60)), 'Body tile should remap.');
+
+  const pathKeys = [...state.pathOccupancyByTile.keys()];
+  const blockedKeys = [...state.effects.blockedUntilByTile.keys()];
+  assertCondition(pathKeys.length === 1 && pathKeys[0] === remapNorth(toIndex(18, 18, 60)), 'Path occupancy keys should remap.');
+  assertCondition(
+    blockedKeys.length === 1 && blockedKeys[0] === remapNorth(toIndex(19, 19, 60)),
+    'Blocked tile effect keys should remap.'
+  );
+
+  const remappedDock = dockByIdOrThrow(state, dockId);
+  assertCondition(remappedDock.anchorTile === remapNorth(dockAnchorBefore), 'Dock anchor should remap north.');
+  assertCondition(
+    state.arrivingShips.some(
+      (arriving) =>
+        arriving.id === ship.id &&
+        arriving.assignedDockId === dockId &&
+        Math.abs(arriving.bayCenterY - (ship.bayCenterY + 40)) < 0.001
+    ),
+    'Docked ship should keep dock assignment and remapped bay center.'
+  );
+}
+
+function testMapExpansionWestRemapsCoreAndDockIntegrity(): void {
+  const state = createInitialState({ seed: 3028 });
+  state.metrics.credits = 20000;
+  const coreBefore = state.core.serviceTile;
+  const dockId = placeEastHullDock(state, 8, 9);
+  const dockBefore = dockByIdOrThrow(state, dockId);
+  const oldWidth = state.width;
+  const oldHeight = state.height;
+
+  const result = expandMap(state, 'west');
+  assertCondition(result.ok, 'West expansion should succeed.');
+  if (!result.ok) return;
+
+  assertCondition(state.width === oldWidth + 40, 'West expansion should increase width by 40.');
+  assertCondition(state.height === oldHeight, 'West expansion should preserve height.');
+  const coreAfter = fromIndex(state.core.serviceTile, state.width);
+  const coreBeforePos = fromIndex(coreBefore, oldWidth);
+  assertCondition(coreAfter.x === coreBeforePos.x + 40 && coreAfter.y === coreBeforePos.y, 'Core tile should shift 40 west-columns.');
+
+  const dockAfter = dockByIdOrThrow(state, dockId);
+  assertCondition(dockAfter.tiles.length === dockBefore.tiles.length, 'Dock cluster size should remain stable after expansion.');
+  assertCondition(
+    dockAfter.tiles.every((tile) => tile >= 0 && tile < state.width * state.height),
+    'Dock tiles should remain in bounds after expansion.'
+  );
+  const assignedDockIds = new Set(state.docks.map((dock) => dock.id));
+  assertCondition(
+    state.arrivingShips.every((ship) => ship.assignedDockId === null || assignedDockIds.has(ship.assignedDockId)),
+    'All ships should reference valid dock ids after expansion.'
+  );
+}
+
+function testSaveRoundtripLayoutAndResources(): void {
+  const state = createInitialState({ seed: 3021 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 10);
+  const dockId = placeEastHullDock(state, 8, 9);
+  setDockPurpose(state, dockId, 'residential');
+  state.controls.shipsPerCycle = 2;
+  state.controls.taxRate = 0.31;
+  state.metrics.credits = 321;
+  state.metrics.waterStock = 88;
+  state.metrics.airQuality = 67;
+  state.legacyMaterialStock = 145;
+  buyMaterials(state, 0, 25);
+
+  const payload = serializeSave('roundtrip', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Roundtrip payload should parse.');
+  if (!parsed.ok) return;
+  const hydrated = hydrateStateFromSave(parsed.save);
+  const loaded = hydrated.state;
+
+  assertCondition(
+    loaded.tiles.every((tile, i) => tile === state.tiles[i]),
+    'Loaded tiles should match the saved station layout.'
+  );
+  assertCondition(
+    loaded.rooms.every((room, i) => room === state.rooms[i]),
+    'Loaded room paint should match saved room paint.'
+  );
+  assertCondition(
+    loaded.zones.every((zone, i) => zone === state.zones[i]),
+    'Loaded zones should match saved zone paint.'
+  );
+  assertCondition(
+    loaded.moduleInstances.some((m) => m.type === ModuleType.ServingStation && m.originTile === toIndex(16, 11, loaded.width)),
+    'Saved serving station module should be restored.'
+  );
+  assertCondition(
+    loaded.docks.some((d) => d.anchorTile === toIndex(44, 8, loaded.width) && d.purpose === 'residential'),
+    'Saved dock configuration should be restored.'
+  );
+  assertCondition(Math.round(loaded.metrics.credits) === 321, 'Credits should be restored from save.');
+  assertCondition(Math.round(loaded.metrics.waterStock) === 88, 'Water stock should be restored from save.');
+  assertCondition(Math.round(loaded.metrics.airQuality) === 67, 'Air quality should be restored from save.');
+  assertCondition(Math.round(loaded.legacyMaterialStock) === 145, 'Legacy material stock should be restored from save.');
+  assertCondition(loaded.controls.shipsPerCycle === 2, 'Ship-per-cycle control should be restored from save.');
+  assertCondition(Math.abs(loaded.controls.taxRate - 0.31) < 0.001, 'Tax rate should be restored from save.');
+}
+
+function testSaveLoadRegeneratesRuntimeEntities(): void {
+  const state = createInitialState({ seed: 3022 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  const dockId = placeEastHullDock(state, 8, 9);
+  const ship = createDockedTransientShip(state, dockId, 9200);
+  spawnReturningVisitor(state, dockByIdOrThrow(state, dockId).tiles[0], 720, ship.id);
+  state.jobs.push({
+    id: 1,
+    type: 'pickup',
+    itemType: 'rawMeal',
+    amount: 2,
+    fromTile: dockByIdOrThrow(state, dockId).tiles[0],
+    toTile: dockByIdOrThrow(state, dockId).tiles[0],
+    assignedCrewId: null,
+    createdAt: 0,
+    expiresAt: 120,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: 0
+  });
+  state.pendingSpawns.push({ at: 1, dockIndex: 0 });
+
+  const payload = serializeSave('runtime', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Runtime payload should parse.');
+  if (!parsed.ok) return;
+  const hydrated = hydrateStateFromSave(parsed.save);
+  const loaded = hydrated.state;
+
+  assertCondition(loaded.visitors.length === 0, 'Visitors should be reset during static-only load.');
+  assertCondition(loaded.residents.length === 0, 'Residents should be reset during static-only load.');
+  assertCondition(
+    loaded.crewMembers.length === loaded.crew.total,
+    'Crew members should be regenerated from crew total, not persisted one-to-one.'
+  );
+  assertCondition(loaded.jobs.length === 0, 'Jobs should be reset during static-only load.');
+  assertCondition(loaded.arrivingShips.length === 0, 'Arriving ships should be reset during static-only load.');
+  assertCondition(loaded.pendingSpawns.length === 0, 'Pending spawns should be reset during static-only load.');
+  assertCondition(loaded.controls.paused, 'Loaded state should force pause.');
+  tick(loaded, 0.5);
+}
+
+function testSaveLoadBestEffortMigration(): void {
+  const baseline = createInitialState({ seed: 3023 });
+  const len = baseline.width * baseline.height;
+  const legacyPayload = JSON.stringify({
+    name: 'legacy-partial',
+    width: baseline.width,
+    height: baseline.height,
+    tiles: new Array<string>(len).fill('floor'),
+    modules: [{ type: 'unknown-module', originTile: 5, rotation: 45 }],
+    controls: { shipsPerCycle: 99, taxRate: -0.25 },
+    resources: { credits: 123 },
+    randomFutureField: { hello: 'world' }
+  });
+
+  const parsed = parseAndMigrateSave(legacyPayload);
+  assertCondition(parsed.ok, 'Legacy payload should parse via best-effort migration.');
+  if (!parsed.ok) return;
+  assertCondition(parsed.warnings.length > 0, 'Legacy migration should emit warnings.');
+
+  const hydrated = hydrateStateFromSave(parsed.save);
+  assertCondition(hydrated.state.controls.shipsPerCycle === 3, 'Ships-per-cycle should be clamped during migration.');
+  assertCondition(hydrated.state.controls.taxRate === 0, 'Tax rate should be clamped during migration.');
+}
+
+function testSaveLoadFailsOnInvalidCoreShape(): void {
+  const invalidPayload = JSON.stringify({
+    schemaVersion: 1,
+    gameVersion: 'sim-tests',
+    name: 'invalid',
+    createdAt: new Date().toISOString(),
+    snapshot: {
+      width: 60,
+      height: 40,
+      zones: []
+    }
+  });
+  const parsed = parseAndMigrateSave(invalidPayload);
+  assertCondition(!parsed.ok, 'Invalid payload missing tiles should fail parse.');
+}
+
+function testInventoryReapplyClampsCapacity(): void {
+  const state = createInitialState({ seed: 3024 });
+  buildHabitat(state);
+  setupTradeChain(state);
+  tick(state, 0);
+  const node = state.itemNodes[0];
+  assertCondition(!!node, 'Fixture should expose at least one item node.');
+  if (!node) return;
+
+  const snapshot = captureSnapshot(state);
+  snapshot.inventoryByTile = [
+    {
+      tileIndex: node.tileIndex,
+      items: {
+        rawMaterial: node.capacity * 3
+      }
+    }
+  ];
+  const envelope: StationSaveEnvelopeV1 = {
+    schemaVersion: 1,
+    gameVersion: 'sim-tests',
+    createdAt: new Date().toISOString(),
+    name: 'clamp-test',
+    snapshot
+  };
+  const hydrated = hydrateStateFromSave(envelope);
+  const reloadedNode = hydrated.state.itemNodes.find((n) => n.tileIndex === node.tileIndex);
+  assertCondition(!!reloadedNode, 'Reloaded node should still exist.');
+  if (!reloadedNode) return;
+  assertCondition((reloadedNode.items.rawMaterial ?? 0) <= reloadedNode.capacity + 0.001, 'Reloaded inventory should be clamped to capacity.');
+  assertCondition(
+    hydrated.warnings.some((warning) => warning.includes('clamped')),
+    'Clamped inventory reload should report warnings.'
+  );
+}
+
+function snapshotActors(state: StationState): string {
+  return JSON.stringify({
+    visitors: state.visitors,
+    residents: state.residents
+  });
+}
+
+function testVisitorInspectorShapeAndPurity(): void {
+  const state = createInitialState({ seed: 3040 });
+  spawnVisitor(state, 10, 10, 10001);
+  const visitor = state.visitors[0];
+  visitor.state = VisitorState.ToCafeteria;
+  visitor.archetype = 'shopper';
+  visitor.primaryPreference = 'market';
+  visitor.patience = 17.5;
+  visitor.carryingMeal = false;
+  visitor.servedMeal = false;
+  visitor.reservedServingTile = toIndex(12, 10, state.width);
+  visitor.reservedTargetTile = null;
+  visitor.path = [toIndex(11, 10, state.width), toIndex(12, 10, state.width)];
+
+  const before = snapshotActors(state);
+  const inspector = getVisitorInspectorById(state, visitor.id);
+  const after = snapshotActors(state);
+
+  assertCondition(!!inspector, 'Visitor inspector should resolve by id.');
+  if (!inspector) return;
+  assertCondition(inspector.kind === 'visitor', 'Visitor inspector kind should be visitor.');
+  assertCondition(inspector.desire === 'eat', 'Visitor desire should be eat before a served meal.');
+  assertCondition(inspector.currentAction === 'heading to serving station', 'Visitor action should reflect serving-station pathing.');
+  assertCondition(inspector.primaryPreference === 'market', 'Visitor inspector should expose primary preference.');
+  assertCondition(inspector.targetTile === visitor.reservedServingTile, 'Visitor inspector should expose serving reservation as target.');
+  assertCondition(before === after, 'Visitor inspector getter should not mutate actor state.');
+}
+
+function testResidentInspectorThresholdsAndPurity(): void {
+  const state = createInitialState({ seed: 3041 });
+  const residentTile = toIndex(14, 14, state.width);
+  state.residents.push({
+    id: 5001,
+    x: 14.5,
+    y: 14.5,
+    tileIndex: residentTile,
+    path: [],
+    speed: 1.8,
+    hunger: 70,
+    energy: 30,
+    hygiene: 76,
+    stress: 22,
+    state: ResidentState.Idle,
+    actionTimer: 0,
+    retargetAt: 0,
+    reservedTargetTile: null,
+    homeShipId: 77,
+    homeDockId: 4,
+    housingUnitId: 90,
+    bedModuleId: 33,
+    satisfaction: 63,
+    leaveIntent: 0,
+    blockedTicks: 1,
+    airExposureSec: 0,
+    healthState: 'healthy'
+  });
+  const resident = state.residents[0];
+
+  const beforeSleep = snapshotActors(state);
+  const sleepInspector = getResidentInspectorById(state, resident.id);
+  const afterSleep = snapshotActors(state);
+  assertCondition(!!sleepInspector, 'Resident inspector should resolve by id.');
+  if (!sleepInspector) return;
+  assertCondition(sleepInspector.desire === 'sleep', 'Resident desire should be sleep when energy is below threshold.');
+  assertCondition(sleepInspector.dominantNeed === 'energy', 'Resident dominant need should be energy for low-energy resident.');
+  assertCondition(
+    sleepInspector.actionReason.includes('sleep'),
+    'Resident action reason should explain the next need/desire when idle.'
+  );
+  assertCondition(beforeSleep === afterSleep, 'Resident inspector getter should not mutate actor state.');
+
+  resident.leaveIntent = 20;
+  const beforeReturn = snapshotActors(state);
+  const returnInspector = getResidentInspectorById(state, resident.id);
+  const afterReturn = snapshotActors(state);
+  assertCondition(!!returnInspector, 'Resident inspector should resolve after leaveIntent mutation.');
+  if (!returnInspector) return;
+  assertCondition(
+    returnInspector.desire === 'return_home_ship',
+    'Resident desire should switch to return_home_ship when leave intent crosses trigger.'
+  );
+  assertCondition(beforeReturn === afterReturn, 'Resident inspector getter should remain non-mutating after desire switch.');
+}
+
+function testAgentInspectorMissingId(): void {
+  const state = createInitialState({ seed: 3042 });
+  assertCondition(getVisitorInspectorById(state, 999999) === null, 'Unknown visitor id should return null inspector.');
+  assertCondition(getResidentInspectorById(state, 999999) === null, 'Unknown resident id should return null inspector.');
+}
+
 function run(): void {
   testAutonomousRoomsNoStaff();
   testCafeteriaMissingServingStation();
@@ -502,10 +1280,28 @@ function run(): void {
   testMarketBuyCapacityContext();
   testMarketBuyMissingIntakeContext();
   testFoodChainInspectorClarity();
+  testServiceNodeUnreachableWarning();
   testLoungeModuleGating();
   testActivationChecksPreserved();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
+  testVisitorBerthsAcceptTrafficResidentialDoNot();
+  testConversionBlockedWithoutResidentialBerth();
+  testConversionBlockedWithoutPrivateHousing();
+  testConversionCreatesResidentHomeShip();
+  testResidentDepartureFreesHomeShipBerth();
+  testMapExpansionCostProgressionAndDirectionLock();
+  testMapExpansionCreditGatingNoMutation();
+  testMapExpansionNorthRemapsRuntimeReferences();
+  testMapExpansionWestRemapsCoreAndDockIntegrity();
+  testSaveRoundtripLayoutAndResources();
+  testSaveLoadRegeneratesRuntimeEntities();
+  testSaveLoadBestEffortMigration();
+  testSaveLoadFailsOnInvalidCoreShape();
+  testInventoryReapplyClampsCapacity();
+  testVisitorInspectorShapeAndPurity();
+  testResidentInspectorThresholdsAndPurity();
+  testAgentInspectorMissingId();
   console.log('sim-tests: PASS');
 }
 
