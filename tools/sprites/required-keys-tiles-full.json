@@ -1,0 +1,18 @@
+[
+  "tile.space",
+  "tile.floor",
+  "tile.wall",
+  "tile.wall.solo",
+  "tile.wall.end",
+  "tile.wall.straight",
+  "tile.wall.corner",
+  "tile.wall.tee",
+  "tile.wall.cross",
+  "tile.dock",
+  "tile.cafeteria",
+  "tile.reactor",
+  "tile.security",
+  "tile.door",
+  "tile.door.horizontal",
+  "tile.door.vertical"
+]

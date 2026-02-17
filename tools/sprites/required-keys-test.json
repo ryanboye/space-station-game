@@ -1,0 +1,17 @@
+[
+  "tile.floor",
+  "tile.wall.solo",
+  "tile.wall.corner",
+  "tile.wall.cross",
+  "tile.door.horizontal",
+  "tile.door.vertical",
+  "tile.dock",
+  "module.bed",
+  "module.table",
+  "module.serving_station",
+  "module.stove",
+  "module.terminal",
+  "module.grow_station",
+  "ship.tourist",
+  "ship.trader"
+]

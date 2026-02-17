@@ -23,6 +23,19 @@ import {
   getDockByTile,
   validateDockPlacement
 } from '../sim/sim';
+import {
+  DOOR_SPRITE_VARIANT_KEYS,
+  MODULE_SPRITE_KEYS,
+  ROOM_SPRITE_KEYS,
+  SHIP_SPRITE_KEYS,
+  TILE_SPRITE_KEYS,
+  WALL_SPRITE_VARIANT_KEYS
+} from './sprite-keys';
+import type { SpriteAtlas, SpriteFrame } from './sprite-atlas';
+import { AGENT_SPRITE_VARIANTS } from './sprite-keys-extended';
+import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
+
+const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
 
 const tileColor: Record<TileType, string> = {
   [TileType.Space]: '#071019',
@@ -144,6 +157,212 @@ const serviceOverlayCache: ServiceOverlayCache = {
   jobDropTiles: new Set(),
   reachability: null
 };
+
+function spritesEnabled(state: StationState, spriteAtlas: SpriteAtlas): boolean {
+  return state.controls.spriteMode === 'sprites' && !state.controls.showSpriteFallback && spriteAtlas.ready && !!spriteAtlas.image;
+}
+
+function positiveMod(value: number, modulus: number): number {
+  const remainder = value % modulus;
+  return remainder < 0 ? remainder + modulus : remainder;
+}
+
+function drawRepeatedSpriteFrame(
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  frame: SpriteFrame,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  patternOffsetX: number,
+  patternOffsetY: number
+): boolean {
+  if (!spriteAtlas.image) return false;
+  const image = spriteAtlas.image;
+  const prevSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+
+  let remainingH = dh;
+  let destY = dy;
+  let srcY = positiveMod(patternOffsetY, frame.h);
+  while (remainingH > 0) {
+    const sampleH = Math.min(frame.h - srcY, remainingH);
+    let remainingW = dw;
+    let destX = dx;
+    let srcX = positiveMod(patternOffsetX, frame.w);
+    while (remainingW > 0) {
+      const sampleW = Math.min(frame.w - srcX, remainingW);
+      ctx.drawImage(
+        image,
+        frame.x + srcX,
+        frame.y + srcY,
+        sampleW,
+        sampleH,
+        destX,
+        destY,
+        sampleW,
+        sampleH
+      );
+      remainingW -= sampleW;
+      destX += sampleW;
+      srcX = 0;
+    }
+    remainingH -= sampleH;
+    destY += sampleH;
+    srcY = 0;
+  }
+
+  ctx.imageSmoothingEnabled = prevSmoothing;
+  return true;
+}
+
+function drawTileSprite(
+  state: StationState,
+  tileIndex: number,
+  tileType: TileType,
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  px: number,
+  py: number
+): boolean {
+  if (tileType === TileType.Space) {
+    const frame = spriteAtlas.getFrame(TILE_SPRITE_KEYS[TileType.Space]);
+    if (!frame) return false;
+    return drawRepeatedSpriteFrame(ctx, spriteAtlas, frame, px, py, TILE_SIZE, TILE_SIZE, px, py);
+  }
+  if (tileType === TileType.Wall) {
+    const wallVariant = resolveWallVariantForTile(state, tileIndex);
+    return (
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        WALL_SPRITE_VARIANT_KEYS[wallVariant.shape],
+        px,
+        py,
+        TILE_SIZE,
+        TILE_SIZE,
+        wallVariant.rotation
+      ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Wall], px, py, TILE_SIZE, TILE_SIZE)
+    );
+  }
+  if (tileType === TileType.Door) {
+    const doorVariant = resolveDoorVariantForTile(state, tileIndex);
+    return (
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        DOOR_SPRITE_VARIANT_KEYS[doorVariant.shape],
+        px,
+        py,
+        TILE_SIZE,
+        TILE_SIZE,
+        doorVariant.rotation
+      ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Door], px, py, TILE_SIZE, TILE_SIZE)
+    );
+  }
+  return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[tileType], px, py, TILE_SIZE, TILE_SIZE);
+}
+
+function drawSpriteFrame(
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  frame: SpriteFrame,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  rotationDeg = 0,
+  alpha = 1
+): boolean {
+  if (!spriteAtlas.image) return false;
+  const image = spriteAtlas.image;
+  ctx.save();
+  const prevSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  if (alpha !== 1) ctx.globalAlpha = alpha;
+  if (rotationDeg === 0) {
+    ctx.drawImage(image, frame.x, frame.y, frame.w, frame.h, dx, dy, dw, dh);
+  } else {
+    ctx.translate(dx + dw * 0.5, dy + dh * 0.5);
+    ctx.rotate((rotationDeg * Math.PI) / 180);
+    ctx.drawImage(image, frame.x, frame.y, frame.w, frame.h, -dw * 0.5, -dh * 0.5, dw, dh);
+  }
+  ctx.imageSmoothingEnabled = prevSmoothing;
+  ctx.restore();
+  return true;
+}
+
+function drawSpriteByKey(
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  spriteKey: string,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  rotationDeg = 0,
+  alpha = 1
+): boolean {
+  const frame = spriteAtlas.getFrame(spriteKey);
+  if (!frame) return false;
+  const manifestRotation = spriteAtlas.getRotation(spriteKey);
+  const totalRotation = ((rotationDeg + manifestRotation) % 360 + 360) % 360;
+  return drawSpriteFrame(ctx, spriteAtlas, frame, dx, dy, dw, dh, totalRotation, alpha);
+}
+
+const AGENT_SPRITE_SCALE = 0.8;
+
+let agentTintCanvas: HTMLCanvasElement | null = null;
+let agentTintCtx: CanvasRenderingContext2D | null = null;
+
+function drawTintedAgentSprite(
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  spriteKey: string,
+  cx: number,
+  cy: number,
+  size: number,
+  tintColor: string,
+  tintAlpha: number
+): boolean {
+  const frame = spriteAtlas.getFrame(spriteKey);
+  if (!frame || !spriteAtlas.image) return false;
+
+  if (!agentTintCanvas) {
+    agentTintCanvas = document.createElement('canvas');
+    agentTintCtx = agentTintCanvas.getContext('2d');
+  }
+  if (!agentTintCtx) return false;
+
+  const fw = frame.w;
+  const fh = frame.h;
+  if (agentTintCanvas.width !== fw || agentTintCanvas.height !== fh) {
+    agentTintCanvas.width = fw;
+    agentTintCanvas.height = fh;
+  }
+
+  // Draw sprite to offscreen canvas
+  agentTintCtx.clearRect(0, 0, fw, fh);
+  agentTintCtx.globalCompositeOperation = 'source-over';
+  agentTintCtx.globalAlpha = 1;
+  agentTintCtx.drawImage(spriteAtlas.image, frame.x, frame.y, fw, fh, 0, 0, fw, fh);
+
+  // Tint only opaque pixels
+  agentTintCtx.globalCompositeOperation = 'source-atop';
+  agentTintCtx.globalAlpha = tintAlpha;
+  agentTintCtx.fillStyle = tintColor;
+  agentTintCtx.fillRect(0, 0, fw, fh);
+
+  // Blit to main canvas
+  const half = size * 0.5;
+  ctx.drawImage(agentTintCanvas, 0, 0, fw, fh, cx - half, cy - half, size, size);
+  return true;
+}
+
+function pickAgentVariant(variants: readonly string[], agentId: number): string {
+  return variants[agentId % variants.length];
+}
 
 type ShipCell = { x: number; y: number };
 type ShipSilhouette = {
@@ -591,7 +810,13 @@ function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
   return collectQueueTargets(state, RoomType.Cafeteria);
 }
 
-function ensureStaticLayer(state: StationState, widthPx: number, heightPx: number): CachedLayer {
+function ensureStaticLayer(
+  state: StationState,
+  widthPx: number,
+  heightPx: number,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): CachedLayer {
   if (!staticLayerCache || staticLayerCache.canvas.width !== widthPx || staticLayerCache.canvas.height !== heightPx) {
     const canvas = document.createElement('canvas');
     canvas.width = widthPx;
@@ -607,7 +832,9 @@ function ensureStaticLayer(state: StationState, widthPx: number, heightPx: numbe
     state.topologyVersion,
     state.roomVersion,
     state.moduleVersion,
-    state.controls.showZones ? 1 : 0
+    state.controls.showZones ? 1 : 0,
+    useSprites ? 1 : 0,
+    spriteAtlas.version
   ].join('|');
   if (layer.key === key) return layer;
   layer.key = key;
@@ -617,8 +844,12 @@ function ensureStaticLayer(state: StationState, widthPx: number, heightPx: numbe
     const { x, y } = fromIndex(i, state.width);
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
-    ctx.fillStyle = tileColor[state.tiles[i]];
-    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    const tileType = state.tiles[i];
+    const drewTileSprite = useSprites && drawTileSprite(state, i, tileType, ctx, spriteAtlas, px, py);
+    if (!drewTileSprite) {
+      ctx.fillStyle = tileColor[tileType];
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    }
     if (state.controls.showZones && state.tiles[i] !== TileType.Space) {
       if (state.zones[i] === ZoneType.Restricted) {
         ctx.fillStyle = 'rgba(255, 90, 90, 0.25)';
@@ -629,33 +860,39 @@ function ensureStaticLayer(state: StationState, widthPx: number, heightPx: numbe
     }
     const roomType = state.rooms[i];
     if (roomType !== RoomType.None) {
-      ctx.fillStyle = roomOverlay[roomType];
-      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-      ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
+      const drewRoomSprite =
+        useSprites && drawSpriteByKey(ctx, spriteAtlas, ROOM_SPRITE_KEYS[roomType], px, py, TILE_SIZE, TILE_SIZE, 0, 0.62);
+      if (!drewRoomSprite) {
+        ctx.fillStyle = roomOverlay[roomType];
+        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+        ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
+        ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
+      }
     }
     if (i === state.core.serviceTile) {
       ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
-      ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+      ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
     }
     if (state.tiles[i] === TileType.Dock) {
       const dock = getDockByTile(state, i);
       if (dock) {
         ctx.fillStyle = 'rgba(8, 16, 28, 0.8)';
-        ctx.fillRect(px + 1, py + 1, 7, 7);
+        ctx.fillRect(px + PX, py + PX, Math.round(7 * PX), Math.round(7 * PX));
         ctx.fillStyle = '#d6deeb';
-        ctx.font = 'bold 7px monospace';
+        ctx.font = `bold ${Math.round(7 * PX)}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         const label = dock.facing === 'north' ? 'N' : dock.facing === 'east' ? 'E' : dock.facing === 'south' ? 'S' : 'W';
-        ctx.fillText(label, px + 4.5, py + 4.5);
+        ctx.fillText(label, px + Math.round(4.5 * PX), py + Math.round(4.5 * PX));
       }
     }
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
+    if (!drewTileSprite) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
+    }
   }
   for (const module of state.moduleInstances) {
     const origin = fromIndex(module.originTile, state.width);
@@ -663,12 +900,23 @@ function ensureStaticLayer(state: StationState, widthPx: number, heightPx: numbe
     const py = origin.y * TILE_SIZE;
     const w = module.width * TILE_SIZE;
     const h = module.height * TILE_SIZE;
+    if (useSprites) {
+      const moduleKey = MODULE_SPRITE_KEYS[module.type];
+      const rotation = module.rotation === 90 ? 90 : 0;
+      const drawW = rotation === 90 ? h : w;
+      const drawH = rotation === 90 ? w : h;
+      const drawX = px + (w - drawW) * 0.5;
+      const drawY = py + (h - drawH) * 0.5;
+      if (drawSpriteByKey(ctx, spriteAtlas, moduleKey, drawX, drawY, drawW, drawH, rotation)) {
+        continue;
+      }
+    }
     ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
-    ctx.fillRect(px + 3, py + 3, w - 6, h - 6);
+    ctx.fillRect(px + Math.round(3 * PX), py + Math.round(3 * PX), w - Math.round(6 * PX), h - Math.round(6 * PX));
     ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
-    ctx.strokeRect(px + 3.5, py + 3.5, w - 7, h - 7);
+    ctx.strokeRect(px + Math.round(3.5 * PX), py + Math.round(3.5 * PX), w - Math.round(7 * PX), h - Math.round(7 * PX));
     ctx.fillStyle = '#e5f0ff';
-    ctx.font = 'bold 10px monospace';
+    ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
@@ -835,12 +1083,12 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
     y: number;
     align: CanvasTextAlign;
   }> = [
-    { lane: 'north', label: 'N', x: widthPx * 0.5, y: 8, align: 'center' },
-    { lane: 'south', label: 'S', x: widthPx * 0.5, y: heightPx - 22, align: 'center' },
-    { lane: 'west', label: 'W', x: 8, y: heightPx * 0.5 - 8, align: 'left' },
-    { lane: 'east', label: 'E', x: widthPx - 8, y: heightPx * 0.5 - 8, align: 'right' }
+    { lane: 'north', label: 'N', x: widthPx * 0.5, y: Math.round(8 * PX), align: 'center' },
+    { lane: 'south', label: 'S', x: widthPx * 0.5, y: heightPx - Math.round(22 * PX), align: 'center' },
+    { lane: 'west', label: 'W', x: Math.round(8 * PX), y: heightPx * 0.5 - Math.round(8 * PX), align: 'left' },
+    { lane: 'east', label: 'E', x: widthPx - Math.round(8 * PX), y: heightPx * 0.5 - Math.round(8 * PX), align: 'right' }
   ];
-  ctx.font = '10px monospace';
+  ctx.font = `${Math.round(10 * PX)}px monospace`;
   ctx.textBaseline = 'top';
   for (const row of laneRows) {
     const profile = state.laneProfiles[row.lane];
@@ -854,9 +1102,9 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
       `${row.label}: ${lanePct}% | Tour ${touristPct}% / Trade ${traderPct}% / ` +
       `Ind ${industrialPct}% / Mil ${militaryPct}% / Col ${colonistPct}%`;
     const textW = ctx.measureText(line).width;
-    const pad = 3;
+    const pad = Math.round(3 * PX);
     const boxW = textW + pad * 2;
-    const boxH = 14;
+    const boxH = Math.round(14 * PX);
     let boxX = row.x - boxW / 2;
     if (row.align === 'left') boxX = row.x;
     if (row.align === 'right') boxX = row.x - boxW;
@@ -872,38 +1120,43 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
   }
 }
 
-function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState): void {
+function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, spriteAtlas: SpriteAtlas, useSprites: boolean): void {
   const countsByLane: Record<'north' | 'east' | 'south' | 'west', number> = {
     north: 0,
     east: 0,
     south: 0,
     west: 0
   };
-  const laneStep = 16;
+  const laneStep = Math.round(16 * PX);
   for (const queued of state.dockQueue) {
     const idx = countsByLane[queued.lane]++;
     const silhouette = resolveShipSilhouette(queued.shipId, queued.shipType, queued.size, queued.lane);
-    const cellSize = queued.size === 'small' ? 4 : queued.size === 'medium' ? 3.5 : 2;
+    const cellSize = (queued.size === 'small' ? 4 : queued.size === 'medium' ? 3.5 : 2) * PX;
     const chipW = silhouette.bounds.width * cellSize;
     const chipH = silhouette.bounds.height * cellSize;
     let cx = 0;
     let cy = 0;
     if (queued.lane === 'north') {
       cx = state.width * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
-      cy = 22;
+      cy = Math.round(22 * PX);
     } else if (queued.lane === 'south') {
       cx = state.width * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
-      cy = state.height * TILE_SIZE - 22;
+      cy = state.height * TILE_SIZE - Math.round(22 * PX);
     } else if (queued.lane === 'west') {
-      cx = 22;
+      cx = Math.round(22 * PX);
       cy = state.height * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
     } else {
-      cx = state.width * TILE_SIZE - 22;
+      cx = state.width * TILE_SIZE - Math.round(22 * PX);
       cy = state.height * TILE_SIZE * 0.5 + (idx - 2) * laneStep;
     }
     const palette = shipPalette(queued.shipType, false);
     ctx.fillStyle = 'rgba(6, 16, 28, 0.75)';
     ctx.fillRect(cx - chipW * 0.5 - 2, cy - chipH * 0.5 - 2, chipW + 4, chipH + 4);
+    if (useSprites) {
+      const shipKey = SHIP_SPRITE_KEYS[queued.shipType];
+      const drewSprite = drawSpriteByKey(ctx, spriteAtlas, shipKey, cx - chipW * 0.5, cy - chipH * 0.5, chipW, chipH);
+      if (drewSprite) continue;
+    }
     drawShipSilhouetteCells(ctx, silhouette, cx - chipW * 0.5, cy - chipH * 0.5, cellSize, palette, 0.4);
   }
 }
@@ -912,14 +1165,16 @@ export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
   currentTool: BuildTool,
-  hoveredTile: number | null = null
+  hoveredTile: number | null = null,
+  spriteAtlas: SpriteAtlas
 ): void {
   const widthPx = state.width * TILE_SIZE;
   const heightPx = state.height * TILE_SIZE;
+  const useSprites = spritesEnabled(state, spriteAtlas);
 
   ctx.fillStyle = '#061018';
   ctx.fillRect(0, 0, widthPx, heightPx);
-  const staticLayer = ensureStaticLayer(state, widthPx, heightPx);
+  const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   ctx.drawImage(staticLayer.canvas, 0, 0);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
@@ -962,34 +1217,34 @@ export function renderWorld(
     if (state.controls.showServiceNodes && serviceNodeTiles.has(i)) {
       const unreachable = unreachableServiceNodeTiles.has(i);
       ctx.fillStyle = unreachable ? 'rgba(255, 86, 86, 0.42)' : 'rgba(0, 230, 180, 0.28)';
-      ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+      ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
       if (unreachable) {
         ctx.strokeStyle = 'rgba(255, 138, 138, 0.95)';
-        ctx.strokeRect(px + 2.5, py + 2.5, TILE_SIZE - 5, TILE_SIZE - 5);
+        ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), TILE_SIZE - Math.round(5 * PX), TILE_SIZE - Math.round(5 * PX));
       }
     }
     if (state.controls.showServiceNodes && queueNodeTiles.has(i)) {
       ctx.fillStyle = 'rgba(255, 205, 80, 0.3)';
-      ctx.fillRect(px + 5, py + 5, TILE_SIZE - 10, TILE_SIZE - 10);
+      ctx.fillRect(px + Math.round(5 * PX), py + Math.round(5 * PX), TILE_SIZE - Math.round(10 * PX), TILE_SIZE - Math.round(10 * PX));
     }
     if (state.controls.showServiceNodes && jobPickupTiles.has(i)) {
       ctx.fillStyle = 'rgba(90, 180, 255, 0.45)';
-      ctx.fillRect(px + 1, py + 1, 4, 4);
+      ctx.fillRect(px + Math.round(1 * PX), py + Math.round(1 * PX), Math.round(4 * PX), Math.round(4 * PX));
     }
     if (state.controls.showServiceNodes && jobDropTiles.has(i)) {
       ctx.fillStyle = 'rgba(255, 140, 90, 0.45)';
-      ctx.fillRect(px + TILE_SIZE - 5, py + TILE_SIZE - 5, 4, 4);
+      ctx.fillRect(px + TILE_SIZE - Math.round(5 * PX), py + TILE_SIZE - Math.round(5 * PX), Math.round(4 * PX), Math.round(4 * PX));
     }
     const bodiesHere = bodyCountByTile.get(i) ?? 0;
     if (bodiesHere > 0) {
       ctx.fillStyle = 'rgba(210, 80, 80, 0.9)';
-      ctx.fillRect(px + 2, py + TILE_SIZE - 6, TILE_SIZE - 4, 4);
+      ctx.fillRect(px + Math.round(2 * PX), py + TILE_SIZE - Math.round(6 * PX), TILE_SIZE - Math.round(4 * PX), Math.round(4 * PX));
       if (bodiesHere > 1) {
         ctx.fillStyle = '#ffdede';
-        ctx.font = 'bold 8px monospace';
+        ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'alphabetic';
-        ctx.fillText(String(bodiesHere), px + TILE_SIZE - 2, py + TILE_SIZE - 8);
+        ctx.fillText(String(bodiesHere), px + TILE_SIZE - Math.round(2 * PX), py + TILE_SIZE - Math.round(8 * PX));
       }
     }
   }
@@ -1002,10 +1257,10 @@ export function renderWorld(
     const h = module.height * TILE_SIZE;
     const inventory = moduleInventoryVisualMap.get(module.originTile);
     if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
-      const innerX = px + 3;
-      const innerY = py + 3;
-      const innerW = w - 6;
-      const innerH = h - 6;
+      const innerX = px + Math.round(3 * PX);
+      const innerY = py + Math.round(3 * PX);
+      const innerW = w - Math.round(6 * PX);
+      const innerH = h - Math.round(6 * PX);
       const fillHeight = Math.round(innerH * inventory.fillPct);
       if (fillHeight > 0) {
         const color = itemFillColor[inventory.dominantItem ?? 'none'];
@@ -1014,10 +1269,10 @@ export function renderWorld(
       }
       if (inventory.mixed && inventory.used > 0.01) {
         ctx.fillStyle = 'rgba(230, 240, 255, 0.95)';
-        ctx.font = 'bold 9px monospace';
+        ctx.font = `bold ${Math.round(9 * PX)}px monospace`;
         ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
-        ctx.fillText('+', px + w - 4, py + 4);
+        ctx.fillText('+', px + w - Math.round(4 * PX), py + Math.round(4 * PX));
       }
     }
     if (state.controls.showInventoryOverlay && inventory && inventory.capacity > 0) {
@@ -1026,22 +1281,22 @@ export function renderWorld(
       if (module.width === 1 && module.height === 1) {
         if (itemCode) {
           ctx.fillStyle = 'rgba(8, 12, 18, 0.8)';
-          ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, 8);
+          ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), Math.round(8 * PX));
           ctx.fillStyle = '#e5f0ff';
-          ctx.font = 'bold 7px monospace';
+          ctx.font = `bold ${Math.round(7 * PX)}px monospace`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          ctx.fillText(itemCode, px + TILE_SIZE * 0.5, py + 3);
+          ctx.fillText(itemCode, px + TILE_SIZE * 0.5, py + Math.round(3 * PX));
         }
       } else {
         const text = itemCode ? `${usedLabel} ${itemCode}` : usedLabel;
         ctx.fillStyle = 'rgba(8, 12, 18, 0.84)';
-        ctx.fillRect(px + 2, py + 2, Math.max(18, text.length * 4.8), 8);
+        ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), Math.max(Math.round(18 * PX), text.length * Math.round(4.8 * PX)), Math.round(8 * PX));
         ctx.fillStyle = '#dce8f9';
-        ctx.font = 'bold 7px monospace';
+        ctx.font = `bold ${Math.round(7 * PX)}px monospace`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText(text, px + 3, py + 3);
+        ctx.fillText(text, px + Math.round(3 * PX), py + Math.round(3 * PX));
       }
     }
   }
@@ -1054,10 +1309,10 @@ export function renderWorld(
     ctx.lineWidth = 1;
     if ((bodyCountByTile.get(hoveredTile) ?? 0) > 0) {
       ctx.fillStyle = 'rgba(255, 195, 195, 0.95)';
-      ctx.font = '11px monospace';
+      ctx.font = `${Math.round(11 * PX)}px monospace`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText('Body remains (temporary system)', 8, 36);
+      ctx.fillText('Body remains (temporary system)', Math.round(8 * PX), Math.round(36 * PX));
     }
   }
 
@@ -1089,14 +1344,24 @@ export function renderWorld(
   for (let vi = 0; vi < state.visitors.length; vi++) {
     const v = state.visitors[vi];
     const o = agentOffset(v.id);
-    ctx.fillStyle = visitorMoodColor(state, vi);
+    const cx = (v.x + o.x) * TILE_SIZE;
+    const cy = (v.y + o.y) * TILE_SIZE;
+    const tint = visitorMoodColor(state, vi);
+    const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.visitor, v.id);
+    if (useSprites && drawTintedAgentSprite(
+      ctx, spriteAtlas, spriteKey, cx, cy,
+      TILE_SIZE * AGENT_SPRITE_SCALE, tint, 0.35
+    )) continue;
+    ctx.fillStyle = tint;
     ctx.beginPath();
-    ctx.arc((v.x + o.x) * TILE_SIZE, (v.y + o.y) * TILE_SIZE, TILE_SIZE * 0.22, 0, Math.PI * 2);
+    ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
     ctx.fill();
   }
 
   for (const r of state.residents) {
     const o = agentOffset(r.id);
+    const cx = (r.x + o.x) * TILE_SIZE;
+    const cy = (r.y + o.y) * TILE_SIZE;
     const agitation = r.agitation ?? 0;
     const inConfrontation = (r.activeIncidentId ?? null) !== null || (r.confrontationUntil ?? 0) > state.now;
     const residentFill = inConfrontation
@@ -1108,9 +1373,25 @@ export function renderWorld(
           : r.healthState === 'distressed'
             ? '#ffd07a'
             : '#72f3b2';
+    const isWarning = inConfrontation || agitation >= 70 || r.healthState === 'critical' || r.healthState === 'distressed';
+    const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.resident, r.id);
+    const tintAlpha = isWarning ? 0.45 : 0.2;
+    if (useSprites && drawTintedAgentSprite(
+      ctx, spriteAtlas, spriteKey, cx, cy,
+      TILE_SIZE * AGENT_SPRITE_SCALE, residentFill, tintAlpha
+    )) {
+      // Draw green ring around sprite
+      const ringRadius = TILE_SIZE * AGENT_SPRITE_SCALE * 0.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = RESIDENT_MARK_COLOR;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+      ctx.stroke();
+      continue;
+    }
     ctx.beginPath();
     ctx.fillStyle = residentFill;
-    ctx.arc((r.x + o.x) * TILE_SIZE, (r.y + o.y) * TILE_SIZE, TILE_SIZE * 0.2, 0, Math.PI * 2);
+    ctx.arc(cx, cy, TILE_SIZE * 0.2, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = RESIDENT_MARK_COLOR;
     ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
@@ -1119,9 +1400,16 @@ export function renderWorld(
 
   for (const c of state.crewMembers) {
     const o = agentOffset(c.id);
+    const cx = (c.x + o.x) * TILE_SIZE;
+    const cy = (c.y + o.y) * TILE_SIZE;
+    const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, c.id);
+    if (useSprites && drawTintedAgentSprite(
+      ctx, spriteAtlas, spriteKey, cx, cy,
+      TILE_SIZE * AGENT_SPRITE_SCALE, '#7ec8ff', 0.2
+    )) continue;
     ctx.fillStyle = '#7ec8ff';
     ctx.beginPath();
-    ctx.arc((c.x + o.x) * TILE_SIZE, (c.y + o.y) * TILE_SIZE, TILE_SIZE * 0.18, 0, Math.PI * 2);
+    ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1143,11 +1431,18 @@ export function renderWorld(
       if (lane === 'east') posX = dockX + off * travelDepth;
       if (lane === 'west') posX = dockX - off * travelDepth;
     }
+    if (useSprites) {
+      const shipKey = SHIP_SPRITE_KEYS[ship.shipType];
+      const spriteW = silhouette.bounds.width * TILE_SIZE;
+      const spriteH = silhouette.bounds.height * TILE_SIZE;
+      const drewSprite = drawSpriteByKey(ctx, spriteAtlas, shipKey, posX * TILE_SIZE, posY * TILE_SIZE, spriteW, spriteH);
+      if (drewSprite) continue;
+    }
     const palette = shipPalette(ship.shipType, ship.stage === 'docked');
     drawShipSilhouetteCells(ctx, silhouette, posX * TILE_SIZE, posY * TILE_SIZE, TILE_SIZE, palette, 2);
   }
 
-  drawQueuedShips(ctx, state);
+  drawQueuedShips(ctx, state, spriteAtlas, useSprites);
   drawLaneEdgeOverlay(ctx, state, widthPx, heightPx);
 
   if (state.now < state.effects.brownoutUntil) {
@@ -1167,44 +1462,44 @@ export function renderWorld(
           : `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`;
 
   ctx.fillStyle = '#d3deed';
-  ctx.font = '12px monospace';
+  ctx.font = `${Math.round(12 * PX)}px monospace`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText(toolText, 8, 16);
+  ctx.fillText(toolText, Math.round(8 * PX), Math.round(16 * PX));
   ctx.fillStyle = 'rgba(8, 16, 28, 0.72)';
-  ctx.fillRect(6, 42, 220, 48);
+  ctx.fillRect(Math.round(6 * PX), Math.round(42 * PX), Math.round(220 * PX), Math.round(48 * PX));
   const legendItems: Array<{ color: string; label: string; y: number }> = [
-    { color: '#f4e58c', label: 'Visitor mood (red->yellow->green)', y: 56 },
-    { color: RESIDENT_MARK_COLOR, label: 'Resident', y: 70 },
-    { color: '#7ec8ff', label: 'Crew', y: 84 }
+    { color: '#f4e58c', label: 'Visitor mood (red->yellow->green)', y: Math.round(56 * PX) },
+    { color: RESIDENT_MARK_COLOR, label: 'Resident', y: Math.round(70 * PX) },
+    { color: '#7ec8ff', label: 'Crew', y: Math.round(84 * PX) }
   ];
   for (let i = 0; i < legendItems.length; i++) {
     const item = legendItems[i];
     ctx.fillStyle = item.color;
     ctx.beginPath();
-    ctx.arc(18, item.y, 3.2, 0, Math.PI * 2);
+    ctx.arc(Math.round(18 * PX), item.y, Math.round(3.2 * PX), 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#d3deed';
-    ctx.font = '10px monospace';
+    ctx.font = `${Math.round(10 * PX)}px monospace`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(item.label, 26, item.y);
+    ctx.fillText(item.label, Math.round(26 * PX), item.y);
   }
   if (state.controls.showServiceNodes && serviceNodeReachability) {
     const unreachableCount = serviceNodeReachability.unreachableNodeTiles.length;
     const reachableCount = Math.max(0, serviceNodeReachability.nodeTiles.length - unreachableCount);
     const line = `Service nodes: ok ${reachableCount} | unreachable ${unreachableCount} | queue ${queueNodeTiles.size}`;
     ctx.fillStyle = 'rgba(8, 16, 28, 0.76)';
-    ctx.fillRect(6, 78, Math.max(220, line.length * 6), 12);
+    ctx.fillRect(Math.round(6 * PX), Math.round(78 * PX), Math.max(Math.round(220 * PX), line.length * Math.round(6 * PX)), Math.round(12 * PX));
     ctx.fillStyle = unreachableCount > 0 ? '#ff9a9a' : '#8fe8cf';
-    ctx.font = '10px monospace';
+    ctx.font = `${Math.round(10 * PX)}px monospace`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(line, 8, 84);
+    ctx.fillText(line, Math.round(8 * PX), Math.round(84 * PX));
   }
   if (state.metrics.bodyCount > 0) {
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';
-    ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, 8, 32);
+    ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));
   }
 }
 

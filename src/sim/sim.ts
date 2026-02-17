@@ -7178,6 +7178,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       showZones: true,
       showServiceNodes: false,
       showInventoryOverlay: false,
+      spriteMode: 'fallback',
+      showSpriteFallback: false,
       taxRate: 0.2,
       dockPlacementFacing: 'north',
       moduleRotation: 0,

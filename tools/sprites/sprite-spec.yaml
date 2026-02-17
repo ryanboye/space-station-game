@@ -1,0 +1,334 @@
+defaults:
+  notes: Edit prompt and optional rotation per key. Rotation is clockwise degrees
+    and should be one of 0,90,180,270.
+sprites:
+  tile.space:
+    prompt: Top-down pixel art. space station. Style of rimworld. space tile for a station game. Full square coverage
+      edge-to-edge with dark void star texture, seamless on all four edges, no
+      border, no frame, no text, readable at 18x18.
+    rotation: 0
+  tile.floor:
+    prompt: Top-down pixel art. space station. Style of rimworld. space station. Simple, repeating metal floor tile. Full-bleed square tile,
+      edge-to-edge coverage, seamless wrap on all four edges, no frame, no
+      margin, no border, muted cool metal paneling, readable at 18x18.
+    rotation: 0
+  tile.wall:
+    prompt: Top-down pixel art. space station. Style of rimworld. station wall tile base fallback. Full-bleed square
+      tile, edge-to-edge coverage, seamless wrap on all four edges, no frame, no
+      margin, no border, structural sci-fi wall details, readable at 18x18.
+    rotation: 90
+  tile.wall.solo:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant SOLO (isolated pillar-like wall).
+      Fill entire square edge-to-edge, no empty border, no frame, no margin,
+      seamless-compatible style, readable at 18x18.
+    rotation: 90
+  tile.wall.end:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant END (one connected side, intended
+      for rotation). Fill entire square edge-to-edge, no empty border, no frame,
+      no margin, seamless-compatible style, readable at 18x18.
+    rotation: 90
+  tile.wall.straight:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant STRAIGHT (opposite-side connection,
+      intended for rotation). Fill entire square edge-to-edge, no empty border,
+      no frame, no margin, seamless-compatible style, readable at 18x18.
+    rotation: 90
+  tile.wall.corner:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant CORNER (adjacent-side corner connection,
+      intended for rotation). Fill entire square edge-to-edge, no empty border,
+      no frame, no margin, seamless-compatible style, readable at 18x18.
+    rotation: -90
+  tile.wall.tee:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant TEE (three-side tee T connection,
+      intended for rotation). Fill entire square edge-to-edge, no empty border,
+      no frame, no margin, seamless-compatible style, readable at 18x18.
+    rotation: 90
+  tile.wall.cross:
+    prompt: Top-down pixel art. space station. Style of rimworld. Space station exterior hull metal wall. tile variant CROSS (four-side plus sign inter connection). Fill
+      entire square edge-to-edge, no empty border, no frame, no margin,
+      seamless-compatible style, readable at 18x18.
+    rotation: 90
+  tile.dock.middle:
+    prompt: Top-down pixel art. space station. Style of rimworld. opening in space station intended for ships to dock. air lock opening. docking tile. Full-bleed square tile with docking
+      markings, edge-to-edge coverage, seamless-compatible, no frame, no margin,
+      no border, readable at 18x18.
+    rotation: 0
+  tile.dock.end:
+    prompt: Top-down pixel art. space station. Style of rimworld. opening in space station intended for ships to dock. air lock opening. docking tile. Full-bleed square tile with docking
+      markings, edge-to-edge coverage, seamless-compatible, no frame, no margin,
+      no border, readable at 18x18.
+    rotation: 0
+  tile.cafeteria:
+    prompt: Top-down pixel art. space station. Style of rimworld. cafeteria floor tile variant. linoleum simple rubber textured floor. subtle. Full-bleed square tile,
+      edge-to-edge coverage, seamless wrap on all four edges, no frame, no
+      margin, no border, readable at 18x18.
+    rotation: 0
+  tile.reactor:
+    prompt: Top-down pixel art. space station. Style of rimworld. glowing reactor tile. Full-bleed square tile,
+      edge-to-edge coverage, seamless wrap on all four edges, no frame, no
+      margin, no border, readable at 18x18.
+    rotation: 0
+  tile.security:
+    prompt: Top-down pixel art. space station. Style of rimworld. security floor tile variant. Full-bleed square tile,
+      edge-to-edge coverage, seamless wrap on all four edges, no frame, no
+      margin, no border, readable at 18x18.
+    rotation: 0
+  tile.door:
+    prompt: Top-down pixel art. space station. Style of rimworld. airlock door tile. Full-bleed square tile with
+      center door seam, edge-to-edge coverage, no frame, no margin, no border,
+      readable at 18x18.
+    rotation: 0
+  tile.door.horizontal:
+    prompt: Top-down pixel art. space station. Style of rimworld. door tile HORIZONTAL orientation (east-west passage).
+      Full-bleed square tile, edge-to-edge coverage, no frame, no margin, no
+      border, readable at 18x18.
+    rotation: 0
+  tile.door.vertical:
+    prompt: Top-down pixel art. space station. Style of rimworld. door tile VERTICAL orientation (north-south passage).
+      Full-bleed square tile, edge-to-edge coverage, no frame, no margin, no
+      border, readable at 18x18.
+    rotation: 0
+  room.cafeteria:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for cafeteria. Subtle tray/meal
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.kitchen:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for kitchen. Subtle stove/pan
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.workshop:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for workshop. Subtle tool/gear
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.clinic:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for clinic. Subtle medical cross
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.brig:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for brig. Subtle bars/lock motif,
+      transparent background, readable at 18x18.
+    rotation: 0
+  room.rec_hall:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for recreation hall. Subtle
+      joystick/arcade motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.reactor:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for reactor. Subtle power-core
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.security:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for security. Subtle shield motif,
+      transparent background, readable at 18x18.
+    rotation: 0
+  room.dorm:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for dorm. Subtle bed motif,
+      transparent background, readable at 18x18.
+    rotation: 0
+  room.hygiene:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for hygiene. Subtle shower/drop
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.hydroponics:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for hydroponics. Subtle leaf/tray
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.life_support:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for life support. Subtle air/oxygen
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.lounge:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for lounge. Subtle couch/music
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.market:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for market. Subtle stall/coin
+      motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.logistics_stock:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for logistics stock. Subtle
+      pallet/crate motif, transparent background, readable at 18x18.
+    rotation: 0
+  room.storage:
+    prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for storage. Subtle rack/box motif,
+      transparent background, readable at 18x18.
+    rotation: 0
+  module.none:
+    prompt: Transparent empty sprite with no object. Keep full transparency.
+    rotation: 0
+  module.bed:
+    prompt: "Top-down pixel art station module sprite: bed. 2x1 footprint,
+      transparent background, no text, readable at 36x18."
+    rotation: 0
+  module.table:
+    prompt: "Top-down pixel art station module sprite: table. 2x2 footprint,
+      transparent background, no text, readable at 36x36."
+    rotation: 0
+  module.serving_station:
+    prompt: "Top-down pixel art station module sprite: serving station. 2x1
+      footprint, transparent background, readable at 36x18."
+    rotation: 0
+  module.stove:
+    prompt: "Top-down pixel art station module sprite: stove. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  module.workbench:
+    prompt: "Top-down pixel art station module sprite: workbench. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  module.med_bed:
+    prompt: "Top-down pixel art station module sprite: medical bed. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  module.cell_console:
+    prompt: "Top-down pixel art station module sprite: brig cell console. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.rec_unit:
+    prompt: "Top-down pixel art station module sprite: recreation unit. 2x2
+      footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.grow_station:
+    prompt: "Top-down pixel art station module sprite: hydroponics grow station. 2x2
+      footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.terminal:
+    prompt: "Top-down pixel art station module sprite: security terminal. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.couch:
+    prompt: "Top-down pixel art station module sprite: couch. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  module.game_station:
+    prompt: "Top-down pixel art station module sprite: arcade game station. 2x2
+      footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.shower:
+    prompt: "Top-down pixel art station module sprite: shower. 1x1 footprint,
+      transparent background, readable at 18x18."
+    rotation: 0
+  module.sink:
+    prompt: "Top-down pixel art station module sprite: sink. 1x1 footprint,
+      transparent background, readable at 18x18."
+    rotation: 0
+  module.market_stall:
+    prompt: "Top-down pixel art station module sprite: market stall. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  module.intake_pallet:
+    prompt: "Top-down pixel art station module sprite: intake pallet. 2x2 footprint,
+      transparent background, readable at 36x36."
+    rotation: 0
+  module.storage_rack:
+    prompt: "Top-down pixel art station module sprite: storage rack. 2x1 footprint,
+      transparent background, readable at 36x18."
+    rotation: 0
+  agent.visitor.1:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 1, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.visitor.2:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 2, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.visitor.3:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 3, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.visitor.4:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 4, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.visitor.5:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 5, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.visitor.6:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 6, casual civilian clothes,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.1:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 1, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.2:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 2, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.3:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 3, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.4:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 4, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.5:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 5, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.resident.6:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid resident sprite variant 6, uniform jumpsuit,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.1:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 1, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.2:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 2, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.3:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 3, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.4:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 4, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.5:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 5, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.6:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 6, utility uniform with tool belt,
+      Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  overlay.agent.distressed:
+    prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for distressed agent state,
+      transparent background, high contrast, no text.
+    rotation: 0
+  overlay.agent.critical:
+    prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for critical agent state,
+      transparent background, high contrast, no text.
+    rotation: 0
+  overlay.agent.agitated:
+    prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for agitated agent state,
+      transparent background, high contrast, no text.
+    rotation: 0
+  overlay.agent.confrontation:
+    prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for confrontation state,
+      transparent background, high contrast, no text.
+    rotation: 0
+  ship.tourist:
+    prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for tourist vessel. Bright civilian
+      style, transparent background, readable at small-medium sizes.
+    rotation: 0
+  ship.trader:
+    prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for trader vessel. Cargo silhouette and
+      utility details, transparent background, readable at small-medium sizes.
+    rotation: 0
+  ship.industrial:
+    prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for industrial vessel. Heavy utility
+      silhouette, transparent background, readable at small-medium sizes.
+    rotation: 0
+  ship.military:
+    prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for military vessel. Reinforced
+      silhouette, disciplined palette, transparent background, readable at
+      small-medium sizes.
+    rotation: 0
+  ship.colonist:
+    prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for colonist vessel. Habitat-focused
+      silhouette, welcoming palette, transparent background, readable at
+      small-medium sizes.
+    rotation: 0

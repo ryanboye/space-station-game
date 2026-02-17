@@ -13,6 +13,20 @@ export const TILE_SPRITE_KEYS: Record<TileType, string> = {
   [TileType.Door]: 'tile.door'
 };
 
+export const WALL_SPRITE_VARIANT_KEYS = {
+  solo: 'tile.wall.solo',
+  end: 'tile.wall.end',
+  straight: 'tile.wall.straight',
+  corner: 'tile.wall.corner',
+  tee: 'tile.wall.tee',
+  cross: 'tile.wall.cross'
+} as const;
+
+export const DOOR_SPRITE_VARIANT_KEYS = {
+  horizontal: 'tile.door.horizontal',
+  vertical: 'tile.door.vertical'
+} as const;
+
 export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
   [RoomType.None]: 'room.none',
   [RoomType.Cafeteria]: 'room.cafeteria',

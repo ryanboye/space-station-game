@@ -1,5 +1,6 @@
 import './styles.css';
 import { renderWorld } from './render/render';
+import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_CRITERIA } from './sim/balance';
 import {
@@ -74,7 +75,10 @@ app.innerHTML = `
     <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
     <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
     <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
+    <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
+    <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
     <span class="topbar-spacer"></span>
+    <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
   </div>
   <div id="game-wrap">
@@ -463,6 +467,7 @@ if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
 const state = createInitialState();
+let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
 let zoom = 1;
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
@@ -499,6 +504,9 @@ const speedLabel = document.querySelector<HTMLSpanElement>('#speed-label')!;
 const toggleZonesBtn = document.querySelector<HTMLButtonElement>('#toggle-zones')!;
 const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle-service-nodes')!;
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
+const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
+const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
+const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
 const stationRatingEl = document.querySelector<HTMLSpanElement>('#station-rating')!;
@@ -1157,8 +1165,7 @@ function refreshExpansionUi(): void {
 refreshExpansionUi();
 
 requestAnimationFrame(() => {
-  updateStageLayout();
-  centerViewportOnMapCenter();
+  fitMapToViewport();
 });
 
 cameraResetBtn.addEventListener('click', () => {
@@ -1991,6 +1998,17 @@ window.addEventListener('keydown', (e) => {
     case 'O':
       state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
       break;
+    case 'F2':
+      state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
+      if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
+        void loadSpriteAtlas().then((loaded) => {
+          spriteAtlas = loaded;
+        });
+      }
+      break;
+    case 'F3':
+      state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
+      break;
     case '8':
       currentTool = { kind: 'zone', zone: ZoneType.Public };
       toolLockMessage = '';
@@ -2100,6 +2118,19 @@ toggleServiceNodesBtn.addEventListener('click', () => {
 
 toggleInventoryOverlayBtn.addEventListener('click', () => {
   state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+});
+
+toggleSpritesBtn.addEventListener('click', () => {
+  state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
+  if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
+    void loadSpriteAtlas().then((loaded) => {
+      spriteAtlas = loaded;
+    });
+  }
+});
+
+toggleSpriteFallbackBtn.addEventListener('click', () => {
+  state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
 });
 
 openSaveModalBtn.addEventListener('click', () => {
@@ -2561,13 +2592,30 @@ function frame(now: number): void {
 
   tick(state, dt);
   const renderStart = performance.now();
-  renderWorld(ctx, state, currentTool, hoveredTile);
+  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
   state.metrics.renderMs = performance.now() - renderStart;
   toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
   toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
+  toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
+  toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
+    ? 'Force Fallback: ON'
+    : 'Force Fallback: OFF';
+  if (state.controls.spriteMode !== 'sprites') {
+    spriteStatusEl.textContent = 'Sprites inactive (fallback rendering)';
+    spriteStatusEl.style.color = '#8ea2bd';
+  } else if (state.controls.showSpriteFallback) {
+    spriteStatusEl.textContent = 'Sprites requested; force fallback enabled';
+    spriteStatusEl.style.color = '#ffcf6e';
+  } else if (!spriteAtlas.ready) {
+    spriteStatusEl.textContent = 'Sprites requested, atlas missing -> fallback active';
+    spriteStatusEl.style.color = '#ffcf6e';
+  } else {
+    spriteStatusEl.textContent = `Sprites active (${spriteAtlas.version})`;
+    spriteStatusEl.style.color = '#6edb8f';
+  }
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
@@ -2831,4 +2879,10 @@ function frame(now: number): void {
     paintGuidanceEl.style.color = '#8ea2bd';
   }
 }
-requestAnimationFrame(frame);
+
+async function startGameLoop(): Promise<void> {
+  spriteAtlas = await loadSpriteAtlas();
+  requestAnimationFrame(frame);
+}
+
+void startGameLoop();

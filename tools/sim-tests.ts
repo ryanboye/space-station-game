@@ -45,6 +45,7 @@ import {
   type UnlockTier,
   type Visitor
 } from '../src/sim/types';
+import { resolveDoorVariantFromMask, resolveWallVariantFromMask } from '../src/render/tile-variants';
 
 function assertCondition(condition: boolean, message: string): void {
   if (!condition) {
@@ -1999,6 +2000,43 @@ function test20MinuteComplexityCurveReadable(): void {
   assertCondition(tierAt20 >= tierAt10, 'Unlock tier should not regress over time.');
 }
 
+function testWallVariantMaskMapping(): void {
+  const expected: Array<[number, string, 0 | 90 | 180 | 270]> = [
+    [0, 'solo', 0],
+    [1, 'end', 0],
+    [2, 'end', 90],
+    [4, 'end', 180],
+    [8, 'end', 270],
+    [3, 'corner', 0],
+    [6, 'corner', 90],
+    [12, 'corner', 180],
+    [9, 'corner', 270],
+    [5, 'straight', 0],
+    [10, 'straight', 90],
+    [7, 'tee', 0],
+    [14, 'tee', 90],
+    [13, 'tee', 180],
+    [11, 'tee', 270],
+    [15, 'cross', 0]
+  ];
+  for (const [mask, shape, rotation] of expected) {
+    const actual = resolveWallVariantFromMask(mask);
+    assertCondition(actual.shape === shape, `Wall variant shape mismatch for mask ${mask}.`);
+    assertCondition(actual.rotation === rotation, `Wall variant rotation mismatch for mask ${mask}.`);
+  }
+
+  const horizontalMasks = [0, 2, 8, 10, 11, 14];
+  const verticalMasks = [1, 4, 5, 7, 13];
+  for (const mask of horizontalMasks) {
+    const actual = resolveDoorVariantFromMask(mask);
+    assertCondition(actual.shape === 'horizontal', `Door variant should be horizontal for mask ${mask}.`);
+  }
+  for (const mask of verticalMasks) {
+    const actual = resolveDoorVariantFromMask(mask);
+    assertCondition(actual.shape === 'vertical', `Door variant should be vertical for mask ${mask}.`);
+  }
+}
+
 function run(): void {
   testUnlockTier0StartsConstrained();
   testUnlockTier1TriggersAfterStability();
@@ -2012,6 +2050,7 @@ function run(): void {
   testBrigReducesIncidentDuration();
   testSaveV1MigratesToV2UnlockDefaults();
   test20MinuteComplexityCurveReadable();
+  testWallVariantMaskMapping();
   testAutonomousRoomsNoStaff();
   testCafeteriaMissingServingStation();
   testBedFootprintRotation();

@@ -1,0 +1,523 @@
+{
+  "version": 1,
+  "profile": "v1",
+  "scale": 1,
+  "sheetPath": "v1-edit.png",
+  "sheetWidth": 1000,
+  "sheetHeight": 880,
+  "cellSize": 64,
+  "spaceCellSize": 256,
+  "entries": [
+    {
+      "key": "tile.space",
+      "x": 0,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    {
+      "key": "tile.floor",
+      "x": 264,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall",
+      "x": 336,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.solo",
+      "x": 408,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.end",
+      "x": 480,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.straight",
+      "x": 552,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.corner",
+      "x": 624,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.tee",
+      "x": 696,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.cross",
+      "x": 768,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.dock",
+      "x": 840,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.cafeteria",
+      "x": 912,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.reactor",
+      "x": 0,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.security",
+      "x": 72,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door",
+      "x": 144,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door.horizontal",
+      "x": 216,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door.vertical",
+      "x": 288,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.cafeteria",
+      "x": 360,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.kitchen",
+      "x": 432,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.workshop",
+      "x": 504,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.clinic",
+      "x": 576,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.brig",
+      "x": 648,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.rec_hall",
+      "x": 720,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.reactor",
+      "x": 792,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.security",
+      "x": 864,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.dorm",
+      "x": 936,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.hygiene",
+      "x": 0,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.hydroponics",
+      "x": 72,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.life_support",
+      "x": 144,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.lounge",
+      "x": 216,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.market",
+      "x": 288,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.logistics_stock",
+      "x": 360,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "room.storage",
+      "x": 432,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.none",
+      "x": 504,
+      "y": 336,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.bed",
+      "x": 576,
+      "y": 336,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.table",
+      "x": 712,
+      "y": 336,
+      "w": 128,
+      "h": 128
+    },
+    {
+      "key": "module.serving_station",
+      "x": 848,
+      "y": 336,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.stove",
+      "x": 0,
+      "y": 472,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.workbench",
+      "x": 136,
+      "y": 472,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.med_bed",
+      "x": 272,
+      "y": 472,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.cell_console",
+      "x": 408,
+      "y": 472,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.rec_unit",
+      "x": 480,
+      "y": 472,
+      "w": 128,
+      "h": 128
+    },
+    {
+      "key": "module.grow_station",
+      "x": 616,
+      "y": 472,
+      "w": 128,
+      "h": 128
+    },
+    {
+      "key": "module.terminal",
+      "x": 752,
+      "y": 472,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.couch",
+      "x": 824,
+      "y": 472,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.game_station",
+      "x": 0,
+      "y": 608,
+      "w": 128,
+      "h": 128
+    },
+    {
+      "key": "module.shower",
+      "x": 136,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.sink",
+      "x": 208,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "module.market_stall",
+      "x": 280,
+      "y": 608,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "module.intake_pallet",
+      "x": 416,
+      "y": 608,
+      "w": 128,
+      "h": 128
+    },
+    {
+      "key": "module.storage_rack",
+      "x": 552,
+      "y": 608,
+      "w": 128,
+      "h": 64
+    },
+    {
+      "key": "ship.tourist",
+      "x": 688,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "ship.trader",
+      "x": 760,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "ship.industrial",
+      "x": 832,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "ship.military",
+      "x": 904,
+      "y": 608,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "ship.colonist",
+      "x": 0,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.1",
+      "x": 72,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.2",
+      "x": 144,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.3",
+      "x": 216,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.4",
+      "x": 288,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.5",
+      "x": 360,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.visitor.6",
+      "x": 432,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.1",
+      "x": 504,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.2",
+      "x": 576,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.3",
+      "x": 648,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.4",
+      "x": 720,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.5",
+      "x": 792,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.resident.6",
+      "x": 864,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.1",
+      "x": 936,
+      "y": 744,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.2",
+      "x": 0,
+      "y": 816,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.3",
+      "x": 72,
+      "y": 816,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.4",
+      "x": 144,
+      "y": 816,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.5",
+      "x": 216,
+      "y": 816,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "agent.crew.6",
+      "x": 288,
+      "y": 816,
+      "w": 64,
+      "h": 64
+    }
+  ]
+}

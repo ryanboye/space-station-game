@@ -1,6 +1,6 @@
 export const GRID_WIDTH = 60;
 export const GRID_HEIGHT = 40;
-export const TILE_SIZE = 18;
+export const TILE_SIZE = 32;
 
 export enum TileType {
   Space = 'space',
@@ -856,6 +856,8 @@ export interface Controls {
   showZones: boolean;
   showServiceNodes: boolean;
   showInventoryOverlay: boolean;
+  spriteMode: 'fallback' | 'sprites';
+  showSpriteFallback: boolean;
   taxRate: number;
   dockPlacementFacing: SpaceLane;
   moduleRotation: ModuleRotation;

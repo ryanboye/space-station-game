@@ -84,7 +84,13 @@ body {
 canvas {
   position: absolute;
   display: block;
-  image-rendering: auto;
+  image-rendering: pixelated;
+}
+
+.topbar-note {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 #panel {

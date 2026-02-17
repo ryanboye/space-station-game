@@ -1,0 +1,10 @@
+[
+  "tile.floor",
+  "tile.wall",
+  "tile.wall.solo",
+  "tile.wall.end",
+  "tile.wall.straight",
+  "tile.wall.corner",
+  "tile.wall.tee",
+  "tile.wall.cross"
+]
