@@ -6,6 +6,9 @@ export type SpriteAtlasManifest = {
   imagePath: string;
   frames: Record<string, SpriteFrame>;
   rotations?: Record<string, number>;
+  offsets?: Record<string, { x: number; y: number }>;
+  blendModes?: Record<string, 'normal' | 'add'>;
+  alphas?: Record<string, number>;
 };
 
 export type SpriteAtlas = {
@@ -14,6 +17,9 @@ export type SpriteAtlas = {
   image: HTMLImageElement | null;
   getFrame: (key: string) => SpriteFrame | null;
   getRotation: (key: string) => number;
+  getOffset: (key: string) => { x: number; y: number };
+  getBlendMode: (key: string) => 'normal' | 'add';
+  getAlpha: (key: string) => number;
 };
 
 function emptyAtlas(version = 'missing'): SpriteAtlas {
@@ -22,7 +28,10 @@ function emptyAtlas(version = 'missing'): SpriteAtlas {
     version,
     image: null,
     getFrame: () => null,
-    getRotation: () => 0
+    getRotation: () => 0,
+    getOffset: () => ({ x: 0, y: 0 }),
+    getBlendMode: () => 'normal',
+    getAlpha: () => 1
   };
 }
 
@@ -64,12 +73,46 @@ function parseManifest(raw: unknown): SpriteAtlasManifest | null {
       }
     }
   }
+  const offsets: Record<string, { x: number; y: number }> = {};
+  const rawOffsets = record.offsets;
+  if (rawOffsets && typeof rawOffsets === 'object' && !Array.isArray(rawOffsets)) {
+    for (const [key, value] of Object.entries(rawOffsets)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const x = Number((value as Record<string, unknown>).x);
+      const y = Number((value as Record<string, unknown>).y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        offsets[key] = { x, y };
+      }
+    }
+  }
+  const blendModes: Record<string, 'normal' | 'add'> = {};
+  const rawBlendModes = record.blendModes;
+  if (rawBlendModes && typeof rawBlendModes === 'object' && !Array.isArray(rawBlendModes)) {
+    for (const [key, value] of Object.entries(rawBlendModes)) {
+      if (value === 'normal' || value === 'add') {
+        blendModes[key] = value;
+      }
+    }
+  }
+  const alphas: Record<string, number> = {};
+  const rawAlphas = record.alphas;
+  if (rawAlphas && typeof rawAlphas === 'object' && !Array.isArray(rawAlphas)) {
+    for (const [key, value] of Object.entries(rawAlphas)) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) {
+        alphas[key] = Math.min(1, Math.max(0, n));
+      }
+    }
+  }
   return {
     version,
     cellSize,
     imagePath,
     frames,
-    rotations
+    rotations,
+    offsets,
+    blendModes,
+    alphas
   };
 }
 
@@ -101,7 +144,10 @@ export async function loadSpriteAtlas(): Promise<SpriteAtlas> {
       version: manifest.version,
       image,
       getFrame: (key: string): SpriteFrame | null => manifest.frames[key] ?? null,
-      getRotation: (key: string): number => manifest.rotations?.[key] ?? 0
+      getRotation: (key: string): number => manifest.rotations?.[key] ?? 0,
+      getOffset: (key: string): { x: number; y: number } => manifest.offsets?.[key] ?? { x: 0, y: 0 },
+      getBlendMode: (key: string): 'normal' | 'add' => manifest.blendModes?.[key] ?? 'normal',
+      getAlpha: (key: string): number => manifest.alphas?.[key] ?? 1
     };
   } catch {
     return emptyAtlas('missing');

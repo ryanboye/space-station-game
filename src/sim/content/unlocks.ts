@@ -43,6 +43,7 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
 
 export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.None]: 0,
+  [ModuleType.WallLight]: 0,
   [ModuleType.Bed]: 0,
   [ModuleType.Table]: 0,
   [ModuleType.ServingStation]: 0,

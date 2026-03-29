@@ -46,6 +46,7 @@ export type HousingPolicy = 'crew' | 'visitor' | 'resident' | 'private_resident'
 
 export enum ModuleType {
   None = 'none',
+  WallLight = 'wall-light',
   Bed = 'bed',
   Table = 'table',
   ServingStation = 'serving-station',

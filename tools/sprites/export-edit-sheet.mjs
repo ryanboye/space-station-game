@@ -8,7 +8,7 @@ import sharp from 'sharp';
 const THIS_FILE = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(THIS_FILE), '..', '..');
 const TOOLS_DIR = path.resolve(ROOT, 'tools', 'sprites');
-const PROCESSED_DIR = path.resolve(TOOLS_DIR, 'out', 'processed');
+const CURATED_DIR = path.resolve(TOOLS_DIR, 'curated');
 const EDIT_DIR = path.resolve(TOOLS_DIR, 'edit');
 
 const PROFILE_TO_REQUIRED = {
@@ -135,7 +135,7 @@ function outputPathsForProfile(profile) {
 async function exportSingle(args, baseCellSize, spaceCellSize) {
   const key = args.single;
   const scale = args.scale;
-  const inputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
+  const inputPath = path.resolve(CURATED_DIR, keyToFileName(key));
   const { frameWidth, frameHeight } = frameLayoutForKey(key, baseCellSize, spaceCellSize);
 
   const outputs = outputPathsForProfile(args.profile);
@@ -172,7 +172,7 @@ async function exportSheet(args, baseCellSize, spaceCellSize) {
   const entries = [];
   const missingErrors = [];
   for (const key of requiredKeys) {
-    const inputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
+    const inputPath = path.resolve(CURATED_DIR, keyToFileName(key));
     const { frameWidth, frameHeight } = frameLayoutForKey(key, baseCellSize, spaceCellSize);
     try {
       await imageDimensions(inputPath);
@@ -190,7 +190,7 @@ async function exportSheet(args, baseCellSize, spaceCellSize) {
     });
   }
   if (missingErrors.length > 0) {
-    throw new Error(`Missing processed sprites:\n${missingErrors.join('\n')}`);
+    throw new Error(`Missing curated sprites:\n${missingErrors.join('\n')}`);
   }
   if (entries.length <= 0) {
     throw new Error(`No entries found for profile=${args.profile}`);

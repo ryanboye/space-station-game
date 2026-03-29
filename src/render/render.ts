@@ -21,6 +21,7 @@ import {
   collectQueueTargets,
   collectServiceNodeReachability,
   getDockByTile,
+  resolveWallLightFacing,
   validateDockPlacement
 } from '../sim/sim';
 import {
@@ -32,7 +33,12 @@ import {
   WALL_SPRITE_VARIANT_KEYS
 } from './sprite-keys';
 import type { SpriteAtlas, SpriteFrame } from './sprite-atlas';
-import { AGENT_SPRITE_VARIANTS } from './sprite-keys-extended';
+import {
+  AGENT_SPRITE_VARIANTS,
+  DOCK_OVERLAY_SPRITE_KEYS,
+  FLOOR_GRIME_SPRITE_KEYS,
+  FLOOR_WEAR_SPRITE_KEYS
+} from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
@@ -90,6 +96,7 @@ const roomLetter: Record<RoomType, string> = {
 
 const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.None]: '',
+  [ModuleType.WallLight]: 'L',
   [ModuleType.Bed]: 'B',
   [ModuleType.Table]: 'T',
   [ModuleType.ServingStation]: 'S',
@@ -147,6 +154,8 @@ type ServiceOverlayCache = {
 };
 
 let staticLayerCache: CachedLayer | null = null;
+let decorativeLayerCache: CachedLayer | null = null;
+let glowLayerCache: CachedLayer | null = null;
 const serviceOverlayCache: ServiceOverlayCache = {
   key: '',
   builtAt: 0,
@@ -165,6 +174,18 @@ function spritesEnabled(state: StationState, spriteAtlas: SpriteAtlas): boolean 
 function positiveMod(value: number, modulus: number): number {
   const remainder = value % modulus;
   return remainder < 0 ? remainder + modulus : remainder;
+}
+
+function ensureCachedLayer(existing: CachedLayer | null, widthPx: number, heightPx: number): CachedLayer {
+  if (!existing || existing.canvas.width !== widthPx || existing.canvas.height !== heightPx) {
+    const canvas = document.createElement('canvas');
+    canvas.width = widthPx;
+    canvas.height = heightPx;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to create render layer');
+    return { canvas, ctx, key: '' };
+  }
+  return existing;
 }
 
 function drawRepeatedSpriteFrame(
@@ -273,7 +294,8 @@ function drawSpriteFrame(
   dw: number,
   dh: number,
   rotationDeg = 0,
-  alpha = 1
+  alpha = 1,
+  blendMode: GlobalCompositeOperation = 'source-over'
 ): boolean {
   if (!spriteAtlas.image) return false;
   const image = spriteAtlas.image;
@@ -281,6 +303,7 @@ function drawSpriteFrame(
   const prevSmoothing = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
   if (alpha !== 1) ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = blendMode;
   if (rotationDeg === 0) {
     ctx.drawImage(image, frame.x, frame.y, frame.w, frame.h, dx, dy, dw, dh);
   } else {
@@ -307,8 +330,22 @@ function drawSpriteByKey(
   const frame = spriteAtlas.getFrame(spriteKey);
   if (!frame) return false;
   const manifestRotation = spriteAtlas.getRotation(spriteKey);
+  const offset = spriteAtlas.getOffset(spriteKey);
+  const blendMode = spriteAtlas.getBlendMode(spriteKey);
+  const manifestAlpha = spriteAtlas.getAlpha(spriteKey);
   const totalRotation = ((rotationDeg + manifestRotation) % 360 + 360) % 360;
-  return drawSpriteFrame(ctx, spriteAtlas, frame, dx, dy, dw, dh, totalRotation, alpha);
+  return drawSpriteFrame(
+    ctx,
+    spriteAtlas,
+    frame,
+    dx + offset.x,
+    dy + offset.y,
+    dw,
+    dh,
+    totalRotation,
+    alpha * manifestAlpha,
+    blendMode === 'add' ? 'lighter' : 'source-over'
+  );
 }
 
 const AGENT_SPRITE_SCALE = 0.8;
@@ -362,6 +399,211 @@ function drawTintedAgentSprite(
 
 function pickAgentVariant(variants: readonly string[], agentId: number): string {
   return variants[agentId % variants.length];
+}
+
+function isFloorWeatherEligible(tileType: TileType): boolean {
+  return (
+    tileType === TileType.Floor ||
+    tileType === TileType.Cafeteria ||
+    tileType === TileType.Reactor ||
+    tileType === TileType.Security
+  );
+}
+
+function roomWeatherBias(roomType: RoomType): number {
+  switch (roomType) {
+    case RoomType.Reactor:
+    case RoomType.Workshop:
+    case RoomType.Kitchen:
+    case RoomType.LogisticsStock:
+    case RoomType.Storage:
+    case RoomType.Market:
+      return 15;
+    default:
+      return 0;
+  }
+}
+
+function hashWeatherSeed(tileIndex: number, roomType: RoomType, topologyVersion: number): number {
+  const seed = `${tileIndex}|${roomType}|${topologyVersion}`;
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function pickFloorOverlayKey(state: StationState, tileIndex: number): string | null {
+  const tileType = state.tiles[tileIndex];
+  if (!isFloorWeatherEligible(tileType)) return null;
+  const roomType = state.rooms[tileIndex];
+  const hash = hashWeatherSeed(tileIndex, roomType, state.topologyVersion);
+  const roll = hash % 100;
+  const bias = roomWeatherBias(roomType);
+  const noOverlayThreshold = Math.max(15, 45 - bias);
+  const wearThreshold = Math.min(95, 85 + Math.round(bias * 0.6));
+  if (roll < noOverlayThreshold) return null;
+  if (roll >= wearThreshold) {
+    return FLOOR_WEAR_SPRITE_KEYS[(hash >>> 8) % FLOOR_WEAR_SPRITE_KEYS.length] ?? null;
+  }
+  return FLOOR_GRIME_SPRITE_KEYS[(hash >>> 4) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
+}
+
+function drawModuleVisual(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): void {
+  const origin = fromIndex(module.originTile, state.width);
+  const px = origin.x * TILE_SIZE;
+  const py = origin.y * TILE_SIZE;
+  const w = module.width * TILE_SIZE;
+  const h = module.height * TILE_SIZE;
+  if (useSprites) {
+    const moduleKey = MODULE_SPRITE_KEYS[module.type];
+    let rotation = module.rotation === 90 ? 90 : 0;
+    if (module.type === ModuleType.WallLight) {
+      const drawX = px - TILE_SIZE * 0.5;
+      const drawY = py;
+      if (drawSpriteByKey(ctx, spriteAtlas, moduleKey, drawX, drawY, TILE_SIZE * 2, TILE_SIZE, 0)) {
+        return;
+      }
+    }
+    const drawW = rotation === 90 ? h : w;
+    const drawH = rotation === 90 ? w : h;
+    const drawX = px + (w - drawW) * 0.5;
+    const drawY = py + (h - drawH) * 0.5;
+    if (drawSpriteByKey(ctx, spriteAtlas, moduleKey, drawX, drawY, drawW, drawH, rotation)) {
+      return;
+    }
+  }
+  ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
+  ctx.fillRect(px + Math.round(3 * PX), py + Math.round(3 * PX), w - Math.round(6 * PX), h - Math.round(6 * PX));
+  ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
+  ctx.strokeRect(px + Math.round(3.5 * PX), py + Math.round(3.5 * PX), w - Math.round(7 * PX), h - Math.round(7 * PX));
+  ctx.fillStyle = '#e5f0ff';
+  ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
+}
+
+function drawDockFacadeOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  tileIndex: number,
+  spriteAtlas: SpriteAtlas
+): void {
+  const dock = getDockByTile(state, tileIndex);
+  if (!dock) return;
+  const p = fromIndex(tileIndex, state.width);
+  const horizontalRun = dock.facing === 'north' || dock.facing === 'south';
+  const hasNeighbor = (x: number, y: number): boolean => {
+    if (!inBounds(x, y, state.width, state.height)) return false;
+    const neighborDock = getDockByTile(state, y * state.width + x);
+    return !!neighborDock && neighborDock.id === dock.id;
+  };
+  const hasPrev = horizontalRun ? hasNeighbor(p.x - 1, p.y) : hasNeighbor(p.x, p.y - 1);
+  const hasNext = horizontalRun ? hasNeighbor(p.x + 1, p.y) : hasNeighbor(p.x, p.y + 1);
+  const px = p.x * TILE_SIZE;
+  const py = p.y * TILE_SIZE;
+  const segment =
+    !hasPrev && !hasNext ? 'solo' : !hasPrev ? 'start' : !hasNext ? 'end' : 'middle';
+  const spriteKey = DOCK_OVERLAY_SPRITE_KEYS[dock.facing][segment];
+  drawSpriteByKey(ctx, spriteAtlas, spriteKey, px, py, TILE_SIZE * 2, TILE_SIZE * 2);
+}
+
+function drawGlowCircle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radiusPx: number,
+  color: string,
+  strength = 1
+): void {
+  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/i);
+  if (!match) return;
+  const [, r, g, b, a] = match;
+  const baseAlpha = Number(a);
+  if (!Number.isFinite(baseAlpha) || baseAlpha <= 0) return;
+  const rgba = (alpha: number) => `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radiusPx);
+  gradient.addColorStop(0, rgba(baseAlpha * strength));
+  gradient.addColorStop(0.55, rgba(baseAlpha * 0.4 * strength));
+  gradient.addColorStop(1, rgba(0));
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawDirectionalGlow(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radiusX: number,
+  radiusY: number,
+  color: string,
+  strength = 1
+): void {
+  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/i);
+  if (!match) return;
+  const [, r, g, b, a] = match;
+  const baseAlpha = Number(a);
+  if (!Number.isFinite(baseAlpha) || baseAlpha <= 0) return;
+  const rgba = (alpha: number) => `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(radiusX, radiusY));
+  gradient.addColorStop(0, rgba(baseAlpha * strength));
+  gradient.addColorStop(0.38, rgba(baseAlpha * 0.5 * strength));
+  gradient.addColorStop(1, rgba(0));
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, radiusY / Math.max(1, radiusX));
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, radiusX, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function collectContiguousRoomCentroids(state: StationState, roomType: RoomType): Array<{ x: number; y: number }> {
+  const seen = new Set<number>();
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < state.rooms.length; i++) {
+    if (state.rooms[i] !== roomType || seen.has(i)) continue;
+    const queue = [i];
+    seen.add(i);
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      const p = fromIndex(current, state.width);
+      sumX += p.x + 0.5;
+      sumY += p.y + 0.5;
+      count += 1;
+      const neighbors = [
+        { x: p.x, y: p.y - 1 },
+        { x: p.x + 1, y: p.y },
+        { x: p.x, y: p.y + 1 },
+        { x: p.x - 1, y: p.y }
+      ];
+      for (const neighbor of neighbors) {
+        if (!inBounds(neighbor.x, neighbor.y, state.width, state.height)) continue;
+        const next = neighbor.y * state.width + neighbor.x;
+        if (seen.has(next) || state.rooms[next] !== roomType) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+    if (count > 0) {
+      out.push({ x: sumX / count, y: sumY / count });
+    }
+  }
+  return out;
 }
 
 type ShipCell = { x: number; y: number };
@@ -817,21 +1059,13 @@ function ensureStaticLayer(
   spriteAtlas: SpriteAtlas,
   useSprites: boolean
 ): CachedLayer {
-  if (!staticLayerCache || staticLayerCache.canvas.width !== widthPx || staticLayerCache.canvas.height !== heightPx) {
-    const canvas = document.createElement('canvas');
-    canvas.width = widthPx;
-    canvas.height = heightPx;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to create static render layer');
-    staticLayerCache = { canvas, ctx, key: '' };
-  }
+  staticLayerCache = ensureCachedLayer(staticLayerCache, widthPx, heightPx);
   const layer = staticLayerCache;
   const key = [
     state.width,
     state.height,
     state.topologyVersion,
     state.roomVersion,
-    state.moduleVersion,
     state.controls.showZones ? 1 : 0,
     useSprites ? 1 : 0,
     spriteAtlas.version
@@ -878,7 +1112,7 @@ function ensureStaticLayer(
     }
     if (state.tiles[i] === TileType.Dock) {
       const dock = getDockByTile(state, i);
-      if (dock) {
+      if (dock && !useSprites) {
         ctx.fillStyle = 'rgba(8, 16, 28, 0.8)';
         ctx.fillRect(px + PX, py + PX, Math.round(7 * PX), Math.round(7 * PX));
         ctx.fillStyle = '#d6deeb';
@@ -894,33 +1128,118 @@ function ensureStaticLayer(
       ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
     }
   }
-  for (const module of state.moduleInstances) {
-    const origin = fromIndex(module.originTile, state.width);
-    const px = origin.x * TILE_SIZE;
-    const py = origin.y * TILE_SIZE;
-    const w = module.width * TILE_SIZE;
-    const h = module.height * TILE_SIZE;
-    if (useSprites) {
-      const moduleKey = MODULE_SPRITE_KEYS[module.type];
-      const rotation = module.rotation === 90 ? 90 : 0;
-      const drawW = rotation === 90 ? h : w;
-      const drawH = rotation === 90 ? w : h;
-      const drawX = px + (w - drawW) * 0.5;
-      const drawY = py + (h - drawH) * 0.5;
-      if (drawSpriteByKey(ctx, spriteAtlas, moduleKey, drawX, drawY, drawW, drawH, rotation)) {
-        continue;
-      }
+  return layer;
+}
+
+function ensureDecorativeLayer(
+  state: StationState,
+  widthPx: number,
+  heightPx: number,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): CachedLayer {
+  decorativeLayerCache = ensureCachedLayer(decorativeLayerCache, widthPx, heightPx);
+  const layer = decorativeLayerCache;
+  const key = [
+    state.width,
+    state.height,
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.dockVersion,
+    useSprites ? 1 : 0,
+    spriteAtlas.version
+  ].join('|');
+  if (layer.key === key) return layer;
+  layer.key = key;
+  const ctx = layer.ctx;
+  ctx.clearRect(0, 0, widthPx, heightPx);
+
+  if (useSprites) {
+    for (let i = 0; i < state.tiles.length; i++) {
+      const overlayKey = pickFloorOverlayKey(state, i);
+      if (!overlayKey) continue;
+      const { x, y } = fromIndex(i, state.width);
+      drawSpriteByKey(ctx, spriteAtlas, overlayKey, x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
     }
-    ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
-    ctx.fillRect(px + Math.round(3 * PX), py + Math.round(3 * PX), w - Math.round(6 * PX), h - Math.round(6 * PX));
-    ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
-    ctx.strokeRect(px + Math.round(3.5 * PX), py + Math.round(3.5 * PX), w - Math.round(7 * PX), h - Math.round(7 * PX));
-    ctx.fillStyle = '#e5f0ff';
-    ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
   }
+
+  for (const module of state.moduleInstances) {
+    drawModuleVisual(ctx, state, module, spriteAtlas, useSprites);
+  }
+
+  if (useSprites) {
+    for (let i = 0; i < state.tiles.length; i++) {
+      if (state.tiles[i] !== TileType.Dock) continue;
+      drawDockFacadeOverlay(ctx, state, i, spriteAtlas);
+    }
+  }
+
+  return layer;
+}
+
+function ensureGlowLayer(
+  state: StationState,
+  widthPx: number,
+  heightPx: number,
+  useSprites: boolean
+): CachedLayer {
+  glowLayerCache = ensureCachedLayer(glowLayerCache, widthPx, heightPx);
+  const layer = glowLayerCache;
+  const key = [
+    state.width,
+    state.height,
+    state.roomVersion,
+    state.moduleVersion,
+    useSprites ? 1 : 0
+  ].join('|');
+  if (layer.key === key) return layer;
+  layer.key = key;
+  const ctx = layer.ctx;
+  ctx.clearRect(0, 0, widthPx, heightPx);
+  if (!useSprites) return layer;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const centroid of collectContiguousRoomCentroids(state, RoomType.Reactor)) {
+    drawGlowCircle(ctx, centroid.x * TILE_SIZE, centroid.y * TILE_SIZE, TILE_SIZE * 1.75, 'rgba(255, 156, 74, 0.22)', 1);
+  }
+  for (const module of state.moduleInstances) {
+    let color = '';
+    let radiusTiles = 0;
+    let strength = 1;
+    if (module.type === ModuleType.GrowStation) {
+      color = 'rgba(115, 255, 140, 0.16)';
+      radiusTiles = 1.35;
+      strength = 0.75;
+    } else if (module.type === ModuleType.Terminal) {
+      color = 'rgba(100, 220, 255, 0.15)';
+      radiusTiles = 0.9;
+      strength = 0.55;
+    } else if (module.type === ModuleType.GameStation) {
+      color = 'rgba(160, 120, 255, 0.12)';
+      radiusTiles = 1;
+      strength = 0.45;
+    } else if (module.type === ModuleType.WallLight) {
+      color = 'rgba(255, 224, 168, 0.14)';
+      radiusTiles = 1.1;
+      strength = 0.7;
+    } else {
+      continue;
+    }
+    const origin = fromIndex(module.originTile, state.width);
+    let cx = (origin.x + module.width * 0.5) * TILE_SIZE;
+    let cy = (origin.y + module.height * 0.5) * TILE_SIZE;
+    if (module.type === ModuleType.WallLight) {
+      const lightCx = cx;
+      const lightCy = cy + TILE_SIZE * 0.72;
+      drawDirectionalGlow(ctx, lightCx, lightCy, TILE_SIZE * 0.72, TILE_SIZE * 1.65, color, strength);
+      drawDirectionalGlow(ctx, lightCx, lightCy + TILE_SIZE * 0.28, TILE_SIZE * 0.42, TILE_SIZE * 0.95, color, strength * 0.75);
+      continue;
+    }
+    drawGlowCircle(ctx, cx, cy, TILE_SIZE * radiusTiles, color, strength);
+  }
+  ctx.restore();
   return layer;
 }
 
@@ -1009,10 +1328,17 @@ function validateModulePreviewPlacement(
   if (!tiles) return { valid: false, tiles: [originTile] };
   const roomAtOrigin = state.rooms[originTile];
   for (const tile of tiles) {
-    if (!isWalkable(state.tiles[tile])) return { valid: false, tiles };
+    if (normalized === ModuleType.WallLight) {
+      if (state.tiles[tile] !== TileType.Wall) return { valid: false, tiles };
+    } else if (!isWalkable(state.tiles[tile])) {
+      return { valid: false, tiles };
+    }
     if (state.moduleOccupancyByTile[tile] !== null) return { valid: false, tiles };
     if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) return { valid: false, tiles };
     if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
+  }
+  if (normalized === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
+    return { valid: false, tiles };
   }
   return { valid: true, tiles };
 }
@@ -1175,7 +1501,11 @@ export function renderWorld(
   ctx.fillStyle = '#061018';
   ctx.fillRect(0, 0, widthPx, heightPx);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
+  const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
+  const glowLayer = ensureGlowLayer(state, widthPx, heightPx, useSprites);
   ctx.drawImage(staticLayer.canvas, 0, 0);
+  ctx.drawImage(decorativeLayer.canvas, 0, 0);
+  ctx.drawImage(glowLayer.canvas, 0, 0);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);

@@ -17,6 +17,28 @@ function normalizeRotation(raw) {
   return 0;
 }
 
+function normalizeBlendMode(raw) {
+  return raw === 'add' ? 'add' : 'normal';
+}
+
+function normalizeAlpha(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(1, Math.max(0, value));
+}
+
+function normalizeDimension(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
+}
+
+function normalizeOffset(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value);
+}
+
 export function parseKeysArg(raw) {
   if (typeof raw !== 'string' || raw.trim().length <= 0) return [];
   const out = [];
@@ -52,7 +74,13 @@ export async function loadSpriteSpec(specPath = DEFAULT_SPRITE_SPEC_PATH) {
     const rotation = normalizeRotation(raw.rotation);
     sprites[key] = {
       prompt,
-      rotation
+      rotation,
+      frameWidth: normalizeDimension(raw.frameWidth),
+      frameHeight: normalizeDimension(raw.frameHeight),
+      offsetX: normalizeOffset(raw.offsetX),
+      offsetY: normalizeOffset(raw.offsetY),
+      blendMode: normalizeBlendMode(raw.blendMode),
+      alpha: normalizeAlpha(raw.alpha)
     };
   }
 
@@ -69,4 +97,32 @@ export function getSpriteRotation(spec, key) {
   const entry = spec?.sprites?.[key];
   if (!entry || typeof entry !== 'object') return 0;
   return normalizeRotation(entry.rotation);
+}
+
+export function getSpriteFrameWidth(spec, key) {
+  const entry = spec?.sprites?.[key];
+  return entry?.frameWidth ?? null;
+}
+
+export function getSpriteFrameHeight(spec, key) {
+  const entry = spec?.sprites?.[key];
+  return entry?.frameHeight ?? null;
+}
+
+export function getSpriteOffset(spec, key) {
+  const entry = spec?.sprites?.[key];
+  return {
+    x: normalizeOffset(entry?.offsetX),
+    y: normalizeOffset(entry?.offsetY)
+  };
+}
+
+export function getSpriteBlendMode(spec, key) {
+  const entry = spec?.sprites?.[key];
+  return normalizeBlendMode(entry?.blendMode);
+}
+
+export function getSpriteAlpha(spec, key) {
+  const entry = spec?.sprites?.[key];
+  return normalizeAlpha(entry?.alpha);
 }

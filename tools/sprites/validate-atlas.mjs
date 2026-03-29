@@ -67,6 +67,10 @@ function isTileKey(key) {
   return key.startsWith('tile.');
 }
 
+function isOverlayKey(key) {
+  return key.startsWith('overlay.');
+}
+
 function atlasPathsForProfile(profile) {
   const suffix = profile === 'v1' ? '' : `-${profile}`;
   return {
@@ -201,6 +205,10 @@ async function main() {
   for (const key of requiredKeys) {
     const frame = frames[key];
     const stats = frameEdgeStats(rgba, atlasWidth, frame);
+
+    if (isOverlayKey(key)) {
+      continue;
+    }
 
     if (isTileKey(key)) {
       const seam = frameSeamScore(rgba, atlasWidth, frame);

@@ -49,6 +49,7 @@ export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
 
 export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.None]: 'module.none',
+  [ModuleType.WallLight]: 'module.wall_light',
   [ModuleType.Bed]: 'module.bed',
   [ModuleType.Table]: 'module.table',
   [ModuleType.ServingStation]: 'module.serving_station',

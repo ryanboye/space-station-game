@@ -1,0 +1,1488 @@
+{
+  "version": 1,
+  "manifestPath": "/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.json",
+  "atlasImagePath": "/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.png",
+  "cellSize": 64,
+  "padding": 2,
+  "width": 3024,
+  "height": 460,
+  "files": {
+    "blankTemplatePath": "/Users/ryan.boye/Documents/New project/public/assets/sprites/guides/atlas-template.png",
+    "overlayPath": "/Users/ryan.boye/Documents/New project/public/assets/sprites/guides/atlas-overlay.png",
+    "guidePath": "/Users/ryan.boye/Documents/New project/public/assets/sprites/guides/atlas-guide.png"
+  },
+  "entries": [
+    {
+      "guideIndex": 1,
+      "key": "tile.space",
+      "safeRect": {
+        "x": 2,
+        "y": 2,
+        "w": 256,
+        "h": 256
+      },
+      "paddedRect": {
+        "x": 0,
+        "y": 0,
+        "w": 260,
+        "h": 260
+      }
+    },
+    {
+      "guideIndex": 2,
+      "key": "tile.floor",
+      "safeRect": {
+        "x": 262,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 260,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 3,
+      "key": "tile.wall",
+      "safeRect": {
+        "x": 330,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 328,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 4,
+      "key": "tile.wall.solo",
+      "safeRect": {
+        "x": 398,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 396,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 5,
+      "key": "tile.wall.end",
+      "safeRect": {
+        "x": 466,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 464,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 6,
+      "key": "tile.wall.straight",
+      "safeRect": {
+        "x": 534,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 532,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 7,
+      "key": "tile.wall.corner",
+      "safeRect": {
+        "x": 602,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 600,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 8,
+      "key": "tile.wall.tee",
+      "safeRect": {
+        "x": 670,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 668,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 9,
+      "key": "tile.wall.cross",
+      "safeRect": {
+        "x": 738,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 736,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 10,
+      "key": "tile.dock",
+      "safeRect": {
+        "x": 806,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 804,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 11,
+      "key": "tile.cafeteria",
+      "safeRect": {
+        "x": 874,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 872,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 12,
+      "key": "tile.reactor",
+      "safeRect": {
+        "x": 942,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 940,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 13,
+      "key": "tile.security",
+      "safeRect": {
+        "x": 1010,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1008,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 14,
+      "key": "tile.door",
+      "safeRect": {
+        "x": 1078,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1076,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 15,
+      "key": "tile.door.horizontal",
+      "safeRect": {
+        "x": 1146,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1144,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 16,
+      "key": "tile.door.vertical",
+      "safeRect": {
+        "x": 1214,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1212,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 17,
+      "key": "room.cafeteria",
+      "safeRect": {
+        "x": 1282,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1280,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 18,
+      "key": "room.kitchen",
+      "safeRect": {
+        "x": 1350,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1348,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 19,
+      "key": "room.workshop",
+      "safeRect": {
+        "x": 1418,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1416,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 20,
+      "key": "room.clinic",
+      "safeRect": {
+        "x": 1486,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1484,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 21,
+      "key": "room.brig",
+      "safeRect": {
+        "x": 1554,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1552,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 22,
+      "key": "room.rec_hall",
+      "safeRect": {
+        "x": 1622,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1620,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 23,
+      "key": "room.reactor",
+      "safeRect": {
+        "x": 1690,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1688,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 24,
+      "key": "room.security",
+      "safeRect": {
+        "x": 1758,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1756,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 25,
+      "key": "room.dorm",
+      "safeRect": {
+        "x": 1826,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1824,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 26,
+      "key": "room.hygiene",
+      "safeRect": {
+        "x": 1894,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1892,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 27,
+      "key": "room.hydroponics",
+      "safeRect": {
+        "x": 1962,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1960,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 28,
+      "key": "room.life_support",
+      "safeRect": {
+        "x": 2030,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2028,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 29,
+      "key": "room.lounge",
+      "safeRect": {
+        "x": 2098,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2096,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 30,
+      "key": "room.market",
+      "safeRect": {
+        "x": 2166,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2164,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 31,
+      "key": "room.logistics_stock",
+      "safeRect": {
+        "x": 2234,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2232,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 32,
+      "key": "room.storage",
+      "safeRect": {
+        "x": 2302,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2300,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 33,
+      "key": "module.none",
+      "safeRect": {
+        "x": 2370,
+        "y": 2,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2368,
+        "y": 0,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 34,
+      "key": "module.bed",
+      "safeRect": {
+        "x": 2438,
+        "y": 2,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2436,
+        "y": 0,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 35,
+      "key": "module.table",
+      "safeRect": {
+        "x": 2570,
+        "y": 2,
+        "w": 128,
+        "h": 128
+      },
+      "paddedRect": {
+        "x": 2568,
+        "y": 0,
+        "w": 132,
+        "h": 132
+      }
+    },
+    {
+      "guideIndex": 36,
+      "key": "module.serving_station",
+      "safeRect": {
+        "x": 2702,
+        "y": 2,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2700,
+        "y": 0,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 37,
+      "key": "module.stove",
+      "safeRect": {
+        "x": 2834,
+        "y": 2,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2832,
+        "y": 0,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 38,
+      "key": "module.workbench",
+      "safeRect": {
+        "x": 2,
+        "y": 262,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 0,
+        "y": 260,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 39,
+      "key": "module.med_bed",
+      "safeRect": {
+        "x": 134,
+        "y": 262,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 132,
+        "y": 260,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 40,
+      "key": "module.cell_console",
+      "safeRect": {
+        "x": 266,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 264,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 41,
+      "key": "module.rec_unit",
+      "safeRect": {
+        "x": 334,
+        "y": 262,
+        "w": 128,
+        "h": 128
+      },
+      "paddedRect": {
+        "x": 332,
+        "y": 260,
+        "w": 132,
+        "h": 132
+      }
+    },
+    {
+      "guideIndex": 42,
+      "key": "module.grow_station",
+      "safeRect": {
+        "x": 466,
+        "y": 262,
+        "w": 128,
+        "h": 128
+      },
+      "paddedRect": {
+        "x": 464,
+        "y": 260,
+        "w": 132,
+        "h": 132
+      }
+    },
+    {
+      "guideIndex": 43,
+      "key": "module.terminal",
+      "safeRect": {
+        "x": 598,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 596,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 44,
+      "key": "module.couch",
+      "safeRect": {
+        "x": 666,
+        "y": 262,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 664,
+        "y": 260,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 45,
+      "key": "module.game_station",
+      "safeRect": {
+        "x": 798,
+        "y": 262,
+        "w": 128,
+        "h": 128
+      },
+      "paddedRect": {
+        "x": 796,
+        "y": 260,
+        "w": 132,
+        "h": 132
+      }
+    },
+    {
+      "guideIndex": 46,
+      "key": "module.shower",
+      "safeRect": {
+        "x": 930,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 928,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 47,
+      "key": "module.sink",
+      "safeRect": {
+        "x": 998,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 996,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 48,
+      "key": "module.market_stall",
+      "safeRect": {
+        "x": 1066,
+        "y": 262,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1064,
+        "y": 260,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 49,
+      "key": "module.intake_pallet",
+      "safeRect": {
+        "x": 1198,
+        "y": 262,
+        "w": 128,
+        "h": 128
+      },
+      "paddedRect": {
+        "x": 1196,
+        "y": 260,
+        "w": 132,
+        "h": 132
+      }
+    },
+    {
+      "guideIndex": 50,
+      "key": "module.storage_rack",
+      "safeRect": {
+        "x": 1330,
+        "y": 262,
+        "w": 128,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1328,
+        "y": 260,
+        "w": 132,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 51,
+      "key": "ship.tourist",
+      "safeRect": {
+        "x": 1462,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1460,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 52,
+      "key": "ship.trader",
+      "safeRect": {
+        "x": 1530,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1528,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 53,
+      "key": "ship.industrial",
+      "safeRect": {
+        "x": 1598,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1596,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 54,
+      "key": "ship.military",
+      "safeRect": {
+        "x": 1666,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1664,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 55,
+      "key": "ship.colonist",
+      "safeRect": {
+        "x": 1734,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1732,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 56,
+      "key": "overlay.dock.facade.north",
+      "safeRect": {
+        "x": 1802,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1800,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 57,
+      "key": "overlay.dock.facade.east",
+      "safeRect": {
+        "x": 1870,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1868,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 58,
+      "key": "overlay.dock.facade.south",
+      "safeRect": {
+        "x": 1938,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1936,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 59,
+      "key": "overlay.dock.facade.west",
+      "safeRect": {
+        "x": 2006,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2004,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 60,
+      "key": "overlay.floor.grime.1",
+      "safeRect": {
+        "x": 2074,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2072,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 61,
+      "key": "overlay.floor.grime.2",
+      "safeRect": {
+        "x": 2142,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2140,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 62,
+      "key": "overlay.floor.grime.3",
+      "safeRect": {
+        "x": 2210,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2208,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 63,
+      "key": "overlay.floor.grime.4",
+      "safeRect": {
+        "x": 2278,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2276,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 64,
+      "key": "overlay.floor.grime.5",
+      "safeRect": {
+        "x": 2346,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2344,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 65,
+      "key": "overlay.floor.grime.6",
+      "safeRect": {
+        "x": 2414,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2412,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 66,
+      "key": "overlay.floor.wear.1",
+      "safeRect": {
+        "x": 2482,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2480,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 67,
+      "key": "overlay.floor.wear.2",
+      "safeRect": {
+        "x": 2550,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2548,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 68,
+      "key": "overlay.floor.wear.3",
+      "safeRect": {
+        "x": 2618,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2616,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 69,
+      "key": "overlay.floor.wear.4",
+      "safeRect": {
+        "x": 2686,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2684,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 70,
+      "key": "overlay.wall.exterior.1",
+      "safeRect": {
+        "x": 2754,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2752,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 71,
+      "key": "overlay.wall.exterior.2",
+      "safeRect": {
+        "x": 2822,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2820,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 72,
+      "key": "overlay.wall.exterior.3",
+      "safeRect": {
+        "x": 2890,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2888,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 73,
+      "key": "overlay.wall.exterior.corner.1",
+      "safeRect": {
+        "x": 2958,
+        "y": 262,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 2956,
+        "y": 260,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 74,
+      "key": "overlay.wall.exterior.end.1",
+      "safeRect": {
+        "x": 2,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 0,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 75,
+      "key": "agent.visitor.1",
+      "safeRect": {
+        "x": 70,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 68,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 76,
+      "key": "agent.visitor.2",
+      "safeRect": {
+        "x": 138,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 136,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 77,
+      "key": "agent.visitor.3",
+      "safeRect": {
+        "x": 206,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 204,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 78,
+      "key": "agent.visitor.4",
+      "safeRect": {
+        "x": 274,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 272,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 79,
+      "key": "agent.visitor.5",
+      "safeRect": {
+        "x": 342,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 340,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 80,
+      "key": "agent.visitor.6",
+      "safeRect": {
+        "x": 410,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 408,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 81,
+      "key": "agent.resident.1",
+      "safeRect": {
+        "x": 478,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 476,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 82,
+      "key": "agent.resident.2",
+      "safeRect": {
+        "x": 546,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 544,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 83,
+      "key": "agent.resident.3",
+      "safeRect": {
+        "x": 614,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 612,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 84,
+      "key": "agent.resident.4",
+      "safeRect": {
+        "x": 682,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 680,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 85,
+      "key": "agent.resident.5",
+      "safeRect": {
+        "x": 750,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 748,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 86,
+      "key": "agent.resident.6",
+      "safeRect": {
+        "x": 818,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 816,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 87,
+      "key": "agent.crew.1",
+      "safeRect": {
+        "x": 886,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 884,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 88,
+      "key": "agent.crew.2",
+      "safeRect": {
+        "x": 954,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 952,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 89,
+      "key": "agent.crew.3",
+      "safeRect": {
+        "x": 1022,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1020,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 90,
+      "key": "agent.crew.4",
+      "safeRect": {
+        "x": 1090,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1088,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 91,
+      "key": "agent.crew.5",
+      "safeRect": {
+        "x": 1158,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1156,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    },
+    {
+      "guideIndex": 92,
+      "key": "agent.crew.6",
+      "safeRect": {
+        "x": 1226,
+        "y": 394,
+        "w": 64,
+        "h": 64
+      },
+      "paddedRect": {
+        "x": 1224,
+        "y": 392,
+        "w": 68,
+        "h": 68
+      }
+    }
+  ]
+}

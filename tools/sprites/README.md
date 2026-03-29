@@ -1,5 +1,22 @@
 # Sprite Tooling (Nano Banana)
 
+## 0) Asset source-of-truth
+
+The pipeline now has two separate roles:
+
+- `/Users/ryan.boye/Documents/New project/tools/sprites/curated` = source-of-truth art you want to keep
+- `/Users/ryan.boye/Documents/New project/tools/sprites/out/raw` = disposable AI output
+- `/Users/ryan.boye/Documents/New project/tools/sprites/out/processed` = generated/normalized draft output
+- `/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.png` + `.json` = build artifacts only
+
+Normal atlas packing prefers `curated` first and falls back to `processed` only if a curated file is missing.
+
+Seed `curated` once from the current processed baseline:
+
+```bash
+npm run sprites:curated:bootstrap
+```
+
 ## 1) Local API key setup
 
 Create `/Users/ryan.boye/Documents/New project/.env.local`:
@@ -31,13 +48,13 @@ sprites:
 
 ## 3) Full profile builds
 
-All-in-one full profile:
+All-in-one full profile from generated drafts (`processed` source):
 
 ```bash
 npm run sprites:build:v1
 ```
 
-Floors/walls-only profile:
+Floors/walls-only profile from generated drafts:
 
 ```bash
 npm run sprites:build:floors-walls
@@ -49,7 +66,7 @@ Activate floors/walls atlas as runtime default (`atlas.json`):
 npm run sprites:build:floors-walls:activate
 ```
 
-Agents/people profile:
+Agents/people profile from generated drafts:
 
 ```bash
 npm run sprites:build:agents
@@ -57,7 +74,7 @@ npm run sprites:build:agents
 
 ## 4) Retry only specific sprites (no full regeneration)
 
-Use retry scripts with `--keys` (comma-separated). This only regenerates those keys, then runs process/pack/validate.
+Use retry scripts with `--keys` (comma-separated). This regenerates only those keys into draft assets and packs from `processed`, without touching curated art.
 
 Retry two floors/walls keys:
 
@@ -108,9 +125,29 @@ SPRITE_SPACE_ATLAS_SIZE=256
 SPRITE_ATLAS_MAX_WIDTH=3072
 ```
 
-## 6) Edit-ready tile sheet workflow (no hidden downscale)
+## 6) Edit sheet workflow from curated art
 
-This workflow exports full tile keys to a single editable contact sheet at native target sizes:
+Export the current curated set to an editable sheet:
+
+```bash
+npm run sprites:edit:export
+```
+
+Then edit:
+
+- `/Users/ryan.boye/Documents/New project/tools/sprites/edit/v1/v1-edit.png`
+
+And import it back into curated art:
+
+```bash
+npm run sprites:edit:apply:activate
+```
+
+This updates `curated`, then rebuilds the runtime atlas.
+
+## 7) Edit-ready tile sheet workflow (no hidden downscale)
+
+This workflow exports full tile keys from `curated` to a single editable contact sheet at native target sizes:
 
 - `tile.space` at `256x256`
 - all other tile keys at `64x64`
@@ -127,7 +164,7 @@ Outputs:
 - `/Users/ryan.boye/Documents/New project/tools/sprites/edit/tiles-full/tiles-full-map.json` (rect/key map)
 - `/Users/ryan.boye/Documents/New project/tools/sprites/edit/tiles-full/tiles-full-guide.png` (labels reference)
 
-Apply edited sheet back into processed tiles and rebuild runtime atlas:
+Apply edited sheet back into curated tiles and rebuild runtime atlas:
 
 ```bash
 npm run sprites:edit:apply:tiles:activate
@@ -139,8 +176,9 @@ Important:
 - If map dimensions or key rectangles are invalid, import fails with key-specific errors.
 - Packing preserves exact-sized inputs without resizing when source dimensions already match the target frame.
 
-## 7) Output paths
+## 8) Output paths
 
+- Curated source art: `/Users/ryan.boye/Documents/New project/tools/sprites/curated`
 - Raw outputs: `/Users/ryan.boye/Documents/New project/tools/sprites/out/raw`
 - Processed outputs: `/Users/ryan.boye/Documents/New project/tools/sprites/out/processed`
 - Runtime atlas: `/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.png`

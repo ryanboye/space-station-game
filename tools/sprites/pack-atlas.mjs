@@ -4,11 +4,21 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
-import { DEFAULT_SPRITE_SPEC_PATH, getSpriteRotation, loadSpriteSpec } from './sprite-spec.mjs';
+import {
+  DEFAULT_SPRITE_SPEC_PATH,
+  getSpriteAlpha,
+  getSpriteBlendMode,
+  getSpriteFrameHeight,
+  getSpriteFrameWidth,
+  getSpriteOffset,
+  getSpriteRotation,
+  loadSpriteSpec
+} from './sprite-spec.mjs';
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(THIS_FILE), '..', '..');
 const TOOLS_DIR = path.resolve(ROOT, 'tools', 'sprites');
+const CURATED_DIR = path.resolve(TOOLS_DIR, 'curated');
 const PROCESSED_DIR = path.resolve(TOOLS_DIR, 'out', 'processed');
 const OUTPUT_DIR = path.resolve(ROOT, 'public', 'assets', 'sprites');
 
@@ -22,6 +32,7 @@ const PROFILE_TO_REQUIRED = {
 
 const MODULE_FOOTPRINT_BY_KEY = {
   'module.none': { w: 1, h: 1 },
+  'module.wall_light': { w: 1, h: 1 },
   'module.bed': { w: 2, h: 1 },
   'module.table': { w: 2, h: 2 },
   'module.serving_station': { w: 2, h: 1 },
@@ -41,8 +52,42 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.storage_rack': { w: 2, h: 1 }
 };
 
+const OVERLAY_FOOTPRINT_BY_KEY = {
+  'overlay.dock.facade.north.solo': { w: 2, h: 2 },
+  'overlay.dock.facade.north.start': { w: 2, h: 2 },
+  'overlay.dock.facade.north.middle': { w: 2, h: 2 },
+  'overlay.dock.facade.north.end': { w: 2, h: 2 },
+  'overlay.dock.facade.east.solo': { w: 2, h: 2 },
+  'overlay.dock.facade.east.start': { w: 2, h: 2 },
+  'overlay.dock.facade.east.middle': { w: 2, h: 2 },
+  'overlay.dock.facade.east.end': { w: 2, h: 2 },
+  'overlay.dock.facade.south.solo': { w: 2, h: 2 },
+  'overlay.dock.facade.south.start': { w: 2, h: 2 },
+  'overlay.dock.facade.south.middle': { w: 2, h: 2 },
+  'overlay.dock.facade.south.end': { w: 2, h: 2 },
+  'overlay.dock.facade.west.solo': { w: 2, h: 2 },
+  'overlay.dock.facade.west.start': { w: 2, h: 2 },
+  'overlay.dock.facade.west.middle': { w: 2, h: 2 },
+  'overlay.dock.facade.west.end': { w: 2, h: 2 },
+  'overlay.floor.grime.1': { w: 1, h: 1 },
+  'overlay.floor.grime.2': { w: 1, h: 1 },
+  'overlay.floor.grime.3': { w: 1, h: 1 },
+  'overlay.floor.grime.4': { w: 1, h: 1 },
+  'overlay.floor.grime.5': { w: 1, h: 1 },
+  'overlay.floor.grime.6': { w: 1, h: 1 },
+  'overlay.floor.wear.1': { w: 1, h: 1 },
+  'overlay.floor.wear.2': { w: 1, h: 1 },
+  'overlay.floor.wear.3': { w: 1, h: 1 },
+  'overlay.floor.wear.4': { w: 1, h: 1 },
+  'overlay.wall.exterior.1': { w: 2, h: 2 },
+  'overlay.wall.exterior.2': { w: 2, h: 2 },
+  'overlay.wall.exterior.3': { w: 2, h: 2 },
+  'overlay.wall.exterior.corner.1': { w: 2, h: 2 },
+  'overlay.wall.exterior.end.1': { w: 2, h: 2 }
+};
+
 function parseArgs(argv) {
-  const args = { profile: 'v1', activate: false, spec: '' };
+  const args = { profile: 'v1', activate: false, spec: '', source: 'auto' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--profile' && argv[i + 1]) {
@@ -55,6 +100,11 @@ function parseArgs(argv) {
     }
     if (arg === '--spec' && argv[i + 1]) {
       args.spec = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--source' && argv[i + 1]) {
+      args.source = argv[i + 1];
       i += 1;
     }
   }
@@ -77,6 +127,21 @@ async function fileExists(filePath) {
   } catch {
     return false;
   }
+}
+
+async function resolveInputPath(key, sourceMode) {
+  const fileName = keyToFileName(key);
+  const curatedPath = path.resolve(CURATED_DIR, fileName);
+  const processedPath = path.resolve(PROCESSED_DIR, fileName);
+  if (sourceMode === 'curated') {
+    return (await fileExists(curatedPath)) ? curatedPath : null;
+  }
+  if (sourceMode === 'processed') {
+    return (await fileExists(processedPath)) ? processedPath : null;
+  }
+  if (await fileExists(curatedPath)) return curatedPath;
+  if (await fileExists(processedPath)) return processedPath;
+  return null;
 }
 
 async function readImageDimensions(filePath) {
@@ -103,6 +168,14 @@ function atlasPathsForProfile(profile) {
 }
 
 function frameLayoutForKey(key, baseCellSize, spaceCellSize) {
+  const overlayFootprint = OVERLAY_FOOTPRINT_BY_KEY[key];
+  if (overlayFootprint) {
+    return {
+      frameWidth: baseCellSize * overlayFootprint.w,
+      frameHeight: baseCellSize * overlayFootprint.h,
+      fit: 'contain'
+    };
+  }
   if (key === 'tile.space') {
     return {
       frameWidth: spaceCellSize,
@@ -216,6 +289,9 @@ async function main() {
   if (!Object.hasOwn(PROFILE_TO_REQUIRED, args.profile)) {
     throw new Error(`Unsupported profile: ${args.profile}. Use one of: ${Object.keys(PROFILE_TO_REQUIRED).join(', ')}`);
   }
+  if (!['auto', 'curated', 'processed'].includes(args.source)) {
+    throw new Error(`Unsupported source: ${args.source}. Use one of: auto, curated, processed`);
+  }
 
   const requiredKeys = await readJson(PROFILE_TO_REQUIRED[args.profile]);
   if (!Array.isArray(requiredKeys) || requiredKeys.some((k) => typeof k !== 'string')) {
@@ -244,11 +320,21 @@ async function main() {
 
   const available = [];
   for (const key of requiredKeys) {
-    const inputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
-    if (!(await fileExists(inputPath))) continue;
+    const inputPath = await resolveInputPath(key, args.source);
+    if (!inputPath) continue;
     const layout = frameLayoutForKey(key, baseCellSize, spaceCellSize);
+    const specFrameWidth = getSpriteFrameWidth(spriteSpec, key);
+    const specFrameHeight = getSpriteFrameHeight(spriteSpec, key);
     const source = await readImageDimensions(inputPath);
-    available.push({ key, inputPath, ...layout, sourceWidth: source.width, sourceHeight: source.height });
+    available.push({
+      key,
+      inputPath,
+      ...layout,
+      frameWidth: specFrameWidth ?? layout.frameWidth,
+      frameHeight: specFrameHeight ?? layout.frameHeight,
+      sourceWidth: source.width,
+      sourceHeight: source.height
+    });
   }
 
   if (available.length <= 0) {
@@ -287,6 +373,9 @@ async function main() {
   const composites = [];
   const frames = {};
   const rotations = {};
+  const offsets = {};
+  const blendModes = {};
+  const alphas = {};
   for (const placement of placements) {
     const padded = await buildPaddedSprite(
       placement.inputPath,
@@ -310,6 +399,12 @@ async function main() {
     };
     const rotation = getSpriteRotation(spriteSpec, placement.key);
     if (rotation !== 0) rotations[placement.key] = rotation;
+    const offset = getSpriteOffset(spriteSpec, placement.key);
+    if (offset.x !== 0 || offset.y !== 0) offsets[placement.key] = offset;
+    const blendMode = getSpriteBlendMode(spriteSpec, placement.key);
+    if (blendMode !== 'normal') blendModes[placement.key] = blendMode;
+    const alpha = getSpriteAlpha(spriteSpec, placement.key);
+    if (alpha !== 1) alphas[placement.key] = alpha;
   }
 
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
@@ -332,7 +427,10 @@ async function main() {
     cellSize: baseCellSize,
     imagePath: atlasPaths.imagePath,
     frames,
-    ...(Object.keys(rotations).length > 0 ? { rotations } : {})
+    ...(Object.keys(rotations).length > 0 ? { rotations } : {}),
+    ...(Object.keys(offsets).length > 0 ? { offsets } : {}),
+    ...(Object.keys(blendModes).length > 0 ? { blendModes } : {}),
+    ...(Object.keys(alphas).length > 0 ? { alphas } : {})
   };
   await fs.writeFile(atlasPaths.jsonPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
@@ -346,7 +444,7 @@ async function main() {
   }
 
   console.log(
-    `Packed atlas: profile=${args.profile}, keys=${available.length}, size=${atlasWidth}x${atlasHeight}, baseCell=${baseCellSize}, spaceCell=${spaceCellSize}, padding=${padding}, png=${atlasPaths.pngPath}, json=${atlasPaths.jsonPath}${args.activate ? ', activated=atlas.json' : ''}`
+    `Packed atlas: profile=${args.profile}, source=${args.source}, keys=${available.length}, size=${atlasWidth}x${atlasHeight}, baseCell=${baseCellSize}, spaceCell=${spaceCellSize}, padding=${padding}, png=${atlasPaths.pngPath}, json=${atlasPaths.jsonPath}${args.activate ? ', activated=atlas.json' : ''}`
   );
 }
 

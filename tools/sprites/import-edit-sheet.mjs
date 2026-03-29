@@ -8,7 +8,7 @@ import sharp from 'sharp';
 const THIS_FILE = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(THIS_FILE), '..', '..');
 const TOOLS_DIR = path.resolve(ROOT, 'tools', 'sprites');
-const PROCESSED_DIR = path.resolve(TOOLS_DIR, 'out', 'processed');
+const CURATED_DIR = path.resolve(TOOLS_DIR, 'curated');
 const EDIT_DIR = path.resolve(TOOLS_DIR, 'edit');
 
 const PROFILE_TO_REQUIRED = {
@@ -163,7 +163,7 @@ async function importSingle(args, baseCellSize, spaceCellSize) {
     );
   }
 
-  const outputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
+  const outputPath = path.resolve(CURATED_DIR, keyToFileName(key));
   if (scale === 1) {
     await sharp(inputPath).png().toFile(outputPath);
   } else {
@@ -270,7 +270,7 @@ async function importSheet(args, baseCellSize, spaceCellSize) {
     const w = Number(entry.w);
     const h = Number(entry.h);
     const expected = frameLayoutForKey(key, baseCellSize, spaceCellSize);
-    const outputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
+    const outputPath = path.resolve(CURATED_DIR, keyToFileName(key));
 
     let pipeline = sheet.clone().extract({ left: x, top: y, width: w, height: h });
     if (scale > 1) {
@@ -281,7 +281,7 @@ async function importSheet(args, baseCellSize, spaceCellSize) {
   }
 
   console.log(
-    `Imported edit sheet. profile=${args.profile}, scale=${scale}, written=${written}, sheet=${sheetPath}, processedDir=${PROCESSED_DIR}`
+    `Imported edit sheet. profile=${args.profile}, scale=${scale}, written=${written}, sheet=${sheetPath}, curatedDir=${CURATED_DIR}`
   );
 }
 

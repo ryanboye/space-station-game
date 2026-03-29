@@ -34,3 +34,54 @@ export const FX_SPRITE_KEYS = {
   incidentFight: 'fx.incident_fight',
   incidentTrespass: 'fx.incident_trespass'
 } as const;
+
+export const DOCK_OVERLAY_SPRITE_KEYS = {
+  north: {
+    solo: 'overlay.dock.facade.north.solo',
+    start: 'overlay.dock.facade.north.start',
+    middle: 'overlay.dock.facade.north.middle',
+    end: 'overlay.dock.facade.north.end'
+  },
+  east: {
+    solo: 'overlay.dock.facade.east.solo',
+    start: 'overlay.dock.facade.east.start',
+    middle: 'overlay.dock.facade.east.middle',
+    end: 'overlay.dock.facade.east.end'
+  },
+  south: {
+    solo: 'overlay.dock.facade.south.solo',
+    start: 'overlay.dock.facade.south.start',
+    middle: 'overlay.dock.facade.south.middle',
+    end: 'overlay.dock.facade.south.end'
+  },
+  west: {
+    solo: 'overlay.dock.facade.west.solo',
+    start: 'overlay.dock.facade.west.start',
+    middle: 'overlay.dock.facade.west.middle',
+    end: 'overlay.dock.facade.west.end'
+  }
+} as const;
+
+export const FLOOR_GRIME_SPRITE_KEYS = [
+  'overlay.floor.grime.1',
+  'overlay.floor.grime.2',
+  'overlay.floor.grime.3',
+  'overlay.floor.grime.4',
+  'overlay.floor.grime.5',
+  'overlay.floor.grime.6'
+] as const;
+
+export const FLOOR_WEAR_SPRITE_KEYS = [
+  'overlay.floor.wear.1',
+  'overlay.floor.wear.2',
+  'overlay.floor.wear.3',
+  'overlay.floor.wear.4'
+] as const;
+
+export const EXTERIOR_WALL_OVERLAY_SPRITE_KEYS = {
+  straight1: 'overlay.wall.exterior.1',
+  straight2: 'overlay.wall.exterior.2',
+  straight3: 'overlay.wall.exterior.3',
+  corner1: 'overlay.wall.exterior.corner.1',
+  end1: 'overlay.wall.exterior.end.1'
+} as const;

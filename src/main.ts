@@ -247,6 +247,7 @@ app.innerHTML = `
       <div class="button-row">
         <button id="save-load">Load</button>
         <button id="save-delete">Delete</button>
+        <button id="save-download">Download JSON</button>
       </div>
       <small>Export selected save (copy/paste JSON):</small>
       <textarea id="save-export" class="save-textarea" readonly spellcheck="false"></textarea>
@@ -674,6 +675,7 @@ const saveQuicksaveBtn = document.querySelector<HTMLButtonElement>('#save-quicks
 const saveSlotSelect = document.querySelector<HTMLSelectElement>('#save-slot-select')!;
 const saveLoadBtn = document.querySelector<HTMLButtonElement>('#save-load')!;
 const saveDeleteBtn = document.querySelector<HTMLButtonElement>('#save-delete')!;
+const saveDownloadBtn = document.querySelector<HTMLButtonElement>('#save-download')!;
 const saveExportTextarea = document.querySelector<HTMLTextAreaElement>('#save-export')!;
 const saveImportTextarea = document.querySelector<HTMLTextAreaElement>('#save-import')!;
 const saveImportBtn = document.querySelector<HTMLButtonElement>('#save-import-btn')!;
@@ -712,6 +714,7 @@ for (const el of document.querySelectorAll<HTMLElement>('.legend-item[data-room]
 }
 
 const MODULE_HOTKEYS: Array<{ key: string; module: ModuleType; label: string }> = [
+  { key: '`', module: ModuleType.WallLight, label: 'WallLight' },
   { key: 'Q', module: ModuleType.Bed, label: 'Bed' },
   { key: 'T', module: ModuleType.Table, label: 'Table' },
   { key: '5', module: ModuleType.ServingStation, label: 'Serving' },
@@ -1286,6 +1289,18 @@ function getSelectedSave(store: SaveStore): LocalSaveRecord | null {
   return store.saves.find((save) => save.id === selectedId) ?? null;
 }
 
+function sanitizeSaveFilenamePart(value: string): string {
+  const collapsed = value.trim().replace(/\s+/g, '-');
+  const cleaned = collapsed.replace(/[^a-zA-Z0-9-_]+/g, '');
+  return cleaned.replace(/-+/g, '-').replace(/^[-_]+|[-_]+$/g, '') || 'save';
+}
+
+function buildSaveDownloadFilename(save: LocalSaveRecord): string {
+  const namePart = sanitizeSaveFilenamePart(save.name);
+  const timestampPart = save.updatedAt.replace(/[:.]/g, '-');
+  return `station-save-${namePart}-${timestampPart}.json`;
+}
+
 function refreshSaveUi(preferredSaveId?: string): void {
   const { store, warnings } = readSaveStore();
   const saves = sortSavesForUi(store.saves);
@@ -1298,6 +1313,7 @@ function refreshSaveUi(preferredSaveId?: string): void {
     saveSlotSelect.disabled = true;
     saveLoadBtn.disabled = true;
     saveDeleteBtn.disabled = true;
+    saveDownloadBtn.disabled = true;
     saveExportTextarea.value = '';
     saveCountEl.textContent = '0';
   } else {
@@ -1317,6 +1333,7 @@ function refreshSaveUi(preferredSaveId?: string): void {
     }
     saveLoadBtn.disabled = false;
     saveDeleteBtn.disabled = false;
+    saveDownloadBtn.disabled = false;
     saveCountEl.textContent = String(saves.length);
     const selected = getSelectedSave({ storeVersion: 1, saves });
     saveExportTextarea.value = selected ? toDisplaySaveJson(selected.payloadText) : '';
@@ -1865,6 +1882,9 @@ window.addEventListener('keydown', (e) => {
     case 'x':
     case 'X':
       selectModuleTool(ModuleType.None);
+      break;
+    case '`':
+      selectModuleTool(ModuleType.WallLight);
       break;
     case 'q':
     case 'Q':
@@ -2444,6 +2464,30 @@ saveDeleteBtn.addEventListener('click', () => {
   if (!writeSaveStore({ storeVersion: 1, saves: remaining })) return;
   refreshSaveUi();
   setSaveStatus(`Deleted "${selected.name}".`, 'ok');
+});
+
+saveDownloadBtn.addEventListener('click', () => {
+  const { store } = readSaveStore();
+  const selected = getSelectedSave(store);
+  if (!selected) {
+    setSaveStatus('Select a save slot first.', 'error');
+    return;
+  }
+  try {
+    const blob = new Blob([selected.payloadText], { type: 'application/json' });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = buildSaveDownloadFilename(selected);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
+    setSaveStatus(`Downloaded "${selected.name}" as JSON.`, 'ok');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSaveStatus(`Download failed: ${message}`, 'error');
+  }
 });
 
 saveImportBtn.addEventListener('click', () => {

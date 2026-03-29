@@ -13,6 +13,12 @@ export type ModuleDefinition = {
 
 export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
   [ModuleType.None]: { width: 1, height: 1, rotatable: false, allowedRooms: null },
+  [ModuleType.WallLight]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
+  },
   [ModuleType.Bed]: {
     width: 2,
     height: 1,

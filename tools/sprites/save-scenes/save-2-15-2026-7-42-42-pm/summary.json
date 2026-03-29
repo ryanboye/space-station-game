@@ -1,0 +1,31 @@
+{
+  "saveName": "Save 2/15/2026, 7:42:42 PM",
+  "sourceSavePath": "/Users/ryan.boye/Downloads/station-save-Save-2152026-74242-PM-2026-02-16T03-42-42-569Z.json",
+  "outputDir": "/Users/ryan.boye/Documents/New project/tools/sprites/save-scenes/save-2-15-2026-7-42-42-pm",
+  "referencePath": "/Users/ryan.boye/Documents/New project/tools/sprites/save-scenes/save-2-15-2026-7-42-42-pm/reference-clean.png",
+  "browserLikePath": "/Users/ryan.boye/Documents/New project/tools/sprites/save-scenes/save-2-15-2026-7-42-42-pm/reference-browser-like.png",
+  "mapPath": "/Users/ryan.boye/Documents/New project/tools/sprites/save-scenes/save-2-15-2026-7-42-42-pm/crop-map.json",
+  "tileCounts": {
+    "space": 4041,
+    "wall": 257,
+    "floor": 433,
+    "door": 39,
+    "dock": 30
+  },
+  "moduleCounts": {
+    "bed": 13,
+    "sink": 8,
+    "shower": 8,
+    "workbench": 2,
+    "intake-pallet": 10,
+    "couch": 6,
+    "game-station": 3,
+    "terminal": 1,
+    "grow-station": 1,
+    "serving-station": 5,
+    "table": 5,
+    "market-stall": 4,
+    "stove": 3
+  },
+  "visibleEntryCount": 1669
+}

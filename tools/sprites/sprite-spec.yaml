@@ -154,6 +154,11 @@ sprites:
   module.none:
     prompt: Transparent empty sprite with no object. Keep full transparency.
     rotation: 0
+  module.wall_light:
+    prompt: "Top-down pixel art station module sprite: horizontal fluorescent wall light fixture, slim tube housing mounted on top wall, clean sci-fi industrial style. Transparent background, readable at 64x32."
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 32
   module.bed:
     prompt: "Top-down pixel art station module sprite: bed. 2x1 footprint,
       transparent background, no text, readable at 36x18."
@@ -332,3 +337,282 @@ sprites:
       silhouette, welcoming palette, transparent background, readable at
       small-medium sizes.
     rotation: 0
+  overlay.dock.facade.north.solo:
+    prompt: Top-down pixel art. space station. exterior docking facade solo segment for a north-facing dock opening. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -48
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.north.start:
+    prompt: Top-down pixel art. space station. exterior docking facade start segment for a north-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -48
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.north.middle:
+    prompt: Top-down pixel art. space station. exterior docking facade middle segment for a north-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -48
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.north.end:
+    prompt: Top-down pixel art. space station. exterior docking facade end segment for a north-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -48
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.east.solo:
+    prompt: Top-down pixel art. space station. exterior docking facade solo segment for an east-facing dock opening. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.east.start:
+    prompt: Top-down pixel art. space station. exterior docking facade start segment for an east-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.east.middle:
+    prompt: Top-down pixel art. space station. exterior docking facade middle segment for an east-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.east.end:
+    prompt: Top-down pixel art. space station. exterior docking facade end segment for an east-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.south.solo:
+    prompt: Top-down pixel art. space station. exterior docking facade solo segment for a south-facing dock opening. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: 16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.south.start:
+    prompt: Top-down pixel art. space station. exterior docking facade start segment for a south-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: 16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.south.middle:
+    prompt: Top-down pixel art. space station. exterior docking facade middle segment for a south-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: 16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.south.end:
+    prompt: Top-down pixel art. space station. exterior docking facade end segment for a south-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: 16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.west.solo:
+    prompt: Top-down pixel art. space station. exterior docking facade solo segment for a west-facing dock opening. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -48
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.west.start:
+    prompt: Top-down pixel art. space station. exterior docking facade start segment for a west-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -48
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.west.middle:
+    prompt: Top-down pixel art. space station. exterior docking facade middle segment for a west-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -48
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.dock.facade.west.end:
+    prompt: Top-down pixel art. space station. exterior docking facade end segment for a west-facing dock run. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -48
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.floor.grime.1:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.grime.2:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.grime.3:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.grime.4:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.grime.5:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.grime.6:
+    prompt: Top-down translucent grime decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.18
+  overlay.floor.wear.1:
+    prompt: Top-down worn floor decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.24
+  overlay.floor.wear.2:
+    prompt: Top-down worn floor decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.24
+  overlay.floor.wear.3:
+    prompt: Top-down worn floor decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.24
+  overlay.floor.wear.4:
+    prompt: Top-down worn floor decal for sci-fi station floor. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.24
+  overlay.wall.exterior.1:
+    prompt: Top-down exterior wall pipe/cable overlay sprite for station hull. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.wall.exterior.2:
+    prompt: Top-down exterior wall pipe/cable overlay sprite for station hull. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.wall.exterior.3:
+    prompt: Top-down exterior wall pipe/cable overlay sprite for station hull. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.wall.exterior.corner.1:
+    prompt: Top-down exterior wall corner pipe/cable overlay sprite for station hull. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1
+  overlay.wall.exterior.end.1:
+    prompt: Top-down exterior wall endcap pipe/cable overlay sprite for station hull. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: -16
+    offsetY: -16
+    blendMode: normal
+    alpha: 1

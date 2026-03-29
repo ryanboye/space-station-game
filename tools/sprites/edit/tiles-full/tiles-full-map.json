@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "profile": "tiles-full",
+  "scale": 1,
+  "sheetPath": "tiles-full-edit.png",
+  "sheetWidth": 976,
+  "sheetHeight": 328,
+  "cellSize": 64,
+  "spaceCellSize": 256,
+  "entries": [
+    {
+      "key": "tile.space",
+      "x": 0,
+      "y": 0,
+      "w": 256,
+      "h": 256
+    },
+    {
+      "key": "tile.floor",
+      "x": 264,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall",
+      "x": 336,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.solo",
+      "x": 408,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.end",
+      "x": 480,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.straight",
+      "x": 552,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.corner",
+      "x": 624,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.tee",
+      "x": 696,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.wall.cross",
+      "x": 768,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.dock",
+      "x": 840,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.cafeteria",
+      "x": 912,
+      "y": 0,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.reactor",
+      "x": 0,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.security",
+      "x": 72,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door",
+      "x": 144,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door.horizontal",
+      "x": 216,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "key": "tile.door.vertical",
+      "x": 288,
+      "y": 264,
+      "w": 64,
+      "h": 64
+    }
+  ]
+}

@@ -7887,8 +7887,13 @@ export function tryPlaceModule(
   originTile: number,
   rotation: ModuleRotation = 0
 ): { ok: boolean; reason?: string } {
-  if (!isWalkable(state.tiles[originTile])) return { ok: false, reason: 'target not walkable' };
   const module = normalizeModuleType(moduleType);
+  const requiresWallMount = module === ModuleType.WallLight;
+  if (requiresWallMount) {
+    if (state.tiles[originTile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+  } else if (!isWalkable(state.tiles[originTile])) {
+    return { ok: false, reason: 'target not walkable' };
+  }
   if (module === ModuleType.None) return { ok: false, reason: 'cannot place none' };
   if (!isModuleUnlocked(state, module)) return { ok: false, reason: 'module locked by progression' };
   const def = MODULE_DEFINITIONS[module];
@@ -7897,10 +7902,17 @@ export function tryPlaceModule(
   const footprint = moduleFootprint(module, appliedRotation);
   const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
   if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
+  if (module === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
+    return { ok: false, reason: 'wall light requires top wall mount' };
+  }
 
   const roomAtOrigin = state.rooms[originTile];
   for (const tile of tiles) {
-    if (!isWalkable(state.tiles[tile])) return { ok: false, reason: 'footprint blocked' };
+    if (requiresWallMount) {
+      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+    } else if (!isWalkable(state.tiles[tile])) {
+      return { ok: false, reason: 'footprint blocked' };
+    }
     if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
     if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) {
       return { ok: false, reason: 'invalid room for module' };
@@ -7921,6 +7933,24 @@ export function tryPlaceModule(
   });
   syncModuleOccupancy(state);
   return { ok: true };
+}
+
+export function resolveWallLightFacing(
+  state: StationState,
+  tileIndex: number
+): 'north' | 'east' | 'south' | 'west' | null {
+  const p = fromIndex(tileIndex, state.width);
+  if (state.tiles[tileIndex] !== TileType.Wall) return null;
+  const belowY = p.y + 1;
+  const aboveY = p.y - 1;
+  if (!inBounds(p.x, belowY, state.width, state.height)) return null;
+  const below = toIndex(p.x, belowY, state.width);
+  if (!isWalkable(state.tiles[below])) return null;
+  if (inBounds(p.x, aboveY, state.width, state.height)) {
+    const above = toIndex(p.x, aboveY, state.width);
+    if (isWalkable(state.tiles[above])) return null;
+  }
+  return 'south';
 }
 
 export function removeModuleAtTile(state: StationState, tileIndex: number): boolean {

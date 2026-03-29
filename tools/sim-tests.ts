@@ -410,6 +410,17 @@ function testBedFootprintRotation(): void {
   assertCondition(rotatedInstance!.width === 1 && rotatedInstance!.height === 2, 'Rotated bed should be 1x2 footprint.');
 }
 
+function testWallLightRequiresAdjacentWall(): void {
+  const state = createInitialState({ seed: 30035 });
+  buildHabitat(state);
+
+  const invalid = tryPlaceModule(state, ModuleType.WallLight, toIndex(20, 20, state.width), 0);
+  const valid = tryPlaceModule(state, ModuleType.WallLight, toIndex(5, 4, state.width), 0);
+
+  assertCondition(!invalid.ok, 'Wall light should fail when not mounted on a top wall tile.');
+  assertCondition(valid.ok, 'Wall light should place on a top wall tile above walkable interior.');
+}
+
 function testFoodChainEndToEnd(): void {
   const state = createInitialState({ seed: 3004 });
   buildHabitat(state);
@@ -2054,6 +2065,7 @@ function run(): void {
   testAutonomousRoomsNoStaff();
   testCafeteriaMissingServingStation();
   testBedFootprintRotation();
+  testWallLightRequiresAdjacentWall();
   testFoodChainEndToEnd();
   testServingStarvationQueue();
   testMaterialsChainEndToEnd();

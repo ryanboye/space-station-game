@@ -73,7 +73,14 @@ function main() {
   const keysArg = keys.join(',');
   runStep('generate', 'generate-nanobanana.mjs', ['--profile', args.profile, '--overwrite', '--keys', keysArg, ...specArg]);
   runStep('process', 'postprocess-raw.mjs', ['--profile', args.profile, '--overwrite']);
-  runStep('pack', 'pack-atlas.mjs', ['--profile', args.profile, ...(args.activate ? ['--activate'] : []), ...specArg]);
+  runStep('pack', 'pack-atlas.mjs', [
+    '--profile',
+    args.profile,
+    '--source',
+    'processed',
+    ...(args.activate ? ['--activate'] : []),
+    ...specArg
+  ]);
   runStep('validate', 'validate-atlas.mjs', ['--profile', args.profile]);
 
   console.log(`Retry complete. profile=${args.profile}, keys=${keys.join(',')}${args.activate ? ', activated=true' : ''}`);
