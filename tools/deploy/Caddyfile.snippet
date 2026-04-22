@@ -9,6 +9,11 @@
 # take precedence.
 
 handle_path /spacegame/* {
+	# Must match SPACEGAME_WEBROOT in the systemd service (or its override
+	# drop-in). If the service deploys to /home/claudebot/www/spacegame,
+	# this line must be `root * /home/claudebot/www/spacegame`. Mismatch
+	# = Caddy serves a stale/empty dir while builds succeed — hard to
+	# diagnose. Keep the two in lockstep.
 	root * /var/www/spacegame
 	encode zstd gzip
 	try_files {path} /index.html
