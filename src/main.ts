@@ -2969,10 +2969,11 @@ window.__harnessLoadSave = (json: string) => {
       console.error('[harness] __harnessLoadSave: parse failed', parsed.error);
       return;
     }
+    // hydrateStateFromSave returns {state, warnings} and throws on unrecoverable errors.
+    // The outer try/catch handles the throw case.
     const hydrated = hydrateStateFromSave(parsed.save);
-    if (!hydrated.ok) {
-      console.error('[harness] __harnessLoadSave: hydrate failed', hydrated.error);
-      return;
+    if (hydrated.warnings.length) {
+      console.warn('[harness] __harnessLoadSave warnings:', hydrated.warnings);
     }
     Object.assign(state, hydrated.state);
     console.log('[harness] state loaded from JSON');
