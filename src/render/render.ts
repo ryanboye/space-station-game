@@ -1830,9 +1830,3 @@ export function renderWorld(
     ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));
   }
 }
-
-export function loadColor(loadPct: number): string {
-  if (loadPct < 75) return '#6edb8f';
-  if (loadPct < 95) return '#ffcf6e';
-  return '#ff7676';
-}
