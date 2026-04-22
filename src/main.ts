@@ -134,7 +134,7 @@ app.innerHTML = `
       <small id="module-phase-note" class="legend-build">
         Readiness checks use size + required modules + door + pressure + path. Rooms are autonomous once ready.
       </small>
-      <small id="unlock-status" class="legend-build">Progression: Tier 0 | Tier 1: air >= 60, meals >= 18</small>
+      <small id="unlock-status" class="legend-build">Progression: Tier 0 | Tier 1: first visitor arrives</small>
     </details>
 
     <details class="section mini-collapse">
@@ -330,7 +330,7 @@ app.innerHTML = `
       <div class="progression-section">
         <div class="section-title">Next Tier Unlocks</div>
         <small id="progress-modal-next-tier-name">Tier 1 - Settled Ring</small>
-        <small id="progress-modal-next-criteria">Unlock Requirement: air >= 60 and meals >= 18</small>
+        <small id="progress-modal-next-criteria">Unlock Requirement: first visitor arrives</small>
         <small id="progress-modal-next-buildings">New Buildings: Lounge, Market</small>
         <small id="progress-modal-next-needs">New Citizen Needs: social need now matters via lounge access</small>
         <small id="progress-modal-next-visitor-needs">New Visitor/Ship Needs: lounge and market demand appears in manifests</small>

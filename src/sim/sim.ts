@@ -367,7 +367,7 @@ function unlockTierProgressText(state: StationState): string {
   if (!ENABLE_UNLOCKS_V1) return 'Progression disabled';
   if (state.unlocks.tier >= 3) return 'All tiers unlocked';
   if (state.unlocks.tier === 0) {
-    return `Tier 1: air >= ${UNLOCK_CRITERIA.tier1.minAirQuality}, meals >= ${UNLOCK_CRITERIA.tier1.minMealStock}`;
+    return 'Tier 1: first visitor arrives';
   }
   if (state.unlocks.tier === 1) {
     return `Tier 2: net >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)}/min, jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
@@ -6971,7 +6971,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       stationRating: STATION_RATING_START,
       stationRatingTrendPerMin: 0,
       unlockTier: 0,
-      unlockProgressText: 'Tier 1: air >= 60, meals >= 18',
+      unlockProgressText: 'Tier 1: first visitor arrives',
       rawFoodStock: 40,
       mealStock: 20,
       kitchenRawBuffer: 0,

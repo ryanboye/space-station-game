@@ -1693,10 +1693,8 @@ function testUnlockTier1TriggersAfterStability(): void {
   state.metrics.airQuality = 82;
   state.metrics.mealStock = 40;
   state.metrics.airBlockedWarningActive = false;
-  // Predicate-driven T1 advance gates on first-visitor-arrives
-  // (archetypesServedLifetime >= 1, derived from usageTotals.archetypes-
-  // EverSeen in the metrics pass). Old air+mealStock+cafeteria criteria
-  // kept as environmental setup but are no longer the actual trigger.
+  // T1 predicate is first-visitor-arrives; air+mealStock+cafeteria above
+  // are legacy environmental setup, not the trigger.
   state.usageTotals.archetypesEverSeen = {
     diner: true,
     shopper: false,
