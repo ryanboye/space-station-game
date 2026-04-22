@@ -48,7 +48,7 @@ import {
   setTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
-} from './sim/sim';
+} from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
 import {
   type CardinalDirection,
