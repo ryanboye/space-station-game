@@ -89,6 +89,65 @@ app.innerHTML = `
     <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
   </div>
+  <div id="toolbar" aria-label="Build tools">
+    <div class="tool-row">
+      <span class="tool-row-label">Build</span>
+      <button class="tool-btn" data-tool-tile="floor" title="Floor (1)"><span class="tool-key">1</span>Floor</button>
+      <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
+      <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
+      <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
+      <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
+      <span class="tool-row-sep"></span>
+      <span class="tool-row-label">Zone</span>
+      <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
+      <button class="tool-btn" data-tool-zone="restricted" title="Paint Restricted zone (9)"><span class="tool-key">9</span>Restricted</button>
+      <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
+      <span class="tool-row-sep"></span>
+      <button class="tool-btn" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
+      <button class="tool-btn" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
+    </div>
+    <div class="tool-row" data-tool-section="rooms">
+      <span class="tool-row-label">Rooms</span>
+      <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
+      <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
+      <button class="tool-btn" data-tool-room="hydroponics" title="Build Hydroponics (F)"><span class="tool-key">F</span>Hydroponics</button>
+      <button class="tool-btn" data-tool-room="kitchen" title="Build Kitchen (I)"><span class="tool-key">I</span>Kitchen</button>
+      <button class="tool-btn" data-tool-room="cafeteria" title="Build Cafeteria (C)"><span class="tool-key">C</span>Cafeteria</button>
+      <button class="tool-btn" data-tool-room="life-support" title="Build Life Support (L)"><span class="tool-key">L</span>Life Support</button>
+      <button class="tool-btn" data-tool-room="reactor" title="Build Reactor (R)"><span class="tool-key">R</span>Reactor</button>
+      <button class="tool-btn" data-tool-room="lounge" title="Build Lounge (U)"><span class="tool-key">U</span>Lounge</button>
+      <button class="tool-btn" data-tool-room="market" title="Build Market (K)"><span class="tool-key">K</span>Market</button>
+      <button class="tool-btn" data-tool-room="workshop" title="Build Workshop (W)"><span class="tool-key">W</span>Workshop</button>
+      <button class="tool-btn" data-tool-room="storage" title="Build Storage (B)"><span class="tool-key">B</span>Storage</button>
+      <button class="tool-btn" data-tool-room="logistics-stock" title="Build Logistics Stock (N)"><span class="tool-key">N</span>Logistics</button>
+      <button class="tool-btn" data-tool-room="security" title="Build Security (S)"><span class="tool-key">S</span>Security</button>
+      <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
+      <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
+      <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
+    </div>
+    <div class="tool-row" data-tool-section="modules">
+      <span class="tool-row-label">Modules</span>
+      <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
+      <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
+      <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
+      <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
+      <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
+      <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
+      <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
+      <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
+      <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
+      <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
+      <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
+      <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
+      <button class="tool-btn" data-tool-module="intake-pallet" title="Place Intake Pallet (,)"><span class="tool-key">,</span>Intake</button>
+      <button class="tool-btn" data-tool-module="storage-rack" title="Place Storage Rack (.)"><span class="tool-key">.</span>Rack</button>
+      <button class="tool-btn" data-tool-module="terminal" title="Place Security Terminal (M)"><span class="tool-key">M</span>Terminal</button>
+      <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
+      <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
+      <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
+      <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
+    </div>
+  </div>
   <div id="game-wrap">
     <div id="game-stage">
       <canvas id="game"></canvas>
@@ -1145,8 +1204,150 @@ if (state.unlocks.tier <= 2) {
   const buildLegend = document.querySelector('.legend-grid')?.closest('details');
   if (buildLegend) buildLegend.open = true;
 }
+// Build toolbar — clickable surface for the ~30 hotkey-driven tools.
+// Each button carries a data-tool-{kind}="{value}" attribute; the
+// wire-up below maps that to the same selectRoomTool / selectModuleTool
+// calls the keyboard handler uses. Hotkey behavior is unchanged —
+// toolbar is additive, not replacing.
+const TOOLBAR_TILE_MAP: Record<string, TileType> = {
+  floor: TileType.Floor,
+  wall: TileType.Wall,
+  dock: TileType.Dock,
+  door: TileType.Door,
+  erase: TileType.Space,
+};
+const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
+  public: ZoneType.Public,
+  restricted: ZoneType.Restricted,
+};
+const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
+  cafeteria: RoomType.Cafeteria,
+  kitchen: RoomType.Kitchen,
+  workshop: RoomType.Workshop,
+  clinic: RoomType.Clinic,
+  brig: RoomType.Brig,
+  'rec-hall': RoomType.RecHall,
+  reactor: RoomType.Reactor,
+  security: RoomType.Security,
+  dorm: RoomType.Dorm,
+  hygiene: RoomType.Hygiene,
+  hydroponics: RoomType.Hydroponics,
+  'life-support': RoomType.LifeSupport,
+  lounge: RoomType.Lounge,
+  market: RoomType.Market,
+  'logistics-stock': RoomType.LogisticsStock,
+  storage: RoomType.Storage,
+};
+const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
+  bed: ModuleType.Bed,
+  table: ModuleType.Table,
+  'serving-station': ModuleType.ServingStation,
+  stove: ModuleType.Stove,
+  'grow-station': ModuleType.GrowStation,
+  shower: ModuleType.Shower,
+  sink: ModuleType.Sink,
+  'wall-light': ModuleType.WallLight,
+  couch: ModuleType.Couch,
+  'game-station': ModuleType.GameStation,
+  'market-stall': ModuleType.MarketStall,
+  workbench: ModuleType.Workbench,
+  'intake-pallet': ModuleType.IntakePallet,
+  'storage-rack': ModuleType.StorageRack,
+  terminal: ModuleType.Terminal,
+  'cell-console': ModuleType.CellConsole,
+  'rec-unit': ModuleType.RecUnit,
+  'med-bed': ModuleType.MedBed,
+  clear: ModuleType.None,
+};
+function wireToolbar(): void {
+  document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tileKey = btn.dataset.toolTile;
+      const zoneKey = btn.dataset.toolZone;
+      const roomKey = btn.dataset.toolRoom;
+      const moduleKey = btn.dataset.toolModule;
+      const rotateKey = btn.dataset.toolRotate;
+      const deselectKey = btn.dataset.toolDeselect;
+      if (tileKey) {
+        const tile = TOOLBAR_TILE_MAP[tileKey];
+        if (tile !== undefined) {
+          currentTool = { kind: 'tile', tile };
+          toolLockMessage = '';
+        }
+      } else if (zoneKey) {
+        const zone = TOOLBAR_ZONE_MAP[zoneKey];
+        if (zone !== undefined) {
+          currentTool = { kind: 'zone', zone };
+          toolLockMessage = '';
+        }
+      } else if (roomKey) {
+        const room = TOOLBAR_ROOM_MAP[roomKey];
+        if (room !== undefined) selectRoomTool(room);
+      } else if (moduleKey) {
+        const module = TOOLBAR_MODULE_MAP[moduleKey];
+        if (module !== undefined) selectModuleTool(module);
+      } else if (btn.dataset.toolClearroom) {
+        // Hotkey '0' equivalent — clears the paint onto a tile (room: None).
+        selectRoomTool(RoomType.None);
+      } else if (rotateKey) {
+        // Toggle between 0 and 90, mirrors [ / ] hotkey behavior.
+        state.controls.moduleRotation = state.controls.moduleRotation === 0 ? 90 : 0;
+      } else if (deselectKey) {
+        currentTool = { kind: 'none' };
+        toolLockMessage = '';
+      }
+    });
+  });
+}
+function refreshToolbar(): void {
+  const toolKind = currentTool.kind;
+  document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
+    const tileKey = btn.dataset.toolTile;
+    const zoneKey = btn.dataset.toolZone;
+    const roomKey = btn.dataset.toolRoom;
+    const moduleKey = btn.dataset.toolModule;
+    let active = false;
+    let locked = false;
+    let lockedTitle = '';
+    if (tileKey && toolKind === 'tile') {
+      active = TOOLBAR_TILE_MAP[tileKey] === currentTool.tile;
+    } else if (zoneKey && toolKind === 'zone') {
+      const z = TOOLBAR_ZONE_MAP[zoneKey];
+      active = z !== undefined && z === currentTool.zone;
+    } else if (btn.dataset.toolClearroom) {
+      active = toolKind === 'room' && currentTool.room === RoomType.None;
+    } else if (roomKey) {
+      const room = TOOLBAR_ROOM_MAP[roomKey];
+      if (room !== undefined) {
+        if (toolKind === 'room' && currentTool.room === room) active = true;
+        if (!isRoomUnlocked(state, room)) {
+          locked = true;
+          lockedTitle = roomLockedMessage(room);
+        }
+      }
+    } else if (moduleKey) {
+      const module = TOOLBAR_MODULE_MAP[moduleKey];
+      if (module !== undefined && module !== ModuleType.None) {
+        if (toolKind === 'module' && currentTool.module === module) active = true;
+        if (!isModuleUnlocked(state, module)) {
+          locked = true;
+          lockedTitle = moduleLockedMessage(module);
+        }
+      } else if (module === ModuleType.None) {
+        // Clear-module button is always available + active when currentTool is module:None
+        if (toolKind === 'module' && currentTool.module === ModuleType.None) active = true;
+      }
+    }
+    btn.classList.toggle('active', active);
+    btn.classList.toggle('locked', locked);
+    if (locked && lockedTitle) btn.title = lockedTitle;
+  });
+}
+wireToolbar();
+
 refreshUnlockLegendAndHotkeys();
 refreshProgressionModal();
+refreshToolbar();
 
 function maxScrollX(): number {
   return Math.max(0, gameWrap.scrollWidth - gameWrap.clientWidth);
@@ -2710,6 +2911,10 @@ function frame(now: number): void {
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
     : 'Force Fallback: OFF';
+  // Toolbar reflects active tool (any kind) and locked state (room+module
+  // per current unlock tier). Called every frame — ~40 DOM attribute
+  // toggles, cheap.
+  refreshToolbar();
   if (state.controls.spriteMode !== 'sprites') {
     spriteStatusEl.textContent = 'Sprites inactive (fallback rendering)';
     spriteStatusEl.style.color = '#8ea2bd';
