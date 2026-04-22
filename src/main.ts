@@ -56,6 +56,7 @@ import {
   type CrewPrioritySystem,
   type SpaceLane,
   type ShipSize,
+  type ShipType,
   type HousingPolicy,
   ModuleType,
   RoomType,
@@ -2369,35 +2370,20 @@ for (const system of prioritySystems) {
   });
 }
 
-dockModalTouristCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipType(state, selectedDockId, 'tourist', dockModalTouristCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalTraderCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipType(state, selectedDockId, 'trader', dockModalTraderCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalIndustrialCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipType(state, selectedDockId, 'industrial', dockModalIndustrialCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalMilitaryCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipType(state, selectedDockId, 'military', dockModalMilitaryCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalColonistCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipType(state, selectedDockId, 'colonist', dockModalColonistCheckbox.checked);
-  refreshDockModal();
-});
+const DOCK_MODAL_SHIP_TYPE_CHECKBOXES: Array<[HTMLInputElement, ShipType]> = [
+  [dockModalTouristCheckbox, 'tourist'],
+  [dockModalTraderCheckbox, 'trader'],
+  [dockModalIndustrialCheckbox, 'industrial'],
+  [dockModalMilitaryCheckbox, 'military'],
+  [dockModalColonistCheckbox, 'colonist']
+];
+for (const [checkbox, shipType] of DOCK_MODAL_SHIP_TYPE_CHECKBOXES) {
+  checkbox.addEventListener('change', () => {
+    if (selectedDockId === null) return;
+    setDockAllowedShipType(state, selectedDockId, shipType, checkbox.checked);
+    refreshDockModal();
+  });
+}
 
 dockModalPurposeSelect.addEventListener('change', () => {
   if (selectedDockId === null) return;
@@ -2420,23 +2406,18 @@ dockModalFacingSelect.addEventListener('change', () => {
   refreshDockModal();
 });
 
-dockModalSmallCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipSize(state, selectedDockId, 'small', dockModalSmallCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalMediumCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipSize(state, selectedDockId, 'medium', dockModalMediumCheckbox.checked);
-  refreshDockModal();
-});
-
-dockModalLargeCheckbox.addEventListener('change', () => {
-  if (selectedDockId === null) return;
-  setDockAllowedShipSize(state, selectedDockId, 'large', dockModalLargeCheckbox.checked);
-  refreshDockModal();
-});
+const DOCK_MODAL_SHIP_SIZE_CHECKBOXES: Array<[HTMLInputElement, ShipSize]> = [
+  [dockModalSmallCheckbox, 'small'],
+  [dockModalMediumCheckbox, 'medium'],
+  [dockModalLargeCheckbox, 'large']
+];
+for (const [checkbox, shipSize] of DOCK_MODAL_SHIP_SIZE_CHECKBOXES) {
+  checkbox.addEventListener('change', () => {
+    if (selectedDockId === null) return;
+    setDockAllowedShipSize(state, selectedDockId, shipSize, checkbox.checked);
+    refreshDockModal();
+  });
+}
 
 roomModalHousingSelect.addEventListener('change', () => {
   if (selectedRoomTile === null) return;
