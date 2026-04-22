@@ -77,8 +77,8 @@ function buildHabitat(state: StationState): void {
   state.dockQueue.length = 0;
   state.docks.length = 0;
   state.unlocks.tier = 3;
-  state.unlocks.unlockedIds = ['tier1_stability', 'tier2_logistics', 'tier3_civic'];
-  state.unlocks.unlockedAtSec = { tier1_stability: 0, tier2_logistics: 0, tier3_civic: 0 };
+  state.unlocks.unlockedIds = ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics'];
+  state.unlocks.unlockedAtSec = { tier1_sustenance: 0, tier2_commerce: 0, tier3_logistics: 0 };
 
   const x0 = 4;
   const y0 = 4;
@@ -106,16 +106,16 @@ function setUnlockTierForTest(state: StationState, tier: UnlockTier): void {
   state.unlocks.tier = tier;
   state.unlocks.unlockedIds =
     tier >= 3
-      ? ['tier1_stability', 'tier2_logistics', 'tier3_civic']
+      ? ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics']
       : tier >= 2
-        ? ['tier1_stability', 'tier2_logistics']
+        ? ['tier1_sustenance', 'tier2_commerce']
         : tier >= 1
-          ? ['tier1_stability']
+          ? ['tier1_sustenance']
           : [];
   state.unlocks.unlockedAtSec = {
-    ...(tier >= 1 ? { tier1_stability: 0 } : {}),
-    ...(tier >= 2 ? { tier2_logistics: 0 } : {}),
-    ...(tier >= 3 ? { tier3_civic: 0 } : {})
+    ...(tier >= 1 ? { tier1_sustenance: 0 } : {}),
+    ...(tier >= 2 ? { tier2_commerce: 0 } : {}),
+    ...(tier >= 3 ? { tier3_logistics: 0 } : {})
   };
 }
 

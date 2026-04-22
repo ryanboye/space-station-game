@@ -473,6 +473,16 @@ export interface Metrics {
   shipDemandLoungePct: number;
   visitorsByArchetype: Record<VisitorArchetype, number>;
   mealsServedTotal: number;
+  /** Lifetime-monotonic counters used by unlocks.ts tier triggers.
+   *  Stable names so harness scenario assertions + render progress UI
+   *  can both target them without schema drift. Increment sites land in
+   *  a follow-up PR; values are 0 at v2 introduction. */
+  creditsEarnedLifetime: number;
+  archetypesServedLifetime: number;
+  tradeCyclesCompletedLifetime: number;
+  incidentsResolvedLifetime: number;
+  actorsTreatedLifetime: number;
+  residentsConvertedLifetime: number;
   cafeteriaNonNodeSeatedCount: number;
   maxBlockedTicksObserved: number;
   pendingJobs: number;
@@ -825,20 +835,44 @@ export interface MapExpansionState {
   purchasesMade: number;
 }
 
-export type UnlockTier = 0 | 1 | 2 | 3;
-export type UnlockId = 'tier1_stability' | 'tier2_logistics' | 'tier3_civic';
+export type UnlockTier = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type UnlockId =
+  | 'tier1_sustenance'
+  | 'tier2_commerce'
+  | 'tier3_logistics'
+  | 'tier4_governance'
+  | 'tier5_health'
+  | 'tier6_specialization';
+
+/** Trigger for advancing to this tier. Predicates are monotonic over
+ *  lifetime counters — they never go false once true — so tier advance
+ *  is stable, save/load survives them, and harness assertions can be
+ *  simple `counter >= threshold` checks. `progress` returns 0..1 for UI
+ *  (triggerProgress map) ahead of full unlock. */
+export interface UnlockTrigger {
+  predicate: (metrics: Metrics) => boolean;
+  progress: (metrics: Metrics) => number;
+  /** Player-facing tooltip copy for the locked-state UI. */
+  tooltip: string;
+}
 
 export interface UnlockDefinition {
   id: UnlockId;
   tier: UnlockTier;
   name: string;
   description: string;
+  trigger: UnlockTrigger;
 }
 
 export interface UnlockState {
   tier: UnlockTier;
   unlockedIds: UnlockId[];
   unlockedAtSec: Partial<Record<UnlockId, number>>;
+  /** 0..1 per tier — reflects progress toward that tier's trigger
+   *  threshold. Current tier is 1.0, future tiers update each sim tick,
+   *  unreached past tiers stay at whatever they were when their
+   *  predicate first returned true (typically 1.0). */
+  triggerProgress: Partial<Record<UnlockTier, number>>;
 }
 
 export interface Effects {

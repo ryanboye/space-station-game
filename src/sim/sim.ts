@@ -386,8 +386,9 @@ function updateUnlockProgress(state: StationState): void {
     state.ops.lifeSupportActive > 0
   ) {
     state.unlocks.tier = 1;
-    unlockIdSet.add('tier1_stability');
-    state.unlocks.unlockedAtSec.tier1_stability = state.now;
+    unlockIdSet.add('tier1_sustenance');
+    state.unlocks.unlockedAtSec.tier1_sustenance = state.now;
+    state.unlocks.triggerProgress[1] = 1;
   }
   if (
     state.unlocks.tier < 2 &&
@@ -395,8 +396,9 @@ function updateUnlockProgress(state: StationState): void {
     state.metrics.completedJobs >= UNLOCK_CRITERIA.tier2.minCompletedJobs
   ) {
     state.unlocks.tier = 2;
-    unlockIdSet.add('tier2_logistics');
-    state.unlocks.unlockedAtSec.tier2_logistics = state.now;
+    unlockIdSet.add('tier2_commerce');
+    state.unlocks.unlockedAtSec.tier2_commerce = state.now;
+    state.unlocks.triggerProgress[2] = 1;
   }
   if (
     state.unlocks.tier < 3 &&
@@ -405,8 +407,9 @@ function updateUnlockProgress(state: StationState): void {
     state.metrics.incidentsResolved >= UNLOCK_CRITERIA.tier3.minResolvedIncidents
   ) {
     state.unlocks.tier = 3;
-    unlockIdSet.add('tier3_civic');
-    state.unlocks.unlockedAtSec.tier3_civic = state.now;
+    unlockIdSet.add('tier3_logistics');
+    state.unlocks.unlockedAtSec.tier3_logistics = state.now;
+    state.unlocks.triggerProgress[3] = 1;
   }
   state.unlocks.unlockedIds = [...unlockIdSet];
   state.metrics.unlockTier = state.unlocks.tier;
@@ -6997,6 +7000,12 @@ export function createInitialState(options?: { seed?: number }): StationState {
         rusher: 0
       },
       mealsServedTotal: 0,
+      creditsEarnedLifetime: 0,
+      archetypesServedLifetime: 0,
+      tradeCyclesCompletedLifetime: 0,
+      incidentsResolvedLifetime: 0,
+      actorsTreatedLifetime: 0,
+      residentsConvertedLifetime: 0,
       cafeteriaNonNodeSeatedCount: 0,
       maxBlockedTicksObserved: 0,
       pendingJobs: 0,
