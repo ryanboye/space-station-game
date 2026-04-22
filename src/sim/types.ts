@@ -973,6 +973,11 @@ export interface StationState {
     payrollPaid: number;
     tradeGoodsSold: number;
     marketStockouts: number;
+    // Lifetime-monotonic set of archetypes the station has ever
+    // received, for unlocks.ts T2 trigger. A `Record<_,boolean>` beats
+    // a `Set<_>` here because it serializes into the save file without
+    // a migration helper.
+    archetypesEverSeen: Record<VisitorArchetype, boolean>;
     shipsByType: Record<ShipType, number>;
     visitorLeisureEntries: {
       cafeteria: number;

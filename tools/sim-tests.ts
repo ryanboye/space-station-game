@@ -1693,6 +1693,10 @@ function testUnlockTier1TriggersAfterStability(): void {
   state.metrics.airQuality = 82;
   state.metrics.mealStock = 40;
   state.metrics.airBlockedWarningActive = false;
+  // Predicate-driven T1 advance gates on mealsServedTotal (canonical
+  // lifetime counter). Old air+mealStock+cafeteria criteria kept as
+  // environmental setup but are no longer the actual trigger.
+  state.metrics.mealsServedTotal = 1;
   state.controls.paused = true;
   tick(state, 0);
   assertCondition(getUnlockTier(state) >= 1, 'Tier 1 should unlock after stability criteria are met.');
@@ -1729,6 +1733,17 @@ function testUnlockTier2RequiresLogisticsSignal(): void {
       lastProgressAt: state.now
     });
   }
+  // Predicate-driven T2 advance gates on lifetime counters
+  // (creditsEarnedLifetime + archetypesServedLifetime). Populate both
+  // past their thresholds; the jobs-signal above is retained as
+  // context but no longer the direct trigger.
+  state.metrics.creditsEarnedLifetime = 600;
+  state.usageTotals.archetypesEverSeen = {
+    diner: true,
+    shopper: true,
+    lounger: true,
+    rusher: false,
+  };
   tick(state, 0);
   assertCondition(getUnlockTier(state) >= 2, 'Tier 2 should unlock after net credits and logistics jobs thresholds are met.');
 }
