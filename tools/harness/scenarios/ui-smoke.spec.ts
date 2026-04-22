@@ -15,6 +15,9 @@
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const RUN_DIR = process.env.HARNESS_RUN_DIR || '/tmp/harness-runs/latest/ui-smoke';
 
