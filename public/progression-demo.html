@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0b0d12" />
+  <title>progression primitives — demo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: manipulation; }
+    html, body {
+      background: #0b0d12;
+      color: #e8e8ea;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100dvh;
+    }
+    input, select, textarea { font-size: 16px; touch-action: auto; }
+
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 4rem;
+    }
+    h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: -0.01em; }
+    h1 .accent { color: #c9a84c; }
+    header {
+      padding-bottom: 0.75rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid #1f2530;
+    }
+    .guide {
+      font-size: 12.5px;
+      color: #9aa3b2;
+      margin-bottom: 1.5rem;
+      background: #13171f;
+      border: 1px solid #1f2530;
+      border-radius: 8px;
+      padding: 0.8rem 1rem;
+      line-height: 1.55;
+    }
+    .guide code {
+      background: #0b0d12;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      color: #c9a84c;
+    }
+    .panel {
+      background: #13171f;
+      border: 1px solid #1f2530;
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .panel h2 {
+      font-size: 0.75rem;
+      font-family: ui-monospace, 'Menlo', monospace;
+      color: #c9a84c;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid #1f2530;
+    }
+    .row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      margin-bottom: 0.75rem;
+    }
+    .row:last-child { margin-bottom: 0; }
+    .tier-label {
+      font-family: ui-monospace, monospace;
+      font-size: 10px;
+      color: #6b7380;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      min-width: 72px;
+      padding-top: 0.4rem;
+    }
+    .tool-btn {
+      min-width: 90px;
+      padding: 0.55rem 0.85rem;
+      background: #1f2530;
+      color: #e8e8ea;
+      border: 1px solid #2a3340;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      font-weight: 500;
+      text-align: center;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .tool-btn:hover:not([data-progression-state='locked']):not([data-progression-state='coming-next-tier']) {
+      background: #2a3340;
+      border-color: #3a4650;
+    }
+    .tool-btn:focus-visible {
+      outline: 2px solid #c9a84c;
+      outline-offset: 2px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 0.6rem;
+      margin-top: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .controls button {
+      padding: 0.55rem 1rem;
+      background: #c9a84c;
+      color: #0b0d12;
+      border: 0;
+      border-radius: 6px;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .controls button:hover { background: #e8c560; }
+    .controls button.ghost {
+      background: transparent;
+      color: #9aa3b2;
+      border: 1px solid #2a3340;
+    }
+    .controls button.ghost:hover { background: #1f2530; color: #e8e8ea; }
+
+    .meta {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      color: #6b7380;
+      margin-top: 1rem;
+    }
+    a { color: #7dbfff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+  <link rel="stylesheet" href="/src/render/progression/styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1><span class="accent">progression</span> primitives — demo</h1>
+    </header>
+
+    <div class="guide">
+      Phase-1 render primitives behind a mock 4-tier map. All three button
+      states are rendered; locked buttons show the tooltip on click;
+      "advance tier" fires the unlock flash overlay.
+      Strict isolation from the game's hot path — this page loads only
+      <code>src/render/progression/*</code>. Spec:
+      <a href="https://bmo.ryanboye.com/spacegame-plan/progression.html" target="_blank">progression.html</a>.
+    </div>
+
+    <section class="panel">
+      <h2>live toolbar (mock)</h2>
+      <div id="tier-groups"></div>
+      <div class="controls">
+        <button id="advance">advance tier →</button>
+        <button id="reset" class="ghost">reset to T0</button>
+      </div>
+      <div class="meta" id="state-display"></div>
+    </section>
+
+    <section class="panel">
+      <h2>state reference</h2>
+      <div class="row">
+        <span class="tier-label">available</span>
+        <button class="tool-btn" data-progression-state="available">Dorm</button>
+      </div>
+      <div class="row">
+        <span class="tier-label">locked</span>
+        <button class="tool-btn" data-progression-state="locked">Workshop</button>
+      </div>
+      <div class="row">
+        <span class="tier-label">coming next</span>
+        <button class="tool-btn" data-progression-state="coming-next-tier">Market</button>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    // Demo driver — imports the real primitives from src/render/progression/.
+    // Vite dev server resolves the ESM paths; in production these become
+    // part of the main bundle (tree-shakeable since nothing in the game
+    // imports index.ts yet).
+    import {
+      computeToolButtonState,
+      showTooltip,
+      hideTooltip,
+      findOwningTier,
+      showTierTransition,
+    } from '/src/render/progression/index.ts';
+
+    // Mock tier map — four tiers, 3-4 items per tier. Matches the SHAPE
+    // tinyclaw's unlocks.ts v2 emits; content is illustrative.
+    const TIERS = [
+      {
+        tier: 0,
+        label: 'You\'ve arrived.',
+        triggerDescription: 'Built a dorm with 1 bed and hired 1 crew.',
+        unlocks: ['dorm', 'bed'],
+      },
+      {
+        tier: 1,
+        label: 'Keep them alive.',
+        triggerDescription: 'Serve one visitor a meal.',
+        unlocks: ['kitchen', 'hydroponics', 'cafeteria'],
+      },
+      {
+        tier: 2,
+        label: 'Run a business.',
+        triggerDescription: 'Earn 500 credits and serve 3 distinct archetypes.',
+        unlocks: ['lounge', 'market', 'tax_slider'],
+      },
+      {
+        tier: 3,
+        label: 'Logistics.',
+        triggerDescription: 'Complete one workshop → market trade cycle.',
+        unlocks: ['workshop', 'storage', 'logistics_stock'],
+      },
+    ];
+
+    const ITEM_NAMES = {
+      dorm: 'Dorm',
+      bed: 'Bed',
+      kitchen: 'Kitchen',
+      hydroponics: 'Hydroponics',
+      cafeteria: 'Cafeteria',
+      lounge: 'Lounge',
+      market: 'Market',
+      tax_slider: 'Tax Slider',
+      workshop: 'Workshop',
+      storage: 'Storage',
+      logistics_stock: 'Logistics Stock',
+    };
+
+    // Mock progression state — starts at T0 with the tier-0 items pre-
+    // unlocked (matches the "station starts running" intent).
+    let state = {
+      currentTier: 0,
+      unlockedIds: new Set(TIERS[0].unlocks),
+    };
+
+    function renderTierGroups() {
+      const root = document.getElementById('tier-groups');
+      root.innerHTML = '';
+      for (const tier of TIERS) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const label = document.createElement('span');
+        label.className = 'tier-label';
+        label.textContent = `T${tier.tier}`;
+        row.appendChild(label);
+        for (const id of tier.unlocks) {
+          const btn = document.createElement('button');
+          btn.className = 'tool-btn';
+          btn.dataset.toolId = id;
+          btn.dataset.toolName = ITEM_NAMES[id] ?? id;
+          btn.textContent = ITEM_NAMES[id] ?? id;
+          btn.dataset.progressionState = computeToolButtonState(id, TIERS, state);
+          row.appendChild(btn);
+        }
+        root.appendChild(row);
+      }
+      renderStateDisplay();
+    }
+
+    function renderStateDisplay() {
+      const el = document.getElementById('state-display');
+      el.textContent = `current: T${state.currentTier} • unlocked: ${[...state.unlockedIds].join(', ')}`;
+    }
+
+    // Delegated click — locked = tooltip, others = (demo only) toast-like
+    // log.
+    document.getElementById('tier-groups').addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-progression-state]');
+      if (!btn) return;
+      const stateName = btn.getAttribute('data-progression-state');
+      if (stateName === 'locked' || stateName === 'coming-next-tier') {
+        ev.preventDefault();
+        const tier = findOwningTier(btn.dataset.toolId, TIERS);
+        if (tier) {
+          showTooltip(btn, {
+            itemId: btn.dataset.toolId,
+            itemName: btn.dataset.toolName,
+            tier: tier.tier,
+            triggerDescription: tier.triggerDescription,
+          });
+        }
+        return;
+      }
+      hideTooltip();
+      // Visual feedback for available buttons — brief flash
+      btn.style.background = '#c9a84c';
+      setTimeout(() => { btn.style.background = ''; }, 150);
+    });
+
+    // "Advance tier" — fires the flash + updates state.
+    document.getElementById('advance').addEventListener('click', async () => {
+      const nextTier = state.currentTier + 1;
+      const nextDef = TIERS.find((t) => t.tier === nextTier);
+      if (!nextDef) {
+        // Reached the top of the demo map.
+        return;
+      }
+      const newUnlocks = nextDef.unlocks;
+      state = {
+        currentTier: nextTier,
+        unlockedIds: new Set([...state.unlockedIds, ...newUnlocks]),
+      };
+      renderTierGroups();
+      await showTierTransition({
+        fromTier: nextTier - 1,
+        toTier: nextTier,
+        unlockedNames: newUnlocks.map((id) => ITEM_NAMES[id] ?? id),
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', () => {
+      state = {
+        currentTier: 0,
+        unlockedIds: new Set(TIERS[0].unlocks),
+      };
+      renderTierGroups();
+      hideTooltip();
+    });
+
+    renderTierGroups();
+  </script>
+</body>
+</html>

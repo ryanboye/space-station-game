@@ -1,0 +1,226 @@
+/* Progression UI — locked-state + coming-next-tier button variants, tooltip,
+ * tier-transition flash overlay.
+ *
+ * Meant to be loaded once from main.ts (or wherever the app bootstraps
+ * styles). All selectors are prefixed `.progression-*` or target a
+ * data-progression-state attribute so they can't accidentally collide with
+ * existing UI.
+ *
+ * Consumer pattern (phase 2 wires this in):
+ *
+ *   <button class="tool-btn" data-progression-state="available">…</button>
+ *   <button class="tool-btn" data-progression-state="locked">…</button>
+ *   <button class="tool-btn" data-progression-state="coming-next-tier">…</button>
+ *
+ * The base `.tool-btn` class is whatever the game's build picker already
+ * uses — we only add variants keyed off data-progression-state.
+ */
+
+/* -------------------------------------------------------------------------
+ * Button state variants
+ * ----------------------------------------------------------------------- */
+
+/* Locked — 40% opacity, padlock icon, no pointer events (clicks handled
+ * by a delegated listener that shows the tooltip instead of triggering
+ * the underlying tool). */
+[data-progression-state='locked'] {
+  opacity: 0.4;
+  position: relative;
+  cursor: help;
+  filter: grayscale(0.4);
+}
+
+[data-progression-state='locked']::after {
+  content: '🔒';
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  font-size: 0.75em;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Coming-next-tier — faint slow pulse + "next up" pip. Signals to the
+ * player "this is the one that unlocks when you finish the current trigger."
+ * Pulse is SUBTLE — no attention hijack, just a peripheral-vision cue. */
+[data-progression-state='coming-next-tier'] {
+  position: relative;
+  opacity: 0.7;
+  filter: saturate(0.7);
+  animation: progression-pulse 2.4s ease-in-out infinite;
+}
+
+[data-progression-state='coming-next-tier']::before {
+  content: 'next';
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  background: #c9a84c;
+  color: #0b0d12;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  box-shadow: 0 0 0 1.5px #0b0d12;  /* Ring so the pip pops against any button bg */
+  pointer-events: none;
+  font-family: ui-monospace, 'Menlo', monospace;
+}
+
+@keyframes progression-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 0.9; }
+}
+
+/* Available state is the default — no overrides, consumer's base styles win. */
+
+/* -------------------------------------------------------------------------
+ * Tooltip
+ * ----------------------------------------------------------------------- */
+
+.progression-tooltip {
+  position: fixed;
+  z-index: 9999;
+  min-width: 220px;
+  max-width: 280px;
+  background: #10141b;
+  border: 1px solid #2a3340;
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  color: #e8e8ea;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  pointer-events: none;  /* Never eat clicks directed at the trigger */
+  display: none;
+}
+
+.progression-tooltip__header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-bottom: 0.25rem;
+}
+
+.progression-tooltip__lock {
+  font-size: 12px;
+}
+
+.progression-tooltip__tier {
+  font-family: ui-monospace, 'Menlo', monospace;
+  font-size: 10px;
+  color: #c9a84c;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.progression-tooltip__name {
+  font-weight: 600;
+  color: #e8e8ea;
+  margin-bottom: 0.25rem;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.progression-tooltip__trigger {
+  color: #9aa3b2;
+  font-size: 12px;
+}
+
+/* -------------------------------------------------------------------------
+ * Tier-transition flash
+ * ----------------------------------------------------------------------- */
+
+.progression-flash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at center,
+    rgba(201, 168, 76, 0.18) 0%,
+    rgba(11, 13, 18, 0) 70%
+  );
+  opacity: 0;
+  transition: opacity 0.35s ease-out;
+}
+
+.progression-flash--visible {
+  opacity: 1;
+  pointer-events: auto;  /* let click dismiss */
+}
+
+.progression-flash__card {
+  background: #10141b;
+  border: 1px solid #c9a84c;
+  border-radius: 14px;
+  padding: 1.4rem 1.8rem 1.1rem;
+  min-width: 260px;
+  max-width: 420px;
+  box-shadow:
+    0 0 0 4px rgba(201, 168, 76, 0.1),
+    0 12px 40px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  color: #e8e8ea;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+  animation: progression-flash-rise 0.4s ease-out both;
+}
+
+@keyframes progression-flash-rise {
+  from { transform: translateY(12px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);    opacity: 1; }
+}
+
+.progression-flash__meta {
+  font-family: ui-monospace, 'Menlo', monospace;
+  font-size: 10px;
+  color: #c9a84c;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.progression-flash__title {
+  font-size: 15px;
+  color: #8a92a0;
+  margin-bottom: 0.55rem;
+}
+
+.progression-flash__items {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.7rem 0;
+}
+
+.progression-flash__items li {
+  font-size: 18px;
+  font-weight: 600;
+  color: #e8e8ea;
+  letter-spacing: -0.01em;
+  padding: 0.15rem 0;
+}
+
+.progression-flash__hint {
+  font-size: 11px;
+  color: #6b7380;
+  font-family: ui-monospace, 'Menlo', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 0.3rem;
+}
+
+@media (max-width: 520px) {
+  .progression-flash__card {
+    min-width: 0;
+    width: calc(100% - 2.5rem);
+    padding: 1.1rem 1.2rem 0.9rem;
+  }
+  .progression-flash__items li { font-size: 16px; }
+}
