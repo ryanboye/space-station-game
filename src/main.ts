@@ -777,31 +777,31 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     systems: ['Baseline staffing, food chain, and pressure management']
   },
   1: {
-    name: 'Settled Ring',
-    theme: 'Leisure and commerce come online once station basics are stable.',
+    name: 'Sustenance',
+    theme: 'First visitor arrives — build the food chain that keeps them alive.',
+    buildings: ['Hydroponics', 'Kitchen', 'Cafeteria'],
+    citizenNeeds: ['Hunger becomes binding once visitors start consuming'],
+    visitorNeeds: ['Cafeteria service gates visitor satisfaction + rating'],
+    ships: ['No new family'],
+    systems: ['Food pipeline: hydroponics → kitchen → cafeteria serving']
+  },
+  2: {
+    name: 'Commerce',
+    theme: 'Leisure and commerce come online once visitors flow reliably.',
     buildings: ['Lounge', 'Market'],
     citizenNeeds: ['Social comfort matters more with lounge access'],
     visitorNeeds: ['Lounge + market demand starts appearing in ship service checks'],
     ships: ['No new family (tourist/trader mix shifts toward leisure + shopping)'],
     systems: ['Leisure and market throughput begin impacting rating and credits']
   },
-  2: {
-    name: 'Trade Spine',
-    theme: 'Scale logistics and production into a sustained economy.',
-    buildings: ['Workshop', 'Logistics Stock', 'Storage'],
-    citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
-    visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
-    ships: ['Industrial'],
-    systems: ['Trade-good pipeline and logistics job volume become progression-critical']
-  },
   3: {
-    name: 'Trade Spine',
-    theme: 'Scale logistics and production into a sustained economy.',
+    name: 'Logistics',
+    theme: 'Scale production + item flow into a sustained trade economy.',
     buildings: ['Workshop', 'Logistics Stock', 'Storage'],
     citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
     visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
     ships: ['Industrial'],
-    systems: ['Trade-good pipeline and logistics job volume become progression-critical']
+    systems: ['Trade-good pipeline: workshop → storage → market stall sale']
   },
   // Placeholder T4..T6 presentation entries — content copy mirrors the
   // progression strawman. Final wording lands with awfml's milestone
