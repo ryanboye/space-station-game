@@ -1,26 +1,127 @@
-import { ModuleType, RoomType, type UnlockDefinition, type UnlockState, type UnlockTier } from '../types';
+import type { Metrics } from '../types';
+import {
+  ModuleType,
+  RoomType,
+  type UnlockDefinition,
+  type UnlockState,
+  type UnlockTier,
+} from '../types';
+
+// --- Tier triggers ---------------------------------------------------------
+//
+// Every trigger is a monotonic predicate over lifetime counters on
+// `Metrics` — the predicate never goes false once true, so tier advance
+// survives save/load, and harness scenarios can assert progress with
+// simple `counter >= threshold` checks.
+//
+// Thresholds below are placeholders matching the progression strawman
+// (T1 = serve one meal, T2 = 500 credits + 3 archetypes, ...). awfml's
+// milestone framework will dial these in when it lands; swapping a
+// number here is ~20 LoC of delta at that point.
+
+function progressTo(current: number, threshold: number): number {
+  if (threshold <= 0) return current > 0 ? 1 : 0;
+  return Math.max(0, Math.min(1, current / threshold));
+}
+
+const TIER1_MEAL_THRESHOLD = 1;
+const TIER2_CREDIT_THRESHOLD = 500;
+const TIER2_ARCHETYPE_THRESHOLD = 3;
+const TIER3_TRADE_CYCLES_THRESHOLD = 1;
+const TIER4_INCIDENTS_RESOLVED_THRESHOLD = 1;
+const TIER5_ACTORS_TREATED_THRESHOLD = 1;
+const TIER5_RESIDENTS_CONVERTED_THRESHOLD = 1;
+const TIER6_ELIGIBLE_TIER = 5;
 
 export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
-    id: 'tier1_stability',
+    id: 'tier1_sustenance',
     tier: 1,
-    name: 'Stability',
-    description: 'Unlock lounge and market after base life support and meal service are stable.'
+    name: 'Sustenance',
+    description: 'Feed a visitor. Unlocks hygiene, hydroponics, kitchen, cafeteria.',
+    trigger: {
+      predicate: (m: Metrics) => m.mealsServedTotal >= TIER1_MEAL_THRESHOLD,
+      progress: (m: Metrics) => progressTo(m.mealsServedTotal, TIER1_MEAL_THRESHOLD),
+      tooltip: 'Serve a meal to your first visitor.',
+    },
   },
   {
-    id: 'tier2_logistics',
+    id: 'tier2_commerce',
     tier: 2,
-    name: 'Logistics',
-    description: 'Unlock logistics stock, storage, and workshop once economy and hauling stabilize.'
+    name: 'Commerce',
+    description: 'Balance revenue vs visitor diversity. Unlocks lounge + market + tax slider.',
+    trigger: {
+      predicate: (m: Metrics) =>
+        m.creditsEarnedLifetime >= TIER2_CREDIT_THRESHOLD &&
+        m.archetypesServedLifetime >= TIER2_ARCHETYPE_THRESHOLD,
+      progress: (m: Metrics) =>
+        Math.min(
+          progressTo(m.creditsEarnedLifetime, TIER2_CREDIT_THRESHOLD),
+          progressTo(m.archetypesServedLifetime, TIER2_ARCHETYPE_THRESHOLD),
+        ),
+      tooltip: 'Earn 500 credits and serve three different visitor types.',
+    },
   },
   {
-    id: 'tier3_civic',
+    id: 'tier3_logistics',
     tier: 3,
-    name: 'Civic',
-    description: 'Unlock advanced civic/security loop and specialized ships.'
-  }
+    name: 'Logistics',
+    description: 'Item-chain loop. Unlocks workshop, storage, intake pallets, industrial ships.',
+    trigger: {
+      predicate: (m: Metrics) => m.tradeCyclesCompletedLifetime >= TIER3_TRADE_CYCLES_THRESHOLD,
+      progress: (m: Metrics) =>
+        progressTo(m.tradeCyclesCompletedLifetime, TIER3_TRADE_CYCLES_THRESHOLD),
+      tooltip: 'Produce a trade good at a workshop and sell it at the market.',
+    },
+  },
+  {
+    id: 'tier4_governance',
+    tier: 4,
+    name: 'Governance',
+    description: 'Safety + rules. Unlocks security, brig, rec hall, restricted zones.',
+    trigger: {
+      predicate: (m: Metrics) => m.incidentsResolvedLifetime >= TIER4_INCIDENTS_RESOLVED_THRESHOLD,
+      progress: (m: Metrics) =>
+        progressTo(m.incidentsResolvedLifetime, TIER4_INCIDENTS_RESOLVED_THRESHOLD),
+      tooltip: 'Resolve one dispatched incident.',
+    },
+  },
+  {
+    id: 'tier5_health',
+    tier: 5,
+    name: 'Health',
+    description: 'Injury + mortality + residents. Unlocks clinic, morgue, resident housing.',
+    trigger: {
+      predicate: (m: Metrics) =>
+        m.actorsTreatedLifetime >= TIER5_ACTORS_TREATED_THRESHOLD &&
+        m.residentsConvertedLifetime >= TIER5_RESIDENTS_CONVERTED_THRESHOLD,
+      progress: (m: Metrics) =>
+        Math.min(
+          progressTo(m.actorsTreatedLifetime, TIER5_ACTORS_TREATED_THRESHOLD),
+          progressTo(m.residentsConvertedLifetime, TIER5_RESIDENTS_CONVERTED_THRESHOLD),
+        ),
+      tooltip: 'Treat a patient at a clinic and convert a visitor to a resident.',
+    },
+  },
+  {
+    id: 'tier6_specialization',
+    tier: 6,
+    name: 'Specialization',
+    description: 'Station identity. Unlocks station-type selector + military/colonist ships.',
+    trigger: {
+      // T6 is the "tutorial complete" marker — gated on reaching T5.
+      predicate: (_m: Metrics) => false,
+      progress: (_m: Metrics) => 0,
+      tooltip: 'Complete the health-loop tier to unlock station specialization.',
+    },
+  },
 ];
 
+// Tier assignments preserved from the v1 3-tier scaffold. The new 6-tier
+// SHAPE lives in UNLOCK_DEFINITIONS + triggers above, but actual content
+// gating stays at the shipped values so the current game / test suite
+// keeps passing. awfml's milestone framework + a content-reshuffle PR
+// will dial these in against the strawman's aspirational assignments.
 export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.None]: 0,
   [RoomType.Cafeteria]: 0,
@@ -38,7 +139,7 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.Lounge]: 1,
   [RoomType.Market]: 1,
   [RoomType.LogisticsStock]: 2,
-  [RoomType.Storage]: 2
+  [RoomType.Storage]: 2,
 };
 
 export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
@@ -60,14 +161,15 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Sink]: 0,
   [ModuleType.MarketStall]: 1,
   [ModuleType.IntakePallet]: 2,
-  [ModuleType.StorageRack]: 2
+  [ModuleType.StorageRack]: 2,
 };
 
 export function createInitialUnlockState(): UnlockState {
   return {
     tier: 0,
     unlockedIds: [],
-    unlockedAtSec: {}
+    unlockedAtSec: {},
+    triggerProgress: { 0: 1 },
   };
 }
 
@@ -78,3 +180,7 @@ export function isRoomUnlockedAtTier(room: RoomType, tier: UnlockTier): boolean 
 export function isModuleUnlockedAtTier(module: ModuleType, tier: UnlockTier): boolean {
   return tier >= MODULE_UNLOCK_TIER[module];
 }
+
+/** Shared threshold constant so `T6_ELIGIBLE_TIER` isn't a bare number
+ *  at the render + sim-tick call sites. */
+export { TIER6_ELIGIBLE_TIER };

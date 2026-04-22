@@ -744,7 +744,7 @@ type TierPresentation = {
   systems: string[];
 };
 
-const TIER_ORDER: UnlockTier[] = [0, 1, 2, 3];
+const TIER_ORDER: UnlockTier[] = [0, 1, 2, 3, 4, 5, 6];
 const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
   0: {
     name: 'Founding Outpost',
@@ -774,13 +774,43 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     systems: ['Trade-good pipeline and logistics job volume become progression-critical']
   },
   3: {
+    name: 'Trade Spine',
+    theme: 'Scale logistics and production into a sustained economy.',
+    buildings: ['Workshop', 'Logistics Stock', 'Storage'],
+    citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
+    visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
+    ships: ['Industrial'],
+    systems: ['Trade-good pipeline and logistics job volume become progression-critical']
+  },
+  // Placeholder T4..T6 presentation entries — content copy mirrors the
+  // progression strawman. Final wording lands with awfml's milestone
+  // framework.
+  4: {
     name: 'Orbital Nexus',
-    theme: 'Run a dense civic hub with safety, recovery, and resident retention.',
-    buildings: ['Security', 'Clinic', 'Brig', 'Rec Hall'],
-    citizenNeeds: ['Safety, medical recovery, and richer social sinks affect retention'],
-    visitorNeeds: ['Security and housing-readiness demands are now evaluated'],
+    theme: 'Safety, containment, and resident-facing amenities.',
+    buildings: ['Security', 'Brig', 'Rec Hall'],
+    citizenNeeds: ['Safety and richer social sinks affect retention'],
+    visitorNeeds: ['Security and housing-readiness demands begin evaluating'],
+    ships: ['No new family'],
+    systems: ['Incident containment + zone controls']
+  },
+  5: {
+    name: 'Medical Wing',
+    theme: 'Mortality, treatment, and resident conversion.',
+    buildings: ['Clinic', 'Morgue'],
+    citizenNeeds: ['Medical recovery + private resident housing'],
+    visitorNeeds: ['Treatment-eligible visitors + body logistics'],
+    ships: ['No new family'],
+    systems: ['Health state machine + morgue overflow']
+  },
+  6: {
+    name: 'Specialization',
+    theme: 'Station identity + advanced ship families.',
+    buildings: ['Station-identity selector'],
+    citizenNeeds: ['Identity-driven satisfaction modifiers'],
+    visitorNeeds: ['Specialized traffic matching station type'],
     ships: ['Military', 'Colonist'],
-    systems: ['Incident containment, medical recovery, and housing conversion loops']
+    systems: ['End of tutorial — full sandbox unlocked']
   }
 };
 

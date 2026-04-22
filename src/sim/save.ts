@@ -31,12 +31,29 @@ const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', '
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
-const UNLOCK_IDS: UnlockId[] = ['tier1_stability', 'tier2_logistics', 'tier3_civic'];
+const UNLOCK_IDS: UnlockId[] = [
+  'tier1_sustenance',
+  'tier2_commerce',
+  'tier3_logistics',
+  'tier4_governance',
+  'tier5_health',
+  'tier6_specialization',
+];
 const UNLOCK_IDS_BY_TIER: Record<UnlockTier, UnlockId[]> = {
   0: [],
-  1: ['tier1_stability'],
-  2: ['tier1_stability', 'tier2_logistics'],
-  3: ['tier1_stability', 'tier2_logistics', 'tier3_civic']
+  1: ['tier1_sustenance'],
+  2: ['tier1_sustenance', 'tier2_commerce'],
+  3: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics'],
+  4: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics', 'tier4_governance'],
+  5: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics', 'tier4_governance', 'tier5_health'],
+  6: [
+    'tier1_sustenance',
+    'tier2_commerce',
+    'tier3_logistics',
+    'tier4_governance',
+    'tier5_health',
+    'tier6_specialization',
+  ],
 };
 
 export interface StationSnapshotV1 {
@@ -659,10 +676,15 @@ export function hydrateStateFromSave(
   next.zones = snapshot.zones.slice();
   next.rooms = snapshot.rooms.slice();
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
+  const hydratedTier = normalizeUnlockTier(snapshot.unlocks.tier);
   next.unlocks = {
-    tier: normalizeUnlockTier(snapshot.unlocks.tier),
+    tier: hydratedTier,
     unlockedIds: UNLOCK_IDS.filter((id) => snapshot.unlocks.unlockedIds.includes(id)),
-    unlockedAtSec: { ...snapshot.unlocks.unlockedAtSec }
+    unlockedAtSec: { ...snapshot.unlocks.unlockedAtSec },
+    // v2 migration: existing saves pre-date triggerProgress. Mark the
+    // reached tier as 1.0 so the tier-advance pass doesn't re-check it;
+    // future tiers stay at 0 and re-accumulate from the live metrics.
+    triggerProgress: { [hydratedTier]: 1 },
   };
 
   next.moduleInstances = [];
