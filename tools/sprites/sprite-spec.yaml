@@ -616,3 +616,21 @@ sprites:
     offsetY: -16
     blendMode: normal
     alpha: 1
+  icon.tier1_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 1 unlock icon for "Sustenance" — a single bowl or plate with steam rising. Simple iconographic composition, centered, warm food tones (amber/orange). Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "food / meal".
+    rotation: 0
+  icon.tier2_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 2 unlock icon for "Commerce" — a single coin with a credit glyph, or a small balance scale. Simple iconographic composition, centered, gold/brass tones. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "trade / credits".
+    rotation: 0
+  icon.tier3_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 3 unlock icon for "Logistics" — a stack of three cargo crates, or a single crate with movement lines. Simple iconographic composition, centered, industrial brown/steel palette. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "cargo / logistics".
+    rotation: 0
+  icon.tier4_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 4 unlock icon for "Civic and Security" — a single security shield with a badge star centered. Simple iconographic composition, centered, steel-blue with gold highlights. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "security / law".
+    rotation: 0
+  icon.tier5_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 5 unlock icon for "Health and Residents" — a red medical cross or a heart symbol, clean and clinical. Simple iconographic composition, centered, medical-white with red cross. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "medical / health".
+    rotation: 0
+  icon.tier6_unlock:
+    prompt: Top-down pixel art icon. Style of rimworld. Tier 6 unlock icon for "Specialization" — a stylized star cluster or radiant crown symbol representing mastery / endgame. Simple iconographic composition, centered, bright gold with subtle outer glow. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "mastery / end-of-tutorial".
+    rotation: 0

@@ -387,7 +387,12 @@ function seamScore(rgba, width, height) {
 }
 
 function isTileKey(key) {
-  return key.startsWith('tile.');
+  // Tiles AND icon badges both ship with opaque full-bleed frames by
+  // design (tiles for seamless floor/wall tiling; icons for
+  // gold-on-dark unlock-toast badges). Both bypass the non-tile
+  // border-opacity thresholds that apply to transparent-bg sprites
+  // like modules/agents/overlays.
+  return key.startsWith('tile.') || key.startsWith('icon.');
 }
 
 const MODULE_FOOTPRINT_BY_KEY = {

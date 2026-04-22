@@ -103,5 +103,11 @@
   "agent.crew.3",
   "agent.crew.4",
   "agent.crew.5",
-  "agent.crew.6"
+  "agent.crew.6",
+  "icon.tier1_unlock",
+  "icon.tier2_unlock",
+  "icon.tier3_unlock",
+  "icon.tier4_unlock",
+  "icon.tier5_unlock",
+  "icon.tier6_unlock"
 ]
