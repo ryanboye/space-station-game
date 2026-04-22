@@ -129,8 +129,14 @@ export function createEmptySpriteAtlas(version = 'missing'): SpriteAtlas {
   return emptyAtlas(version);
 }
 
-export async function loadSpriteAtlas(): Promise<SpriteAtlas> {
-  const manifestUrl = new URL('assets/sprites/atlas.json', document.baseURI).toString();
+export type SpritePipeline = 'nano-banana' | 'pixellab';
+
+function manifestPathForPipeline(pipeline: SpritePipeline): string {
+  return pipeline === 'pixellab' ? 'assets/sprites/atlas-pixellab.json' : 'assets/sprites/atlas.json';
+}
+
+export async function loadSpriteAtlas(pipeline: SpritePipeline = 'nano-banana'): Promise<SpriteAtlas> {
+  const manifestUrl = new URL(manifestPathForPipeline(pipeline), document.baseURI).toString();
   try {
     const response = await fetch(manifestUrl, { cache: 'no-cache' });
     if (!response.ok) return emptyAtlas('missing');

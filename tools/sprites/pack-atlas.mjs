@@ -87,7 +87,7 @@ const OVERLAY_FOOTPRINT_BY_KEY = {
 };
 
 function parseArgs(argv) {
-  const args = { profile: 'v1', activate: false, spec: '', source: 'auto' };
+  const args = { profile: 'v1', activate: false, spec: '', source: 'auto', variant: 'nano-banana' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--profile' && argv[i + 1]) {
@@ -107,8 +107,22 @@ function parseArgs(argv) {
       args.source = argv[i + 1];
       i += 1;
     }
+    if (arg === '--variant' && argv[i + 1]) {
+      args.variant = argv[i + 1];
+      i += 1;
+    }
   }
   return args;
+}
+
+function variantProcessedDir(variant) {
+  if (variant === 'pixellab') return path.resolve(TOOLS_DIR, 'out', 'processed-pixellab');
+  return PROCESSED_DIR;
+}
+
+function variantAtlasNames(variant) {
+  if (variant === 'pixellab') return { png: 'atlas-pixellab.png', json: 'atlas-pixellab.json' };
+  return { png: 'atlas.png', json: 'atlas.json' };
 }
 
 function keyToFileName(key) {
@@ -129,10 +143,10 @@ async function fileExists(filePath) {
   }
 }
 
-async function resolveInputPath(key, sourceMode) {
+async function resolveInputPath(key, sourceMode, processedDir) {
   const fileName = keyToFileName(key);
   const curatedPath = path.resolve(CURATED_DIR, fileName);
-  const processedPath = path.resolve(PROCESSED_DIR, fileName);
+  const processedPath = path.resolve(processedDir, fileName);
   if (sourceMode === 'curated') {
     return (await fileExists(curatedPath)) ? curatedPath : null;
   }
@@ -158,7 +172,17 @@ function isTileKey(key) {
   return key.startsWith('tile.');
 }
 
-function atlasPathsForProfile(profile) {
+function atlasPathsForProfile(profile, variant = 'nano-banana') {
+  // Pixellab variant always produces atlas-pixellab.{png,json} regardless
+  // of profile (used at runtime via the spritePipeline toggle), so all
+  // pixellab profiles write to the same pair of files.
+  if (variant === 'pixellab') {
+    return {
+      pngPath: path.resolve(OUTPUT_DIR, 'atlas-pixellab.png'),
+      jsonPath: path.resolve(OUTPUT_DIR, 'atlas-pixellab.json'),
+      imagePath: 'atlas-pixellab.png'
+    };
+  }
   const suffix = profile === 'v1' ? '' : `-${profile}`;
   return {
     pngPath: path.resolve(OUTPUT_DIR, `atlas${suffix}.png`),
@@ -318,9 +342,10 @@ async function main() {
     throw new Error('SPRITE_ATLAS_MAX_WIDTH must be a positive number.');
   }
 
+  const processedDir = variantProcessedDir(args.variant);
   const available = [];
   for (const key of requiredKeys) {
-    const inputPath = await resolveInputPath(key, args.source);
+    const inputPath = await resolveInputPath(key, args.source, processedDir);
     if (!inputPath) continue;
     const layout = frameLayoutForKey(key, baseCellSize, spaceCellSize);
     const specFrameWidth = getSpriteFrameWidth(spriteSpec, key);
@@ -338,7 +363,7 @@ async function main() {
   }
 
   if (available.length <= 0) {
-    throw new Error(`No processed sprite PNGs found in ${PROCESSED_DIR}. Run sprites:process first.`);
+    throw new Error(`No processed sprite PNGs found in ${processedDir}. Run sprites:process first.`);
   }
 
   const placements = [];
@@ -408,7 +433,7 @@ async function main() {
   }
 
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
-  const atlasPaths = atlasPathsForProfile(args.profile);
+  const atlasPaths = atlasPathsForProfile(args.profile, args.variant);
 
   await sharp({
     create: {

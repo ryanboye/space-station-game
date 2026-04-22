@@ -893,6 +893,7 @@ export interface Controls {
   showInventoryOverlay: boolean;
   spriteMode: 'fallback' | 'sprites';
   showSpriteFallback: boolean;
+  spritePipeline: 'nano-banana' | 'pixellab';
   taxRate: number;
   dockPlacementFacing: SpaceLane;
   moduleRotation: ModuleRotation;
