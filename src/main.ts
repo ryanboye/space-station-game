@@ -1,6 +1,12 @@
 import './styles.css';
 import { renderWorld } from './render/render';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
+import {
+  applyLegendStates,
+  attachLegendTooltipHandlers,
+  maybeFireTierFlash,
+} from './render/progression/wire';
+import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_CRITERIA } from './sim/balance';
 import {
@@ -863,13 +869,53 @@ function selectModuleTool(module: ModuleType): void {
   toolLockMessage = '';
 }
 
+/**
+ * Extract the display name from a legend item's rendered text. Parses
+ * things like "Cafeteria (C) C" → "Cafeteria". Avoids adding a separate
+ * RoomType→name map when the HTML already has the strings.
+ */
+function roomDisplayName(room: RoomType): string {
+  const entry = roomLegendByType.get(room);
+  if (!entry) return room;
+  const text = entry.textContent?.trim() ?? room;
+  const parenIdx = text.indexOf('(');
+  return (parenIdx > 0 ? text.slice(0, parenIdx) : text).trim();
+}
+
+/**
+ * Install locked/coming-next click handlers on the legend once. Called at
+ * startup AFTER roomLegendByType is populated. Idempotent — wire.ts tracks
+ * `_progAttached` per element.
+ */
+function installLegendProgressionHandlers(): void {
+  // Tooltip copy source: BMO's PROGRESSION_TOOLTIP_COPY (neighbors
+  // unlocks.ts). Player-facing "Unlocks when you..." voice; keeps
+  // tierRequirementText reserved for the raw-criteria progression modal.
+  attachLegendTooltipHandlers(
+    roomLegendByType,
+    roomDisplayName,
+    (t) => PROGRESSION_TOOLTIP_COPY[t]?.trigger ?? tierRequirementText(t),
+  );
+}
+
+// Previous-tier tracker for flash-on-advance. Initialized to the
+// current tier at startup so the first refresh doesn't spuriously fire.
+let prevUnlockTier: UnlockTier = 0;
+
 function refreshUnlockLegendAndHotkeys(): void {
   const tier = getUnlockTier(state);
   const progressText = getUnlockProgressText(state);
   unlockStatusEl.textContent = `Progression: Tier ${tier} (${TIER_PRESENTATION[tier].name}) | ${progressText}`;
-  for (const [room, entry] of roomLegendByType) {
-    entry.style.display = isRoomUnlocked(state, room) ? '' : 'none';
-  }
+  // Phase-2 progression wiring — replaces the old `display: none` hide
+  // loop. Locked + coming-next-tier items stay VISIBLE with a state
+  // attribute + tooltip-on-click so players learn what unlocks them.
+  applyLegendStates(state, roomLegendByType);
+  prevUnlockTier = maybeFireTierFlash(
+    prevUnlockTier,
+    state,
+    roomDisplayName,
+    (t) => PROGRESSION_TOOLTIP_COPY[t],
+  );
   const unlockedModules = MODULE_HOTKEYS.filter(({ module }) => isModuleUnlocked(state, module))
     .map(({ key, label }) => `${key} ${label}`)
     .join(', ');
@@ -1096,6 +1142,11 @@ function refreshPriorityUi(): void {
   }
 }
 refreshPriorityUi();
+// Initialize prev-tier tracker to current (prevents flash on cold-load /
+// save-restore). Then install the progression click handlers + paint
+// initial states.
+prevUnlockTier = state.unlocks.tier;
+installLegendProgressionHandlers();
 refreshUnlockLegendAndHotkeys();
 refreshProgressionModal();
 

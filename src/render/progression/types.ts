@@ -62,4 +62,10 @@ export interface TierTransitionSpec {
   readonly fromTier: number;
   readonly toTier: number;
   readonly unlockedNames: readonly string[];
+  /** Optional — PROGRESSION_TOOLTIP_COPY[toTier].name. Renders as the
+   *  flash title when set. Falls back to bare tier number. */
+  readonly tierName?: string;
+  /** Optional — PROGRESSION_TOOLTIP_COPY[toTier].theme. Renders as a
+   *  subtitle in the flash card. Skipped if empty. */
+  readonly tierTheme?: string;
 }
