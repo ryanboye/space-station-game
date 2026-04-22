@@ -1,7 +1,7 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-22 15:59Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `00d9a35`.*
+*Last updated: 2026-04-22 16:30Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `a59ac5f`.*
 
 ### Current milestone
 **M1 Unlock Progression v1 + Tutorial Onboarding — shipped.** Six-tier predicate advance live end-to-end. T0→T1 now fires on first-visitor-arrives (was blocked by missing food infra in starter state), quest bar pinned at top of sidebar reads the live `PROGRESSION_TOOLTIP_COPY` + `.progress()` each tick, pre-placed east-hull dock on fresh start.
@@ -33,6 +33,8 @@
 | #20 | `d9fa188` | onboarding — pre-place 2-tile visitor dock on fresh start (east hull) |
 | #21 | `dbc2272` | render/progression — quest bar pinned sidebar strip ("what do I do now") |
 | #22 | `00d9a35` | progression — T0→T1 fires on first-visitor-arrives + 5 stale copy sites swept |
+| #23 | `389042d` | docs — §0 refresh post PRs #17-22 |
+| #24 | `a59ac5f` | chore — sweep legacy UNLOCK_CRITERIA copy in locked-room/module tooltips |
 
 ### Open PRs
 - **#4** `feat(harness): Harness v1.0 — Playwright runner + window hooks + CI advisory` (barnacle).
@@ -44,11 +46,12 @@
 
 ### Backlog (priority-ordered)
 1. **Phase 5 counter wiring** (blocked on Phase 5 producer events): `actorsTreatedLifetime` + `residentsConvertedLifetime` — placeholder wiring useless until treatment + conversion sites exist in `sim.ts`.
-2. **Dead UNLOCK_CRITERIA cleanup** — `tierRequirementText()` + `tierProgressSnapshot()` in `main.ts:945-1000` are legacy fallbacks unreachable via the `PROGRESSION_TOOLTIP_COPY` chain. Delete as a separate hygiene PR. Review-B on #22 flagged but intentionally deferred.
+2. **tierProgressSnapshot() cleanup** — `main.ts:956-1000` still uses `UNLOCK_CRITERIA` for progress-bar math + only handles tiers 0-2. Modal progress bar for T3-T6 is broken. Rewrite to `UNLOCK_DEFINITIONS[n-1].trigger.progress(metrics)` — cleanup follow-up to #24 which only covered `tierRequirementText`.
 3. **Phase 5 / Health + Morgue mechanics reference doc** (BMO's lane, parked by the tutorial pivot).
 4. **Sprite polish** — regen modules/agents where current nano-banana outputs are weakest; consider pixellab rotate for 4/8-direction agent sprites.
 5. **gpt-image-2 / Nano Banana Pro evaluation** — seb has pricing ($0.063/image HD vs $0.015 for Nano Banana Pro vs $0.04 current Imagen-4). Potential atlas rebuild. Sam parked the OpenRouter wire-up for later; revisit when she's ready.
-6. **Tutorial first-playable polish (round 2)** — quest bar + T0 predicate + pre-placed dock shipped. Next round depends on live playtest feedback from awfml.
+6. **Starter food chain (option B)** — pre-activate Reactor + Life Support + pre-place Hydroponics + Kitchen + Cafeteria with modules + hire 1 starter crew in `createInitialState`. Post-PR#22 playtest: visitors arrive + T1 flash fires within 10s, but visitors starve/die ~60s later because no food infra. tinyclaw scoping this fire for fire 7 ship.
+7. **T6 specialization design (open question)** — tier is currently a gated no-op. Strawman: station-type selector + military/colonist ships. Brainstorm posted to Wheat 2026-04-22; pending team response.
 
 ### Risks / open questions
 - Phase 5 (health/death/morgue) scoped but not built. Unlocks v2 has placeholder predicates for T5 that won't fire until Phase 5 lands.
