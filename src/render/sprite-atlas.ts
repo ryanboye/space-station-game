@@ -129,13 +129,19 @@ export function createEmptySpriteAtlas(version = 'missing'): SpriteAtlas {
   return emptyAtlas(version);
 }
 
-export type SpritePipeline = 'nano-banana' | 'pixellab';
+// SpritePipeline is defined in `src/sim/types.ts` so the sim engine
+// stays render-free. Re-exported here for renderer callers that pull
+// types from this module.
+export type { SpritePipeline } from '../sim/types';
+import type { SpritePipeline } from '../sim/types';
 
 function manifestPathForPipeline(pipeline: SpritePipeline): string {
   return pipeline === 'pixellab' ? 'assets/sprites/atlas-pixellab.json' : 'assets/sprites/atlas.json';
 }
 
-export async function loadSpriteAtlas(pipeline: SpritePipeline = 'nano-banana'): Promise<SpriteAtlas> {
+export async function loadSpriteAtlas(
+  pipeline: SpritePipeline = 'nano-banana'
+): Promise<SpriteAtlas> {
   const manifestUrl = new URL(manifestPathForPipeline(pipeline), document.baseURI).toString();
   try {
     const response = await fetch(manifestUrl, { cache: 'no-cache' });

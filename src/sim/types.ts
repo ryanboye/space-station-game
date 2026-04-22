@@ -1,8 +1,12 @@
-import type { SpritePipeline } from '../render/sprite-atlas';
-
 export const GRID_WIDTH = 60;
 export const GRID_HEIGHT = 40;
 export const TILE_SIZE = 32;
+
+// Which offline sprite-generator pipeline produced the atlas currently
+// loaded at runtime. Lives here so `src/sim/` stays a pure engine with
+// no back-reference to `src/render/` (renderer re-exports this type
+// for its own public surface).
+export type SpritePipeline = 'nano-banana' | 'pixellab';
 
 export enum TileType {
   Space = 'space',
