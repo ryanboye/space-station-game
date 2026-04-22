@@ -84,6 +84,7 @@ app.innerHTML = `
     <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
     <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
     <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
+    <button id="toggle-sprite-pipeline" class="topbar-btn">Pipeline: nano-banana</button>
     <span class="topbar-spacer"></span>
     <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
@@ -525,6 +526,7 @@ const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
+const toggleSpritePipelineBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-pipeline')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
@@ -2102,7 +2104,7 @@ window.addEventListener('keydown', (e) => {
     case 'F2':
       state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
       if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-        void loadSpriteAtlas().then((loaded) => {
+        void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
           spriteAtlas = loaded;
         });
       }
@@ -2224,7 +2226,7 @@ toggleInventoryOverlayBtn.addEventListener('click', () => {
 toggleSpritesBtn.addEventListener('click', () => {
   state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
   if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-    void loadSpriteAtlas().then((loaded) => {
+    void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
       spriteAtlas = loaded;
     });
   }
@@ -2232,6 +2234,23 @@ toggleSpritesBtn.addEventListener('click', () => {
 
 toggleSpriteFallbackBtn.addEventListener('click', () => {
   state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
+});
+
+let pipelineLoadInFlight = false;
+toggleSpritePipelineBtn.addEventListener('click', () => {
+  if (pipelineLoadInFlight) return;
+  state.controls.spritePipeline = state.controls.spritePipeline === 'pixellab' ? 'nano-banana' : 'pixellab';
+  // Reload atlas from the new pipeline immediately; sprite mode state
+  // is preserved but the atlas swaps under it. Eager fetch so when the
+  // user toggles sprites on, the new atlas is already warm.
+  pipelineLoadInFlight = true;
+  void loadSpriteAtlas(state.controls.spritePipeline)
+    .then((loaded) => {
+      spriteAtlas = loaded;
+    })
+    .finally(() => {
+      pipelineLoadInFlight = false;
+    });
 });
 
 openSaveModalBtn.addEventListener('click', () => {
@@ -2725,6 +2744,7 @@ function frame(now: number): void {
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
   toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
+  toggleSpritePipelineBtn.textContent = `Pipeline: ${state.controls.spritePipeline}`;
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
     : 'Force Fallback: OFF';
@@ -3006,7 +3026,7 @@ function frame(now: number): void {
 }
 
 async function startGameLoop(): Promise<void> {
-  spriteAtlas = await loadSpriteAtlas();
+  spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
   requestAnimationFrame(frame);
 }
 
