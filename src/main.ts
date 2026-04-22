@@ -842,8 +842,10 @@ type TierProgressSnapshot = {
 let toolLockMessage = '';
 
 function unlockRequirementText(tier: number): string {
-  const copyTier = (tier < 1 ? 1 : tier > 6 ? 6 : tier) as UnlockTier;
-  return `Tier ${copyTier}: ${tierRequirementText(copyTier)}`;
+  // Caller ("X locked until Tier N.") already owns the tier number;
+  // dropping the prefix here avoids "until Tier 1. Tier 1: ..." doubling.
+  const copyTier = Math.max(1, Math.min(6, tier)) as UnlockTier;
+  return tierRequirementText(copyTier);
 }
 
 function friendlyName(value: string): string {
