@@ -74,7 +74,10 @@ const CLASS_PARAMS = {
   room: {
     width: 256,
     height: 256,
-    no_background: false,
+    // Room sprites are scene renders placed OVER floor tiles — the
+    // postprocess treats them as non-tile and enforces transparent
+    // borders. Generate with transparent bg to match.
+    no_background: true,
     outline: 'lineless',
     shading: 'basic shading',
     detail: 'medium detail',

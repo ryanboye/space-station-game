@@ -12,6 +12,7 @@ dist/
 # this key"), and keeping raw history lets us bisect regressions back
 # to the exact generation that shipped.
 tools/sprites/out/processed/
+tools/sprites/out/processed-pixellab/
 
 # Local env files
 .env
