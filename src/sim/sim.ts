@@ -5191,6 +5191,7 @@ function updateVisitorLogic(
         }
         const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
         state.metrics.credits += spend;
+        state.metrics.creditsEarnedLifetime += spend;
         state.usageTotals.creditsMarketGross += spend;
         state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
@@ -5226,6 +5227,7 @@ function updateVisitorLogic(
           if (visitor.servedMeal) {
             const payout = mealExitPayout(state, visitor);
             state.metrics.credits += payout;
+            state.metrics.creditsEarnedLifetime += payout;
             state.usageTotals.creditsMealPayoutGross += payout;
           }
           state.recentExitTimes.push(state.now);
@@ -5607,6 +5609,12 @@ function resolveIncident(
   incident.stage = 'resolved';
   incident.resolvedAt = state.now;
   incident.extendedResolveAt = null;
+  // Lifetime counter — increment at the resolve EVENT (not a scan over
+  // `state.incidents`, which prunes resolved incidents after the
+  // retention window and would make this field non-monotonic). Failed
+  // incidents stay out — `failIncident` below has its own resolvedAt
+  // write but is semantically distinct from "resolved".
+  state.metrics.incidentsResolvedLifetime += 1;
   if (incident.type === 'fight') {
     incident.outcome = options?.fightOutcome ?? (incident.severity > 1.35 ? 'detained' : 'deescalated');
     for (const residentId of incident.residentParticipantIds) {
@@ -6260,6 +6268,7 @@ function applyResidentTaxes(state: StationState): void {
   const collected = taxableResidents * RESIDENT_TAX_PER_HEAD * multiplier;
   if (collected <= 0) return;
   state.metrics.credits += collected;
+  state.metrics.creditsEarnedLifetime += collected;
   state.usageTotals.residentTaxesCollected += collected;
 }
 
@@ -6512,6 +6521,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentsCount = residentsCount;
   state.metrics.incidentsOpen = openIncidents;
   state.metrics.incidentsResolved = resolvedIncidents;
+  // Note: incidentsResolvedLifetime is NOT mirrored here — the
+  // scan-based `resolvedIncidents` drops as state.incidents prunes old
+  // resolved records past INCIDENT_RESOLVED_RETENTION_SEC, breaking
+  // monotonicity. It's incremented at the resolve event in
+  // resolveIncident() instead.
   state.metrics.incidentsFailed = failedIncidents;
   state.metrics.securityDispatches = state.usageTotals.securityDispatches;
   state.metrics.securityResponseAvgSec = avgSecurityResponseSec;
