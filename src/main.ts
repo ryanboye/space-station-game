@@ -44,6 +44,7 @@ import {
   tick,
   tryPlaceModule,
   trySetTile,
+  setTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
 } from './sim/sim';
@@ -473,6 +474,15 @@ if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
 const state = createInitialState();
+
+// T0 onboarding: pre-place a 2-tile visitor dock at east hull
+// (x=35, y=17..18) so ships arrive on a fresh start without the
+// player painting one first. setTile invokes rebuildDockEntities to
+// auto-populate the dock entity.
+for (let dockY = 17; dockY <= 18; dockY++) {
+  setTile(state, toIndex(35, dockY, state.width), TileType.Dock);
+}
+
 let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
 let zoom = 1;
 const MIN_ZOOM = 0.6;
