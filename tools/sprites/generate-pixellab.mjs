@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { PixelLabClient } from '@pixellab-code/pixellab';
+import { PixelLabClient, AuthenticationError } from '@pixellab-code/pixellab';
 import { DEFAULT_SPRITE_SPEC_PATH, getSpritePrompt, loadSpriteSpec, parseKeysArg } from './sprite-spec.mjs';
 
 const THIS_FILE = fileURLToPath(import.meta.url);
@@ -23,7 +23,8 @@ const PROFILE_TO_REQUIRED = {
 // Per-class pixflux param overrides. Pixellab pixflux maxes at 400x400;
 // 256 is the recommended upper band for pixel-art fidelity. Tiles stay
 // full-bleed (no_background=false) so they tile; sprites/icons/agents
-// ride transparent so they composite over tile layers.
+// ride transparent so they composite over tile layers. `view` enum is
+// honored by pixflux more reliably than prompt prose for top-down framing.
 const CLASS_PARAMS = {
   tile: {
     width: 256,
@@ -31,7 +32,8 @@ const CLASS_PARAMS = {
     no_background: false,
     outline: 'lineless',
     shading: 'basic shading',
-    detail: 'medium detail'
+    detail: 'medium detail',
+    view: 'high top-down'
   },
   icon: {
     width: 256,
@@ -39,7 +41,8 @@ const CLASS_PARAMS = {
     no_background: true,
     outline: 'selective outline',
     shading: 'medium shading',
-    detail: 'highly detailed'
+    detail: 'highly detailed',
+    view: 'side'
   },
   module: {
     width: 256,
@@ -47,7 +50,8 @@ const CLASS_PARAMS = {
     no_background: true,
     outline: 'selective outline',
     shading: 'medium shading',
-    detail: 'highly detailed'
+    detail: 'highly detailed',
+    view: 'high top-down'
   },
   agent: {
     width: 128,
@@ -55,7 +59,8 @@ const CLASS_PARAMS = {
     no_background: true,
     outline: 'single color black outline',
     shading: 'medium shading',
-    detail: 'highly detailed'
+    detail: 'highly detailed',
+    view: 'side'
   },
   overlay: {
     width: 256,
@@ -63,7 +68,8 @@ const CLASS_PARAMS = {
     no_background: true,
     outline: 'lineless',
     shading: 'flat shading',
-    detail: 'low detail'
+    detail: 'low detail',
+    view: 'high top-down'
   },
   room: {
     width: 256,
@@ -71,7 +77,8 @@ const CLASS_PARAMS = {
     no_background: false,
     outline: 'lineless',
     shading: 'basic shading',
-    detail: 'medium detail'
+    detail: 'medium detail',
+    view: 'high top-down'
   }
 };
 
@@ -181,7 +188,8 @@ async function generateOne(client, key, prompt, outputPath) {
     noBackground: params.no_background,
     outline: params.outline,
     shading: params.shading,
-    detail: params.detail
+    detail: params.detail,
+    view: params.view
   });
   const img = response?.image;
   if (!img || typeof img.saveToFile !== 'function') {
@@ -192,14 +200,23 @@ async function generateOne(client, key, prompt, outputPath) {
 
 async function runPool(items, concurrency, worker) {
   const queue = items.slice();
+  const state = { aborted: false };
   const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
-    while (queue.length > 0) {
+    while (queue.length > 0 && !state.aborted) {
       const item = queue.shift();
       if (item === undefined) break;
-      await worker(item);
+      try {
+        await worker(item);
+      } catch (err) {
+        // Auth failures at one key will repeat at every key — abort the
+        // pool instead of grinding through the whole profile.
+        if (err instanceof AuthenticationError) state.aborted = true;
+        throw err;
+      }
     }
   });
   await Promise.all(workers);
+  if (state.aborted) throw new AuthenticationError('Pixellab authentication failed — aborted remaining keys.');
 }
 
 async function main() {

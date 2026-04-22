@@ -1,3 +1,5 @@
+import type { SpritePipeline } from '../render/sprite-atlas';
+
 export const GRID_WIDTH = 60;
 export const GRID_HEIGHT = 40;
 export const TILE_SIZE = 32;
@@ -893,7 +895,7 @@ export interface Controls {
   showInventoryOverlay: boolean;
   spriteMode: 'fallback' | 'sprites';
   showSpriteFallback: boolean;
-  spritePipeline: 'nano-banana' | 'pixellab';
+  spritePipeline: SpritePipeline;
   taxRate: number;
   dockPlacementFacing: SpaceLane;
   moduleRotation: ModuleRotation;

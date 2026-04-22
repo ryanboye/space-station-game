@@ -115,15 +115,6 @@ function parseArgs(argv) {
   return args;
 }
 
-function variantProcessedDir(variant) {
-  if (variant === 'pixellab') return path.resolve(TOOLS_DIR, 'out', 'processed-pixellab');
-  return PROCESSED_DIR;
-}
-
-function variantAtlasNames(variant) {
-  if (variant === 'pixellab') return { png: 'atlas-pixellab.png', json: 'atlas-pixellab.json' };
-  return { png: 'atlas.png', json: 'atlas.json' };
-}
 
 function keyToFileName(key) {
   return `${key.replace(/[^a-zA-Z0-9]+/g, '_')}.png`;
@@ -316,6 +307,9 @@ async function main() {
   if (!['auto', 'curated', 'processed'].includes(args.source)) {
     throw new Error(`Unsupported source: ${args.source}. Use one of: auto, curated, processed`);
   }
+  if (args.activate && args.variant === 'pixellab') {
+    throw new Error('`--activate` with `--variant pixellab` would overwrite the primary nano-banana atlas. The pixellab atlas is consumed via the runtime spritePipeline toggle; no activation step needed.');
+  }
 
   const requiredKeys = await readJson(PROFILE_TO_REQUIRED[args.profile]);
   if (!Array.isArray(requiredKeys) || requiredKeys.some((k) => typeof k !== 'string')) {
@@ -342,7 +336,8 @@ async function main() {
     throw new Error('SPRITE_ATLAS_MAX_WIDTH must be a positive number.');
   }
 
-  const processedDir = variantProcessedDir(args.variant);
+  const processedDir =
+    args.variant === 'pixellab' ? path.resolve(TOOLS_DIR, 'out', 'processed-pixellab') : PROCESSED_DIR;
   const available = [];
   for (const key of requiredKeys) {
     const inputPath = await resolveInputPath(key, args.source, processedDir);

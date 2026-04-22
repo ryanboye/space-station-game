@@ -2236,13 +2236,21 @@ toggleSpriteFallbackBtn.addEventListener('click', () => {
   state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
 });
 
+let pipelineLoadInFlight = false;
 toggleSpritePipelineBtn.addEventListener('click', () => {
+  if (pipelineLoadInFlight) return;
   state.controls.spritePipeline = state.controls.spritePipeline === 'pixellab' ? 'nano-banana' : 'pixellab';
   // Reload atlas from the new pipeline immediately; sprite mode state
-  // is preserved but the atlas swaps under it.
-  void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
-    spriteAtlas = loaded;
-  });
+  // is preserved but the atlas swaps under it. Eager fetch so when the
+  // user toggles sprites on, the new atlas is already warm.
+  pipelineLoadInFlight = true;
+  void loadSpriteAtlas(state.controls.spritePipeline)
+    .then((loaded) => {
+      spriteAtlas = loaded;
+    })
+    .finally(() => {
+      pipelineLoadInFlight = false;
+    });
 });
 
 openSaveModalBtn.addEventListener('click', () => {
