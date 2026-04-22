@@ -14,3 +14,5 @@ export type {
 export { computeToolButtonState, findOwningTier } from './button-state';
 export { showTooltip, hideTooltip } from './tooltip';
 export { showTierTransition } from './flash';
+export { mountQuestBar, renderQuestBar } from './quest-bar';
+export type { QuestBarCopyFn } from './quest-bar';

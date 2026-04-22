@@ -232,3 +232,93 @@
   }
   .progression-flash__items li { font-size: 16px; }
 }
+
+/* -------------------------------------------------------------------------
+ * Quest bar — pinned "what do I do now" strip.
+ *
+ * Sits above the Build & Room Legend in the sidebar, always visible.
+ * Three lines: tier title, goal copy, progress fill + %.
+ * ----------------------------------------------------------------------- */
+
+.quest-bar {
+  background: #10141b;
+  border: 1px solid #2a3340;
+  border-left: 3px solid #c9a84c;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem 0.6rem;
+  margin-bottom: 0.5rem;
+  color: #e8e8ea;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.quest-bar__header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.2rem;
+}
+
+.quest-bar__title {
+  font-family: ui-monospace, 'Menlo', monospace;
+  font-size: 10px;
+  color: #c9a84c;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.quest-bar__goal {
+  color: #e8e8ea;
+  font-size: 13px;
+  margin-bottom: 0.4rem;
+  /* Let long trigger copy wrap rather than overflow the sidebar. */
+  overflow-wrap: break-word;
+}
+
+.quest-bar__progress {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.quest-bar__track {
+  flex: 1 1 auto;
+  height: 7px;
+  background: #1d2430;
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.quest-bar__fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #8a6d2a 0%, #c9a84c 100%);
+  /* Short transition so jumps from tick-to-tick ease rather than snap,
+   * but short enough that at fast-forward speed the bar tracks live. */
+  transition: width 0.25s ease-out;
+}
+
+.quest-bar[data-quest-bar-state='ready'] .quest-bar__fill {
+  background: linear-gradient(90deg, #3d9a4d 0%, #5ac968 100%);
+}
+
+.quest-bar[data-quest-bar-state='complete'] {
+  border-left-color: #5ac968;
+}
+
+.quest-bar[data-quest-bar-state='complete'] .quest-bar__fill {
+  background: linear-gradient(90deg, #3d9a4d 0%, #5ac968 100%);
+}
+
+.quest-bar__pct {
+  font-family: ui-monospace, 'Menlo', monospace;
+  font-size: 11px;
+  color: #9aa3b2;
+  font-weight: 600;
+  min-width: 2.2em;
+  text-align: right;
+}

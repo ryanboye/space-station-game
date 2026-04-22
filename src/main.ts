@@ -6,6 +6,7 @@ import {
   attachLegendTooltipHandlers,
   maybeFireTierFlash,
 } from './render/progression/wire';
+import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_CRITERIA } from './sim/balance';
@@ -103,6 +104,8 @@ app.innerHTML = `
         <span class="value speed-pill" id="speed-label">1x</span>
       </div>
     </div>
+
+    <div id="quest-bar" class="section" aria-live="polite"></div>
 
     <details class="section mini-collapse">
       <summary class="legend-title">Build & Room Legend</summary>
@@ -544,6 +547,7 @@ const demandStripEl = document.querySelector<HTMLElement>('#demand-strip')!;
 const archetypeStripEl = document.querySelector<HTMLElement>('#archetype-strip')!;
 const shipTypeStripEl = document.querySelector<HTMLElement>('#ship-type-strip')!;
 const unlockStatusEl = document.querySelector<HTMLElement>('#unlock-status')!;
+const questBarEl = document.querySelector<HTMLElement>('#quest-bar')!;
 const openProgressionModalBtn = document.querySelector<HTMLButtonElement>('#open-progression-modal')!;
 const progressionModal = document.querySelector<HTMLDivElement>('#progression-modal')!;
 const closeProgressionModalBtn = document.querySelector<HTMLButtonElement>('#close-progression-modal')!;
@@ -925,6 +929,10 @@ function refreshUnlockLegendAndHotkeys(): void {
   const label = copy?.name ?? TIER_PRESENTATION[tier].name;
   const nextLine = nextCopy ? ` | Next: ${nextCopy.trigger}` : '';
   unlockStatusEl.textContent = `Progression: Tier ${tier} — ${label}${nextLine}`;
+  // Quest bar — pinned "what do I do now" strip at the top of the sidebar.
+  // Reads state.unlocks.tier + triggerProgress[tier+1] + PROGRESSION_TOOLTIP_COPY.
+  // No new sim fields; lives alongside the existing status line surfaces.
+  renderQuestBar(state, questBarEl, (t) => PROGRESSION_TOOLTIP_COPY[t]);
   // Phase-2 progression wiring — replaces the old `display: none` hide
   // loop. Locked + coming-next-tier items stay VISIBLE with a state
   // attribute + tooltip-on-click so players learn what unlocks them.
