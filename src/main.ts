@@ -9,7 +9,7 @@ import {
 import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
-import { UNLOCK_CRITERIA } from './sim/balance';
+import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
@@ -957,53 +957,16 @@ function tierRequirementText(tier: UnlockTier): string {
 
 function tierProgressSnapshot(): TierProgressSnapshot {
   const tier = getUnlockTier(state);
-  let progress = 1;
-  if (tier === 0) {
-    const air = clamp(state.metrics.airQuality / UNLOCK_CRITERIA.tier1.minAirQuality, 0, 1);
-    const meals = clamp(state.metrics.mealStock / UNLOCK_CRITERIA.tier1.minMealStock, 0, 1);
-    const warningClear = state.metrics.airBlockedWarningActive ? 0 : 1;
-    const cafeteriaReady = state.ops.cafeteriasActive > 0 ? 1 : 0;
-    const lifeSupportReady = state.ops.lifeSupportActive > 0 ? 1 : 0;
-    progress = (air + meals + warningClear + cafeteriaReady + lifeSupportReady) / 5;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 1,
-      requirement:
-        `Air ${state.metrics.airQuality.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minAirQuality} | ` +
-        `Meals ${state.metrics.mealStock.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minMealStock} | ` +
-        `Cafeteria ${state.ops.cafeteriasActive > 0 ? 'online' : 'missing'} | ` +
-        `Life Support ${state.ops.lifeSupportActive > 0 ? 'online' : 'missing'} | ` +
-        `Air Warning ${state.metrics.airBlockedWarningActive ? 'active' : 'clear'}`
-    };
-  } else if (tier === 1) {
-    const credits = clamp(state.metrics.creditsNetPerMin / UNLOCK_CRITERIA.tier2.minCreditsNetPerMin, 0, 1);
-    const jobs = clamp(state.metrics.completedJobs / UNLOCK_CRITERIA.tier2.minCompletedJobs, 0, 1);
-    progress = (credits + jobs) / 2;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 2,
-      requirement:
-        `Credits/min ${state.metrics.creditsNetPerMin.toFixed(2)}/${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(2)} | ` +
-        `Logistics jobs ${state.metrics.completedJobs}/${UNLOCK_CRITERIA.tier2.minCompletedJobs}`
-    };
-  } else if (tier === 2) {
-    const residents = clamp(state.metrics.residentsCount / UNLOCK_CRITERIA.tier3.minResidents, 0, 1);
-    const sat = clamp(state.metrics.residentSatisfactionAvg / UNLOCK_CRITERIA.tier3.minResidentSatisfaction, 0, 1);
-    const incidents = clamp(state.metrics.incidentsResolved / UNLOCK_CRITERIA.tier3.minResolvedIncidents, 0, 1);
-    progress = (residents + sat + incidents) / 3;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 3,
-      requirement:
-        `Residents ${state.metrics.residentsCount}/${UNLOCK_CRITERIA.tier3.minResidents} | ` +
-        `Satisfaction ${state.metrics.residentSatisfactionAvg.toFixed(0)}/${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)} | ` +
-        `Resolved incidents ${state.metrics.incidentsResolved}/${UNLOCK_CRITERIA.tier3.minResolvedIncidents}`
-    };
+  if (tier >= 6) {
+    return { pct: 100, nextTier: null, requirement: 'All progression tiers unlocked.' };
   }
+  const nextTier = (tier + 1) as UnlockTier;
+  const def = UNLOCK_DEFINITIONS.find((d) => d.tier === nextTier);
+  const progress = def ? def.trigger.progress(state.metrics) : 1;
   return {
-    pct: 100,
-    nextTier: null,
-    requirement: 'All progression tiers unlocked.'
+    pct: Math.round(clamp(progress, 0, 1) * 100),
+    nextTier,
+    requirement: PROGRESSION_TOOLTIP_COPY[nextTier]?.trigger ?? 'Progression requirement unavailable.',
   };
 }
 
@@ -1039,7 +1002,7 @@ function refreshProgressionModal(): void {
     progressModalNextShipsEl.textContent = `New Ship Families: ${formatTierList(nextInfo.ships)}`;
     progressModalNextSystemsEl.textContent = `New Systems: ${formatTierList(nextInfo.systems)}`;
   } else {
-    progressModalNextTierNameEl.textContent = 'Tier 3 complete: all systems online';
+    progressModalNextTierNameEl.textContent = 'Tier 6 complete: all tiers unlocked';
     progressModalNextCriteriaEl.textContent = 'Unlock Requirement: n/a';
     progressModalNextBuildingsEl.textContent = 'New Buildings: none';
     progressModalNextNeedsEl.textContent = 'New Citizen Needs: none';
