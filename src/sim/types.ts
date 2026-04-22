@@ -62,7 +62,6 @@ export enum ModuleType {
   CellConsole = 'cell-console',
   RecUnit = 'rec-unit',
   GrowStation = 'grow-station',
-  GrowTray = 'grow-station',
   Terminal = 'terminal',
   Couch = 'couch',
   GameStation = 'game-station',
