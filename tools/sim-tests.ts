@@ -1255,6 +1255,11 @@ function testSaveRoundtripTierCapAboveThree(): void {
   if (!parsed.ok) return;
   const hydrated = hydrateStateFromSave(parsed.save);
   assertCondition(hydrated.state.unlocks.tier === 5, `Tier 5 should hydrate as 5, not demoted; got ${hydrated.state.unlocks.tier}.`);
+  // Hydrate reconstructs unlockedIds from UNLOCK_IDS_BY_TIER so the full
+  // tier-5 set is present post-roundtrip even if the setUnlockTierForTest
+  // helper only seeded tier 1-3 entries.
+  assertCondition(hydrated.state.unlocks.unlockedIds.includes('tier4_governance'), 'tier5 hydrate should include tier4_governance id.');
+  assertCondition(hydrated.state.unlocks.unlockedIds.includes('tier5_health'), 'tier5 hydrate should include tier5_health id.');
 }
 
 function testSellMaterialsIncrementsCreditsEarnedLifetime(): void {

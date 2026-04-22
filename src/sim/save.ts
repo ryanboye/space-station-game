@@ -28,6 +28,7 @@ import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './content/unlocks';
 
 const SAVE_SCHEMA_VERSION = 2 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
@@ -187,13 +188,8 @@ function maxUnlockTier(a: UnlockTier, b: UnlockTier): UnlockTier {
 }
 
 function normalizeUnlockTier(value: number): UnlockTier {
-  if (value >= 6) return 6;
-  if (value >= 5) return 5;
-  if (value >= 4) return 4;
-  if (value >= 3) return 3;
-  if (value >= 2) return 2;
-  if (value >= 1) return 1;
-  return 0;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(6, Math.floor(value))) as UnlockTier;
 }
 
 function requiredUnlockTierForSnapshotContent(
@@ -201,25 +197,28 @@ function requiredUnlockTierForSnapshotContent(
   modules: StationSnapshotV1['modules'],
   dockConfigs: StationSnapshotV1['dockConfigs']
 ): UnlockTier {
+  // Walks saved content to derive the MIN tier that could have produced
+  // it, used to elevate a demoted/hand-edited save. Early-outs at tier 6
+  // (the ceiling) so content lands at T4-T6 don't silently cap at 3.
   let required: UnlockTier = 0;
   for (const room of rooms) {
     required = maxUnlockTier(required, ROOM_UNLOCK_TIER[room] ?? 0);
-    if (required === 3) break;
+    if (required === 6) break;
   }
-  if (required < 3) {
+  if (required < 6) {
     for (const module of modules) {
       required = maxUnlockTier(required, MODULE_UNLOCK_TIER[module.type] ?? 0);
-      if (required === 3) break;
+      if (required === 6) break;
     }
   }
-  if (required < 3) {
+  if (required < 6) {
     for (const dock of dockConfigs) {
       for (const shipType of dock.allowedShipTypes) {
         const shipTier: UnlockTier = shipType === 'industrial' ? 2 : shipType === 'military' || shipType === 'colonist' ? 3 : 0;
         required = maxUnlockTier(required, shipTier);
-        if (required === 3) break;
+        if (required === 6) break;
       }
-      if (required === 3) break;
+      if (required === 6) break;
     }
   }
   return required;
@@ -521,8 +520,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const progRaw = isRecord(snapshotRaw.progression) ? snapshotRaw.progression : null;
   const archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>> = {};
   if (progRaw && isRecord(progRaw.archetypesEverSeen)) {
-    const archetypes: VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
-    for (const archetype of archetypes) {
+    for (const archetype of VISITOR_ARCHETYPES) {
       if (progRaw.archetypesEverSeen[archetype] === true) archetypesEverSeen[archetype] = true;
     }
   }
@@ -820,7 +818,7 @@ export function hydrateStateFromSave(
   next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
   next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
   next.metrics.residentsConvertedLifetime = snapshot.progression.residentsConvertedLifetime;
-  for (const archetype of Object.keys(next.usageTotals.archetypesEverSeen) as Array<keyof typeof next.usageTotals.archetypesEverSeen>) {
+  for (const archetype of VISITOR_ARCHETYPES) {
     next.usageTotals.archetypesEverSeen[archetype] = snapshot.progression.archetypesEverSeen[archetype] === true;
   }
 
