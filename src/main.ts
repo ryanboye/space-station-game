@@ -1047,7 +1047,7 @@ function refreshProgressionModal(): void {
           <span class="progression-tier-status">${statusLabel}</span>
         </div>
         <small class="progression-tier-theme-line">${entry.theme}</small>
-        <small><strong>Unlock Requirement:</strong> ${tierRequirementText(entryTier)}</small>
+        <small><strong>Unlock Requirement:</strong> ${PROGRESSION_TOOLTIP_COPY[entryTier]?.trigger ?? tierRequirementText(entryTier)}</small>
         <small><strong>Buildings:</strong> ${formatTierList(entry.buildings)}</small>
         <small><strong>Citizen Needs:</strong> ${formatTierList(entry.citizenNeeds)}</small>
         <small><strong>Visitor/Ship Needs:</strong> ${formatTierList(entry.visitorNeeds)}</small>
