@@ -5170,6 +5170,11 @@ function updateVisitorLogic(
         if (consumedGoods > 0) {
           spendMultiplier = 1 + consumedGoods * 0.9;
           state.usageTotals.tradeGoodsSold += consumedGoods;
+          // Trade-cycle counter for the T3 unlock gate. One sale event
+          // here = one workshop→market cycle completed (the goods were
+          // produced at a workshop earlier and are now being consumed
+          // by a visitor). Lifetime-monotonic; increments per sale.
+          state.metrics.tradeCyclesCompletedLifetime += consumedGoods;
           marketTradeGoodsUsed += consumedGoods;
           visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
         } else {
