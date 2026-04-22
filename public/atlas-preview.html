@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>space-station-game — atlas preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: #0a0a0f;
+      color: #e8e8ea;
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100dvh;
+    }
+    header {
+      padding: 12px 16px;
+      background: #12151c;
+      border-bottom: 1px solid #222;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    h1 { font-size: 14px; font-weight: 600; }
+    .status { font-size: 11px; color: #8a8a8f; }
+    .controls { margin-left: auto; display: flex; gap: 6px; }
+    button {
+      background: #1f2530;
+      color: #e8e8ea;
+      border: 1px solid #333;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    button.on { background: #3a5a8a; border-color: #4a7aca; }
+    .guide {
+      padding: 10px 16px;
+      background: #15181f;
+      border-bottom: 1px solid #262a38;
+      font-size: 12px;
+      color: #c0c0c8;
+      line-height: 1.5;
+    }
+    .guide strong { color: #e8e8ea; }
+    .guide code {
+      background: #1f2530;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+    .namespace {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1a1d24;
+    }
+    .namespace h2 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #c8c060;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+      gap: 8px;
+    }
+    .cell {
+      position: relative;
+      background: #15181f;
+      border: 1px solid #232730;
+      border-radius: 4px;
+      padding: 4px;
+      cursor: pointer;
+      transition: border-color 0.1s;
+    }
+    .cell:hover { border-color: #3a5a8a; }
+    .cell.selected { border-color: #c8c060; }
+    .cell canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+    }
+    .cell .label {
+      font-size: 9px;
+      color: #8a8a8f;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #sprite-info {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(18, 21, 28, 0.97);
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #e8e8ea;
+      max-width: 280px;
+      z-index: 100;
+      line-height: 1.5;
+      display: none;
+    }
+    #sprite-info.show { display: block; }
+    #sprite-info strong {
+      color: #c8c060;
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>atlas preview</h1>
+    <div class="status" id="status">loading…</div>
+    <div class="controls">
+      <button id="btn-bounds">bounds</button>
+      <button id="btn-rotation" class="on">rotation</button>
+      <button id="btn-labels" class="on">labels</button>
+      <button id="btn-reload">reload</button>
+    </div>
+  </header>
+
+  <div class="guide">
+    <strong>Iteration guide:</strong>
+    &nbsp;<code>bounds</code> toggles a red 64×64 outline to catch anything bleeding past the cell —
+    &nbsp;<code>rotation</code> applies per-key rotation from the manifest (matches what the game renders) —
+    &nbsp;<code>labels</code> toggle sprite-key captions —
+    &nbsp;<code>reload</code> cache-busts both atlas.json + atlas.png so a freshly-regenerated sprite shows up without a hard refresh —
+    &nbsp;<strong>click any sprite</strong> to see its <code>{ x, y, w, h, rotation }</code> in the pop-up.
+  </div>
+
+  <main id="main"></main>
+
+  <div id="sprite-info"></div>
+
+  <script>
+    const state = {
+      atlas: null,
+      atlasImg: null,
+      showBounds: false,
+      showRotation: true,
+      showLabels: true,
+      selected: null,
+    };
+
+    const $status = document.getElementById('status');
+    const $main = document.getElementById('main');
+    const $info = document.getElementById('sprite-info');
+    const $btnBounds = document.getElementById('btn-bounds');
+    const $btnRotation = document.getElementById('btn-rotation');
+    const $btnLabels = document.getElementById('btn-labels');
+    const $btnReload = document.getElementById('btn-reload');
+
+    function cacheBust(url) {
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}t=${Date.now()}`;
+    }
+
+    async function loadAtlas() {
+      $status.textContent = 'loading…';
+      try {
+        const res = await fetch(cacheBust('assets/sprites/atlas.json'));
+        if (!res.ok) throw new Error(`manifest ${res.status}`);
+        const manifest = await res.json();
+        const img = new Image();
+        img.src = cacheBust(`assets/sprites/${manifest.imagePath}`);
+        await img.decode();
+        state.atlas = manifest;
+        state.atlasImg = img;
+        const count = Object.keys(manifest.frames || {}).length;
+        $status.textContent = `${count} sprites · cellSize ${manifest.cellSize} · ${manifest.version}`;
+        render();
+      } catch (err) {
+        $status.textContent = `load failed: ${err.message}`;
+        console.error(err);
+      }
+    }
+
+    function groupByNamespace(frames) {
+      const groups = new Map();
+      for (const [key, frame] of Object.entries(frames)) {
+        const ns = key.split('.')[0] || 'other';
+        if (!groups.has(ns)) groups.set(ns, []);
+        groups.get(ns).push({ key, frame });
+      }
+      for (const list of groups.values()) list.sort((a, b) => a.key.localeCompare(b.key));
+      return groups;
+    }
+
+    function drawCell(canvas, frame, rotation, highlightBounds) {
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      const size = Math.max(frame.w, frame.h);
+      canvas.width = size;
+      canvas.height = size;
+      ctx.clearRect(0, 0, size, size);
+      ctx.save();
+      ctx.translate(size / 2, size / 2);
+      if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+      ctx.drawImage(
+        state.atlasImg,
+        frame.x, frame.y, frame.w, frame.h,
+        -frame.w / 2, -frame.h / 2, frame.w, frame.h,
+      );
+      ctx.restore();
+      if (highlightBounds) {
+        ctx.strokeStyle = 'rgba(220, 64, 64, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        const cellSize = state.atlas.cellSize;
+        if (frame.w === cellSize && frame.h === cellSize) {
+          ctx.strokeRect(0, 0, cellSize, cellSize);
+        } else {
+          // Non-cellSize sprites (e.g. tile.space = 256) — outline the actual frame
+          const ox = (size - frame.w) / 2;
+          const oy = (size - frame.h) / 2;
+          ctx.strokeRect(ox, oy, frame.w, frame.h);
+        }
+      }
+    }
+
+    function buildCellEl(key, frame, rotation) {
+      const el = document.createElement('div');
+      el.className = 'cell';
+      el.dataset.key = key;
+      const canvas = document.createElement('canvas');
+      canvas.style.width = frame.w > 128 ? '128px' : `${frame.w}px`;
+      el.appendChild(canvas);
+      drawCell(canvas, frame, state.showRotation ? rotation : 0, state.showBounds);
+      if (state.showLabels) {
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = key;
+        el.appendChild(label);
+      }
+      el.addEventListener('click', () => {
+        for (const s of document.querySelectorAll('.cell.selected')) s.classList.remove('selected');
+        el.classList.add('selected');
+        state.selected = { key, frame, rotation };
+        showInfo();
+      });
+      return el;
+    }
+
+    function showInfo() {
+      if (!state.selected) return $info.classList.remove('show');
+      const { key, frame, rotation } = state.selected;
+      $info.innerHTML = `
+        <strong>${key}</strong>
+        x: ${frame.x}, y: ${frame.y}<br>
+        w: ${frame.w}, h: ${frame.h}<br>
+        rotation: ${rotation || 0}°
+      `;
+      $info.classList.add('show');
+    }
+
+    function render() {
+      $main.innerHTML = '';
+      if (!state.atlas || !state.atlasImg) return;
+      const frames = state.atlas.frames || {};
+      const rotations = state.atlas.rotations || {};
+      const groups = groupByNamespace(frames);
+      const order = ['tile', 'module', 'agent', 'room', 'ship', 'overlay'];
+      const sortedNs = [...groups.keys()].sort((a, b) => {
+        const ai = order.indexOf(a);
+        const bi = order.indexOf(b);
+        if (ai === -1 && bi === -1) return a.localeCompare(b);
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      });
+      for (const ns of sortedNs) {
+        const section = document.createElement('section');
+        section.className = 'namespace';
+        const h = document.createElement('h2');
+        h.textContent = `${ns} · ${groups.get(ns).length} sprites`;
+        section.appendChild(h);
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        for (const { key, frame } of groups.get(ns)) {
+          grid.appendChild(buildCellEl(key, frame, rotations[key] || 0));
+        }
+        section.appendChild(grid);
+        $main.appendChild(section);
+      }
+      if (state.selected) showInfo();
+    }
+
+    $btnBounds.addEventListener('click', () => {
+      state.showBounds = !state.showBounds;
+      $btnBounds.classList.toggle('on', state.showBounds);
+      render();
+    });
+    $btnRotation.addEventListener('click', () => {
+      state.showRotation = !state.showRotation;
+      $btnRotation.classList.toggle('on', state.showRotation);
+      render();
+    });
+    $btnLabels.addEventListener('click', () => {
+      state.showLabels = !state.showLabels;
+      $btnLabels.classList.toggle('on', state.showLabels);
+      render();
+    });
+    $btnReload.addEventListener('click', loadAtlas);
+
+    loadAtlas();
+  </script>
+</body>
+</html>
