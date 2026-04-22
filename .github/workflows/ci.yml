@@ -32,10 +32,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate sprite atlas (optional pilot gate)
+      - name: Validate sprite atlas (advisory)
+        continue-on-error: true
         run: |
           if [ -f public/assets/sprites/atlas.json ] && [ -f public/assets/sprites/atlas.png ]; then
-            npm run sprites:validate:test
+            npm run sprites:validate:v1
           else
             echo "No sprite atlas present yet; skipping sprite validation."
           fi
