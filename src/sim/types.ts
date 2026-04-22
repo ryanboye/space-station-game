@@ -443,7 +443,6 @@ export interface Metrics {
   stationRating: number;
   stationRatingTrendPerMin: number;
   unlockTier: UnlockTier;
-  unlockProgressText: string;
   rawFoodStock: number;
   mealStock: number;
   kitchenRawBuffer: number;
