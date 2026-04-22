@@ -1,5 +1,59 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
+## 0) Current Execution Status
+*Last updated: 2026-04-22 by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `4f21474`.*
+
+### Current milestone
+**M1 Unlock Progression v1 — shipped.** Six-tier predicate-driven advance running end-to-end in the live game. Copy + UI + counters + render all aligned.
+
+### Lanes (active bots)
+- **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
+- **seb** — render integration, deploy ops, sprite packing. Full pipeline ownership on the render side.
+- **BMO** (awfml's bot) — spec + PR review + deploy coordination + mechanics-reference docs + morning-status writeups.
+- **barnacle** (barn's bot) — harness scenarios + per-tier unlock smoke tests + QA diagnostics.
+
+### Shipped — merged overnight 2026-04-21/22
+| PR | Commit | What |
+|----|--------|------|
+| #3 | `046015d` | systemd pull-and-build deploy wiring → `bmo.ryanboye.com/spacegame/` |
+| #5 | `93a0cd6` | unlocks v2 scaffold — 6-tier shape + trigger predicate interface + lifetime counter stubs |
+| #6 | `3e519bd` | wire `creditsEarnedLifetime` + `incidentsResolvedLifetime` increment sites |
+| #7 | `bb49e62` | progression UI render primitives (`data-progression-state` attr, tooltip singleton, tier-flash overlay) |
+| #8 | `7607531` | deploy v1.1 — `build.sh` force-on-empty + README ProtectHome + ReadWritePaths notes |
+| #9 | `1edd242` | predicate-driven tier advance — loop over `UNLOCK_DEFINITIONS.trigger.predicate` + `archetypesServedLifetime` |
+| #10 | `dd7c7ad` | `tradeCyclesCompletedLifetime` increment at workshop→market sale |
+| #11 | `323ac8c` | phase-2 wiring — progression UI reads live `UnlockState`, flash fires on advance |
+| #12 | `864fb02` | S2 — status line uses `PROGRESSION_TOOLTIP_COPY` not legacy `UNLOCK_CRITERIA` |
+| #13 | `b1db92f` | 6 nano-banana tier-unlock icons (`icon.tier1_unlock` … `icon.tier6_unlock`) |
+| #14 | `2b72dfe` | S1 — Build & Room Legend auto-expands at tiers 0–2 |
+| #15 | `342af5f` | S2.1 — progression modal header uses new copy |
+| #16 | `4f21474` | S2.2 — modal tier-cards "Unlock Requirement" copy aligned |
+
+### Open PRs
+- **#4** `feat(harness): Harness v1.0 — Playwright runner + window hooks + CI advisory` (barnacle).
+  Waiting on awfml's one-click merge. BMO's PAT lacks `workflow` scope to self-merge workflow-touching PRs.
+- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw).
+  Static debug page, ready for merge when someone picks it up. Non-blocking.
+
+### Backlog (priority-ordered)
+1. **Phase 5 counter wiring** (blocked on Phase 5 producer events): `actorsTreatedLifetime` + `residentsConvertedLifetime` — placeholder wiring useless until treatment + conversion sites exist in `sim.ts`.
+2. **Hygiene PR** — add `tools/sprites/out/processed/` to `.gitignore` + `git rm --cached` the 74 existing tracked files. Tightens future PR diffs.
+3. **Phase 5 / Health + Morgue mechanics reference doc** (BMO's lane, parked by the tutorial pivot).
+4. **Sprite polish** — regen modules/agents where current nano-banana outputs are weakest; consider pixellab rotate for 4/8-direction agent sprites.
+5. **gpt-image-2 evaluation** — released 2026-04-21 with first-class pixel-art + iso-3D + spatial reasoning. Potential for sebcity or space-station-game atlas rebuild. Needs VoX/awfml greenlight + budget decision.
+6. **Tutorial first-playable polish** — observed UX gaps from the morning playtest (expand-legend, trigger copy) are fixed; next round comes from live playtest feedback.
+
+### Risks / open questions
+- Phase 5 (health/death/morgue) scoped but not built. Unlocks v2 has placeholder predicates for T5 that won't fire until Phase 5 lands.
+- T6 specialization predicate is intentionally a no-op until we decide how "tutorial complete" gates. Ship this decision before ~week 2 of playtesting.
+- `tools/sprites/out/processed/` tracked in git produces sprawling diffs on every sprite regen. Hygiene PR will fix, but until then PR diffs look scary.
+- No visual regression baseline yet. barnacle's harness v1.0 has the hooks; the baseline screenshot step is v1.1.
+
+### Ritual
+Before merging ANY PR touching `src/sim/` or `src/render/`: 4 parallel agents — 2 × `/simplify` + 2 × `/review`. Pure-docs PRs ≤ 50 lines can merge without the ritual. All render-touching PRs attach a Playwright smoke screenshot to the PR body.
+
+---
+
 ## 1) Purpose
 Translate the Vision Draft into implementable product requirements with explicit system behavior, player-facing outcomes, and measurable success criteria.
 
