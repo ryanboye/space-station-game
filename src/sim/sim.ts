@@ -1989,6 +1989,7 @@ function activeFightIncidentForResident(state: StationState, residentId: number)
 }
 
 function applyAirExposure(
+  state: StationState,
   actor: { airExposureSec: number; healthState: 'healthy' | 'distressed' | 'critical' },
   airQuality: number,
   dt: number
@@ -2005,12 +2006,19 @@ function applyAirExposure(
     return { died: true };
   }
 
+  const priorHealthState = actor.healthState;
   actor.healthState =
     actor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
       ? 'critical'
       : actor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
         ? 'distressed'
         : 'healthy';
+  // Proxy for `actorsTreatedLifetime` — increments on recovery-to-healthy
+  // from a worse state. Placeholder until Phase 5 wires explicit medical
+  // treatment events; keeps T5 predicate reachable in the meantime.
+  if (priorHealthState !== 'healthy' && actor.healthState === 'healthy') {
+    state.metrics.actorsTreatedLifetime += 1;
+  }
   return { died: false };
 }
 
@@ -2388,6 +2396,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   state.residents.push(resident);
   ship.residentIds.push(resident.id);
   state.usageTotals.residentConversionSuccesses += 1;
+  state.metrics.residentsConvertedLifetime += 1;
   return resident;
 }
 
@@ -4474,7 +4483,7 @@ function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: 
   if (state.crewMembers.length <= 0) return;
   const keep: CrewMember[] = [];
   for (const crew of state.crewMembers) {
-    const exposure = applyAirExposure(crew, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, crew, state.metrics.airQuality, dt);
     if (exposure.died) {
       releaseCrewJobsOnDeath(state, crew.id);
       registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
@@ -4949,7 +4958,7 @@ function updateVisitorLogic(
   let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
-    const exposure = applyAirExposure(visitor, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, visitor, state.metrics.airQuality, dt);
     if (exposure.died) {
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
       continue;
@@ -5779,7 +5788,7 @@ function updateResidentLogic(
 ): void {
   const keep: Resident[] = [];
   for (const resident of state.residents) {
-    const exposure = applyAirExposure(resident, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, resident, state.metrics.airQuality, dt);
     if (exposure.died) {
       unlinkResidentFromShip(state, resident);
       registerBodyDeathAtTile(state, resident.tileIndex, occupancyByTile);
@@ -8195,6 +8204,7 @@ export function sellMaterials(state: StationState, materialsCost: number, credit
   if (removed < materialsCost) return false;
   state.metrics.materials = Math.max(0, state.metrics.materials - removed);
   state.metrics.credits += creditGain;
+  state.metrics.creditsEarnedLifetime += creditGain;
   return true;
 }
 
@@ -8210,6 +8220,7 @@ export function sellRawFood(state: StationState, rawFoodCost: number, creditGain
   if (removed < rawFoodCost) return false;
   state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - removed, 0, 260);
   state.metrics.credits += creditGain;
+  state.metrics.creditsEarnedLifetime += creditGain;
   return true;
 }
 

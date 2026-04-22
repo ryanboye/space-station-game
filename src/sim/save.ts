@@ -21,12 +21,14 @@ import {
   type SpaceLane,
   TileType,
   type StationState,
+  type VisitorArchetype,
   ZoneType
 } from './types';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './content/unlocks';
 
 const SAVE_SCHEMA_VERSION = 2 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
@@ -93,6 +95,19 @@ export interface StationSnapshotV1 {
     tier: UnlockTier;
     unlockedIds: UnlockId[];
     unlockedAtSec: Partial<Record<UnlockId, number>>;
+  };
+  progression: {
+    // Lifetime counters + the archetype-seen set that feed predicate-
+    // driven tier advances. Must survive save/load; without them a
+    // reload at T1 sees archetypesServedLifetime=0 and the T2 gate is
+    // permanently stuck.
+    mealsServedTotal: number;
+    creditsEarnedLifetime: number;
+    tradeCyclesCompletedLifetime: number;
+    incidentsResolvedLifetime: number;
+    actorsTreatedLifetime: number;
+    residentsConvertedLifetime: number;
+    archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>>;
   };
 }
 
@@ -173,10 +188,8 @@ function maxUnlockTier(a: UnlockTier, b: UnlockTier): UnlockTier {
 }
 
 function normalizeUnlockTier(value: number): UnlockTier {
-  if (value >= 3) return 3;
-  if (value >= 2) return 2;
-  if (value >= 1) return 1;
-  return 0;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(6, Math.floor(value))) as UnlockTier;
 }
 
 function requiredUnlockTierForSnapshotContent(
@@ -184,25 +197,28 @@ function requiredUnlockTierForSnapshotContent(
   modules: StationSnapshotV1['modules'],
   dockConfigs: StationSnapshotV1['dockConfigs']
 ): UnlockTier {
+  // Walks saved content to derive the MIN tier that could have produced
+  // it, used to elevate a demoted/hand-edited save. Early-outs at tier 6
+  // (the ceiling) so content lands at T4-T6 don't silently cap at 3.
   let required: UnlockTier = 0;
   for (const room of rooms) {
     required = maxUnlockTier(required, ROOM_UNLOCK_TIER[room] ?? 0);
-    if (required === 3) break;
+    if (required === 6) break;
   }
-  if (required < 3) {
+  if (required < 6) {
     for (const module of modules) {
       required = maxUnlockTier(required, MODULE_UNLOCK_TIER[module.type] ?? 0);
-      if (required === 3) break;
+      if (required === 6) break;
     }
   }
-  if (required < 3) {
+  if (required < 6) {
     for (const dock of dockConfigs) {
       for (const shipType of dock.allowedShipTypes) {
         const shipTier: UnlockTier = shipType === 'industrial' ? 2 : shipType === 'military' || shipType === 'colonist' ? 3 : 0;
         required = maxUnlockTier(required, shipTier);
-        if (required === 3) break;
+        if (required === 6) break;
       }
-      if (required === 3) break;
+      if (required === 6) break;
     }
   }
   return required;
@@ -266,6 +282,15 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       tier: state.unlocks.tier,
       unlockedIds: [...state.unlocks.unlockedIds],
       unlockedAtSec: { ...state.unlocks.unlockedAtSec }
+    },
+    progression: {
+      mealsServedTotal: state.metrics.mealsServedTotal,
+      creditsEarnedLifetime: state.metrics.creditsEarnedLifetime,
+      tradeCyclesCompletedLifetime: state.metrics.tradeCyclesCompletedLifetime,
+      incidentsResolvedLifetime: state.metrics.incidentsResolvedLifetime,
+      actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
+      residentsConvertedLifetime: state.metrics.residentsConvertedLifetime,
+      archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen }
     }
   };
 }
@@ -490,6 +515,26 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     unlockedIds.add(id);
   }
 
+  // Progression counters — missing in pre-progression save files, so
+  // default all to 0 and an empty archetypesEverSeen set.
+  const progRaw = isRecord(snapshotRaw.progression) ? snapshotRaw.progression : null;
+  const archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>> = {};
+  if (progRaw && isRecord(progRaw.archetypesEverSeen)) {
+    for (const archetype of VISITOR_ARCHETYPES) {
+      if (progRaw.archetypesEverSeen[archetype] === true) archetypesEverSeen[archetype] = true;
+    }
+  }
+  const progression: StationSnapshotV1['progression'] = {
+    mealsServedTotal: Math.max(0, Math.floor(asFiniteNumber(progRaw?.mealsServedTotal, 0))),
+    creditsEarnedLifetime: Math.max(0, asFiniteNumber(progRaw?.creditsEarnedLifetime, 0)),
+    tradeCyclesCompletedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.tradeCyclesCompletedLifetime, 0))),
+    incidentsResolvedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.incidentsResolvedLifetime, 0))),
+    actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
+    residentsConvertedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.residentsConvertedLifetime, 0))),
+    archetypesEverSeen
+  };
+  if (!progRaw) warnings.push('progression counters missing; defaulted to zero (pre-progression save).');
+
   return {
     width,
     height,
@@ -514,7 +559,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       tier: unlockTier,
       unlockedIds: UNLOCK_IDS.filter((id) => unlockedIds.has(id)),
       unlockedAtSec
-    }
+    },
+    progression
   };
 }
 
@@ -762,6 +808,19 @@ export function hydrateStateFromSave(
   next.metrics.waterStock = Math.max(0, snapshot.resources.waterStock);
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
+
+  // Restore lifetime counters so predicate-driven tier progression
+  // (archetypesServedLifetime is derived from archetypesEverSeen in
+  // the metrics pass, so persisting the set is enough) survives reload.
+  next.metrics.mealsServedTotal = snapshot.progression.mealsServedTotal;
+  next.metrics.creditsEarnedLifetime = snapshot.progression.creditsEarnedLifetime;
+  next.metrics.tradeCyclesCompletedLifetime = snapshot.progression.tradeCyclesCompletedLifetime;
+  next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
+  next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
+  next.metrics.residentsConvertedLifetime = snapshot.progression.residentsConvertedLifetime;
+  for (const archetype of VISITOR_ARCHETYPES) {
+    next.usageTotals.archetypesEverSeen[archetype] = snapshot.progression.archetypesEverSeen[archetype] === true;
+  }
 
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);
