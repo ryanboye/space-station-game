@@ -1,8 +1,15 @@
 import './styles.css';
 import { renderWorld } from './render/render';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
+import {
+  applyLegendStates,
+  attachLegendTooltipHandlers,
+  maybeFireTierFlash,
+} from './render/progression/wire';
+import { renderQuestBar } from './render/progression/quest-bar';
+import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
-import { UNLOCK_CRITERIA } from './sim/balance';
+import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
@@ -14,7 +21,6 @@ import {
   getHousingInspectorAt,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
-  getUnlockProgressText,
   getUnlockTier,
   getResidentInspectorById,
   getVisitorInspectorById,
@@ -39,6 +45,7 @@ import {
   tick,
   tryPlaceModule,
   trySetTile,
+  setTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
 } from './sim/sim';
@@ -77,6 +84,7 @@ app.innerHTML = `
     <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
     <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
     <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
+    <button id="toggle-sprite-pipeline" class="topbar-btn">Pipeline: nano-banana</button>
     <span class="topbar-spacer"></span>
     <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
@@ -97,6 +105,8 @@ app.innerHTML = `
         <span class="value speed-pill" id="speed-label">1x</span>
       </div>
     </div>
+
+    <div id="quest-bar" class="section" aria-live="polite"></div>
 
     <details class="section mini-collapse">
       <summary class="legend-title">Build & Room Legend</summary>
@@ -128,7 +138,7 @@ app.innerHTML = `
       <small id="module-phase-note" class="legend-build">
         Readiness checks use size + required modules + door + pressure + path. Rooms are autonomous once ready.
       </small>
-      <small id="unlock-status" class="legend-build">Progression: Tier 0 | Tier 1: air >= 60, meals >= 18</small>
+      <small id="unlock-status" class="legend-build">Progression: Tier 0 | Tier 1: first visitor arrives</small>
     </details>
 
     <details class="section mini-collapse">
@@ -324,7 +334,7 @@ app.innerHTML = `
       <div class="progression-section">
         <div class="section-title">Next Tier Unlocks</div>
         <small id="progress-modal-next-tier-name">Tier 1 - Settled Ring</small>
-        <small id="progress-modal-next-criteria">Unlock Requirement: air >= 60 and meals >= 18</small>
+        <small id="progress-modal-next-criteria">Unlock Requirement: first visitor arrives</small>
         <small id="progress-modal-next-buildings">New Buildings: Lounge, Market</small>
         <small id="progress-modal-next-needs">New Citizen Needs: social need now matters via lounge access</small>
         <small id="progress-modal-next-visitor-needs">New Visitor/Ship Needs: lounge and market demand appears in manifests</small>
@@ -468,6 +478,15 @@ if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
 const state = createInitialState();
+
+// T0 onboarding: pre-place a 2-tile visitor dock at east hull
+// (x=35, y=17..18) so ships arrive on a fresh start without the
+// player painting one first. setTile invokes rebuildDockEntities to
+// auto-populate the dock entity.
+for (let dockY = 17; dockY <= 18; dockY++) {
+  setTile(state, toIndex(35, dockY, state.width), TileType.Dock);
+}
+
 let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
 let zoom = 1;
 const MIN_ZOOM = 0.6;
@@ -507,6 +526,7 @@ const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
+const toggleSpritePipelineBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-pipeline')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
@@ -529,6 +549,7 @@ const demandStripEl = document.querySelector<HTMLElement>('#demand-strip')!;
 const archetypeStripEl = document.querySelector<HTMLElement>('#archetype-strip')!;
 const shipTypeStripEl = document.querySelector<HTMLElement>('#ship-type-strip')!;
 const unlockStatusEl = document.querySelector<HTMLElement>('#unlock-status')!;
+const questBarEl = document.querySelector<HTMLElement>('#quest-bar')!;
 const openProgressionModalBtn = document.querySelector<HTMLButtonElement>('#open-progression-modal')!;
 const progressionModal = document.querySelector<HTMLDivElement>('#progression-modal')!;
 const closeProgressionModalBtn = document.querySelector<HTMLButtonElement>('#close-progression-modal')!;
@@ -744,7 +765,7 @@ type TierPresentation = {
   systems: string[];
 };
 
-const TIER_ORDER: UnlockTier[] = [0, 1, 2, 3];
+const TIER_ORDER: UnlockTier[] = [0, 1, 2, 3, 4, 5, 6];
 const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
   0: {
     name: 'Founding Outpost',
@@ -756,31 +777,61 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     systems: ['Baseline staffing, food chain, and pressure management']
   },
   1: {
-    name: 'Settled Ring',
-    theme: 'Leisure and commerce come online once station basics are stable.',
+    name: 'Sustenance',
+    theme: 'First visitor arrives — build the food chain that keeps them alive.',
+    buildings: ['Hydroponics', 'Kitchen', 'Cafeteria'],
+    citizenNeeds: ['Hunger becomes binding once visitors start consuming'],
+    visitorNeeds: ['Cafeteria service gates visitor satisfaction + rating'],
+    ships: ['No new family'],
+    systems: ['Food pipeline: hydroponics → kitchen → cafeteria serving']
+  },
+  2: {
+    name: 'Commerce',
+    theme: 'Leisure and commerce come online once visitors flow reliably.',
     buildings: ['Lounge', 'Market'],
     citizenNeeds: ['Social comfort matters more with lounge access'],
     visitorNeeds: ['Lounge + market demand starts appearing in ship service checks'],
     ships: ['No new family (tourist/trader mix shifts toward leisure + shopping)'],
     systems: ['Leisure and market throughput begin impacting rating and credits']
   },
-  2: {
-    name: 'Trade Spine',
-    theme: 'Scale logistics and production into a sustained economy.',
+  3: {
+    name: 'Logistics',
+    theme: 'Scale production + item flow into a sustained trade economy.',
     buildings: ['Workshop', 'Logistics Stock', 'Storage'],
     citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
     visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
     ships: ['Industrial'],
-    systems: ['Trade-good pipeline and logistics job volume become progression-critical']
+    systems: ['Trade-good pipeline: workshop → storage → market stall sale']
   },
-  3: {
+  // Placeholder T4..T6 presentation entries — content copy mirrors the
+  // progression strawman. Final wording lands with awfml's milestone
+  // framework.
+  4: {
     name: 'Orbital Nexus',
-    theme: 'Run a dense civic hub with safety, recovery, and resident retention.',
-    buildings: ['Security', 'Clinic', 'Brig', 'Rec Hall'],
-    citizenNeeds: ['Safety, medical recovery, and richer social sinks affect retention'],
-    visitorNeeds: ['Security and housing-readiness demands are now evaluated'],
+    theme: 'Safety, containment, and resident-facing amenities.',
+    buildings: ['Security', 'Brig', 'Rec Hall'],
+    citizenNeeds: ['Safety and richer social sinks affect retention'],
+    visitorNeeds: ['Security and housing-readiness demands begin evaluating'],
+    ships: ['No new family'],
+    systems: ['Incident containment + zone controls']
+  },
+  5: {
+    name: 'Medical Wing',
+    theme: 'Mortality, treatment, and resident conversion.',
+    buildings: ['Clinic', 'Morgue'],
+    citizenNeeds: ['Medical recovery + private resident housing'],
+    visitorNeeds: ['Treatment-eligible visitors + body logistics'],
+    ships: ['No new family'],
+    systems: ['Health state machine + morgue overflow']
+  },
+  6: {
+    name: 'Specialization',
+    theme: 'Station identity + advanced ship families.',
+    buildings: ['Station-identity selector'],
+    citizenNeeds: ['Identity-driven satisfaction modifiers'],
+    visitorNeeds: ['Specialized traffic matching station type'],
     ships: ['Military', 'Colonist'],
-    systems: ['Incident containment, medical recovery, and housing conversion loops']
+    systems: ['End of tutorial — full sandbox unlocked']
   }
 };
 
@@ -793,9 +844,10 @@ type TierProgressSnapshot = {
 let toolLockMessage = '';
 
 function unlockRequirementText(tier: number): string {
-  if (tier <= 1) return `Tier 1: ${tierRequirementText(1)}`;
-  if (tier === 2) return `Tier 2: ${tierRequirementText(2)}`;
-  return `Tier 3: ${tierRequirementText(3)}`;
+  // Caller ("X locked until Tier N.") already owns the tier number;
+  // dropping the prefix here avoids "until Tier 1. Tier 1: ..." doubling.
+  const copyTier = Math.max(1, Math.min(6, tier)) as UnlockTier;
+  return tierRequirementText(copyTier);
 }
 
 function friendlyName(value: string): string {
@@ -833,13 +885,64 @@ function selectModuleTool(module: ModuleType): void {
   toolLockMessage = '';
 }
 
+/**
+ * Extract the display name from a legend item's rendered text. Parses
+ * things like "Cafeteria (C) C" → "Cafeteria". Avoids adding a separate
+ * RoomType→name map when the HTML already has the strings.
+ */
+function roomDisplayName(room: RoomType): string {
+  const entry = roomLegendByType.get(room);
+  if (!entry) return room;
+  const text = entry.textContent?.trim() ?? room;
+  const parenIdx = text.indexOf('(');
+  return (parenIdx > 0 ? text.slice(0, parenIdx) : text).trim();
+}
+
+/**
+ * Install locked/coming-next click handlers on the legend once. Called at
+ * startup AFTER roomLegendByType is populated. Idempotent — wire.ts tracks
+ * `_progAttached` per element.
+ */
+function installLegendProgressionHandlers(): void {
+  // Tooltip copy source: BMO's PROGRESSION_TOOLTIP_COPY (neighbors
+  // unlocks.ts). Player-facing "Unlocks when you..." voice; keeps
+  // tierRequirementText reserved for the raw-criteria progression modal.
+  attachLegendTooltipHandlers(
+    roomLegendByType,
+    roomDisplayName,
+    (t) => PROGRESSION_TOOLTIP_COPY[t]?.trigger ?? tierRequirementText(t),
+  );
+}
+
+// Previous-tier tracker for flash-on-advance. Initialized to the
+// current tier at startup so the first refresh doesn't spuriously fire.
+let prevUnlockTier: UnlockTier = 0;
+
 function refreshUnlockLegendAndHotkeys(): void {
   const tier = getUnlockTier(state);
-  const progressText = getUnlockProgressText(state);
-  unlockStatusEl.textContent = `Progression: Tier ${tier} (${TIER_PRESENTATION[tier].name}) | ${progressText}`;
-  for (const [room, entry] of roomLegendByType) {
-    entry.style.display = isRoomUnlocked(state, room) ? '' : 'none';
-  }
+  const copy = PROGRESSION_TOOLTIP_COPY[tier];
+  const nextTier = (tier < 6 ? tier + 1 : 6) as UnlockTier;
+  const nextCopy = nextTier > tier ? PROGRESSION_TOOLTIP_COPY[nextTier] : undefined;
+  // Status text pulls next-tier trigger copy from PROGRESSION_TOOLTIP_COPY
+  // (player-facing "Unlocks when you X" voice). Single source of truth
+  // shared with the quest bar + modal.
+  const label = copy?.name ?? TIER_PRESENTATION[tier].name;
+  const nextLine = nextCopy ? ` | Next: ${nextCopy.trigger}` : '';
+  unlockStatusEl.textContent = `Progression: Tier ${tier} — ${label}${nextLine}`;
+  // Quest bar — pinned "what do I do now" strip at the top of the sidebar.
+  // Reads state.unlocks.tier + triggerProgress[tier+1] + PROGRESSION_TOOLTIP_COPY.
+  // No new sim fields; lives alongside the existing status line surfaces.
+  renderQuestBar(state, questBarEl, (t) => PROGRESSION_TOOLTIP_COPY[t]);
+  // Phase-2 progression wiring — replaces the old `display: none` hide
+  // loop. Locked + coming-next-tier items stay VISIBLE with a state
+  // attribute + tooltip-on-click so players learn what unlocks them.
+  applyLegendStates(state, roomLegendByType);
+  prevUnlockTier = maybeFireTierFlash(
+    prevUnlockTier,
+    state,
+    roomDisplayName,
+    (t) => PROGRESSION_TOOLTIP_COPY[t],
+  );
   const unlockedModules = MODULE_HOTKEYS.filter(({ module }) => isModuleUnlocked(state, module))
     .map(({ key, label }) => `${key} ${label}`)
     .join(', ');
@@ -848,65 +951,20 @@ function refreshUnlockLegendAndHotkeys(): void {
 }
 
 function tierRequirementText(tier: UnlockTier): string {
-  if (tier === 0) return 'Starting package active immediately.';
-  if (tier === 1) {
-    return `air >= ${UNLOCK_CRITERIA.tier1.minAirQuality}, meals >= ${UNLOCK_CRITERIA.tier1.minMealStock}, active cafeteria + life support, and no active air warning`;
-  }
-  if (tier === 2) {
-    return `credits/min >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)} and completed logistics jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
-  }
-  return `residents >= ${UNLOCK_CRITERIA.tier3.minResidents}, resident satisfaction >= ${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)}, resolved incidents >= ${UNLOCK_CRITERIA.tier3.minResolvedIncidents}`;
+  return PROGRESSION_TOOLTIP_COPY[tier]?.trigger ?? 'Progression requirement unavailable.';
 }
 
 function tierProgressSnapshot(): TierProgressSnapshot {
   const tier = getUnlockTier(state);
-  let progress = 1;
-  if (tier === 0) {
-    const air = clamp(state.metrics.airQuality / UNLOCK_CRITERIA.tier1.minAirQuality, 0, 1);
-    const meals = clamp(state.metrics.mealStock / UNLOCK_CRITERIA.tier1.minMealStock, 0, 1);
-    const warningClear = state.metrics.airBlockedWarningActive ? 0 : 1;
-    const cafeteriaReady = state.ops.cafeteriasActive > 0 ? 1 : 0;
-    const lifeSupportReady = state.ops.lifeSupportActive > 0 ? 1 : 0;
-    progress = (air + meals + warningClear + cafeteriaReady + lifeSupportReady) / 5;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 1,
-      requirement:
-        `Air ${state.metrics.airQuality.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minAirQuality} | ` +
-        `Meals ${state.metrics.mealStock.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minMealStock} | ` +
-        `Cafeteria ${state.ops.cafeteriasActive > 0 ? 'online' : 'missing'} | ` +
-        `Life Support ${state.ops.lifeSupportActive > 0 ? 'online' : 'missing'} | ` +
-        `Air Warning ${state.metrics.airBlockedWarningActive ? 'active' : 'clear'}`
-    };
-  } else if (tier === 1) {
-    const credits = clamp(state.metrics.creditsNetPerMin / UNLOCK_CRITERIA.tier2.minCreditsNetPerMin, 0, 1);
-    const jobs = clamp(state.metrics.completedJobs / UNLOCK_CRITERIA.tier2.minCompletedJobs, 0, 1);
-    progress = (credits + jobs) / 2;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 2,
-      requirement:
-        `Credits/min ${state.metrics.creditsNetPerMin.toFixed(2)}/${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(2)} | ` +
-        `Logistics jobs ${state.metrics.completedJobs}/${UNLOCK_CRITERIA.tier2.minCompletedJobs}`
-    };
-  } else if (tier === 2) {
-    const residents = clamp(state.metrics.residentsCount / UNLOCK_CRITERIA.tier3.minResidents, 0, 1);
-    const sat = clamp(state.metrics.residentSatisfactionAvg / UNLOCK_CRITERIA.tier3.minResidentSatisfaction, 0, 1);
-    const incidents = clamp(state.metrics.incidentsResolved / UNLOCK_CRITERIA.tier3.minResolvedIncidents, 0, 1);
-    progress = (residents + sat + incidents) / 3;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 3,
-      requirement:
-        `Residents ${state.metrics.residentsCount}/${UNLOCK_CRITERIA.tier3.minResidents} | ` +
-        `Satisfaction ${state.metrics.residentSatisfactionAvg.toFixed(0)}/${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)} | ` +
-        `Resolved incidents ${state.metrics.incidentsResolved}/${UNLOCK_CRITERIA.tier3.minResolvedIncidents}`
-    };
+  if (tier >= 6) {
+    return { pct: 100, nextTier: null, requirement: 'All progression tiers unlocked.' };
   }
+  const nextTier = (tier + 1) as UnlockTier;
+  const progress = UNLOCK_DEFINITIONS[nextTier - 1].trigger.progress(state.metrics);
   return {
-    pct: 100,
-    nextTier: null,
-    requirement: 'All progression tiers unlocked.'
+    pct: Math.round(progress * 100),
+    nextTier,
+    requirement: PROGRESSION_TOOLTIP_COPY[nextTier].trigger,
   };
 }
 
@@ -926,15 +984,19 @@ function refreshProgressionModal(): void {
 
   if (progress.nextTier !== null) {
     const nextInfo = TIER_PRESENTATION[progress.nextTier];
+    const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
     progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${tierRequirementText(progress.nextTier)}`;
+    // S2.1: modal "Unlock Requirement" pulls from PROGRESSION_TOOLTIP_COPY
+    // (player-facing trigger voice). Matches the status-line + quest-bar.
+    const requirement = nextCopy?.trigger ?? tierRequirementText(progress.nextTier);
+    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${requirement}`;
     progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
     progressModalNextNeedsEl.textContent = `New Citizen Needs: ${formatTierList(nextInfo.citizenNeeds)}`;
     progressModalNextVisitorNeedsEl.textContent = `New Visitor/Ship Needs: ${formatTierList(nextInfo.visitorNeeds)}`;
     progressModalNextShipsEl.textContent = `New Ship Families: ${formatTierList(nextInfo.ships)}`;
     progressModalNextSystemsEl.textContent = `New Systems: ${formatTierList(nextInfo.systems)}`;
   } else {
-    progressModalNextTierNameEl.textContent = 'Tier 3 complete: all systems online';
+    progressModalNextTierNameEl.textContent = 'Tier 6 complete: all tiers unlocked';
     progressModalNextCriteriaEl.textContent = 'Unlock Requirement: n/a';
     progressModalNextBuildingsEl.textContent = 'New Buildings: none';
     progressModalNextNeedsEl.textContent = 'New Citizen Needs: none';
@@ -954,7 +1016,7 @@ function refreshProgressionModal(): void {
           <span class="progression-tier-status">${statusLabel}</span>
         </div>
         <small class="progression-tier-theme-line">${entry.theme}</small>
-        <small><strong>Unlock Requirement:</strong> ${tierRequirementText(entryTier)}</small>
+        <small><strong>Unlock Requirement:</strong> ${PROGRESSION_TOOLTIP_COPY[entryTier]?.trigger ?? tierRequirementText(entryTier)}</small>
         <small><strong>Buildings:</strong> ${formatTierList(entry.buildings)}</small>
         <small><strong>Citizen Needs:</strong> ${formatTierList(entry.citizenNeeds)}</small>
         <small><strong>Visitor/Ship Needs:</strong> ${formatTierList(entry.visitorNeeds)}</small>
@@ -1066,6 +1128,24 @@ function refreshPriorityUi(): void {
   }
 }
 refreshPriorityUi();
+// Initialize prev-tier tracker to current (prevents flash on cold-load /
+// save-restore). Then install the progression click handlers + paint
+// initial states.
+prevUnlockTier = state.unlocks.tier;
+installLegendProgressionHandlers();
+// S1 fix: auto-expand the Build & Room Legend at tiers 0-2. New players
+// wouldn't open it otherwise and miss the tiered tool palette entirely
+// (BMO's morning-status playtest finding). One-shot at init — if the
+// player manually collapses later it stays collapsed, and save-restores
+// at T3+ start collapsed since that legend is past its teaching window.
+if (state.unlocks.tier <= 2) {
+  // Target the Build & Room Legend specifically via its unique .legend-grid
+  // child. `:has(.legend-title)` would match all 5 section details (Core
+  // Status / Logistics / etc. share the legend-title class), so use the
+  // closest-details pattern instead.
+  const buildLegend = document.querySelector('.legend-grid')?.closest('details');
+  if (buildLegend) buildLegend.open = true;
+}
 refreshUnlockLegendAndHotkeys();
 refreshProgressionModal();
 
@@ -2021,7 +2101,7 @@ window.addEventListener('keydown', (e) => {
     case 'F2':
       state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
       if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-        void loadSpriteAtlas().then((loaded) => {
+        void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
           spriteAtlas = loaded;
         });
       }
@@ -2143,7 +2223,7 @@ toggleInventoryOverlayBtn.addEventListener('click', () => {
 toggleSpritesBtn.addEventListener('click', () => {
   state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
   if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-    void loadSpriteAtlas().then((loaded) => {
+    void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
       spriteAtlas = loaded;
     });
   }
@@ -2151,6 +2231,23 @@ toggleSpritesBtn.addEventListener('click', () => {
 
 toggleSpriteFallbackBtn.addEventListener('click', () => {
   state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
+});
+
+let pipelineLoadInFlight = false;
+toggleSpritePipelineBtn.addEventListener('click', () => {
+  if (pipelineLoadInFlight) return;
+  state.controls.spritePipeline = state.controls.spritePipeline === 'pixellab' ? 'nano-banana' : 'pixellab';
+  // Reload atlas from the new pipeline immediately; sprite mode state
+  // is preserved but the atlas swaps under it. Eager fetch so when the
+  // user toggles sprites on, the new atlas is already warm.
+  pipelineLoadInFlight = true;
+  void loadSpriteAtlas(state.controls.spritePipeline)
+    .then((loaded) => {
+      spriteAtlas = loaded;
+    })
+    .finally(() => {
+      pipelineLoadInFlight = false;
+    });
 });
 
 openSaveModalBtn.addEventListener('click', () => {
@@ -2644,6 +2741,7 @@ function frame(now: number): void {
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
   toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
+  toggleSpritePipelineBtn.textContent = `Pipeline: ${state.controls.spritePipeline}`;
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
     : 'Force Fallback: OFF';
@@ -2925,7 +3023,7 @@ function frame(now: number): void {
 }
 
 async function startGameLoop(): Promise<void> {
-  spriteAtlas = await loadSpriteAtlas();
+  spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
   requestAnimationFrame(frame);
 }
 

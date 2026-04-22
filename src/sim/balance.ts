@@ -251,23 +251,6 @@ export const PROCESS_RATES = {
   clinicDistressRecoveryPerSec: 2.4
 } as const;
 
-export const UNLOCK_CRITERIA = {
-  tier1: {
-    minMealStock: 18,
-    minAirQuality: 60,
-    minNoCriticalAirWarningSec: 12
-  },
-  tier2: {
-    minCreditsNetPerMin: 0.4,
-    minCompletedJobs: 14
-  },
-  tier3: {
-    minResidents: 4,
-    minResidentSatisfaction: 58,
-    minResolvedIncidents: 2
-  }
-} as const;
-
 export const SHIP_SERVICE_WEIGHT_BY_TYPE: Record<ShipType, number> = {
   tourist: 1,
   trader: 1,
@@ -303,7 +286,3 @@ export const TASK_TIMINGS = {
   residentSleepSec: 3.2,
   residentCleanSec: 2.2
 } as const;
-
-export function normalizeModuleType(module: ModuleType): ModuleType {
-  return module === ModuleType.GrowTray ? ModuleType.GrowStation : module;
-}

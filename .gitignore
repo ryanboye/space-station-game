@@ -5,6 +5,15 @@ node_modules/
 # Build output
 dist/
 
+# Sprite pipeline: post-processed outputs are regenerated from raw/ by
+# postprocess-raw.mjs every sprite rebuild, so they're pure noise in
+# PR diffs. Raws stay TRACKED — generate-nanobanana.mjs uses raw/ as a
+# skip-cache (a raw on disk means "don't re-burn a Gemini call for
+# this key"), and keeping raw history lets us bisect regressions back
+# to the exact generation that shipped.
+tools/sprites/out/processed/
+tools/sprites/out/processed-pixellab/
+
 # Local env files
 .env
 .env.*

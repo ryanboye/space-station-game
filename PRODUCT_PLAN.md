@@ -1,5 +1,69 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
+## 0) Current Execution Status
+*Last updated: 2026-04-22 16:30Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `a59ac5f`.*
+
+### Current milestone
+**M1 Unlock Progression v1 + Tutorial Onboarding — shipped.** Six-tier predicate advance live end-to-end. T0→T1 now fires on first-visitor-arrives (was blocked by missing food infra in starter state), quest bar pinned at top of sidebar reads the live `PROGRESSION_TOOLTIP_COPY` + `.progress()` each tick, pre-placed east-hull dock on fresh start.
+
+### Lanes (active bots)
+- **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
+- **seb** — render integration, deploy ops, sprite packing. Full pipeline ownership on the render side.
+- **BMO** (awfml's bot) — spec + PR review + deploy coordination + mechanics-reference docs + morning-status writeups.
+- **barnacle** (barn's bot) — harness scenarios + per-tier unlock smoke tests + QA diagnostics.
+
+### Shipped — merged overnight 2026-04-21/22
+| PR | Commit | What |
+|----|--------|------|
+| #3 | `046015d` | systemd pull-and-build deploy wiring → `bmo.ryanboye.com/spacegame/` |
+| #5 | `93a0cd6` | unlocks v2 scaffold — 6-tier shape + trigger predicate interface + lifetime counter stubs |
+| #6 | `3e519bd` | wire `creditsEarnedLifetime` + `incidentsResolvedLifetime` increment sites |
+| #7 | `bb49e62` | progression UI render primitives (`data-progression-state` attr, tooltip singleton, tier-flash overlay) |
+| #8 | `7607531` | deploy v1.1 — `build.sh` force-on-empty + README ProtectHome + ReadWritePaths notes |
+| #9 | `1edd242` | predicate-driven tier advance — loop over `UNLOCK_DEFINITIONS.trigger.predicate` + `archetypesServedLifetime` |
+| #10 | `dd7c7ad` | `tradeCyclesCompletedLifetime` increment at workshop→market sale |
+| #11 | `323ac8c` | phase-2 wiring — progression UI reads live `UnlockState`, flash fires on advance |
+| #12 | `864fb02` | S2 — status line uses `PROGRESSION_TOOLTIP_COPY` not legacy `UNLOCK_CRITERIA` |
+| #13 | `b1db92f` | 6 nano-banana tier-unlock icons (`icon.tier1_unlock` … `icon.tier6_unlock`) |
+| #14 | `2b72dfe` | S1 — Build & Room Legend auto-expands at tiers 0–2 |
+| #15 | `342af5f` | S2.1 — progression modal header uses new copy |
+| #16 | `4f21474` | S2.2 — modal tier-cards "Unlock Requirement" copy aligned |
+| #17 | `ad0bf7a` | docs — Section 0 current execution status for bot-swarm coordination |
+| #18 | `fc6aee7` | hygiene — gitignore `tools/sprites/out/processed/` + untrack 73 intermediates |
+| #20 | `d9fa188` | onboarding — pre-place 2-tile visitor dock on fresh start (east hull) |
+| #21 | `dbc2272` | render/progression — quest bar pinned sidebar strip ("what do I do now") |
+| #22 | `00d9a35` | progression — T0→T1 fires on first-visitor-arrives + 5 stale copy sites swept |
+| #23 | `389042d` | docs — §0 refresh post PRs #17-22 |
+| #24 | `a59ac5f` | chore — sweep legacy UNLOCK_CRITERIA copy in locked-room/module tooltips |
+
+### Open PRs
+- **#4** `feat(harness): Harness v1.0 — Playwright runner + window hooks + CI advisory` (barnacle).
+  Waiting on awfml's one-click merge. BMO's PAT lacks `workflow` scope to self-merge workflow-touching PRs.
+- **#19** `test(harness): agent-movement spec — catches sim-freeze bugs` (tinyclaw).
+  Depends on harness window hooks from #4; unblocks when #4 merges.
+- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw).
+  Static debug page, ready for merge when someone picks it up. Non-blocking.
+
+### Backlog (priority-ordered)
+1. **Phase 5 counter wiring** (blocked on Phase 5 producer events): `actorsTreatedLifetime` + `residentsConvertedLifetime` — placeholder wiring useless until treatment + conversion sites exist in `sim.ts`.
+2. **tierProgressSnapshot() cleanup** — `main.ts:956-1000` still uses `UNLOCK_CRITERIA` for progress-bar math + only handles tiers 0-2. Modal progress bar for T3-T6 is broken. Rewrite to `UNLOCK_DEFINITIONS[n-1].trigger.progress(metrics)` — cleanup follow-up to #24 which only covered `tierRequirementText`.
+3. **Phase 5 / Health + Morgue mechanics reference doc** (BMO's lane, parked by the tutorial pivot).
+4. **Sprite polish** — regen modules/agents where current nano-banana outputs are weakest; consider pixellab rotate for 4/8-direction agent sprites.
+5. **gpt-image-2 / Nano Banana Pro evaluation** — seb has pricing ($0.063/image HD vs $0.015 for Nano Banana Pro vs $0.04 current Imagen-4). Potential atlas rebuild. Sam parked the OpenRouter wire-up for later; revisit when she's ready.
+6. **Starter food chain (option B)** — pre-activate Reactor + Life Support + pre-place Hydroponics + Kitchen + Cafeteria with modules + hire 1 starter crew in `createInitialState`. Post-PR#22 playtest: visitors arrive + T1 flash fires within 10s, but visitors starve/die ~60s later because no food infra. tinyclaw scoping this fire for fire 7 ship.
+7. **T6 specialization design (open question)** — tier is currently a gated no-op. Strawman: station-type selector + military/colonist ships. Brainstorm posted to Wheat 2026-04-22; pending team response.
+
+### Risks / open questions
+- Phase 5 (health/death/morgue) scoped but not built. Unlocks v2 has placeholder predicates for T5 that won't fire until Phase 5 lands.
+- T6 specialization predicate is intentionally a no-op until we decide how "tutorial complete" gates. Ship this decision before ~week 2 of playtesting.
+- `tools/sprites/out/processed/` tracked in git produces sprawling diffs on every sprite regen. Hygiene PR will fix, but until then PR diffs look scary.
+- No visual regression baseline yet. barnacle's harness v1.0 has the hooks; the baseline screenshot step is v1.1.
+
+### Ritual
+Before merging ANY PR touching `src/sim/` or `src/render/`: 4 parallel agents — 2 × `/simplify` + 2 × `/review`. Pure-docs PRs ≤ 50 lines can merge without the ritual. All render-touching PRs attach a Playwright smoke screenshot to the PR body.
+
+---
+
 ## 1) Purpose
 Translate the Vision Draft into implementable product requirements with explicit system behavior, player-facing outcomes, and measurable success criteria.
 

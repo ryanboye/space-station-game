@@ -64,11 +64,20 @@
     "sprites:build:floors-walls": "npm run sprites:generate:floors-walls && npm run sprites:process:floors-walls && node tools/sprites/pack-atlas.mjs --profile floors-walls --source processed && npm run sprites:validate:floors-walls",
     "sprites:build:floors-walls:activate": "npm run sprites:generate:floors-walls && npm run sprites:process:floors-walls && node tools/sprites/pack-atlas.mjs --profile floors-walls --source processed --activate && npm run sprites:validate:floors-walls",
     "sprites:build:agents": "npm run sprites:generate:agents && npm run sprites:process:agents && node tools/sprites/pack-atlas.mjs --profile agents --source processed && npm run sprites:validate:agents",
-    "sprites:build:tiles-full": "npm run sprites:generate:tiles-full && npm run sprites:process:tiles-full && node tools/sprites/pack-atlas.mjs --profile tiles-full --source processed && npm run sprites:validate:tiles-full"
+    "sprites:build:tiles-full": "npm run sprites:generate:tiles-full && npm run sprites:process:tiles-full && node tools/sprites/pack-atlas.mjs --profile tiles-full --source processed && npm run sprites:validate:tiles-full",
+    "sprites:generate:pixellab": "node tools/sprites/generate-pixellab.mjs --profile v1",
+    "sprites:regenerate:pixellab": "node tools/sprites/generate-pixellab.mjs --profile v1 --overwrite",
+    "sprites:process:pixellab": "node tools/sprites/postprocess-raw.mjs --profile v1 --variant pixellab --overwrite",
+    "sprites:pack:pixellab": "node tools/sprites/pack-atlas.mjs --profile v1 --variant pixellab --source processed",
+    "sprites:build:pixellab": "npm run sprites:generate:pixellab && npm run sprites:process:pixellab && npm run sprites:pack:pixellab"
   },
   "devDependencies": {
     "@google/genai": "^1.30.0",
+
     "@playwright/test": "^1.44.0",
+
+    "@pixellab-code/pixellab": "^1.0.2",
+
     "dotenv": "^16.5.0",
     "sharp": "^0.34.4",
     "typescript": "^5.6.3",

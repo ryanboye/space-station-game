@@ -5,13 +5,12 @@ import {
   ROOM_DEFINITIONS,
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
-  TASK_TIMINGS,
-  UNLOCK_CRITERIA,
-  normalizeModuleType
+  TASK_TIMINGS
 } from './balance';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import { SHIP_PROFILES } from './content/ships';
 import {
+  UNLOCK_DEFINITIONS,
   createInitialUnlockState,
   isModuleUnlockedAtTier,
   isRoomUnlockedAtTier
@@ -78,9 +77,6 @@ const BASE_CAPACITY = 30;
 const CYCLE_DURATION = 15;
 const MAX_SHIPS_PER_CYCLE = 3;
 const MAX_OCCUPANTS_PER_TILE = 4;
-export const ENABLE_UNLOCKS_V1 = true;
-export const ENABLE_SHIP_PACK_V1 = true;
-export const ENABLE_RESIDENT_ROUTINES_V2 = true;
 
 const CREW_PER_CAFETERIA = 1;
 const CREW_PER_KITCHEN = 1;
@@ -145,7 +141,6 @@ const AIR_BLOCKED_WARNING_DELAY_SEC = 8;
 const DORM_SEEK_ENERGY_THRESHOLD = 55;
 const BODY_CLEAR_BATCH = 4;
 const BODY_CLEAR_MATERIAL_COST = 6;
-const ENABLE_RESIDENTS_NOW = true;
 const RESIDENT_CONVERSION_BASE_CHANCE = 0.03;
 const RESIDENT_TAX_PERIOD = 24;
 const RESIDENT_TAX_PER_HEAD = 0.42;
@@ -315,7 +310,6 @@ function serviceTagUnlockTier(tag: ShipServiceTag): UnlockTier {
 }
 
 function isServiceTagUnlocked(state: StationState, tag: ShipServiceTag): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return state.unlocks.tier >= serviceTagUnlockTier(tag);
 }
 
@@ -348,69 +342,41 @@ function shipTypeUnlockTier(shipType: ShipType): UnlockTier {
 }
 
 export function isShipTypeUnlocked(state: StationState, shipType: ShipType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return state.unlocks.tier >= shipTypeUnlockTier(shipType);
 }
 
 export function isRoomUnlocked(state: StationState, room: RoomType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return isRoomUnlockedAtTier(room, state.unlocks.tier);
 }
 
 export function isModuleUnlocked(state: StationState, module: ModuleType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return isModuleUnlockedAtTier(module, state.unlocks.tier);
 }
 
-function unlockTierProgressText(state: StationState): string {
-  if (!ENABLE_UNLOCKS_V1) return 'Progression disabled';
-  if (state.unlocks.tier >= 3) return 'All tiers unlocked';
-  if (state.unlocks.tier === 0) {
-    return `Tier 1: air >= ${UNLOCK_CRITERIA.tier1.minAirQuality}, meals >= ${UNLOCK_CRITERIA.tier1.minMealStock}`;
-  }
-  if (state.unlocks.tier === 1) {
-    return `Tier 2: net >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)}/min, jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
-  }
-  return `Tier 3: residents >= ${UNLOCK_CRITERIA.tier3.minResidents}, sat >= ${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)}`;
-}
-
 function updateUnlockProgress(state: StationState): void {
-  if (!ENABLE_UNLOCKS_V1) return;
   const unlockIdSet = new Set(state.unlocks.unlockedIds);
-  if (
-    state.unlocks.tier < 1 &&
-    state.metrics.airQuality >= UNLOCK_CRITERIA.tier1.minAirQuality &&
-    state.metrics.mealStock >= UNLOCK_CRITERIA.tier1.minMealStock &&
-    !state.metrics.airBlockedWarningActive &&
-    state.ops.cafeteriasActive > 0 &&
-    state.ops.lifeSupportActive > 0
-  ) {
-    state.unlocks.tier = 1;
-    unlockIdSet.add('tier1_stability');
-    state.unlocks.unlockedAtSec.tier1_stability = state.now;
-  }
-  if (
-    state.unlocks.tier < 2 &&
-    state.metrics.creditsNetPerMin >= UNLOCK_CRITERIA.tier2.minCreditsNetPerMin &&
-    state.metrics.completedJobs >= UNLOCK_CRITERIA.tier2.minCompletedJobs
-  ) {
-    state.unlocks.tier = 2;
-    unlockIdSet.add('tier2_logistics');
-    state.unlocks.unlockedAtSec.tier2_logistics = state.now;
-  }
-  if (
-    state.unlocks.tier < 3 &&
-    state.residents.length >= UNLOCK_CRITERIA.tier3.minResidents &&
-    state.metrics.residentSatisfactionAvg >= UNLOCK_CRITERIA.tier3.minResidentSatisfaction &&
-    state.metrics.incidentsResolved >= UNLOCK_CRITERIA.tier3.minResolvedIncidents
-  ) {
-    state.unlocks.tier = 3;
-    unlockIdSet.add('tier3_civic');
-    state.unlocks.unlockedAtSec.tier3_civic = state.now;
+  // Predicate-driven advance. Loop up from current tier, evaluate each
+  // tier's trigger against live metrics. Monotonic lifetime counters
+  // mean predicates never go false once true, so the advance is
+  // stable across save/load + safe to re-evaluate each tick. At the
+  // first un-met tier, record progress (for the "coming next" UI)
+  // and stop — we never advance past a gate that hasn't fired.
+  for (let t = state.unlocks.tier + 1; t <= 6; t++) {
+    const tier = t as UnlockTier;
+    const def = UNLOCK_DEFINITIONS.find((d) => d.tier === tier);
+    if (!def) break;
+    if (def.trigger.predicate(state.metrics)) {
+      state.unlocks.tier = tier;
+      unlockIdSet.add(def.id);
+      state.unlocks.unlockedAtSec[def.id] = state.now;
+      state.unlocks.triggerProgress[tier] = 1;
+      continue; // check the next tier in the same tick
+    }
+    state.unlocks.triggerProgress[tier] = def.trigger.progress(state.metrics);
+    break;
   }
   state.unlocks.unlockedIds = [...unlockIdSet];
   state.metrics.unlockTier = state.unlocks.tier;
-  state.metrics.unlockProgressText = unlockTierProgressText(state);
 }
 
 function serviceFailureRatingPenalty(
@@ -1999,6 +1965,7 @@ function activeFightIncidentForResident(state: StationState, residentId: number)
 }
 
 function applyAirExposure(
+  state: StationState,
   actor: { airExposureSec: number; healthState: 'healthy' | 'distressed' | 'critical' },
   airQuality: number,
   dt: number
@@ -2015,12 +1982,19 @@ function applyAirExposure(
     return { died: true };
   }
 
+  const priorHealthState = actor.healthState;
   actor.healthState =
     actor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
       ? 'critical'
       : actor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
         ? 'distressed'
         : 'healthy';
+  // Proxy for `actorsTreatedLifetime` — increments on recovery-to-healthy
+  // from a worse state. Placeholder until Phase 5 wires explicit medical
+  // treatment events; keeps T5 predicate reachable in the meantime.
+  if (priorHealthState !== 'healthy' && actor.healthState === 'healthy') {
+    state.metrics.actorsTreatedLifetime += 1;
+  }
   return { died: false };
 }
 
@@ -2139,6 +2113,7 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     rusher: 0.1
   };
   const archetype = pickArchetypeFromMix(state, mix);
+  state.usageTotals.archetypesEverSeen[archetype] = true;
   const profile = ARCHETYPE_PROFILES[archetype];
   const primaryPreference = pickVisitorPrimaryPreference(state, archetype, ship?.manifestDemand ?? null);
   const visitor: Visitor = {
@@ -2184,11 +2159,10 @@ function ensureCrewPool(state: StationState): void {
   }
 }
 
-function ensureResidentPopulation(state: StationState): void {
-  if (!ENABLE_RESIDENTS_NOW) {
-    state.residents.length = 0;
-    return;
-  }
+function ensureResidentPopulation(_state: StationState): void {
+  // No-op placeholder: residents join via visitor conversion +
+  // residential-ship boarding, populated at those event sites. Kept as
+  // a seam for future population-cap enforcement.
 }
 
 function rebuildDockEntities(state: StationState): void {
@@ -2397,6 +2371,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   state.residents.push(resident);
   ship.residentIds.push(resident.id);
   state.usageTotals.residentConversionSuccesses += 1;
+  state.metrics.residentsConvertedLifetime += 1;
   return resident;
 }
 
@@ -3550,7 +3525,6 @@ function scheduleCycleArrivals(state: StationState): void {
     const availableTypes = new Set<ShipType>();
     for (const dock of laneDocks) {
       for (const type of dock.allowedShipTypes) {
-        if (!ENABLE_SHIP_PACK_V1 && (type === 'military' || type === 'colonist')) continue;
         if (!isShipTypeUnlocked(state, type)) continue;
         availableTypes.add(type);
       }
@@ -4483,7 +4457,7 @@ function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: 
   if (state.crewMembers.length <= 0) return;
   const keep: CrewMember[] = [];
   for (const crew of state.crewMembers) {
-    const exposure = applyAirExposure(crew, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, crew, state.metrics.airQuality, dt);
     if (exposure.died) {
       releaseCrewJobsOnDeath(state, crew.id);
       registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
@@ -4912,7 +4886,6 @@ function shouldTryMealAfterLeisure(state: StationState, visitor: Visitor): boole
 }
 
 function marketHelperMultiplier(state: StationState): number {
-  if (!ENABLE_RESIDENT_ROUTINES_V2) return 1;
   let workers = 0;
   for (const resident of state.residents) {
     if (resident.role !== 'market_helper') continue;
@@ -4958,7 +4931,7 @@ function updateVisitorLogic(
   let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
-    const exposure = applyAirExposure(visitor, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, visitor, state.metrics.airQuality, dt);
     if (exposure.died) {
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
       continue;
@@ -5179,6 +5152,11 @@ function updateVisitorLogic(
         if (consumedGoods > 0) {
           spendMultiplier = 1 + consumedGoods * 0.9;
           state.usageTotals.tradeGoodsSold += consumedGoods;
+          // Trade-cycle counter for the T3 unlock gate. One sale event
+          // here = one workshop→market cycle completed (the goods were
+          // produced at a workshop earlier and are now being consumed
+          // by a visitor). Lifetime-monotonic; increments per sale.
+          state.metrics.tradeCyclesCompletedLifetime += consumedGoods;
           marketTradeGoodsUsed += consumedGoods;
           visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
         } else {
@@ -5188,6 +5166,7 @@ function updateVisitorLogic(
         }
         const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
         state.metrics.credits += spend;
+        state.metrics.creditsEarnedLifetime += spend;
         state.usageTotals.creditsMarketGross += spend;
         state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
@@ -5223,6 +5202,7 @@ function updateVisitorLogic(
           if (visitor.servedMeal) {
             const payout = mealExitPayout(state, visitor);
             state.metrics.credits += payout;
+            state.metrics.creditsEarnedLifetime += payout;
             state.usageTotals.creditsMealPayoutGross += payout;
           }
           state.recentExitTimes.push(state.now);
@@ -5426,7 +5406,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     }
   }
 
-  if (!criticalNeed && ENABLE_RESIDENT_ROUTINES_V2 && resident.routinePhase === 'work') {
+  if (!criticalNeed && resident.routinePhase === 'work') {
     const workTargets = residentWorkTargets(state, resident);
     if (workTargets.length > 0) {
       resident.state = ResidentState.ToLeisure;
@@ -5604,6 +5584,12 @@ function resolveIncident(
   incident.stage = 'resolved';
   incident.resolvedAt = state.now;
   incident.extendedResolveAt = null;
+  // Lifetime counter — increment at the resolve EVENT (not a scan over
+  // `state.incidents`, which prunes resolved incidents after the
+  // retention window and would make this field non-monotonic). Failed
+  // incidents stay out — `failIncident` below has its own resolvedAt
+  // write but is semantically distinct from "resolved".
+  state.metrics.incidentsResolvedLifetime += 1;
   if (incident.type === 'fight') {
     incident.outcome = options?.fightOutcome ?? (incident.severity > 1.35 ? 'detained' : 'deescalated');
     for (const residentId of incident.residentParticipantIds) {
@@ -5775,7 +5761,7 @@ function updateResidentLogic(
 ): void {
   const keep: Resident[] = [];
   for (const resident of state.residents) {
-    const exposure = applyAirExposure(resident, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, resident, state.metrics.airQuality, dt);
     if (exposure.died) {
       unlinkResidentFromShip(state, resident);
       registerBodyDeathAtTile(state, resident.tileIndex, occupancyByTile);
@@ -6081,7 +6067,7 @@ function activeResidentRoleCounts(state: StationState): Record<ResidentRole, num
 }
 
 function updateResources(state: StationState, dt: number): void {
-  const roleWorkers = ENABLE_RESIDENT_ROUTINES_V2 ? activeResidentRoleCounts(state) : { none: 0, market_helper: 0, hydro_assist: 0, civic_watch: 0 };
+  const roleWorkers = activeResidentRoleCounts(state);
   const leakPenalty = state.metrics.leakingTiles * 0.03;
   const powerRatio = clamp(state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand), 0.35, 1);
   const hydroAssistMultiplier =
@@ -6257,6 +6243,7 @@ function applyResidentTaxes(state: StationState): void {
   const collected = taxableResidents * RESIDENT_TAX_PER_HEAD * multiplier;
   if (collected <= 0) return;
   state.metrics.credits += collected;
+  state.metrics.creditsEarnedLifetime += collected;
   state.usageTotals.residentTaxesCollected += collected;
 }
 
@@ -6509,7 +6496,17 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentsCount = residentsCount;
   state.metrics.incidentsOpen = openIncidents;
   state.metrics.incidentsResolved = resolvedIncidents;
+  // Note: incidentsResolvedLifetime is NOT mirrored here — the
+  // scan-based `resolvedIncidents` drops as state.incidents prunes old
+  // resolved records past INCIDENT_RESOLVED_RETENTION_SEC, breaking
+  // monotonicity. It's incremented at the resolve event in
+  // resolveIncident() instead.
   state.metrics.incidentsFailed = failedIncidents;
+  // Derive lifetime-monotonic archetypes-seen count from the boolean
+  // record in usageTotals. O(4) constant — cheap to run every metrics pass.
+  state.metrics.archetypesServedLifetime = Object.values(
+    state.usageTotals.archetypesEverSeen,
+  ).filter(Boolean).length;
   state.metrics.securityDispatches = state.usageTotals.securityDispatches;
   state.metrics.securityResponseAvgSec = avgSecurityResponseSec;
   state.metrics.residentConfrontations = confrontingResidents;
@@ -6956,7 +6953,6 @@ export function createInitialState(options?: { seed?: number }): StationState {
       stationRating: STATION_RATING_START,
       stationRatingTrendPerMin: 0,
       unlockTier: 0,
-      unlockProgressText: 'Tier 1: air >= 60, meals >= 18',
       rawFoodStock: 40,
       mealStock: 20,
       kitchenRawBuffer: 0,
@@ -6997,6 +6993,12 @@ export function createInitialState(options?: { seed?: number }): StationState {
         rusher: 0
       },
       mealsServedTotal: 0,
+      creditsEarnedLifetime: 0,
+      archetypesServedLifetime: 0,
+      tradeCyclesCompletedLifetime: 0,
+      incidentsResolvedLifetime: 0,
+      actorsTreatedLifetime: 0,
+      residentsConvertedLifetime: 0,
       cafeteriaNonNodeSeatedCount: 0,
       maxBlockedTicksObserved: 0,
       pendingJobs: 0,
@@ -7180,6 +7182,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       showInventoryOverlay: false,
       spriteMode: 'fallback',
       showSpriteFallback: false,
+      spritePipeline: 'nano-banana',
       taxRate: 0.2,
       dockPlacementFacing: 'north',
       moduleRotation: 0,
@@ -7249,6 +7252,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       payrollPaid: 0,
       tradeGoodsSold: 0,
       marketStockouts: 0,
+      archetypesEverSeen: { diner: false, shopper: false, lounger: false, rusher: false },
       shipsByType: {
         tourist: 0,
         trader: 0,
@@ -7601,10 +7605,6 @@ export function getUnlockTier(state: StationState): UnlockTier {
   return state.unlocks.tier;
 }
 
-export function getUnlockProgressText(state: StationState): string {
-  return state.metrics.unlockProgressText;
-}
-
 export function setRoomHousingPolicy(state: StationState, index: number, policy: HousingPolicy): boolean {
   const room = state.rooms[index];
   if (!isHousingPolicyAllowedForRoom(room, policy)) return false;
@@ -7887,7 +7887,7 @@ export function tryPlaceModule(
   originTile: number,
   rotation: ModuleRotation = 0
 ): { ok: boolean; reason?: string } {
-  const module = normalizeModuleType(moduleType);
+  const module = moduleType;
   const requiresWallMount = module === ModuleType.WallLight;
   if (requiresWallMount) {
     if (state.tiles[originTile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
@@ -7974,7 +7974,7 @@ export function setModule(state: StationState, index: number, module: ModuleType
   }
   state.moduleInstances.push({
     id: state.moduleSpawnCounter++,
-    type: normalizeModuleType(module),
+    type: module,
     originTile: index,
     rotation: 0,
     width: 1,
@@ -8172,6 +8172,7 @@ export function sellMaterials(state: StationState, materialsCost: number, credit
   if (removed < materialsCost) return false;
   state.metrics.materials = Math.max(0, state.metrics.materials - removed);
   state.metrics.credits += creditGain;
+  state.metrics.creditsEarnedLifetime += creditGain;
   return true;
 }
 
@@ -8187,6 +8188,7 @@ export function sellRawFood(state: StationState, rawFoodCost: number, creditGain
   if (removed < rawFoodCost) return false;
   state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - removed, 0, 260);
   state.metrics.credits += creditGain;
+  state.metrics.creditsEarnedLifetime += creditGain;
   return true;
 }
 
@@ -8316,12 +8318,8 @@ export function tick(state: StationState, frameDt: number): void {
   state.effects.securityAuraByTile = computeSecurityAuraMap(state);
   const securityAuraByTile = state.effects.securityAuraByTile;
   updateCriticalStaffTracking(state, dt);
-  if (ENABLE_RESIDENTS_NOW) {
-    updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
-    tryStartResidentConfrontation(state, dt, securityAuraByTile);
-  } else {
-    state.residents.length = 0;
-  }
+  updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
+  tryStartResidentConfrontation(state, dt, securityAuraByTile);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   updateIncidentPipeline(state, dt, occupancyByTile);
 

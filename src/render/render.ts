@@ -15,7 +15,7 @@ import {
   type BuildTool,
   type StationState
 } from '../sim/types';
-import { MODULE_DEFINITIONS, normalizeModuleType } from '../sim/balance';
+import { MODULE_DEFINITIONS } from '../sim/balance';
 import {
   collectActiveRoomTiles,
   collectQueueTargets,
@@ -1288,8 +1288,7 @@ function readServiceOverlay(state: StationState): ServiceOverlayCache {
 }
 
 function previewFootprint(module: ModuleType, rotation: 0 | 90): { width: number; height: number } {
-  const normalized = normalizeModuleType(module);
-  const def = MODULE_DEFINITIONS[normalized] ?? MODULE_DEFINITIONS[ModuleType.None];
+  const def = MODULE_DEFINITIONS[module] ?? MODULE_DEFINITIONS[ModuleType.None];
   if (rotation === 90 && def.rotatable) return { width: def.height, height: def.width };
   return { width: def.width, height: def.height };
 }
@@ -1319,16 +1318,15 @@ function validateModulePreviewPlacement(
   originTile: number,
   rotation: 0 | 90
 ): { valid: boolean; tiles: number[] } {
-  const normalized = normalizeModuleType(moduleType);
-  if (normalized === ModuleType.None) return { valid: true, tiles: [originTile] };
-  const def = MODULE_DEFINITIONS[normalized];
+  if (moduleType === ModuleType.None) return { valid: true, tiles: [originTile] };
+  const def = MODULE_DEFINITIONS[moduleType];
   if (!def) return { valid: false, tiles: [originTile] };
-  const footprint = previewFootprint(normalized, rotation);
+  const footprint = previewFootprint(moduleType, rotation);
   const tiles = previewTiles(state, originTile, footprint.width, footprint.height);
   if (!tiles) return { valid: false, tiles: [originTile] };
   const roomAtOrigin = state.rooms[originTile];
   for (const tile of tiles) {
-    if (normalized === ModuleType.WallLight) {
+    if (moduleType === ModuleType.WallLight) {
       if (state.tiles[tile] !== TileType.Wall) return { valid: false, tiles };
     } else if (!isWalkable(state.tiles[tile])) {
       return { valid: false, tiles };
@@ -1337,7 +1335,7 @@ function validateModulePreviewPlacement(
     if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) return { valid: false, tiles };
     if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
   }
-  if (normalized === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
+  if (moduleType === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
     return { valid: false, tiles };
   }
   return { valid: true, tiles };

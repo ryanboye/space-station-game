@@ -30,7 +30,7 @@ const NON_TILE_BRIGHT_BORDER_MAX = Number(process.env.SPRITE_NON_TILE_BRIGHT_BOR
 const MIN_ALPHA = Number(process.env.SPRITE_PROCESS_MIN_ALPHA || 8);
 
 function parseArgs(argv) {
-  const args = { profile: 'test', overwrite: false };
+  const args = { profile: 'test', overwrite: false, variant: 'nano-banana' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--profile' && argv[i + 1]) {
@@ -41,8 +41,22 @@ function parseArgs(argv) {
     if (arg === '--overwrite') {
       args.overwrite = true;
     }
+    if (arg === '--variant' && argv[i + 1]) {
+      args.variant = argv[i + 1];
+      i += 1;
+    }
   }
   return args;
+}
+
+function resolveVariantDirs(variant) {
+  if (variant === 'pixellab') {
+    return {
+      raw: path.resolve(TOOLS_DIR, 'out', 'raw-pixellab'),
+      processed: path.resolve(TOOLS_DIR, 'out', 'processed-pixellab')
+    };
+  }
+  return { raw: RAW_DIR, processed: PROCESSED_DIR };
 }
 
 function keyToFileName(key) {
@@ -387,7 +401,12 @@ function seamScore(rgba, width, height) {
 }
 
 function isTileKey(key) {
-  return key.startsWith('tile.');
+  // Tiles AND icon badges both ship with opaque full-bleed frames by
+  // design (tiles for seamless floor/wall tiling; icons for
+  // gold-on-dark unlock-toast badges). Both bypass the non-tile
+  // border-opacity thresholds that apply to transparent-bg sprites
+  // like modules/agents/overlays.
+  return key.startsWith('tile.') || key.startsWith('icon.');
 }
 
 const MODULE_FOOTPRINT_BY_KEY = {
@@ -534,15 +553,16 @@ async function main() {
     throw new Error(`Invalid required keys file for profile=${args.profile}`);
   }
 
-  await fs.mkdir(PROCESSED_DIR, { recursive: true });
+  const dirs = resolveVariantDirs(args.variant);
+  await fs.mkdir(dirs.processed, { recursive: true });
 
   const missing = [];
   const failures = [];
   let processed = 0;
 
   for (const key of requiredKeys) {
-    const inputPath = path.resolve(RAW_DIR, keyToFileName(key));
-    const outputPath = path.resolve(PROCESSED_DIR, keyToFileName(key));
+    const inputPath = path.resolve(dirs.raw, keyToFileName(key));
+    const outputPath = path.resolve(dirs.processed, keyToFileName(key));
 
     if (!(await fileExists(inputPath))) {
       missing.push(key);
@@ -590,7 +610,7 @@ async function main() {
     throw new Error(messages.join('\n'));
   }
 
-  console.log(`Sprite post-process complete. profile=${args.profile}, processed=${processed}, outDir=${PROCESSED_DIR}`);
+  console.log(`Sprite post-process complete. profile=${args.profile}, variant=${args.variant}, processed=${processed}, outDir=${dirs.processed}`);
 }
 
 main().catch((err) => {
