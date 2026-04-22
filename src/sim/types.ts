@@ -3,10 +3,11 @@ export const GRID_HEIGHT = 40;
 export const TILE_SIZE = 32;
 
 // Which offline sprite-generator pipeline produced the atlas currently
-// loaded at runtime. Lives here so `src/sim/` stays a pure engine with
-// no back-reference to `src/render/` (renderer re-exports this type
-// for its own public surface).
-export type SpritePipeline = 'nano-banana' | 'pixellab';
+// loaded at runtime. Single-option for now (curated baseline); designed
+// as a union so a future gpt-image-1 alternate can slot in without
+// rewiring the runtime toggle. Pixellab option was removed per owner
+// feedback: generator output was too low-quality to ship.
+export type SpritePipeline = 'nano-banana';
 
 export enum TileType {
   Space = 'space',

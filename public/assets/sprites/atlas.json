@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-04-22T06:36:45.690Z",
+  "version": "sprite-v1-2026-03-01T04:01:57.885Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -629,42 +629,6 @@
     },
     "agent.crew.6": {
       "x": 2042,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier1_unlock": {
-      "x": 2110,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier2_unlock": {
-      "x": 2178,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier3_unlock": {
-      "x": 2246,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier4_unlock": {
-      "x": 2314,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier5_unlock": {
-      "x": 2382,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier6_unlock": {
-      "x": 2450,
       "y": 394,
       "w": 64,
       "h": 64

@@ -85,7 +85,6 @@ app.innerHTML = `
     <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
     <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
     <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
-    <button id="toggle-sprite-pipeline" class="topbar-btn">Pipeline: nano-banana</button>
     <span class="topbar-spacer"></span>
     <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
@@ -527,7 +526,6 @@ const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
-const toggleSpritePipelineBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-pipeline')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
@@ -2234,22 +2232,9 @@ toggleSpriteFallbackBtn.addEventListener('click', () => {
   state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
 });
 
-let pipelineLoadInFlight = false;
-toggleSpritePipelineBtn.addEventListener('click', () => {
-  if (pipelineLoadInFlight) return;
-  state.controls.spritePipeline = state.controls.spritePipeline === 'pixellab' ? 'nano-banana' : 'pixellab';
-  // Reload atlas from the new pipeline immediately; sprite mode state
-  // is preserved but the atlas swaps under it. Eager fetch so when the
-  // user toggles sprites on, the new atlas is already warm.
-  pipelineLoadInFlight = true;
-  void loadSpriteAtlas(state.controls.spritePipeline)
-    .then((loaded) => {
-      spriteAtlas = loaded;
-    })
-    .finally(() => {
-      pipelineLoadInFlight = false;
-    });
-});
+// Pipeline toggle removed with the pixellab rip-out. Single-atlas runtime
+// now. When a future gpt-image-1 alternate ships, the toggle + handler
+// come back (type in src/sim/types.ts already accepts a union).
 
 openSaveModalBtn.addEventListener('click', () => {
   refreshSaveUi();
@@ -2722,7 +2707,6 @@ function frame(now: number): void {
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
   toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
-  toggleSpritePipelineBtn.textContent = `Pipeline: ${state.controls.spritePipeline}`;
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
     : 'Force Fallback: OFF';
