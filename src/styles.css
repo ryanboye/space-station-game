@@ -94,6 +94,10 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  /* Override the global `button { width: 100% }` so toolbar buttons
+     pack horizontally instead of stacking full-width. */
+  width: auto;
+  flex: 0 0 auto;
 }
 #toolbar .tool-btn:hover:not(.locked) {
   background: #263349;
