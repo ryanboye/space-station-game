@@ -923,12 +923,9 @@ function refreshUnlockLegendAndHotkeys(): void {
   const copy = PROGRESSION_TOOLTIP_COPY[tier];
   const nextTier = (tier < 6 ? tier + 1 : 6) as UnlockTier;
   const nextCopy = nextTier > tier ? PROGRESSION_TOOLTIP_COPY[nextTier] : undefined;
-  // S2 fix: status text now shows tier name + next-tier trigger copy from
-  // PROGRESSION_TOOLTIP_COPY (the player-facing "Unlocks when you X"
-  // voice), not the raw UNLOCK_CRITERIA thresholds from getUnlockProgressText.
-  // The old text told players "Tier 1: air ≥ 60, meals ≥ 18" — not what the
-  // v2 predicate actually checks, so following it didn't advance you.
-  // BMO caught this post-deploy in the live playtest.
+  // Status text pulls next-tier trigger copy from PROGRESSION_TOOLTIP_COPY
+  // (player-facing "Unlocks when you X" voice). Single source of truth
+  // shared with the quest bar + modal.
   const label = copy?.name ?? TIER_PRESENTATION[tier].name;
   const nextLine = nextCopy ? ` | Next: ${nextCopy.trigger}` : '';
   unlockStatusEl.textContent = `Progression: Tier ${tier} — ${label}${nextLine}`;

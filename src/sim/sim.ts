@@ -6,7 +6,6 @@ import {
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
   TASK_TIMINGS,
-  UNLOCK_CRITERIA,
   normalizeModuleType
 } from './balance';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
@@ -363,18 +362,6 @@ export function isModuleUnlocked(state: StationState, module: ModuleType): boole
   return isModuleUnlockedAtTier(module, state.unlocks.tier);
 }
 
-function unlockTierProgressText(state: StationState): string {
-  if (!ENABLE_UNLOCKS_V1) return 'Progression disabled';
-  if (state.unlocks.tier >= 3) return 'All tiers unlocked';
-  if (state.unlocks.tier === 0) {
-    return 'Tier 1: first visitor arrives';
-  }
-  if (state.unlocks.tier === 1) {
-    return `Tier 2: net >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)}/min, jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
-  }
-  return `Tier 3: residents >= ${UNLOCK_CRITERIA.tier3.minResidents}, sat >= ${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)}`;
-}
-
 function updateUnlockProgress(state: StationState): void {
   if (!ENABLE_UNLOCKS_V1) return;
   const unlockIdSet = new Set(state.unlocks.unlockedIds);
@@ -400,7 +387,6 @@ function updateUnlockProgress(state: StationState): void {
   }
   state.unlocks.unlockedIds = [...unlockIdSet];
   state.metrics.unlockTier = state.unlocks.tier;
-  state.metrics.unlockProgressText = unlockTierProgressText(state);
 }
 
 function serviceFailureRatingPenalty(
@@ -6980,7 +6966,6 @@ export function createInitialState(options?: { seed?: number }): StationState {
       stationRating: STATION_RATING_START,
       stationRatingTrendPerMin: 0,
       unlockTier: 0,
-      unlockProgressText: 'Tier 1: first visitor arrives',
       rawFoodStock: 40,
       mealStock: 20,
       kitchenRawBuffer: 0,
@@ -7631,10 +7616,6 @@ export function setRoom(state: StationState, index: number, room: RoomType): voi
 
 export function getUnlockTier(state: StationState): UnlockTier {
   return state.unlocks.tier;
-}
-
-export function getUnlockProgressText(state: StationState): string {
-  return state.metrics.unlockProgressText;
 }
 
 export function setRoomHousingPolicy(state: StationState, index: number, policy: HousingPolicy): boolean {
