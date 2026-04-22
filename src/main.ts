@@ -842,9 +842,10 @@ type TierProgressSnapshot = {
 let toolLockMessage = '';
 
 function unlockRequirementText(tier: number): string {
-  if (tier <= 1) return `Tier 1: ${tierRequirementText(1)}`;
-  if (tier === 2) return `Tier 2: ${tierRequirementText(2)}`;
-  return `Tier 3: ${tierRequirementText(3)}`;
+  // Caller ("X locked until Tier N.") already owns the tier number;
+  // dropping the prefix here avoids "until Tier 1. Tier 1: ..." doubling.
+  const copyTier = Math.max(1, Math.min(6, tier)) as UnlockTier;
+  return tierRequirementText(copyTier);
 }
 
 function friendlyName(value: string): string {
@@ -951,14 +952,7 @@ function refreshUnlockLegendAndHotkeys(): void {
 }
 
 function tierRequirementText(tier: UnlockTier): string {
-  if (tier === 0) return 'Starting package active immediately.';
-  if (tier === 1) {
-    return `air >= ${UNLOCK_CRITERIA.tier1.minAirQuality}, meals >= ${UNLOCK_CRITERIA.tier1.minMealStock}, active cafeteria + life support, and no active air warning`;
-  }
-  if (tier === 2) {
-    return `credits/min >= ${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(1)} and completed logistics jobs >= ${UNLOCK_CRITERIA.tier2.minCompletedJobs}`;
-  }
-  return `residents >= ${UNLOCK_CRITERIA.tier3.minResidents}, resident satisfaction >= ${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)}, resolved incidents >= ${UNLOCK_CRITERIA.tier3.minResolvedIncidents}`;
+  return PROGRESSION_TOOLTIP_COPY[tier]?.trigger ?? 'Progression requirement unavailable.';
 }
 
 function tierProgressSnapshot(): TierProgressSnapshot {
