@@ -75,17 +75,46 @@ Drop `/etc/systemd/system/spacegame-deploy.service.d/override.conf`:
 [Service]
 Environment=SPACEGAME_REPO=/srv/spacegame
 Environment=SPACEGAME_WEBROOT=/srv/www/spacegame
+# ReadWritePaths is NOT inherited or env-expanded by systemd — if you
+# relocate the webroot, you MUST override the unit's RWP list here too.
+# Otherwise the service runs but the rsync step silently fails on
+# permission-denied inside the sandbox. Symptom: journalctl shows
+# "done — deployed <sha>" but the webroot never populates.
+ReadWritePaths=/opt/spacegame-repo /srv/www/spacegame
 Environment=SPACEGAME_BRANCH=main
 ```
 
 Then `sudo systemctl daemon-reload && sudo systemctl restart spacegame-deploy.timer`.
 
+### Webroot under /home/
+
+The unit ships with `ProtectHome=yes`, which blocks all reads + writes
+under `/home/` (and `/root/`, `/run/user/`). If you want the webroot at
+e.g. `/home/claudebot/www/spacegame`, you need TWO drop-ins:
+
+```ini
+[Service]
+# Lift the /home/ block.
+ProtectHome=no
+# And update the RWP list for the new webroot.
+ReadWritePaths=/opt/spacegame-repo /home/claudebot/www/spacegame
+Environment=SPACEGAME_WEBROOT=/home/claudebot/www/spacegame
+```
+
+This was BMO's first-install gotcha — symptom was the service running
+happily with "done — deployed <sha>" in the logs, but the webroot
+staying empty + Caddy serving a default 404. Verify with
+`ls -la /home/claudebot/www/spacegame` after the first timer tick; if
+empty despite successful service logs, ProtectHome is the culprit.
+
 ## Operational knobs
 
-- **Force a rebuild without new commits** — the service is idempotent, but
-  if you want to rebuild after a server-side tweak (dependency bump via
-  cached npm, etc.), `rm -rf /opt/spacegame-repo/node_modules && sudo
-  systemctl start spacegame-deploy.service`.
+- **Force a rebuild without new commits** — `sudo systemctl set-environment
+  FORCE=1 && sudo systemctl start spacegame-deploy.service && sudo
+  systemctl unset-environment FORCE`. Useful after a server-side tweak
+  (node version bump, external webroot wipe, manual `npm cache clean`).
+  The build also auto-forces on an empty webroot so first-install
+  chicken-egg is handled automatically.
 
 - **Pause the timer** — `sudo systemctl stop spacegame-deploy.timer`. The
   webroot keeps serving the last deployed commit.
