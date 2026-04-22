@@ -14,17 +14,17 @@ import {
 // survives save/load, and harness scenarios can assert progress with
 // simple `counter >= threshold` checks.
 //
-// Thresholds below are placeholders matching the progression strawman
-// (T1 = serve one meal, T2 = 500 credits + 3 archetypes, ...). awfml's
-// milestone framework will dial these in when it lands; swapping a
-// number here is ~20 LoC of delta at that point.
+// Thresholds are placeholders (T1 = first visitor arrives,
+// T2 = 500 credits + 3 archetypes, ...). awfml's milestone framework
+// will dial these in when it lands; swapping a number here is ~20 LoC
+// of delta at that point.
 
 function progressTo(current: number, threshold: number): number {
   if (threshold <= 0) return current > 0 ? 1 : 0;
   return Math.max(0, Math.min(1, current / threshold));
 }
 
-const TIER1_MEAL_THRESHOLD = 1;
+const TIER1_VISITOR_ARRIVAL_THRESHOLD = 1;
 const TIER2_CREDIT_THRESHOLD = 500;
 const TIER2_ARCHETYPE_THRESHOLD = 3;
 const TIER3_TRADE_CYCLES_THRESHOLD = 1;
@@ -38,11 +38,14 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
     id: 'tier1_sustenance',
     tier: 1,
     name: 'Sustenance',
-    description: 'Feed a visitor. Unlocks hygiene, hydroponics, kitchen, cafeteria.',
+    description: 'First visitor arrives. Unlocks lounge, market, and market stall.',
     trigger: {
-      predicate: (m: Metrics) => m.mealsServedTotal >= TIER1_MEAL_THRESHOLD,
-      progress: (m: Metrics) => progressTo(m.mealsServedTotal, TIER1_MEAL_THRESHOLD),
-      tooltip: 'Serve a meal to your first visitor.',
+      // Starter state has no kitchen/cafeteria, so mealsServedTotal never
+      // advanced. Gate on visitor-spawn via archetypesServedLifetime.
+      predicate: (m: Metrics) => m.archetypesServedLifetime >= TIER1_VISITOR_ARRIVAL_THRESHOLD,
+      progress: (m: Metrics) =>
+        progressTo(m.archetypesServedLifetime, TIER1_VISITOR_ARRIVAL_THRESHOLD),
+      tooltip: 'Your first visitor arrives at the station.',
     },
   },
   {

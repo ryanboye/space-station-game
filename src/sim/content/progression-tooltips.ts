@@ -33,7 +33,7 @@ export const PROGRESSION_TOOLTIP_COPY: Record<UnlockTier, ProgressionTooltipCopy
   1: {
     name: 'Sustenance',
     theme: 'Keep your visitors fed.',
-    trigger: 'Unlocks when you serve one visitor a meal.',
+    trigger: 'Unlocks when your first visitor arrives at your station.',
   },
   2: {
     name: 'Commerce',
