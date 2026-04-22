@@ -1156,6 +1156,19 @@ refreshPriorityUi();
 // initial states.
 prevUnlockTier = state.unlocks.tier;
 installLegendProgressionHandlers();
+// S1 fix: auto-expand the Build & Room Legend at tiers 0-2. New players
+// wouldn't open it otherwise and miss the tiered tool palette entirely
+// (BMO's morning-status playtest finding). One-shot at init — if the
+// player manually collapses later it stays collapsed, and save-restores
+// at T3+ start collapsed since that legend is past its teaching window.
+if (state.unlocks.tier <= 2) {
+  // Target the Build & Room Legend specifically via its unique .legend-grid
+  // child. `:has(.legend-title)` would match all 5 section details (Core
+  // Status / Logistics / etc. share the legend-title class), so use the
+  // closest-details pattern instead.
+  const buildLegend = document.querySelector('.legend-grid')?.closest('details');
+  if (buildLegend) buildLegend.open = true;
+}
 refreshUnlockLegendAndHotkeys();
 refreshProgressionModal();
 
