@@ -677,13 +677,18 @@ export function hydrateStateFromSave(
   next.rooms = snapshot.rooms.slice();
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
   const hydratedTier = normalizeUnlockTier(snapshot.unlocks.tier);
+  // v1→v2 migration: pre-v2 saves used the old id strings (tier1_stability,
+  // tier2_logistics, tier3_civic). Those won't match the new UNLOCK_IDS,
+  // so unlockedIds becomes [] here. That's intentional — `tier` is the
+  // source of truth for what's unlocked, and the advance pass will
+  // repopulate unlockedIds as the player re-crosses each threshold.
   next.unlocks = {
     tier: hydratedTier,
     unlockedIds: UNLOCK_IDS.filter((id) => snapshot.unlocks.unlockedIds.includes(id)),
     unlockedAtSec: { ...snapshot.unlocks.unlockedAtSec },
-    // v2 migration: existing saves pre-date triggerProgress. Mark the
-    // reached tier as 1.0 so the tier-advance pass doesn't re-check it;
-    // future tiers stay at 0 and re-accumulate from the live metrics.
+    // triggerProgress: mark reached tier as 1.0 so the tier-advance pass
+    // doesn't re-check it; future tiers stay at 0 and re-accumulate from
+    // the live metrics.
     triggerProgress: { [hydratedTier]: 1 },
   };
 
