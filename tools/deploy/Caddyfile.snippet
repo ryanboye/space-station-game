@@ -1,0 +1,33 @@
+# Caddyfile snippet for bmo.ryanboye.com/spacegame/*
+# Include this inside the `bmo.ryanboye.com { ... }` site block (or paste
+# inline). The handle_path directive strips the /spacegame prefix before
+# serving — matches Vite's `base: './'` config so all asset paths stay
+# root-relative to the served directory.
+#
+# If the rest of bmo.ryanboye.com already has its own root/file_server
+# setup, the handle_path block below must come BEFORE any catchall to
+# take precedence.
+
+handle_path /spacegame/* {
+	# Must match SPACEGAME_WEBROOT in the systemd service (or its override
+	# drop-in). If the service deploys to /home/claudebot/www/spacegame,
+	# this line must be `root * /home/claudebot/www/spacegame`. Mismatch
+	# = Caddy serves a stale/empty dir while builds succeed — hard to
+	# diagnose. Keep the two in lockstep.
+	root * /var/www/spacegame
+	encode zstd gzip
+	try_files {path} /index.html
+	file_server
+	header {
+		# Let Caddy set Cache-Control. Hashed bundles (/assets/*) can be
+		# cached aggressively; index.html should revalidate so new
+		# builds propagate on next navigation.
+		?Cache-Control "public, max-age=3600"
+	}
+	# index.html specifically gets short TTL — everything else under
+	# /assets/ is content-hashed and safe to cache long.
+	@html path /index.html /
+	header @html Cache-Control "public, max-age=60, must-revalidate"
+	@hashed path /assets/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+}

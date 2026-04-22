@@ -1,0 +1,20 @@
+[Unit]
+Description=Poll origin/main every 5 minutes and rebuild/deploy on new commits
+Requires=spacegame-deploy.service
+
+[Timer]
+# Fire 2 min after boot so deploys resume quickly after a reboot.
+OnBootSec=2min
+# Then every 5 min. build.sh is a ~2s no-op when there are no new commits.
+OnUnitActiveSec=5min
+# Persistent = true means if the system was off when the timer should have
+# fired, it runs on next boot. Useful for ephemeral VMs / dev containers.
+Persistent=true
+# AccuracySec default is 1 min; tightening to 15s keeps the cadence honest
+# since the total work per tick is small.
+AccuracySec=15s
+
+Unit=spacegame-deploy.service
+
+[Install]
+WantedBy=timers.target
