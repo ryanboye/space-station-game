@@ -1,10 +1,10 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-22 16:30Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `a59ac5f`.*
+*Last updated: 2026-04-22 23:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `01be383`.*
 
 ### Current milestone
-**M1 Unlock Progression v1 + Tutorial Onboarding — shipped.** Six-tier predicate advance live end-to-end. T0→T1 now fires on first-visitor-arrives (was blocked by missing food infra in starter state), quest bar pinned at top of sidebar reads the live `PROGRESSION_TOOLTIP_COPY` + `.progress()` each tick, pre-placed east-hull dock on fresh start.
+**M1.1 Hardening — in progress.** M1 tutorial loop is live + verified. Post-deploy 4-agent whole-repo review (2026-04-22) surfaced a correctness bundle + dead-code sweep + architecture hygiene; most has shipped (PRs #29–#39). Nano-banana generator pipeline RIPPED OUT (#36) after it broke the curated atlas — sprite pipeline v2 design doc awaiting awfml decisions at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>.
 
 ### Lanes (active bots)
 - **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
@@ -35,29 +35,50 @@
 | #22 | `00d9a35` | progression — T0→T1 fires on first-visitor-arrives + 5 stale copy sites swept |
 | #23 | `389042d` | docs — §0 refresh post PRs #17-22 |
 | #24 | `a59ac5f` | chore — sweep legacy UNLOCK_CRITERIA copy in locked-room/module tooltips |
+| #25 | `f9a3dcb` | docs — §0 refresh post PRs #23-24 |
+| #26 | `7380c26` | chore — tierProgressSnapshot uses UNLOCK_DEFINITIONS (progress bar math for 6 tiers) |
+| #27 | `7d0d165` | feat — pixellab generator + runtime pipeline toggle (infra) *[ripped out in #36]* |
+| #28 | `d0e5e0a` | feat — pixellab atlas batch (111 keys) *[ripped out in #36]* |
+| #29 | `e0b7e70` | fix(progression) — save/load counters + tier cap + sell credits + T5 proxies |
+| #30 | `42a5ee9` | fix(ui) — TIER_PRESENTATION T1/T2/T3 aligned with PROGRESSION_TOOLTIP_COPY |
+| #31 | `31ad50f` | fix(sim) — SpritePipeline type moved from render/ to sim/types.ts |
+| #32 | `1d77af4` | chore — retire dead unlockProgressText chain + UNLOCK_CRITERIA |
+| #33 | `e1815c4` | chore — retire 4 dead feature flags |
+| #34 | `3cefd34` | chore — retire ModuleType.GrowTray alias + normalizeModuleType |
+| #35 | `31451c0` | chore(ui) — dock-modal checkbox handlers → 2 loops |
+| #4 | `8b97067` | feat(harness) — Harness v1.0 Playwright runner + window hooks |
+| #38 | `7ca4029` | fix(ci) — atlas validator advisory + v1 profile |
+| #19 | `d110ece` | test(harness) — agent-movement spec |
+| #36 | `30fc12c` | revert(sprites) — restored curated baseline atlas + ripped pipelines |
+| #37 | `2644528` | feat(sim) — src/sim/index.ts barrel for public API |
+| #39 | `01be383` | chore — final dead-code sweep (agent-sheet, #load CSS, loadColor) |
 
 ### Open PRs
-- **#4** `feat(harness): Harness v1.0 — Playwright runner + window hooks + CI advisory` (barnacle).
-  Waiting on awfml's one-click merge. BMO's PAT lacks `workflow` scope to self-merge workflow-touching PRs.
-- **#19** `test(harness): agent-movement spec — catches sim-freeze bugs` (tinyclaw).
-  Depends on harness window hooks from #4; unblocks when #4 merges.
 - **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw).
   Static debug page, ready for merge when someone picks it up. Non-blocking.
 
 ### Backlog (priority-ordered)
-1. **Phase 5 counter wiring** (blocked on Phase 5 producer events): `actorsTreatedLifetime` + `residentsConvertedLifetime` — placeholder wiring useless until treatment + conversion sites exist in `sim.ts`.
-2. **tierProgressSnapshot() cleanup** — `main.ts:956-1000` still uses `UNLOCK_CRITERIA` for progress-bar math + only handles tiers 0-2. Modal progress bar for T3-T6 is broken. Rewrite to `UNLOCK_DEFINITIONS[n-1].trigger.progress(metrics)` — cleanup follow-up to #24 which only covered `tierRequirementText`.
-3. **Phase 5 / Health + Morgue mechanics reference doc** (BMO's lane, parked by the tutorial pivot).
-4. **Sprite polish** — regen modules/agents where current nano-banana outputs are weakest; consider pixellab rotate for 4/8-direction agent sprites.
-5. **gpt-image-2 / Nano Banana Pro evaluation** — seb has pricing ($0.063/image HD vs $0.015 for Nano Banana Pro vs $0.04 current Imagen-4). Potential atlas rebuild. Sam parked the OpenRouter wire-up for later; revisit when she's ready.
-6. **Starter food chain (option B)** — pre-activate Reactor + Life Support + pre-place Hydroponics + Kitchen + Cafeteria with modules + hire 1 starter crew in `createInitialState`. Post-PR#22 playtest: visitors arrive + T1 flash fires within 10s, but visitors starve/die ~60s later because no food infra. tinyclaw scoping this fire for fire 7 ship.
-7. **T6 specialization design (open question)** — tier is currently a gated no-op. Strawman: station-type selector + military/colonist ships. Brainstorm posted to Wheat 2026-04-22; pending team response.
+1. **Sprite pipeline v2 (gpt-image-1)** — BMO design doc live at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>. 5 awfml decisions open (single-vs-sheet, reference-image-use, QA ownership, bulk-trigger, archive policy). Blocked on awfml.
+2. **Phase 5 mechanics ref** — BMO doc live at <https://bmo.ryanboye.com/spacegame-plan/phase-5-mechanics.html>. 6 awfml decisions open (medSupply source, clinic staffing, propagation, overflow curve, contagion model, treatment duration). Blocked on awfml.
+3. **Starter food chain (option B)** — pre-activate Reactor + Life Support + pre-place Hydroponics/Kitchen/Cafeteria + hire 1 starter crew in `createInitialState`. Visitors arrive but starve within 60s of T1 flash. tinyclaw's fresh-session lane.
+4. **Toolbar/HUD rework** — awfml's ask, seb to ship, BMO to spec. Full judgment given to BMO per awfml.
+5. **Testing gap sweep** — T3/T4/T5/T6 predicate tests, rebuildDockEntities test (save/load counter + tier>3 shipped in #29). tinyclaw lane.
+6. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
+7. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox, no new content required. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning knobs).
+8. **Dead-code follow-up (out of last sweep)** — `UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`; `tierRequirementText` single-source the fallback chain. Small hygiene.
+
+### Recent activity snapshot (2026-04-22 17:00–23:45Z)
+- **19 PRs merged** on top of the overnight sprint
+- **~580 LoC retired** across dead-code sweep (#32/#33/#34/#39)
+- **Correctness bundle** (#29) — save/load now persists all 6 lifetime counters + `archetypesEverSeen`, `normalizeUnlockTier` cap lifted 3→6, sell functions count toward T2 gate, T5 counter proxies wired.
+- **Nano-banana + pixellab pipelines RIPPED OUT** (#36) — atlas restored to curated baseline (7a0b4f3); gpt-image-1 replaces them post-awfml-sign-off.
+- **Harness + CI** unblocked — PR #4 merged, advisory validator shipped (#38).
 
 ### Risks / open questions
-- Phase 5 (health/death/morgue) scoped but not built. Unlocks v2 has placeholder predicates for T5 that won't fire until Phase 5 lands.
-- T6 specialization predicate is intentionally a no-op until we decide how "tutorial complete" gates. Ship this decision before ~week 2 of playtesting.
-- `tools/sprites/out/processed/` tracked in git produces sprawling diffs on every sprite regen. Hygiene PR will fix, but until then PR diffs look scary.
-- No visual regression baseline yet. barnacle's harness v1.0 has the hooks; the baseline screenshot step is v1.1.
+- Phase 5 predicate (T5) uses a proxy (`actorsTreatedLifetime++` on health-state recovery to `healthy`) until Phase 5 producer events land. Proxy is monotonic + works, but semantically "treatments ≠ treatees".
+- T6 specialization predicate intentionally no-op. BMO's minimum-viable path (trophy state, future gate) is the current agreed strawman.
+- Starter state has no food chain — visitors arrive, T1 flash fires, then visitors starve ~60s later. Option-B (pre-activate food chain) is tinyclaw's fresh-session lane.
+- Visual regression baseline absent. Harness v1.0 (#4) has Playwright hooks + CI advisory wired. Baseline screenshot step is follow-up.
 
 ### Ritual
 Before merging ANY PR touching `src/sim/` or `src/render/`: 4 parallel agents — 2 × `/simplify` + 2 × `/review`. Pure-docs PRs ≤ 50 lines can merge without the ritual. All render-touching PRs attach a Playwright smoke screenshot to the PR body.
