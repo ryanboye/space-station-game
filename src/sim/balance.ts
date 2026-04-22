@@ -286,7 +286,3 @@ export const TASK_TIMINGS = {
   residentSleepSec: 3.2,
   residentCleanSec: 2.2
 } as const;
-
-export function normalizeModuleType(module: ModuleType): ModuleType {
-  return module === ModuleType.GrowTray ? ModuleType.GrowStation : module;
-}

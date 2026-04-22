@@ -5,8 +5,7 @@ import {
   ROOM_DEFINITIONS,
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
-  TASK_TIMINGS,
-  normalizeModuleType
+  TASK_TIMINGS
 } from './balance';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import { SHIP_PROFILES } from './content/ships';
@@ -7888,7 +7887,7 @@ export function tryPlaceModule(
   originTile: number,
   rotation: ModuleRotation = 0
 ): { ok: boolean; reason?: string } {
-  const module = normalizeModuleType(moduleType);
+  const module = moduleType;
   const requiresWallMount = module === ModuleType.WallLight;
   if (requiresWallMount) {
     if (state.tiles[originTile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
@@ -7975,7 +7974,7 @@ export function setModule(state: StationState, index: number, module: ModuleType
   }
   state.moduleInstances.push({
     id: state.moduleSpawnCounter++,
-    type: normalizeModuleType(module),
+    type: module,
     originTile: index,
     rotation: 0,
     width: 1,

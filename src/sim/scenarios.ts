@@ -312,7 +312,7 @@ function buildBaseStation(state: StationState): void {
   setRoom(state, toIndex(30, 16, state.width), RoomType.Market);
   setModule(state, toIndex(28, 13, state.width), ModuleType.Table);
   setModule(state, toIndex(24, 16, state.width), ModuleType.Stove);
-  setModule(state, toIndex(26, 13, state.width), ModuleType.GrowTray);
+  setModule(state, toIndex(26, 13, state.width), ModuleType.GrowStation);
   setModule(state, toIndex(30, 13, state.width), ModuleType.Terminal);
   setModule(state, toIndex(22, 15, state.width), ModuleType.Bed);
   setModule(state, toIndex(23, 15, state.width), ModuleType.Bed);
@@ -782,7 +782,7 @@ export function buildNearBufferScenario(): ScenarioSpec {
     setup: (state) => {
       buildBaseStation(state);
       setRoom(state, toIndex(27, 13, state.width), RoomType.Hydroponics);
-      setModule(state, toIndex(27, 13, state.width), ModuleType.GrowTray);
+      setModule(state, toIndex(27, 13, state.width), ModuleType.GrowStation);
       state.controls.shipsPerCycle = 2;
     }
   };
@@ -799,7 +799,7 @@ export function buildFarBufferScenario(): ScenarioSpec {
       buildBaseStation(state);
       roomRect(state, 31, 20, 33, 22, RoomType.Hydroponics);
       setModule(state, toIndex(26, 13, state.width), ModuleType.None);
-      setModule(state, toIndex(33, 22, state.width), ModuleType.GrowTray);
+      setModule(state, toIndex(33, 22, state.width), ModuleType.GrowStation);
       addDoor(state, 31, 19);
       state.controls.shipsPerCycle = 2;
     }
