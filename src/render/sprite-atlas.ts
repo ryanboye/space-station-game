@@ -135,8 +135,11 @@ export function createEmptySpriteAtlas(version = 'missing'): SpriteAtlas {
 export type { SpritePipeline } from '../sim/types';
 import type { SpritePipeline } from '../sim/types';
 
-function manifestPathForPipeline(pipeline: SpritePipeline): string {
-  return pipeline === 'pixellab' ? 'assets/sprites/atlas-pixellab.json' : 'assets/sprites/atlas.json';
+function manifestPathForPipeline(_pipeline: SpritePipeline): string {
+  // Single atlas for now; kept as a function so a future pipeline alt
+  // (gpt-image-1) can route to a different manifest without reshaping
+  // callers.
+  return 'assets/sprites/atlas.json';
 }
 
 export async function loadSpriteAtlas(
