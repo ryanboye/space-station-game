@@ -46,12 +46,29 @@ git fetch --prune --quiet "$REMOTE" "$BRANCH"
 LOCAL="$(git rev-parse HEAD)"
 UPSTREAM="$(git rev-parse "$REMOTE/$BRANCH")"
 
-if [[ "$LOCAL" == "$UPSTREAM" ]]; then
+# Force a build if the webroot is empty — this avoids the "first-tick
+# no-op" chicken-egg BMO hit during install: if someone had already
+# pulled main into $REPO manually before enabling the service, LOCAL ==
+# UPSTREAM on the first tick and the webroot stayed empty forever.
+# --force env override short-circuits too (for manual rebuilds after an
+# external webroot wipe, node_modules flush, etc.).
+WEBROOT_EMPTY=0
+if [[ -z "$(ls -A "$WEBROOT" 2>/dev/null)" ]]; then
+  WEBROOT_EMPTY=1
+fi
+
+if [[ "$LOCAL" == "$UPSTREAM" && "$WEBROOT_EMPTY" -eq 0 && "${FORCE:-0}" != "1" ]]; then
   log "already at $UPSTREAM — nothing to do"
   exit 0
 fi
 
-log "updating $LOCAL → $UPSTREAM"
+if [[ "$WEBROOT_EMPTY" -eq 1 ]]; then
+  log "webroot $WEBROOT is empty — forcing build even though repo is at $UPSTREAM"
+elif [[ "${FORCE:-0}" == "1" ]]; then
+  log "FORCE=1 — forcing build even though repo is at $UPSTREAM"
+else
+  log "updating $LOCAL → $UPSTREAM"
+fi
 git reset --hard --quiet "$UPSTREAM"
 
 log "installing deps (npm ci)"
