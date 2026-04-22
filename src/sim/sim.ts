@@ -5609,6 +5609,12 @@ function resolveIncident(
   incident.stage = 'resolved';
   incident.resolvedAt = state.now;
   incident.extendedResolveAt = null;
+  // Lifetime counter — increment at the resolve EVENT (not a scan over
+  // `state.incidents`, which prunes resolved incidents after the
+  // retention window and would make this field non-monotonic). Failed
+  // incidents stay out — `failIncident` below has its own resolvedAt
+  // write but is semantically distinct from "resolved".
+  state.metrics.incidentsResolvedLifetime += 1;
   if (incident.type === 'fight') {
     incident.outcome = options?.fightOutcome ?? (incident.severity > 1.35 ? 'detained' : 'deescalated');
     for (const residentId of incident.residentParticipantIds) {
@@ -6515,11 +6521,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentsCount = residentsCount;
   state.metrics.incidentsOpen = openIncidents;
   state.metrics.incidentsResolved = resolvedIncidents;
-  // incidentsResolved is already derived by scanning all incident records
-  // every tick, so it's lifetime-monotonic. Mirror to the v2 explicit
-  // lifetime field so unlocks.ts predicates + harness assertions have a
-  // clearly-named counter to target.
-  state.metrics.incidentsResolvedLifetime = resolvedIncidents;
+  // Note: incidentsResolvedLifetime is NOT mirrored here — the
+  // scan-based `resolvedIncidents` drops as state.incidents prunes old
+  // resolved records past INCIDENT_RESOLVED_RETENTION_SEC, breaking
+  // monotonicity. It's incremented at the resolve event in
+  // resolveIncident() instead.
   state.metrics.incidentsFailed = failedIncidents;
   state.metrics.securityDispatches = state.usageTotals.securityDispatches;
   state.metrics.securityResponseAvgSec = avgSecurityResponseSec;
