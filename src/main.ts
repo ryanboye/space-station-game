@@ -1011,8 +1011,16 @@ function refreshProgressionModal(): void {
 
   if (progress.nextTier !== null) {
     const nextInfo = TIER_PRESENTATION[progress.nextTier];
+    const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
     progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${tierRequirementText(progress.nextTier)}`;
+    // S2.1 fix: modal "Unlock Requirement" now pulls from
+    // PROGRESSION_TOOLTIP_COPY (player-facing trigger voice) instead of
+    // tierRequirementText() raw criteria. Matches the status-line fix
+    // from PR #12 so tooltip + status line + modal all speak the same
+    // language. Falls back to tierRequirementText if copy is missing
+    // (defensive; shouldn't happen for T1-T6).
+    const requirement = nextCopy?.trigger ?? tierRequirementText(progress.nextTier);
+    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${requirement}`;
     progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
     progressModalNextNeedsEl.textContent = `New Citizen Needs: ${formatTierList(nextInfo.citizenNeeds)}`;
     progressModalNextVisitorNeedsEl.textContent = `New Visitor/Ship Needs: ${formatTierList(nextInfo.visitorNeeds)}`;
