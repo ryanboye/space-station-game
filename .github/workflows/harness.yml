@@ -1,0 +1,106 @@
+name: Harness (advisory)
+
+# Advisory-only: regressions post a PR comment but do NOT block merge.
+# Promote to blocking (move steps under ci.yml) after one stable week
+# where no legitimate regression shipped despite green.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write  # needed to post PR comments
+
+concurrency:
+  group: harness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: Playwright Harness (advisory)
+    runs-on: ubuntu-latest
+    # Never block the PR — always green from CI's perspective.
+    # Bots read the uploaded artifact + PR comment for actual results.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Build for harness
+        run: npm run build
+
+      - name: Run harness
+        id: harness_run
+        run: |
+          mkdir -p /tmp/harness-runs/latest
+          # Serve the built dist/ statically — no dev server needed in CI
+          npx serve dist -l 5173 &
+          SERVE_PID=$!
+          sleep 2  # brief wait for server to bind
+          HARNESS_BASE_URL=http://localhost:5173 HARNESS_SKIP_SERVER=1 npm run test:harness -- --reporter=list,json 2>&1 | tee /tmp/harness-runs/latest/harness.log
+          HARNESS_EXIT=$?
+          kill $SERVE_PID 2>/dev/null || true
+          echo "exit_code=$HARNESS_EXIT" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Upload harness run artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-run-${{ github.run_number }}
+          path: /tmp/harness-runs/latest/
+          retention-days: 30
+
+      - name: Post PR comment with harness summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const exitCode = '${{ steps.harness_run.outputs.exit_code }}';
+            const status = exitCode === '0' ? '✅ passed' : '⚠️ regressions detected';
+            const runId = '${{ github.run_number }}';
+            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            let summaryText = '';
+            try {
+              const raw = fs.readFileSync('/tmp/harness-runs/latest/summary.json', 'utf8');
+              const summary = JSON.parse(raw);
+              const passed = (summary.suites || []).flatMap(s => s.specs || []).filter(s => s.ok).length;
+              const failed = (summary.suites || []).flatMap(s => s.specs || []).filter(s => !s.ok).length;
+              summaryText = `\n\n**Results:** ${passed} passed, ${failed} failed`;
+            } catch (_) {
+              summaryText = '\n\n(summary.json not found — check artifact log)';
+            }
+
+            const body = [
+              `### Harness v1 — advisory ${status}`,
+              ``,
+              `This is an **advisory-only** check. It does not block merge.${summaryText}`,
+              ``,
+              `[Download run artifacts](${artifactUrl}) — screenshots, error logs, metrics JSON are in the artifact.`,
+              ``,
+              `> Promote to blocking after one stable week with no false positives.`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

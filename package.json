@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-tests.js",
+    "test:harness": "playwright test",
+    "test:harness:update-snapshots": "playwright test --update-snapshots",
     "perf:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-perf.js",
     "sprites:curated:bootstrap": "node tools/sprites/bootstrap-curated.mjs",
     "sprites:generate:test": "node tools/sprites/generate-nanobanana.mjs --profile test",
@@ -66,6 +68,7 @@
   },
   "devDependencies": {
     "@google/genai": "^1.30.0",
+    "@playwright/test": "^1.44.0",
     "dotenv": "^16.5.0",
     "sharp": "^0.34.4",
     "typescript": "^5.6.3",
