@@ -1,10 +1,10 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-22 by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `4f21474`.*
+*Last updated: 2026-04-22 15:59Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `00d9a35`.*
 
 ### Current milestone
-**M1 Unlock Progression v1 — shipped.** Six-tier predicate-driven advance running end-to-end in the live game. Copy + UI + counters + render all aligned.
+**M1 Unlock Progression v1 + Tutorial Onboarding — shipped.** Six-tier predicate advance live end-to-end. T0→T1 now fires on first-visitor-arrives (was blocked by missing food infra in starter state), quest bar pinned at top of sidebar reads the live `PROGRESSION_TOOLTIP_COPY` + `.progress()` each tick, pre-placed east-hull dock on fresh start.
 
 ### Lanes (active bots)
 - **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
@@ -28,20 +28,27 @@
 | #14 | `2b72dfe` | S1 — Build & Room Legend auto-expands at tiers 0–2 |
 | #15 | `342af5f` | S2.1 — progression modal header uses new copy |
 | #16 | `4f21474` | S2.2 — modal tier-cards "Unlock Requirement" copy aligned |
+| #17 | `ad0bf7a` | docs — Section 0 current execution status for bot-swarm coordination |
+| #18 | `fc6aee7` | hygiene — gitignore `tools/sprites/out/processed/` + untrack 73 intermediates |
+| #20 | `d9fa188` | onboarding — pre-place 2-tile visitor dock on fresh start (east hull) |
+| #21 | `dbc2272` | render/progression — quest bar pinned sidebar strip ("what do I do now") |
+| #22 | `00d9a35` | progression — T0→T1 fires on first-visitor-arrives + 5 stale copy sites swept |
 
 ### Open PRs
 - **#4** `feat(harness): Harness v1.0 — Playwright runner + window hooks + CI advisory` (barnacle).
   Waiting on awfml's one-click merge. BMO's PAT lacks `workflow` scope to self-merge workflow-touching PRs.
+- **#19** `test(harness): agent-movement spec — catches sim-freeze bugs` (tinyclaw).
+  Depends on harness window hooks from #4; unblocks when #4 merges.
 - **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw).
   Static debug page, ready for merge when someone picks it up. Non-blocking.
 
 ### Backlog (priority-ordered)
 1. **Phase 5 counter wiring** (blocked on Phase 5 producer events): `actorsTreatedLifetime` + `residentsConvertedLifetime` — placeholder wiring useless until treatment + conversion sites exist in `sim.ts`.
-2. **Hygiene PR** — add `tools/sprites/out/processed/` to `.gitignore` + `git rm --cached` the 74 existing tracked files. Tightens future PR diffs.
+2. **Dead UNLOCK_CRITERIA cleanup** — `tierRequirementText()` + `tierProgressSnapshot()` in `main.ts:945-1000` are legacy fallbacks unreachable via the `PROGRESSION_TOOLTIP_COPY` chain. Delete as a separate hygiene PR. Review-B on #22 flagged but intentionally deferred.
 3. **Phase 5 / Health + Morgue mechanics reference doc** (BMO's lane, parked by the tutorial pivot).
 4. **Sprite polish** — regen modules/agents where current nano-banana outputs are weakest; consider pixellab rotate for 4/8-direction agent sprites.
-5. **gpt-image-2 evaluation** — released 2026-04-21 with first-class pixel-art + iso-3D + spatial reasoning. Potential for sebcity or space-station-game atlas rebuild. Needs VoX/awfml greenlight + budget decision.
-6. **Tutorial first-playable polish** — observed UX gaps from the morning playtest (expand-legend, trigger copy) are fixed; next round comes from live playtest feedback.
+5. **gpt-image-2 / Nano Banana Pro evaluation** — seb has pricing ($0.063/image HD vs $0.015 for Nano Banana Pro vs $0.04 current Imagen-4). Potential atlas rebuild. Sam parked the OpenRouter wire-up for later; revisit when she's ready.
+6. **Tutorial first-playable polish (round 2)** — quest bar + T0 predicate + pre-placed dock shipped. Next round depends on live playtest feedback from awfml.
 
 ### Risks / open questions
 - Phase 5 (health/death/morgue) scoped but not built. Unlocks v2 has placeholder predicates for T5 that won't fire until Phase 5 lands.
