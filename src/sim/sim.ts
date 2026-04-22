@@ -5191,6 +5191,7 @@ function updateVisitorLogic(
         }
         const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
         state.metrics.credits += spend;
+        state.metrics.creditsEarnedLifetime += spend;
         state.usageTotals.creditsMarketGross += spend;
         state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
@@ -5226,6 +5227,7 @@ function updateVisitorLogic(
           if (visitor.servedMeal) {
             const payout = mealExitPayout(state, visitor);
             state.metrics.credits += payout;
+            state.metrics.creditsEarnedLifetime += payout;
             state.usageTotals.creditsMealPayoutGross += payout;
           }
           state.recentExitTimes.push(state.now);
@@ -6260,6 +6262,7 @@ function applyResidentTaxes(state: StationState): void {
   const collected = taxableResidents * RESIDENT_TAX_PER_HEAD * multiplier;
   if (collected <= 0) return;
   state.metrics.credits += collected;
+  state.metrics.creditsEarnedLifetime += collected;
   state.usageTotals.residentTaxesCollected += collected;
 }
 
@@ -6512,6 +6515,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentsCount = residentsCount;
   state.metrics.incidentsOpen = openIncidents;
   state.metrics.incidentsResolved = resolvedIncidents;
+  // incidentsResolved is already derived by scanning all incident records
+  // every tick, so it's lifetime-monotonic. Mirror to the v2 explicit
+  // lifetime field so unlocks.ts predicates + harness assertions have a
+  // clearly-named counter to target.
+  state.metrics.incidentsResolvedLifetime = resolvedIncidents;
   state.metrics.incidentsFailed = failedIncidents;
   state.metrics.securityDispatches = state.usageTotals.securityDispatches;
   state.metrics.securityResponseAvgSec = avgSecurityResponseSec;
