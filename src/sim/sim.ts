@@ -12,6 +12,7 @@ import {
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import { SHIP_PROFILES } from './content/ships';
 import {
+  UNLOCK_DEFINITIONS,
   createInitialUnlockState,
   isModuleUnlockedAtTier,
   isRoomUnlockedAtTier
@@ -377,39 +378,25 @@ function unlockTierProgressText(state: StationState): string {
 function updateUnlockProgress(state: StationState): void {
   if (!ENABLE_UNLOCKS_V1) return;
   const unlockIdSet = new Set(state.unlocks.unlockedIds);
-  if (
-    state.unlocks.tier < 1 &&
-    state.metrics.airQuality >= UNLOCK_CRITERIA.tier1.minAirQuality &&
-    state.metrics.mealStock >= UNLOCK_CRITERIA.tier1.minMealStock &&
-    !state.metrics.airBlockedWarningActive &&
-    state.ops.cafeteriasActive > 0 &&
-    state.ops.lifeSupportActive > 0
-  ) {
-    state.unlocks.tier = 1;
-    unlockIdSet.add('tier1_sustenance');
-    state.unlocks.unlockedAtSec.tier1_sustenance = state.now;
-    state.unlocks.triggerProgress[1] = 1;
-  }
-  if (
-    state.unlocks.tier < 2 &&
-    state.metrics.creditsNetPerMin >= UNLOCK_CRITERIA.tier2.minCreditsNetPerMin &&
-    state.metrics.completedJobs >= UNLOCK_CRITERIA.tier2.minCompletedJobs
-  ) {
-    state.unlocks.tier = 2;
-    unlockIdSet.add('tier2_commerce');
-    state.unlocks.unlockedAtSec.tier2_commerce = state.now;
-    state.unlocks.triggerProgress[2] = 1;
-  }
-  if (
-    state.unlocks.tier < 3 &&
-    state.residents.length >= UNLOCK_CRITERIA.tier3.minResidents &&
-    state.metrics.residentSatisfactionAvg >= UNLOCK_CRITERIA.tier3.minResidentSatisfaction &&
-    state.metrics.incidentsResolved >= UNLOCK_CRITERIA.tier3.minResolvedIncidents
-  ) {
-    state.unlocks.tier = 3;
-    unlockIdSet.add('tier3_logistics');
-    state.unlocks.unlockedAtSec.tier3_logistics = state.now;
-    state.unlocks.triggerProgress[3] = 1;
+  // Predicate-driven advance. Loop up from current tier, evaluate each
+  // tier's trigger against live metrics. Monotonic lifetime counters
+  // mean predicates never go false once true, so the advance is
+  // stable across save/load + safe to re-evaluate each tick. At the
+  // first un-met tier, record progress (for the "coming next" UI)
+  // and stop — we never advance past a gate that hasn't fired.
+  for (let t = state.unlocks.tier + 1; t <= 6; t++) {
+    const tier = t as UnlockTier;
+    const def = UNLOCK_DEFINITIONS.find((d) => d.tier === tier);
+    if (!def) break;
+    if (def.trigger.predicate(state.metrics)) {
+      state.unlocks.tier = tier;
+      unlockIdSet.add(def.id);
+      state.unlocks.unlockedAtSec[def.id] = state.now;
+      state.unlocks.triggerProgress[tier] = 1;
+      continue; // check the next tier in the same tick
+    }
+    state.unlocks.triggerProgress[tier] = def.trigger.progress(state.metrics);
+    break;
   }
   state.unlocks.unlockedIds = [...unlockIdSet];
   state.metrics.unlockTier = state.unlocks.tier;
@@ -2142,6 +2129,7 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     rusher: 0.1
   };
   const archetype = pickArchetypeFromMix(state, mix);
+  state.usageTotals.archetypesEverSeen[archetype] = true;
   const profile = ARCHETYPE_PROFILES[archetype];
   const primaryPreference = pickVisitorPrimaryPreference(state, archetype, ship?.manifestDemand ?? null);
   const visitor: Visitor = {
@@ -6527,6 +6515,11 @@ function computeMetrics(state: StationState): void {
   // monotonicity. It's incremented at the resolve event in
   // resolveIncident() instead.
   state.metrics.incidentsFailed = failedIncidents;
+  // Derive lifetime-monotonic archetypes-seen count from the boolean
+  // record in usageTotals. O(4) constant — cheap to run every metrics pass.
+  state.metrics.archetypesServedLifetime = Object.values(
+    state.usageTotals.archetypesEverSeen,
+  ).filter(Boolean).length;
   state.metrics.securityDispatches = state.usageTotals.securityDispatches;
   state.metrics.securityResponseAvgSec = avgSecurityResponseSec;
   state.metrics.residentConfrontations = confrontingResidents;
@@ -7272,6 +7265,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       payrollPaid: 0,
       tradeGoodsSold: 0,
       marketStockouts: 0,
+      archetypesEverSeen: { diner: false, shopper: false, lounger: false, rusher: false },
       shipsByType: {
         tourist: 0,
         trader: 0,
