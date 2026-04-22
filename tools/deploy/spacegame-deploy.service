@@ -1,0 +1,40 @@
+[Unit]
+Description=Build and deploy space-station-game from origin/main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Oneshot — the timer handles cadence. RemainAfterExit=no so each tick runs fresh.
+Type=oneshot
+User=spacegame
+Group=spacegame
+
+# Tunables. Override these in /etc/systemd/system/spacegame-deploy.service.d/
+# override.conf if the paths differ from the README defaults.
+Environment=SPACEGAME_REPO=/opt/spacegame-repo
+Environment=SPACEGAME_WEBROOT=/var/www/spacegame
+Environment=SPACEGAME_BRANCH=main
+Environment=SPACEGAME_REMOTE=origin
+
+ExecStart=/opt/spacegame-repo/tools/deploy/build.sh
+
+# If build.sh fails we DO NOT want the timer to keep retrying rapidly —
+# sd-journal + a quiet retry on the next tick is fine.
+Restart=no
+
+# Modest hardening — the build process writes to $REPO and $WEBROOT only.
+# ProtectSystem=strict is too tight because git needs to write $REPO under /opt.
+# ReadWritePaths is the minimum surface we need.
+ReadWritePaths=/opt/spacegame-repo /var/www/spacegame
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Build takes up to ~45s cold (npm ci + tsc + vite). 5 min is generous
+# without stalling the timer if something hangs.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
