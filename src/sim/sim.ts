@@ -78,9 +78,6 @@ const BASE_CAPACITY = 30;
 const CYCLE_DURATION = 15;
 const MAX_SHIPS_PER_CYCLE = 3;
 const MAX_OCCUPANTS_PER_TILE = 4;
-export const ENABLE_UNLOCKS_V1 = true;
-export const ENABLE_SHIP_PACK_V1 = true;
-export const ENABLE_RESIDENT_ROUTINES_V2 = true;
 
 const CREW_PER_CAFETERIA = 1;
 const CREW_PER_KITCHEN = 1;
@@ -145,7 +142,6 @@ const AIR_BLOCKED_WARNING_DELAY_SEC = 8;
 const DORM_SEEK_ENERGY_THRESHOLD = 55;
 const BODY_CLEAR_BATCH = 4;
 const BODY_CLEAR_MATERIAL_COST = 6;
-const ENABLE_RESIDENTS_NOW = true;
 const RESIDENT_CONVERSION_BASE_CHANCE = 0.03;
 const RESIDENT_TAX_PERIOD = 24;
 const RESIDENT_TAX_PER_HEAD = 0.42;
@@ -315,7 +311,6 @@ function serviceTagUnlockTier(tag: ShipServiceTag): UnlockTier {
 }
 
 function isServiceTagUnlocked(state: StationState, tag: ShipServiceTag): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return state.unlocks.tier >= serviceTagUnlockTier(tag);
 }
 
@@ -348,22 +343,18 @@ function shipTypeUnlockTier(shipType: ShipType): UnlockTier {
 }
 
 export function isShipTypeUnlocked(state: StationState, shipType: ShipType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return state.unlocks.tier >= shipTypeUnlockTier(shipType);
 }
 
 export function isRoomUnlocked(state: StationState, room: RoomType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return isRoomUnlockedAtTier(room, state.unlocks.tier);
 }
 
 export function isModuleUnlocked(state: StationState, module: ModuleType): boolean {
-  if (!ENABLE_UNLOCKS_V1) return true;
   return isModuleUnlockedAtTier(module, state.unlocks.tier);
 }
 
 function updateUnlockProgress(state: StationState): void {
-  if (!ENABLE_UNLOCKS_V1) return;
   const unlockIdSet = new Set(state.unlocks.unlockedIds);
   // Predicate-driven advance. Loop up from current tier, evaluate each
   // tier's trigger against live metrics. Monotonic lifetime counters
@@ -2169,11 +2160,10 @@ function ensureCrewPool(state: StationState): void {
   }
 }
 
-function ensureResidentPopulation(state: StationState): void {
-  if (!ENABLE_RESIDENTS_NOW) {
-    state.residents.length = 0;
-    return;
-  }
+function ensureResidentPopulation(_state: StationState): void {
+  // No-op placeholder: residents join via visitor conversion +
+  // residential-ship boarding, populated at those event sites. Kept as
+  // a seam for future population-cap enforcement.
 }
 
 function rebuildDockEntities(state: StationState): void {
@@ -3536,7 +3526,6 @@ function scheduleCycleArrivals(state: StationState): void {
     const availableTypes = new Set<ShipType>();
     for (const dock of laneDocks) {
       for (const type of dock.allowedShipTypes) {
-        if (!ENABLE_SHIP_PACK_V1 && (type === 'military' || type === 'colonist')) continue;
         if (!isShipTypeUnlocked(state, type)) continue;
         availableTypes.add(type);
       }
@@ -4898,7 +4887,6 @@ function shouldTryMealAfterLeisure(state: StationState, visitor: Visitor): boole
 }
 
 function marketHelperMultiplier(state: StationState): number {
-  if (!ENABLE_RESIDENT_ROUTINES_V2) return 1;
   let workers = 0;
   for (const resident of state.residents) {
     if (resident.role !== 'market_helper') continue;
@@ -5419,7 +5407,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     }
   }
 
-  if (!criticalNeed && ENABLE_RESIDENT_ROUTINES_V2 && resident.routinePhase === 'work') {
+  if (!criticalNeed && resident.routinePhase === 'work') {
     const workTargets = residentWorkTargets(state, resident);
     if (workTargets.length > 0) {
       resident.state = ResidentState.ToLeisure;
@@ -6080,7 +6068,7 @@ function activeResidentRoleCounts(state: StationState): Record<ResidentRole, num
 }
 
 function updateResources(state: StationState, dt: number): void {
-  const roleWorkers = ENABLE_RESIDENT_ROUTINES_V2 ? activeResidentRoleCounts(state) : { none: 0, market_helper: 0, hydro_assist: 0, civic_watch: 0 };
+  const roleWorkers = activeResidentRoleCounts(state);
   const leakPenalty = state.metrics.leakingTiles * 0.03;
   const powerRatio = clamp(state.metrics.powerSupply / Math.max(1, state.metrics.powerDemand), 0.35, 1);
   const hydroAssistMultiplier =
@@ -8331,12 +8319,8 @@ export function tick(state: StationState, frameDt: number): void {
   state.effects.securityAuraByTile = computeSecurityAuraMap(state);
   const securityAuraByTile = state.effects.securityAuraByTile;
   updateCriticalStaffTracking(state, dt);
-  if (ENABLE_RESIDENTS_NOW) {
-    updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
-    tryStartResidentConfrontation(state, dt, securityAuraByTile);
-  } else {
-    state.residents.length = 0;
-  }
+  updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
+  tryStartResidentConfrontation(state, dt, securityAuraByTile);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   updateIncidentPipeline(state, dt, occupancyByTile);
 
