@@ -24,7 +24,7 @@ function progressTo(current: number, threshold: number): number {
   return Math.max(0, Math.min(1, current / threshold));
 }
 
-const TIER1_MEAL_THRESHOLD = 1;
+const TIER1_VISITOR_ARRIVAL_THRESHOLD = 1;
 const TIER2_CREDIT_THRESHOLD = 500;
 const TIER2_ARCHETYPE_THRESHOLD = 3;
 const TIER3_TRADE_CYCLES_THRESHOLD = 1;
@@ -38,11 +38,19 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
     id: 'tier1_sustenance',
     tier: 1,
     name: 'Sustenance',
-    description: 'Feed a visitor. Unlocks hygiene, hydroponics, kitchen, cafeteria.',
+    description: 'First visitor arrives. Unlocks hygiene, hydroponics, kitchen, cafeteria.',
     trigger: {
-      predicate: (m: Metrics) => m.mealsServedTotal >= TIER1_MEAL_THRESHOLD,
-      progress: (m: Metrics) => progressTo(m.mealsServedTotal, TIER1_MEAL_THRESHOLD),
-      tooltip: 'Serve a meal to your first visitor.',
+      // Fires when the first visitor arrives. Starter state has no
+      // hydroponics/kitchen/cafeteria, so gating on mealsServed never
+      // resolved — the tutorial couldn't self-advance. archetypesServed-
+      // Lifetime increments at visitor-spawn (usageTotals.archetypes-
+      // EverSeen set in sim.ts), giving a counter the bare starter does
+      // afford. T1 still THEMES Sustenance; the player builds food
+      // infra organically while working toward T2.
+      predicate: (m: Metrics) => m.archetypesServedLifetime >= TIER1_VISITOR_ARRIVAL_THRESHOLD,
+      progress: (m: Metrics) =>
+        progressTo(m.archetypesServedLifetime, TIER1_VISITOR_ARRIVAL_THRESHOLD),
+      tooltip: 'Your first visitor arrives at the station.',
     },
   },
   {

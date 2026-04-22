@@ -1693,10 +1693,16 @@ function testUnlockTier1TriggersAfterStability(): void {
   state.metrics.airQuality = 82;
   state.metrics.mealStock = 40;
   state.metrics.airBlockedWarningActive = false;
-  // Predicate-driven T1 advance gates on mealsServedTotal (canonical
-  // lifetime counter). Old air+mealStock+cafeteria criteria kept as
-  // environmental setup but are no longer the actual trigger.
-  state.metrics.mealsServedTotal = 1;
+  // Predicate-driven T1 advance gates on first-visitor-arrives
+  // (archetypesServedLifetime >= 1, derived from usageTotals.archetypes-
+  // EverSeen in the metrics pass). Old air+mealStock+cafeteria criteria
+  // kept as environmental setup but are no longer the actual trigger.
+  state.usageTotals.archetypesEverSeen = {
+    diner: true,
+    shopper: false,
+    lounger: false,
+    rusher: false,
+  };
   state.controls.paused = true;
   tick(state, 0);
   assertCondition(getUnlockTier(state) >= 1, 'Tier 1 should unlock after stability criteria are met.');
