@@ -9,7 +9,7 @@ import {
 import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
-import { UNLOCK_CRITERIA } from './sim/balance';
+import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
@@ -957,53 +957,15 @@ function tierRequirementText(tier: UnlockTier): string {
 
 function tierProgressSnapshot(): TierProgressSnapshot {
   const tier = getUnlockTier(state);
-  let progress = 1;
-  if (tier === 0) {
-    const air = clamp(state.metrics.airQuality / UNLOCK_CRITERIA.tier1.minAirQuality, 0, 1);
-    const meals = clamp(state.metrics.mealStock / UNLOCK_CRITERIA.tier1.minMealStock, 0, 1);
-    const warningClear = state.metrics.airBlockedWarningActive ? 0 : 1;
-    const cafeteriaReady = state.ops.cafeteriasActive > 0 ? 1 : 0;
-    const lifeSupportReady = state.ops.lifeSupportActive > 0 ? 1 : 0;
-    progress = (air + meals + warningClear + cafeteriaReady + lifeSupportReady) / 5;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 1,
-      requirement:
-        `Air ${state.metrics.airQuality.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minAirQuality} | ` +
-        `Meals ${state.metrics.mealStock.toFixed(0)}/${UNLOCK_CRITERIA.tier1.minMealStock} | ` +
-        `Cafeteria ${state.ops.cafeteriasActive > 0 ? 'online' : 'missing'} | ` +
-        `Life Support ${state.ops.lifeSupportActive > 0 ? 'online' : 'missing'} | ` +
-        `Air Warning ${state.metrics.airBlockedWarningActive ? 'active' : 'clear'}`
-    };
-  } else if (tier === 1) {
-    const credits = clamp(state.metrics.creditsNetPerMin / UNLOCK_CRITERIA.tier2.minCreditsNetPerMin, 0, 1);
-    const jobs = clamp(state.metrics.completedJobs / UNLOCK_CRITERIA.tier2.minCompletedJobs, 0, 1);
-    progress = (credits + jobs) / 2;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 2,
-      requirement:
-        `Credits/min ${state.metrics.creditsNetPerMin.toFixed(2)}/${UNLOCK_CRITERIA.tier2.minCreditsNetPerMin.toFixed(2)} | ` +
-        `Logistics jobs ${state.metrics.completedJobs}/${UNLOCK_CRITERIA.tier2.minCompletedJobs}`
-    };
-  } else if (tier === 2) {
-    const residents = clamp(state.metrics.residentsCount / UNLOCK_CRITERIA.tier3.minResidents, 0, 1);
-    const sat = clamp(state.metrics.residentSatisfactionAvg / UNLOCK_CRITERIA.tier3.minResidentSatisfaction, 0, 1);
-    const incidents = clamp(state.metrics.incidentsResolved / UNLOCK_CRITERIA.tier3.minResolvedIncidents, 0, 1);
-    progress = (residents + sat + incidents) / 3;
-    return {
-      pct: Math.round(clamp(progress, 0, 1) * 100),
-      nextTier: 3,
-      requirement:
-        `Residents ${state.metrics.residentsCount}/${UNLOCK_CRITERIA.tier3.minResidents} | ` +
-        `Satisfaction ${state.metrics.residentSatisfactionAvg.toFixed(0)}/${UNLOCK_CRITERIA.tier3.minResidentSatisfaction.toFixed(0)} | ` +
-        `Resolved incidents ${state.metrics.incidentsResolved}/${UNLOCK_CRITERIA.tier3.minResolvedIncidents}`
-    };
+  if (tier >= 6) {
+    return { pct: 100, nextTier: null, requirement: 'All progression tiers unlocked.' };
   }
+  const nextTier = (tier + 1) as UnlockTier;
+  const progress = UNLOCK_DEFINITIONS[nextTier - 1].trigger.progress(state.metrics);
   return {
-    pct: 100,
-    nextTier: null,
-    requirement: 'All progression tiers unlocked.'
+    pct: Math.round(progress * 100),
+    nextTier,
+    requirement: PROGRESSION_TOOLTIP_COPY[nextTier].trigger,
   };
 }
 
@@ -1025,12 +987,8 @@ function refreshProgressionModal(): void {
     const nextInfo = TIER_PRESENTATION[progress.nextTier];
     const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
     progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    // S2.1 fix: modal "Unlock Requirement" now pulls from
-    // PROGRESSION_TOOLTIP_COPY (player-facing trigger voice) instead of
-    // tierRequirementText() raw criteria. Matches the status-line fix
-    // from PR #12 so tooltip + status line + modal all speak the same
-    // language. Falls back to tierRequirementText if copy is missing
-    // (defensive; shouldn't happen for T1-T6).
+    // S2.1: modal "Unlock Requirement" pulls from PROGRESSION_TOOLTIP_COPY
+    // (player-facing trigger voice). Matches the status-line + quest-bar.
     const requirement = nextCopy?.trigger ?? tierRequirementText(progress.nextTier);
     progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${requirement}`;
     progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
@@ -1039,7 +997,7 @@ function refreshProgressionModal(): void {
     progressModalNextShipsEl.textContent = `New Ship Families: ${formatTierList(nextInfo.ships)}`;
     progressModalNextSystemsEl.textContent = `New Systems: ${formatTierList(nextInfo.systems)}`;
   } else {
-    progressModalNextTierNameEl.textContent = 'Tier 3 complete: all systems online';
+    progressModalNextTierNameEl.textContent = 'Tier 6 complete: all tiers unlocked';
     progressModalNextCriteriaEl.textContent = 'Unlock Requirement: n/a';
     progressModalNextBuildingsEl.textContent = 'New Buildings: none';
     progressModalNextNeedsEl.textContent = 'New Citizen Needs: none';
