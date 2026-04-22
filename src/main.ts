@@ -3028,3 +3028,99 @@ async function startGameLoop(): Promise<void> {
 }
 
 void startGameLoop();
+
+// ---------------------------------------------------------------------------
+// Harness hooks — always-on, read-only, safe to expose in production.
+// Playwright and browser-console users can call these to inspect live state
+// without touching internals. Repro URLs use window.__harnessLoadSave().
+// ---------------------------------------------------------------------------
+declare global {
+  interface Window {
+    __harnessGetState: () => unknown;
+    __harnessGetMetrics: () => unknown;
+    __harnessExportSave: () => string;
+    __harnessLoadSave: (json: string) => void;
+    __harnessPauseAndFlush: () => void;
+    __harnessAdvanceSim: (seconds: number, step?: number) => void;
+    __harnessReady: boolean;
+  }
+}
+
+window.__harnessGetState = () => {
+  // Returns a shallow-serializable snapshot of the current sim state.
+  // Deep-clone via JSON to avoid reference leaks into test code.
+  return JSON.parse(serializeSave('__harness__', state, GAME_VERSION));
+};
+
+window.__harnessGetMetrics = () => {
+  return JSON.parse(JSON.stringify(state.metrics));
+};
+
+window.__harnessExportSave = () => {
+  return serializeSave('__harness_export__', state, GAME_VERSION);
+};
+
+window.__harnessLoadSave = (json: string) => {
+  try {
+    const parsed = parseAndMigrateSave(json);
+    if (!parsed.ok) {
+      console.error('[harness] __harnessLoadSave: parse failed', parsed.error);
+      return;
+    }
+    // hydrateStateFromSave returns {state, warnings} and throws on unrecoverable errors.
+    // The outer try/catch handles the throw case.
+    const hydrated = hydrateStateFromSave(parsed.save);
+    if (hydrated.warnings.length) {
+      console.warn('[harness] __harnessLoadSave warnings:', hydrated.warnings);
+    }
+    Object.assign(state, hydrated.state);
+    console.log('[harness] state loaded from JSON');
+  } catch (e) {
+    console.error('[harness] __harnessLoadSave: exception', e);
+  }
+};
+
+window.__harnessPauseAndFlush = () => {
+  // Pause the sim and force a synchronous render pass so screenshots
+  // are taken against a stable, non-animated frame.
+  state.controls.paused = true;
+  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
+};
+
+window.__harnessAdvanceSim = (seconds: number, step = 0.25) => {
+  // Advance the sim by `seconds` of sim time regardless of pause state.
+  // Useful for fast-forwarding a scenario to a target state.
+  const steps = Math.ceil(seconds / step);
+  for (let i = 0; i < steps; i++) {
+    tick(state, step);
+  }
+};
+
+window.__harnessReady = true;
+
+// ?load=<base64-JSON> or ?loadId=<localStorageKey> repro URL support.
+// Bots can construct these from failure-state.json to reproduce any failure.
+(function applyLoadParam() {
+  const params = new URLSearchParams(location.search);
+  const loadB64 = params.get('load');
+  const loadId = params.get('loadId');
+  if (loadB64) {
+    try {
+      const json = atob(loadB64);
+      window.__harnessLoadSave(json);
+    } catch (e) {
+      console.error('[harness] ?load= base64 decode failed', e);
+    }
+  } else if (loadId) {
+    try {
+      const raw = localStorage.getItem(loadId);
+      if (raw) {
+        window.__harnessLoadSave(raw);
+      } else {
+        console.warn('[harness] ?loadId=', loadId, 'not found in localStorage');
+      }
+    } catch (e) {
+      console.error('[harness] ?loadId= read failed', e);
+    }
+  }
+})();
