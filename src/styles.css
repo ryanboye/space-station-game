@@ -123,10 +123,6 @@ h1 {
   color: var(--text);
 }
 
-#load {
-  font-weight: 700;
-}
-
 .section {
   margin-top: 12px;
   border-top: 1px solid #2f3f53;
