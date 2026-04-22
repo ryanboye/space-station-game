@@ -21,6 +21,7 @@ import {
   type SpaceLane,
   TileType,
   type StationState,
+  type VisitorArchetype,
   ZoneType
 } from './types';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './content/unlocks';
@@ -93,6 +94,19 @@ export interface StationSnapshotV1 {
     tier: UnlockTier;
     unlockedIds: UnlockId[];
     unlockedAtSec: Partial<Record<UnlockId, number>>;
+  };
+  progression: {
+    // Lifetime counters + the archetype-seen set that feed predicate-
+    // driven tier advances. Must survive save/load; without them a
+    // reload at T1 sees archetypesServedLifetime=0 and the T2 gate is
+    // permanently stuck.
+    mealsServedTotal: number;
+    creditsEarnedLifetime: number;
+    tradeCyclesCompletedLifetime: number;
+    incidentsResolvedLifetime: number;
+    actorsTreatedLifetime: number;
+    residentsConvertedLifetime: number;
+    archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>>;
   };
 }
 
@@ -173,6 +187,9 @@ function maxUnlockTier(a: UnlockTier, b: UnlockTier): UnlockTier {
 }
 
 function normalizeUnlockTier(value: number): UnlockTier {
+  if (value >= 6) return 6;
+  if (value >= 5) return 5;
+  if (value >= 4) return 4;
   if (value >= 3) return 3;
   if (value >= 2) return 2;
   if (value >= 1) return 1;
@@ -266,6 +283,15 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       tier: state.unlocks.tier,
       unlockedIds: [...state.unlocks.unlockedIds],
       unlockedAtSec: { ...state.unlocks.unlockedAtSec }
+    },
+    progression: {
+      mealsServedTotal: state.metrics.mealsServedTotal,
+      creditsEarnedLifetime: state.metrics.creditsEarnedLifetime,
+      tradeCyclesCompletedLifetime: state.metrics.tradeCyclesCompletedLifetime,
+      incidentsResolvedLifetime: state.metrics.incidentsResolvedLifetime,
+      actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
+      residentsConvertedLifetime: state.metrics.residentsConvertedLifetime,
+      archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen }
     }
   };
 }
@@ -490,6 +516,27 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     unlockedIds.add(id);
   }
 
+  // Progression counters — missing in pre-progression save files, so
+  // default all to 0 and an empty archetypesEverSeen set.
+  const progRaw = isRecord(snapshotRaw.progression) ? snapshotRaw.progression : null;
+  const archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>> = {};
+  if (progRaw && isRecord(progRaw.archetypesEverSeen)) {
+    const archetypes: VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
+    for (const archetype of archetypes) {
+      if (progRaw.archetypesEverSeen[archetype] === true) archetypesEverSeen[archetype] = true;
+    }
+  }
+  const progression: StationSnapshotV1['progression'] = {
+    mealsServedTotal: Math.max(0, Math.floor(asFiniteNumber(progRaw?.mealsServedTotal, 0))),
+    creditsEarnedLifetime: Math.max(0, asFiniteNumber(progRaw?.creditsEarnedLifetime, 0)),
+    tradeCyclesCompletedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.tradeCyclesCompletedLifetime, 0))),
+    incidentsResolvedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.incidentsResolvedLifetime, 0))),
+    actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
+    residentsConvertedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.residentsConvertedLifetime, 0))),
+    archetypesEverSeen
+  };
+  if (!progRaw) warnings.push('progression counters missing; defaulted to zero (pre-progression save).');
+
   return {
     width,
     height,
@@ -514,7 +561,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       tier: unlockTier,
       unlockedIds: UNLOCK_IDS.filter((id) => unlockedIds.has(id)),
       unlockedAtSec
-    }
+    },
+    progression
   };
 }
 
@@ -762,6 +810,19 @@ export function hydrateStateFromSave(
   next.metrics.waterStock = Math.max(0, snapshot.resources.waterStock);
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
+
+  // Restore lifetime counters so predicate-driven tier progression
+  // (archetypesServedLifetime is derived from archetypesEverSeen in
+  // the metrics pass, so persisting the set is enough) survives reload.
+  next.metrics.mealsServedTotal = snapshot.progression.mealsServedTotal;
+  next.metrics.creditsEarnedLifetime = snapshot.progression.creditsEarnedLifetime;
+  next.metrics.tradeCyclesCompletedLifetime = snapshot.progression.tradeCyclesCompletedLifetime;
+  next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
+  next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
+  next.metrics.residentsConvertedLifetime = snapshot.progression.residentsConvertedLifetime;
+  for (const archetype of Object.keys(next.usageTotals.archetypesEverSeen) as Array<keyof typeof next.usageTotals.archetypesEverSeen>) {
+    next.usageTotals.archetypesEverSeen[archetype] = snapshot.progression.archetypesEverSeen[archetype] === true;
+  }
 
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);

@@ -1208,6 +1208,71 @@ function testSaveLoadBestEffortMigration(): void {
   assertCondition(hydrated.state.controls.taxRate === 0, 'Tax rate should be clamped during migration.');
 }
 
+function testSaveRoundtripLifetimeCountersSurvive(): void {
+  const state = createInitialState({ seed: 3088 });
+  buildHabitat(state);
+  state.metrics.mealsServedTotal = 17;
+  state.metrics.creditsEarnedLifetime = 842;
+  state.metrics.tradeCyclesCompletedLifetime = 3;
+  state.metrics.incidentsResolvedLifetime = 5;
+  state.metrics.actorsTreatedLifetime = 2;
+  state.metrics.residentsConvertedLifetime = 4;
+  state.usageTotals.archetypesEverSeen = {
+    diner: true,
+    shopper: true,
+    lounger: true,
+    rusher: false
+  };
+
+  const payload = serializeSave('lifetime-counters', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Lifetime-counter payload should parse.');
+  if (!parsed.ok) return;
+  const hydrated = hydrateStateFromSave(parsed.save);
+  const loaded = hydrated.state;
+
+  assertCondition(loaded.metrics.mealsServedTotal === 17, 'mealsServedTotal should survive roundtrip.');
+  assertCondition(Math.round(loaded.metrics.creditsEarnedLifetime) === 842, 'creditsEarnedLifetime should survive roundtrip.');
+  assertCondition(loaded.metrics.tradeCyclesCompletedLifetime === 3, 'tradeCyclesCompletedLifetime should survive roundtrip.');
+  assertCondition(loaded.metrics.incidentsResolvedLifetime === 5, 'incidentsResolvedLifetime should survive roundtrip.');
+  assertCondition(loaded.metrics.actorsTreatedLifetime === 2, 'actorsTreatedLifetime should survive roundtrip.');
+  assertCondition(loaded.metrics.residentsConvertedLifetime === 4, 'residentsConvertedLifetime should survive roundtrip.');
+  assertCondition(loaded.usageTotals.archetypesEverSeen.diner === true, 'archetypesEverSeen[diner] should survive roundtrip.');
+  assertCondition(loaded.usageTotals.archetypesEverSeen.shopper === true, 'archetypesEverSeen[shopper] should survive roundtrip.');
+  assertCondition(loaded.usageTotals.archetypesEverSeen.lounger === true, 'archetypesEverSeen[lounger] should survive roundtrip.');
+  assertCondition(loaded.usageTotals.archetypesEverSeen.rusher === false, 'archetypesEverSeen[rusher] should stay false.');
+  // Tick runs during hydrate; derived counter should reflect the set.
+  assertCondition(loaded.metrics.archetypesServedLifetime === 3, 'archetypesServedLifetime derived from set should be 3.');
+}
+
+function testSaveRoundtripTierCapAboveThree(): void {
+  const state = createInitialState({ seed: 3089 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 5);
+  const payload = serializeSave('tier5', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Tier-5 save payload should parse.');
+  if (!parsed.ok) return;
+  const hydrated = hydrateStateFromSave(parsed.save);
+  assertCondition(hydrated.state.unlocks.tier === 5, `Tier 5 should hydrate as 5, not demoted; got ${hydrated.state.unlocks.tier}.`);
+}
+
+function testSellMaterialsIncrementsCreditsEarnedLifetime(): void {
+  const state = createInitialState({ seed: 3090 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  const bought = buyMaterials(state, 0, 35);
+  assertCondition(bought, 'Setup: buy materials should seed stock.');
+  runFor(state, 150);
+  const priorLifetime = state.metrics.creditsEarnedLifetime;
+  const priorCredits = state.metrics.credits;
+  const ok = sellMaterials(state, 10, 50);
+  assertCondition(ok, 'sellMaterials should succeed with stocked materials.');
+  assertCondition(state.metrics.credits - priorCredits === 50, 'Credits should rise by creditGain.');
+  assertCondition(state.metrics.creditsEarnedLifetime - priorLifetime === 50, 'creditsEarnedLifetime should rise by creditGain for T2 gate.');
+}
+
 function testSaveLoadFailsOnInvalidCoreShape(): void {
   const invalidPayload = JSON.stringify({
     schemaVersion: 1,
@@ -2110,6 +2175,9 @@ function run(): void {
   testSaveRoundtripLayoutAndResources();
   testSaveLoadRegeneratesRuntimeEntities();
   testSaveLoadBestEffortMigration();
+  testSaveRoundtripLifetimeCountersSurvive();
+  testSaveRoundtripTierCapAboveThree();
+  testSellMaterialsIncrementsCreditsEarnedLifetime();
   testSaveLoadFailsOnInvalidCoreShape();
   testInventoryReapplyClampsCapacity();
   testVisitorInspectorShapeAndPurity();
