@@ -30,13 +30,23 @@ export function showTierTransition(spec: TierTransitionSpec): Promise<void> {
   overlay.className = 'progression-flash';
   overlay.setAttribute('role', 'alertdialog');
   overlay.setAttribute('aria-live', 'polite');
+  const tierLabel = spec.tierName
+    ? `Tier ${spec.toTier} — ${escapeHTML(spec.tierName)}`
+    : `Tier ${spec.fromTier} → Tier ${spec.toTier}`;
+  const themeRow = spec.tierTheme
+    ? `<div class="progression-flash__theme">${escapeHTML(spec.tierTheme)}</div>`
+    : '';
+  const unlockedSection = spec.unlockedNames.length
+    ? `<div class="progression-flash__title">You unlocked:</div>
+       <ul class="progression-flash__items">
+         ${spec.unlockedNames.map((n) => `<li>${escapeHTML(n)}</li>`).join('')}
+       </ul>`
+    : '';
   overlay.innerHTML = `
     <div class="progression-flash__card">
-      <div class="progression-flash__meta">Tier ${spec.fromTier} → Tier ${spec.toTier}</div>
-      <div class="progression-flash__title">You unlocked:</div>
-      <ul class="progression-flash__items">
-        ${spec.unlockedNames.map((n) => `<li>${escapeHTML(n)}</li>`).join('')}
-      </ul>
+      <div class="progression-flash__meta">${tierLabel}</div>
+      ${themeRow}
+      ${unlockedSection}
       <div class="progression-flash__hint">tap to dismiss</div>
     </div>
   `;

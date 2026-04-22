@@ -187,6 +187,14 @@
   margin-bottom: 0.4rem;
 }
 
+.progression-flash__theme {
+  font-size: 14px;
+  color: #c0c0c8;
+  margin-bottom: 0.7rem;
+  font-style: italic;
+  line-height: 1.35;
+}
+
 .progression-flash__title {
   font-size: 15px;
   color: #8a92a0;
