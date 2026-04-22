@@ -961,12 +961,11 @@ function tierProgressSnapshot(): TierProgressSnapshot {
     return { pct: 100, nextTier: null, requirement: 'All progression tiers unlocked.' };
   }
   const nextTier = (tier + 1) as UnlockTier;
-  const def = UNLOCK_DEFINITIONS.find((d) => d.tier === nextTier);
-  const progress = def ? def.trigger.progress(state.metrics) : 1;
+  const progress = UNLOCK_DEFINITIONS[nextTier - 1].trigger.progress(state.metrics);
   return {
-    pct: Math.round(clamp(progress, 0, 1) * 100),
+    pct: Math.round(progress * 100),
     nextTier,
-    requirement: PROGRESSION_TOOLTIP_COPY[nextTier]?.trigger ?? 'Progression requirement unavailable.',
+    requirement: PROGRESSION_TOOLTIP_COPY[nextTier].trigger,
   };
 }
 
@@ -988,12 +987,8 @@ function refreshProgressionModal(): void {
     const nextInfo = TIER_PRESENTATION[progress.nextTier];
     const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
     progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    // S2.1 fix: modal "Unlock Requirement" now pulls from
-    // PROGRESSION_TOOLTIP_COPY (player-facing trigger voice) instead of
-    // tierRequirementText() raw criteria. Matches the status-line fix
-    // from PR #12 so tooltip + status line + modal all speak the same
-    // language. Falls back to tierRequirementText if copy is missing
-    // (defensive; shouldn't happen for T1-T6).
+    // S2.1: modal "Unlock Requirement" pulls from PROGRESSION_TOOLTIP_COPY
+    // (player-facing trigger voice). Matches the status-line + quest-bar.
     const requirement = nextCopy?.trigger ?? tierRequirementText(progress.nextTier);
     progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${requirement}`;
     progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
