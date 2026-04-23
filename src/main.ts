@@ -88,6 +88,7 @@ app.innerHTML = `
     <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
     <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
     <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
+    <button id="toggle-glow" class="topbar-btn">Glow: ON</button>
     <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
     <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
     <span class="topbar-spacer"></span>
@@ -590,6 +591,7 @@ const speedLabel = document.querySelector<HTMLSpanElement>('#speed-label')!;
 const toggleZonesBtn = document.querySelector<HTMLButtonElement>('#toggle-zones')!;
 const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle-service-nodes')!;
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
+const toggleGlowBtn = document.querySelector<HTMLButtonElement>('#toggle-glow')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
@@ -2478,6 +2480,7 @@ function syncToggleLabels(): void {
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
     ? 'Inventory Overlay: ON'
     : 'Inventory Overlay: OFF';
+  toggleGlowBtn.textContent = state.controls.showGlow ? 'Glow: ON' : 'Glow: OFF';
   toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
@@ -2497,6 +2500,11 @@ toggleServiceNodesBtn.addEventListener('click', () => {
 
 toggleInventoryOverlayBtn.addEventListener('click', () => {
   state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+  syncToggleLabels();
+});
+
+toggleGlowBtn.addEventListener('click', () => {
+  state.controls.showGlow = !state.controls.showGlow;
   syncToggleLabels();
 });
 

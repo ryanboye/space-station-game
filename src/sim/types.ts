@@ -896,6 +896,7 @@ export interface Controls {
   showZones: boolean;
   showServiceNodes: boolean;
   showInventoryOverlay: boolean;
+  showGlow: boolean;
   spriteMode: 'fallback' | 'sprites';
   showSpriteFallback: boolean;
   spritePipeline: SpritePipeline;
