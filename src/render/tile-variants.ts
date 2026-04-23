@@ -1,7 +1,10 @@
 import { TileType, fromIndex, inBounds, type StationState } from '../sim/types';
 
 export type TileRotation = 0 | 90 | 180 | 270;
-export type WallVariantShape = 'solo' | 'end' | 'straight' | 'corner' | 'tee' | 'cross';
+// 'straight.vertical' is a dedicated sprite for N-S walls because the
+// horizontal `straight` sprite has asymmetric semi-3D shading that looks
+// wrong when rotated. Separate sprite @ rotation 0 is the cleanest fix.
+export type WallVariantShape = 'solo' | 'end' | 'straight' | 'straight.vertical' | 'corner' | 'tee' | 'cross';
 export type DoorVariantShape = 'horizontal' | 'vertical';
 
 export type WallVariant = {
@@ -54,9 +57,11 @@ export function resolveWallVariantFromMask(mask: number): WallVariant {
     case 9:
       return { shape: 'corner', rotation: 270 };
     case 5:
-      return { shape: 'straight', rotation: 0 };
+      // N+S connections → wall runs vertical → dedicated vertical sprite
+      return { shape: 'straight.vertical', rotation: 0 };
     case 10:
-      return { shape: 'straight', rotation: 90 };
+      // E+W connections → wall runs horizontal → canonical straight sprite
+      return { shape: 'straight', rotation: 0 };
     case 7:
       return { shape: 'tee', rotation: 0 };
     case 14:

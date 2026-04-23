@@ -5,6 +5,7 @@
   "tile.wall.solo",
   "tile.wall.end",
   "tile.wall.straight",
+  "tile.wall.straight.vertical",
   "tile.wall.corner",
   "tile.wall.tee",
   "tile.wall.cross",
