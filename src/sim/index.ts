@@ -37,7 +37,6 @@ export {
   setDockAllowedShipType,
   setDockFacing,
   setDockPurpose,
-  setModule,
   setRoom,
   setRoomHousingPolicy,
   setTile,
