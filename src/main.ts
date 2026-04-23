@@ -58,6 +58,7 @@ import {
   type ShipSize,
   type ShipType,
   type HousingPolicy,
+  type StationState,
   ModuleType,
   RoomType,
   TILE_SIZE,
@@ -2645,13 +2646,7 @@ function loadSelectedSave(): void {
 
   try {
     const hydrated = hydrateStateFromSave(parsed.save);
-    Object.assign(state, hydrated.state);
-    applyCanvasSize();
-    updateStageLayout();
-    centerViewportOnMapCenter();
-    clearUiSelectionsAfterLoad();
-    syncControlsToUiFromState();
-    refreshExpansionUi();
+    applyHydratedState(hydrated.state);
     const warningCount = parsed.warnings.length + hydrated.warnings.length + storageWarnings.length;
     const details = [...storageWarnings, ...parsed.warnings, ...hydrated.warnings];
     if (warningCount > 0) {
@@ -2864,6 +2859,13 @@ let cachedHoverDiagnostic: ReturnType<typeof getRoomDiagnosticAt> = null;
 function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
+
+  // Tag autosave-dirty whenever the sim advances OR the player acted
+  // since the last tick. Simpler than wiring every mutation site; a tick
+  // of dt>0 means something about the world changed. Autosave's first
+  // successful write still only fires after this flag flips true, so a
+  // refresh-then-walk-away doesn't overwrite a meaningful prior record.
+  if (dt > 0) markDirty();
 
   tick(state, dt);
   const renderStart = performance.now();
@@ -3154,14 +3156,33 @@ function frame(now: number): void {
 // Autosave — ticks every AUTOSAVE_INTERVAL_MS, single slot at AUTOSAVE_KEY.
 // Opt-in load: player sees a "Load last session (saved HH:MM)" button on
 // arrival and decides whether to hydrate. Auto-loading on refresh would
-// override intentional reset attempts.
+// override intentional reset attempts. Serialization gated by `stateDirty`
+// so a just-booted untouched session doesn't overwrite a meaningful
+// prior autosave.
 
 function formatClock(ms: number): string {
   const d = new Date(ms);
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+function applyHydratedState(nextState: StationState): void {
+  Object.assign(state, nextState);
+  applyCanvasSize();
+  updateStageLayout();
+  centerViewportOnMapCenter();
+  clearUiSelectionsAfterLoad();
+  syncControlsToUiFromState();
+  refreshExpansionUi();
+}
+
 type AutosaveRecord = { savedAt: number; payloadText: string };
+
+let stateDirty = false;
+let autosaveTimer: ReturnType<typeof setInterval> | null = null;
+
+function markDirty(): void {
+  stateDirty = true;
+}
 
 function readAutosaveRecord(): AutosaveRecord | null {
   let raw: string | null;
@@ -3181,6 +3202,7 @@ function readAutosaveRecord(): AutosaveRecord | null {
 }
 
 function writeAutosave(): void {
+  if (!stateDirty) return;
   try {
     const record: AutosaveRecord = {
       savedAt: Date.now(),
@@ -3201,34 +3223,36 @@ function offerAutosaveLoadOnColdStart(): void {
   if (!record) return;
   loadAutosaveBtn.textContent = `Load last session (saved ${formatClock(record.savedAt)})`;
   loadAutosaveBtn.classList.remove('hidden');
-  loadAutosaveBtn.addEventListener(
-    'click',
-    () => {
-      const parsed = parseAndMigrateSave(record.payloadText);
-      if (!parsed.ok) {
-        loadAutosaveBtn.textContent = 'Autosave load failed';
-        return;
+  loadAutosaveBtn.addEventListener('click', () => {
+    const parsed = parseAndMigrateSave(record.payloadText);
+    if (!parsed.ok) {
+      loadAutosaveBtn.textContent = 'Autosave load failed — record cleared';
+      try {
+        localStorage.removeItem(AUTOSAVE_KEY);
+      } catch {
+        /* ignore */
       }
+      return;
+    }
+    try {
       const hydrated = hydrateStateFromSave(parsed.save);
-      Object.assign(state, hydrated.state);
-      applyCanvasSize();
-      updateStageLayout();
-      centerViewportOnMapCenter();
-      clearUiSelectionsAfterLoad();
-      syncControlsToUiFromState();
-      refreshExpansionUi();
+      applyHydratedState(hydrated.state);
+      stateDirty = true;
       loadAutosaveBtn.classList.add('hidden');
       autosaveStatusEl.textContent = `Autosaved ${formatClock(record.savedAt)} · loaded`;
       autosaveStatusEl.classList.remove('hidden');
-    },
-    { once: true }
-  );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      loadAutosaveBtn.textContent = `Autosave load failed: ${msg}`;
+    }
+  });
 }
 
 async function startGameLoop(): Promise<void> {
   spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
   offerAutosaveLoadOnColdStart();
-  setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
+  if (autosaveTimer !== null) clearInterval(autosaveTimer);
+  autosaveTimer = setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
   requestAnimationFrame(frame);
 }
 
