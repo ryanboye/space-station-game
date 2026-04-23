@@ -69,10 +69,8 @@ export const FLOOR_WEAR_SPRITE_KEYS = [
   'overlay.floor.wear.4'
 ] as const;
 
-export const EXTERIOR_WALL_OVERLAY_SPRITE_KEYS = {
-  straight1: 'overlay.wall.exterior.1',
-  straight2: 'overlay.wall.exterior.2',
-  straight3: 'overlay.wall.exterior.3',
-  corner1: 'overlay.wall.exterior.corner.1',
-  end1: 'overlay.wall.exterior.end.1'
-} as const;
+// EXTERIOR_WALL_OVERLAY_SPRITE_KEYS removed 2026-04-23 — seb + bmo
+// verified no renderer ever called it. Art was 5 near-duplicate
+// placeholder sprites eating atlas space. If decorative wall-exteriors
+// are wanted later, re-add with proper render integration + per-tile
+// rotation (don't ship 4 direction-specific sprites per decoration).
