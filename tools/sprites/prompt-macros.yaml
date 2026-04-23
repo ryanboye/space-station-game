@@ -1,0 +1,73 @@
+# Reusable prompt macros for gpt-image-2 sprite generation.
+# Usage: prompt templates reference `{MACRO_NAME}` tokens which get
+# substituted by build-gen-prompt.mjs before sending to the API.
+#
+# Owner's lane: awfml/tinyclaw/seb tweak vocabulary here, no code PR needed.
+# BMO uses them in gen prompts so camera-angle / palette drift between
+# iterations stops being a source of regressions.
+
+# ---- CAMERA MACROS ----
+
+CAMERA_PURE_TOPDOWN: |
+  Camera is DIRECTLY ABOVE, pointing straight down, 0° tilt.
+  You see ONLY the top surface of each object — NO side faces, NO 3/4 view, NO
+  isometric projection. If any vertical side face is visible, the image is
+  WRONG. Pure top-down orthographic, like a blueprint or floor plan.
+
+CAMERA_SLIGHT_DEPTH: |
+  Camera is directly above with a tiny ~5° depth hint expressed through
+  rim-light only — a thin highlight on the top edge that suggests height.
+  No 3/4 projection, no visible side faces, no isometric tilt. The depth
+  cue is ONLY a lighting suggestion, not a perspective change.
+
+CAMERA_PAWN: |
+  Camera DIRECTLY ABOVE each character. "Floating head" style — you see
+  the top of the head (hair/hat) as a small circle, with the rounded body
+  silhouette beneath showing hints of shoulders and arms. NO side view,
+  NO 3/4 projection, NO JRPG walking-sprite orientation. Think RimWorld
+  "pawn" or Prison Architect "inmate" sprite.
+
+# ---- PALETTE MACROS ----
+
+PALETTE_STATION_COOL: |
+  Dark sci-fi space station palette: deep charcoal (#1a1e28) + steel blue
+  (#2a3040) as the dominant tones. Cool-white highlights (#d8e0ea) for
+  rim-lights. Minimal saturation. Amber (#c9a84c) ONLY used sparingly for
+  active-tech indicators (glowing screens, reactor cores, warning lights).
+  NEVER use amber/warm tones as the dominant color or for neutral
+  highlights — that accumulates into a warm aggregate palette.
+
+PALETTE_NEUTRAL_FLOOR: |
+  Dark steel floor base (#2a2d34). Subtle brushed-metal micro-texture.
+  Optional very faint tint by room type but DO NOT SATURATE — 90% dark
+  steel, 10% tint maximum. No center-glow, no dominating color, no
+  directional pattern.
+
+# ---- STYLE / RENDERING MACROS ----
+
+STYLE_RIMWORLD_PA: |
+  Strict RimWorld + Prison Architect aesthetic. Clean crisp pixel edges,
+  NO painterly blur, NO antialiasing, NO soft gradients on geometry.
+  Chunky pixel-art style but clean silhouettes. Readable at 64×64
+  downsample.
+
+TILEABLE_FLOOR: |
+  Seamlessly tileable — edges match opposite edges. NO corner bolts, NO
+  edge borders, NO directional patterns. When placed in a 3×3 grid the
+  seams are invisible.
+
+WALL_DEPTH: |
+  Wall has visible semi-3D depth: top face rim-lit with COOL-WHITE
+  highlight (not amber — amber accumulates warm across tiled station).
+  Subtle drop shadow on south edge cast onto adjacent floor. Side face
+  hint on south + east edges but the wall remains READ as top-down —
+  depth is a lighting effect, not a projection change.
+
+# ---- SHEET / CROPPING MACROS ----
+
+SHEET_GRID_STRICT: |
+  Grid layout is NON-NEGOTIABLE: cells must be exactly uniform, exactly
+  equal-width magenta gutters. No text labels, no borders. The 40px
+  magenta gutter between cells is uniform pure-magenta (#FF00FF) for
+  chroma-keying during post-processing. Each cell contents must be
+  centered within its cell.
