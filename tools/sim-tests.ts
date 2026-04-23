@@ -10,6 +10,7 @@ import {
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
+  setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockPurpose,
   getResidentInspectorById,
@@ -1881,6 +1882,194 @@ function testRebuildDockEntitiesPreservesAllowedShips(): void {
   );
 }
 
+function testRebuildDockEntitiesPaintOverExistingDockIsIdempotent(): void {
+  // Coverage gap flagged by tinyclaw's review of PR #44: the merge case
+  // tests the *adjacent-new-tile* path, but the redundant-paint path
+  // (setTile with previousTile === Dock → short-circuits at sim.ts:7525)
+  // isn't exercised. Guard that the early-return doesn't silently
+  // mutate docks, versions, or inherited metadata.
+  const state = createInitialState({ seed: 5108 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 11);
+  setDockAllowedShipType(state, dockId, 'industrial', true);
+  setDockPurpose(state, dockId, 'residential');
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  const tilesBefore = [...dockBefore.tiles];
+  const allowedBefore = [...dockBefore.allowedShipTypes];
+  const purposeBefore = dockBefore.purpose;
+  const anchorBefore = dockBefore.anchorTile;
+  const topologyVersionBefore = state.topologyVersion;
+  const dockVersionBefore = state.dockVersion;
+  const dockCountBefore = state.docks.length;
+
+  // Paint Dock on a tile that is already Dock. setTile should short-
+  // circuit at the `previousTile === tile` check and bump NO versions,
+  // trigger NO rebuild, preserve all metadata.
+  setTile(state, tilesBefore[0], TileType.Dock);
+
+  assertCondition(
+    state.docks.length === dockCountBefore,
+    `Paint-over should not change dock count; got ${state.docks.length} from ${dockCountBefore}.`
+  );
+  const dockAfter = state.docks.find((d) => d.id === dockId);
+  assertCondition(!!dockAfter, 'Paint-over: dock id should still exist.');
+  if (!dockAfter) return;
+  assertCondition(
+    dockAfter.tiles.length === tilesBefore.length && dockAfter.tiles.every((t, i) => t === tilesBefore[i]),
+    'Paint-over: dock.tiles should be byte-equal to pre-paint.'
+  );
+  assertCondition(dockAfter.anchorTile === anchorBefore, 'Paint-over: anchorTile should not shift.');
+  assertCondition(dockAfter.purpose === purposeBefore, 'Paint-over: purpose should not change.');
+  for (const shipType of allowedBefore) {
+    assertCondition(
+      dockAfter.allowedShipTypes.includes(shipType),
+      `Paint-over: allowed ship type ${shipType} should persist.`
+    );
+  }
+  assertCondition(
+    state.topologyVersion === topologyVersionBefore,
+    `Paint-over: topologyVersion should not bump; got ${state.topologyVersion} from ${topologyVersionBefore}.`
+  );
+  assertCondition(
+    state.dockVersion === dockVersionBefore,
+    `Paint-over: dockVersion should not bump; got ${state.dockVersion} from ${dockVersionBefore}.`
+  );
+}
+
+function testRebuildDockEntitiesSplitsOnMiddleTileDeletion(): void {
+  // Coverage gap: PR #44 tests MERGE (1→2), and paint-over tests
+  // idempotency. The reverse — deleting a middle tile from a 3+ tile
+  // dock → topology SPLITS into two disjoint clusters — is untested.
+  // Each resulting dock should: (a) be a distinct entity, (b) inherit
+  // parent metadata (purpose, allowedShipTypes), (c) one keeps the
+  // original id, the other gets maxId+1.
+  const state = createInitialState({ seed: 5109 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 12); // 3-tile cluster at x=44, y=10..12
+  setDockAllowedShipType(state, dockId, 'industrial', true);
+  setDockPurpose(state, dockId, 'residential');
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.tiles.length === 3, `Setup: expected 3-tile dock, got ${dockBefore.tiles.length}.`);
+  const [topTile, middleTile, bottomTile] = dockBefore.tiles;
+  const inheritedAllowed = [...dockBefore.allowedShipTypes];
+  const inheritedPurpose = dockBefore.purpose;
+
+  // Delete the middle tile → splits into two 1-tile clusters.
+  // (1-tile dock has no `allowedShipSizes` guarantees for multi-tile
+  // ships, but the topology split is what we're testing.)
+  setTile(state, middleTile, TileType.Floor);
+
+  assertCondition(
+    state.docks.length === 2,
+    `Split: expected 2 docks post-deletion, got ${state.docks.length}.`
+  );
+  const topDock = state.docks.find((d) => d.tiles.includes(topTile));
+  const bottomDock = state.docks.find((d) => d.tiles.includes(bottomTile));
+  assertCondition(!!topDock, 'Split: top tile should belong to a dock.');
+  assertCondition(!!bottomDock, 'Split: bottom tile should belong to a dock.');
+  if (!topDock || !bottomDock) return;
+  assertCondition(topDock.id !== bottomDock.id, 'Split: two resulting docks must have distinct ids.');
+  assertCondition(
+    topDock.id === dockId || bottomDock.id === dockId,
+    `Split: one resulting dock should keep the original id ${dockId}.`
+  );
+  // Both should inherit metadata from the parent via byAnyTile (sim.ts:2181).
+  for (const dock of [topDock, bottomDock]) {
+    assertCondition(
+      dock.purpose === inheritedPurpose,
+      `Split: dock ${dock.id} should inherit purpose '${inheritedPurpose}', got '${dock.purpose}'.`
+    );
+    for (const shipType of inheritedAllowed) {
+      assertCondition(
+        dock.allowedShipTypes.includes(shipType),
+        `Split: dock ${dock.id} should inherit allowedShipTypes containing '${shipType}'.`
+      );
+    }
+    assertCondition(dock.tiles.length === 1, `Split: each side should be 1 tile, got ${dock.tiles.length}.`);
+  }
+  // Middle tile no longer appears in any dock's tile list.
+  assertCondition(
+    !state.docks.some((d) => d.tiles.includes(middleTile)),
+    'Split: deleted middle tile should not appear in any dock cluster.'
+  );
+}
+
+function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
+  // Coverage gap: 3+ tile clusters aren't tested. `maxSizeByArea`
+  // (sim.ts:2194) is the *capability* indicator — it scales with
+  // cluster.length per SHIP_MIN_DOCK_AREA thresholds (small≥2, medium≥4,
+  // large≥7). `allowedShipSizes` is the user-gated *permission*
+  // subset — tile-by-tile growth inherits the prior subset rather than
+  // auto-expanding (so a user who disabled medium doesn't re-enable it
+  // on next paint). We verify both surfaces: maxSizeByArea scales
+  // automatically, allowedShipSizes only expands when the user opts in
+  // via setDockAllowedShipSize().
+  const state = createInitialState({ seed: 5110 });
+  buildHabitat(state);
+
+  // 4-tile cluster at y=10..13 → maxSizeByArea should be 'medium'.
+  const dockId4 = placeEastHullDock(state, 10, 13);
+  const dock4 = state.docks.find((d) => d.id === dockId4)!;
+  assertCondition(dock4.tiles.length === 4, `4-cluster: expected 4 tiles, got ${dock4.tiles.length}.`);
+  assertCondition(
+    dock4.maxSizeByArea === 'medium',
+    `4-cluster: maxSizeByArea should be 'medium', got '${dock4.maxSizeByArea}'.`
+  );
+  // anchorTile is the smallest tile index in the sorted cluster.
+  const expectedAnchor4 = toIndex(44, 10, state.width);
+  assertCondition(
+    dock4.anchorTile === expectedAnchor4,
+    `4-cluster: anchorTile should be smallest tile index ${expectedAnchor4}, got ${dock4.anchorTile}.`
+  );
+  assertCondition(
+    dock4.allowedShipSizes.includes('small'),
+    `4-cluster: allowedShipSizes should always include 'small' fallback; got ${dock4.allowedShipSizes.join(',')}.`
+  );
+  // Manual opt-in is required to expand allowedShipSizes beyond the
+  // inherited subset. After opt-in, medium should be permitted.
+  setDockAllowedShipSize(state, dockId4, 'medium', true);
+  const dock4After = state.docks.find((d) => d.id === dockId4)!;
+  assertCondition(
+    dock4After.allowedShipSizes.includes('medium'),
+    `4-cluster: setDockAllowedShipSize(medium,true) should enable medium; got ${dock4After.allowedShipSizes.join(',')}.`
+  );
+
+  // Extend to 7 tiles → maxSizeByArea should flip to 'large'. Growing
+  // in place also exercises the merge-preserves-id invariant across
+  // a multi-tile extension, not just the 1→2 case from PR #44. Opt-in
+  // must still persist medium across the topology change.
+  for (let y = 14; y <= 16; y++) {
+    setTile(state, toIndex(44, y, state.width), TileType.Dock);
+  }
+  const dock7 = state.docks.find((d) => d.tiles.includes(expectedAnchor4));
+  assertCondition(!!dock7, '7-cluster: dock containing original anchor should still exist.');
+  if (!dock7) return;
+  assertCondition(
+    dock7.id === dockId4,
+    `7-cluster: growing in place should preserve original id ${dockId4}, got ${dock7.id}.`
+  );
+  assertCondition(dock7.tiles.length === 7, `7-cluster: expected 7 tiles, got ${dock7.tiles.length}.`);
+  assertCondition(
+    dock7.maxSizeByArea === 'large',
+    `7-cluster: maxSizeByArea should be 'large', got '${dock7.maxSizeByArea}'.`
+  );
+  assertCondition(
+    dock7.allowedShipSizes.includes('medium'),
+    `7-cluster: medium opt-in should persist across extension; got ${dock7.allowedShipSizes.join(',')}.`
+  );
+  assertCondition(
+    dock7.anchorTile === expectedAnchor4,
+    `7-cluster: anchorTile should remain the smallest tile index ${expectedAnchor4} after extension, got ${dock7.anchorTile}.`
+  );
+  // Opt-in to large and verify it takes (capability has now caught up).
+  setDockAllowedShipSize(state, dockId4, 'large', true);
+  const dock7After = state.docks.find((d) => d.id === dockId4)!;
+  assertCondition(
+    dock7After.allowedShipSizes.includes('large'),
+    `7-cluster: setDockAllowedShipSize(large,true) should enable large; got ${dock7After.allowedShipSizes.join(',')}.`
+  );
+}
+
 function testActorsTreatedLifetimeIncrementsOnRecovery(): void {
   const state = createInitialState({ seed: 5107 });
   buildHabitat(state);
@@ -2234,6 +2423,9 @@ function run(): void {
   testUnlockTier3TriggersOnTradeCycle();
   testUnlockTier4TriggersOnResolvedIncident();
   testRebuildDockEntitiesPreservesAllowedShips();
+  testRebuildDockEntitiesPaintOverExistingDockIsIdempotent();
+  testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
+  testRebuildDockEntitiesClusterSizeScalesShipCapacity();
   testActorsTreatedLifetimeIncrementsOnRecovery();
   testTier0ShipServicesIgnoreLockedDemands();
   testMilitaryShipPenalizesLowSecurity();
