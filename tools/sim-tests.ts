@@ -2101,6 +2101,37 @@ function testActorsTreatedLifetimeIncrementsOnRecovery(): void {
   );
 }
 
+// Regression guard against T2 becoming unreachable via normal play:
+// exercises the spawn pipeline end-to-end (ship.manifestMix → pickArchetype
+// → archetypesEverSeen). Runs 3 sim minutes at default T1 parameters + 1
+// visitor dock; asserts >=3 distinct archetypes spawn, matching the T2
+// predicate threshold. Failure = balance regression (rare archetype weight
+// dropped too low, ship manifest routing broken). Complements the
+// unit-level testUnlockTier2RequiresLogisticsSignal which pokes the
+// predicate directly.
+function testT1ArchetypeDiversityReachesThreeWithinThreeMinutes(): void {
+  const state = createInitialState({ seed: 9701 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 1);
+  placeEastHullDock(state, 8, 9);
+  state.controls.shipsPerCycle = 3;
+  runFor(state, 180);
+
+  const seen = state.usageTotals.archetypesEverSeen;
+  const distinctCount = Object.values(seen).filter(Boolean).length;
+  const totalVisitorsSpawned = state.spawnCounter;
+  assertCondition(
+    totalVisitorsSpawned >= 5,
+    `Setup: at least 5 visitors should spawn in 180s with shipsPerCycle=3 (got ${totalVisitorsSpawned}).`
+  );
+  assertCondition(
+    distinctCount >= 3,
+    `T1 default spawn should reach >=3 archetypes within 3 sim minutes ` +
+      `(got ${distinctCount}/4 across ${totalVisitorsSpawned} visitors: ` +
+      `diner=${seen.diner}, shopper=${seen.shopper}, lounger=${seen.lounger}, rusher=${seen.rusher}).`
+  );
+}
+
 function testTier0ShipServicesIgnoreLockedDemands(): void {
   const state = createInitialState({ seed: 51035 });
   buildHabitat(state);
@@ -2427,6 +2458,7 @@ function run(): void {
   testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
   testRebuildDockEntitiesClusterSizeScalesShipCapacity();
   testActorsTreatedLifetimeIncrementsOnRecovery();
+  testT1ArchetypeDiversityReachesThreeWithinThreeMinutes();
   testTier0ShipServicesIgnoreLockedDemands();
   testMilitaryShipPenalizesLowSecurity();
   testColonistShipBoostsConversionWhenHousingValid();
