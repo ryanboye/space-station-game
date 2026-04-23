@@ -554,6 +554,19 @@ for (let dockY = 17; dockY <= 18; dockY++) {
   }
 })();
 
+// ?walls=dual flips the dual-tilemap wall renderer on for this session.
+// Feature-flagged behind Controls.wallRenderMode; per-cell remains default.
+(function applyWallsParam() {
+  const params = new URLSearchParams(location.search);
+  const walls = params.get('walls');
+  if (walls === 'dual' || walls === 'dual-tilemap') {
+    state.controls.wallRenderMode = 'dual-tilemap';
+    console.info('[walls] dual-tilemap wall renderer enabled via URL param');
+  } else if (walls === 'per-cell') {
+    state.controls.wallRenderMode = 'per-cell';
+  }
+})();
+
 let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
 let zoom = 1;
 const MIN_ZOOM = 0.6;

@@ -898,6 +898,7 @@ export interface Controls {
   showInventoryOverlay: boolean;
   showGlow: boolean;
   spriteMode: 'fallback' | 'sprites';
+  wallRenderMode: 'per-cell' | 'dual-tilemap';
   showSpriteFallback: boolean;
   spritePipeline: SpritePipeline;
   taxRate: number;

@@ -41,6 +41,7 @@ import {
   FLOOR_WEAR_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
+import { renderDualWallLayer } from './wall-dual-tilemap';
 import { renderGlowPass } from './glow-pass';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
@@ -254,6 +255,12 @@ function drawTileSprite(
     return drawRepeatedSpriteFrame(ctx, spriteAtlas, frame, px, py, TILE_SIZE, TILE_SIZE, px, py);
   }
   if (tileType === TileType.Wall) {
+    if (state.controls.wallRenderMode === 'dual-tilemap') {
+      // Dual-tilemap: per-cell wall sprite is suppressed so the dual pass
+      // composites over a clean floor underlay. Wall geometry is drawn by
+      // `renderDualWallLayer` in `ensureStaticLayer`.
+      return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Floor], px, py, TILE_SIZE, TILE_SIZE);
+    }
     const wallVariant = resolveWallVariantForTile(state, tileIndex);
     return (
       drawSpriteByKey(
@@ -980,6 +987,7 @@ function ensureStaticLayer(
     state.roomVersion,
     state.controls.showZones ? 1 : 0,
     useSprites ? 1 : 0,
+    state.controls.wallRenderMode,
     spriteAtlas.version
   ].join('|');
   if (layer.key === key) return layer;
@@ -1040,6 +1048,9 @@ function ensureStaticLayer(
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
       ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
     }
+  }
+  if (useSprites && state.controls.wallRenderMode === 'dual-tilemap') {
+    renderDualWallLayer(ctx, state, spriteAtlas, drawSpriteByKey);
   }
   return layer;
 }
