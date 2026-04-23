@@ -156,7 +156,6 @@ type ServiceOverlayCache = {
 
 let staticLayerCache: CachedLayer | null = null;
 let decorativeLayerCache: CachedLayer | null = null;
-let glowLayerCache: CachedLayer | null = null;
 const serviceOverlayCache: ServiceOverlayCache = {
   key: '',
   builtAt: 0,
@@ -515,96 +514,6 @@ function drawDockFacadeOverlay(
     !hasPrev && !hasNext ? 'solo' : !hasPrev ? 'start' : !hasNext ? 'end' : 'middle';
   const spriteKey = DOCK_OVERLAY_SPRITE_KEYS[dock.facing][segment];
   drawSpriteByKey(ctx, spriteAtlas, spriteKey, px, py, TILE_SIZE * 2, TILE_SIZE * 2);
-}
-
-function drawGlowCircle(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radiusPx: number,
-  color: string,
-  strength = 1
-): void {
-  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/i);
-  if (!match) return;
-  const [, r, g, b, a] = match;
-  const baseAlpha = Number(a);
-  if (!Number.isFinite(baseAlpha) || baseAlpha <= 0) return;
-  const rgba = (alpha: number) => `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
-  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radiusPx);
-  gradient.addColorStop(0, rgba(baseAlpha * strength));
-  gradient.addColorStop(0.55, rgba(baseAlpha * 0.4 * strength));
-  gradient.addColorStop(1, rgba(0));
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawDirectionalGlow(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radiusX: number,
-  radiusY: number,
-  color: string,
-  strength = 1
-): void {
-  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/i);
-  if (!match) return;
-  const [, r, g, b, a] = match;
-  const baseAlpha = Number(a);
-  if (!Number.isFinite(baseAlpha) || baseAlpha <= 0) return;
-  const rgba = (alpha: number) => `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
-  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(radiusX, radiusY));
-  gradient.addColorStop(0, rgba(baseAlpha * strength));
-  gradient.addColorStop(0.38, rgba(baseAlpha * 0.5 * strength));
-  gradient.addColorStop(1, rgba(0));
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(1, radiusY / Math.max(1, radiusX));
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.arc(0, 0, radiusX, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function collectContiguousRoomCentroids(state: StationState, roomType: RoomType): Array<{ x: number; y: number }> {
-  const seen = new Set<number>();
-  const out: Array<{ x: number; y: number }> = [];
-  for (let i = 0; i < state.rooms.length; i++) {
-    if (state.rooms[i] !== roomType || seen.has(i)) continue;
-    const queue = [i];
-    seen.add(i);
-    let sumX = 0;
-    let sumY = 0;
-    let count = 0;
-    while (queue.length > 0) {
-      const current = queue.pop()!;
-      const p = fromIndex(current, state.width);
-      sumX += p.x + 0.5;
-      sumY += p.y + 0.5;
-      count += 1;
-      const neighbors = [
-        { x: p.x, y: p.y - 1 },
-        { x: p.x + 1, y: p.y },
-        { x: p.x, y: p.y + 1 },
-        { x: p.x - 1, y: p.y }
-      ];
-      for (const neighbor of neighbors) {
-        if (!inBounds(neighbor.x, neighbor.y, state.width, state.height)) continue;
-        const next = neighbor.y * state.width + neighbor.x;
-        if (seen.has(next) || state.rooms[next] !== roomType) continue;
-        seen.add(next);
-        queue.push(next);
-      }
-    }
-    if (count > 0) {
-      out.push({ x: sumX / count, y: sumY / count });
-    }
-  }
-  return out;
 }
 
 type ShipCell = { x: number; y: number };
@@ -1176,71 +1085,6 @@ function ensureDecorativeLayer(
     }
   }
 
-  return layer;
-}
-
-function ensureGlowLayer(
-  state: StationState,
-  widthPx: number,
-  heightPx: number,
-  useSprites: boolean
-): CachedLayer {
-  glowLayerCache = ensureCachedLayer(glowLayerCache, widthPx, heightPx);
-  const layer = glowLayerCache;
-  const key = [
-    state.width,
-    state.height,
-    state.roomVersion,
-    state.moduleVersion,
-    useSprites ? 1 : 0
-  ].join('|');
-  if (layer.key === key) return layer;
-  layer.key = key;
-  const ctx = layer.ctx;
-  ctx.clearRect(0, 0, widthPx, heightPx);
-  if (!useSprites) return layer;
-
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  for (const centroid of collectContiguousRoomCentroids(state, RoomType.Reactor)) {
-    drawGlowCircle(ctx, centroid.x * TILE_SIZE, centroid.y * TILE_SIZE, TILE_SIZE * 1.75, 'rgba(255, 156, 74, 0.22)', 1);
-  }
-  for (const module of state.moduleInstances) {
-    let color = '';
-    let radiusTiles = 0;
-    let strength = 1;
-    if (module.type === ModuleType.GrowStation) {
-      color = 'rgba(115, 255, 140, 0.16)';
-      radiusTiles = 1.35;
-      strength = 0.75;
-    } else if (module.type === ModuleType.Terminal) {
-      color = 'rgba(100, 220, 255, 0.15)';
-      radiusTiles = 0.9;
-      strength = 0.55;
-    } else if (module.type === ModuleType.GameStation) {
-      color = 'rgba(160, 120, 255, 0.12)';
-      radiusTiles = 1;
-      strength = 0.45;
-    } else if (module.type === ModuleType.WallLight) {
-      color = 'rgba(255, 224, 168, 0.14)';
-      radiusTiles = 1.1;
-      strength = 0.7;
-    } else {
-      continue;
-    }
-    const origin = fromIndex(module.originTile, state.width);
-    let cx = (origin.x + module.width * 0.5) * TILE_SIZE;
-    let cy = (origin.y + module.height * 0.5) * TILE_SIZE;
-    if (module.type === ModuleType.WallLight) {
-      const lightCx = cx;
-      const lightCy = cy + TILE_SIZE * 0.72;
-      drawDirectionalGlow(ctx, lightCx, lightCy, TILE_SIZE * 0.72, TILE_SIZE * 1.65, color, strength);
-      drawDirectionalGlow(ctx, lightCx, lightCy + TILE_SIZE * 0.28, TILE_SIZE * 0.42, TILE_SIZE * 0.95, color, strength * 0.75);
-      continue;
-    }
-    drawGlowCircle(ctx, cx, cy, TILE_SIZE * radiusTiles, color, strength);
-  }
-  ctx.restore();
   return layer;
 }
 

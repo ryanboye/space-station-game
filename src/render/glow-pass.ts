@@ -146,9 +146,7 @@ export function renderGlowPass(
   heightPx: number,
   useSprites: boolean
 ): void {
-  // Default to ON. If Controls.showGlow is missing (pre-migration save), treat
-  // it as true — user can toggle it off via the top-bar button.
-  if ((state.controls as { showGlow?: boolean }).showGlow === false) return;
+  if (!state.controls.showGlow) return;
 
   glowLayerCache = ensureCachedLayer(glowLayerCache, widthPx, heightPx);
   const layer = glowLayerCache;
