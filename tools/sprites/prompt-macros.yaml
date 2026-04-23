@@ -30,12 +30,19 @@ CAMERA_PAWN: |
 # ---- PALETTE MACROS ----
 
 PALETTE_STATION_COOL: |
-  Dark sci-fi space station palette: deep charcoal (#1a1e28) + steel blue
-  (#2a3040) as the dominant tones. Cool-white highlights (#d8e0ea) for
-  rim-lights. Minimal saturation. Amber (#c9a84c) ONLY used sparingly for
-  active-tech indicators (glowing screens, reactor cores, warning lights).
-  NEVER use amber/warm tones as the dominant color or for neutral
-  highlights — that accumulates into a warm aggregate palette.
+  COOL-FIRST palette — deep blues + greys dominate. Base: charcoal
+  (#1a1e28) + steel blue (#2a3040). Highlights: COOL-WHITE (#d8e0ea) for
+  rim-lights — NOT amber, NOT warm-yellow. Warm amber (#c9a84c) is
+  RESERVED for true hazard/alert moments ONLY: dock hazard stripes
+  (yellow+black), reactor core glow (orange center), alert lights /
+  warning signals, serving-station warmer-tray glow, wall-light module
+  (the one object whose JOB is to be warm). DO NOT sprinkle amber as
+  decorative "trim" on walls, floors, furniture, agents. Rimworld's
+  walls + floors + furniture are mostly COOL GREYS with color-coded
+  accents ONLY on functional/hazard tiles. When in doubt, stay grey. The
+  aggregate palette read of a tiled station must be COOL, not warm.
+  (Seb's observation 2026-04-23: warm-amber trim on walls accumulates
+  into a brown-aggregate station even when isolated sprites look fine.)
 
 PALETTE_NEUTRAL_FLOOR: |
   Dark steel floor base (#2a2d34). Subtle brushed-metal micro-texture.
@@ -55,6 +62,37 @@ TILEABLE_FLOOR: |
   Seamlessly tileable — edges match opposite edges. NO corner bolts, NO
   edge borders, NO directional patterns. When placed in a 3×3 grid the
   seams are invisible.
+
+FLOOR_WITH_ROOM_MOTIF: |
+  Dark neutral metal-plate base fills 80% of the tile (matches tile.floor
+  vocabulary for family cohesion). The remaining 20% is a small room-type
+  motif/icon at ~25% tile size, subtle glow tint, positioned off-center so
+  tiling still reads as texture not a 5×5 grid of repeated decals.
+  Room-type color keys: reactor=amber glow + hex-pattern hint;
+  security=blue+red striped accent or lock; brig=red diagonal bands;
+  clinic=white base + red-cross subtle motif; hydroponics=green grid /
+  grow-light hint; workshop=orange + gear icon. CRITICAL: motif subtle
+  enough the floor still TILES — no room-sized icon, no centered decal.
+  Every room-floor tile on the SAME dark-steel base — family reads as
+  variations-on-a-theme, not unrelated styles.
+
+CAMERA_FLAT_FLOOR_OBJECT: |
+  This object LIES FLAT on the floor (bed, couch, table, pallet, market
+  stall laying out goods). Camera DIRECTLY ABOVE, pointing straight down,
+  0° tilt. Render the top-surface silhouette — a bed shows pillow +
+  blanket from above, a table shows its tabletop + chair tops, a couch
+  shows cushion-tops. NO side faces, NO 3/4 view, NO visible height.
+
+CAMERA_STANDING_OBJECT: |
+  This object STANDS UP vertically from the floor (arcade cabinet, stove,
+  wall-light, shower cubicle, serving station counter, storage rack
+  shelving, terminal monitor, workbench with vice). Camera from a
+  slight-front angle showing the FRONT face of the object — the face the
+  colonist would interact with. RimWorld's stove/arcade/workbench look.
+  NOT pure top-down (a stove from above = just 4 circles, unreadable),
+  NOT full 3/4 isometric. Slight front-3/4, readable functional face
+  visible. Subtle drop shadow on floor beneath. When in doubt, ask "does
+  a colonist LOOK DOWN at this or LOOK AT its front?"
 
 WALL_DEPTH: |
   Wall has visible semi-3D depth: top face rim-lit with COOL-WHITE
