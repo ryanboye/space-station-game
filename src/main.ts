@@ -2845,6 +2845,28 @@ let nextUiRefreshAt = 0;
 let nextHoverDiagnosticRefreshAt = 0;
 let lastHoverDiagnosticTile: number | null = null;
 let cachedHoverDiagnostic: ReturnType<typeof getRoomDiagnosticAt> = null;
+// Key-cache rather than the PR #48 handler-push pattern because
+// `spriteAtlas.ready` flips inside the async atlas-loader resolution, not
+// at a sync click. Lazy detection is simpler than plumbing calls into that.
+let lastSpriteStatusKey = '';
+function refreshSpriteStatus(): void {
+  const key = `${state.controls.spriteMode}|${state.controls.showSpriteFallback}|${spriteAtlas.ready}|${spriteAtlas.version}`;
+  if (key === lastSpriteStatusKey) return;
+  lastSpriteStatusKey = key;
+  if (state.controls.spriteMode !== 'sprites') {
+    spriteStatusEl.textContent = 'Sprites inactive (fallback rendering)';
+    spriteStatusEl.style.color = '#8ea2bd';
+  } else if (state.controls.showSpriteFallback) {
+    spriteStatusEl.textContent = 'Sprites requested; force fallback enabled';
+    spriteStatusEl.style.color = '#ffcf6e';
+  } else if (!spriteAtlas.ready) {
+    spriteStatusEl.textContent = 'Sprites requested, atlas missing -> fallback active';
+    spriteStatusEl.style.color = '#ffcf6e';
+  } else {
+    spriteStatusEl.textContent = `Sprites active (${spriteAtlas.version})`;
+    spriteStatusEl.style.color = '#6edb8f';
+  }
+}
 function frame(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
@@ -2864,19 +2886,7 @@ function frame(now: number): void {
   // per current unlock tier). Called every frame — ~40 DOM attribute
   // toggles, cheap.
   refreshToolbar();
-  if (state.controls.spriteMode !== 'sprites') {
-    spriteStatusEl.textContent = 'Sprites inactive (fallback rendering)';
-    spriteStatusEl.style.color = '#8ea2bd';
-  } else if (state.controls.showSpriteFallback) {
-    spriteStatusEl.textContent = 'Sprites requested; force fallback enabled';
-    spriteStatusEl.style.color = '#ffcf6e';
-  } else if (!spriteAtlas.ready) {
-    spriteStatusEl.textContent = 'Sprites requested, atlas missing -> fallback active';
-    spriteStatusEl.style.color = '#ffcf6e';
-  } else {
-    spriteStatusEl.textContent = `Sprites active (${spriteAtlas.version})`;
-    spriteStatusEl.style.color = '#6edb8f';
-  }
+  refreshSpriteStatus();
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
