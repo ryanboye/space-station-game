@@ -1,0 +1,786 @@
+{
+  "version": "sprite-v1-2026-04-23T17:32:35.163Z",
+  "cellSize": 64,
+  "imagePath": "atlas.png",
+  "frames": {
+    "tile.space": {
+      "x": 2,
+      "y": 2,
+      "w": 256,
+      "h": 256
+    },
+    "tile.floor": {
+      "x": 262,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall": {
+      "x": 330,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.solo": {
+      "x": 398,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.end": {
+      "x": 466,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.straight": {
+      "x": 534,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.straight.vertical": {
+      "x": 602,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.corner": {
+      "x": 670,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.tee": {
+      "x": 738,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.cross": {
+      "x": 806,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.dock": {
+      "x": 874,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.cafeteria": {
+      "x": 942,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.reactor": {
+      "x": 1010,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.security": {
+      "x": 1078,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.door": {
+      "x": 1146,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.door.horizontal": {
+      "x": 1214,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.door.vertical": {
+      "x": 1282,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.cafeteria": {
+      "x": 1350,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.kitchen": {
+      "x": 1418,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.workshop": {
+      "x": 1486,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.clinic": {
+      "x": 1554,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.brig": {
+      "x": 1622,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.rec_hall": {
+      "x": 1690,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.reactor": {
+      "x": 1758,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.security": {
+      "x": 1826,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.dorm": {
+      "x": 1894,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.hygiene": {
+      "x": 1962,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.hydroponics": {
+      "x": 2030,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.life_support": {
+      "x": 2098,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.lounge": {
+      "x": 2166,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.market": {
+      "x": 2234,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.logistics_stock": {
+      "x": 2302,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "room.storage": {
+      "x": 2370,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "module.none": {
+      "x": 2438,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "module.wall_light": {
+      "x": 2506,
+      "y": 2,
+      "w": 64,
+      "h": 32
+    },
+    "module.bed": {
+      "x": 2574,
+      "y": 2,
+      "w": 128,
+      "h": 64
+    },
+    "module.table": {
+      "x": 2706,
+      "y": 2,
+      "w": 128,
+      "h": 128
+    },
+    "module.serving_station": {
+      "x": 2838,
+      "y": 2,
+      "w": 128,
+      "h": 64
+    },
+    "module.stove": {
+      "x": 2,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.workbench": {
+      "x": 134,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.med_bed": {
+      "x": 266,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.cell_console": {
+      "x": 398,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.rec_unit": {
+      "x": 466,
+      "y": 262,
+      "w": 128,
+      "h": 128
+    },
+    "module.grow_station": {
+      "x": 598,
+      "y": 262,
+      "w": 128,
+      "h": 128
+    },
+    "module.terminal": {
+      "x": 730,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.couch": {
+      "x": 798,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.game_station": {
+      "x": 930,
+      "y": 262,
+      "w": 128,
+      "h": 128
+    },
+    "module.shower": {
+      "x": 1062,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.sink": {
+      "x": 1130,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.market_stall": {
+      "x": 1198,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.intake_pallet": {
+      "x": 1330,
+      "y": 262,
+      "w": 128,
+      "h": 128
+    },
+    "module.storage_rack": {
+      "x": 1462,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "ship.tourist": {
+      "x": 1594,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "ship.trader": {
+      "x": 1662,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "ship.industrial": {
+      "x": 1730,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "ship.military": {
+      "x": 1798,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "ship.colonist": {
+      "x": 1866,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.north.solo": {
+      "x": 1934,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.north.start": {
+      "x": 2002,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.north.middle": {
+      "x": 2070,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.north.end": {
+      "x": 2138,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.east.solo": {
+      "x": 2206,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.east.start": {
+      "x": 2274,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.east.middle": {
+      "x": 2342,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.east.end": {
+      "x": 2410,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.south.solo": {
+      "x": 2478,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.south.start": {
+      "x": 2546,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.south.middle": {
+      "x": 2614,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.south.end": {
+      "x": 2682,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.west.solo": {
+      "x": 2750,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.west.start": {
+      "x": 2818,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.west.middle": {
+      "x": 2886,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.west.end": {
+      "x": 2954,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.1": {
+      "x": 2,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.2": {
+      "x": 70,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.3": {
+      "x": 138,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.4": {
+      "x": 206,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.5": {
+      "x": 274,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.grime.6": {
+      "x": 342,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.wear.1": {
+      "x": 410,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.wear.2": {
+      "x": 478,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.wear.3": {
+      "x": 546,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.floor.wear.4": {
+      "x": 614,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.exterior.1": {
+      "x": 682,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.exterior.2": {
+      "x": 750,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.exterior.3": {
+      "x": 818,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.exterior.corner.1": {
+      "x": 886,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.exterior.end.1": {
+      "x": 954,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.1": {
+      "x": 1022,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.2": {
+      "x": 1090,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.3": {
+      "x": 1158,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.4": {
+      "x": 1226,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.5": {
+      "x": 1294,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.6": {
+      "x": 1362,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.1": {
+      "x": 1430,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.2": {
+      "x": 1498,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.3": {
+      "x": 1566,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.4": {
+      "x": 1634,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.5": {
+      "x": 1702,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.6": {
+      "x": 1770,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.1": {
+      "x": 1838,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.2": {
+      "x": 1906,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.3": {
+      "x": 1974,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.4": {
+      "x": 2042,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.5": {
+      "x": 2110,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.6": {
+      "x": 2178,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier1_unlock": {
+      "x": 2246,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier2_unlock": {
+      "x": 2314,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier3_unlock": {
+      "x": 2382,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier4_unlock": {
+      "x": 2450,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier5_unlock": {
+      "x": 2518,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier6_unlock": {
+      "x": 2586,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    }
+  },
+  "rotations": {
+    "tile.wall": 90,
+    "tile.wall.solo": 90,
+    "tile.wall.end": 90,
+    "tile.wall.straight": 90,
+    "tile.wall.corner": 270,
+    "tile.wall.tee": 90,
+    "tile.wall.cross": 90
+  },
+  "offsets": {
+    "overlay.dock.facade.north.solo": {
+      "x": -16,
+      "y": -48
+    },
+    "overlay.dock.facade.north.start": {
+      "x": -16,
+      "y": -48
+    },
+    "overlay.dock.facade.north.middle": {
+      "x": -16,
+      "y": -48
+    },
+    "overlay.dock.facade.north.end": {
+      "x": -16,
+      "y": -48
+    },
+    "overlay.dock.facade.east.solo": {
+      "x": 16,
+      "y": -16
+    },
+    "overlay.dock.facade.east.start": {
+      "x": 16,
+      "y": -16
+    },
+    "overlay.dock.facade.east.middle": {
+      "x": 16,
+      "y": -16
+    },
+    "overlay.dock.facade.east.end": {
+      "x": 16,
+      "y": -16
+    },
+    "overlay.dock.facade.south.solo": {
+      "x": -16,
+      "y": 16
+    },
+    "overlay.dock.facade.south.start": {
+      "x": -16,
+      "y": 16
+    },
+    "overlay.dock.facade.south.middle": {
+      "x": -16,
+      "y": 16
+    },
+    "overlay.dock.facade.south.end": {
+      "x": -16,
+      "y": 16
+    },
+    "overlay.dock.facade.west.solo": {
+      "x": -48,
+      "y": -16
+    },
+    "overlay.dock.facade.west.start": {
+      "x": -48,
+      "y": -16
+    },
+    "overlay.dock.facade.west.middle": {
+      "x": -48,
+      "y": -16
+    },
+    "overlay.dock.facade.west.end": {
+      "x": -48,
+      "y": -16
+    },
+    "overlay.wall.exterior.1": {
+      "x": -16,
+      "y": -16
+    },
+    "overlay.wall.exterior.2": {
+      "x": -16,
+      "y": -16
+    },
+    "overlay.wall.exterior.3": {
+      "x": -16,
+      "y": -16
+    },
+    "overlay.wall.exterior.corner.1": {
+      "x": -16,
+      "y": -16
+    },
+    "overlay.wall.exterior.end.1": {
+      "x": -16,
+      "y": -16
+    }
+  },
+  "alphas": {
+    "overlay.floor.grime.1": 0.18,
+    "overlay.floor.grime.2": 0.18,
+    "overlay.floor.grime.3": 0.18,
+    "overlay.floor.grime.4": 0.18,
+    "overlay.floor.grime.5": 0.18,
+    "overlay.floor.grime.6": 0.18,
+    "overlay.floor.wear.1": 0.24,
+    "overlay.floor.wear.2": 0.24,
+    "overlay.floor.wear.3": 0.24,
+    "overlay.floor.wear.4": 0.24
+  }
+}
