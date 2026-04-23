@@ -2033,6 +2033,71 @@ function testRebuildDockEntitiesSplitWithDockedShipPreservesReference(): void {
   );
 }
 
+function testRebuildDockEntitiesThreeWaySplitDedupesIds(): void {
+  // Third of the PR #53 follow-ups: the 2-way split test exercises
+  // consumedIds at size-1 (one inherited id consumed, the other
+  // cluster gets ++maxId). A 3-way split exercises the Set at >1 entry
+  // — both the "2nd cluster falls through" AND "3rd cluster also falls
+  // through" branches of the dedup logic. Guards against any scaling
+  // regression where the Set degenerates or iteration skips entries.
+  const state = createInitialState({ seed: 5140 });
+  buildHabitat(state);
+  // Place a 5-tile vertical dock at x=44, y=10..14.
+  const dockId = placeEastHullDock(state, 10, 14);
+  setDockAllowedShipType(state, dockId, 'industrial', true);
+  setDockPurpose(state, dockId, 'residential');
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.tiles.length === 5, `Setup: expected 5-tile dock, got ${dockBefore.tiles.length}.`);
+  const sortedTiles = [...dockBefore.tiles].sort((a, b) => a - b);
+  const [topTile, firstDeleteTile, middleTile, secondDeleteTile, bottomTile] = sortedTiles;
+  const inheritedAllowed = dockBefore.allowedShipTypes;
+  const inheritedPurpose = dockBefore.purpose;
+
+  // Delete y=11 AND y=13 → three 1-tile clusters at y=10, y=12, y=14.
+  setTile(state, firstDeleteTile, TileType.Floor);
+  setTile(state, secondDeleteTile, TileType.Floor);
+
+  assertCondition(
+    state.docks.length === 3,
+    `3-way split: expected 3 docks post-deletion, got ${state.docks.length}.`
+  );
+  const topDock = state.docks.find((d) => d.tiles.includes(topTile));
+  const middleDock = state.docks.find((d) => d.tiles.includes(middleTile));
+  const bottomDock = state.docks.find((d) => d.tiles.includes(bottomTile));
+  assertCondition(!!topDock && !!middleDock && !!bottomDock, '3-way split: all three halves should exist as docks.');
+  if (!topDock || !middleDock || !bottomDock) return;
+
+  // All three must have distinct ids (no collisions).
+  const ids = new Set([topDock.id, middleDock.id, bottomDock.id]);
+  assertCondition(
+    ids.size === 3,
+    `3-way split: all three dock ids must be distinct, got [${topDock.id}, ${middleDock.id}, ${bottomDock.id}].`
+  );
+
+  // Exactly one keeps the parent id; the other two consumed `++maxId`
+  // fresh ids. consumedIds ensures only one of the three matches dockId.
+  const keeperCount = [topDock, middleDock, bottomDock].filter((d) => d.id === dockId).length;
+  assertCondition(
+    keeperCount === 1,
+    `3-way split: exactly one cluster should keep the parent id (got ${keeperCount}).`
+  );
+
+  // All three inherit parent metadata via byAnyTile — verifies the
+  // metadata-copy path runs per-cluster, not just once.
+  for (const dock of [topDock, middleDock, bottomDock]) {
+    assertCondition(
+      dock.purpose === inheritedPurpose,
+      `3-way split: dock ${dock.id} should inherit purpose '${inheritedPurpose}'.`
+    );
+    for (const shipType of inheritedAllowed) {
+      assertCondition(
+        dock.allowedShipTypes.includes(shipType),
+        `3-way split: dock ${dock.id} should inherit allowedShipTypes containing '${shipType}'.`
+      );
+    }
+  }
+}
+
 function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
   // Coverage gap: 3+ tile clusters aren't tested. `maxSizeByArea`
   // (sim.ts:2194) is the *capability* indicator — it scales with
@@ -2496,6 +2561,7 @@ function run(): void {
   testRebuildDockEntitiesPaintOverExistingDockIsIdempotent();
   testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
   testRebuildDockEntitiesSplitWithDockedShipPreservesReference();
+  testRebuildDockEntitiesThreeWaySplitDedupesIds();
   testRebuildDockEntitiesClusterSizeScalesShipCapacity();
   testActorsTreatedLifetimeIncrementsOnRecovery();
   testT1ArchetypeDiversityReachesThreeWithinThreeMinutes();
