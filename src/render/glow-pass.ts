@@ -52,12 +52,13 @@ function ensureCachedLayer(
   return { canvas, ctx, key: '' };
 }
 
-// Source-of-truth glow colors. Keep alpha values ≤ 0.4 so additive-blend
-// accumulation from neighbors doesn't blow out.
-const GLOW_COLOR_WALL_LIGHT = 'rgba(255, 220, 140, 0.35)';
-const GLOW_COLOR_STOVE = 'rgba(255, 130, 60, 0.3)';
-const GLOW_COLOR_REACTOR_TILE = 'rgba(255, 100, 60, 0.4)';
-const GLOW_COLOR_MED_BED = 'rgba(140, 200, 255, 0.25)';
+// Source-of-truth glow colors. Keep alpha values ≤ 0.25 so additive-blend
+// accumulation from neighbors doesn't blow out (per awfml 2026-04-23:
+// "Glow On just does that weird orange glow that needs fixing").
+const GLOW_COLOR_WALL_LIGHT = 'rgba(255, 220, 140, 0.22)';
+const GLOW_COLOR_STOVE = 'rgba(255, 130, 60, 0.18)';
+const GLOW_COLOR_REACTOR_TILE = 'rgba(255, 100, 60, 0.18)';
+const GLOW_COLOR_MED_BED = 'rgba(140, 200, 255, 0.18)';
 
 function drawGlowCircle(
   ctx: CanvasRenderingContext2D,
