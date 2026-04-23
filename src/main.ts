@@ -51,6 +51,10 @@ import {
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
 import {
+  applyColdStartScenario,
+  COLD_START_SCENARIO_NAMES
+} from './sim/cold-start-scenarios';
+import {
   type CardinalDirection,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
@@ -521,6 +525,33 @@ const state = createInitialState();
 for (let dockY = 17; dockY <= 18; dockY++) {
   setTile(state, toIndex(35, dockY, state.width), TileType.Dock);
 }
+
+// ?scenario=<name> thin-spec cold-start loader: skip the starter grind
+// for sprite/UX iteration. Whitelisted fixtures in COLD_START_SCENARIOS
+// (src/sim/cold-start-scenarios.ts) overlay tier-relevant counters + unlock
+// state onto the fresh starter. Unknown names warn and fall through.
+// ?load= / ?loadId= take precedence — those fully hydrate state, so
+// combining with ?scenario= would silently drop the scenario overlay.
+// Warn on the ambiguity rather than applying both.
+(function applyScenarioParam() {
+  const params = new URLSearchParams(location.search);
+  const name = params.get('scenario');
+  if (!name) return;
+  if (params.has('load') || params.has('loadId')) {
+    console.warn(
+      `[scenario] '${name}' ignored — ?load/?loadId takes precedence (full state replacement).`
+    );
+    return;
+  }
+  const applied = applyColdStartScenario(state, name);
+  if (applied) {
+    console.info(`[scenario] applied '${name}'`);
+  } else {
+    console.warn(
+      `[scenario] unknown name '${name}'; known: ${COLD_START_SCENARIO_NAMES.join(', ')}`
+    );
+  }
+})();
 
 let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
 let zoom = 1;
