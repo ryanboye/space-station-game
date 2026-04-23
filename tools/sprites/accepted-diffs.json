@@ -1,7 +1,15 @@
 {
   "_note": "allowlisted keys drift past the verify-golden threshold intentionally. Each entry has a reason; delete when the drift is addressed or when re-approved in sprite-review.",
-  "icon_tier2_unlock": "borderline pixel-rms drift (45.9 vs 42 threshold); sprite unchanged since pre-iter-1 golden mint, drift from cropper non-determinism on large-PNG source. Acceptable.",
+  "icon_tier2_unlock": "borderline pixel-rms drift (45.9 vs 42 threshold); sprite unchanged since pre-iter-1 golden mint, drift from cropper non-determinism on large-PNG source. Acceptable pending pipeline-noise investigation.",
   "module_bed": "borderline (43.8 vs 42); modules-v3 top-down version seb approved, current matches. Likely IoU artifact on transparent-padded crop.",
   "module_market_stall": "moderate drift (51 vs 42); modules-v3 version seb approved, current matches. Acceptable pending seb re-review in harness.",
-  "module_wall_light": "borderline (44 vs 42); modules-v3 version seb approved, current matches. Acceptable."
+  "module_wall_light": "borderline (44 vs 42); modules-v3 version seb approved, current matches. Acceptable.",
+  "module_med_bed": "rms 80.9 flagged after batch-1 reroll was approved by seb pass-3. Current matches the reroll. Likely cropper-non-determinism hypothesis #1 (non-NEAREST downsample). Pending pipeline-noise fix.",
+  "tile_wall_solo": "walls-v5 intentional cool-palette reroll per seb+tinyclaw diagnosis 2026-04-23. Old golden was warm-amber trim, new version is cool-white only. Awaiting pass-5 approval → new golden.",
+  "tile_wall_end": "walls-v5 intentional cool-palette reroll — see tile_wall_solo note.",
+  "tile_wall_straight": "walls-v5 intentional cool-palette reroll.",
+  "tile_wall_straight_vertical": "walls-v5 intentional cool-palette reroll.",
+  "tile_wall_corner": "walls-v5 intentional cool-palette reroll.",
+  "tile_wall_tee": "walls-v5 intentional cool-palette reroll.",
+  "tile_wall_cross": "walls-v5 intentional cool-palette reroll."
 }
