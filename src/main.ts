@@ -2437,111 +2437,51 @@ toggleSpriteFallbackBtn.addEventListener('click', () => {
 // now. When a future gpt-image-1 alternate ships, the toggle + handler
 // come back (type in src/sim/types.ts already accepts a union).
 
-openSaveModalBtn.addEventListener('click', () => {
-  refreshSaveUi();
-  saveModal.classList.remove('hidden');
-});
+type ModalWiring = {
+  modal: HTMLElement;
+  openBtn?: HTMLButtonElement;
+  closeBtn: HTMLButtonElement;
+  beforeOpen?: () => void;
+  beforeClose?: () => void;
+};
 
-closeSaveModalBtn.addEventListener('click', () => {
-  saveModal.classList.add('hidden');
-});
-
-saveModal.addEventListener('click', (e) => {
-  if (e.target === saveModal) {
-    saveModal.classList.add('hidden');
+function wireModal({ modal, openBtn, closeBtn, beforeOpen, beforeClose }: ModalWiring): void {
+  if (openBtn) {
+    openBtn.addEventListener('click', () => {
+      beforeOpen?.();
+      modal.classList.remove('hidden');
+    });
   }
-});
+  closeBtn.addEventListener('click', () => {
+    beforeClose?.();
+    modal.classList.add('hidden');
+  });
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      beforeClose?.();
+      modal.classList.add('hidden');
+    }
+  });
+}
 
-openMarketBtn.addEventListener('click', () => {
-  marketModal.classList.remove('hidden');
-});
-
-closeMarketBtn.addEventListener('click', () => {
-  marketModal.classList.add('hidden');
-});
-
-marketModal.addEventListener('click', (e) => {
-  if (e.target === marketModal) {
-    marketModal.classList.add('hidden');
-  }
-});
-
-openExpansionModalBtn.addEventListener('click', () => {
-  refreshExpansionUi();
-  expansionModal.classList.remove('hidden');
-});
-
-closeExpansionModalBtn.addEventListener('click', () => {
-  expansionModal.classList.add('hidden');
-});
-
-expansionModal.addEventListener('click', (e) => {
-  if (e.target === expansionModal) {
-    expansionModal.classList.add('hidden');
-  }
-});
-
-openProgressionModalBtn.addEventListener('click', () => {
-  refreshProgressionModal();
-  progressionModal.classList.remove('hidden');
-});
-
-closeProgressionModalBtn.addEventListener('click', () => {
-  progressionModal.classList.add('hidden');
-});
-
-progressionModal.addEventListener('click', (e) => {
-  if (e.target === progressionModal) {
-    progressionModal.classList.add('hidden');
-  }
-});
-
-editPrioritiesBtn.addEventListener('click', () => {
-  refreshPriorityUi();
-  priorityModal.classList.remove('hidden');
-});
-
-closePriorityBtn.addEventListener('click', () => {
-  priorityModal.classList.add('hidden');
-});
-
-priorityModal.addEventListener('click', (e) => {
-  if (e.target === priorityModal) {
-    priorityModal.classList.add('hidden');
-  }
-});
-
-closeDockBtn.addEventListener('click', () => {
-  dockModal.classList.add('hidden');
-});
-
-dockModal.addEventListener('click', (e) => {
-  if (e.target === dockModal) {
-    dockModal.classList.add('hidden');
-  }
-});
-
-closeRoomBtn.addEventListener('click', () => {
-  selectedRoomTile = null;
-  roomModal.classList.add('hidden');
-});
-
-roomModal.addEventListener('click', (e) => {
-  if (e.target === roomModal) {
+wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
+wireModal({ modal: marketModal, openBtn: openMarketBtn, closeBtn: closeMarketBtn });
+wireModal({ modal: expansionModal, openBtn: openExpansionModalBtn, closeBtn: closeExpansionModalBtn, beforeOpen: refreshExpansionUi });
+wireModal({ modal: progressionModal, openBtn: openProgressionModalBtn, closeBtn: closeProgressionModalBtn, beforeOpen: refreshProgressionModal });
+wireModal({ modal: priorityModal, openBtn: editPrioritiesBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
+wireModal({ modal: dockModal, closeBtn: closeDockBtn });
+wireModal({
+  modal: roomModal,
+  closeBtn: closeRoomBtn,
+  beforeClose: () => {
     selectedRoomTile = null;
-    roomModal.classList.add('hidden');
   }
 });
-
-closeAgentBtn.addEventListener('click', () => {
-  selectedAgent = null;
-  agentModal.classList.add('hidden');
-});
-
-agentModal.addEventListener('click', (e) => {
-  if (e.target === agentModal) {
+wireModal({
+  modal: agentModal,
+  closeBtn: closeAgentBtn,
+  beforeClose: () => {
     selectedAgent = null;
-    agentModal.classList.add('hidden');
   }
 });
 
