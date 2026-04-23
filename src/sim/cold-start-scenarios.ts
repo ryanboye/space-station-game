@@ -15,7 +15,9 @@
 // paths or JSON blobs land through this door.
 
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
+import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { StationState, UnlockId, UnlockTier } from './types';
+import { setTile, setRoom, setModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -87,8 +89,166 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.metrics.residentsConvertedLifetime = 3;
     s.metrics.credits = 5000;
     s.metrics.materials = 500;
+  },
+
+  // Demo showcase: T6 unlocked + a PROGRAMMATICALLY BUILT multi-room
+  // station so every sprite category renders on load. Departs from the
+  // thin-spec norm because the whole point is *dense* visual verification
+  // for sprite-pipeline iteration. Use `?scenario=demo-station`.
+  'demo-station': (s) => {
+    // Start from t6-trophy counters so content is unlocked.
+    unlockThrough(s, 6);
+    s.usageTotals.archetypesEverSeen = { diner: true, shopper: true, lounger: true, rusher: true };
+    s.metrics.archetypesServedLifetime = 4;
+    s.metrics.creditsEarnedLifetime = 25000;
+    s.metrics.tradeCyclesCompletedLifetime = 20;
+    s.metrics.incidentsResolvedLifetime = 10;
+    s.metrics.actorsTreatedLifetime = 5;
+    s.metrics.residentsConvertedLifetime = 3;
+    s.metrics.credits = 5000;
+    s.metrics.materials = 500;
+    applyDemoStationOverlay(s);
   }
 };
+
+// ----------------------------------------------------------------------------
+// demo-station layout — programmatic station builder
+// ----------------------------------------------------------------------------
+
+function paintRoom(
+  state: StationState,
+  x1: number, y1: number, x2: number, y2: number,
+  roomType: RoomType,
+  doorSide: 'north' | 'south' | 'east' | 'west' = 'south'
+): void {
+  for (let y = y1; y < y2; y++) {
+    for (let x = x1; x < x2; x++) {
+      const idx = y * GRID_WIDTH + x;
+      const isEdge = x === x1 || x === x2 - 1 || y === y1 || y === y2 - 1;
+      if (isEdge) {
+        setTile(state, idx, TileType.Wall);
+      } else {
+        setTile(state, idx, TileType.Floor);
+        setRoom(state, idx, roomType);
+      }
+    }
+  }
+  const midX = Math.floor((x1 + x2) / 2);
+  const midY = Math.floor((y1 + y2) / 2);
+  let doorX: number, doorY: number;
+  if (doorSide === 'north') { doorX = midX; doorY = y1; }
+  else if (doorSide === 'south') { doorX = midX; doorY = y2 - 1; }
+  else if (doorSide === 'west') { doorX = x1; doorY = midY; }
+  else { doorX = x2 - 1; doorY = midY; }
+  const doorIdx = doorY * GRID_WIDTH + doorX;
+  setTile(state, doorIdx, TileType.Door);
+  setRoom(state, doorIdx, roomType);
+}
+
+function placeMod(state: StationState, x: number, y: number, m: ModuleType): void {
+  setModule(state, y * GRID_WIDTH + x, m);
+}
+
+function paintFloorTile(state: StationState, x: number, y: number, t: TileType): void {
+  setTile(state, y * GRID_WIDTH + x, t);
+}
+
+function applyDemoStationOverlay(state: StationState): void {
+  // Wipe a 52×32 canvas so the starter's tiny central room doesn't conflict.
+  for (let y = 4; y < 36; y++) {
+    for (let x = 4; x < 56; x++) {
+      const idx = y * GRID_WIDTH + x;
+      setTile(state, idx, TileType.Space);
+    }
+  }
+
+  // Top row: 5 rooms at y=6-14
+  paintRoom(state, 5, 6, 15, 15, RoomType.Dorm, 'south');
+  paintRoom(state, 15, 6, 25, 15, RoomType.Cafeteria, 'south');
+  paintRoom(state, 25, 6, 35, 15, RoomType.Hydroponics, 'south');
+  paintRoom(state, 35, 6, 45, 15, RoomType.Clinic, 'south');
+  paintRoom(state, 45, 6, 55, 15, RoomType.Workshop, 'south');
+
+  // Central corridor y=15-18
+  for (let y = 15; y < 19; y++) {
+    for (let x = 5; x < 55; x++) {
+      setTile(state, y * GRID_WIDTH + x, TileType.Floor);
+    }
+  }
+
+  // Bottom row: 5 rooms at y=19-28
+  paintRoom(state, 5, 19, 15, 28, RoomType.Market, 'north');
+  paintRoom(state, 15, 19, 25, 28, RoomType.Reactor, 'north');
+  paintRoom(state, 25, 19, 35, 28, RoomType.Security, 'north');
+  paintRoom(state, 35, 19, 45, 28, RoomType.Hygiene, 'north');
+  paintRoom(state, 45, 19, 55, 28, RoomType.RecHall, 'north');
+
+  // Room-specific floor variants
+  for (let y = 7; y < 14; y++) for (let x = 16; x < 24; x++) {
+    paintFloorTile(state, x, y, TileType.Cafeteria);
+    setRoom(state, y * GRID_WIDTH + x, RoomType.Cafeteria);
+  }
+  for (let y = 20; y < 27; y++) for (let x = 16; x < 24; x++) {
+    paintFloorTile(state, x, y, TileType.Reactor);
+    setRoom(state, y * GRID_WIDTH + x, RoomType.Reactor);
+  }
+  for (let y = 20; y < 27; y++) for (let x = 26; x < 34; x++) {
+    paintFloorTile(state, x, y, TileType.Security);
+    setRoom(state, y * GRID_WIDTH + x, RoomType.Security);
+  }
+
+  // Dock pair on east side
+  paintFloorTile(state, 55, 20, TileType.Dock);
+  paintFloorTile(state, 55, 21, TileType.Dock);
+
+  // ---- modules ----
+  // Dorm
+  placeMod(state, 7, 8, ModuleType.Bed);
+  placeMod(state, 9, 8, ModuleType.Bed);
+  placeMod(state, 11, 8, ModuleType.Bed);
+  placeMod(state, 13, 8, ModuleType.Bed);
+  placeMod(state, 7, 12, ModuleType.WallLight);
+  // Cafeteria
+  placeMod(state, 17, 8, ModuleType.Table);
+  placeMod(state, 19, 8, ModuleType.Table);
+  placeMod(state, 21, 8, ModuleType.ServingStation);
+  placeMod(state, 17, 12, ModuleType.Stove);
+  placeMod(state, 19, 12, ModuleType.WallLight);
+  // Hydroponics
+  placeMod(state, 27, 9, ModuleType.GrowStation);
+  placeMod(state, 30, 9, ModuleType.GrowStation);
+  placeMod(state, 27, 12, ModuleType.GrowStation);
+  // Clinic
+  placeMod(state, 37, 9, ModuleType.MedBed);
+  placeMod(state, 40, 9, ModuleType.Terminal);
+  placeMod(state, 37, 12, ModuleType.Sink);
+  // Workshop
+  placeMod(state, 47, 9, ModuleType.Workbench);
+  placeMod(state, 49, 9, ModuleType.StorageRack);
+  placeMod(state, 47, 12, ModuleType.IntakePallet);
+  // Market
+  placeMod(state, 7, 21, ModuleType.MarketStall);
+  placeMod(state, 9, 21, ModuleType.MarketStall);
+  placeMod(state, 11, 21, ModuleType.Terminal);
+  // Reactor
+  placeMod(state, 17, 21, ModuleType.WallLight);
+  placeMod(state, 22, 21, ModuleType.WallLight);
+  placeMod(state, 17, 25, ModuleType.WallLight);
+  placeMod(state, 22, 25, ModuleType.WallLight);
+  // Security
+  placeMod(state, 27, 21, ModuleType.CellConsole);
+  placeMod(state, 30, 21, ModuleType.Terminal);
+  placeMod(state, 27, 25, ModuleType.Couch);
+  // Hygiene
+  placeMod(state, 37, 21, ModuleType.Shower);
+  placeMod(state, 39, 21, ModuleType.Shower);
+  placeMod(state, 37, 25, ModuleType.Sink);
+  // RecHall
+  placeMod(state, 47, 21, ModuleType.Couch);
+  placeMod(state, 49, 21, ModuleType.Couch);
+  placeMod(state, 47, 25, ModuleType.GameStation);
+  placeMod(state, 49, 25, ModuleType.RecUnit);
+}
 
 /** Apply a named scenario to a fresh state. Returns true if the name
  *  matched a whitelisted fixture, false otherwise. Caller decides
