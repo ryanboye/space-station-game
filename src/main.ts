@@ -163,6 +163,7 @@ app.innerHTML = `
       <span class="hud-sep"></span>
       <span class="hud-item"><span class="hud-label">Visitors</span><span class="hud-value" id="hud-visitors">--</span></span>
     </div>
+    <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
     <div id="game-stage">
       <canvas id="game"></canvas>
     </div>
@@ -721,6 +722,11 @@ const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
 const hudCreditsEl = document.querySelector<HTMLElement>('#hud-credits')!;
 const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
 const hudVisitorsEl = document.querySelector<HTMLElement>('#hud-visitors')!;
+const devTierOverlayEl = document.querySelector<HTMLElement>('#dev-tier-overlay')!;
+// Enable dev-only HUD surfaces via `?dev=1`. Read once at startup; the
+// overlay stays hidden in prod so the shipped game is unaffected.
+const devModeEnabled = new URLSearchParams(location.search).get('dev') === '1';
+if (devModeEnabled) devTierOverlayEl.hidden = false;
 const expansionButtons: Record<CardinalDirection, HTMLButtonElement> = {
   north: expandNorthBtn,
   east: expandEastBtn,
@@ -1009,6 +1015,34 @@ function refreshHudStatus(): void {
   hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
   hudCrewEl.textContent = String(state.crew.total);
   hudVisitorsEl.textContent = String(state.metrics.visitorsCount);
+}
+
+// Dev-only overlay — "time to tier" at a glance for playtest pacing.
+// Hidden unless `?dev=1` was set at startup. Reached tiers render
+// `Tn: MM:SS` (from `state.unlocks.unlockedAtSec`), the current
+// candidate renders `Tn: NN%` via the UNLOCK_DEFINITIONS progress fn,
+// and future-unreached tiers render `Tn: —`. Catches pacing
+// regressions during live play — e.g. awfml's "is T2 reachable?"
+// question — without polluting the prod HUD.
+export function buildDevTierOverlayString(state: StationState): string {
+  const currentTier = getUnlockTier(state);
+  return UNLOCK_DEFINITIONS.map((def) => {
+    const label = `T${def.tier}`;
+    if (state.unlocks.unlockedIds.includes(def.id)) {
+      const at = state.unlocks.unlockedAtSec[def.id];
+      if (typeof at !== 'number') return `${label}: ✓`;
+      const s = Math.max(0, Math.floor(at));
+      return `${label}: ${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+    }
+    if (def.tier === currentTier + 1) {
+      return `${label}: ${Math.round(def.trigger.progress(state.metrics) * 100)}%`;
+    }
+    return `${label}: —`;
+  }).join(' · ');
+}
+function refreshDevTierOverlay(): void {
+  if (!devModeEnabled) return;
+  devTierOverlayEl.textContent = buildDevTierOverlayString(state);
 }
 
 function tierRequirementText(tier: UnlockTier): string {
@@ -2915,6 +2949,7 @@ function frame(now: number): void {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
   refreshHudStatus();
+  refreshDevTierOverlay();
   visitorsEl.textContent = String(state.metrics.visitorsCount);
   moraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
   stationRatingEl.textContent = `${Math.round(state.metrics.stationRating)} (${state.metrics.stationRatingTrendPerMin >= 0 ? '+' : ''}${state.metrics.stationRatingTrendPerMin.toFixed(1)}/min)`;

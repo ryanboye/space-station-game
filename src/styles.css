@@ -213,6 +213,24 @@ body {
   background: #2f3f53;
 }
 
+/* Dev-only "time to tier" overlay — rendered only when ?dev=1.
+   Sits below the main HUD strip in document flow (no magic-number
+   sticky offset), with a muted auxiliary tone. Hidden via [hidden]
+   attr in prod. `pointer-events: none` so it can't steal canvas
+   clicks; text selection is ALLOWED so devs can copy the string
+   into bug reports. */
+#dev-tier-overlay {
+  padding: 4px 12px;
+  font-family: Consolas, Menlo, Monaco, monospace;
+  font-size: 11px;
+  color: #9cb2cc;
+  background: rgba(12, 16, 24, 0.82);
+  border-bottom: 1px solid #243244;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 #game-stage {
   position: relative;
   min-width: 100%;
