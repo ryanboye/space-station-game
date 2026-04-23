@@ -1005,23 +1005,19 @@ function ensureStaticLayer(
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
     const roomType = state.rooms[i];
-    if (roomType !== RoomType.None) {
-      const drewRoomSprite =
-        useSprites && drawSpriteByKey(ctx, spriteAtlas, ROOM_SPRITE_KEYS[roomType], px, py, TILE_SIZE, TILE_SIZE, 0, 1.0);
-      if (!drewRoomSprite && !useSprites) {
-        // Fallback tint + letter only in non-sprite fallback mode. When sprites
-        // are ON, the floor-tile sprite (tile.reactor, tile.security, etc.)
-        // already encodes the room-type visual — stacking a 28% colored
-        // overlay on top of the real art was washing everything red/orange
-        // per awfml's feedback.
-        ctx.fillStyle = roomOverlay[roomType];
-        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
-        ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
-      }
+    // In sprites-ON mode, room identity comes from the tile-type sprite
+    // (tile.cafeteria, tile.reactor, tile.security). The room.* overlay layer
+    // is deprecated — per awfml 2026-04-23: "strip the room color overlays
+    // and let the texture color speak for itself." Fallback overlay+letter
+    // still runs in sprites-OFF mode to keep that path recognizable.
+    if (roomType !== RoomType.None && !useSprites) {
+      ctx.fillStyle = roomOverlay[roomType];
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
+      ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
     }
     if (i === state.core.serviceTile) {
       ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
