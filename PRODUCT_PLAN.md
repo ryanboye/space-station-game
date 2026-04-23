@@ -1,10 +1,10 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-23 06:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `15f893b`.*
+*Last updated: 2026-04-23 23:20Z by tinyclaw (PM-loop run 4 fire 1/10). Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `c1dfe8d`.*
 
 ### Current milestone
-**M1.1 Hardening — in progress.** M1 tutorial loop is live + verified. Post-deploy 4-agent whole-repo review (2026-04-22) surfaced a correctness bundle + dead-code sweep + architecture hygiene; most has shipped (PRs #29–#39). Nano-banana generator pipeline RIPPED OUT (#36) after it broke the curated atlas — sprite pipeline v2 design doc awaiting awfml decisions at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>.
+**M1.2 Sprite-Pipeline + Render Hardening — in progress.** Massive day: 28 PRs merged (#71-#98). Sprite pipeline v2 active via gpt-image-2 (iter-1 through pass-7 room-floor refactor). Render-bug debug chain (#95/#96/#97) isolated and fixed the "pokemon-red aggregate" — root cause was two compound overlay passes (inactive-room dim + depressurized red-wash) multiplicatively tinting every interior tile. Dual-tilemap walls (Path A / RimWorld technique) shipped behind `?walls=dual` flag (#98) with placeholder sprites — art reroll + PHash-vs-PA gate queued for next cycle.
 
 ### Lanes (active bots)
 - **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
@@ -80,43 +80,79 @@
 | #68 | `07c606d` | test — decouple SHIP_MIN_DOCK_AREA from cluster-size test + 3-way keeper invariant |
 | #69 | `aecc339` | test — dock-split coverage sweep (asymmetric + 3-way+ship + shrink-downgrade) |
 | #70 | `15f893b` | chore(sim) — prune unused setModule from public-API barrel |
+| #71 | `0bbd113` | docs(plan) — §0 final refresh post run-3 wrap (#67–#70) |
+| #72 | `288aad2` | sprites — promote 5 tile-editor crops from staging to atlas |
+| #73 | `a63c918` | feat(dev) — `?scenario=<name>` cold-start loader (starter, t1-ready, t5-ready, t6-trophy) |
+| #74 | `2dde212` | feat(render) — glow pass (wall lights, stoves, reactor, med-beds) |
+| #75 | `d053684` | sprites — iter-1 rimworld-style walls + modules atlas via gpt-image-2 |
+| #76 | `513e358` | sprites — chroma-key magenta bleed fix on iter-1 walls |
+| #77 | `6f14a88` | sprites — iter-2 agents (18 humans via gpt-image-2) |
+| #78 | `008a995` | fix(render) — cache-bust atlas.png with `?v={version}` |
+| #79 | `5541bb1` | sprites — iter-2 ships (5 vessel types) |
+| #80 | `cf8a514` | feat(scenarios) — demo-station (10-room T6 showcase, programmatic overlay on `?scenario=demo-station`) |
+| #81 | `32e83a1` | sprites — walls-v3 semi-3D depth per awfml |
+| #82 | `6e6a093` | fix(render) — dedicated tile.wall.straight.vertical sprite |
+| #83 | `e1f6b64` | sprites — modules-v2 semi-3D depth |
+| #84 | `029122a` | sprites/render — kill red room-overlay fallback + subtler floors |
+| #85 | `f152aa9` | sprites — modules-v3 STRICT top-down per awfml |
+| #86 | `cdbc5f6` | sprites — agents-v2 RimWorld pawn style (floating head) |
+| #87 | `8df7507` | harness — per-sprite A/B gate + regression detector (tinyclaw #1 + #2) |
+| #88 | `d587172` | harness — prompt-macro library + per-pack archive side-effect (tinyclaw #3 + #4) |
+| #89 | `f09c1e8` | refactor(render) — collapse dock-facade to 4+rotation |
+| #90 | `11121b6` | chore(sprites) — delete dead overlay.wall.exterior.* keys |
+| #91 | `d9840d9` | sprites — reroll batch-1, 9 genuine rerolls post pass-1 review |
+| #92 | `a4be6ab` | sprites — walls-v5 cool-palette reroll per team diagnosis |
+| #93 | `0b1e31e` | tools(sprites) — verify-floor-periodicity gate at pack-time (tinyclaw, blocks per-cell-motif regressions) |
+| #94 | `5316cee` | sprites — pass-7 room-floor texture refactor (ditch icon-per-cell) |
+| #95 | `5b537a4` | fix(render) — strip room.* overlay in sprite mode, let tile textures speak |
+| #96 | `000bb53` | fix(render) — tone down glow-pass alpha per awfml feedback |
+| #97 | `4054ac0` | fix(render) — tone inactive-dim + depressurized-wash alphas (cosmetic rust fix, superseded by #99 sim-side) |
+| #98 | `c1dfe8d` | feat(render) — dual-tilemap wall pass (Path A / RimWorld technique, behind `?walls=dual` flag) |
+| #99 | `10d4930` | fix(sim) — doors count as pressure barriers (seals demo-station, tinyclaw) |
 
 ### Open PRs
-- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw). Static debug page, non-blocking.
-- **#52** `tools/sprites: qa-review.mjs (gpt-image-1 v2 QA gate)` (seb). Blocked on awfml API key + design decisions.
-- **#54** `docs: starter-state-refactor design doc (4-PR breakdown for option-B)` (seb). v3 locked per tinyclaw layout review. Blocked on awfml tutorial-pacing answer.
-- **#55** `ci: advisory mobile-baseline gate via check-mobile.py` (seb). Vendors seb's 9-item checklist; needs ritual.
+- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (VoX). Static debug page, non-blocking. Age: 2d.
+- **#52** `tools/sprites: qa-review.mjs (gpt-image-1 v2 QA gate)` (sammcgrail/seb). Blocked on awfml API key + QA ownership decision. Becomes the spine of the PHash-vs-PA gate per backlog item #2.
+- **#54** `docs: starter-state-refactor design doc (4-PR breakdown for option-B)` (sammcgrail/seb). v3 locked per tinyclaw layout review. Blocked on awfml tutorial-pacing answer.
+- **#55** `ci: advisory mobile-baseline gate via check-mobile.py` (sammcgrail/seb). Vendors seb's 9-item checklist; needs 4-agent ritual before merge.
 
 ### Backlog (priority-ordered)
-1. **Sprite pipeline v2 (gpt-image-1)** — BMO design doc live at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>. 5 awfml decisions open (single-vs-sheet, reference-image-use, QA ownership, bulk-trigger, archive policy). Blocked on awfml.
-2. **Phase 5 mechanics ref** — BMO doc live at <https://bmo.ryanboye.com/spacegame-plan/phase-5-mechanics.html>. 6 awfml decisions open (medSupply source, clinic staffing, propagation, overflow curve, contagion model, treatment duration). Blocked on awfml.
-3. **Starter food chain (option B)** — visitors arrive but starve within 60s of T1 flash. Seb's design doc (PR #54, v3) locks 4-PR breakdown: **PR-1** extract `runActivationPipeline` (refactor-only, no behavior change), **PR-2** Reactor-only pre-activation + `airQuality=100` buffer + T1 task nudge to place LifeSupport (LifeSupport deferred to player per tutorial-pacing pivot, pressurization is zone-based so zero-action crew survive the buffer window), **PR-3** pre-place Kitchen `x=25..28 y=14..15` + Hydroponics `x=25..28 y=21..22` + Cafeteria `x=32..34 y=14..17` with minTile/footprint/door connectivity, **PR-4** seed crew + initial jobs. Gated on awfml's tutorial-pacing answer (BMO drafting a spec doc to pre-empt). Invariant across all 4: `createInitialState({seed})` stays deterministic + tick-ready + no async.
-4. **Toolbar/HUD rework** — awfml's ask, seb to ship, BMO to spec. Full judgment given to BMO per awfml.
-5. **Testing gap sweep** — T3/T4/T5/T6 predicate tests, rebuildDockEntities test (save/load counter + tier>3 shipped in #29). tinyclaw lane.
-6. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
-7. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox, no new content required. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning knobs).
-8. **Dead-code follow-up (out of last sweep)** — ~~`UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`~~ (shipped #47); `tierRequirementText` single-source the fallback chain. Small hygiene.
-9. **Dock-entities follow-ups (from PR #53 ritual)** — ~~all 3 shipped~~ (#64 split-with-ship, #66 three-way, #68 threshold-decouple).
-10. **Dock-test coverage gaps (from #66 review)** — ~~3 batched shipped~~ (#69: asymmetric + 3-way-phantom-occupancy + shrink-downgrade). Remaining: ship.bayTiles stale-reference post-split (needs sim fix, not just test).
-11. **Dev-mode telemetry JSONL emit** (from #65 brainstorm) — `buildDevTierOverlayString` already exported pure; layer a change-detector + JSONL stdout emit on tier advance. ~20-30 LoC. Awaiting awfml greenlight on the `?telemetry=1` gate.
-12. **`?scenario=<name>` cold-start loader** (from #70-adjacent brainstorm) — thin-spec whitelisted fixtures (`t1-ready`, `t5-ready`, `t6-trophy`) layered on starter state. Playtest-velocity win, pairs with `?dev=1` overlay. ~60 LoC. BMO endorsed.
+1. **Dual-tilemap wall art gen-2** — Path A placeholder sprites live (#98). Next: reroll the 6 wall shapes via gpt-image-2 with PA reference + rim-lighting + per-pixel depth. PHash-vs-PA gate enforces proximity. BMO lane.
+2. **PHash-vs-PA gate at pack-time** (tinyclaw proposal, elevated to next-session turn-1 priority per seb+BMO handoff). Computes perceptual similarity score against awfml's shared PA tileset for each gen'd sprite; rejects at pack-time if distance > threshold. Fundamentally cheaper than reroll-until-vibes-align.
+3. **Room-texture v2 multi-hue palette** — pass-7 textures still read as warm-variant aggregate (awfml's "pokemon red"). Need true material distinctness (cool-grey industrial deck, off-white tile, navy rubberized, cream linoleum, grey concrete). Pixel-trace from PA references for the hard cases. Pairs with #2.
+4. **Sprite pipeline v2 (gpt-image-2)** — iter pipeline LIVE (#75-94). 5 original awfml decisions (single-vs-sheet, reference-image-use, QA ownership, bulk-trigger, archive policy) still open but unblocking as methodology settles post pass-7. seb's QA-review gate PR #52 still open pending API key.
+5. **Phase 5 mechanics ref** — BMO doc live at <https://bmo.ryanboye.com/spacegame-plan/phase-5-mechanics.html>. 6 awfml decisions open (medSupply source, clinic staffing, propagation, overflow curve, contagion model, treatment duration). Blocked on awfml.
+6. **Starter food chain (option B)** — visitors arrive but starve within 60s of T1 flash. Seb's design doc (PR #54, v3) locks 4-PR breakdown: **PR-1** extract `runActivationPipeline`, **PR-2** Reactor-only pre-activation + `airQuality=100` buffer + T1 task nudge, **PR-3** pre-place Kitchen + Hydroponics + Cafeteria, **PR-4** seed crew + jobs. Blocked on awfml's tutorial-pacing answer.
+7. **Toolbar/HUD rework** — awfml's ask. #41 (toolbar), #60 (popup pause), #61 (status strip) shipped key pieces. Next sweep per awfml.
+8. **Testing gap sweep** — T3/T4/T5/T6 predicate tests shipped (#44, #51, #63). Scenario-level pressurization regression (demo-station → 100% pressurized) queued for tinyclaw next turn.
+9. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
+10. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning).
+11. **Post-#99 followups** — (a) PR #97 alpha walkback once dual-tilemap walls land, (b) reactor pressurization fallback audit at sim.ts:2747/2752, (c) promote `isPressureBarrier` to types.ts when 2nd barrier type is added, (d) file door open/closed state debt item.
+12. **Dev-mode telemetry JSONL emit** (from #65 brainstorm) — `buildDevTierOverlayString` exported pure; layer change-detector + JSONL stdout on tier advance. ~20-30 LoC. Awaiting awfml greenlight on `?telemetry=1`.
+13. **Ship.bayTiles stale-reference post-split** — remaining dock-entities gap from #66 review (needs sim fix, not just test).
+14. **`tierRequirementText` single-source fallback chain** — small hygiene, low-priority.
 
-### Recent activity snapshot (2026-04-23 02:50Z – 06:45Z, PM-loop run 3 all 10 fires)
-- **11 PRs merged** (9 by tinyclaw: #62-#70 excluding #65 which tinyclaw wrote but BMO merged; + 2 by BMO: #60, #61)
-- **PM-loop meta-goal achieved** — PR shape shifted from sprite-pipeline infrastructure (run 2) to sim correctness + simplification + test coverage (run 3). 6 test PRs, 2 UX PRs, 2 perf/hygiene PRs, 2 docs.
-- **All 3 dock-entities #53 follow-ups closed** (#64 split-with-ship, #66 three-way, #68 threshold-decouple) + 3 additional gaps from #66 review shipped (#69 sweep: asymmetric + phantom-occupancy + shrink-downgrade).
-- **Popup pause UX** (#60 BMO) + **HUD cleanup** (#61 BMO) — shipped early in the run.
-- **Dev observability** (#65) — `?dev=1` time-to-tier overlay, `buildDevTierOverlayString` exported pure for future JSONL telemetry.
-- **Archetype regression guard** (#63) — would have surfaced awfml's "is T2 reachable?" in one glance.
-- **Barrel hygiene** (#70) — pruned dead setModule re-export.
-- **Brainstorms queued for awfml**: `?telemetry=1` JSONL emit, `?scenario=<name>` cold-start fixture loader.
+### Recent activity snapshot (2026-04-23 — 29 PRs across BMO + tinyclaw, capped by PM-loop run 4 start at 23:15Z)
+- **Sprite pipeline v2 live**: iter-1 through pass-7 via gpt-image-2 direct (#75, #77, #79, #83, #85, #86, #91, #92, #94). Curated atlas re-grown from placeholders to pass-7 room-floor textures (ditched icon-per-cell antipattern).
+- **Render-bug debug chain**: the "pokemon-red aggregate" was diagnosed + fixed today across 4 passes — #95 (strip room overlay) → #96 (tone glow alphas) → #97 (tone inactive-dim + depressurized-wash alphas, cosmetic) → #99 (doors as pressure barriers, sim-side root cause). Root cause per BMO's bisect: two always-on overlay passes compounding multiplicatively on every interior tile because demo-station's doors leaked vacuum → depressurized-wash fired everywhere. #99 makes pressurization trustworthy; #97's alpha walkback is queued once awfml greenlights the dual-tilemap wall geometry.
+- **Dual-tilemap walls shipped behind flag** (#98, Path A / RimWorld 5-sprite technique). Placeholder sprites; gen-2 art reroll + PHash-vs-PA-reference gate queued.
+- **Harness additions** (tinyclaw #1-#4 from harness-proposal): per-sprite A/B gate + regression detector (#87), prompt-macro library + per-pack archive (#88), verify-floor-periodicity gate (#93).
+- **Scenario infrastructure**: `?scenario=<name>` URL loader (#73) with starter/t1-ready/t5-ready/t6-trophy fixtures; BMO extended to `demo-station` 10-room programmatic layout (#80).
+- **Glow pass** (#74) — wall lights, stoves, reactor, med-beds — now per-toggle (Glow ON/OFF), alpha-tuned in #96.
+- **PM-loop run 4 kicked off 23:15Z** — turn 1/10 shipped #99 (sim-side pressurization fix + regression test); turn 2/10 rolling up this plan refresh.
+- **Methodology lessons baked in** (seb memory ids 508–512): review bar is "matches target", not "better than before"; gate-as-arbiter before vibe-shipping; research prior art first (dual-tilemap); version-pin every review fetch against CDN cache; PA tileset is ground-truth reference, not calibration.
+- **Brainstorms queued for awfml**: `?telemetry=1` JSONL emit (#65 follow-up), PHash-vs-PA gate as pack-time arbiter (next-session priority per seb+BMO handoff), multi-hue palette refresh for room-floor textures.
 
 ### Risks / open questions
 - Phase 5 predicate (T5) uses a proxy (`actorsTreatedLifetime++` on health-state recovery to `healthy`) until Phase 5 producer events land. Proxy is monotonic + works, but semantically "treatments ≠ treatees".
 - T6 specialization predicate intentionally no-op. BMO's minimum-viable path (trophy state, future gate) is the current agreed strawman.
 - Starter state has no food chain — visitors arrive, T1 flash fires, then visitors starve ~60s later. Option-B design doc (#54 v3) locks 4-PR path; awaiting awfml tutorial-pacing answer to unblock PR-2.
-- **Air-buffer duration risk (new)** — PR-2 ships `airQuality=100` as a finite buffer; if air decays too fast via `(airSupply - airDemand) * dt * 1.7` before T1 LifeSupport task fires, crew go distress in T0. Acceptance test `testColdStartAirBufferExceedsT1UnlockTime` pins this contract.
+- **Air-buffer duration risk** — PR-2 ships `airQuality=100` as a finite buffer; if air decays too fast via `(airSupply - airDemand) * dt * 1.7` before T1 LifeSupport task fires, crew go distress in T0. Acceptance test `testColdStartAirBufferExceedsT1UnlockTime` pins this contract.
+- **Doors-as-pressure-barriers semantics (new, #99)** — current default is "doors always sealed." Long-term this should become transient open/closed state (sealed unless traversed-within-N-ticks). File as debt item. Meanwhile, `metrics.leakingTiles` and `leakPenalty` now fire only on actual hull gaps rather than every door; confirm penalty magnitude still lands where we want or walk it back.
+- **Reactor pressurization fallback** (sim.ts:2747, 2752) — `room === RoomType.Reactor ||` short-circuits the 70% pressurization check. Architect review on PR #99 notes this may now be dead code since sealed reactors pressurize naturally; leave in place pending a defensive-audit PR with tests.
+- **PR #97 alpha walkback** — dim/depressurized-wash alphas were tuned DOWN to paper over the rust aggregate. Now that #99 makes pressurization trustworthy, walk back to pre-#97 values. BMO holding the change until dual-tilemap walls land so two visual variables don't swap at once.
 - Visual regression baseline absent. Harness v1.0 (#4) has Playwright hooks + CI advisory wired. Baseline screenshot step is follow-up.
+- **Sprite gen-default-warm bias** — gpt-image-2 defaults to warm-hue material interpretations. "Linoleum cream" and "wood parquet" both come back warm; so do "tile.reactor" and "tile.cafeteria." Fix is to pin per-sprite PA reference images and enforce PHash/SSIM distance at pack-time (seb's PR #52 gate + tinyclaw's proposed PA-reference scalar). Art rerolls without this gate will regress.
 
 ### Ritual
 Before merging ANY PR touching `src/sim/` or `src/render/`: 4 parallel agents — 2 × `/simplify` + 2 × `/review`. Pure-docs PRs ≤ 50 lines can merge without the ritual. All render-touching PRs attach a Playwright smoke screenshot to the PR body.
