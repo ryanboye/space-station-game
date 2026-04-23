@@ -1881,6 +1881,37 @@ function testRebuildDockEntitiesPreservesAllowedShips(): void {
   );
 }
 
+function testActorsTreatedLifetimeIncrementsOnRecovery(): void {
+  const state = createInitialState({ seed: 5107 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  // crewMembers is populated lazily by ensureCrewPopulation up to
+  // state.crew.total = 8 starter — tick once paused to fill the array,
+  // then force-distress crew[0] before unpausing so the recovery loop
+  // can run + applyAirExposure can fire the proxy increment.
+  state.controls.paused = true;
+  tick(state, 0);
+  assertCondition(state.crewMembers.length >= 1, 'Setup: starter state should have crew after tick.');
+  const crew = state.crewMembers[0];
+  crew.airExposureSec = 25;
+  crew.healthState = 'distressed';
+  state.metrics.airQuality = 100;
+  state.controls.paused = false;
+  const priorTreated = state.metrics.actorsTreatedLifetime;
+  // Recovery rate is 1.8 sec exposure shed per real second at high
+  // airQuality, so 25s of exposure clears in <15s of sim time.
+  runFor(state, 20);
+  assertCondition(
+    state.metrics.actorsTreatedLifetime > priorTreated,
+    `actorsTreatedLifetime should increment on health recovery; got ${state.metrics.actorsTreatedLifetime} from prior ${priorTreated}.`
+  );
+  const finalHealth: string = crew.healthState;
+  assertCondition(
+    finalHealth === 'healthy',
+    `Crew should reach 'healthy' under clean air; got '${finalHealth}'.`
+  );
+}
+
 function testTier0ShipServicesIgnoreLockedDemands(): void {
   const state = createInitialState({ seed: 51035 });
   buildHabitat(state);
@@ -2203,6 +2234,7 @@ function run(): void {
   testUnlockTier3TriggersOnTradeCycle();
   testUnlockTier4TriggersOnResolvedIncident();
   testRebuildDockEntitiesPreservesAllowedShips();
+  testActorsTreatedLifetimeIncrementsOnRecovery();
   testTier0ShipServicesIgnoreLockedDemands();
   testMilitaryShipPenalizesLowSecurity();
   testColonistShipBoostsConversionWhenHousingValid();
