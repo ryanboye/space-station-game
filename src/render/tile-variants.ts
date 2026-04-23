@@ -17,7 +17,7 @@ export type DoorVariant = {
   rotation: TileRotation;
 };
 
-function connectedWallLikeTile(tile: TileType): boolean {
+export function connectedWallLikeTile(tile: TileType): boolean {
   return tile === TileType.Wall || tile === TileType.Door;
 }
 

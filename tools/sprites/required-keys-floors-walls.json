@@ -6,5 +6,11 @@
   "tile.wall.straight",
   "tile.wall.corner",
   "tile.wall.tee",
-  "tile.wall.cross"
+  "tile.wall.cross",
+  "tile.wall.dt.empty",
+  "tile.wall.dt.single_corner",
+  "tile.wall.dt.edge",
+  "tile.wall.dt.saddle",
+  "tile.wall.dt.inner_corner",
+  "tile.wall.dt.full"
 ]

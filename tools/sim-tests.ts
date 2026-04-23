@@ -48,6 +48,7 @@ import {
   type Visitor
 } from '../src/sim/types';
 import { resolveDoorVariantFromMask, resolveWallVariantFromMask } from '../src/render/tile-variants';
+import { pickDualVariant, type DualWallShape } from '../src/render/wall-dual-tilemap';
 
 function assertCondition(condition: boolean, message: string): void {
   if (!condition) {
@@ -2685,6 +2686,54 @@ function testWallVariantMaskMapping(): void {
   }
 }
 
+function testDualWallVariantTruthTable(): void {
+  // Truth table for pickDualVariant. Mask = tl*1 + tr*2 + bl*4 + br*8.
+  // Entries: [mask, expectedShape, expectedRotation].
+  const expected: Array<[number, DualWallShape, 0 | 90 | 180 | 270]> = [
+    [0, 'empty', 0],
+    [1, 'single_corner', 0],
+    [2, 'single_corner', 90],
+    [4, 'single_corner', 270],
+    [8, 'single_corner', 180],
+    [3, 'edge', 0],
+    [10, 'edge', 90],
+    [12, 'edge', 180],
+    [5, 'edge', 270],
+    [9, 'saddle', 0],
+    [6, 'saddle', 90],
+    [7, 'inner_corner', 0],
+    [11, 'inner_corner', 90],
+    [14, 'inner_corner', 180],
+    [13, 'inner_corner', 270],
+    [15, 'full', 0]
+  ];
+  const seen = new Set<number>();
+  for (const [mask, shape, rotation] of expected) {
+    seen.add(mask);
+    const tl = (mask & 1) !== 0;
+    const tr = (mask & 2) !== 0;
+    const bl = (mask & 4) !== 0;
+    const br = (mask & 8) !== 0;
+    const actual = pickDualVariant(tl, tr, bl, br);
+    assertCondition(actual.shape === shape, `Dual wall shape mismatch for mask ${mask}: expected ${shape}, got ${actual.shape}.`);
+    assertCondition(
+      actual.rotation === rotation,
+      `Dual wall rotation mismatch for mask ${mask}: expected ${rotation}, got ${actual.rotation}.`
+    );
+  }
+  // Confirm all 16 masks are covered by the table.
+  assertCondition(seen.size === 16, `Dual wall truth table should cover all 16 masks; covered ${seen.size}.`);
+  // Sweep every mask once more to ensure no runtime throw / no undefined entries.
+  for (let m = 0; m < 16; m++) {
+    const tl = (m & 1) !== 0;
+    const tr = (m & 2) !== 0;
+    const bl = (m & 4) !== 0;
+    const br = (m & 8) !== 0;
+    const v = pickDualVariant(tl, tr, bl, br);
+    assertCondition(typeof v.shape === 'string' && v.shape.length > 0, `pickDualVariant produced invalid shape for mask ${m}.`);
+  }
+}
+
 function run(): void {
   testUnlockTier0StartsConstrained();
   testUnlockTier1TriggersAfterStability();
@@ -2712,6 +2761,7 @@ function run(): void {
   testSaveV1MigratesToV2UnlockDefaults();
   test20MinuteComplexityCurveReadable();
   testWallVariantMaskMapping();
+  testDualWallVariantTruthTable();
   testAutonomousRoomsNoStaff();
   testCafeteriaMissingServingStation();
   testBedFootprintRotation();

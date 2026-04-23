@@ -7196,6 +7196,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       showInventoryOverlay: false,
       showGlow: true,
       spriteMode: 'fallback',
+      wallRenderMode: 'per-cell',
       showSpriteFallback: false,
       spritePipeline: 'nano-banana',
       taxRate: 0.2,
