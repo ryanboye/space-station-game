@@ -14,6 +14,15 @@ dist/
 tools/sprites/out/processed/
 tools/sprites/out/processed-pixellab/
 
+# qa-review.mjs (gpt-image-1 v2 pipeline): staging is raw generator output
+# awaiting review; approved/rejected are the reviewer's sorted buckets.
+# None of these are build inputs in the legacy pipeline, and the v2 pack
+# path will regenerate the atlas from approved/, so checking them in
+# just adds diff noise.
+tools/sprites/out/staging/
+tools/sprites/out/approved/
+tools/sprites/out/rejected/
+
 # Local env files
 .env
 .env.*

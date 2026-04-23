@@ -1,0 +1,12 @@
+{
+  "projectName": "space-station-game",
+  "stagingDir": "tools/sprites/out/staging",
+  "approvedDir": "tools/sprites/out/approved",
+  "rejectedDir": "tools/sprites/out/rejected",
+  "specPath": "tools/sprites/sprite-spec.yaml",
+  "publicAtlasJson": "public/assets/sprites/atlas.json",
+  "publicAtlasPng": "public/assets/sprites/atlas.png",
+  "referenceImage": "tools/sprites/anchors/mockup.png",
+  "previewSizes": [32, 64, 128],
+  "port": 5199
+}

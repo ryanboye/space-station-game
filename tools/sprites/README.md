@@ -176,11 +176,45 @@ Important:
 - If map dimensions or key rectangles are invalid, import fails with key-specific errors.
 - Packing preserves exact-sized inputs without resizing when source dimensions already match the target frame.
 
-## 8) Output paths
+## 8) QA review (gpt-image-1 v2 pipeline)
+
+Raw generator output lands in `tools/sprites/out/staging/`. Nothing in staging
+flows to the runtime atlas on its own — a human must approve each tile first.
+`qa-review.mjs` is that gate:
+
+```bash
+node tools/sprites/qa-review.mjs            # default port 5199
+node tools/sprites/qa-review.mjs --port 5200
+node tools/sprites/qa-review.mjs --config tools/sprites/qa-config.json
+node tools/sprites/qa-review.mjs --no-open  # suppress browser auto-open
+```
+
+Opens a local web UI that walks you through each staging tile one at a time.
+Side-by-side comparison: reference mockup, the proposed staging tile at multiple
+zoom levels, and the current atlas tile (sliced from `public/assets/sprites/atlas.png`
+on the fly).
+
+- `a` — approve → moves `staging/<key>.{png,meta.json}` into `approved/`
+- `r` — reject → moves into `rejected/` (with optional note)
+- `j` / `k` — navigate without moving files
+
+If both `staging/<key>.png` and `approved/<key>.png` exist (a re-generation),
+approve returns 409 and the UI asks for explicit confirmation before overwriting.
+
+Configuration lives in `tools/sprites/qa-config.json`. Override via
+`--config <path>` or `QA_CONFIG=<path>`. Port override: `--port <n>` or `QA_PORT=<n>`.
+
+**`pack-atlas.mjs` reads ONLY from `approved/` in the v2 pipeline** — staging
+tiles can never reach the runtime atlas without passing through this tool.
+
+## 9) Output paths
 
 - Curated source art: `/Users/ryan.boye/Documents/New project/tools/sprites/curated`
 - Raw outputs: `/Users/ryan.boye/Documents/New project/tools/sprites/out/raw`
 - Processed outputs: `/Users/ryan.boye/Documents/New project/tools/sprites/out/processed`
+- QA staging (gpt-image-1 v2): `/Users/ryan.boye/Documents/New project/tools/sprites/out/staging`
+- QA approved (only source for pack-atlas v2): `/Users/ryan.boye/Documents/New project/tools/sprites/out/approved`
+- QA rejected: `/Users/ryan.boye/Documents/New project/tools/sprites/out/rejected`
 - Runtime atlas: `/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.png`
 - Runtime manifest: `/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas.json`
 - Floors/walls atlas: `/Users/ryan.boye/Documents/New project/public/assets/sprites/atlas-floors-walls.png`
