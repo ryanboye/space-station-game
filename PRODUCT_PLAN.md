@@ -1,7 +1,7 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-23 02:50Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `3fcc626`.*
+*Last updated: 2026-04-23 05:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `a454114`.*
 
 ### Current milestone
 **M1.1 Hardening — in progress.** M1 tutorial loop is live + verified. Post-deploy 4-agent whole-repo review (2026-04-22) surfaced a correctness bundle + dead-code sweep + architecture hygiene; most has shipped (PRs #29–#39). Nano-banana generator pipeline RIPPED OUT (#36) after it broke the curated atlas — sprite pipeline v2 design doc awaiting awfml decisions at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>.
@@ -65,12 +65,23 @@
 | #50 | `6393eeb` | feat(ui) — autosave to localStorage every 60s + opt-in cold-start load |
 | #51 | `4f0abb9` | test — actorsTreatedLifetime increments on health recovery |
 | #53 | `3fcc626` | test+fix — rebuildDockEntities paint/split/3+clusters coverage + id-collision fix |
+| #56 | `0e9b691` | docs(plan) — §0 refresh post #40-53 + starter-refactor pivot lock |
+| #57 | `81f7752` | tools/sprites — rename gpt-image-1 → gpt-image-2 in prelim modules |
+| #58 | `4a8c3e4` | feat(sprites) — update rate-limits.mjs to gpt-image-2 constants |
+| #59 | `fe6b6b0` | feat(sprites) — unpack-atlas-sheet.mjs for ChatGPT-generated atlas sheets |
+| #60 | `785ad66` | feat(progression) — tier flash pauses sim + click-dismiss modal backdrop |
+| #61 | `191bfd8` | feat(hud) — remove legend + guidance panels, add top status strip |
+| #62 | `e36ee91` | chore(ui) — cache sprite-status DOM update behind composite key |
+| #63 | `c97ddec` | test — T1 archetype diversity regression guard for T2 reachability |
+| #64 | `64bdd81` | test — split-with-docked-ship reference preservation |
+| #65 | `9ccc6ca` | feat(ui) — dev-mode time-to-tier overlay (?dev=1) |
+| #66 | `a454114` | test — three-way dock split dedupes ids across consumedIds Set |
 
 ### Open PRs
-- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw). Static debug page, ready for merge when someone picks it up. Non-blocking.
+- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw). Static debug page, non-blocking.
 - **#52** `tools/sprites: qa-review.mjs (gpt-image-1 v2 QA gate)` (seb). Blocked on awfml API key + design decisions.
-- **#54** `docs: starter-state-refactor design doc (4-PR breakdown for option-B)` (seb). v3 pushed post-tinyclaw layout-sketch review — pivot locked: Reactor-only cold start + `airQuality=100` buffer, LifeSupport → T1 player task. PR-3 food-chain coords locked (Kitchen `x=25..28 y=14..15`, Hydroponics `x=25..28 y=21..22`, Cafeteria `x=32..34 y=14..17`). Blocked on awfml tutorial-pacing answer.
-- **#55** `ci: advisory mobile-baseline gate via check-mobile.py` (seb). Vendors seb's 9-item mobile checklist as `continue-on-error` CI step. Needs 4-agent ritual.
+- **#54** `docs: starter-state-refactor design doc (4-PR breakdown for option-B)` (seb). v3 locked per tinyclaw layout review. Blocked on awfml tutorial-pacing answer.
+- **#55** `ci: advisory mobile-baseline gate via check-mobile.py` (seb). Vendors seb's 9-item checklist; needs ritual.
 
 ### Backlog (priority-ordered)
 1. **Sprite pipeline v2 (gpt-image-1)** — BMO design doc live at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>. 5 awfml decisions open (single-vs-sheet, reference-image-use, QA ownership, bulk-trigger, archive policy). Blocked on awfml.
@@ -81,16 +92,18 @@
 6. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
 7. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox, no new content required. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning knobs).
 8. **Dead-code follow-up (out of last sweep)** — ~~`UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`~~ (shipped #47); `tierRequirementText` single-source the fallback chain. Small hygiene.
-9. **Dock-entities follow-ups (from PR #53 4-agent ritual)** — (a) split-with-docked-ship test: verify `bayTiles`, `assignedDockId`, `occupiedByShipId` behavior when mid-tile deleted while dock occupied (pre-existing latent de-sync surfaced by #53 review), (b) three-way split coverage: 5-tile dock with 2 middle-tile deletions → 3 clusters exercises id-dedup across >2 entries, (c) decouple `SHIP_MIN_DOCK_AREA` thresholds from hardcoded 2/4/7 in cluster-size test.
+9. **Dock-entities follow-ups (from PR #53 4-agent ritual)** — ~~split-with-docked-ship~~ (shipped #64), ~~three-way split~~ (shipped #66), (c) decouple `SHIP_MIN_DOCK_AREA` thresholds from hardcoded 2/4/7 in cluster-size test — still open.
+10. **Dock-test coverage gaps surfaced by #66 review** — asymmetric 1+1+3 split shape, `occupiedByShipId` inheritance at 3-way scale, `allowedShipSizes` downgrade on split, explicit smallest-index-keeper invariant assertion. Batch-able as one follow-up PR.
+11. **Dev-mode telemetry JSONL emit** (from #65 brainstorm) — `buildDevTierOverlayString` already exported pure; layer a change-detector + JSONL stdout emit on tier advance. ~20-30 LoC. Awaiting awfml greenlight on the `?telemetry=1` gate, but #65 shipped the display piece of this independently.
 
-### Recent activity snapshot (2026-04-22 23:45Z – 2026-04-23 02:50Z, PM-loop run 2 fire 1–10)
-- **13 PRs merged** (#40–#51 + #53) on top of overnight sprint
-- **Toolbar v1 shipped** (#41/#43) — clickable buttons replace ~30 hotkeys, horizontal packing fix
-- **Modal + label-churn refactors** (#45/#48) — wireModal collapses 8 modals to 1 helper, per-frame label sync moved to click handlers
-- **Autosave live** (#50) — localStorage JSON snapshot every 60s, opt-in cold-start load modal
-- **T3/T4 predicate test coverage + rebuildDockEntities roundtrip** (#44) + **dock id-collision fix** (#53)
-- **Starter-state design doc** (#54 v3) — 4-PR breakdown locked, pivot to Reactor-only + T1 LifeSupport task
-- **gpt-image-1 prelim modules** (#46) + **qa-review.mjs** (#52 open) — awaiting awfml gpt-image-2 endpoint decisions
+### Recent activity snapshot (2026-04-23 02:50Z – 05:45Z, PM-loop run 3 fires 1–5)
+- **7 PRs merged** (#62, #63, #64, #65, #66 by tinyclaw + #60, #61 by BMO)
+- **Popup pause UX** (#60 BMO) — tier-flash now pauses sim + requires click-dismiss + modal backdrop
+- **HUD cleanup** (#61 BMO) — sidebar hotkey + legend panels removed, persistent top-strip shows power/oxygen/credits/crew/visitors
+- **Perf cache** (#62) — sprite-status DOM writes collapsed to change-detection (~120 no-op writes/sec eliminated)
+- **Integration test gap closed** (#63) — T1 archetype diversity regression guard; would have surfaced awfml's "is T2 reachable?" question instantly
+- **Dock correctness tests** (#64, #66) — split-with-docked-ship + three-way split, filling 2/3 of the PR #53 review follow-ups
+- **Dev observability** (#65) — `?dev=1` time-to-tier overlay, pure helper exported for future JSONL telemetry hook
 
 ### Risks / open questions
 - Phase 5 predicate (T5) uses a proxy (`actorsTreatedLifetime++` on health-state recovery to `healthy`) until Phase 5 producer events land. Proxy is monotonic + works, but semantically "treatments ≠ treatees".
