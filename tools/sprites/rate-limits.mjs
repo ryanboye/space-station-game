@@ -1,12 +1,12 @@
 /**
- * OpenAI gpt-image-1 rate-limit knowledge.
+ * OpenAI gpt-image-2 rate-limit knowledge.
  *
  * Shared between `generate-gpt-image.mjs` (obeys these limits when firing
  * requests) and `qa-review.mjs` (shows an ETA banner to the reviewer based
  * on batch size + current tier). ONE source of truth so neither side drifts.
  *
  * Source: seb's research in the claws group, 2026-04-23. Pulled from
- * OpenAI's own rate-limit docs + model-specific quirks. gpt-image-1 has
+ * OpenAI's own rate-limit docs + model-specific quirks. gpt-image-2 has
  * its own bucket separate from the text models.
  *
  * Correction history (kept so the table stays honest):
@@ -26,7 +26,7 @@ export const TIER_LIMITS = {
   4: { rpm: 1500, daily: null }, // enterprise / support-ticket only
 };
 
-/** Per-request latency on `/v1/images/edits` with gpt-image-1 (seconds). */
+/** Per-request latency on `/v1/images/edits` with gpt-image-2 (seconds). */
 export const REQUEST_LATENCY_SECONDS = 8; // median; range ~5-12s
 
 /** How long before we give up on a request (ms). OpenAI occasionally drops

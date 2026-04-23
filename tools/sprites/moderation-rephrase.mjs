@@ -1,5 +1,5 @@
 /**
- * Moderation rephrase dictionary for gpt-image-1 prompts.
+ * Moderation rephrase dictionary for gpt-image-2 prompts.
  *
  * OpenAI's content policy flags common game-management vocabulary even
  * when it's clearly non-violent context. A space-station sim has a lot
@@ -8,7 +8,7 @@
  *
  * This module:
  *   1) Ships a baseline rephrase map that covers the vocabulary likely
- *      to hit gpt-image-1 400s on this project.
+ *      to hit gpt-image-2 400s on this project.
  *   2) Exports a `rephrasePrompt(prompt)` helper that applies the map
  *      (case-insensitive, word-boundary) and RETURNS BOTH the rephrased
  *      text and a diff log. The caller logs the diff so awfml can see

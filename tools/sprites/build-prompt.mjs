@@ -1,8 +1,8 @@
 /**
- * Structured prompt builder for gpt-image-1.
+ * Structured prompt builder for gpt-image-2.
  *
  * Wraps the per-key `prompt` string from `sprite-spec.yaml` with a
- * consistent envelope that steers gpt-image-1 toward:
+ * consistent envelope that steers gpt-image-2 toward:
  *   - pixel-art style (not photographic / illustration)
  *   - transparent background (sprite atlases composite on grids)
  *   - reference-image adherence (the caller passes awfml's mockup in
@@ -36,7 +36,7 @@ const PROMPT_TAIL = [
 ].join(' ');
 
 /**
- * Build a complete gpt-image-1 prompt for a given sprite-spec key.
+ * Build a complete gpt-image-2 prompt for a given sprite-spec key.
  *
  * @param {object} spec    parsed contents of sprite-spec.yaml
  * @param {string} key     sprite-spec key (e.g. "tile.floor", "agent.crew")
