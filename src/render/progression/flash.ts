@@ -1,13 +1,14 @@
 // Tier-transition flash overlay — the "you unlocked X!" moment.
 //
-// Full-viewport momentary overlay that appears when the player advances to a
-// new tier. Lists the items newly available. Dismisses after ~3.5s OR on
-// click/tap. Non-blocking: the game underneath stays interactive.
+// Full-viewport modal overlay that appears when the player advances to a
+// new tier. Lists the items newly available. Stays up until the user
+// clicks to dismiss (no auto-dismiss — the owner wants to screenshot the
+// achievement). Consumer typically pauses the sim in `onShow` and restores
+// the prior pause state in `onDismiss`.
 //
 // Design intent (from progression.html): reward + redirect attention. The
-// flash shouldn't interrupt play — it should make the player notice the new
-// stuff in the build palette. Short, un-dismissable-by-keyboard-accident,
-// no modal dialog.
+// flash is modal — darker backdrop, waits for a click — so the player can
+// read the unlocked list and capture the moment.
 
 import type { TierTransitionSpec } from './types';
 
@@ -15,15 +16,21 @@ let activeOverlay: HTMLDivElement | null = null;
 
 /**
  * Show the tier-transition flash. Returns a Promise that resolves when the
- * overlay fades out (either timer-based or user-dismissed). Safe to call
- * while another flash is mid-animation — the in-flight one is dismissed
- * immediately and replaced (no stacking).
+ * overlay fades out (user-dismissed via click). Safe to call while another
+ * flash is mid-animation — the in-flight one is dismissed immediately and
+ * replaced (no stacking). If an `onDismiss` was set on the replaced spec,
+ * it is invoked as part of that teardown so the caller's pause-state
+ * bookkeeping stays balanced.
  */
 export function showTierTransition(spec: TierTransitionSpec): Promise<void> {
-  // Tear down any previous overlay so we don't stack animations.
+  // Tear down any previous overlay so we don't stack animations. Fire its
+  // onDismiss so pause state doesn't get stuck if two advances land
+  // back-to-back.
   if (activeOverlay) {
+    const prevDismiss = (activeOverlay as unknown as { _onDismiss?: () => void })._onDismiss;
     activeOverlay.remove();
     activeOverlay = null;
+    if (prevDismiss) prevDismiss();
   }
 
   const overlay = document.createElement('div');
@@ -47,7 +54,7 @@ export function showTierTransition(spec: TierTransitionSpec): Promise<void> {
       <div class="progression-flash__meta">${tierLabel}</div>
       ${themeRow}
       ${unlockedSection}
-      <div class="progression-flash__hint">tap to dismiss</div>
+      <div class="progression-flash__hint">click to continue</div>
     </div>
   `;
   document.body.appendChild(overlay);
@@ -59,9 +66,25 @@ export function showTierTransition(spec: TierTransitionSpec): Promise<void> {
   void overlay.offsetWidth;
   overlay.classList.add('progression-flash--visible');
 
+  // Fire onShow *after* mount so the consumer's side-effect (pausing the
+  // sim) lines up with the frame the overlay becomes visible on.
+  spec.onShow?.();
+
   return new Promise<void>((resolve) => {
+    let dismissed = false;
     const teardown = (): void => {
-      if (overlay !== activeOverlay) return;  // already replaced; caller's resolve was handled
+      if (dismissed) return;
+      dismissed = true;
+      // Clear the stashed dismiss handler BEFORE invoking it, so a concurrent
+      // replacement flash doesn't re-enter this same path.
+      (overlay as unknown as { _onDismiss?: () => void })._onDismiss = undefined;
+      spec.onDismiss?.();
+      if (overlay !== activeOverlay) {
+        // Replaced by a newer flash — DOM + activeOverlay already handled
+        // by the replacer; just resolve.
+        resolve();
+        return;
+      }
       overlay.classList.remove('progression-flash--visible');
       // Give the fade-out a beat, then remove from DOM.
       setTimeout(() => {
@@ -70,11 +93,10 @@ export function showTierTransition(spec: TierTransitionSpec): Promise<void> {
         resolve();
       }, 300);
     };
-    const timer = window.setTimeout(teardown, 3500);
-    overlay.addEventListener('click', () => {
-      clearTimeout(timer);
-      teardown();
-    });
+    // Stash a reference so the replacement path above can fire this
+    // spec's onDismiss without having to re-enter `teardown`.
+    (overlay as unknown as { _onDismiss?: () => void })._onDismiss = teardown;
+    overlay.addEventListener('click', teardown);
   });
 }
 

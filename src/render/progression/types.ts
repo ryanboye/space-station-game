@@ -68,4 +68,13 @@ export interface TierTransitionSpec {
   /** Optional — PROGRESSION_TOOLTIP_COPY[toTier].theme. Renders as a
    *  subtitle in the flash card. Skipped if empty. */
   readonly tierTheme?: string;
+  /** Optional — invoked exactly once, immediately after the overlay is
+   *  mounted. Consumer uses this to pause the sim so the achievement card
+   *  can be read / screenshotted without the background advancing. */
+  readonly onShow?: () => void;
+  /** Optional — invoked exactly once, when the user dismisses the overlay
+   *  by clicking. Consumer uses this to restore whatever pause state was
+   *  active before `onShow` ran (resume if the player was playing, stay
+   *  paused if they had already paused manually). */
+  readonly onDismiss?: () => void;
 }

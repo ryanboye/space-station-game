@@ -154,15 +154,27 @@ export function maybeFireTierFlash(
     if (req > prevTier && req <= now) newlyUnlockedRooms.push(roomStr);
   }
   const labels = labelFor?.(now);
+  // Capture the player's pause state at the moment the flash opens so we
+  // can restore it on dismiss — if they were already paused, we don't want
+  // to yank them back into play.
+  let wasPaused = false;
   // Fire the flash. Deliberately fire-and-forget — if the player triggers
   // two advances in rapid succession, the second flash dismisses the first
-  // (tooltip.ts::showTierTransition handles that internally).
+  // (flash.ts::showTierTransition handles that internally, including
+  // invoking the replaced spec's onDismiss so pause state stays balanced).
   void showTierTransition({
     fromTier: prevTier,
     toTier: now,
     unlockedNames: newlyUnlockedRooms.map(nameFor),
     tierName: labels?.name,
     tierTheme: labels?.theme,
+    onShow: () => {
+      wasPaused = state.controls.paused;
+      state.controls.paused = true;
+    },
+    onDismiss: () => {
+      state.controls.paused = wasPaused;
+    },
   });
   return now;
 }
