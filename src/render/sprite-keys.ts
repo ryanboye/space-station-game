@@ -13,10 +13,17 @@ export const TILE_SPRITE_KEYS: Record<TileType, string> = {
   [TileType.Door]: 'tile.door'
 };
 
+// Wall-variant → atlas-key map. `straight` is the canonical horizontal
+// orientation (east-west run); `straight.vertical` is its dedicated
+// north-south counterpart — previously we rotated `straight` 90° but the
+// semi-3D depth cues (top-face rim light + drop shadow south) don't
+// survive rotation, so vertical walls looked broken. Separate sprite
+// with rotation=0 fixes it.
 export const WALL_SPRITE_VARIANT_KEYS = {
   solo: 'tile.wall.solo',
   end: 'tile.wall.end',
   straight: 'tile.wall.straight',
+  'straight.vertical': 'tile.wall.straight.vertical',
   corner: 'tile.wall.corner',
   tee: 'tile.wall.tee',
   cross: 'tile.wall.cross'
