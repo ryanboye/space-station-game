@@ -2408,16 +2408,35 @@ speedUpBtn.addEventListener('click', () => {
   refreshTransportUi();
 });
 
+// Button-label sync runs at click-time, not per-frame — these labels
+// only change on click, and the frame() loop reassigning ~5 textContent
+// props each tick was pure waste (~60Hz × 5 DOM writes).
+function syncToggleLabels(): void {
+  toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
+  toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
+  toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
+    ? 'Inventory Overlay: ON'
+    : 'Inventory Overlay: OFF';
+  toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
+  toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
+    ? 'Force Fallback: ON'
+    : 'Force Fallback: OFF';
+}
+syncToggleLabels();
+
 toggleZonesBtn.addEventListener('click', () => {
   state.controls.showZones = !state.controls.showZones;
+  syncToggleLabels();
 });
 
 toggleServiceNodesBtn.addEventListener('click', () => {
   state.controls.showServiceNodes = !state.controls.showServiceNodes;
+  syncToggleLabels();
 });
 
 toggleInventoryOverlayBtn.addEventListener('click', () => {
   state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+  syncToggleLabels();
 });
 
 toggleSpritesBtn.addEventListener('click', () => {
@@ -2427,10 +2446,12 @@ toggleSpritesBtn.addEventListener('click', () => {
       spriteAtlas = loaded;
     });
   }
+  syncToggleLabels();
 });
 
 toggleSpriteFallbackBtn.addEventListener('click', () => {
   state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
+  syncToggleLabels();
 });
 
 // Pipeline toggle removed with the pixellab rip-out. Single-atlas runtime
@@ -2842,15 +2863,6 @@ function frame(now: number): void {
   const renderStart = performance.now();
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
   state.metrics.renderMs = performance.now() - renderStart;
-  toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
-  toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
-  toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
-    ? 'Inventory Overlay: ON'
-    : 'Inventory Overlay: OFF';
-  toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
-  toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
-    ? 'Force Fallback: ON'
-    : 'Force Fallback: OFF';
   // Toolbar reflects active tool (any kind) and locked state (room+module
   // per current unlock tier). Called every frame — ~40 DOM attribute
   // toggles, cheap.
