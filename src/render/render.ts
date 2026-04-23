@@ -1376,8 +1376,12 @@ export function renderWorld(
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const roomType = state.rooms[i];
+    // Inactive-room dim. Dropped from 0.45 -> 0.22 per awfml 2026-04-23:
+    // at 0.45 this wiped 45% of the sprite color, which combined with the
+    // red-wash below produced aggregate rust. 0.22 still reads as "this
+    // room is inactive" without flattening texture variety.
     if (roomType !== RoomType.None && !activeRoomTiles.has(i)) {
-      ctx.fillStyle = 'rgba(8, 14, 22, 0.45)';
+      ctx.fillStyle = 'rgba(8, 14, 22, 0.22)';
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
 
@@ -1387,8 +1391,15 @@ export function renderWorld(
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
 
+    // Depressurized-tile red wash. Dropped from 0.22 -> 0.08 per awfml
+    // 2026-04-23: at 0.22 this pass composited with the dim-inactive pass
+    // (0.45) turned every room rust-brown ("pokemon red") whenever atmos
+    // flagged interior tiles as vacuum-reachable (which happens by default
+    // on demo-station because doors aren't pressure barriers in the current
+    // sim model). 0.08 keeps the diagnostic signal without dominating the
+    // aesthetic.
     if (state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall && !state.pressurized[i]) {
-      ctx.fillStyle = 'rgba(160, 40, 40, 0.22)';
+      ctx.fillStyle = 'rgba(160, 40, 40, 0.08)';
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
 
