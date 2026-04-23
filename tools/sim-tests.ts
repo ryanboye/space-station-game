@@ -1822,6 +1822,65 @@ function testUnlockTier2RequiresLogisticsSignal(): void {
   assertCondition(getUnlockTier(state) >= 2, 'Tier 2 should unlock after net credits and logistics jobs thresholds are met.');
 }
 
+function testUnlockTier3TriggersOnTradeCycle(): void {
+  const state = createInitialState({ seed: 5104 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 2);
+  state.controls.paused = true;
+  tick(state, 0);
+  assertCondition(getUnlockTier(state) === 2, 'Tier 3 should not unlock without a trade cycle.');
+  state.metrics.tradeCyclesCompletedLifetime = 1;
+  tick(state, 0);
+  assertCondition(getUnlockTier(state) >= 3, 'Tier 3 should unlock when tradeCyclesCompletedLifetime >= 1.');
+}
+
+function testUnlockTier4TriggersOnResolvedIncident(): void {
+  const state = createInitialState({ seed: 5105 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  state.controls.paused = true;
+  tick(state, 0);
+  assertCondition(getUnlockTier(state) === 3, 'Tier 4 should not unlock without a resolved incident.');
+  state.metrics.incidentsResolvedLifetime = 1;
+  tick(state, 0);
+  assertCondition(getUnlockTier(state) >= 4, 'Tier 4 should unlock when incidentsResolvedLifetime >= 1.');
+}
+
+function testRebuildDockEntitiesPreservesAllowedShips(): void {
+  const state = createInitialState({ seed: 5106 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 11);
+  setDockAllowedShipType(state, dockId, 'industrial', true);
+  setDockPurpose(state, dockId, 'residential');
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.allowedShipTypes.includes('industrial'), 'Setup: dock should accept industrial.');
+  assertCondition(dockBefore.purpose === 'residential', 'Setup: dock purpose should be residential.');
+  const preservedShipTypes = [...dockBefore.allowedShipTypes];
+  // Paint a Dock tile adjacent to extend the cluster. setTile triggers
+  // rebuildDockEntities; the merged dock should preserve the inherited
+  // allowedShipTypes + purpose via the byAnyTile reconciliation loop
+  // at sim.ts:2185.
+  const adjacentTile = toIndex(state.width - 1, 12, state.width);
+  setTile(state, adjacentTile, TileType.Dock);
+  const dockAfter = state.docks.find((d) => d.tiles.includes(dockBefore.anchorTile));
+  assertCondition(!!dockAfter, 'Rebuilt dock should still exist at original anchor.');
+  if (!dockAfter) return;
+  for (const shipType of preservedShipTypes) {
+    assertCondition(
+      dockAfter.allowedShipTypes.includes(shipType),
+      `Rebuilt dock should preserve ${shipType} in allowedShipTypes through topology change.`
+    );
+  }
+  assertCondition(
+    dockAfter.purpose === 'residential',
+    'Rebuilt dock should preserve purpose through topology change.'
+  );
+  assertCondition(
+    dockAfter.tiles.length >= 2,
+    'Rebuilt dock should cluster with the new adjacent tile.'
+  );
+}
+
 function testTier0ShipServicesIgnoreLockedDemands(): void {
   const state = createInitialState({ seed: 51035 });
   buildHabitat(state);
@@ -2141,6 +2200,9 @@ function run(): void {
   testUnlockTier0StartsConstrained();
   testUnlockTier1TriggersAfterStability();
   testUnlockTier2RequiresLogisticsSignal();
+  testUnlockTier3TriggersOnTradeCycle();
+  testUnlockTier4TriggersOnResolvedIncident();
+  testRebuildDockEntitiesPreservesAllowedShips();
   testTier0ShipServicesIgnoreLockedDemands();
   testMilitaryShipPenalizesLowSecurity();
   testColonistShipBoostsConversionWhenHousingValid();
