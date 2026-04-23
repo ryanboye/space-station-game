@@ -1,7 +1,7 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-23 05:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `a454114`.*
+*Last updated: 2026-04-23 06:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `15f893b`.*
 
 ### Current milestone
 **M1.1 Hardening — in progress.** M1 tutorial loop is live + verified. Post-deploy 4-agent whole-repo review (2026-04-22) surfaced a correctness bundle + dead-code sweep + architecture hygiene; most has shipped (PRs #29–#39). Nano-banana generator pipeline RIPPED OUT (#36) after it broke the curated atlas — sprite pipeline v2 design doc awaiting awfml decisions at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>.
@@ -76,6 +76,10 @@
 | #64 | `64bdd81` | test — split-with-docked-ship reference preservation |
 | #65 | `9ccc6ca` | feat(ui) — dev-mode time-to-tier overlay (?dev=1) |
 | #66 | `a454114` | test — three-way dock split dedupes ids across consumedIds Set |
+| #67 | `fd6041b` | docs(plan) — §0 refresh post run-3 fires 1-5 (#60-#66) |
+| #68 | `07c606d` | test — decouple SHIP_MIN_DOCK_AREA from cluster-size test + 3-way keeper invariant |
+| #69 | `aecc339` | test — dock-split coverage sweep (asymmetric + 3-way+ship + shrink-downgrade) |
+| #70 | `15f893b` | chore(sim) — prune unused setModule from public-API barrel |
 
 ### Open PRs
 - **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw). Static debug page, non-blocking.
@@ -92,18 +96,20 @@
 6. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
 7. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox, no new content required. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning knobs).
 8. **Dead-code follow-up (out of last sweep)** — ~~`UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`~~ (shipped #47); `tierRequirementText` single-source the fallback chain. Small hygiene.
-9. **Dock-entities follow-ups (from PR #53 4-agent ritual)** — ~~split-with-docked-ship~~ (shipped #64), ~~three-way split~~ (shipped #66), (c) decouple `SHIP_MIN_DOCK_AREA` thresholds from hardcoded 2/4/7 in cluster-size test — still open.
-10. **Dock-test coverage gaps surfaced by #66 review** — asymmetric 1+1+3 split shape, `occupiedByShipId` inheritance at 3-way scale, `allowedShipSizes` downgrade on split, explicit smallest-index-keeper invariant assertion. Batch-able as one follow-up PR.
-11. **Dev-mode telemetry JSONL emit** (from #65 brainstorm) — `buildDevTierOverlayString` already exported pure; layer a change-detector + JSONL stdout emit on tier advance. ~20-30 LoC. Awaiting awfml greenlight on the `?telemetry=1` gate, but #65 shipped the display piece of this independently.
+9. **Dock-entities follow-ups (from PR #53 ritual)** — ~~all 3 shipped~~ (#64 split-with-ship, #66 three-way, #68 threshold-decouple).
+10. **Dock-test coverage gaps (from #66 review)** — ~~3 batched shipped~~ (#69: asymmetric + 3-way-phantom-occupancy + shrink-downgrade). Remaining: ship.bayTiles stale-reference post-split (needs sim fix, not just test).
+11. **Dev-mode telemetry JSONL emit** (from #65 brainstorm) — `buildDevTierOverlayString` already exported pure; layer a change-detector + JSONL stdout emit on tier advance. ~20-30 LoC. Awaiting awfml greenlight on the `?telemetry=1` gate.
+12. **`?scenario=<name>` cold-start loader** (from #70-adjacent brainstorm) — thin-spec whitelisted fixtures (`t1-ready`, `t5-ready`, `t6-trophy`) layered on starter state. Playtest-velocity win, pairs with `?dev=1` overlay. ~60 LoC. BMO endorsed.
 
-### Recent activity snapshot (2026-04-23 02:50Z – 05:45Z, PM-loop run 3 fires 1–5)
-- **7 PRs merged** (#62, #63, #64, #65, #66 by tinyclaw + #60, #61 by BMO)
-- **Popup pause UX** (#60 BMO) — tier-flash now pauses sim + requires click-dismiss + modal backdrop
-- **HUD cleanup** (#61 BMO) — sidebar hotkey + legend panels removed, persistent top-strip shows power/oxygen/credits/crew/visitors
-- **Perf cache** (#62) — sprite-status DOM writes collapsed to change-detection (~120 no-op writes/sec eliminated)
-- **Integration test gap closed** (#63) — T1 archetype diversity regression guard; would have surfaced awfml's "is T2 reachable?" question instantly
-- **Dock correctness tests** (#64, #66) — split-with-docked-ship + three-way split, filling 2/3 of the PR #53 review follow-ups
-- **Dev observability** (#65) — `?dev=1` time-to-tier overlay, pure helper exported for future JSONL telemetry hook
+### Recent activity snapshot (2026-04-23 02:50Z – 06:45Z, PM-loop run 3 all 10 fires)
+- **11 PRs merged** (9 by tinyclaw: #62-#70 excluding #65 which tinyclaw wrote but BMO merged; + 2 by BMO: #60, #61)
+- **PM-loop meta-goal achieved** — PR shape shifted from sprite-pipeline infrastructure (run 2) to sim correctness + simplification + test coverage (run 3). 6 test PRs, 2 UX PRs, 2 perf/hygiene PRs, 2 docs.
+- **All 3 dock-entities #53 follow-ups closed** (#64 split-with-ship, #66 three-way, #68 threshold-decouple) + 3 additional gaps from #66 review shipped (#69 sweep: asymmetric + phantom-occupancy + shrink-downgrade).
+- **Popup pause UX** (#60 BMO) + **HUD cleanup** (#61 BMO) — shipped early in the run.
+- **Dev observability** (#65) — `?dev=1` time-to-tier overlay, `buildDevTierOverlayString` exported pure for future JSONL telemetry.
+- **Archetype regression guard** (#63) — would have surfaced awfml's "is T2 reachable?" in one glance.
+- **Barrel hygiene** (#70) — pruned dead setModule re-export.
+- **Brainstorms queued for awfml**: `?telemetry=1` JSONL emit, `?scenario=<name>` cold-start fixture loader.
 
 ### Risks / open questions
 - Phase 5 predicate (T5) uses a proxy (`actorsTreatedLifetime++` on health-state recovery to `healthy`) until Phase 5 producer events land. Proxy is monotonic + works, but semantically "treatments ≠ treatees".
