@@ -142,11 +142,16 @@
   justify-content: center;
   z-index: 10000;
   pointer-events: none;
-  background: radial-gradient(
-    circle at center,
-    rgba(201, 168, 76, 0.18) 0%,
-    rgba(11, 13, 18, 0) 70%
-  );
+  /* Modal backdrop: darker semi-opaque scrim so the card reads cleanly in
+   * screenshots, with the gold radial glow layered on top to keep the
+   * celebratory vibe. */
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(201, 168, 76, 0.18) 0%,
+      rgba(11, 13, 18, 0) 70%
+    ),
+    rgba(5, 8, 12, 0.72);
   opacity: 0;
   transition: opacity 0.35s ease-out;
 }
