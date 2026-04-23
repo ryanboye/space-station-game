@@ -35,32 +35,23 @@ export const FX_SPRITE_KEYS = {
   incidentTrespass: 'fx.incident_trespass'
 } as const;
 
+// Dock facade is 4 canonical sprites (authored in NORTH orientation).
+// East/south/west render-time-rotated from the same set. seb's review pass
+// caught that the gen pipeline silently duplicated 14 of 16 direction-specific
+// sprites — collapsing to 4 + rotation eliminates that surface area.
 export const DOCK_OVERLAY_SPRITE_KEYS = {
-  north: {
-    solo: 'overlay.dock.facade.north.solo',
-    start: 'overlay.dock.facade.north.start',
-    middle: 'overlay.dock.facade.north.middle',
-    end: 'overlay.dock.facade.north.end'
-  },
-  east: {
-    solo: 'overlay.dock.facade.east.solo',
-    start: 'overlay.dock.facade.east.start',
-    middle: 'overlay.dock.facade.east.middle',
-    end: 'overlay.dock.facade.east.end'
-  },
-  south: {
-    solo: 'overlay.dock.facade.south.solo',
-    start: 'overlay.dock.facade.south.start',
-    middle: 'overlay.dock.facade.south.middle',
-    end: 'overlay.dock.facade.south.end'
-  },
-  west: {
-    solo: 'overlay.dock.facade.west.solo',
-    start: 'overlay.dock.facade.west.start',
-    middle: 'overlay.dock.facade.west.middle',
-    end: 'overlay.dock.facade.west.end'
-  }
+  solo: 'overlay.dock.facade.north.solo',
+  start: 'overlay.dock.facade.north.start',
+  middle: 'overlay.dock.facade.north.middle',
+  end: 'overlay.dock.facade.north.end'
 } as const;
+
+export const DOCK_FACADE_ROTATION: Record<'north' | 'east' | 'south' | 'west', 0 | 90 | 180 | 270> = {
+  north: 0,
+  east: 90,
+  south: 180,
+  west: 270
+};
 
 export const FLOOR_GRIME_SPRITE_KEYS = [
   'overlay.floor.grime.1',
