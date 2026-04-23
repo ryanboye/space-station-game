@@ -35,14 +35,14 @@ a { color: #c9a84c; }
 <body>
 
 <h1>Starter State Refactor</h1>
-<p class="meta">space-station-game · design doc v1 · draft 2026-04-23 · author: seb, requested by BMO</p>
+<p class="meta">space-station-game · design doc <strong>v2</strong> · draft 2026-04-23 · author: seb, requested by BMO · v2 iteration incorporates BMO's 5 review notes + tinyclaw's LifeSupport-activation + coord calls</p>
 
 <h2>TL;DR</h2>
 <p>
 Tinyclaw's fire 3/10 run 2 (<code>option B: starter food chain pre-place</code>) discovered a real scope ceiling: pre-placing rooms in <code>createInitialState</code> is <em>not</em> single-PR work because activating a room requires firing the same pipeline that normally only runs inside the live tick loop (size checks, module requirements, pressurization flood-fill, staff assignment, job-queue priming). She aborted her attempt cleanly and flagged the finding; BMO suggested a design doc.
 </p>
 <p>
-This doc breaks the refactor into <strong>4 sequenced PRs</strong>. Each is reviewable on its own, leaves the game playable after merge, and sets up the next. Total estimated scope: 3-4 days of focused work by one claw plus review cycles. <strong>Gated on awfml's tutorial-pacing answer</strong> (the right end state depends on what T0 should <em>feel</em> like for a first-time player).
+This doc breaks the refactor into <strong>4 sequenced PRs</strong>, plus a cleanup PR-5 (<code>main.ts</code> dock-placement fold) and a conditional PR-6 (scenario-fixture audit if &gt;10 fixtures affected). Each is reviewable on its own, leaves the game playable after merge, and sets up the next. Total estimated scope: 3-4 days of focused work by one claw plus review cycles. <strong>Gated on awfml's tutorial-pacing answer</strong> (the right end state depends on what T0 should <em>feel</em> like for a first-time player).
 </p>
 
 <div class="callout">
@@ -102,7 +102,7 @@ Extract the per-tick activation sequencing from <code>tick()</code> into a calla
 <p>
 <strong>This PR does NOT change what happens at runtime.</strong> It just factors the existing in-tick call sequence into a named function. Tick still calls it on topology changes; <code>createInitialState</code> doesn't call it yet (that's PR-2).
 </p>
-<p><strong>Acceptance</strong>: all existing sim-tests pass. Add one new test: <code>testRunActivationPipelineIdempotent</code> — call it twice in a row on a quiescent state, assert the state hash is bit-identical.</p>
+<p><strong>Acceptance</strong>: all existing sim-tests pass. Add one new test: <code>testRunActivationPipelineIdempotent</code> — call it twice in a row on a quiescent state, assert the state is deep-equal via sorted-keys JSON serialization (Sets/Maps don't serialize deterministically otherwise; per BMO's v2 note). Alternative bar if that trips on hidden non-determinism: "all <code>state.metrics</code> + all actor positions + all <code>state.tiles</code> entries identical" — same regression coverage, fewer false negatives.</p>
 </div>
 
 <div class="pr">
@@ -112,10 +112,10 @@ Extract the per-tick activation sequencing from <code>tick()</code> into a calla
 Extend <code>createInitialState</code> to:
 </p>
 <ol>
-<li>Paint a <code>RoomType.LifeSupport</code> cell adjacent to the reactor core (suggested: 3×3 at (coreX+3, coreY-1) through (coreX+5, coreY+1), with its own wall border + door back into the main corridor)</li>
-<li>Place a <code>ModuleType.AirScrubber</code> (or whichever satisfies LifeSupport's activation predicate) inside it</li>
-<li>Ensure Reactor room's required module (<code>ModuleType.Reactor</code>?) is placed at the core-center tile</li>
-<li>Call the new <code>runActivationPipeline(state)</code> before returning — so the state leaves <code>createInitialState</code> already activated</li>
+<li>Paint a <code>RoomType.LifeSupport</code> cluster as a <strong>separate room from Reactor</strong> (not shared-wall, per tinyclaw's call — keeps activation semantics clean). Tinyclaw's tentative coords: <code>x = 25..28, y = 22..23</code> (8 tiles, bottom row of the 10×10 interior patch, 3-side wall-adjacent for cheap pressurization). Needs its own door back to the main corridor.</li>
+<li><strong>No module required.</strong> Per tinyclaw (confirmed against <code>balance.ts:202</code>): <code>RoomType.LifeSupport</code> has <code>requiredModules: []</code> + <code>requiredAnyOf: []</code> + <code>minTiles: 6</code>. Activation is pure geometry (sealed room + door + pressurization + path). The v1 of this doc suggested <code>ModuleType.AirScrubber</code>; that module doesn't exist — strike it.</li>
+<li>Ensure Reactor room's required module (<code>ModuleType.Reactor</code>, confirm exact name against <code>balance.ts</code> when writing the PR) is placed at the core-center tile.</li>
+<li>Call the new <code>runActivationPipeline(state)</code> before returning — so the state leaves <code>createInitialState</code> already activated.</li>
 </ol>
 <p>
 <strong>Result</strong>: cold-start state has air, pressure holds, Reactor is Active, LifeSupport is Active. Crew spawned on first tick survives indefinitely with zero player action.
@@ -160,10 +160,12 @@ Connectivity: Hydroponics and Kitchen on one side of the reactor, Cafeteria adja
 Extend <code>createInitialState</code> to:
 </p>
 <ol>
-<li>Populate <code>state.crewMembers</code> with 3 crew (not the current lazy-on-first-tick 8; smaller starting crew keeps T0 legible per BMO's pacing brainstorm). Spawn at designated tiles near the reactor core, default <code>healthState: 'healthy'</code>, no pre-set Phase-5 condition state so the upcoming spec stays clean.</li>
+<li>Populate <code>state.crewMembers</code> with <strong>3 crew</strong> (tinyclaw confirmed 2026-04-23: "8 is payroll-pressure + information overload for a tutorial; 3 shows what crew does without swamping the player. hire up naturally"). Replaces the current lazy-on-first-tick <code>ensureCrewPopulation</code> cap of 8. Spawn at designated tiles near the reactor core, default <code>healthState: 'healthy'</code>, no pre-set Phase-5 condition state so the upcoming spec stays clean.</li>
 <li>Seed <code>state.jobs</code> with the initial set that <code>rebuildJobQueue</code> would produce after PR-3's rooms activate: "staff kitchen", "staff cafeteria", "staff hydroponics". Crew pick these up on first tick instead of idling.</li>
 <li>Update the lazy-populate path in <code>ensureCrewPopulation</code> so it NO-OPs if <code>state.crewMembers.length &gt; 0</code> on entry. Backwards-compat for any path that still expects lazy spawn.</li>
 </ol>
+<p>
+<strong>Player-visible state delta heads-up</strong> (per BMO's v2 note #3): the 8→3 crew change is not purely internal — it shows in the crew list sidebar, the payroll metric, and any sim-metric widget that counts actors. Scenario fixtures that reference <code>crew.total === 8</code> or count crew actors will need updates. Rolls into Risk #4's audit (flagged below as potentially PR-sized).</p>
 <p>
 <strong>Result</strong>: first tick has 3 crew walking to assigned jobs. First visitor can arrive and get served. The tutorial's opening beat is "watch the station breathe" rather than "figure out why nothing's happening."
 </p>
@@ -175,7 +177,7 @@ Extend <code>createInitialState</code> to:
 <li><strong>Tutorial-pacing coupling.</strong> If awfml picks "T0 must hold for 30s regardless of event," PR-4's crew-job-seed + PR-3's food-chain-activation might fire T0→T1 faster than intended. Mitigation: add a `minTierDwellSec` gate in the unlock predicate, configurable.</li>
 <li><strong>Save-format migration.</strong> Old saves pre-refactor expect lazy crew spawning. <code>hydrateStateFromSave</code> must NOT call <code>runActivationPipeline</code> (saves are already-activated snapshots). Enforce with a separate <code>createPreActivatedState</code> / <code>hydrateToActiveState</code> split if needed.</li>
 <li><strong>Determinism.</strong> Adding rooms + crew to the starter state expands the seed's effect surface. Bit-identical save-roundtrip tests must pass with the new starter before merging PR-2+.</li>
-<li><strong>Scenario fixtures</strong> currently assume a bare starter. <code>ghost-town.json</code>, <code>isolation.json</code>, etc. need audit — any that assumed "zero rooms + zero crew" as their baseline need explicit teardown in their <code>layout</code> section.</li>
+<li><strong>Scenario fixtures</strong> currently assume a bare starter. <code>ghost-town.json</code>, <code>isolation.json</code>, etc. need audit — any that assumed "zero rooms + zero crew" as their baseline need explicit teardown in their <code>layout</code> section. <strong>Per BMO's v2 note #5:</strong> if the audit uncovers 10+ affected fixtures, the update may itself be PR-sized — split off as PR-6 with its own review burden rather than bundling into PR-2/3/4.</li>
 </ul>
 
 <h2>Non-goals (punt)</h2>
@@ -191,7 +193,8 @@ Extend <code>createInitialState</code> to:
 <li>Ship PR-1 first — refactor only, zero behavior change. Validates the activation-pipeline-extraction shape.</li>
 <li>Gate PR-2 merge on awfml's tutorial-pacing answer (to avoid redoing the T0-timing calibration later).</li>
 <li>PR-3 + PR-4 can ship independently after PR-2, in either order. PR-4 depends on PR-3 only for the <code>jobs</code> seed (if PR-3 hasn't shipped, PR-4 skips the food-chain jobs + only seeds crew).</li>
-<li>After all 4 merge, remove PR #20's post-<code>createInitialState</code> <code>setTile</code> dock-placement from <code>main.ts</code> — fold into <code>createInitialState</code> itself for consistency.</li>
+<li><strong>PR-5 — `main.ts` cleanup</strong> (promoted from trailing bullet per BMO's v2 note #4). Remove PR #20's post-<code>createInitialState</code> <code>setTile</code> dock-placement from <code>main.ts</code> — fold into <code>createInitialState</code> itself for consistency. Its own PR with its own test burden: verify PR #20's existing dock behavior doesn't regress (spawn visitor, confirm dock assignment + approach-tile pathing works unchanged).</li>
+<li><strong>PR-6 — scenario-fixture audit</strong> (conditional, per BMO's v2 note #5). If Risk #4's audit finds &gt;N fixtures affected (rough threshold: 10), carve out a dedicated cleanup PR rather than bloating PR-2/3/4 reviews with fixture updates. If the audit is small (&lt; 10 fixtures), inline into the relevant behavior-change PR.</li>
 </ol>
 
 <h2>Open questions for review</h2>
