@@ -678,6 +678,37 @@ function testActivationChecksPreserved(): void {
   );
 }
 
+function testDoorsArePressureBarriers(): void {
+  // Sealed room + one door must pressurize — doors are airlocks, not leaks.
+  const state = createInitialState({ seed: 9001 });
+  const x1 = 2;
+  const y1 = 2;
+  const x2 = 6;
+  const y2 = 6;
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      const idx = toIndex(x, y, state.width);
+      const onPerimeter = x === x1 || x === x2 || y === y1 || y === y2;
+      setTile(state, idx, onPerimeter ? TileType.Wall : TileType.Floor);
+    }
+  }
+  const doorX = Math.floor((x1 + x2) / 2);
+  const doorIdx = toIndex(doorX, y2, state.width);
+  setTile(state, doorIdx, TileType.Door);
+
+  runFor(state, 1);
+
+  const interiorIdx = toIndex(x1 + 2, y1 + 2, state.width);
+  assertCondition(
+    state.pressurized[interiorIdx] === true,
+    'Sealed room interior should be pressurized once doors count as barriers.'
+  );
+  assertCondition(
+    state.pressurized[doorIdx] === true,
+    'Door tile in a sealed room should read as pressurized (built-walkable + not vacuum-reachable).'
+  );
+}
+
 function testLegacyBalanceSanity(): void {
   const state = createInitialState({ seed: 3009 });
   buildHabitat(state);
@@ -2777,6 +2808,7 @@ function run(): void {
   testServiceNodeUnreachableWarning();
   testLoungeModuleGating();
   testActivationChecksPreserved();
+  testDoorsArePressureBarriers();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
   testVisitorBerthsAcceptTrafficResidentialDoNot();

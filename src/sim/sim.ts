@@ -1772,6 +1772,7 @@ function computePressurization(state: StationState): void {
   const queue: number[] = [];
   const isPressureBarrier = (idx: number): boolean => {
     if (state.tiles[idx] === TileType.Wall) return true;
+    if (state.tiles[idx] === TileType.Door) return true;
     if (state.tiles[idx] === TileType.Dock && isOuterHullTile(state, idx)) return true;
     return false;
   };
