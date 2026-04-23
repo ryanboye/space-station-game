@@ -46,3 +46,20 @@ jobs:
 
       - name: Run sim tests
         run: npm run test:sim
+
+      - name: Install uv (for check-mobile.py)
+        uses: astral-sh/setup-uv@v6
+
+      - name: Mobile baseline gate (advisory)
+        # Advisory only — prints PASS/FAIL per checklist item against the
+        # built dist/index.html, but does NOT fail CI. Once the build
+        # reliably passes all 9 items we can flip `continue-on-error` off
+        # and make it a hard gate. See tools/check-mobile.py comments +
+        # /root/seb/skills/sebland-app/SKILL.md for the full checklist.
+        continue-on-error: true
+        run: |
+          if [ -f dist/index.html ]; then
+            uv run tools/check-mobile.py dist/index.html
+          else
+            echo "dist/index.html not found after build — skipping mobile gate."
+          fi
