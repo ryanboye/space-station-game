@@ -86,6 +86,8 @@ app.innerHTML = `
     <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
     <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
     <span class="topbar-spacer"></span>
+    <span id="autosave-status" class="topbar-note hidden" aria-live="polite"></span>
+    <button id="load-autosave" class="topbar-btn hidden">Load last session</button>
     <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
     <button id="camera-reset" class="topbar-btn">Fit Map</button>
   </div>
@@ -586,6 +588,8 @@ const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#to
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
+const autosaveStatusEl = document.querySelector<HTMLElement>('#autosave-status')!;
+const loadAutosaveBtn = document.querySelector<HTMLButtonElement>('#load-autosave')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
 const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
 const stationRatingEl = document.querySelector<HTMLSpanElement>('#station-rating')!;
@@ -1101,6 +1105,8 @@ const market = {
 
 const GAME_VERSION = '0.1.0';
 const SAVE_STORE_KEY = 'stationSim.saves.v1';
+const AUTOSAVE_KEY = 'spacegame-autosave';
+const AUTOSAVE_INTERVAL_MS = 60_000;
 const QUICKSAVE_ID = 'quicksave';
 const MAX_SAVE_SLOTS = 30;
 
@@ -3144,8 +3150,85 @@ function frame(now: number): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Autosave — ticks every AUTOSAVE_INTERVAL_MS, single slot at AUTOSAVE_KEY.
+// Opt-in load: player sees a "Load last session (saved HH:MM)" button on
+// arrival and decides whether to hydrate. Auto-loading on refresh would
+// override intentional reset attempts.
+
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+type AutosaveRecord = { savedAt: number; payloadText: string };
+
+function readAutosaveRecord(): AutosaveRecord | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(AUTOSAVE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AutosaveRecord>;
+    if (typeof parsed?.savedAt !== 'number' || typeof parsed?.payloadText !== 'string') return null;
+    return { savedAt: parsed.savedAt, payloadText: parsed.payloadText };
+  } catch {
+    return null;
+  }
+}
+
+function writeAutosave(): void {
+  try {
+    const record: AutosaveRecord = {
+      savedAt: Date.now(),
+      payloadText: serializeSave('__autosave__', state, GAME_VERSION)
+    };
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(record));
+    autosaveStatusEl.textContent = `Autosaved ${formatClock(record.savedAt)}`;
+    autosaveStatusEl.classList.remove('hidden');
+  } catch (err) {
+    // localStorage full, serialization error, or quota exhausted — log
+    // and continue. Autosave is a nice-to-have; never block the game.
+    console.warn('[autosave] skip tick:', err);
+  }
+}
+
+function offerAutosaveLoadOnColdStart(): void {
+  const record = readAutosaveRecord();
+  if (!record) return;
+  loadAutosaveBtn.textContent = `Load last session (saved ${formatClock(record.savedAt)})`;
+  loadAutosaveBtn.classList.remove('hidden');
+  loadAutosaveBtn.addEventListener(
+    'click',
+    () => {
+      const parsed = parseAndMigrateSave(record.payloadText);
+      if (!parsed.ok) {
+        loadAutosaveBtn.textContent = 'Autosave load failed';
+        return;
+      }
+      const hydrated = hydrateStateFromSave(parsed.save);
+      Object.assign(state, hydrated.state);
+      applyCanvasSize();
+      updateStageLayout();
+      centerViewportOnMapCenter();
+      clearUiSelectionsAfterLoad();
+      syncControlsToUiFromState();
+      refreshExpansionUi();
+      loadAutosaveBtn.classList.add('hidden');
+      autosaveStatusEl.textContent = `Autosaved ${formatClock(record.savedAt)} · loaded`;
+      autosaveStatusEl.classList.remove('hidden');
+    },
+    { once: true }
+  );
+}
+
 async function startGameLoop(): Promise<void> {
   spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
+  offerAutosaveLoadOnColdStart();
+  setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
   requestAnimationFrame(frame);
 }
 
