@@ -2172,31 +2172,45 @@ function rebuildDockEntities(state: StationState): void {
     for (const tile of dock.tiles) byAnyTile.set(tile, dock);
   }
   let maxId = state.docks.reduce((best, dock) => Math.max(best, dock.id), 0);
+  // Track inherited ids that have already been consumed by a new cluster.
+  // Fixes the dock-split-on-deletion case: when a middle tile is removed
+  // from a ≥3-tile dock, BOTH resulting clusters would otherwise inherit
+  // the same parent id via `byAnyTile.get()` → id collision in state.docks.
+  // First cluster keeps the original id; subsequent clusters fall through
+  // to `++maxId` since their lookup skips consumed ids.
+  const consumedIds = new Set<number>();
   const visited = new Set<number>();
   for (let i = 0; i < state.tiles.length; i++) {
     if (state.tiles[i] !== TileType.Dock || visited.has(i)) continue;
     const cluster = adjacentDockTiles(state, i).sort((a, b) => a - b);
     for (const tile of cluster) visited.add(tile);
     if (cluster.length === 0) continue;
-    const inherited = cluster.map((tile) => byAnyTile.get(tile)).find((d) => d !== undefined);
+    // Inherited metadata (purpose, allowedShipTypes, etc.) copies from
+    // ANY tile's parent dock — both halves of a split should remember
+    // the parent's settings. But the inherited ID can only be reused
+    // once per rebuild; subsequent splits get fresh maxId++.
+    const inheritedMeta = cluster.map((tile) => byAnyTile.get(tile)).find((d) => d !== undefined);
+    const inheritedId = inheritedMeta && !consumedIds.has(inheritedMeta.id) ? inheritedMeta.id : null;
     const anchorTile = cluster[0];
-    const facing = inherited?.facing ?? chooseDockFacingForPlacement(state, anchorTile) ?? 'north';
+    const facing = inheritedMeta?.facing ?? chooseDockFacingForPlacement(state, anchorTile) ?? 'north';
     const check = validateDockPlacementAt(state, anchorTile, facing);
     const maxSizeByArea = maxShipSizeForArea(cluster.length);
-    const allowedShipSizes = inherited?.allowedShipSizes?.filter((s) => shipSizesUpTo(maxSizeByArea).includes(s)) ?? shipSizesUpTo(maxSizeByArea);
+    const allowedShipSizes = inheritedMeta?.allowedShipSizes?.filter((s) => shipSizesUpTo(maxSizeByArea).includes(s)) ?? shipSizesUpTo(maxSizeByArea);
+    const newId = inheritedId ?? ++maxId;
+    consumedIds.add(newId);
     next.push({
-      id: inherited?.id ?? ++maxId,
-      purpose: inherited?.purpose ?? 'visitor',
+      id: newId,
+      purpose: inheritedMeta?.purpose ?? 'visitor',
       tiles: cluster,
       anchorTile,
       area: cluster.length,
       facing,
       lane: laneFromFacing(facing),
       approachTiles: check.approachTiles,
-      allowedShipTypes: inherited?.allowedShipTypes?.length ? [...inherited.allowedShipTypes] : ['tourist'],
+      allowedShipTypes: inheritedMeta?.allowedShipTypes?.length ? [...inheritedMeta.allowedShipTypes] : ['tourist'],
       allowedShipSizes: allowedShipSizes.length > 0 ? allowedShipSizes : ['small'],
       maxSizeByArea,
-      occupiedByShipId: inherited?.occupiedByShipId ?? null
+      occupiedByShipId: inheritedId !== null ? (inheritedMeta?.occupiedByShipId ?? null) : null
     });
   }
   const existingIds = new Set(next.map((d) => d.id));
