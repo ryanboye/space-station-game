@@ -36,6 +36,7 @@ import type { SpriteAtlas, SpriteFrame } from './sprite-atlas';
 import {
   AGENT_SPRITE_VARIANTS,
   DOCK_OVERLAY_SPRITE_KEYS,
+  DOCK_FACADE_ROTATION,
   FLOOR_GRIME_SPRITE_KEYS,
   FLOOR_WEAR_SPRITE_KEYS
 } from './sprite-keys-extended';
@@ -512,8 +513,9 @@ function drawDockFacadeOverlay(
   const py = p.y * TILE_SIZE;
   const segment =
     !hasPrev && !hasNext ? 'solo' : !hasPrev ? 'start' : !hasNext ? 'end' : 'middle';
-  const spriteKey = DOCK_OVERLAY_SPRITE_KEYS[dock.facing][segment];
-  drawSpriteByKey(ctx, spriteAtlas, spriteKey, px, py, TILE_SIZE * 2, TILE_SIZE * 2);
+  const spriteKey = DOCK_OVERLAY_SPRITE_KEYS[segment];
+  const rotation = DOCK_FACADE_ROTATION[dock.facing];
+  drawSpriteByKey(ctx, spriteAtlas, spriteKey, px, py, TILE_SIZE * 2, TILE_SIZE * 2, rotation);
 }
 
 type ShipCell = { x: number; y: number };
