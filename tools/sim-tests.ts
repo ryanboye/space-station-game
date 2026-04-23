@@ -21,6 +21,7 @@ import {
   sellMaterials,
   setRoom,
   setTile,
+  SHIP_MIN_DOCK_AREA,
   tick,
   tryPlaceModule
 } from '../src/sim/sim';
@@ -2081,6 +2082,15 @@ function testRebuildDockEntitiesThreeWaySplitDedupesIds(): void {
     keeperCount === 1,
     `3-way split: exactly one cluster should keep the parent id (got ${keeperCount}).`
   );
+  // Smallest-index-keeper invariant: because rebuildDockEntities walks
+  // state.tiles by ascending index, the cluster containing the smallest
+  // index (here: topDock) is always the one that inherits the parent id.
+  // Locking this prevents a subtle iteration-order regression where
+  // keeper selection becomes non-deterministic.
+  assertCondition(
+    topDock.id === dockId,
+    `3-way split: smallest-index cluster (top) should always be the id-keeper (got top.id=${topDock.id}, parent=${dockId}).`
+  );
 
   // All three inherit parent metadata via byAnyTile — verifies the
   // metadata-copy path runs per-cluster, not just once.
@@ -2101,33 +2111,41 @@ function testRebuildDockEntitiesThreeWaySplitDedupesIds(): void {
 function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
   // Coverage gap: 3+ tile clusters aren't tested. `maxSizeByArea`
   // (sim.ts:2194) is the *capability* indicator — it scales with
-  // cluster.length per SHIP_MIN_DOCK_AREA thresholds (small≥2, medium≥4,
-  // large≥7). `allowedShipSizes` is the user-gated *permission*
-  // subset — tile-by-tile growth inherits the prior subset rather than
-  // auto-expanding (so a user who disabled medium doesn't re-enable it
-  // on next paint). We verify both surfaces: maxSizeByArea scales
-  // automatically, allowedShipSizes only expands when the user opts in
-  // via setDockAllowedShipSize().
+  // cluster.length per SHIP_MIN_DOCK_AREA thresholds. `allowedShipSizes`
+  // is the user-gated *permission* subset — tile-by-tile growth
+  // inherits the prior subset rather than auto-expanding (so a user who
+  // disabled medium doesn't re-enable it on next paint). We verify both
+  // surfaces: maxSizeByArea scales automatically, allowedShipSizes only
+  // expands when the user opts in via setDockAllowedShipSize().
+  // Tile dims are derived from SHIP_MIN_DOCK_AREA so a threshold change
+  // (e.g. large 7→8) reshapes the test rather than silently passing.
   const state = createInitialState({ seed: 5110 });
   buildHabitat(state);
+  const mediumThreshold = SHIP_MIN_DOCK_AREA.medium;
+  const largeThreshold = SHIP_MIN_DOCK_AREA.large;
 
-  // 4-tile cluster at y=10..13 → maxSizeByArea should be 'medium'.
-  const dockId4 = placeEastHullDock(state, 10, 13);
+  // Cluster at medium-threshold size → maxSizeByArea should be 'medium'.
+  const clusterTopY = 10;
+  const clusterMediumBottomY = clusterTopY + mediumThreshold - 1;
+  const dockId4 = placeEastHullDock(state, clusterTopY, clusterMediumBottomY);
   const dock4 = state.docks.find((d) => d.id === dockId4)!;
-  assertCondition(dock4.tiles.length === 4, `4-cluster: expected 4 tiles, got ${dock4.tiles.length}.`);
+  assertCondition(
+    dock4.tiles.length === mediumThreshold,
+    `medium-threshold cluster: expected ${mediumThreshold} tiles, got ${dock4.tiles.length}.`
+  );
   assertCondition(
     dock4.maxSizeByArea === 'medium',
-    `4-cluster: maxSizeByArea should be 'medium', got '${dock4.maxSizeByArea}'.`
+    `medium-threshold cluster: maxSizeByArea should be 'medium', got '${dock4.maxSizeByArea}'.`
   );
   // anchorTile is the smallest tile index in the sorted cluster.
-  const expectedAnchor4 = toIndex(44, 10, state.width);
+  const expectedAnchor = toIndex(44, clusterTopY, state.width);
   assertCondition(
-    dock4.anchorTile === expectedAnchor4,
-    `4-cluster: anchorTile should be smallest tile index ${expectedAnchor4}, got ${dock4.anchorTile}.`
+    dock4.anchorTile === expectedAnchor,
+    `medium-threshold cluster: anchorTile should be smallest tile index ${expectedAnchor}, got ${dock4.anchorTile}.`
   );
   assertCondition(
     dock4.allowedShipSizes.includes('small'),
-    `4-cluster: allowedShipSizes should always include 'small' fallback; got ${dock4.allowedShipSizes.join(',')}.`
+    `medium-threshold cluster: allowedShipSizes should always include 'small' fallback; got ${dock4.allowedShipSizes.join(',')}.`
   );
   // Manual opt-in is required to expand allowedShipSizes beyond the
   // inherited subset. After opt-in, medium should be permitted.
@@ -2135,42 +2153,46 @@ function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
   const dock4After = state.docks.find((d) => d.id === dockId4)!;
   assertCondition(
     dock4After.allowedShipSizes.includes('medium'),
-    `4-cluster: setDockAllowedShipSize(medium,true) should enable medium; got ${dock4After.allowedShipSizes.join(',')}.`
+    `medium-threshold cluster: setDockAllowedShipSize(medium,true) should enable medium; got ${dock4After.allowedShipSizes.join(',')}.`
   );
 
-  // Extend to 7 tiles → maxSizeByArea should flip to 'large'. Growing
-  // in place also exercises the merge-preserves-id invariant across
-  // a multi-tile extension, not just the 1→2 case from PR #44. Opt-in
-  // must still persist medium across the topology change.
-  for (let y = 14; y <= 16; y++) {
+  // Extend to large-threshold size → maxSizeByArea should flip to
+  // 'large'. Growing in place also exercises the merge-preserves-id
+  // invariant across a multi-tile extension, not just the 1→2 case from
+  // PR #44. Opt-in must still persist medium across the topology change.
+  const clusterLargeBottomY = clusterTopY + largeThreshold - 1;
+  for (let y = clusterMediumBottomY + 1; y <= clusterLargeBottomY; y++) {
     setTile(state, toIndex(44, y, state.width), TileType.Dock);
   }
-  const dock7 = state.docks.find((d) => d.tiles.includes(expectedAnchor4));
-  assertCondition(!!dock7, '7-cluster: dock containing original anchor should still exist.');
+  const dock7 = state.docks.find((d) => d.tiles.includes(expectedAnchor));
+  assertCondition(!!dock7, 'large-threshold cluster: dock containing original anchor should still exist.');
   if (!dock7) return;
   assertCondition(
     dock7.id === dockId4,
-    `7-cluster: growing in place should preserve original id ${dockId4}, got ${dock7.id}.`
+    `large-threshold cluster: growing in place should preserve original id ${dockId4}, got ${dock7.id}.`
   );
-  assertCondition(dock7.tiles.length === 7, `7-cluster: expected 7 tiles, got ${dock7.tiles.length}.`);
+  assertCondition(
+    dock7.tiles.length === largeThreshold,
+    `large-threshold cluster: expected ${largeThreshold} tiles, got ${dock7.tiles.length}.`
+  );
   assertCondition(
     dock7.maxSizeByArea === 'large',
-    `7-cluster: maxSizeByArea should be 'large', got '${dock7.maxSizeByArea}'.`
+    `large-threshold cluster: maxSizeByArea should be 'large', got '${dock7.maxSizeByArea}'.`
   );
   assertCondition(
     dock7.allowedShipSizes.includes('medium'),
-    `7-cluster: medium opt-in should persist across extension; got ${dock7.allowedShipSizes.join(',')}.`
+    `large-threshold cluster: medium opt-in should persist across extension; got ${dock7.allowedShipSizes.join(',')}.`
   );
   assertCondition(
-    dock7.anchorTile === expectedAnchor4,
-    `7-cluster: anchorTile should remain the smallest tile index ${expectedAnchor4} after extension, got ${dock7.anchorTile}.`
+    dock7.anchorTile === expectedAnchor,
+    `large-threshold cluster: anchorTile should remain the smallest tile index ${expectedAnchor} after extension, got ${dock7.anchorTile}.`
   );
   // Opt-in to large and verify it takes (capability has now caught up).
   setDockAllowedShipSize(state, dockId4, 'large', true);
   const dock7After = state.docks.find((d) => d.id === dockId4)!;
   assertCondition(
     dock7After.allowedShipSizes.includes('large'),
-    `7-cluster: setDockAllowedShipSize(large,true) should enable large; got ${dock7After.allowedShipSizes.join(',')}.`
+    `large-threshold cluster: setDockAllowedShipSize(large,true) should enable large; got ${dock7After.allowedShipSizes.join(',')}.`
   );
 }
 
