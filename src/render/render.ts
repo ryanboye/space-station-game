@@ -1007,7 +1007,7 @@ function ensureStaticLayer(
     const roomType = state.rooms[i];
     if (roomType !== RoomType.None) {
       const drewRoomSprite =
-        useSprites && drawSpriteByKey(ctx, spriteAtlas, ROOM_SPRITE_KEYS[roomType], px, py, TILE_SIZE, TILE_SIZE, 0, 0.62);
+        useSprites && drawSpriteByKey(ctx, spriteAtlas, ROOM_SPRITE_KEYS[roomType], px, py, TILE_SIZE, TILE_SIZE, 0, 1.0);
       if (!drewRoomSprite && !useSprites) {
         // Fallback tint + letter only in non-sprite fallback mode. When sprites
         // are ON, the floor-tile sprite (tile.reactor, tile.security, etc.)
