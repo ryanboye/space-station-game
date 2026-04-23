@@ -40,6 +40,7 @@ import {
   FLOOR_WEAR_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
+import { renderGlowPass } from './glow-pass';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
 
@@ -1500,10 +1501,12 @@ export function renderWorld(
   ctx.fillRect(0, 0, widthPx, heightPx);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
-  const glowLayer = ensureGlowLayer(state, widthPx, heightPx, useSprites);
   ctx.drawImage(staticLayer.canvas, 0, 0);
   ctx.drawImage(decorativeLayer.canvas, 0, 0);
-  ctx.drawImage(glowLayer.canvas, 0, 0);
+  // Glow pass paints after the sprite layers (additive blend). Gated on
+  // state.controls.showGlow; cache key includes dynamic signatures (med-bed
+  // occupancy, kitchen-active) so frame cost is ~0 when nothing changes.
+  renderGlowPass(ctx, state, widthPx, heightPx, useSprites);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);
