@@ -47,6 +47,7 @@ import {
   type UnlockTier,
   type Visitor
 } from '../src/sim/types';
+import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import { resolveDoorVariantFromMask, resolveWallVariantFromMask } from '../src/render/tile-variants';
 import { pickDualVariant, type DualWallShape } from '../src/render/wall-dual-tilemap';
 
@@ -676,6 +677,39 @@ function testActivationChecksPreserved(): void {
     !!missingPressureDiag && missingPressureDiag.reasons.includes('not pressurized'),
     'Pressurization readiness check should still block activation.'
   );
+}
+
+function testDemoStationRoomsPressurized(): void {
+  // Scenario-level regression guard for doors-as-barriers: after loading
+  // demo-station, every room center (painted as walled interior with one
+  // door) must read pressurized. Guards against the pokemon-red root cause
+  // — a future sim change that leaks vacuum through doors would surface
+  // here before cosmetic render code papers over it.
+  const state = createInitialState({ seed: 5005 });
+  const applied = applyColdStartScenario(state, 'demo-station');
+  assertCondition(applied, 'demo-station fixture should exist in COLD_START_SCENARIOS.');
+
+  runFor(state, 1);
+
+  const roomCenters: Array<{ x: number; y: number; label: string }> = [
+    { x: 9, y: 10, label: 'Dorm' },
+    { x: 19, y: 10, label: 'Cafeteria' },
+    { x: 29, y: 10, label: 'Hydroponics' },
+    { x: 39, y: 10, label: 'Clinic' },
+    { x: 49, y: 10, label: 'Workshop' },
+    { x: 9, y: 23, label: 'Market' },
+    { x: 19, y: 23, label: 'Reactor' },
+    { x: 29, y: 23, label: 'Security' },
+    { x: 39, y: 23, label: 'Hygiene' },
+    { x: 49, y: 23, label: 'RecHall' }
+  ];
+  for (const c of roomCenters) {
+    const idx = toIndex(c.x, c.y, state.width);
+    assertCondition(
+      state.pressurized[idx] === true,
+      `demo-station ${c.label} center (${c.x},${c.y}) should be pressurized.`
+    );
+  }
 }
 
 function testDoorsArePressureBarriers(): void {
@@ -2809,6 +2843,7 @@ function run(): void {
   testLoungeModuleGating();
   testActivationChecksPreserved();
   testDoorsArePressureBarriers();
+  testDemoStationRoomsPressurized();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
