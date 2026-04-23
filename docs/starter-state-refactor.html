@@ -35,14 +35,14 @@ a { color: #c9a84c; }
 <body>
 
 <h1>Starter State Refactor</h1>
-<p class="meta">space-station-game · design doc <strong>v2</strong> · draft 2026-04-23 · author: seb, requested by BMO · v2 iteration incorporates BMO's 5 review notes + tinyclaw's LifeSupport-activation + coord calls</p>
+<p class="meta">space-station-game · design doc <strong>v3</strong> · draft 2026-04-23 · author: seb, requested by BMO · v3 locks the Reactor-only pre-activation pivot (defer LifeSupport to T1 player task) per tinyclaw's layout analysis + airQuality decay check</p>
 
 <h2>TL;DR</h2>
 <p>
 Tinyclaw's fire 3/10 run 2 (<code>option B: starter food chain pre-place</code>) discovered a real scope ceiling: pre-placing rooms in <code>createInitialState</code> is <em>not</em> single-PR work because activating a room requires firing the same pipeline that normally only runs inside the live tick loop (size checks, module requirements, pressurization flood-fill, staff assignment, job-queue priming). She aborted her attempt cleanly and flagged the finding; BMO suggested a design doc.
 </p>
 <p>
-This doc breaks the refactor into <strong>4 sequenced PRs</strong>, plus a cleanup PR-5 (<code>main.ts</code> dock-placement fold) and a conditional PR-6 (scenario-fixture audit if &gt;10 fixtures affected). Each is reviewable on its own, leaves the game playable after merge, and sets up the next. Total estimated scope: 3-4 days of focused work by one claw plus review cycles. <strong>Gated on awfml's tutorial-pacing answer</strong> (the right end state depends on what T0 should <em>feel</em> like for a first-time player).
+This doc breaks the refactor into <strong>4 sequenced PRs</strong>, plus a cleanup PR-5 (<code>main.ts</code> dock-placement fold) and a conditional PR-6 (scenario-fixture audit if &gt;10 fixtures affected). Each is reviewable on its own, leaves the game playable after merge, and sets up the next. <strong>v3 pivot (2026-04-23)</strong>: PR-2 drops LifeSupport pre-placement — LifeSupport becomes the player's first T1 task. Reactor alone at cold start + finite air buffer that T1 must fire before consuming. Tighter scope for PR-2 (~100-150 LoC instead of ~150-200), cleaner pacing, LifeSupport-adjacency question resolves for free. Total estimated scope: 2-3 days of focused work by one claw plus review cycles. <strong>Gated on awfml's tutorial-pacing answer</strong> (the right end state depends on what T0 should <em>feel</em> like for a first-time player).
 </p>
 
 <div class="callout">
@@ -106,51 +106,76 @@ Extract the per-tick activation sequencing from <code>tick()</code> into a calla
 </div>
 
 <div class="pr">
-<div class="pr-header"><span class="pr-tag">PR-2</span><span class="pr-title">Pre-activate Reactor + LifeSupport at cold start</span></div>
-<p class="pr-meta">scope: behavior change · ~150-200 LoC · sim-test + scenario-fixture coverage required</p>
+<div class="pr-header"><span class="pr-tag">PR-2</span><span class="pr-title">Pre-activate Reactor + starting air buffer (LifeSupport deferred to T1)</span></div>
+<p class="pr-meta">scope: behavior change · ~100-150 LoC · sim-test + scenario-fixture coverage required</p>
+
+<div class="callout">
+<strong>Pivot from v1/v2 (tinyclaw's #54 layout analysis):</strong> LifeSupport's 6-tile footprint doesn't fit cleanly in the 10×10 interior alongside Kitchen + Hydroponics + Cafeteria + Reactor. Instead of scope-blasting the interior to 12×10 or forcing an L-shaped LifeSupport, <strong>defer LifeSupport to the player's first T1 task</strong>. Reactor alone satisfies the cold-start survival invariant — for a bounded air-buffer window, calibrated so T1 unlocks before <code>airQuality</code> hits the distress threshold.
+</div>
+
 <p>
 Extend <code>createInitialState</code> to:
 </p>
 <ol>
-<li>Paint a <code>RoomType.LifeSupport</code> cluster as a <strong>separate room from Reactor</strong> (not shared-wall, per tinyclaw's call — keeps activation semantics clean). Tinyclaw's tentative coords: <code>x = 25..28, y = 22..23</code> (8 tiles, bottom row of the 10×10 interior patch, 3-side wall-adjacent for cheap pressurization). Needs its own door back to the main corridor.</li>
-<li><strong>No module required.</strong> Per tinyclaw (confirmed against <code>balance.ts:202</code>): <code>RoomType.LifeSupport</code> has <code>requiredModules: []</code> + <code>requiredAnyOf: []</code> + <code>minTiles: 6</code>. Activation is pure geometry (sealed room + door + pressurization + path). The v1 of this doc suggested <code>ModuleType.AirScrubber</code>; that module doesn't exist — strike it.</li>
-<li>Ensure Reactor room's required module (<code>ModuleType.Reactor</code>, confirm exact name against <code>balance.ts</code> when writing the PR) is placed at the core-center tile.</li>
-<li>Call the new <code>runActivationPipeline(state)</code> before returning — so the state leaves <code>createInitialState</code> already activated.</li>
+<li>Ensure Reactor room's required module is placed at the core-center tile (confirm the exact <code>ModuleType</code> name against <code>balance.ts</code> when writing the PR — the v1 doc speculated <code>ModuleType.Reactor</code>; verify).</li>
+<li>Initialize <code>state.metrics.airQuality = 100</code> (already the default; verify not regressed). This is the buffer that keeps crew alive until the player places LifeSupport.</li>
+<li><strong>Do NOT place LifeSupport.</strong> It becomes the player's T1 onboarding task: station breathes initially, air quality visibly drops over T0, unlocking "build LifeSupport" as the T1 progression moment.</li>
+<li>Call the new <code>runActivationPipeline(state)</code> before returning — Reactor activates on geometry alone since its 3×3 frame at <code>x=29..31, y=18..20</code> (coreY=19) already satisfies its predicate.</li>
 </ol>
+
 <p>
-<strong>Result</strong>: cold-start state has air, pressure holds, Reactor is Active, LifeSupport is Active. Crew spawned on first tick survives indefinitely with zero player action.
+<strong>Air-buffer calibration</strong> (per tinyclaw's <code>sim.ts:6171</code> reading): <code>airQuality</code> decays as <code>(airSupply - airDemand) * dt * 1.7</code>. With no LifeSupport, <code>airSupply = 0</code> and the rate reduces to <code>-airDemand * dt * 1.7</code>. The window between <code>airQuality = 100</code> and the distress threshold (~35) is what PR-2 + PR-4's T1-unlock timing must cooperate to span. Calibration is awfml's pacing call: the T1 unlock trigger must fire BEFORE the buffer runs out. tinyclaw to confirm <code>airDemand</code> values per crew and derive the budget during PR-2.
 </p>
-<p><strong>Acceptance</strong>: two new sim-tests — <code>testColdStartLifeSupportActiveOnFirstTick</code> and <code>testColdStartAirQualityHoldsSteady</code> (run 60s, assert <code>state.metrics.airQuality &gt;= 95</code>). New scenario fixture <code>cold-start-survives.json</code>: zero player action, run 10k ticks, assert zero crew deaths.</p>
+
+<p>
+<strong>Result</strong>: cold-start state has power + sealed rooms + a finite air buffer. Crew survive the tutorial window, player builds LifeSupport at T1, air stabilizes. Pacing: "watch the station tick" → "uh oh air quality dropping" → "T1 unlock: build LifeSupport" — classic onboarding beat.
+</p>
+<p><strong>Acceptance</strong>: three sim-tests —</p>
+<ul>
+<li><code>testColdStartReactorActiveOnReturn</code> — assert Reactor is Active immediately after <code>createInitialState</code> returns (not after first tick).</li>
+<li><code>testColdStartAirDecaysWithoutLifeSupport</code> — run 60s, assert <code>airQuality</code> strictly decreasing (confirms the decay model actually fires; guards against a regression where <code>airSupply</code> accidentally defaults nonzero).</li>
+<li><code>testColdStartAirBufferExceedsT1UnlockTime</code> — run until T1 unlocks (per awfml's locked pacing rule), assert <code>airQuality &gt; 35</code> for the full duration. If T1 doesn't unlock in time, test fails loudly — tuning is awfml's call then.</li>
+</ul>
+<p>Scenario fixture <code>cold-start-reactor-only.json</code>: zero player action, run until the air buffer drops below 35 (not a fixed tick count — runtime-bounded by the decay curve), assert zero crew deaths within that window. Fixture serves as a regression guard for the T0→T1 timing contract.</p>
 </div>
 
 <div class="pr">
 <div class="pr-header"><span class="pr-tag">PR-3</span><span class="pr-title">Pre-place food chain (Hydroponics + Kitchen + Cafeteria)</span></div>
 <p class="pr-meta">scope: behavior change · ~250-350 LoC · sim-test + e2e coverage required</p>
 <p>
-Paint 3 more rooms + their minimum-required modules + appropriate wall/door connectivity:
+Paint 3 more rooms + their minimum-required modules + appropriate wall/door connectivity. <strong>Coords locked by tinyclaw's layout analysis</strong> (PR #54 comment):
 </p>
 <ul>
-<li><strong>Hydroponics</strong> — min 8 tiles per progression-tooltip copy. Place <code>ModuleType.GrowStation</code> (satisfies the room's activation predicate).</li>
-<li><strong>Kitchen</strong> — min 8 tiles. Place <code>ModuleType.Stove</code> + <code>ModuleType.Sink</code>.</li>
-<li><strong>Cafeteria</strong> — min 12 tiles. Place <code>ModuleType.ServingStation</code> + <code>ModuleType.Table</code>(×2).</li>
+<li><strong>Kitchen</strong> — <code>x=25..28, y=14..15</code> (4×2 = 8 tiles, meets <code>minTiles=8</code>). Place <code>ModuleType.Stove</code> (2×1) + <code>ModuleType.ServingStation</code> (2×1) — both fit.</li>
+<li><strong>Hydroponics</strong> — <code>x=25..28, y=21..22</code> (4×2 = 8 tiles, meets min 8). Place <code>ModuleType.GrowStation</code> (2×2) — fits with spare tile.</li>
+<li><strong>Cafeteria</strong> — <code>x=32..34, y=14..17</code> (3×4 = 12 tiles, meets min 12). Place <code>ModuleType.Table</code> (2×2) — fits with spare floor for pathing.</li>
 </ul>
 <p>
-Connectivity: Hydroponics and Kitchen on one side of the reactor, Cafeteria adjacent to the visitor dock from PR #20. Doors between each so residents/crew can pathfind the full <code>grown → cooked → served</code> chain. Verify the three rooms activate via <code>runActivationPipeline</code> at the end of <code>createInitialState</code>.
+<strong>Corridors + connectivity</strong>: left column <code>x=25..28, y=16..20</code> + right column <code>x=32..34, y=18..23</code> path-connect all rooms to the Reactor core doors. Doors on each room's edge facing the corridor. Verify via <code>runActivationPipeline</code> at the end of <code>createInitialState</code>.
 </p>
 <p>
-<strong>Layout suggestion</strong> (ASCII, not final — tinyclaw owns the actual coordinates):
+<strong>Layout map</strong> (viewed top-down, origin top-left, <code>*</code> = reactor core, <code>R</code> = reactor frame, <code>K</code> = kitchen, <code>H</code> = hydroponics, <code>C</code> = cafeteria, <code>.</code> = corridor/floor; credit: tinyclaw PR #54 comment):
 </p>
-<pre><code>       Hydroponics  Kitchen
-       [8 tiles]    [8 tiles]
-            \\      /
-             Reactor+LS (core)
-                |
-             Cafeteria [12 tiles]
-                |
-             [dock corridor]
-                |
-             VisitorDock (PR #20)</code></pre>
-<p><strong>Acceptance</strong>: <code>testColdStartFoodChainActiveAndConnected</code> — assert all 3 rooms are Active after <code>createInitialState</code>, pathfinding from Hydroponics → Kitchen → Cafeteria → dock succeeds. e2e test: spawn a visitor at the dock, run 120s, assert <code>metrics.firstMealServedSec &lt; 90</code>.</p>
+<pre><code>     25 26 27 28  29 30 31  32 33 34
+14 [ K  K  K  K ][ .  .  . ][ C  C  C ]
+15 [ K  K  K  K ][ .  .  . ][ C  C  C ]
+16 [ .  .  .  . ][ .  .  . ][ C  C  C ]
+17 [ .  .  .  . ][ .  .  . ][ C  C  C ]
+18 [ .  .  .  . ][ R  R  R ][ .  .  . ]
+19 [ .  .  .  . ][ R  *  R ][ .  .  . ]
+20 [ .  .  .  . ][ R  R  R ][ .  .  . ]
+21 [ H  H  H  H ][ .  .  . ][ .  .  . ]
+22 [ H  H  H  H ][ .  .  . ][ .  .  . ]
+23 [ .  .  .  . ][ .  .  . ][ .  .  . ]</code></pre>
+<p>
+Reactor footprint is <code>y=18..20</code> per <code>coreY=19</code> (corrected from the v2 sketch ASCII which had the reactor at <code>y=17..19</code>).
+</p>
+<p><strong>Acceptance</strong>:</p>
+<ul>
+<li><code>testColdStartFoodChainActiveOnReturn</code> — assert all 3 rooms report Active <strong>immediately after <code>createInitialState</code> returns</strong> (not after tick). Covers <code>runActivationPipeline</code> end-of-construction invocation.</li>
+<li><code>testColdStartFoodChainPathConnected</code> — assert <code>findPath</code> succeeds Hydroponics-door → Kitchen-door → Cafeteria-door → Dock corridor tile, with all intermediate corridor tiles walkable.</li>
+<li>e2e (Playwright): spawn a visitor at the dock, run 90s, assert <code>metrics.firstMealServedSec &lt; 75</code>. <strong>Tighter than v2's <code>&lt; 90</code></strong> because (a) the food-chain is pre-populated, (b) T0 ends when the player acts on the T1 LifeSupport task — if the meal-serving budget is &gt; 75s the T0 window could elapse first, which is a regression.</li>
+</ul>
 </div>
 
 <div class="pr">
@@ -174,7 +199,8 @@ Extend <code>createInitialState</code> to:
 
 <h2>Risks</h2>
 <ul>
-<li><strong>Tutorial-pacing coupling.</strong> If awfml picks "T0 must hold for 30s regardless of event," PR-4's crew-job-seed + PR-3's food-chain-activation might fire T0→T1 faster than intended. Mitigation: add a `minTierDwellSec` gate in the unlock predicate, configurable.</li>
+<li><strong>Air-buffer duration &lt; T1-unlock trigger time.</strong> Since PR-2 defers LifeSupport to a T1 player task, <code>airQuality</code> decay is on a finite clock from cold start. If the T1 unlock predicate (awfml's pacing call) doesn't fire before <code>airQuality</code> hits the distress threshold (~35 per the current tuning), crew start dying during the tutorial. Mitigation: <code>testColdStartAirBufferExceedsT1UnlockTime</code> in PR-2 is the regression guard; if it fails, either the buffer gets bumped (start airQuality higher, or reduce decay rate for T0 only) or awfml's pacing rule gets tightened.</li>
+<li><strong>Tutorial-pacing coupling.</strong> If awfml picks "T0 must hold for 30s regardless of event," PR-4's crew-job-seed + PR-3's food-chain-activation might fire T0→T1 faster than intended. Mitigation: add a `minTierDwellSec` gate in the unlock predicate, configurable. Pairs with the air-buffer risk above — both point at the same "what does T0 feel like" answer from awfml.</li>
 <li><strong>Save-format migration.</strong> Old saves pre-refactor expect lazy crew spawning. <code>hydrateStateFromSave</code> must NOT call <code>runActivationPipeline</code> (saves are already-activated snapshots). Enforce with a separate <code>createPreActivatedState</code> / <code>hydrateToActiveState</code> split if needed.</li>
 <li><strong>Determinism.</strong> Adding rooms + crew to the starter state expands the seed's effect surface. Bit-identical save-roundtrip tests must pass with the new starter before merging PR-2+.</li>
 <li><strong>Scenario fixtures</strong> currently assume a bare starter. <code>ghost-town.json</code>, <code>isolation.json</code>, etc. need audit — any that assumed "zero rooms + zero crew" as their baseline need explicit teardown in their <code>layout</code> section. <strong>Per BMO's v2 note #5:</strong> if the audit uncovers 10+ affected fixtures, the update may itself be PR-sized — split off as PR-6 with its own review burden rather than bundling into PR-2/3/4.</li>
@@ -200,8 +226,8 @@ Extend <code>createInitialState</code> to:
 <h2>Open questions for review</h2>
 <ol>
 <li><strong>Crew count at start.</strong> 3 crew (this doc's suggestion) vs 8 (current lazy spawn cap). Smaller = more T0 legibility; larger = less early starvation if a room fails. <em>tinyclaw's call.</em></li>
-<li><strong>LifeSupport adjacency.</strong> Attach to reactor core (shared wall) or separate room connected by corridor? Shared wall saves tiles but couples two systems' topology invariants. <em>BMO's call.</em></li>
-<li><strong>Food-chain layout.</strong> ASCII sketch above is a strawman. Real coordinates from tinyclaw if she picks this up.</li>
+<li>~~<strong>LifeSupport adjacency.</strong>~~ <strong>Resolved by the PR-2 pivot (v3):</strong> LifeSupport is no longer pre-placed — it's a T1 player task. No adjacency constraint, player chooses placement at T1.</li>
+<li>~~<strong>Food-chain layout.</strong>~~ <strong>Resolved:</strong> tinyclaw locked coords on PR #54 (Kitchen <code>x=25..28, y=14..15</code>, Hydroponics <code>x=25..28, y=21..22</code>, Cafeteria <code>x=32..34, y=14..17</code>, Reactor <code>y=18..20</code>). Now in PR-3 above.</li>
 <li><strong>Scenario-fixture migration.</strong> Inline tear-down in each fixture vs. a new <code>startFromBare: true</code> option on <code>createInitialState</code>. <em>tinyclaw's call</em> — she knows the fixture harness best.</li>
 <li><strong>Deterministic seed surface.</strong> Does the starter state's construction need to consume RNG (for crew names, module orientation variety, etc.) or is it entirely deterministic pre-PR? Affects test-fixture seed choices. <em>seb to research during PR-1.</em></li>
 </ol>
