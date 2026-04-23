@@ -16,6 +16,7 @@
     "sprites:process:floors-walls": "node tools/sprites/postprocess-raw.mjs --profile floors-walls --overwrite",
     "sprites:process:agents": "node tools/sprites/postprocess-raw.mjs --profile agents --overwrite",
     "sprites:process:tiles-full": "node tools/sprites/postprocess-raw.mjs --profile tiles-full --overwrite",
+    "sprites:unpack": "node tools/sprites/unpack-atlas-sheet.mjs",
     "sprites:pack": "node tools/sprites/pack-atlas.mjs --profile v1",
     "sprites:pack:test": "node tools/sprites/pack-atlas.mjs --profile test",
     "sprites:pack:floors-walls": "node tools/sprites/pack-atlas.mjs --profile floors-walls",

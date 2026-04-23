@@ -1,0 +1,4 @@
+# atlas sheets from ChatGPT Pro land here.
+# filename convention: `<author>-<yyyy-mm-dd>[-<slot>].png` + matching `.yaml` map.
+# e.g.  awfml-2026-04-23-tiles.png + awfml-2026-04-23-tiles.yaml
+# see tools/sprites/sheets/EXAMPLE-key-map.yaml for the map shape.
