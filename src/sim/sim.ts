@@ -111,7 +111,7 @@ const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Door]: 2
 };
 
-const SHIP_MIN_DOCK_AREA: Record<ShipSize, number> = {
+export const SHIP_MIN_DOCK_AREA: Record<ShipSize, number> = {
   small: 2,
   medium: 4,
   large: 7
