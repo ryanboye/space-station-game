@@ -1994,6 +1994,45 @@ function testRebuildDockEntitiesSplitsOnMiddleTileDeletion(): void {
   );
 }
 
+function testRebuildDockEntitiesSplitWithDockedShipPreservesReference(): void {
+  // Follow-up from PR #53 review: exercises the `occupiedByShipId`
+  // inheritance branch (sim.ts:2213) that the sibling split test misses.
+  // Asserts the invariant "exactly one dock claims this ship, and
+  // ship.assignedDockId points at it" — deliberately NOT coupled to
+  // which half keeps the parent id, so a future ship-relocation fix
+  // (e.g. re-sync bayTiles, move ship to the larger half) can land
+  // without churning this test.
+  const state = createInitialState({ seed: 5130 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 12);
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.tiles.length === 3, `Setup: expected 3-tile dock, got ${dockBefore.tiles.length}.`);
+  const middleTile = dockBefore.tiles[1];
+
+  const ship = createDockedTransientShip(state, dockId, 9200);
+  assertCondition(dockBefore.occupiedByShipId === ship.id, 'Setup: parent dock should be occupied by ship.');
+
+  // Split by deleting middle tile.
+  setTile(state, middleTile, TileType.Floor);
+
+  assertCondition(state.docks.length === 2, `Split: expected 2 docks, got ${state.docks.length}.`);
+  assertCondition(
+    state.arrivingShips.some((s) => s.id === ship.id),
+    'Split: parked ship should still exist in arrivingShips after dock-split.'
+  );
+
+  const claimingDocks = state.docks.filter((d) => d.occupiedByShipId === ship.id);
+  assertCondition(
+    claimingDocks.length === 1,
+    `Split: exactly one dock must claim ship.id=${ship.id} post-split (got ${claimingDocks.length}). Prevents phantom dual-occupancy from id-collision regressions.`
+  );
+  const claimingDock = claimingDocks[0];
+  assertCondition(
+    ship.assignedDockId === claimingDock.id,
+    `Split: ship.assignedDockId must match the claiming dock (got ${ship.assignedDockId}, claimer ${claimingDock.id}).`
+  );
+}
+
 function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
   // Coverage gap: 3+ tile clusters aren't tested. `maxSizeByArea`
   // (sim.ts:2194) is the *capability* indicator — it scales with
@@ -2456,6 +2495,7 @@ function run(): void {
   testRebuildDockEntitiesPreservesAllowedShips();
   testRebuildDockEntitiesPaintOverExistingDockIsIdempotent();
   testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
+  testRebuildDockEntitiesSplitWithDockedShipPreservesReference();
   testRebuildDockEntitiesClusterSizeScalesShipCapacity();
   testActorsTreatedLifetimeIncrementsOnRecovery();
   testT1ArchetypeDiversityReachesThreeWithinThreeMinutes();
