@@ -1006,7 +1006,12 @@ function ensureStaticLayer(
     if (roomType !== RoomType.None) {
       const drewRoomSprite =
         useSprites && drawSpriteByKey(ctx, spriteAtlas, ROOM_SPRITE_KEYS[roomType], px, py, TILE_SIZE, TILE_SIZE, 0, 0.62);
-      if (!drewRoomSprite) {
+      if (!drewRoomSprite && !useSprites) {
+        // Fallback tint + letter only in non-sprite fallback mode. When sprites
+        // are ON, the floor-tile sprite (tile.reactor, tile.security, etc.)
+        // already encodes the room-type visual — stacking a 28% colored
+        // overlay on top of the real art was washing everything red/orange
+        // per awfml's feedback.
         ctx.fillStyle = roomOverlay[roomType];
         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
         ctx.fillStyle = 'rgba(230, 240, 250, 0.24)';
