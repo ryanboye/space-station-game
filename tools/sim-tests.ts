@@ -679,10 +679,7 @@ function testActivationChecksPreserved(): void {
 }
 
 function testDoorsArePressureBarriers(): void {
-  // Walled room with a single door should be FULLY pressurized — doors must
-  // act as pressure barriers so stations with normal room-access doors don't
-  // show as "vacuum-flooded" (the root cause of the pokemon-red render bug
-  // fixed cosmetically in PR #97; this is the sim-side fix).
+  // Sealed room + one door must pressurize — doors are airlocks, not leaks.
   const state = createInitialState({ seed: 9001 });
   const x1 = 2;
   const y1 = 2;
