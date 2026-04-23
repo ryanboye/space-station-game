@@ -2108,6 +2108,118 @@ function testRebuildDockEntitiesThreeWaySplitDedupesIds(): void {
   }
 }
 
+function testRebuildDockEntitiesAsymmetricSplitPreservesClusterSizes(): void {
+  // Coverage gap from #66 review: symmetric 1+1+1 split doesn't
+  // exercise the maxSizeByArea downgrade path for a cluster whose
+  // post-split size drops its capability. Here we delete the 2nd tile
+  // of a 6-tile dock → 1-tile + 4-tile split (asymmetric). The 1-tile
+  // half degrades to maxSizeByArea='small'; the 4-tile half should
+  // stay at 'medium' per SHIP_MIN_DOCK_AREA thresholds.
+  const state = createInitialState({ seed: 5150 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 15); // 6-tile y=10..15
+  setDockAllowedShipType(state, dockId, 'industrial', true);
+  setDockPurpose(state, dockId, 'residential');
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.tiles.length === 6, `Setup: expected 6-tile dock, got ${dockBefore.tiles.length}.`);
+  assertCondition(dockBefore.maxSizeByArea === 'medium', `Setup: 6-tile should be 'medium' capability.`);
+  const sortedTiles = [...dockBefore.tiles].sort((a, b) => a - b);
+  const topTile = sortedTiles[0];
+  const deleteTile = sortedTiles[1];
+
+  // Delete y=11 → 1-tile (y=10) + 4-tile (y=12..15) split.
+  setTile(state, deleteTile, TileType.Floor);
+
+  assertCondition(state.docks.length === 2, `Asymmetric split: expected 2 docks, got ${state.docks.length}.`);
+  const topDock = state.docks.find((d) => d.tiles.includes(topTile))!;
+  const bigDock = state.docks.find((d) => d.tiles.length === 4);
+  assertCondition(!!bigDock, `Asymmetric split: 4-tile half should exist.`);
+  if (!bigDock) return;
+  assertCondition(
+    topDock.tiles.length === 1,
+    `Asymmetric split: 1-tile half should have size 1, got ${topDock.tiles.length}.`
+  );
+  assertCondition(
+    topDock.maxSizeByArea === 'small',
+    `Asymmetric split: 1-tile half should downgrade maxSizeByArea to 'small', got '${topDock.maxSizeByArea}'.`
+  );
+  assertCondition(
+    bigDock.maxSizeByArea === 'medium',
+    `Asymmetric split: 4-tile half should retain 'medium' capability, got '${bigDock.maxSizeByArea}'.`
+  );
+}
+
+function testRebuildDockEntitiesThreeWaySplitClearsPhantomOccupancy(): void {
+  // Coverage gap from #66 review: 3-way occupiedByShipId inheritance
+  // branch (sim.ts:2213). Extends the 2-way-with-ship test to the
+  // scaling case — only the keeper half should claim the ship; the
+  // two fresh-id halves must both have occupiedByShipId=null. Prevents
+  // a dual-phantom-occupancy regression at N>2.
+  const state = createInitialState({ seed: 5160 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 14); // 5-tile
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(dockBefore.tiles.length === 5, `Setup: expected 5-tile dock, got ${dockBefore.tiles.length}.`);
+  const sortedTiles = [...dockBefore.tiles].sort((a, b) => a - b);
+  const [, firstDel, , secondDel] = sortedTiles;
+
+  const ship = createDockedTransientShip(state, dockId, 9300);
+  assertCondition(dockBefore.occupiedByShipId === ship.id, 'Setup: parent dock should claim ship.');
+
+  setTile(state, firstDel, TileType.Floor);
+  setTile(state, secondDel, TileType.Floor);
+
+  assertCondition(state.docks.length === 3, `3-way+ship: expected 3 docks, got ${state.docks.length}.`);
+  const claimingDocks = state.docks.filter((d) => d.occupiedByShipId === ship.id);
+  assertCondition(
+    claimingDocks.length === 1,
+    `3-way+ship: exactly one dock must claim ship=${ship.id} (got ${claimingDocks.length}). Prevents phantom dual/triple-occupancy.`
+  );
+  assertCondition(
+    ship.assignedDockId === claimingDocks[0].id,
+    `3-way+ship: ship.assignedDockId must match the claimer (got ${ship.assignedDockId}, claimer ${claimingDocks[0].id}).`
+  );
+}
+
+function testRebuildDockEntitiesSplitDowngradesAllowedShipSizes(): void {
+  // Coverage gap from #66 review: when a cluster splits into smaller
+  // halves whose maxSizeByArea drops below the parent's
+  // allowedShipSizes subset, the subset must be truncated to what the
+  // new cluster CAN physically accept. A 4-tile dock opted into
+  // 'medium' that splits into 1-tile halves should lose 'medium' from
+  // allowedShipSizes — keeping a stale permission post-split would
+  // silently allow medium ships to attempt docking on a too-small
+  // cluster.
+  const state = createInitialState({ seed: 5170 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 10, 13); // 4-tile
+  setDockAllowedShipSize(state, dockId, 'medium', true);
+  const dockBefore = state.docks.find((d) => d.id === dockId)!;
+  assertCondition(
+    dockBefore.allowedShipSizes.includes('medium'),
+    'Setup: 4-tile dock should opt-in to medium.'
+  );
+  const sortedTiles = [...dockBefore.tiles].sort((a, b) => a - b);
+  const [, firstDel, secondDel] = sortedTiles;
+
+  // Delete the middle 2 tiles of a 4-tile dock → two 1-tile clusters
+  // at the endpoints (each with maxSizeByArea='small').
+  setTile(state, firstDel, TileType.Floor);
+  setTile(state, secondDel, TileType.Floor);
+
+  assertCondition(state.docks.length === 2, `Downgrade: expected 2 docks after mid-deletions, got ${state.docks.length}.`);
+  for (const dock of state.docks) {
+    assertCondition(
+      dock.maxSizeByArea === 'small',
+      `Downgrade: 1-tile cluster should have maxSizeByArea='small', got '${dock.maxSizeByArea}'.`
+    );
+    assertCondition(
+      !dock.allowedShipSizes.includes('medium'),
+      `Downgrade: 1-tile cluster must not retain stale 'medium' permission post-split (got [${dock.allowedShipSizes.join(',')}]).`
+    );
+  }
+}
+
 function testRebuildDockEntitiesClusterSizeScalesShipCapacity(): void {
   // Coverage gap: 3+ tile clusters aren't tested. `maxSizeByArea`
   // (sim.ts:2194) is the *capability* indicator — it scales with
@@ -2584,6 +2696,9 @@ function run(): void {
   testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
   testRebuildDockEntitiesSplitWithDockedShipPreservesReference();
   testRebuildDockEntitiesThreeWaySplitDedupesIds();
+  testRebuildDockEntitiesAsymmetricSplitPreservesClusterSizes();
+  testRebuildDockEntitiesThreeWaySplitClearsPhantomOccupancy();
+  testRebuildDockEntitiesSplitDowngradesAllowedShipSizes();
   testRebuildDockEntitiesClusterSizeScalesShipCapacity();
   testActorsTreatedLifetimeIncrementsOnRecovery();
   testT1ArchetypeDiversityReachesThreeWithinThreeMinutes();
