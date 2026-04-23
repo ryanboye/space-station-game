@@ -1,7 +1,7 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-22 23:45Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `01be383`.*
+*Last updated: 2026-04-23 02:50Z by tinyclaw. Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `3fcc626`.*
 
 ### Current milestone
 **M1.1 Hardening — in progress.** M1 tutorial loop is live + verified. Post-deploy 4-agent whole-repo review (2026-04-22) surfaced a correctness bundle + dead-code sweep + architecture hygiene; most has shipped (PRs #29–#39). Nano-banana generator pipeline RIPPED OUT (#36) after it broke the curated atlas — sprite pipeline v2 design doc awaiting awfml decisions at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>.
@@ -52,32 +52,51 @@
 | #36 | `30fc12c` | revert(sprites) — restored curated baseline atlas + ripped pipelines |
 | #37 | `2644528` | feat(sim) — src/sim/index.ts barrel for public API |
 | #39 | `01be383` | chore — final dead-code sweep (agent-sheet, #load CSS, loadColor) |
+| #40 | — | docs — §0 refresh post #32-39 |
+| #41 | `b9b06ef` | feat(ui) — build toolbar replaces ~30 hotkeys with clickable buttons |
+| #42 | — | docs — phase-5 mechanics ref + sprite-v2 design doc preread notes |
+| #43 | `29092f9` | fix(ui) — toolbar buttons pack horizontally, not full-width |
+| #44 | `2f74a10` | test — T3/T4 predicate coverage + rebuildDockEntities topology roundtrip |
+| #45 | `4bb75b2` | chore(ui) — modal open/close helper, 8 modals → 1 wireModal + 8 calls |
+| #46 | `92671f0` | tools/sprites — prelim modules for gpt-image-1 pipeline |
+| #47 | `cf8b4c2` | chore(sim) — derive UNLOCK_IDS_BY_TIER from UNLOCK_DEFINITIONS |
+| #48 | `1e3c859` | chore(ui) — move toggle-button label sync out of frame() hot loop |
+| #49 | `ab76ec0` | docs(plan) — expand option-B backlog with hard-blocker findings |
+| #50 | `6393eeb` | feat(ui) — autosave to localStorage every 60s + opt-in cold-start load |
+| #51 | `4f0abb9` | test — actorsTreatedLifetime increments on health recovery |
+| #53 | `3fcc626` | test+fix — rebuildDockEntities paint/split/3+clusters coverage + id-collision fix |
 
 ### Open PRs
-- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw).
-  Static debug page, ready for merge when someone picks it up. Non-blocking.
+- **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (tinyclaw). Static debug page, ready for merge when someone picks it up. Non-blocking.
+- **#52** `tools/sprites: qa-review.mjs (gpt-image-1 v2 QA gate)` (seb). Blocked on awfml API key + design decisions.
+- **#54** `docs: starter-state-refactor design doc (4-PR breakdown for option-B)` (seb). v3 pushed post-tinyclaw layout-sketch review — pivot locked: Reactor-only cold start + `airQuality=100` buffer, LifeSupport → T1 player task. PR-3 food-chain coords locked (Kitchen `x=25..28 y=14..15`, Hydroponics `x=25..28 y=21..22`, Cafeteria `x=32..34 y=14..17`). Blocked on awfml tutorial-pacing answer.
+- **#55** `ci: advisory mobile-baseline gate via check-mobile.py` (seb). Vendors seb's 9-item mobile checklist as `continue-on-error` CI step. Needs 4-agent ritual.
 
 ### Backlog (priority-ordered)
 1. **Sprite pipeline v2 (gpt-image-1)** — BMO design doc live at <https://bmo.ryanboye.com/spacegame-plan/sprite-pipeline-v2.html>. 5 awfml decisions open (single-vs-sheet, reference-image-use, QA ownership, bulk-trigger, archive policy). Blocked on awfml.
 2. **Phase 5 mechanics ref** — BMO doc live at <https://bmo.ryanboye.com/spacegame-plan/phase-5-mechanics.html>. 6 awfml decisions open (medSupply source, clinic staffing, propagation, overflow curve, contagion model, treatment duration). Blocked on awfml.
-3. **Starter food chain (option B)** — visitors arrive but starve within 60s of T1 flash. NAIVE pre-place attempt (run-2 fire-3, abandoned) hit hard blockers: rooms need `minTiles` activation (Cafeteria 12, Kitchen+Hydroponics 8 each), modules need cross-tile footprint placement (Stove 2×1, Table 2×2, GrowStation 2×2, ServingStation 2×1), and pressurization needs interior walls + doors. Real implementation = a "starter habitat builder" that builds walls + doors + paints rooms in proper-size blocks + places modules in footprint-aware order. **Multi-PR refactor of `createInitialState`, not single-PR pre-place**. Suggested split: PR-α adds wall+door framing helper, PR-β paints Kitchen 2×4 + places Stove, PR-γ same for Hydroponics, PR-δ Cafeteria 3×4 + 2 Tables + ServingStation, PR-ε hireCrew + e2e playtest verify.
+3. **Starter food chain (option B)** — visitors arrive but starve within 60s of T1 flash. Seb's design doc (PR #54, v3) locks 4-PR breakdown: **PR-1** extract `runActivationPipeline` (refactor-only, no behavior change), **PR-2** Reactor-only pre-activation + `airQuality=100` buffer + T1 task nudge to place LifeSupport (LifeSupport deferred to player per tutorial-pacing pivot, pressurization is zone-based so zero-action crew survive the buffer window), **PR-3** pre-place Kitchen `x=25..28 y=14..15` + Hydroponics `x=25..28 y=21..22` + Cafeteria `x=32..34 y=14..17` with minTile/footprint/door connectivity, **PR-4** seed crew + initial jobs. Gated on awfml's tutorial-pacing answer (BMO drafting a spec doc to pre-empt). Invariant across all 4: `createInitialState({seed})` stays deterministic + tick-ready + no async.
 4. **Toolbar/HUD rework** — awfml's ask, seb to ship, BMO to spec. Full judgment given to BMO per awfml.
 5. **Testing gap sweep** — T3/T4/T5/T6 predicate tests, rebuildDockEntities test (save/load counter + tier>3 shipped in #29). tinyclaw lane.
 6. **Visitor archetype behavior differentiation** — brainstorm posted 2026-04-22; BMO endorsed parallel-able with Phase 5. Makes T2 `archetypesServedLifetime >= 3` predicate measure real gameplay instead of string counting. Blocked on awfml priority call.
 7. **T6 specialization design (open question)** — "Tutorial complete" minimal-viable per BMO: flash trophy state, full sandbox, no new content required. Dual-use as canonical gate for future content drops (M2 military ships, station-identity system, advanced tuning knobs).
-8. **Dead-code follow-up (out of last sweep)** — `UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`; `tierRequirementText` single-source the fallback chain. Small hygiene.
+8. **Dead-code follow-up (out of last sweep)** — ~~`UNLOCK_IDS_BY_TIER` derivable from `UNLOCK_DEFINITIONS`~~ (shipped #47); `tierRequirementText` single-source the fallback chain. Small hygiene.
+9. **Dock-entities follow-ups (from PR #53 4-agent ritual)** — (a) split-with-docked-ship test: verify `bayTiles`, `assignedDockId`, `occupiedByShipId` behavior when mid-tile deleted while dock occupied (pre-existing latent de-sync surfaced by #53 review), (b) three-way split coverage: 5-tile dock with 2 middle-tile deletions → 3 clusters exercises id-dedup across >2 entries, (c) decouple `SHIP_MIN_DOCK_AREA` thresholds from hardcoded 2/4/7 in cluster-size test.
 
-### Recent activity snapshot (2026-04-22 17:00–23:45Z)
-- **19 PRs merged** on top of the overnight sprint
-- **~580 LoC retired** across dead-code sweep (#32/#33/#34/#39)
-- **Correctness bundle** (#29) — save/load now persists all 6 lifetime counters + `archetypesEverSeen`, `normalizeUnlockTier` cap lifted 3→6, sell functions count toward T2 gate, T5 counter proxies wired.
-- **Nano-banana + pixellab pipelines RIPPED OUT** (#36) — atlas restored to curated baseline (7a0b4f3); gpt-image-1 replaces them post-awfml-sign-off.
-- **Harness + CI** unblocked — PR #4 merged, advisory validator shipped (#38).
+### Recent activity snapshot (2026-04-22 23:45Z – 2026-04-23 02:50Z, PM-loop run 2 fire 1–10)
+- **13 PRs merged** (#40–#51 + #53) on top of overnight sprint
+- **Toolbar v1 shipped** (#41/#43) — clickable buttons replace ~30 hotkeys, horizontal packing fix
+- **Modal + label-churn refactors** (#45/#48) — wireModal collapses 8 modals to 1 helper, per-frame label sync moved to click handlers
+- **Autosave live** (#50) — localStorage JSON snapshot every 60s, opt-in cold-start load modal
+- **T3/T4 predicate test coverage + rebuildDockEntities roundtrip** (#44) + **dock id-collision fix** (#53)
+- **Starter-state design doc** (#54 v3) — 4-PR breakdown locked, pivot to Reactor-only + T1 LifeSupport task
+- **gpt-image-1 prelim modules** (#46) + **qa-review.mjs** (#52 open) — awaiting awfml gpt-image-2 endpoint decisions
 
 ### Risks / open questions
 - Phase 5 predicate (T5) uses a proxy (`actorsTreatedLifetime++` on health-state recovery to `healthy`) until Phase 5 producer events land. Proxy is monotonic + works, but semantically "treatments ≠ treatees".
 - T6 specialization predicate intentionally no-op. BMO's minimum-viable path (trophy state, future gate) is the current agreed strawman.
-- Starter state has no food chain — visitors arrive, T1 flash fires, then visitors starve ~60s later. Option-B (pre-activate food chain) is tinyclaw's fresh-session lane.
+- Starter state has no food chain — visitors arrive, T1 flash fires, then visitors starve ~60s later. Option-B design doc (#54 v3) locks 4-PR path; awaiting awfml tutorial-pacing answer to unblock PR-2.
+- **Air-buffer duration risk (new)** — PR-2 ships `airQuality=100` as a finite buffer; if air decays too fast via `(airSupply - airDemand) * dt * 1.7` before T1 LifeSupport task fires, crew go distress in T0. Acceptance test `testColdStartAirBufferExceedsT1UnlockTime` pins this contract.
 - Visual regression baseline absent. Harness v1.0 (#4) has Playwright hooks + CI advisory wired. Baseline screenshot step is follow-up.
 
 ### Ritual
