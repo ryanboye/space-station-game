@@ -24,7 +24,7 @@ import {
   type VisitorArchetype,
   ZoneType
 } from './types';
-import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './content/unlocks';
+import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER, UNLOCK_DEFINITIONS } from './content/unlocks';
 
 const SAVE_SCHEMA_VERSION = 2 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
@@ -33,29 +33,19 @@ const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', '
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
-const UNLOCK_IDS: UnlockId[] = [
-  'tier1_sustenance',
-  'tier2_commerce',
-  'tier3_logistics',
-  'tier4_governance',
-  'tier5_health',
-  'tier6_specialization',
-];
+// Derived from UNLOCK_DEFINITIONS so adding a 7th tier doesn't require
+// hand-editing two parallel tables. UNLOCK_DEFINITIONS is tier-ordered
+// (1..6), so the canonical id list is just .map(d => d.id), and the
+// per-tier prefix slice gives the cumulative ids unlocked at that tier.
+const UNLOCK_IDS: UnlockId[] = UNLOCK_DEFINITIONS.map((d) => d.id);
 const UNLOCK_IDS_BY_TIER: Record<UnlockTier, UnlockId[]> = {
   0: [],
-  1: ['tier1_sustenance'],
-  2: ['tier1_sustenance', 'tier2_commerce'],
-  3: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics'],
-  4: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics', 'tier4_governance'],
-  5: ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics', 'tier4_governance', 'tier5_health'],
-  6: [
-    'tier1_sustenance',
-    'tier2_commerce',
-    'tier3_logistics',
-    'tier4_governance',
-    'tier5_health',
-    'tier6_specialization',
-  ],
+  1: UNLOCK_IDS.slice(0, 1),
+  2: UNLOCK_IDS.slice(0, 2),
+  3: UNLOCK_IDS.slice(0, 3),
+  4: UNLOCK_IDS.slice(0, 4),
+  5: UNLOCK_IDS.slice(0, 5),
+  6: UNLOCK_IDS.slice(0, 6)
 };
 
 export interface StationSnapshotV1 {
