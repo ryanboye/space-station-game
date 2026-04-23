@@ -152,7 +152,11 @@ export async function loadSpriteAtlas(
     const manifestRaw = (await response.json()) as unknown;
     const manifest = parseManifest(manifestRaw);
     if (!manifest) return emptyAtlas('invalid_manifest');
-    const imageUrl = new URL(manifest.imagePath, manifestUrl).toString();
+    // Cache-bust the atlas.png on every manifest version change. Vite-hashed
+    // JS/CSS already handle this; atlas.png ships with a stable filename, so
+    // CDN+browser caches serve stale bytes across deploys without the `?v=`.
+    const baseImageUrl = new URL(manifest.imagePath, manifestUrl).toString();
+    const imageUrl = `${baseImageUrl}?v=${encodeURIComponent(manifest.version)}`;
     const image = await loadImage(imageUrl);
     return {
       ready: true,
