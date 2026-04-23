@@ -1,0 +1,36 @@
+# Example atlas-key-map for unpack-atlas-sheet.mjs.
+# Copy this, rename to match your sheet PNG, fill in the real grid + keys.
+#
+# Usage:
+#   node tools/sprites/unpack-atlas-sheet.mjs \
+#     --sheet tools/sprites/sheets/awfml-2026-04-23-tiles.png \
+#     --map   tools/sprites/sheets/awfml-2026-04-23-tiles.yaml \
+#     --color-key FF00FF
+#   npm run sprites:pack
+#
+# `keys` maps "<col>,<row>" → atlas key. Missing cells are simply ignored.
+# Atlas key must match one from tools/sprites/required-keys-v1.json.
+
+source: "awfml-2026-04-23-tiles.png"
+grid:
+  cols: 4
+  rows: 4
+  cell_size_px: 64
+  gutter_px: 0      # pixel spacing between cells on the sheet (0 = tight)
+  origin: [0, 0]    # top-left pixel of cell (0,0). Usually [0,0].
+keys:
+  "0,0": tile.space
+  "1,0": tile.floor
+  "2,0": tile.cafeteria
+  "3,0": tile.reactor
+  "0,1": tile.wall.solo
+  "1,1": tile.wall.end
+  "2,1": tile.wall.straight
+  "3,1": tile.wall.corner
+  "0,2": tile.wall.tee
+  "1,2": tile.wall.cross
+  "2,2": tile.door
+  "3,2": tile.dock
+  "0,3": tile.security
+  "1,3": tile.brig
+  # leave unused cells unmapped; they're skipped silently.
