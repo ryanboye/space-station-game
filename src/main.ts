@@ -152,6 +152,17 @@ app.innerHTML = `
     </div>
   </div>
   <div id="game-wrap">
+    <div id="hud-status" aria-label="Station status">
+      <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
+      <span class="hud-sep"></span>
+      <span class="hud-item"><span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span></span>
+      <span class="hud-sep"></span>
+      <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
+      <span class="hud-sep"></span>
+      <span class="hud-item"><span class="hud-label">Crew</span><span class="hud-value" id="hud-crew">--</span></span>
+      <span class="hud-sep"></span>
+      <span class="hud-item"><span class="hud-label">Visitors</span><span class="hud-value" id="hud-visitors">--</span></span>
+    </div>
     <div id="game-stage">
       <canvas id="game"></canvas>
     </div>
@@ -169,39 +180,6 @@ app.innerHTML = `
     </div>
 
     <div id="quest-bar" class="section" aria-live="polite"></div>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Build & Room Legend</summary>
-      <div class="legend-grid">
-        <div class="legend-item" data-room="cafeteria"><span class="chip chip-caf"></span><span>Cafeteria (C) <kbd>C</kbd></span></div>
-        <div class="legend-item" data-room="kitchen"><span class="chip chip-caf"></span><span>Kitchen (I) <kbd>I</kbd></span></div>
-        <div class="legend-item" data-room="workshop"><span class="chip chip-reactor"></span><span>Workshop (W) <kbd>W</kbd></span></div>
-        <div class="legend-item" data-room="reactor"><span class="chip chip-reactor"></span><span>Reactor (R) <kbd>R</kbd></span></div>
-        <div class="legend-item" data-room="security"><span class="chip chip-security"></span><span>Security (S) <kbd>S</kbd></span></div>
-        <div class="legend-item" data-room="clinic"><span class="chip chip-security"></span><span>Clinic (Y) <kbd>Y</kbd></span></div>
-        <div class="legend-item" data-room="brig"><span class="chip chip-security"></span><span>Brig (J) <kbd>J</kbd></span></div>
-        <div class="legend-item" data-room="rec-hall"><span class="chip chip-lounge"></span><span>Rec Hall (A) <kbd>A</kbd></span></div>
-        <div class="legend-item" data-room="dorm"><span class="chip chip-dorm"></span><span>Dorm (D) <kbd>D</kbd></span></div>
-        <div class="legend-item" data-room="hygiene"><span class="chip chip-hygiene"></span><span>Hygiene (H) <kbd>H</kbd></span></div>
-        <div class="legend-item" data-room="hydroponics"><span class="chip chip-hydro"></span><span>Hydroponics (F) <kbd>F</kbd></span></div>
-        <div class="legend-item" data-room="life-support"><span class="chip chip-life"></span><span>Life Support (L) <kbd>L</kbd></span></div>
-        <div class="legend-item" data-room="lounge"><span class="chip chip-lounge"></span><span>Lounge (U) <kbd>U</kbd></span></div>
-        <div class="legend-item" data-room="market"><span class="chip chip-market"></span><span>Market (K) <kbd>K</kbd></span></div>
-        <div class="legend-item" data-room="logistics-stock"><span class="chip chip-market"></span><span>Logistics Stock (N) <kbd>N</kbd></span></div>
-        <div class="legend-item" data-room="storage"><span class="chip chip-market"></span><span>Storage (B) <kbd>B</kbd></span></div>
-      </div>
-      <small class="legend-build">
-        Build: <kbd>1</kbd> Floor, <kbd>2</kbd> Wall, <kbd>3</kbd> Dock, <kbd>4</kbd> Door, <kbd>7</kbd> Erase Tile<br />
-        Zone paint: <kbd>8</kbd> Public, <kbd>9</kbd> Restricted, <kbd>0</kbd> Clear Room
-      </small>
-      <small id="module-hotkeys" class="legend-build">
-        Modules: <kbd>Q</kbd> Bed, <kbd>T</kbd> Table, <kbd>5</kbd> Serving, <kbd>V</kbd> Stove, <kbd>P</kbd> Workbench, <kbd>G</kbd> Grow, <kbd>M</kbd> Terminal, <kbd>6</kbd> Couch, <kbd>=</kbd> Game, <kbd>;</kbd> Shower, <kbd>'</kbd> Sink, <kbd>-</kbd> Stall, <kbd>,</kbd> Intake, <kbd>.</kbd> Rack, <kbd>Z</kbd> MedBed, <kbd>/</kbd> CellConsole, <kbd>\\</kbd> RecUnit, <kbd>X</kbd> Clear Module, <kbd>[</kbd>/<kbd>]</kbd> Rotate
-      </small>
-      <small id="module-phase-note" class="legend-build">
-        Readiness checks use size + required modules + door + pressure + path. Rooms are autonomous once ready.
-      </small>
-      <small id="unlock-status" class="legend-build">Progression: Tier 0 | Tier 1: first visitor arrives</small>
-    </details>
 
     <details class="section mini-collapse">
       <summary class="legend-title">Core Status</summary>
@@ -295,12 +273,6 @@ app.innerHTML = `
       <input type="range" id="tax" min="0" max="50" step="1" value="20" />
     </details>
 
-    <details class="section mini-collapse">
-      <summary class="legend-title">Build Guidance</summary>
-      <small>Drag to paint rectangle (Prison Architect style)</small>
-      <small id="paint-guidance">Paint guidance: larger rooms need enough service modules and more than one door.</small>
-      <small id="room-diagnostic">Inspect room: hover a room tile</small>
-    </details>
   </aside>
   <div id="save-modal" class="modal hidden">
     <div class="modal-card save-modal-card">
@@ -611,7 +583,6 @@ const tradeStatusEl = document.querySelector<HTMLElement>('#trade-status')!;
 const demandStripEl = document.querySelector<HTMLElement>('#demand-strip')!;
 const archetypeStripEl = document.querySelector<HTMLElement>('#archetype-strip')!;
 const shipTypeStripEl = document.querySelector<HTMLElement>('#ship-type-strip')!;
-const unlockStatusEl = document.querySelector<HTMLElement>('#unlock-status')!;
 const questBarEl = document.querySelector<HTMLElement>('#quest-bar')!;
 const openProgressionModalBtn = document.querySelector<HTMLButtonElement>('#open-progression-modal')!;
 const progressionModal = document.querySelector<HTMLDivElement>('#progression-modal')!;
@@ -744,9 +715,12 @@ const agentHealthEl = document.querySelector<HTMLElement>('#agent-health')!;
 const agentBlockedEl = document.querySelector<HTMLElement>('#agent-blocked')!;
 const agentVisitorDetailsEl = document.querySelector<HTMLElement>('#agent-visitor-details')!;
 const agentResidentDetailsEl = document.querySelector<HTMLElement>('#agent-resident-details')!;
-const roomDiagnosticEl = document.querySelector<HTMLElement>('#room-diagnostic')!;
-const paintGuidanceEl = document.querySelector<HTMLElement>('#paint-guidance')!;
-const moduleHotkeysEl = document.querySelector<HTMLElement>('#module-hotkeys')!;
+// HUD status strip elements — persistent top-of-canvas sim-game status bar.
+const hudPowerEl = document.querySelector<HTMLElement>('#hud-power')!;
+const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
+const hudCreditsEl = document.querySelector<HTMLElement>('#hud-credits')!;
+const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
+const hudVisitorsEl = document.querySelector<HTMLElement>('#hud-visitors')!;
 const expansionButtons: Record<CardinalDirection, HTMLButtonElement> = {
   north: expandNorthBtn,
   east: expandEastBtn,
@@ -789,13 +763,13 @@ for (const system of prioritySystems) {
 }
 crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
 
+// The Build & Room Legend sidebar panel was removed in the HUD-cleanup
+// pass (awfml's live-game feedback: the top toolbar already surfaces
+// every hotkey). This map used to index those .legend-item nodes; it's
+// now empty, which makes `applyLegendStates` + `attachLegendTooltipHandlers`
+// safe no-ops. Kept declared so the progression wire calls still compile
+// and so we have a single seam if legend chips are ever reintroduced.
 const roomLegendByType = new Map<RoomType, HTMLElement>();
-for (const el of document.querySelectorAll<HTMLElement>('.legend-item[data-room]')) {
-  const roomValue = el.dataset.room;
-  if (roomValue && Object.values(RoomType).includes(roomValue as RoomType)) {
-    roomLegendByType.set(roomValue as RoomType, el);
-  }
-}
 
 const MODULE_HOTKEYS: Array<{ key: string; module: ModuleType; label: string }> = [
   { key: '`', module: ModuleType.WallLight, label: 'WallLight' },
@@ -982,23 +956,15 @@ function installLegendProgressionHandlers(): void {
 let prevUnlockTier: UnlockTier = 0;
 
 function refreshUnlockLegendAndHotkeys(): void {
-  const tier = getUnlockTier(state);
-  const copy = PROGRESSION_TOOLTIP_COPY[tier];
-  const nextTier = (tier < 6 ? tier + 1 : 6) as UnlockTier;
-  const nextCopy = nextTier > tier ? PROGRESSION_TOOLTIP_COPY[nextTier] : undefined;
-  // Status text pulls next-tier trigger copy from PROGRESSION_TOOLTIP_COPY
-  // (player-facing "Unlocks when you X" voice). Single source of truth
-  // shared with the quest bar + modal.
-  const label = copy?.name ?? TIER_PRESENTATION[tier].name;
-  const nextLine = nextCopy ? ` | Next: ${nextCopy.trigger}` : '';
-  unlockStatusEl.textContent = `Progression: Tier ${tier} — ${label}${nextLine}`;
   // Quest bar — pinned "what do I do now" strip at the top of the sidebar.
   // Reads state.unlocks.tier + triggerProgress[tier+1] + PROGRESSION_TOOLTIP_COPY.
   // No new sim fields; lives alongside the existing status line surfaces.
   renderQuestBar(state, questBarEl, (t) => PROGRESSION_TOOLTIP_COPY[t]);
-  // Phase-2 progression wiring — replaces the old `display: none` hide
-  // loop. Locked + coming-next-tier items stay VISIBLE with a state
-  // attribute + tooltip-on-click so players learn what unlocks them.
+  // Phase-2 progression wiring — paints locked/available state on any
+  // remaining legend entries. After the Build & Room Legend panel was
+  // removed, roomLegendByType is empty so this is effectively a no-op;
+  // keep the call so tier-flash + tooltip wiring still works if legend
+  // items are ever reintroduced.
   applyLegendStates(state, roomLegendByType);
   prevUnlockTier = maybeFireTierFlash(
     prevUnlockTier,
@@ -1006,11 +972,43 @@ function refreshUnlockLegendAndHotkeys(): void {
     roomDisplayName,
     (t) => PROGRESSION_TOOLTIP_COPY[t],
   );
-  const unlockedModules = MODULE_HOTKEYS.filter(({ module }) => isModuleUnlocked(state, module))
-    .map(({ key, label }) => `${key} ${label}`)
-    .join(', ');
-  moduleHotkeysEl.textContent =
-    `Modules: ${unlockedModules || 'none yet'}, X Clear, [ ] Rotate, O Inventory`;
+}
+
+/**
+ * Refresh the persistent top-of-canvas HUD status strip.
+ *
+ * Shows Power / Oxygen / Credits / Crew / Visitors — the five numbers
+ * awfml wanted at-a-glance without cracking the sidebar (Starlight-Station
+ * dashboard vibe). Pulled from the same state surfaces the sidebar panels
+ * use so we stay a read-only render consumer:
+ *   - Power: `powerDemand / powerSupply`. `loadPct` is a pre-derived %
+ *     but it clamps to 140 and loses the raw supply denominator; the
+ *     sidebar already shows the ratio so we keep that here too, plus a
+ *     % for quick read.
+ *   - Oxygen: `airQuality` (0-100 life-support %, the sim's "oxygen").
+ *   - Credits: `state.metrics.credits` (integer station bank).
+ *   - Crew: `state.crew.total` (hired head-count).
+ *   - Visitors: `state.metrics.visitorsCount` (on-station right now).
+ *
+ * Uses simple red/yellow/green thresholds matching the existing sidebar
+ * treatments so the HUD reads the same at a glance.
+ */
+function refreshHudStatus(): void {
+  const powerDemand = state.metrics.powerDemand;
+  const powerSupply = state.metrics.powerSupply;
+  const loadPct = Math.round(state.metrics.loadPct);
+  hudPowerEl.textContent = `${loadPct}% (${Math.round(powerDemand)}/${Math.round(powerSupply)})`;
+  hudPowerEl.style.color =
+    powerDemand > powerSupply ? 'var(--danger)' : loadPct > 85 ? 'var(--warn)' : 'var(--ok)';
+
+  const oxygen = Math.round(state.metrics.airQuality);
+  hudOxygenEl.textContent = `${oxygen}%`;
+  hudOxygenEl.style.color =
+    oxygen < 35 ? 'var(--danger)' : oxygen < 70 ? 'var(--warn)' : 'var(--ok)';
+
+  hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
+  hudCrewEl.textContent = String(state.crew.total);
+  hudVisitorsEl.textContent = String(state.metrics.visitorsCount);
 }
 
 function tierRequirementText(tier: UnlockTier): string {
@@ -1198,19 +1196,10 @@ refreshPriorityUi();
 // initial states.
 prevUnlockTier = state.unlocks.tier;
 installLegendProgressionHandlers();
-// S1 fix: auto-expand the Build & Room Legend at tiers 0-2. New players
-// wouldn't open it otherwise and miss the tiered tool palette entirely
-// (BMO's morning-status playtest finding). One-shot at init — if the
-// player manually collapses later it stays collapsed, and save-restores
-// at T3+ start collapsed since that legend is past its teaching window.
-if (state.unlocks.tier <= 2) {
-  // Target the Build & Room Legend specifically via its unique .legend-grid
-  // child. `:has(.legend-title)` would match all 5 section details (Core
-  // Status / Logistics / etc. share the legend-title class), so use the
-  // closest-details pattern instead.
-  const buildLegend = document.querySelector('.legend-grid')?.closest('details');
-  if (buildLegend) buildLegend.open = true;
-}
+// The Build & Room Legend auto-expand at tiers 0-2 was removed alongside
+// the legend panel itself (HUD cleanup pass). The top toolbar now carries
+// the tiered tool palette and the quest bar + persistent HUD strip teach
+// progression, so there's nothing to open here.
 // Build toolbar — clickable surface for the ~30 hotkey-driven tools.
 // Each button carries a data-tool-{kind}="{value}" attribute; the
 // wire-up below maps that to the same selectRoomTool / selectModuleTool
@@ -2915,6 +2904,7 @@ function frame(now: number): void {
   if (shouldRefreshUi) {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
+  refreshHudStatus();
   visitorsEl.textContent = String(state.metrics.visitorsCount);
   moraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
   stationRatingEl.textContent = `${Math.round(state.metrics.stationRating)} (${state.metrics.stationRatingTrendPerMin >= 0 ? '+' : ''}${state.metrics.stationRatingTrendPerMin.toFixed(1)}/min)`;
@@ -3120,36 +3110,16 @@ function frame(now: number): void {
     dockPreviewEl.style.color = '#8ea2bd';
   }
 
-  const diagnostic = cachedHoverDiagnostic;
-  if (diagnostic) {
-    if (diagnostic.active) {
-      const warningSuffix = diagnostic.warnings.length > 0 ? ` | warning: ${diagnostic.warnings.join(', ')}` : '';
-      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} active (${diagnostic.clusterSize} tiles)${warningSuffix} | click for details`;
-      roomDiagnosticEl.style.color = '#6edb8f';
-    } else {
-      const warningSuffix = diagnostic.warnings.length > 0 ? ` | warning: ${diagnostic.warnings.join(', ')}` : '';
-      roomDiagnosticEl.textContent = `Inspect room: ${diagnostic.room} inactive - ${diagnostic.reasons.join(', ')}${warningSuffix} | click for details`;
-      roomDiagnosticEl.style.color = '#ffcf6e';
-    }
-  } else {
-    roomDiagnosticEl.textContent = 'Inspect room: hover a room tile';
-    roomDiagnosticEl.style.color = '#8ea2bd';
-  }
+  // The Build Guidance sidebar panel (room-diagnostic + paint-guidance
+  // surfaces) was removed alongside the Build & Room Legend panel in the
+  // HUD cleanup pass — the top toolbar already encodes the same build
+  // hotkey legend, and the modal room inspector handles deep diagnostics.
+  // `cachedHoverDiagnostic` and `toolLockMessage` are still updated by
+  // other sites (modal inspector, locked-tool toasts) so we just stop
+  // writing them to the deleted sidebar spans.
   }
 
   requestAnimationFrame(frame);
-
-  if (toolLockMessage) {
-    paintGuidanceEl.textContent = `Paint guidance: ${toolLockMessage}`;
-    paintGuidanceEl.style.color = '#ffcf6e';
-  } else if (currentTool.kind === 'room' && currentTool.room !== RoomType.None) {
-    paintGuidanceEl.textContent =
-      'Paint guidance: add enough matching service modules and avoid one-door mega rooms to reduce queue clumping.';
-    paintGuidanceEl.style.color = '#8ea2bd';
-  } else {
-    paintGuidanceEl.textContent = 'Paint guidance: larger rooms need enough service modules and more than one door.';
-    paintGuidanceEl.style.color = '#8ea2bd';
-  }
 }
 
 // ---------------------------------------------------------------------------
