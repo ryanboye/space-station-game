@@ -2744,12 +2744,12 @@ function inspectRoomCluster(
   for (const tile of cluster) {
     const hasDoor = hasAdjacentDoor(state, tile);
     if (hasDoor) doorCount += 1;
-    if (state.pressurized[tile] || room === RoomType.Reactor) pressurizedCount += 1;
+    if (state.pressurized[tile]) pressurizedCount += 1;
     staffCount += staffByTile.get(tile) ?? 0;
   }
   const minTilesMet = cluster.length >= definition.minTiles;
   const pressurizedPct = cluster.length > 0 ? (pressurizedCount / cluster.length) * 100 : 0;
-  const pressurizedEnough = room === RoomType.Reactor || pressurizedPct >= 70;
+  const pressurizedEnough = pressurizedPct >= 70;
 
   const moduleCounts = moduleCountsForCluster(state, cluster);
   const moduleProgress = definition.requiredModules.map((req) => ({
