@@ -679,6 +679,37 @@ function testActivationChecksPreserved(): void {
   );
 }
 
+function testReactorInspectorReportsRealPressurizationPct(): void {
+  // Pre-this-PR, reactor rooms always reported pressurizedPct=100 via a
+  // `room === RoomType.Reactor` short-circuit in inspectRoomCluster. After
+  // #99 made doors into pressure barriers, a walled reactor pressurizes
+  // naturally — the bypass was dead code inflating the inspector's UI %.
+  // Guard: an unsealed reactor now reports its REAL leaky pressurizedPct
+  // (< 70) in the inspector instead of the fake 100.
+  const state = createInitialState({ seed: 6006 });
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 48; x <= 50; x++) {
+      const idx = toIndex(x, y, state.width);
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, RoomType.Reactor);
+    }
+  }
+  const doorIdx = toIndex(48, 2, state.width);
+  setTile(state, doorIdx, TileType.Door);
+  setRoom(state, doorIdx, RoomType.Reactor);
+
+  runFor(state, 1);
+  const inspector = getRoomInspectorAt(state, toIndex(49, 3, state.width));
+  assertCondition(
+    !!inspector,
+    'Reactor cluster inspector should exist for a 3x3 painted room.'
+  );
+  assertCondition(
+    inspector!.pressurizedPct < 70,
+    `Unsealed reactor should report real-leaky pressurization, got ${inspector!.pressurizedPct}%.`
+  );
+}
+
 function testDemoStationRoomsPressurized(): void {
   // Scenario-level regression guard for doors-as-barriers: after loading
   // demo-station, every room center (painted as walled interior with one
@@ -2844,6 +2875,7 @@ function run(): void {
   testActivationChecksPreserved();
   testDoorsArePressureBarriers();
   testDemoStationRoomsPressurized();
+  testReactorInspectorReportsRealPressurizationPct();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
