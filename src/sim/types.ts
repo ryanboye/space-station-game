@@ -1080,6 +1080,18 @@ export function isWalkable(tile: TileType): boolean {
   return WALKABLE_TILES.has(tile);
 }
 
+// Tiles that always block vacuum propagation. Outer-hull Dock tiles also
+// barrier but require state context to detect — handled inline in
+// computePressurization.
+export const PRESSURE_BARRIER_TILES = new Set<TileType>([
+  TileType.Wall,
+  TileType.Door
+]);
+
+export function isPressureBarrier(tile: TileType): boolean {
+  return PRESSURE_BARRIER_TILES.has(tile);
+}
+
 export function makeRng(seed: number): () => number {
   let t = seed >>> 0;
   return () => {
