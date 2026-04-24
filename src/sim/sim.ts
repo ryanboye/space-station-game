@@ -66,6 +66,7 @@ import {
   clamp,
   fromIndex,
   inBounds,
+  isPressureBarrier,
   isWalkable,
   makeRng,
   toIndex,
@@ -1770,15 +1771,14 @@ function computePressurization(state: StationState): void {
   const n = state.tiles.length;
   const vacuumReachable = new Array<boolean>(n).fill(false);
   const queue: number[] = [];
-  const isPressureBarrier = (idx: number): boolean => {
-    if (state.tiles[idx] === TileType.Wall) return true;
-    if (state.tiles[idx] === TileType.Door) return true;
-    if (state.tiles[idx] === TileType.Dock && isOuterHullTile(state, idx)) return true;
-    return false;
+  const isBarrierAt = (idx: number): boolean => {
+    const tile = state.tiles[idx];
+    if (isPressureBarrier(tile)) return true;
+    return tile === TileType.Dock && isOuterHullTile(state, idx);
   };
   const pushIfOpen = (idx: number): void => {
     if (vacuumReachable[idx]) return;
-    if (isPressureBarrier(idx)) return;
+    if (isBarrierAt(idx)) return;
     vacuumReachable[idx] = true;
     queue.push(idx);
   };
@@ -1807,7 +1807,7 @@ function computePressurization(state: StationState): void {
       if (!inBounds(nx, ny, state.width, state.height)) continue;
       const ni = toIndex(nx, ny, state.width);
       if (vacuumReachable[ni]) continue;
-      if (isPressureBarrier(ni)) continue;
+      if (isBarrierAt(ni)) continue;
       vacuumReachable[ni] = true;
       queue.push(ni);
     }
