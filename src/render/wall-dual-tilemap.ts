@@ -15,13 +15,18 @@ export const WALL_DUAL_SPRITE_VARIANT_KEYS: Record<DualWallShape, string> = {
 };
 
 /**
- * Which tiles terminate a dual-tilemap wall? Walls ONLY — doors are excluded
- * (RimWorld-style: walls meet flush against doors, not merged). This differs
- * from the per-cell wall renderer in `tile-variants.ts` where Door counts as
- * a connected neighbor.
+ * Which tiles terminate a dual-tilemap wall? Walls AND doors — walls draw
+ * continuously THROUGH doors so the station reads as a single enclosed shell
+ * (Prison Architect style). The door sprite renders on top of the wall in a
+ * later pass, creating the "opening in the wall" visual.
+ *
+ * This was 'Wall only' in the initial implementation (RimWorld style,
+ * flush-terminate at doors), but awfml 2026-04-24 flagged the resulting
+ * geometry as "walls broken" — every door tile created a stub of interior
+ * wall next to it. Treating doors as wall-like fixes that.
  */
 export function isWallLikeTileForDual(tile: TileType): boolean {
-  return tile === TileType.Wall;
+  return tile === TileType.Wall || tile === TileType.Door;
 }
 
 /**
