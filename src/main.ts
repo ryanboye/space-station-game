@@ -999,7 +999,7 @@ function installLegendProgressionHandlers(): void {
   attachLegendTooltipHandlers(
     roomLegendByType,
     roomDisplayName,
-    (t) => PROGRESSION_TOOLTIP_COPY[t]?.trigger ?? tierRequirementText(t),
+    tierRequirementText,
   );
 }
 
@@ -1127,10 +1127,7 @@ function refreshProgressionModal(): void {
     const nextInfo = TIER_PRESENTATION[progress.nextTier];
     const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
     progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    // S2.1: modal "Unlock Requirement" pulls from PROGRESSION_TOOLTIP_COPY
-    // (player-facing trigger voice). Matches the status-line + quest-bar.
-    const requirement = nextCopy?.trigger ?? tierRequirementText(progress.nextTier);
-    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${requirement}`;
+    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${tierRequirementText(progress.nextTier)}`;
     progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
     progressModalNextNeedsEl.textContent = `New Citizen Needs: ${formatTierList(nextInfo.citizenNeeds)}`;
     progressModalNextVisitorNeedsEl.textContent = `New Visitor/Ship Needs: ${formatTierList(nextInfo.visitorNeeds)}`;
@@ -1157,7 +1154,7 @@ function refreshProgressionModal(): void {
           <span class="progression-tier-status">${statusLabel}</span>
         </div>
         <small class="progression-tier-theme-line">${entry.theme}</small>
-        <small><strong>Unlock Requirement:</strong> ${PROGRESSION_TOOLTIP_COPY[entryTier]?.trigger ?? tierRequirementText(entryTier)}</small>
+        <small><strong>Unlock Requirement:</strong> ${tierRequirementText(entryTier)}</small>
         <small><strong>Buildings:</strong> ${formatTierList(entry.buildings)}</small>
         <small><strong>Citizen Needs:</strong> ${formatTierList(entry.citizenNeeds)}</small>
         <small><strong>Visitor/Ship Needs:</strong> ${formatTierList(entry.visitorNeeds)}</small>
