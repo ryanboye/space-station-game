@@ -42,6 +42,9 @@ import {
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
 import { renderDualWallLayer } from './wall-dual-tilemap';
+import { renderWallDetailLayer } from './wall-detail-layer';
+import { renderRoomLabelLayer } from './room-label-layer';
+import { renderDoorDockDetailLayer } from './door-dock-detail-layer';
 import { renderGlowPass } from './glow-pass';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
@@ -276,6 +279,9 @@ function drawTileSprite(
     );
   }
   if (tileType === TileType.Door) {
+    if (state.controls.wallRenderMode === 'dual-tilemap') {
+      return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Floor], px, py, TILE_SIZE, TILE_SIZE);
+    }
     const doorVariant = resolveDoorVariantForTile(state, tileIndex);
     return (
       drawSpriteByKey(
@@ -290,7 +296,33 @@ function drawTileSprite(
       ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Door], px, py, TILE_SIZE, TILE_SIZE)
     );
   }
+  if (tileType === TileType.Floor && state.rooms[tileIndex] !== RoomType.None) {
+    const roomKey = ROOM_SPRITE_KEYS[state.rooms[tileIndex]];
+    if (roomKey && drawSpriteByKey(ctx, spriteAtlas, roomKey, px, py, TILE_SIZE, TILE_SIZE)) {
+      return true;
+    }
+  }
   return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[tileType], px, py, TILE_SIZE, TILE_SIZE);
+}
+
+function renderDoorLayer(ctx: CanvasRenderingContext2D, state: StationState, spriteAtlas: SpriteAtlas): void {
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] !== TileType.Door) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    const doorVariant = resolveDoorVariantForTile(state, i);
+    drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      DOOR_SPRITE_VARIANT_KEYS[doorVariant.shape],
+      px,
+      py,
+      TILE_SIZE,
+      TILE_SIZE,
+      doorVariant.rotation
+    ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Door], px, py, TILE_SIZE, TILE_SIZE);
+  }
 }
 
 function drawSpriteFrame(
@@ -432,6 +464,10 @@ function roomWeatherBias(roomType: RoomType): number {
   }
 }
 
+function suppressFloorWeather(roomType: RoomType): boolean {
+  return roomType === RoomType.Cafeteria || roomType === RoomType.Clinic || roomType === RoomType.RecHall;
+}
+
 function hashWeatherSeed(tileIndex: number, roomType: RoomType, topologyVersion: number): number {
   const seed = `${tileIndex}|${roomType}|${topologyVersion}`;
   let hash = 2166136261;
@@ -446,6 +482,7 @@ function pickFloorOverlayKey(state: StationState, tileIndex: number): string | n
   const tileType = state.tiles[tileIndex];
   if (!isFloorWeatherEligible(tileType)) return null;
   const roomType = state.rooms[tileIndex];
+  if (suppressFloorWeather(roomType)) return null;
   const hash = hashWeatherSeed(tileIndex, roomType, state.topologyVersion);
   const roll = hash % 100;
   const bias = roomWeatherBias(roomType);
@@ -1051,6 +1088,10 @@ function ensureStaticLayer(
   }
   if (useSprites && state.controls.wallRenderMode === 'dual-tilemap') {
     renderDualWallLayer(ctx, state, spriteAtlas, drawSpriteByKey);
+    renderWallDetailLayer(ctx, state);
+    renderDoorLayer(ctx, state, spriteAtlas);
+    renderDoorDockDetailLayer(ctx, state);
+    renderRoomLabelLayer(ctx, state);
   }
   return layer;
 }
@@ -1090,13 +1131,6 @@ function ensureDecorativeLayer(
 
   for (const module of state.moduleInstances) {
     drawModuleVisual(ctx, state, module, spriteAtlas, useSprites);
-  }
-
-  if (useSprites) {
-    for (let i = 0; i < state.tiles.length; i++) {
-      if (state.tiles[i] !== TileType.Dock) continue;
-      drawDockFacadeOverlay(ctx, state, i, spriteAtlas);
-    }
   }
 
   return layer;

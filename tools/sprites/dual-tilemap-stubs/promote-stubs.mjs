@@ -2,10 +2,10 @@
 // Copies the 5 staged dual-tilemap stubs into tools/sprites/curated/ with
 // the pack-atlas keyToFileName mapping, and PROGRAMMATICALLY DERIVES a
 // placeholder for tile.wall.dt.inner_corner by taking wall_dual_full.png
-// and clearing the bottom-right quadrant to magenta chroma (#FF00FF).
+// and clearing the bottom-right quadrant to alpha 0.
 //
-// (The real inner_corner stub is not in the staged set — awfml will
-// replace this placeholder with a hand-authored asset.)
+// (The real inner_corner stub is not in the staged set — this keeps the
+// runtime contract valid until a hand-authored asset replaces it.)
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -38,10 +38,10 @@ async function deriveInnerCornerFromFull(fullPath, outPath) {
   for (let y = halfH; y < height; y++) {
     for (let x = halfW; x < width; x++) {
       const i = (y * width + x) * 4;
-      raw[i + 0] = 0xff;
+      raw[i + 0] = 0x00;
       raw[i + 1] = 0x00;
-      raw[i + 2] = 0xff;
-      raw[i + 3] = 0xff;
+      raw[i + 2] = 0x00;
+      raw[i + 3] = 0x00;
     }
   }
   await sharp(raw, { raw: { width, height, channels: 4 } })

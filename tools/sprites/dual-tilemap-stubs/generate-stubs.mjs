@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// Generates 5 placeholder PNGs for the dual-tilemap wall sprite set.
+// Generates 5 deterministic PNGs for the dual-tilemap wall sprite set.
 // The inner_corner stub is NOT generated here — it is derived from
 // wall_dual_full.png by the pack-atlas step (see promote-stubs.mjs).
 //
 // Palette (matches walls-dt-template.txt):
-//   #FF00FF magenta     — transparent quadrant (chroma key)
+//   alpha 0             — transparent quadrant
 //   #2a3040 wall body   — cool steel-blue
 //   #d8e0ea rim-light   — cool-white edge highlight
 //
-// Layout: 256x256 canvas, 4 × 128x128 quadrants (TL, TR, BL, BR).
+// Layout: 64x64 canvas, 4 × 32x32 quadrants (TL, TR, BL, BR).
 // Authoring is TL-biased (matches pickDualVariant's canonical lookup).
 
 import fs from 'node:fs/promises';
@@ -18,19 +18,20 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-const SIZE = 256;
-const HALF = 128;
+const SIZE = 64;
+const HALF = 32;
 const BODY = { r: 0x2a, g: 0x30, b: 0x40 };
+const BODY_DARK = { r: 0x20, g: 0x25, b: 0x33 };
+const BODY_LIGHT = { r: 0x37, g: 0x40, b: 0x54 };
 const RIM = { r: 0xd8, g: 0xe0, b: 0xea };
-const CHROMA = { r: 0xff, g: 0x00, b: 0xff };
 
 function makeBuffer() {
   const buf = Buffer.alloc(SIZE * SIZE * 4);
   for (let i = 0; i < SIZE * SIZE; i++) {
-    buf[i * 4 + 0] = CHROMA.r;
-    buf[i * 4 + 1] = CHROMA.g;
-    buf[i * 4 + 2] = CHROMA.b;
-    buf[i * 4 + 3] = 255;
+    buf[i * 4 + 0] = 0;
+    buf[i * 4 + 1] = 0;
+    buf[i * 4 + 2] = 0;
+    buf[i * 4 + 3] = 0;
   }
   return buf;
 }
@@ -57,6 +58,12 @@ function fillQuadrant(buf, col, row) {
   const x0 = col * HALF;
   const y0 = row * HALF;
   fillRect(buf, x0, y0, x0 + HALF, y0 + HALF, BODY);
+  for (let y = y0; y < y0 + HALF; y++) {
+    for (let x = x0; x < x0 + HALF; x++) {
+      if ((x + y) % 11 === 0) put(buf, x, y, BODY_LIGHT);
+      if (x % 16 === 0 || y % 16 === 0) put(buf, x, y, BODY_DARK);
+    }
+  }
 }
 
 function drawRimOnExternalEdges(buf, filledQuadrants) {
@@ -66,7 +73,7 @@ function drawRimOnExternalEdges(buf, filledQuadrants) {
   // sprite, or outside the 2x2 quadrant grid — but outside = cell boundary,
   // we skip rim there per spec, only interior wall-meets-empty gets rim).
   const isFilled = (c, r) => filledQuadrants.has(`${c},${r}`);
-  const RIM_THICKNESS = 3;
+  const RIM_THICKNESS = 2;
   for (const key of filledQuadrants) {
     const [col, row] = key.split(',').map(Number);
     const x0 = col * HALF;

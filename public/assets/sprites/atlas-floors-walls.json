@@ -1,5 +1,5 @@
 {
-  "version": "sprite-floors-walls-2026-02-16T23:04:37.656Z",
+  "version": "sprite-floors-walls-2026-04-24T16:33:52.598Z",
   "cellSize": 64,
   "imagePath": "atlas-floors-walls.png",
   "frames": {
@@ -47,6 +47,42 @@
     },
     "tile.wall.cross": {
       "x": 478,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.empty": {
+      "x": 546,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.single_corner": {
+      "x": 614,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.edge": {
+      "x": 682,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.saddle": {
+      "x": 750,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.inner_corner": {
+      "x": 818,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "tile.wall.dt.full": {
+      "x": 886,
       "y": 2,
       "w": 64,
       "h": 64

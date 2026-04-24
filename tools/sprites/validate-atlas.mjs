@@ -63,12 +63,33 @@ function isValidFrame(frame) {
   );
 }
 
-function isTileKey(key) {
-  return key.startsWith('tile.');
+function isSurfaceKey(key) {
+  // `room.*` entries were originally transparent overlay icons, but the
+  // sprite pipeline now treats them as full-bleed floor textures. Validate
+  // them with the same edge/seam checks as tiles instead of the transparent
+  // non-tile border checks.
+  return key.startsWith('tile.') || key.startsWith('room.');
 }
 
 function isOverlayKey(key) {
   return key.startsWith('overlay.');
+}
+
+function isTransparentTileObjectKey(key) {
+  return key === 'tile.door' || key === 'tile.door.horizontal' || key === 'tile.door.vertical';
+}
+
+const DUAL_WALL_ALPHA_COVERAGE = {
+  'tile.wall.dt.empty': 0,
+  'tile.wall.dt.single_corner': 0.25,
+  'tile.wall.dt.edge': 0.5,
+  'tile.wall.dt.saddle': 0.5,
+  'tile.wall.dt.inner_corner': 0.75,
+  'tile.wall.dt.full': 1
+};
+
+function isDualWallKey(key) {
+  return Object.hasOwn(DUAL_WALL_ALPHA_COVERAGE, key);
 }
 
 function atlasPathsForProfile(profile) {
@@ -117,6 +138,19 @@ function frameEdgeStats(rgba, atlasWidth, frame) {
     transparentRatio: edgePixels > 0 ? transparent / edgePixels : 0,
     opaqueRatio: edgePixels > 0 ? opaque / edgePixels : 0
   };
+}
+
+function frameOpaqueCoverage(rgba, atlasWidth, frame) {
+  let opaque = 0;
+  let pixels = 0;
+  for (let y = frame.y; y < frame.y + frame.h; y++) {
+    for (let x = frame.x; x < frame.x + frame.w; x++) {
+      const i = (y * atlasWidth + x) * 4;
+      if (rgba[i + 3] >= MIN_ALPHA) opaque += 1;
+      pixels += 1;
+    }
+  }
+  return pixels > 0 ? opaque / pixels : 0;
 }
 
 function frameSeamScore(rgba, atlasWidth, frame) {
@@ -210,7 +244,18 @@ async function main() {
       continue;
     }
 
-    if (isTileKey(key)) {
+    if (isDualWallKey(key)) {
+      const coverage = frameOpaqueCoverage(rgba, atlasWidth, frame);
+      const expected = DUAL_WALL_ALPHA_COVERAGE[key];
+      if (Math.abs(coverage - expected) > 0.02) {
+        thresholdFailures.push(
+          `${key}: opaque coverage ${coverage.toFixed(3)} outside expected ${expected.toFixed(3)} ± 0.020`
+        );
+      }
+      continue;
+    }
+
+    if (isSurfaceKey(key) && !isTransparentTileObjectKey(key)) {
       const seam = frameSeamScore(rgba, atlasWidth, frame);
       if (stats.brightOpaqueRatio > TILE_BRIGHT_EDGE_MAX) {
         thresholdFailures.push(
