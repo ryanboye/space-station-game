@@ -36,3 +36,8 @@ playwright-report/
 
 # Harness run output (generated, not committed)
 /tmp/harness-runs/
+
+# Pixellab v2 generated sprite outputs — regenerate via tools/sprites/pixellab-v2/gen.mjs
+tools/sprites/pixellab-v2/agents/
+tools/sprites/pixellab-v2/modules/
+tools/sprites/pixellab-v2/_status.json
