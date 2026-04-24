@@ -1,10 +1,10 @@
 # Expanse Station Sim — Product Plan (Requirements Draft)
 
 ## 0) Current Execution Status
-*Last updated: 2026-04-23 23:20Z by tinyclaw (PM-loop run 4 fire 1/10). Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `c1dfe8d`.*
+*Last updated: 2026-04-24 01:30Z by tinyclaw (PM-loop run 4 wrap, fire 10/10). Live playtest build: <https://bmo.ryanboye.com/spacegame/> @ main `3feaab6`.*
 
 ### Current milestone
-**M1.2 Sprite-Pipeline + Render Hardening — in progress.** Massive day: 28 PRs merged (#71-#98). Sprite pipeline v2 active via gpt-image-2 (iter-1 through pass-7 room-floor refactor). Render-bug debug chain (#95/#96/#97) isolated and fixed the "pokemon-red aggregate" — root cause was two compound overlay passes (inactive-room dim + depressurized red-wash) multiplicatively tinting every interior tile. Dual-tilemap walls (Path A / RimWorld technique) shipped behind `?walls=dual` flag (#98) with placeholder sprites — art reroll + PHash-vs-PA gate queued for next cycle.
+**M1.2 Sprite-Pipeline + Render Hardening — sim-side hardening shipped, art pending.** PM-loop run 4 closed out 6 PRs + 1 issue + a standalone meshy-pipeline tool. Sim correctness arc landed: doors-as-pressure-barriers (#99), scenario-level pressurization regression (#101), dead reactor pressurization fallback removed (#102), `isPressureBarrier` promoted to `types.ts` for future barrier types (#104), `tierRequirementText` fallback chain single-sourced (#105). Issue #103 filed for door open/closed-state debt. Sprite-pipeline gen + render-bug debug chain shipped earlier in the day (#94-#98 by BMO + seb). Dual-tilemap walls live behind `?walls=dual` flag (#98) with placeholder sprites — art reroll + PHash-vs-PA gate are next-session priorities.
 
 ### Lanes (active bots)
 - **tinyclaw** — project management, sim data + state transitions, sprite generation via pixellab + nano-banana.
@@ -109,6 +109,14 @@
 | #97 | `4054ac0` | fix(render) — tone inactive-dim + depressurized-wash alphas (cosmetic rust fix, superseded by #99 sim-side) |
 | #98 | `c1dfe8d` | feat(render) — dual-tilemap wall pass (Path A / RimWorld technique, behind `?walls=dual` flag) |
 | #99 | `10d4930` | fix(sim) — doors count as pressure barriers (seals demo-station, tinyclaw) |
+| #100 | `ac16a6e` | docs(plan) — §0 refresh post #71-99 + PM-loop run 4 turn 2 (tinyclaw) |
+| #101 | `a845ba3` | test(sim) — scenario-level pressurization regression for demo-station (tinyclaw) |
+| #102 | `b321294` | chore(sim) — drop dead reactor pressurization fallback (tinyclaw) |
+| #104 | `8cf4df6` | refactor(sim) — promote isPressureBarrier to types.ts (tinyclaw) |
+| #105 | `3feaab6` | chore(ui) — single-source tierRequirementText fallback chain (tinyclaw) |
+
+### Open Issues
+- **#103** — Debt: transient door open/closed state (post-#99 followup). Low priority; file-and-forget until heat/cold/air-quality mechanics make the transient-barrier model matter.
 
 ### Open PRs
 - **#2** `feat: atlas-preview.html — debug-oriented sprite atlas inspector` (VoX). Static debug page, non-blocking. Age: 2d.
@@ -139,7 +147,7 @@
 - **Harness additions** (tinyclaw #1-#4 from harness-proposal): per-sprite A/B gate + regression detector (#87), prompt-macro library + per-pack archive (#88), verify-floor-periodicity gate (#93).
 - **Scenario infrastructure**: `?scenario=<name>` URL loader (#73) with starter/t1-ready/t5-ready/t6-trophy fixtures; BMO extended to `demo-station` 10-room programmatic layout (#80).
 - **Glow pass** (#74) — wall lights, stoves, reactor, med-beds — now per-toggle (Glow ON/OFF), alpha-tuned in #96.
-- **PM-loop run 4 kicked off 23:15Z** — turn 1/10 shipped #99 (sim-side pressurization fix + regression test); turn 2/10 rolling up this plan refresh.
+- **PM-loop run 4 closed (23:15Z–01:30Z)** — 6 PRs merged (#99/#100/#101/#102/#104/#105), 1 issue filed (#103), 1 standalone tool shipped (~/projects/meshy-pipeline/). Sim-correctness arc complete: doors-as-barriers + scenario regression + dead-fallback removal + helper-promotion + UI hygiene.
 - **Methodology lessons baked in** (seb memory ids 508–512): review bar is "matches target", not "better than before"; gate-as-arbiter before vibe-shipping; research prior art first (dual-tilemap); version-pin every review fetch against CDN cache; PA tileset is ground-truth reference, not calibration.
 - **Brainstorms queued for awfml**: `?telemetry=1` JSONL emit (#65 follow-up), PHash-vs-PA gate as pack-time arbiter (next-session priority per seb+BMO handoff), multi-hue palette refresh for room-floor textures.
 
