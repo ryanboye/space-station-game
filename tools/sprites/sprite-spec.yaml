@@ -53,56 +53,46 @@ sprites:
   # /tmp/rimworld-test/walls-dt-template.txt — each prompt below matches
   # the canonical TL-biased orientation (rotations resolved at runtime).
   tile.wall.dt.empty:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant EMPTY — fully transparent 256x256 cell (pure magenta
-      #FF00FF for chroma-key). No wall body. Included as a canonical slot;
-      renderer skips drawing this in practice. Cool station palette context.
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant EMPTY - fully transparent cell (magenta FF00FF chroma). No
+      wall body. Cool station palette context.
     rotation: 0
   tile.wall.dt.single_corner:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant SINGLE_CORNER — only the TOP-LEFT 128x128 quadrant filled
-      with cool steel-blue wall body (#2a3040), cool-white rim-light (#d8e0ea)
-      on the two EXTERIOR edges of that quadrant (bottom + right edges where
-      wall meets empty magenta). Other three quadrants fully transparent
-      magenta (#FF00FF). No bolts, no seams, no decorative trim. Seamless
-      wall body. See /tmp/rimworld-test/walls-dt-template.txt (Cell 1).
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant SINGLE_CORNER - only top-left quadrant filled with cool
+      steel-blue wall body (2a3040), cool-white rim-light (d8e0ea) on the
+      two exterior edges of that quadrant. Other three quadrants magenta
+      chroma. No bolts, no seams, seamless wall body.
     rotation: 0
   tile.wall.dt.edge:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant EDGE — top half (TL + TR quadrants) filled with continuous
-      cool steel-blue wall body (#2a3040). Bottom half (BL + BR quadrants)
-      fully transparent magenta (#FF00FF). Cool-white rim-light (#d8e0ea) on
-      the bottom edge of the filled half only (wall-meets-empty boundary).
-      Top edge of cell is body-only (continues into next tile). No bolts, no
-      decorative panels. See /tmp/rimworld-test/walls-dt-template.txt (Cell 2
-      — authored canonical rotation is top-half solid).
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant EDGE - top half (TL+TR) filled with cool steel-blue wall
+      body (2a3040). Bottom half magenta chroma. Cool-white rim-light
+      (d8e0ea) on the bottom edge of the filled half. No decorative panels.
     rotation: 0
   tile.wall.dt.saddle:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant SADDLE — diagonal pattern, TL + BR quadrants filled with
-      cool steel-blue wall body (#2a3040), TR + BL quadrants fully transparent
-      magenta (#FF00FF). Cool-white rim-lights (#d8e0ea) on the inner edges of
-      each filled quadrant (the two edges facing the diagonal empty neighbors).
-      Two separate wall chunks diagonally opposed. No decorative trim. See
-      /tmp/rimworld-test/walls-dt-template.txt (Cell 3).
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant SADDLE - diagonal pattern, TL+BR quadrants filled with cool
+      steel-blue wall body (2a3040), TR+BL magenta chroma. Cool-white
+      rim-lights (d8e0ea) on inner edges of each filled quadrant.
     rotation: 0
   tile.wall.dt.inner_corner:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant INNER_CORNER — three quadrants filled (TL + TR + BL) in
-      continuous cool steel-blue wall body (#2a3040). BR quadrant fully
-      transparent magenta (#FF00FF). Cool-white rim-lights (#d8e0ea) ONLY on
-      the concave edges facing the empty BR (bottom edge of TR, right edge of
-      BL). Other edges are body-only (cell boundary or internal). L-shape /
-      concave wall with a 1/4-cell bite out of BR. See
-      /tmp/rimworld-test/walls-dt-template.txt (Cell 4).
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant INNER_CORNER - three quadrants filled (TL+TR+BL) in cool
+      steel-blue wall body (2a3040). BR quadrant magenta chroma. Cool-white
+      rim-lights (d8e0ea) on the concave edges facing empty BR.
     rotation: 0
   tile.wall.dt.full:
-    prompt: Top-down pixel art. space station. Style of rimworld. Dual-tilemap
-      wall variant FULL — entire 256x256 cell filled with continuous cool
-      steel-blue wall body (#2a3040). NO rim-lights anywhere (every edge is a
-      cell-boundary meeting another filled wall in the grid). Seamless wall
-      body texture across the whole cell. No bolts, no panel seams. See
-      /tmp/rimworld-test/walls-dt-template.txt (Cell 5).
+    prompt: |-
+      Top-down pixel art, space station, rimworld style. Dual-tilemap wall
+      variant FULL - entire cell filled with continuous cool steel-blue
+      wall body (2a3040). No rim-lights (every edge meets another wall).
+      Seamless texture. No bolts, no panel seams.
     rotation: 0
   tile.dock.middle:
     prompt: Top-down pixel art. space station. Style of rimworld. opening in space station intended for ships to dock. air lock opening. docking tile. Full-bleed square tile with docking
