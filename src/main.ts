@@ -81,157 +81,118 @@ if (!app) throw new Error('App root not found');
 
 app.innerHTML = `
   <div id="topbar">
-    <button id="open-save-modal" class="topbar-btn">Save / Load</button>
-    <button id="open-market" class="topbar-btn">Market</button>
-    <button id="open-expansion-modal" class="topbar-btn">Map Expansion</button>
-    <button id="open-progression-modal" class="topbar-btn">Progression</button>
-    <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
-    <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
-    <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
-    <button id="toggle-glow" class="topbar-btn">Glow: ON</button>
-    <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
-    <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
-    <span class="topbar-spacer"></span>
-    <span id="autosave-status" class="topbar-note hidden" aria-live="polite"></span>
-    <button id="load-autosave" class="topbar-btn hidden">Load last session</button>
-    <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
-    <button id="camera-reset" class="topbar-btn">Fit Map</button>
-  </div>
-  <div id="toolbar" aria-label="Build tools">
-    <div class="tool-row">
-      <span class="tool-row-label">Build</span>
-      <button class="tool-btn" data-tool-tile="floor" title="Floor (1)"><span class="tool-key">1</span>Floor</button>
-      <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
-      <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
-      <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
-      <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
-      <span class="tool-row-sep"></span>
-      <span class="tool-row-label">Zone</span>
-      <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
-      <button class="tool-btn" data-tool-zone="restricted" title="Paint Restricted zone (9)"><span class="tool-key">9</span>Restricted</button>
-      <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
-      <span class="tool-row-sep"></span>
-      <button class="tool-btn" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
-      <button class="tool-btn" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
+    <div class="station-brand">
+      <div class="station-mark">S</div>
+      <div>
+        <h1>Starlight Station</h1>
+        <span id="autosave-status" class="topbar-note hidden" aria-live="polite"></span>
+        <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
+      </div>
     </div>
-    <div class="tool-row" data-tool-section="rooms">
-      <span class="tool-row-label">Rooms</span>
-      <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
-      <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
-      <button class="tool-btn" data-tool-room="hydroponics" title="Build Hydroponics (F)"><span class="tool-key">F</span>Hydroponics</button>
-      <button class="tool-btn" data-tool-room="kitchen" title="Build Kitchen (I)"><span class="tool-key">I</span>Kitchen</button>
-      <button class="tool-btn" data-tool-room="cafeteria" title="Build Cafeteria (C)"><span class="tool-key">C</span>Cafeteria</button>
-      <button class="tool-btn" data-tool-room="life-support" title="Build Life Support (L)"><span class="tool-key">L</span>Life Support</button>
-      <button class="tool-btn" data-tool-room="reactor" title="Build Reactor (R)"><span class="tool-key">R</span>Reactor</button>
-      <button class="tool-btn" data-tool-room="lounge" title="Build Lounge (U)"><span class="tool-key">U</span>Lounge</button>
-      <button class="tool-btn" data-tool-room="market" title="Build Market (K)"><span class="tool-key">K</span>Market</button>
-      <button class="tool-btn" data-tool-room="workshop" title="Build Workshop (W)"><span class="tool-key">W</span>Workshop</button>
-      <button class="tool-btn" data-tool-room="storage" title="Build Storage (B)"><span class="tool-key">B</span>Storage</button>
-      <button class="tool-btn" data-tool-room="logistics-stock" title="Build Logistics Stock (N)"><span class="tool-key">N</span>Logistics</button>
-      <button class="tool-btn" data-tool-room="security" title="Build Security (S)"><span class="tool-key">S</span>Security</button>
-      <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
-      <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
-      <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
+    <div id="hud-status" aria-label="Station status">
+      <span class="hud-item"><span class="hud-label">Crew</span><span class="hud-value" id="hud-crew">--</span></span>
+      <span class="hud-item"><span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span></span>
+      <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
+      <span class="hud-item"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
+      <span class="hud-item"><span class="hud-label">Food</span><span class="hud-value" id="hud-food">--</span></span>
+      <span class="hud-item"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
+      <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
+      <span class="hud-item"><span class="hud-label">Visitors</span><span class="hud-value" id="hud-visitors">--</span></span>
     </div>
-    <div class="tool-row" data-tool-section="modules">
-      <span class="tool-row-label">Modules</span>
-      <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
-      <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
-      <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
-      <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
-      <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
-      <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
-      <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
-      <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
-      <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
-      <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
-      <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
-      <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
-      <button class="tool-btn" data-tool-module="intake-pallet" title="Place Intake Pallet (,)"><span class="tool-key">,</span>Intake</button>
-      <button class="tool-btn" data-tool-module="storage-rack" title="Place Storage Rack (.)"><span class="tool-key">.</span>Rack</button>
-      <button class="tool-btn" data-tool-module="terminal" title="Place Security Terminal (M)"><span class="tool-key">M</span>Terminal</button>
-      <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
-      <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
-      <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
-      <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
+    <div class="top-actions">
+      <button id="open-save-modal" class="topbar-btn">Save / Load</button>
+      <button id="load-autosave" class="topbar-btn hidden">Load last session</button>
+      <button id="open-market" class="topbar-btn">Market</button>
+      <button id="open-expansion-modal" class="topbar-btn">Expand</button>
+      <button id="open-progression-modal" class="topbar-btn">Progress</button>
+      <button id="camera-reset" class="topbar-btn">Fit</button>
+    </div>
+    <div class="sim-controls">
+      <span class="sim-clock" id="hud-clock">Cycle 0 | Day 1 | 00:00</span>
+      <button id="play" class="icon-btn transport-btn" aria-label="Play">&gt;</button>
+      <button id="pause" class="icon-btn transport-btn" aria-label="Pause">||</button>
+      <button id="speed-up" class="icon-btn transport-btn" aria-label="Speed Up">&gt;&gt;</button>
+      <span class="value speed-pill" id="speed-label">1x</span>
     </div>
   </div>
   <div id="game-wrap">
-    <div id="hud-status" aria-label="Station status">
-      <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
-      <span class="hud-sep"></span>
-      <span class="hud-item"><span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span></span>
-      <span class="hud-sep"></span>
-      <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
-      <span class="hud-sep"></span>
-      <span class="hud-item"><span class="hud-label">Crew</span><span class="hud-value" id="hud-crew">--</span></span>
-      <span class="hud-sep"></span>
-      <span class="hud-item"><span class="hud-label">Visitors</span><span class="hud-value" id="hud-visitors">--</span></span>
-    </div>
     <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
     <div id="game-stage">
       <canvas id="game"></canvas>
     </div>
-  </div>
-  <aside id="panel">
-    <h1>Station / Colony Sim MVP</h1>
-
-    <div class="section panel-first top-controls">
-      <div class="transport-row">
-        <button id="play" class="icon-btn transport-btn" aria-label="Play">&gt;</button>
-        <button id="pause" class="icon-btn transport-btn" aria-label="Pause">||</button>
-        <button id="speed-up" class="icon-btn transport-btn" aria-label="Speed Up">&gt;&gt;</button>
-        <span class="value speed-pill" id="speed-label">1x</span>
-      </div>
+    <div class="floating-stack left-stack" aria-label="Station tactical overview">
+      <section class="hud-card">
+        <div class="hud-card-title">Station Overview</div>
+        <div class="overview-grid">
+          <div class="row compact list-row"><span>Population</span><span class="value" id="overview-population">0</span></div>
+          <div class="row compact list-row"><span>Oxygen</span><span class="value" id="overview-oxygen">0%</span></div>
+          <div class="row compact list-row"><span>Power</span><span class="value" id="overview-power">0%</span></div>
+          <div class="row compact list-row"><span>Food</span><span class="value" id="overview-food">0</span></div>
+          <div class="row compact list-row"><span>Morale</span><span class="value" id="overview-morale">0%</span></div>
+          <div class="row compact list-row"><span>Hull</span><span class="value" id="overview-hull">0%</span></div>
+          <div class="row compact list-row"><span>Threat</span><span class="value" id="overview-threat">Low</span></div>
+        </div>
+      </section>
+      <section class="hud-card task-card">
+        <div class="hud-card-title">Tasks</div>
+        <div id="quest-bar" aria-live="polite"></div>
+      </section>
+      <section class="hud-card alert-card">
+        <div class="hud-card-title">Alerts</div>
+        <div id="alert-list" class="alert-list">No active alerts</div>
+      </section>
     </div>
-
-    <div id="quest-bar" class="section" aria-live="polite"></div>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Core Status</summary>
-      <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Materials 0 | Credits 0</span></div>
-      <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
-      <div class="row compact list-row"><span>Power</span><span class="value" id="power">0 / 0</span></div>
-      <div class="row compact list-row"><span>Crew Morale</span><span class="value" id="morale">0</span></div>
-      <div class="row compact list-row"><span>Station Rating</span><span class="value" id="station-rating">70</span></div>
-      <small id="air-trend">Air trend: +0.0/s</small>
-      <small id="air-blocked-warning">Air warning: none</small>
-    </details>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Logistics & Economy</summary>
-      <div class="row compact list-row"><span>Resources</span><span class="value" id="resources">Food 0 | Water 0 | Air 0%</span></div>
-      <small id="food-flow">Food flow: +0.0 raw/s -> +0.0 meals/s, use 0.0 meals/s</small>
-      <small id="economy-flow">Credits/min: +0.0 gross | -0.0 payroll | net +0.0</small>
-      <div class="row compact list-row"><span>Jobs</span><span class="value" id="jobs">P0 A0 X0 D0 | none</span></div>
-      <details class="mini-collapse">
-        <summary>Job Diagnostics</summary>
+    <div id="bottom-dock">
+      <section class="dock-card selected-card">
+        <div class="hud-card-title">Selection</div>
+        <div id="selection-summary" class="selection-summary">No room, dock, or resident selected.</div>
+        <small id="dock-info">Dock: none selected</small>
+        <small id="dock-preview">Dock preview: n/a</small>
+      </section>
+      <section class="dock-card ops-card">
+        <div class="hud-card-title">Station Ops</div>
+        <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">0 / 0 (free 0)</span></div>
+        <div class="row compact list-row"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Security 0/0 | Reactor 0/0 | Dorms 0/0</span></div>
+        <div class="row compact list-row"><span>Jobs</span><span class="value" id="jobs">P0 A0 X0 D0 | none</span></div>
+        <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
+      </section>
+      <section class="dock-card event-card">
+        <div class="hud-card-title">Event Log</div>
+        <small id="room-warnings">Room warnings: none</small>
+        <small id="visitor-feelings">Visitor feelings: none</small>
+        <small id="morale-reasons">Crew morale drivers: none</small>
+        <small id="rating-reasons">Station rating drivers: none</small>
+      </section>
+      <details class="dock-card diagnostics-card mini-collapse">
+        <summary>Diagnostics</summary>
+        <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Materials 0 | Credits 0</span></div>
+        <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
+        <div class="row compact list-row"><span>Power</span><span class="value" id="power">0 / 0</span></div>
+        <div class="row compact list-row"><span>Morale</span><span class="value" id="morale">0</span></div>
+        <div class="row compact list-row"><span>Rating</span><span class="value" id="station-rating">70</span></div>
+        <div class="row compact list-row"><span>Resources</span><span class="value" id="resources">Food 0 | Water 0 | Air 0%</span></div>
+        <div class="row compact list-row"><span>Visitors</span><span class="value" id="visitors">0</span></div>
+        <div class="row compact list-row"><span>Incidents</span><span class="value" id="incidents">0</span></div>
+        <div class="row compact list-row"><span>Docked ships</span><span class="value" id="docked-ships">0</span></div>
+        <div class="row compact list-row"><span>Avg dock time</span><span class="value" id="avg-dock-time">0.0s</span></div>
+        <div class="row compact list-row"><span>Bay utilization</span><span class="value" id="bay-utilization">0%</span></div>
+        <div class="row compact list-row"><span>Exits / min</span><span class="value" id="exits-per-min">0</span></div>
+        <small id="air-trend">Air trend: +0.0/s</small>
+        <small id="air-blocked-warning">Air warning: none</small>
+        <small id="food-flow">Food flow: +0.0 raw/s -> +0.0 meals/s, use 0.0 meals/s</small>
+        <small id="economy-flow">Credits/min: +0.0 gross | -0.0 payroll | net +0.0</small>
         <small id="jobs-extra">Avg age 0.0s | Oldest 0.0s | Delivery 0.0s | Stalled 0</small>
         <small id="idle-reasons">Idle reasons: available 0 | no jobs 0 | resting 0 | no path 0 | waiting 0</small>
         <small id="stall-reasons">Stalls: blocked 0 | src 0 | dst 0 | supply 0</small>
         <small id="crew-retargets">Crew retargets/min: 0.0 | visitor service fails/min: 0.0</small>
         <small id="food-chain-hint">Food chain: none</small>
-        <small id="room-warnings">Room warnings: none</small>
-      </details>
-    </details>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Visitor Traffic</summary>
-      <div class="row compact list-row"><span>Visitors</span><span class="value" id="visitors">0</span></div>
-      <small id="visitor-feelings">Visitor feelings: none</small>
-      <small id="demand-strip">Current demand: Caf 0% | Market 0% | Lounge 0%</small>
-      <small id="archetype-strip">Visitors: Diner 0 | Shopper 0 | Lounger 0 | Rusher 0</small>
-      <small id="ship-type-strip">Ships/min: Tour 0.0 | Trade 0.0 | Ind 0.0 | Mil 0.0 | Col 0.0</small>
-      <div class="row compact list-row"><span>Docked ships</span><span class="value" id="docked-ships">0</span></div>
-      <div class="row compact list-row"><span>Avg dock time</span><span class="value" id="avg-dock-time">0.0s</span></div>
-      <div class="row compact list-row"><span>Bay utilization</span><span class="value" id="bay-utilization">0%</span></div>
-      <div class="row compact list-row"><span>Exits / min</span><span class="value" id="exits-per-min">0</span></div>
-      <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
-      <small id="walk-stats">Visitor walk avg: 0.0</small>
-      <small id="berth-summary">Berths: visitor 0/0 | resident 0/0 | resident ships 0</small>
-      <small id="resident-loop-summary">Resident loop: convert 0/0 | departures 0 | tax +0.0/min</small>
-      <details class="mini-collapse">
-        <summary>Station Rating Insight</summary>
+        <small id="demand-strip">Current demand: Caf 0% | Market 0% | Lounge 0%</small>
+        <small id="archetype-strip">Visitors: Diner 0 | Shopper 0 | Lounger 0 | Rusher 0</small>
+        <small id="ship-type-strip">Ships/min: Tour 0.0 | Trade 0.0 | Ind 0.0 | Mil 0.0 | Col 0.0</small>
+        <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
+        <small id="walk-stats">Visitor walk avg: 0.0</small>
+        <small id="berth-summary">Berths: visitor 0/0 | resident 0/0 | resident ships 0</small>
+        <small id="resident-loop-summary">Resident loop: convert 0/0 | departures 0 | tax +0.0/min</small>
         <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
         <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
         <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
@@ -240,37 +201,91 @@ app.innerHTML = `
         <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service-total">Service total: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
         <small id="rating-insight-events">Events: skipped docks 0 | queue timeouts 0 | service fails/min 0.0</small>
-      </details>
-      <small id="dock-info">Dock: none selected</small>
-      <small id="dock-preview">Dock preview: n/a</small>
-    </details>
-
-    <details class="section mini-collapse">
-      <summary class="legend-title">Population & Services</summary>
-      <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">0 / 0 (free 0)</span></div>
-      <div class="row compact list-row"><span>Station Systems</span><span class="value" id="ops">Cafeteria 0/0 | Security 0/0 | Reactor 0/0 | Dorms 0/0</span></div>
-      <div class="row compact list-row"><span>Incidents</span><span class="value" id="incidents">0</span></div>
-      <small id="life-support-status">Life support: active 0 / total 0 (air +0.0/s)</small>
-      <small id="air-health">Air health: distressed 0 | critical 0 | deaths 0 (+0 recent)</small>
-      <details class="mini-collapse">
-        <summary>Advanced Ops</summary>
-        <small id="morale-reasons">Crew morale drivers: none</small>
-        <small id="rating-reasons">Station rating drivers: none</small>
+        <small id="life-support-status">Life support: active 0 / total 0 (air +0.0/s)</small>
+        <small id="air-health">Air health: distressed 0 | critical 0 | deaths 0 (+0 recent)</small>
         <small id="crew-breakdown">Crew: work 0 | idle 0 | resting 0 | logistics 0 | blocked 0</small>
         <small id="crew-shifts">Shifts: resting 0/0 | wake budget 0 | woken 0</small>
         <small id="crew-lockouts">Emergency lockouts prevented: 0</small>
-        <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
         <small id="ops-extra">Kitchen 0/0 | Workshop 0/0 | Hygiene 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
         <small id="kitchen-status">Kitchen: active 0/0 | raw 0.0 | meal +0.0/s</small>
         <small id="trade-status">Trade: workshop +0.0/s | market use 0.0/s | stock 0.0 | sold/min 0.0 | stockouts/min 0.0</small>
         <small id="room-usage">Usage: to dorm 0 | resting 0 | hygiene 0 | queue 0 | eating 0 | hydro staff 0/0</small>
         <small id="room-flow">Flow/min: dorm 0.0 | hygiene 0.0 | meals 0.0 | dorm fail 0.0</small>
       </details>
+    </div>
+  </div>
+  <aside id="panel">
+    <h2>Build Palette</h2>
+    <div id="toolbar" aria-label="Build tools">
+      <div class="tool-row">
+        <span class="tool-row-label">Structure</span>
+        <button class="tool-btn" data-tool-tile="floor" title="Floor (1)"><span class="tool-key">1</span>Floor</button>
+        <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
+        <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
+        <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
+        <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
+        <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
+      </div>
+      <div class="tool-row" data-tool-section="rooms">
+        <span class="tool-row-label">Rooms</span>
+        <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
+        <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
+        <button class="tool-btn" data-tool-room="hydroponics" title="Build Hydroponics (F)"><span class="tool-key">F</span>Hydroponics</button>
+        <button class="tool-btn" data-tool-room="kitchen" title="Build Kitchen (I)"><span class="tool-key">I</span>Kitchen</button>
+        <button class="tool-btn" data-tool-room="cafeteria" title="Build Cafeteria (C)"><span class="tool-key">C</span>Cafeteria</button>
+        <button class="tool-btn" data-tool-room="life-support" title="Build Life Support (L)"><span class="tool-key">L</span>Life Support</button>
+        <button class="tool-btn" data-tool-room="reactor" title="Build Reactor (R)"><span class="tool-key">R</span>Reactor</button>
+        <button class="tool-btn" data-tool-room="lounge" title="Build Lounge (U)"><span class="tool-key">U</span>Lounge</button>
+        <button class="tool-btn" data-tool-room="market" title="Build Market (K)"><span class="tool-key">K</span>Market</button>
+        <button class="tool-btn" data-tool-room="workshop" title="Build Workshop (W)"><span class="tool-key">W</span>Workshop</button>
+        <button class="tool-btn" data-tool-room="storage" title="Build Storage (B)"><span class="tool-key">B</span>Storage</button>
+        <button class="tool-btn" data-tool-room="logistics-stock" title="Build Logistics Stock (N)"><span class="tool-key">N</span>Logistics</button>
+        <button class="tool-btn" data-tool-room="security" title="Build Security (S)"><span class="tool-key">S</span>Security</button>
+        <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
+        <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
+        <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
+      </div>
+      <div class="tool-row" data-tool-section="modules">
+        <span class="tool-row-label">Furniture</span>
+        <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
+        <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
+        <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
+        <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
+        <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
+        <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
+        <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
+        <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
+        <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
+        <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
+        <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
+        <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
+        <button class="tool-btn" data-tool-module="intake-pallet" title="Place Intake Pallet (,)"><span class="tool-key">,</span>Intake</button>
+        <button class="tool-btn" data-tool-module="storage-rack" title="Place Storage Rack (.)"><span class="tool-key">.</span>Rack</button>
+        <button class="tool-btn" data-tool-module="terminal" title="Place Security Terminal (M)"><span class="tool-key">M</span>Terminal</button>
+        <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
+        <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
+        <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
+        <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
+      </div>
+      <div class="tool-row">
+        <span class="tool-row-label">Overlays</span>
+        <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
+        <button class="tool-btn" data-tool-zone="restricted" title="Paint Restricted zone (9)"><span class="tool-key">9</span>Restricted</button>
+        <button class="tool-btn" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
+        <button class="tool-btn" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
+      <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
+      <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
+      <button id="toggle-glow" class="topbar-btn">Glow: ON</button>
+      <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
+      <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
       <button id="clear-bodies">Clear Bodies (-6 materials)</button>
       <button id="edit-priorities">Edit Priorities</button>
       <div class="row compact list-row"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
-    </details>
-
+    </div>
     <details class="section mini-collapse">
       <summary class="legend-title">Traffic & Tax</summary>
       <div class="row"><span>Ships / cycle</span><span class="value" id="ships-label">1</span></div>
@@ -768,6 +783,19 @@ const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
 const hudCreditsEl = document.querySelector<HTMLElement>('#hud-credits')!;
 const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
 const hudVisitorsEl = document.querySelector<HTMLElement>('#hud-visitors')!;
+const hudWaterEl = document.querySelector<HTMLElement>('#hud-water')!;
+const hudFoodEl = document.querySelector<HTMLElement>('#hud-food')!;
+const hudMoraleEl = document.querySelector<HTMLElement>('#hud-morale')!;
+const hudClockEl = document.querySelector<HTMLElement>('#hud-clock')!;
+const overviewPopulationEl = document.querySelector<HTMLElement>('#overview-population')!;
+const overviewOxygenEl = document.querySelector<HTMLElement>('#overview-oxygen')!;
+const overviewPowerEl = document.querySelector<HTMLElement>('#overview-power')!;
+const overviewFoodEl = document.querySelector<HTMLElement>('#overview-food')!;
+const overviewMoraleEl = document.querySelector<HTMLElement>('#overview-morale')!;
+const overviewHullEl = document.querySelector<HTMLElement>('#overview-hull')!;
+const overviewThreatEl = document.querySelector<HTMLElement>('#overview-threat')!;
+const alertListEl = document.querySelector<HTMLElement>('#alert-list')!;
+const selectionSummaryEl = document.querySelector<HTMLElement>('#selection-summary')!;
 const devTierOverlayEl = document.querySelector<HTMLElement>('#dev-tier-overlay')!;
 // Enable dev-only HUD surfaces via `?dev=1`. Read once at startup; the
 // overlay stays hidden in prod so the shipped game is unaffected.
@@ -1049,7 +1077,7 @@ function refreshHudStatus(): void {
   const powerDemand = state.metrics.powerDemand;
   const powerSupply = state.metrics.powerSupply;
   const loadPct = Math.round(state.metrics.loadPct);
-  hudPowerEl.textContent = `${loadPct}% (${Math.round(powerDemand)}/${Math.round(powerSupply)})`;
+  hudPowerEl.textContent = `${loadPct}%`;
   hudPowerEl.style.color =
     powerDemand > powerSupply ? 'var(--danger)' : loadPct > 85 ? 'var(--warn)' : 'var(--ok)';
 
@@ -1061,6 +1089,112 @@ function refreshHudStatus(): void {
   hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
   hudCrewEl.textContent = String(state.crew.total);
   hudVisitorsEl.textContent = String(state.metrics.visitorsCount);
+  hudWaterEl.textContent = String(Math.round(state.metrics.waterStock));
+  hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
+  hudMoraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
+  hudMoraleEl.style.color =
+    state.metrics.morale > 65 ? 'var(--ok)' : state.metrics.morale > 40 ? 'var(--warn)' : 'var(--danger)';
+
+  const cycleIndex = Math.floor(state.now / state.cycleDuration);
+  const cycle = cycleIndex + 1;
+  const day = Math.floor(cycleIndex / 8) + 1;
+  const cycleElapsed = Math.max(0, state.now - cycleIndex * state.cycleDuration);
+  const minutes = Math.floor(cycleElapsed / 60).toString().padStart(2, '0');
+  const seconds = Math.floor(cycleElapsed % 60).toString().padStart(2, '0');
+  hudClockEl.textContent = `Cycle ${cycle} | Day ${day} | ${minutes}:${seconds}`;
+}
+
+function setMetricTone(el: HTMLElement, tone: 'ok' | 'warn' | 'danger' | 'muted'): void {
+  el.classList.remove('tone-ok', 'tone-warn', 'tone-danger', 'tone-muted');
+  el.classList.add(`tone-${tone}`);
+}
+
+function refreshHudOverview(): void {
+  const powerDemand = state.metrics.powerDemand;
+  const powerSupply = state.metrics.powerSupply;
+  const oxygen = Math.round(state.metrics.airQuality);
+  const loadPct = Math.round(state.metrics.loadPct);
+  const morale = Math.round(state.metrics.morale);
+  const hull = Math.round(state.metrics.pressurizationPct);
+  const threat =
+    state.metrics.incidentsOpen > 0 || state.metrics.criticalResidents > 0
+      ? 'High'
+      : state.metrics.leakingTiles > 0 || state.metrics.distressedResidents > 0
+        ? 'Elevated'
+        : 'Low';
+
+  overviewPopulationEl.textContent = `${state.crew.total + state.metrics.visitorsCount}`;
+  overviewOxygenEl.textContent = `${oxygen}%`;
+  overviewPowerEl.textContent = `${loadPct}% (${Math.round(powerDemand)}/${Math.round(powerSupply)})`;
+  overviewFoodEl.textContent = `${Math.round(state.metrics.mealStock)} meals`;
+  overviewMoraleEl.textContent = `${morale}%`;
+  overviewHullEl.textContent = `${hull}%`;
+  overviewThreatEl.textContent = threat;
+
+  setMetricTone(overviewOxygenEl, oxygen < 35 ? 'danger' : oxygen < 70 ? 'warn' : 'ok');
+  setMetricTone(overviewPowerEl, powerDemand > powerSupply ? 'danger' : loadPct > 85 ? 'warn' : 'ok');
+  setMetricTone(overviewFoodEl, state.metrics.mealStock < 8 ? 'danger' : state.metrics.mealStock < 25 ? 'warn' : 'ok');
+  setMetricTone(overviewMoraleEl, morale < 40 ? 'danger' : morale < 65 ? 'warn' : 'ok');
+  setMetricTone(overviewHullEl, hull < 60 ? 'danger' : hull < 85 ? 'warn' : 'ok');
+  setMetricTone(overviewThreatEl, threat === 'High' ? 'danger' : threat === 'Elevated' ? 'warn' : 'ok');
+}
+
+function refreshAlertPanel(): void {
+  const alerts: Array<{ tone: 'danger' | 'warn'; text: string }> = [];
+  if (state.metrics.mealStock < 8) alerts.push({ tone: 'danger', text: `Low meals: ${Math.round(state.metrics.mealStock)}` });
+  else if (state.metrics.mealStock < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${Math.round(state.metrics.mealStock)}` });
+  if (state.metrics.airQuality < 35) alerts.push({ tone: 'danger', text: `Oxygen low: ${Math.round(state.metrics.airQuality)}%` });
+  if (state.metrics.airBlockedWarningActive) alerts.push({ tone: 'danger', text: 'Life support blocked' });
+  if (state.metrics.powerDemand > state.metrics.powerSupply) alerts.push({ tone: 'danger', text: 'Power deficit' });
+  else if (state.metrics.loadPct > 85) alerts.push({ tone: 'warn', text: `Power load high: ${Math.round(state.metrics.loadPct)}%` });
+  if (state.metrics.leakingTiles > 0 || state.metrics.pressurizationPct < 85) {
+    alerts.push({ tone: state.metrics.pressurizationPct < 60 ? 'danger' : 'warn', text: `Hull ${Math.round(state.metrics.pressurizationPct)}%, leaks ${state.metrics.leakingTiles}` });
+  }
+  if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  const criticalWarning = state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:'));
+  if (criticalWarning) alerts.push({ tone: 'warn', text: criticalWarning.replace('critical staffing: ', 'Staffing: ') });
+  if (alerts.length === 0) {
+    alertListEl.textContent = 'No active alerts';
+    alertListEl.classList.add('is-clear');
+    return;
+  }
+  alertListEl.classList.remove('is-clear');
+  alertListEl.innerHTML = alerts
+    .slice(0, 5)
+    .map((alert) => `<div class="alert-item ${alert.tone}">${alert.text}</div>`)
+    .join('');
+}
+
+function refreshSelectionSummary(): void {
+  if (selectedAgent !== null) {
+    if (selectedAgent.kind === 'visitor') {
+      const inspector = getVisitorInspectorById(state, selectedAgent.id);
+      selectionSummaryEl.textContent = inspector
+        ? `Visitor #${inspector.id}: ${inspector.state} | ${inspector.currentAction} | ${inspector.healthState}`
+        : 'Selected visitor is no longer available.';
+      return;
+    }
+    const inspector = getResidentInspectorById(state, selectedAgent.id);
+    selectionSummaryEl.textContent = inspector
+      ? `Resident #${inspector.id}: ${inspector.role} | ${inspector.currentAction} | ${inspector.healthState}`
+      : 'Selected resident is no longer available.';
+    return;
+  }
+  if (selectedDockId !== null) {
+    const dock = state.docks.find((d) => d.id === selectedDockId);
+    selectionSummaryEl.textContent = dock
+      ? `Dock #${dock.id}: ${dock.purpose} | ${dock.lane} lane | facing ${dock.facing}`
+      : 'Selected dock is no longer available.';
+    return;
+  }
+  if (selectedRoomTile !== null) {
+    const inspector = getRoomInspectorAt(state, selectedRoomTile);
+    selectionSummaryEl.textContent = inspector
+      ? `${inspector.room}: ${inspector.active ? 'active' : 'inactive'} | staff ${inspector.staffCount}/${inspector.requiredStaff} | pressure ${inspector.pressurizedPct.toFixed(0)}%`
+      : 'Selected room is no longer available.';
+    return;
+  }
+  selectionSummaryEl.textContent = 'No room, dock, or resident selected.';
 }
 
 // Dev-only overlay — "time to tier" at a glance for playtest pacing.
@@ -2998,6 +3132,9 @@ function frame(now: number): void {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
   refreshHudStatus();
+  refreshHudOverview();
+  refreshAlertPanel();
+  refreshSelectionSummary();
   refreshDevTierOverlay();
   visitorsEl.textContent = String(state.metrics.visitorsCount);
   moraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
