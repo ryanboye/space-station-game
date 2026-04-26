@@ -19,6 +19,7 @@ import {
   createInitialState,
   expandMap,
   fireCrew,
+  getBerthInspectorAt,
   getHousingInspectorAt,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
@@ -612,6 +613,7 @@ app.innerHTML = `
         <option value="private_resident">Private Resident</option>
       </select>
       <small id="room-modal-housing">Housing: n/a</small>
+      <small id="room-modal-berth">Berth: n/a</small>
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
       <small id="room-modal-hints">Hints: none</small>
@@ -936,6 +938,7 @@ const roomModalHousingEl = document.querySelector<HTMLElement>('#room-modal-hous
 const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
 const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
+const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
 const agentModal = document.querySelector<HTMLDivElement>('#agent-modal')!;
 const closeAgentBtn = document.querySelector<HTMLButtonElement>('#close-agent')!;
 const agentKindEl = document.querySelector<HTMLElement>('#agent-kind')!;
@@ -2862,6 +2865,29 @@ function refreshRoomModal(): void {
     roomModalHousingSelect.style.display = 'none';
     roomModalHousingEl.textContent = 'Housing: n/a';
     roomModalHousingEl.style.color = '#8ea2bd';
+  }
+  // Dock-migration v0: berth-specific info. Shows installed
+  // capability tags + which ship types this berth can/cannot accept.
+  if (inspector.room === RoomType.Berth) {
+    const berth = getBerthInspectorAt(state, selectedRoomTile!);
+    if (berth) {
+      const caps = berth.capabilities.length > 0 ? berth.capabilities.join(', ') : 'none installed';
+      const accepts = berth.acceptedShipTypes.length > 0 ? berth.acceptedShipTypes.join(', ') : 'none yet — install capability modules';
+      const rejects = berth.rejectedShipTypes
+        .map((r) => `${r.shipType} (needs ${r.missing.join('+')})`)
+        .join(' | ');
+      const occ = berth.occupiedByShipId !== null ? ` | occupied by ship #${berth.occupiedByShipId}` : ' | empty';
+      roomModalBerthEl.textContent =
+        `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles)${occ} | capabilities: ${caps} | accepts: ${accepts}` +
+        (rejects ? ` | rejects: ${rejects}` : '');
+      roomModalBerthEl.style.color = berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
+    } else {
+      roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
+      roomModalBerthEl.style.color = '#ff7676';
+    }
+  } else {
+    roomModalBerthEl.textContent = 'Berth: n/a';
+    roomModalBerthEl.style.color = '#8ea2bd';
   }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
   roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;

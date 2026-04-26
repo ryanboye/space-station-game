@@ -15,6 +15,7 @@ export {
   createInitialState,
   expandMap,
   fireCrew,
+  getBerthInspectorAt,
   getCrewPriorityPresetWeights,
   getDockByTile,
   getHousingInspectorAt,

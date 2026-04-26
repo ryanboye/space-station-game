@@ -261,7 +261,10 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   // are loose: berths don't need a sealed pressurized envelope (ships
   // arrive through them). v1 will add U-shape + airlock primitive.
   [RoomType.Berth]: {
-    minTiles: 9,
+    // v0: minTiles lowered to 4 for testing — small berths register as
+    // valid Small clusters even at 4 tiles. Production v1 will tighten
+    // this back to ≥9 once shape validation lands.
+    minTiles: 4,
     requiredModules: [],
     requiredAnyOf: [],
     activationChecks: { door: false, path: false, pressurization: false },
@@ -272,7 +275,9 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
 // Berth size class thresholds (tile counts). Computed on demand from
 // cluster length — see `berthSizeClassForArea` in sim.ts.
 export const BERTH_SIZE_MIN = {
-  small: 9,
+  // v0: small lowered to 4 to match relaxed minTiles. Production v1
+  // restores to 9.
+  small: 4,
   medium: 20,
   large: 42
 } as const;

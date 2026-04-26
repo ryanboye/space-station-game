@@ -2367,6 +2367,56 @@ function pickBerthForShip(
  * yes but `pickBerthForShip` returned null, the failure was capability
  * mismatch — surface a hint in the alert panel.
  */
+// Dock-migration v0: UI-facing inspector for berth tiles. Given a tile
+// inside a Berth room, returns the berth's size class, installed
+// capability tags, accepted/rejected ship types, and current occupancy.
+// `null` if the tile is not part of a Berth cluster.
+export interface BerthInspector {
+  anchorTile: number;
+  clusterTiles: number[];
+  size: BerthSizeClass;
+  capabilities: CapabilityTag[];
+  acceptedShipTypes: ShipType[];
+  rejectedShipTypes: Array<{ shipType: ShipType; missing: CapabilityTag[] }>;
+  occupiedByShipId: number | null;
+}
+
+export function getBerthInspectorAt(state: StationState, tileIndex: number): BerthInspector | null {
+  if (tileIndex < 0 || tileIndex >= state.rooms.length) return null;
+  if (state.rooms[tileIndex] !== RoomType.Berth) return null;
+  ensureRoomClustersCache(state);
+  const meta = state.derived.clusterByTile.get(tileIndex);
+  if (!meta || meta.room !== RoomType.Berth) return null;
+  const cluster = meta.cluster;
+  const capabilities = computeBerthCapabilities(state, cluster);
+  const size = berthSizeClassForArea(cluster.length);
+  const accepted: ShipType[] = [];
+  const rejected: Array<{ shipType: ShipType; missing: CapabilityTag[] }> = [];
+  const shipTypes: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+  for (const t of shipTypes) {
+    const required = SHIP_PROFILES[t]?.requiredCapabilities ?? [];
+    const missing = required.filter((tag) => !capabilities.includes(tag));
+    if (missing.length === 0) accepted.push(t);
+    else rejected.push({ shipType: t, missing });
+  }
+  let occupiedByShipId: number | null = null;
+  for (const ship of state.arrivingShips) {
+    if (ship.assignedBerthAnchor === cluster[0]) {
+      occupiedByShipId = ship.id;
+      break;
+    }
+  }
+  return {
+    anchorTile: cluster[0],
+    clusterTiles: cluster,
+    size,
+    capabilities,
+    acceptedShipTypes: accepted,
+    rejectedShipTypes: rejected,
+    occupiedByShipId
+  };
+}
+
 function describeMissingCapabilities(
   state: StationState,
   shipType: ShipType,
