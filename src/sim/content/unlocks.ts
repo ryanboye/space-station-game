@@ -152,6 +152,9 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.Market]: 1,
   [RoomType.LogisticsStock]: 0,
   [RoomType.Storage]: 2,
+  // Dock-migration v0: Berth available from T0 for testing.
+  // v1: production probably wants T0 still, but worth re-evaluating.
+  [RoomType.Berth]: 0,
 };
 
 export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
@@ -174,6 +177,11 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.MarketStall]: 1,
   [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,
+  // Dock-migration v0: capability modules at T0 for testing.
+  // v1: Gangway T0, Customs T1, CargoArm T2 per scope doc.
+  [ModuleType.Gangway]: 0,
+  [ModuleType.CustomsCounter]: 0,
+  [ModuleType.CargoArm]: 0,
 };
 
 export function createInitialUnlockState(): UnlockState {

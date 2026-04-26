@@ -293,6 +293,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
         <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
         <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
+        <button class="tool-btn" data-tool-room="berth" title="Build Berth (E) — dock-migration v0"><span class="tool-key">E</span>Berth</button>
       </div>
       <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
         <span class="tool-row-label">Furniture</span>
@@ -314,6 +315,9 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
         <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
         <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
+        <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
+        <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
+        <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -1834,6 +1838,12 @@ function refreshAlertPanel(): void {
     alerts.push({ tone: state.metrics.pressurizationPct < 60 ? 'danger' : 'warn', text: `Hull ${Math.round(state.metrics.pressurizationPct)}%, leaks ${state.metrics.leakingTiles}` });
   }
   if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  // Dock-migration v0: surface ship-waiting-on-capability hints. The
+  // sim writes shipsQueuedNoCapabilityHint each cycle when a berth
+  // would fit by size but not by capability tags.
+  if (state.metrics.shipsQueuedNoCapabilityCount > 0 && state.metrics.shipsQueuedNoCapabilityHint) {
+    alerts.push({ tone: 'warn', text: state.metrics.shipsQueuedNoCapabilityHint });
+  }
   const criticalWarning = state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:'));
   if (criticalWarning) alerts.push({ tone: 'warn', text: criticalWarning.replace('critical staffing: ', 'Staffing: ') });
   if (alerts.length === 0) {
@@ -2210,6 +2220,7 @@ const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   market: RoomType.Market,
   'logistics-stock': RoomType.LogisticsStock,
   storage: RoomType.Storage,
+  berth: RoomType.Berth,
 };
 const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   bed: ModuleType.Bed,
@@ -2230,6 +2241,9 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'cell-console': ModuleType.CellConsole,
   'rec-unit': ModuleType.RecUnit,
   'med-bed': ModuleType.MedBed,
+  gangway: ModuleType.Gangway,
+  'customs-counter': ModuleType.CustomsCounter,
+  'cargo-arm': ModuleType.CargoArm,
   clear: ModuleType.None,
 };
 
@@ -3370,6 +3384,11 @@ window.addEventListener('keydown', (e) => {
     case 'a':
     case 'A':
       selectRoomTool(RoomType.RecHall);
+      break;
+    case 'e':
+    case 'E':
+      // Dock-migration v0: Berth room paint.
+      selectRoomTool(RoomType.Berth);
       break;
     case '[':
       state.controls.moduleRotation = 0;

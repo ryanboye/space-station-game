@@ -105,6 +105,27 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: true,
     allowedRooms: [RoomType.Storage],
     itemNodeCapacity: 28
+  },
+  // Dock-migration v0: Berth capability modules. Footprints per scope.
+  // T0 in v0 for testing — production wants Gangway T0, Customs T1,
+  // CargoArm T2 (see MODULE_UNLOCK_TIER in sim/content/unlocks.ts).
+  [ModuleType.Gangway]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Berth]
+  },
+  [ModuleType.CustomsCounter]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Berth]
+  },
+  [ModuleType.CargoArm]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Berth]
   }
 };
 
@@ -233,8 +254,28 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
+  },
+  // Dock-migration v0: Berth is rectangular (no U-shape strict
+  // validation in v0). minTiles matches BERTH_SIZE_MIN.small so any
+  // valid berth qualifies for at least small ships. Activation gates
+  // are loose: berths don't need a sealed pressurized envelope (ships
+  // arrive through them). v1 will add U-shape + airlock primitive.
+  [RoomType.Berth]: {
+    minTiles: 9,
+    requiredModules: [],
+    requiredAnyOf: [],
+    activationChecks: { door: false, path: false, pressurization: false },
+    staffedPostMode: 'none'
   }
 };
+
+// Berth size class thresholds (tile counts). Computed on demand from
+// cluster length — see `berthSizeClassForArea` in sim.ts.
+export const BERTH_SIZE_MIN = {
+  small: 9,
+  medium: 20,
+  large: 42
+} as const;
 
 export const SERVICE_CAPACITY = {
   tableMaxDiners: MODULE_DEFINITIONS[ModuleType.Table].visitorCapacity ?? 3,

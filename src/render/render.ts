@@ -77,7 +77,11 @@ const roomOverlay: Record<RoomType, string> = {
   [RoomType.Lounge]: 'rgba(196, 140, 255, 0.2)',
   [RoomType.Market]: 'rgba(255, 188, 120, 0.2)',
   [RoomType.LogisticsStock]: 'rgba(150, 200, 255, 0.2)',
-  [RoomType.Storage]: 'rgba(255, 220, 155, 0.22)'
+  [RoomType.Storage]: 'rgba(255, 220, 155, 0.22)',
+  // Berth: cool steel-blue tint, distinct from Dorm's warmer blue and
+  // the cyan dock-tile color. v0 placeholder; revisit when atlas
+  // Berth floor sprite lands.
+  [RoomType.Berth]: 'rgba(120, 170, 220, 0.22)'
 };
 
 const roomLetter: Record<RoomType, string> = {
@@ -97,7 +101,8 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Lounge]: 'U',
   [RoomType.Market]: 'K',
   [RoomType.LogisticsStock]: 'N',
-  [RoomType.Storage]: 'B'
+  [RoomType.Storage]: 'B',
+  [RoomType.Berth]: 'E'
 };
 
 const moduleLetter: Record<ModuleType, string> = {
@@ -119,7 +124,12 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Sink]: 'I',
   [ModuleType.MarketStall]: '$',
   [ModuleType.IntakePallet]: 'P',
-  [ModuleType.StorageRack]: 'R'
+  [ModuleType.StorageRack]: 'R',
+  // Dock-migration v0: capability-module letters for vector fallback.
+  // No atlas sprites — fallback path is the only render route.
+  [ModuleType.Gangway]: 'g',
+  [ModuleType.CustomsCounter]: 'c',
+  [ModuleType.CargoArm]: 'X'
 };
 
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
@@ -1654,7 +1664,12 @@ export function renderWorld(
 
     let posX = dockX;
     let posY = dockY;
-    if (ship.stage === 'approach' || ship.stage === 'depart') {
+    // Dock-migration v0: berth-bound ships snap to the centroid (no
+    // approach/depart slide) since the berth interior is inside the
+    // hull — sliding from off-screen into the interior would visually
+    // pass through walls. v1 will animate via a dedicated airlock.
+    const isBerthBound = (ship.assignedBerthAnchor ?? null) !== null;
+    if (!isBerthBound && (ship.stage === 'approach' || ship.stage === 'depart')) {
       const t = Math.min(1, ship.stageTime / SHIP_TRANSIT_VISUAL_SEC);
       const lane = ship.lane;
       const off = ship.stage === 'approach' ? 1 - t : t;

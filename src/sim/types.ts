@@ -46,8 +46,23 @@ export enum RoomType {
   Lounge = 'lounge',
   Market = 'market',
   LogisticsStock = 'logistics-stock',
-  Storage = 'storage'
+  Storage = 'storage',
+  // Berth: dock-migration v0. A regular rectangular room paint that ships
+  // dock *inside*. Capability tags are derived from contained modules
+  // (Gangway/CustomsCounter/CargoArm) — see `computeBerthCapabilities`
+  // in sim.ts. v1 will add U-shape strict validation.
+  Berth = 'berth'
 }
+
+// Berth capability tags drive ship→berth matching in v0.
+// Each tag is contributed by a specific module type placed inside the berth.
+// v1: add 'military_bridge' and 'refuel' tags + their modules.
+export type CapabilityTag = 'gangway' | 'customs' | 'cargo';
+
+// Berth size class derived from tile count when the berth cluster is
+// identified. Thresholds: S >= 9, M >= 20, L >= 42 tiles. Stored
+// nowhere — computed on demand from a cluster's length.
+export type BerthSizeClass = 'small' | 'medium' | 'large';
 
 export type HousingPolicy = 'crew' | 'visitor' | 'resident' | 'private_resident';
 
@@ -70,7 +85,15 @@ export enum ModuleType {
   Sink = 'sink',
   MarketStall = 'market-stall',
   IntakePallet = 'intake-pallet',
-  StorageRack = 'storage-rack'
+  StorageRack = 'storage-rack',
+  // Dock-migration v0: capability modules for the new Berth room.
+  // Footprints: Gangway 1x1, CustomsCounter 1x1, CargoArm 2x2.
+  // All three are allowedRooms: [RoomType.Berth] in MODULE_DEFINITIONS.
+  // v1: tier-gate (Gangway T0, Customs T1, CargoArm T2) — currently T0
+  // for ease of testing.
+  Gangway = 'gangway',
+  CustomsCounter = 'customs-counter',
+  CargoArm = 'cargo-arm'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -328,6 +351,10 @@ export interface ShipProfile {
   manifestBaseline: { cafeteria: number; market: number; lounge: number };
   militaryPenaltyWeight: number;
   conversionChanceMultiplier: number;
+  // Dock-migration v0: capability tags a Berth must provide for this
+  // ship type to dock there. Used by `pickBerthForShip` / scheduler.
+  // Legacy Dock-tile path ignores this and always matches.
+  requiredCapabilities: CapabilityTag[];
 }
 
 export type ShipSize = 'small' | 'medium' | 'large';
@@ -357,6 +384,12 @@ export interface ArrivingShip {
   residentIds: number[];
   manifestDemand: { cafeteria: number; market: number; lounge: number };
   manifestMix: Record<VisitorArchetype, number>;
+  // Dock-migration v0: when set, this ship is bound to a Berth room
+  // (not a legacy Dock tile-cluster). The anchor is the lowest tile
+  // index in the berth cluster — used by render to fit the ship inside
+  // the berth interior, and by sim to look up the cluster on demand.
+  // Null for legacy-dock ships.
+  assignedBerthAnchor?: number | null;
 }
 
 export interface CoreState {
@@ -482,6 +515,11 @@ export interface Metrics {
   exitsPerMin: number;
   shipsSkippedNoEligibleDock: number;
   shipsTimedOutInQueue: number;
+  // Dock-migration v0: surfaced in alert panel ("trader ship waiting —
+  // needs gangway + customs"). Cleared when a matching berth becomes
+  // available. v1: roll into a structured queue-status object.
+  shipsQueuedNoCapabilityCount: number;
+  shipsQueuedNoCapabilityHint: string;
   dockQueueLengthByLane: Record<SpaceLane, number>;
   avgVisitorWalkDistance: number;
   dockZonesTotal: number;
