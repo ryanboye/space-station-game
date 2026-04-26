@@ -16,6 +16,7 @@ import {
   isModuleUnlockedAtTier,
   isRoomUnlockedAtTier
 } from './content/unlocks';
+import { generateSystemMap, laneWeightsFromSystem } from './system-map';
 import {
   type ArrivingShip,
   type BerthSizeClass,
@@ -264,22 +265,41 @@ function normalizeTrafficWeights(weights: Record<ShipType, number>): Record<Ship
 
 function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfile> {
   const profiles = {} as Record<SpaceLane, LaneProfile>;
+  // System-map driven path (MVP): derive lane weights from the dominant
+  // factions' shipBias tables. Legacy fallback (system null/undefined)
+  // keeps the prior pure-RNG behavior so old saves and any path that
+  // somehow loses state.system still produces valid weights.
+  //
+  // PRNG discipline: even when system-driven, we still consume the same
+  // number of rng() calls per lane (5: traffic + 4 placeholder draws)
+  // so seeded scenarios in tools/sim-tests.ts retain their existing
+  // sequence. Without this, replacing the legacy weight roll silently
+  // shifted every later random draw and broke deterministic tests.
+  const system = state.system ?? null;
   for (const lane of LANES) {
+    const trafficVolume = clamp(0.6 + state.rng() * 0.8, 0.4, 1.6);
     const touristBase = 0.25 + state.rng() * 0.45;
     const traderBase = 0.2 + state.rng() * 0.45;
     const industrialBase = 0.15 + state.rng() * 0.35;
     const militaryBase = 0.08 + state.rng() * 0.22;
     const colonistBase = 0.1 + state.rng() * 0.26;
-    profiles[lane] = {
-      trafficVolume: clamp(0.6 + state.rng() * 0.8, 0.4, 1.6),
-      weights: normalizeTrafficWeights({
-        tourist: touristBase,
-        trader: traderBase,
-        industrial: industrialBase,
-        military: militaryBase,
-        colonist: colonistBase
-      })
-    };
+    if (system) {
+      profiles[lane] = {
+        trafficVolume,
+        weights: normalizeTrafficWeights(laneWeightsFromSystem(system, lane))
+      };
+    } else {
+      profiles[lane] = {
+        trafficVolume,
+        weights: normalizeTrafficWeights({
+          tourist: touristBase,
+          trader: traderBase,
+          industrial: industrialBase,
+          military: militaryBase,
+          colonist: colonistBase
+        })
+      };
+    }
   }
   return profiles;
 }
@@ -7335,7 +7355,11 @@ function expireEffects(state: StationState): void {
 }
 
 export function createInitialState(options?: { seed?: number }): StationState {
-  const rng = makeRng(options?.seed ?? 1337);
+  const seed = options?.seed ?? 1337;
+  const rng = makeRng(seed);
+  // Roll the system map from a sub-seed so it doesn't deplete the
+  // primary rng (which scenario builders + manifest gen rely on).
+  const system = generateSystemMap(seed);
   const tiles = new Array<TileType>(GRID_WIDTH * GRID_HEIGHT).fill(TileType.Space);
   const zones = new Array<ZoneType>(GRID_WIDTH * GRID_HEIGHT).fill(ZoneType.Public);
   const rooms = new Array<RoomType>(GRID_WIDTH * GRID_HEIGHT).fill(RoomType.None);
@@ -7374,7 +7398,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles.push(idx);
     }
   }
-  const laneProfiles = generateLaneProfiles({ rng } as StationState);
+  const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
 
   return {
     width: GRID_WIDTH,
@@ -7392,6 +7416,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles
     },
     docks: [],
+    system,
+    seedAtCreation: seed,
     laneProfiles,
     dockQueue: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),

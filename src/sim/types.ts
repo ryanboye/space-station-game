@@ -428,6 +428,61 @@ export interface LaneProfile {
   weights: Record<ShipType, number>;
 }
 
+// System Map (MVP) — see docs/?? (none) and feat/spacemap-v0 task spec.
+// Procedurally generated star system rolled at createInitialState time
+// from `state.seedAtCreation`. The `laneSectors` slot is consumed by
+// `generateLaneProfiles` to derive per-lane ship-type weights from the
+// dominant faction(s) along each lane (replacing the old hardcoded RNG
+// roll). The map is regenerated deterministically on save-load by
+// reusing the same seed branch (see hydrateStateFromSave).
+export type FactionTemplateId =
+  | 'trader-guild'
+  | 'industrial-combine'
+  | 'colonial-authority'
+  | 'military-bloc'
+  | 'free-port'
+  | 'pleasure-syndicate';
+
+export interface Faction {
+  id: string;
+  templateId: FactionTemplateId;
+  displayName: string;
+  color: string;
+  // Partial weights — averaged across a lane's dominant factions to
+  // produce the lane's ship-type pick distribution.
+  shipBias: Partial<Record<ShipType, number>>;
+}
+
+export interface Planet {
+  id: string;
+  factionId: string;
+  displayName: string;
+  orbitRadius: number; // 0..1
+  orbitAngle: number;  // 0..2π
+  bodyType: 'rocky' | 'gas' | 'ice';
+}
+
+export interface AsteroidBelt {
+  id: string;
+  innerRadius: number; // 0..1
+  outerRadius: number; // 0..1
+  resourceType: 'metal' | 'ice' | 'gas';
+  factionClaim: string | null;
+}
+
+export interface LaneSector {
+  factionIds: string[];
+  dominantFactionId: string | null;
+}
+
+export interface SystemMap {
+  factions: Faction[];
+  planets: Planet[];
+  asteroidBelts: AsteroidBelt[];
+  laneSectors: Record<SpaceLane, LaneSector>;
+  seedAtCreation: number;
+}
+
 export interface DockQueueEntry {
   shipId: number;
   lane: SpaceLane;
@@ -981,6 +1036,15 @@ export interface StationState {
   moduleOccupancyByTile: Array<number | null>;
   core: CoreState;
   docks: DockEntity[];
+  // Procedurally generated star system (MVP). Null only on legacy saves
+  // that pre-date this feature and didn't get re-rolled at hydrate time;
+  // generateLaneProfiles falls back to legacy RNG behavior in that case.
+  system: SystemMap | null;
+  // The seed used to seed the StationState rng. Stored separately so
+  // generateSystemMap can derive a stable sub-seed without depleting
+  // state.rng. Mirrored into state.system.seedAtCreation when the
+  // system rolls.
+  seedAtCreation: number;
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
   pressurized: boolean[];

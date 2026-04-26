@@ -619,6 +619,33 @@ small {
   padding: 14px;
 }
 
+.system-map-modal-card {
+  width: min(720px, 96vw);
+}
+
+.system-map-modal-card #system-map-canvas {
+  display: block;
+  margin: 8px auto;
+  background: #070b15;
+  border: 1px solid #2a3550;
+  border-radius: 4px;
+  width: min(520px, 88vw);
+  height: auto;
+  aspect-ratio: 1 / 1;
+}
+
+.system-map-summary {
+  display: block;
+  text-align: center;
+  color: #9aa3b5;
+  margin-top: 4px;
+}
+
+.system-map-factions,
+.system-map-lanes {
+  margin-top: 10px;
+}
+
 .ops-modal-summary {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
