@@ -621,17 +621,46 @@ small {
 
 .system-map-modal-card {
   width: min(720px, 96vw);
+  max-height: 95vh;
+  overflow-y: auto;
+  display: block;
+}
+
+.system-map-lane-row {
+  display: block;
+  padding: 4px 0;
+  border-top: 1px solid rgba(120, 130, 160, 0.18);
+}
+
+.system-map-lane-row strong {
+  color: #e6eaf2;
+  font-size: 12px;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.system-map-lane-detail {
+  color: #9aa3b5;
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .system-map-modal-card #system-map-canvas {
+  /* Override the global `canvas { position: absolute }` rule so this
+     canvas participates in normal block flow inside the modal-card. */
+  position: relative !important;
   display: block;
   margin: 8px auto;
   background: #070b15;
   border: 1px solid #2a3550;
   border-radius: 4px;
-  width: min(520px, 88vw);
-  height: auto;
-  aspect-ratio: 1 / 1;
+  /* Smaller display size so the modal fits canvas + factions + lanes
+     in viewport without overlap. Drawing surface (HTML width/height
+     attributes on the canvas element) stays 520×520; CSS scales it. */
+  width: 360px !important;
+  height: 360px !important;
+  max-width: 88vw;
 }
 
 .system-map-summary {

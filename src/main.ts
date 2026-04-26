@@ -3749,26 +3749,19 @@ function refreshSystemMapModal(): void {
     ctx2d.strokeStyle = dom?.color ?? 'rgba(140, 150, 180, 0.55)';
     ctx2d.beginPath();
     ctx2d.moveTo(cx + dir.dx * 12, cy + dir.dy * 12);
-    ctx2d.lineTo(cx + dir.dx * (maxR + 14), cy + dir.dy * (maxR + 14));
+    // Stop the ray well inside the canvas edge so labels don't need to
+    // render off-canvas; long-form lane info lives in the DOM list below.
+    const rayMax = maxR - 4;
+    ctx2d.lineTo(cx + dir.dx * rayMax, cy + dir.dy * rayMax);
     ctx2d.stroke();
-    // Lane label at the far edge
+    // Compass label inside the canvas at the ray's far end.
     ctx2d.fillStyle = '#e6eaf2';
     ctx2d.font = 'bold 14px sans-serif';
     ctx2d.textAlign = 'center';
     ctx2d.textBaseline = 'middle';
-    const lx = cx + dir.dx * (maxR + 28);
-    const ly = cy + dir.dy * (maxR + 28);
+    const lx = cx + dir.dx * (maxR - 18);
+    const ly = cy + dir.dy * (maxR - 18);
     ctx2d.fillText(dir.label, lx, ly);
-    // Faction-list mini label below
-    const factionsAlong = sector.factionIds
-      .map((id) => sys.factions.find((f) => f.id === id))
-      .filter((f): f is NonNullable<typeof f> => !!f);
-    const tag = factionsAlong.length > 0
-      ? factionsAlong.map((f) => `[${sigilForFaction(f)}]`).join(' ')
-      : '[-]';
-    ctx2d.fillStyle = '#9aa3b5';
-    ctx2d.font = '11px sans-serif';
-    ctx2d.fillText(tag, lx + dir.dx * 14, ly + dir.dy * 14);
   }
 
   // Planets
@@ -3834,7 +3827,14 @@ function refreshSystemMapModal(): void {
     return `<div class="row compact list-row"><span>${swatch}[${sigilForFaction(f)}] ${f.displayName}</span></div>`;
   }).join('');
 
-  // Lane legend
+  // Lane legend — vertical stacked layout so long faction lists wrap
+  // instead of being clipped by the right edge of the modal.
+  const laneNames: Record<string, string> = {
+    N: 'North',
+    E: 'East',
+    S: 'South',
+    W: 'West'
+  };
   const laneLines = laneDirs.map((d) => {
     const sector = sys.laneSectors[d.lane];
     const factionsAlong = sector.factionIds
@@ -3846,8 +3846,8 @@ function refreshSystemMapModal(): void {
     const tag = factionsAlong.length > 0
       ? factionsAlong.map((f) => `[${sigilForFaction(f)}] ${f.displayName}`).join(', ')
       : 'unclaimed';
-    const domLabel = dom ? ` — dominant: [${sigilForFaction(dom)}]` : '';
-    return `<div class="row compact list-row"><span>${d.label}</span><span class="value">${tag}${domLabel}</span></div>`;
+    const domLabel = dom ? ` &mdash; dominant: [${sigilForFaction(dom)}] ${dom.displayName}` : '';
+    return `<div class="system-map-lane-row"><strong>${d.label} (${laneNames[d.label] ?? d.label})</strong><div class="system-map-lane-detail">${tag}${domLabel}</div></div>`;
   }).join('');
   systemMapLanesEl.innerHTML = '<div class="section-title">Lanes</div>' + laneLines;
 }
