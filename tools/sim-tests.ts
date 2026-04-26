@@ -357,6 +357,11 @@ function setupTradeChain(state: StationState): void {
   placeModuleOrThrow(state, ModuleType.MarketStall, 21, 17);
 }
 
+function setupStarterDepot(state: StationState): void {
+  paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 18);
+  placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
+}
+
 function setupLeisure(state: StationState, withModule: boolean): void {
   paintRoom(state, RoomType.Lounge, 23, 10, 27, 12);
   if (withModule) {
@@ -441,6 +446,27 @@ function testFoodChainEndToEnd(): void {
   assertCondition(state.metrics.createdJobs > 0, 'Food chain should create hauling jobs.');
   assertCondition(state.metrics.completedJobs > 0, 'Food chain should complete hauling jobs.');
   assertCondition(state.metrics.mealsServedTotal > 0, 'Visitor should be served through serving station -> table flow.');
+}
+
+function testLowFoodAssignsFoodChainCrew(): void {
+  const state = createInitialState({ seed: 3006 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.metrics.mealStock = 1;
+  state.metrics.kitchenRawBuffer = 0;
+
+  runFor(state, 0.5);
+
+  assertCondition(
+    state.metrics.requiredCriticalStaff.hydroponics >= 1,
+    'Low food should request hydroponics staffing.'
+  );
+  assertCondition(state.metrics.requiredCriticalStaff.kitchen >= 1, 'Low food should request kitchen staffing.');
+  assertCondition(state.metrics.requiredCriticalStaff.cafeteria >= 1, 'Low food should request cafeteria staffing.');
+  assertCondition(state.metrics.assignedCriticalStaff.hydroponics >= 1, 'Low food should assign crew to hydroponics.');
+  assertCondition(state.metrics.assignedCriticalStaff.kitchen >= 1, 'Low food should assign crew to kitchen.');
+  assertCondition(state.metrics.assignedCriticalStaff.cafeteria >= 1, 'Low food should assign crew to cafeteria.');
 }
 
 function testServingStarvationQueue(): void {
@@ -814,15 +840,71 @@ function testJobMetricsConsistency(): void {
   const assigned = state.jobs.filter((j) => j.state === 'assigned' || j.state === 'in_progress').length;
   const expired = state.jobs.filter((j) => j.state === 'expired').length;
   const completed = state.jobs.filter((j) => j.state === 'done').length;
+  const expiredReasonTotal = Object.values(state.metrics.expiredJobsByReason).reduce((sum, count) => sum + count, 0);
+  const expiredContextTotal = Object.values(state.metrics.expiredJobsByContext).reduce((sum, count) => sum + count, 0);
+  const pendingItemTotal = Object.values(state.metrics.jobCountsByItem).reduce((sum, counts) => sum + counts.pending, 0);
+  const assignedItemTotal = Object.values(state.metrics.jobCountsByItem).reduce((sum, counts) => sum + counts.assigned, 0);
+  const expiredItemTotal = Object.values(state.metrics.jobCountsByItem).reduce((sum, counts) => sum + counts.expired, 0);
 
   assertCondition(state.metrics.pendingJobs === pending, 'Pending job metric should match job states.');
   assertCondition(state.metrics.assignedJobs === assigned, 'Assigned job metric should match job states.');
   assertCondition(state.metrics.expiredJobs === expired, 'Expired job metric should match job states.');
+  assertCondition(expiredReasonTotal === expired, 'Expired job reason metrics should match expired job states.');
+  assertCondition(expiredContextTotal === expired, 'Expired job context metrics should match expired job states.');
+  assertCondition(pendingItemTotal === pending, 'Pending job item breakdown should match pending jobs.');
+  assertCondition(assignedItemTotal === assigned, 'Assigned job item breakdown should match assigned jobs.');
+  assertCondition(expiredItemTotal === expired, 'Expired job item breakdown should match expired jobs.');
   assertCondition(state.metrics.completedJobs === completed, 'Completed job metric should match job states.');
   assertCondition(
     state.metrics.createdJobs >= state.metrics.completedJobs + state.metrics.expiredJobs,
     'Created jobs should be >= completed + expired jobs.'
   );
+}
+
+function testActiveLogisticsCrewDoNotRestBeforeCompletingJobs(): void {
+  const state = createInitialState({ seed: 30102 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 1;
+  buyRawFood(state, 0, 5);
+  tick(state, 0.25);
+
+  const crew = state.crewMembers[0];
+  assertCondition(!!crew, 'Crew pool should create a worker.');
+  const job = {
+    id: state.jobSpawnCounter++,
+    type: 'deliver' as const,
+    itemType: 'rawMeal' as const,
+    amount: 1,
+    fromTile: toIndex(6, 11, state.width),
+    toTile: toIndex(11, 11, state.width),
+    assignedCrewId: crew.id,
+    createdAt: state.now,
+    expiresAt: state.now + 10,
+    state: 'assigned' as const,
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none' as const
+  };
+  state.jobs.push(job);
+  crew.activeJobId = job.id;
+  crew.energy = 0;
+  crew.hygiene = 0;
+  crew.resting = false;
+  crew.cleaning = false;
+  crew.restCooldownUntil = 0;
+  crew.taskLockUntil = 0;
+
+  tick(state, 0.25);
+
+  assertCondition(!crew.resting, 'Crew with an active logistics job should not start resting.');
+  assertCondition(!crew.cleaning, 'Crew with an active logistics job should not start hygiene.');
+  assertCondition(state.metrics.crewOnLogisticsJobs === 1, 'Active logistics crew should count as logistics, not idle.');
+  assertCondition(state.metrics.crewIdleAvailable === 0, 'Active logistics crew should not count as available idle.');
+  assertCondition(state.metrics.crewSelfCare === 0, 'Active logistics crew should not count as self-care.');
+  assertCondition(state.jobs[0].state !== 'expired', 'Active logistics job should not expire because crew entered self-care.');
 }
 
 function testVisitorBerthsAcceptTrafficResidentialDoNot(): void {
@@ -1842,14 +1924,44 @@ function testUnlockTier0StartsConstrained(): void {
   assertCondition(getUnlockTier(state) === 0, 'New stations should start at unlock tier 0.');
   assertCondition(isRoomUnlocked(state, RoomType.Reactor), 'Tier 0 should include reactor.');
   assertCondition(isRoomUnlocked(state, RoomType.Dorm), 'Tier 0 should include dorm.');
+  assertCondition(isRoomUnlocked(state, RoomType.LogisticsStock), 'Tier 0 should include starter logistics stock.');
   assertCondition(!isRoomUnlocked(state, RoomType.Workshop), 'Tier 0 should not include workshop.');
+  assertCondition(!isRoomUnlocked(state, RoomType.Storage), 'Tier 0 should not include full storage.');
   assertCondition(!isRoomUnlocked(state, RoomType.Security), 'Tier 0 should not include security.');
+  assertCondition(isModuleUnlocked(state, ModuleType.IntakePallet), 'Tier 0 should include starter intake pallet.');
   assertCondition(!isModuleUnlocked(state, ModuleType.Workbench), 'Tier 0 should not include workbench.');
+  assertCondition(!isModuleUnlocked(state, ModuleType.StorageRack), 'Tier 0 should not include storage rack.');
   assertCondition(!isModuleUnlocked(state, ModuleType.Terminal), 'Tier 0 should not include terminal.');
   assertCondition(isShipTypeUnlocked(state, 'tourist'), 'Tier 0 should include tourist ships.');
   assertCondition(isShipTypeUnlocked(state, 'trader'), 'Tier 0 should include trader ships.');
   assertCondition(!isShipTypeUnlocked(state, 'industrial'), 'Tier 0 should not include industrial ships.');
   assertCondition(!isShipTypeUnlocked(state, 'military'), 'Tier 0 should not include military ships.');
+}
+
+function testTier0StarterDepotMaterialCapacity(): void {
+  const missingIntake = createInitialState({ seed: 5111 });
+  buildHabitat(missingIntake);
+  setupCoreRooms(missingIntake);
+  setUnlockTierForTest(missingIntake, 0);
+  const missing = buyMaterialsDetailed(missingIntake, 0, 25);
+  assertCondition(!missing.ok, 'Tier 0 buying materials without intake should fail.');
+  if (missing.ok) throw new Error('Expected missing intake failure.');
+  assertCondition(missing.reason === 'no_logistics_stock', 'Tier 0 missing intake should report no logistics stock.');
+
+  const starter = createInitialState({ seed: 5112 });
+  buildHabitat(starter);
+  setupCoreRooms(starter);
+  setUnlockTierForTest(starter, 0);
+  setupStarterDepot(starter);
+  const small = buyMaterialsDetailed(starter, 0, 25);
+  assertCondition(small.ok, 'Tier 0 starter depot should receive +25 materials.');
+
+  const bulk = buyMaterialsDetailed(starter, 0, 80);
+  assertCondition(!bulk.ok, 'Tier 0 single intake pallet should not receive +80 materials.');
+  if (bulk.ok) throw new Error('Expected starter depot capacity failure.');
+  assertCondition(bulk.reason === 'insufficient_storage_capacity', 'Starter depot bulk buy should fail on capacity.');
+  assertCondition(bulk.targetNodeCount === 1, 'Starter depot bulk buy should report the single intake node.');
+  assertCondition(bulk.freeCapacity < 80, 'Starter depot bulk buy should report insufficient free capacity.');
 }
 
 function testUnlockTier1TriggersAfterStability(): void {
@@ -2684,6 +2796,23 @@ function testBrigReducesIncidentDuration(): void {
   );
 }
 
+function testSecurityPriorityStaffsBrig(): void {
+  const state = createInitialState({ seed: 5119 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Brig, 14, 10, 16, 12);
+  placeModuleOrThrow(state, ModuleType.CellConsole, 15, 10);
+  state.controls.crewPriorityWeights.security = 10;
+  runFor(state, 20);
+
+  const brigStaff = state.crewMembers.filter(
+    (crew) => crew.assignedSystem === 'security' && crew.targetTile !== null && state.rooms[crew.targetTile] === RoomType.Brig
+  );
+  assertCondition(brigStaff.length > 0, 'Security priority should assign staff to Brig posts.');
+  assertCondition(state.ops.brigActive > 0, 'Staffed Brig should become active.');
+}
+
 function testSaveV1MigratesToV2UnlockDefaults(): void {
   const baseline = createInitialState({ seed: 5110 });
   const len = baseline.width * baseline.height;
@@ -2743,6 +2872,21 @@ function test20MinuteComplexityCurveReadable(): void {
   assertCondition(tierAt10 >= 1, 'By 10 minutes the player should usually unlock Tier 1 decisions.');
   assertCondition(tierAt10 < 3, 'By 10 minutes the game should avoid jumping straight to full complexity.');
   assertCondition(tierAt20 >= tierAt10, 'Unlock tier should not regress over time.');
+}
+
+function testTier0VisitorDockSchedulesTraffic(): void {
+  const state = createInitialState({ seed: 5113 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 0);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  const dockId = placeEastHullDock(state, 8, 8);
+  setDockAllowedShipType(state, dockId, 'tourist', true);
+  setDockAllowedShipType(state, dockId, 'trader', true);
+  state.controls.shipsPerCycle = 1;
+  runFor(state, 45, 0.5);
+  assertCondition(state.shipSpawnCounter > 1, 'Tier 0 one-tile visitor dock should schedule ship traffic.');
+  assertCondition(state.spawnCounter > 1, 'Tier 0 one-tile visitor dock should spawn at least one visitor.');
 }
 
 function testWallVariantMaskMapping(): void {
@@ -2832,6 +2976,7 @@ function testDualWallVariantTruthTable(): void {
 
 function run(): void {
   testUnlockTier0StartsConstrained();
+  testTier0StarterDepotMaterialCapacity();
   testUnlockTier1TriggersAfterStability();
   testUnlockTier2RequiresLogisticsSignal();
   testUnlockTier3TriggersOnTradeCycle();
@@ -2854,8 +2999,10 @@ function run(): void {
   testResidentRoutineFallbackWithoutWorkRooms();
   testClinicLowersDistressAndDeaths();
   testBrigReducesIncidentDuration();
+  testSecurityPriorityStaffsBrig();
   testSaveV1MigratesToV2UnlockDefaults();
   test20MinuteComplexityCurveReadable();
+  testTier0VisitorDockSchedulesTraffic();
   testWallVariantMaskMapping();
   testDualWallVariantTruthTable();
   testAutonomousRoomsNoStaff();
@@ -2863,6 +3010,7 @@ function run(): void {
   testBedFootprintRotation();
   testWallLightRequiresAdjacentWall();
   testFoodChainEndToEnd();
+  testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();
   testMaterialsChainEndToEnd();
   testInventoryOverlayToggleState();
@@ -2878,6 +3026,7 @@ function run(): void {
   testReactorInspectorReportsRealPressurizationPct();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
+  testActiveLogisticsCrewDoNotRestBeforeCompletingJobs();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
   testConversionBlockedWithoutResidentialBerth();
   testConversionBlockedWithoutPrivateHousing();

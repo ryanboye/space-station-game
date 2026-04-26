@@ -43,6 +43,9 @@ import {
   type CrewMember,
   type CrewRole,
   type JobStallReason,
+  type JobType,
+  type JobStatusCounts,
+  type JobExpiryContext,
   type ItemType,
   type ResidentRole,
   type ShipServiceTag,
@@ -113,7 +116,7 @@ const MATERIAL_COST: Record<TileType, number> = {
 };
 
 export const SHIP_MIN_DOCK_AREA: Record<ShipSize, number> = {
-  small: 2,
+  small: 1,
   medium: 4,
   large: 7
 };
@@ -1148,7 +1151,11 @@ function dutyAnchorsForSystem(state: StationState, system: CrewPrioritySystem): 
   if (system === 'kitchen') return roomClusterAnchors(state, RoomType.Kitchen);
   if (system === 'workshop') return roomClusterAnchors(state, RoomType.Workshop);
   if (system === 'cafeteria') return roomClusterAnchors(state, RoomType.Cafeteria);
-  if (system === 'security') return roomClusterAnchors(state, RoomType.Security);
+  if (system === 'security') {
+    return [...roomClusterAnchors(state, RoomType.Security), ...roomClusterAnchors(state, RoomType.Brig)].sort(
+      (a, b) => a - b
+    );
+  }
   if (system === 'hygiene') return roomClusterAnchors(state, RoomType.Hygiene);
   if (system === 'lounge') return roomClusterAnchors(state, RoomType.Lounge);
   if (system === 'market') return roomClusterAnchors(state, RoomType.Market);
@@ -1168,13 +1175,29 @@ function systemRoomType(system: CrewPrioritySystem): RoomType {
   return RoomType.Market;
 }
 
+function roomMatchesCrewSystem(system: CrewPrioritySystem, room: RoomType): boolean {
+  if (system === 'security') return room === RoomType.Security || room === RoomType.Brig;
+  return room === systemRoomType(system);
+}
+
 function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTargets {
+  const hasRoom = (room: RoomType): boolean => roomClusterAnchors(state, room).length > 0;
+  const hasService = (room: RoomType): boolean => {
+    if (!hasRoom(room)) return false;
+    return !roomRequiresServiceNode(room) || collectServiceTargets(state, room).length > 0;
+  };
+  const needsAirStaff = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
+  const needsPowerStaff = state.metrics.powerDemand > state.metrics.powerSupply;
+  const needsFoodStaff =
+    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK ||
+    state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW ||
+    (state.metrics.visitorsCount > 0 && state.metrics.mealStock < FOOD_CHAIN_TARGET_MEAL_STOCK);
   return {
-    requiredReactorPosts: 0,
-    requiredLifeSupportPosts: 0,
-    requiredHydroPosts: 0,
-    requiredKitchenPosts: 0,
-    requiredCafeteriaPosts: 0
+    requiredReactorPosts: needsPowerStaff && hasRoom(RoomType.Reactor) ? 1 : 0,
+    requiredLifeSupportPosts: needsAirStaff && hasRoom(RoomType.LifeSupport) ? 1 : 0,
+    requiredHydroPosts: needsFoodStaff && hasService(RoomType.Hydroponics) ? 1 : 0,
+    requiredKitchenPosts: needsFoodStaff && hasService(RoomType.Kitchen) ? 1 : 0,
+    requiredCafeteriaPosts: needsFoodStaff && hasService(RoomType.Cafeteria) ? 1 : 0
   };
 }
 
@@ -1890,17 +1913,19 @@ function pathCongestion(path: number[], occupancyByTile: Map<number, number>): n
 }
 
 function isStationedSecurityResponder(state: StationState, crew: CrewMember): boolean {
+  const room = state.rooms[crew.tileIndex];
   return (
     !crew.resting &&
     crew.healthState !== 'critical' &&
     crew.activeJobId === null &&
     (crew.assignedSystem === 'security' || crew.role === 'security') &&
-    state.rooms[crew.tileIndex] === RoomType.Security
+    (room === RoomType.Security || room === RoomType.Brig)
   );
 }
 
 function isSecurityAuraSource(state: StationState, crew: CrewMember): boolean {
-  return !crew.resting && crew.healthState !== 'critical' && state.rooms[crew.tileIndex] === RoomType.Security;
+  const room = state.rooms[crew.tileIndex];
+  return !crew.resting && crew.healthState !== 'critical' && (room === RoomType.Security || room === RoomType.Brig);
 }
 
 function computeSecurityAuraMap(state: StationState): Map<number, number> {
@@ -2440,7 +2465,8 @@ function assignCrewJobs(state: StationState): void {
     const tasks: CrewTaskCandidate[] = [];
     const room = systemRoomType(system);
     const requiresPost = ROOM_DEFINITIONS[room]?.staffedPostMode === 'required';
-    if (!requiresPost) {
+    const requiredPosts = requiredMinimum.get(system) ?? 0;
+    if (!requiresPost && requiredPosts <= 0) {
       jobsBySystem.set(system, tasks);
       continue;
     }
@@ -2448,11 +2474,11 @@ function assignCrewJobs(state: StationState): void {
       for (let i = 0; i < slotsPerSystem[system]; i++) {
         tasks.push({
           id: `${system}:${anchor}:${i}`,
-          kind: (requiredMinimum.get(system) ?? 0) > 0 ? 'critical_post' : 'post',
+          kind: requiredPosts > 0 ? 'critical_post' : 'post',
           system,
           tileIndex: anchor,
           score: 0,
-          critical: (requiredMinimum.get(system) ?? 0) > 0,
+          critical: requiredPosts > 0,
           protectedMinimum: false
         });
       }
@@ -2517,7 +2543,7 @@ function assignCrewJobs(state: StationState): void {
     if (crew.assignedSystem === null || crew.targetTile === null) return false;
     const key = `${crew.assignedSystem}:${crew.targetTile}`;
     if (!taskByKey.has(key)) return false;
-    if (state.rooms[crew.targetTile] !== systemRoomType(crew.assignedSystem)) return false;
+    if (!roomMatchesCrewSystem(crew.assignedSystem, state.rooms[crew.targetTile])) return false;
     return true;
   };
 
@@ -4363,6 +4389,8 @@ function assignJobsToIdleCrew(state: StationState): void {
     bestJob.lastProgressAt = state.now;
     markJobStall(state, bestJob, 'none');
     crew.activeJobId = bestJob.id;
+    crew.cleaning = false;
+    crew.cleanSessionActive = false;
     crew.path = bestPath;
     if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
       markJobStall(state, bestJob, 'stalled_unreachable_source');
@@ -4375,6 +4403,7 @@ function expireJobs(state: StationState): void {
   for (const job of state.jobs) {
     if (job.state === 'done' || job.state === 'expired') continue;
     if (state.now <= job.expiresAt) continue;
+    job.expiredFromState = job.state;
     job.state = 'expired';
     state.metrics.expiredJobs += 1;
     if (job.assignedCrewId !== null) {
@@ -4386,6 +4415,27 @@ function expireJobs(state: StationState): void {
       }
     }
   }
+}
+
+function createJobStatusCounts(): JobStatusCounts {
+  return { pending: 0, assigned: 0, expired: 0, done: 0 };
+}
+
+function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
+  return {
+    rawMeal: createJobStatusCounts(),
+    meal: createJobStatusCounts(),
+    rawMaterial: createJobStatusCounts(),
+    tradeGood: createJobStatusCounts(),
+    body: createJobStatusCounts()
+  };
+}
+
+function createJobCountsByType(): Record<JobType, JobStatusCounts> {
+  return {
+    pickup: createJobStatusCounts(),
+    deliver: createJobStatusCounts()
+  };
 }
 
 function requeueStalledJobs(state: StationState): void {
@@ -4404,22 +4454,57 @@ function refreshJobMetrics(state: StationState): void {
   let pending = 0;
   let assigned = 0;
   let done = 0;
+  let expired = 0;
   const ages: number[] = [];
   const backlogByType = new Map<string, number>();
+  const countsByItem = createJobCountsByItem();
+  const countsByType = createJobCountsByType();
+  const expiredByContext: Record<JobExpiryContext, number> = {
+    queued: 0,
+    assigned: 0,
+    carrying: 0,
+    unknown: 0
+  };
   for (const job of state.jobs) {
     if (job.state === 'pending') {
       pending++;
+      countsByItem[job.itemType].pending += 1;
+      countsByType[job.type].pending += 1;
       backlogByType.set(job.type, (backlogByType.get(job.type) ?? 0) + 1);
       ages.push(Math.max(0, state.now - job.createdAt));
     } else if (job.state === 'assigned' || job.state === 'in_progress') {
       assigned++;
+      countsByItem[job.itemType].assigned += 1;
+      countsByType[job.type].assigned += 1;
       ages.push(Math.max(0, state.now - job.createdAt));
     } else if (job.state === 'done') {
       done++;
+      countsByItem[job.itemType].done += 1;
+      countsByType[job.type].done += 1;
+    } else if (job.state === 'expired') {
+      expired++;
+      countsByItem[job.itemType].expired += 1;
+      countsByType[job.type].expired += 1;
+      const context: JobExpiryContext =
+        job.expiredFromState === 'pending'
+          ? 'queued'
+          : job.expiredFromState === 'assigned'
+            ? 'assigned'
+            : job.expiredFromState === 'in_progress'
+              ? 'carrying'
+              : 'unknown';
+      expiredByContext[context] += 1;
     }
   }
   let oldestPendingAgeSec = 0;
   const stalledByReason: Record<JobStallReason, number> = {
+    none: 0,
+    stalled_path_blocked: 0,
+    stalled_unreachable_source: 0,
+    stalled_unreachable_dropoff: 0,
+    stalled_no_supply: 0
+  };
+  const expiredByReason: Record<JobStallReason, number> = {
     none: 0,
     stalled_path_blocked: 0,
     stalled_unreachable_source: 0,
@@ -4432,6 +4517,8 @@ function refreshJobMetrics(state: StationState): void {
     }
     if (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress') {
       stalledByReason[job.stallReason ?? 'none']++;
+    } else if (job.state === 'expired') {
+      expiredByReason[job.stallReason ?? 'none']++;
     }
   }
   let topBacklogType: typeof state.metrics.topBacklogType = 'none';
@@ -4444,6 +4531,7 @@ function refreshJobMetrics(state: StationState): void {
   }
   state.metrics.pendingJobs = pending;
   state.metrics.assignedJobs = assigned;
+  state.metrics.expiredJobs = expired;
   state.metrics.completedJobs = done;
   state.metrics.avgJobAgeSec = ages.length > 0 ? ages.reduce((a, b) => a + b, 0) / ages.length : 0;
   state.metrics.topBacklogType = topBacklogType;
@@ -4453,6 +4541,10 @@ function refreshJobMetrics(state: StationState): void {
     stalledByReason.stalled_unreachable_dropoff +
     stalledByReason.stalled_no_supply;
   state.metrics.stalledJobsByReason = stalledByReason;
+  state.metrics.expiredJobsByReason = expiredByReason;
+  state.metrics.expiredJobsByContext = expiredByContext;
+  state.metrics.jobCountsByItem = countsByItem;
+  state.metrics.jobCountsByType = countsByType;
 }
 
 function releaseCrewJobsOnDeath(state: StationState, crewId: number): void {
@@ -4510,6 +4602,19 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   for (const crew of state.crewMembers) {
     crew.idleReason = 'idle_available';
     crew.hygiene = clamp(crew.hygiene - dt * 0.2, 0, 100);
+    if (crew.activeJobId !== null) {
+      if (crew.resting) {
+        crew.resting = false;
+        crew.restSessionActive = false;
+        crew.restCooldownUntil = state.now + CREW_REST_COOLDOWN_SEC;
+        currentResting = Math.max(0, currentResting - 1);
+        state.metrics.crewRestingNow = currentResting;
+      }
+      if (crew.cleaning) {
+        crew.cleaning = false;
+        crew.cleanSessionActive = false;
+      }
+    }
     if (airEmergency) {
       if (crew.cleaning) {
         crew.cleaning = false;
@@ -4535,6 +4640,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       const canRestByShift = needsCriticalRest || (belowRestCap && shiftMatches);
       const cooldownReady = state.now >= crew.restCooldownUntil && state.now >= crew.taskLockUntil;
       const shouldRest =
+        crew.activeJobId === null &&
         crew.energy < CREW_REST_ENERGY_THRESHOLD &&
         cooldownReady &&
         canRestByShift &&
@@ -4553,7 +4659,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.cleaning = false;
         currentResting += 1;
         state.metrics.crewRestingNow = currentResting;
-      } else if (crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
+      } else if (crew.activeJobId === null && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
         const hygieneTargets = preferredHygieneTargets(state);
         if (hygieneTargets.length > 0 && !airEmergency) {
           crew.cleaning = true;
@@ -6385,6 +6491,12 @@ function computeMetrics(state: StationState): void {
     residentsCount > 0 ? state.residents.reduce((acc, resident) => acc + resident.social, 0) / residentsCount : 0;
   const residentSafetyAvg =
     residentsCount > 0 ? state.residents.reduce((acc, resident) => acc + resident.safety, 0) / residentsCount : 0;
+  const residentHungerAvg =
+    residentsCount > 0 ? state.residents.reduce((acc, resident) => acc + resident.hunger, 0) / residentsCount : 0;
+  const residentEnergyAvg =
+    residentsCount > 0 ? state.residents.reduce((acc, resident) => acc + resident.energy, 0) / residentsCount : 0;
+  const residentHygieneAvg =
+    residentsCount > 0 ? state.residents.reduce((acc, resident) => acc + resident.hygiene, 0) / residentsCount : 0;
   let secureTiles = 0;
   let securableTiles = 0;
   for (let i = 0; i < state.tiles.length; i++) {
@@ -6531,6 +6643,9 @@ function computeMetrics(state: StationState): void {
   state.metrics.escalatedFightRate = escalatedFightRate;
   state.metrics.residentSocialAvg = residentSocialAvg;
   state.metrics.residentSafetyAvg = residentSafetyAvg;
+  state.metrics.residentHungerAvg = residentHungerAvg;
+  state.metrics.residentEnergyAvg = residentEnergyAvg;
+  state.metrics.residentHygieneAvg = residentHygieneAvg;
   state.metrics.load = load;
   state.metrics.capacity = capacity;
   state.metrics.loadPct = loadPct;
@@ -6573,6 +6688,10 @@ function computeMetrics(state: StationState): void {
   state.metrics.dormSleepingResidents = state.residents.filter((r) => r.state === ResidentState.Sleeping).length + crewRestingInDorm;
   state.metrics.toDormResidents = state.residents.filter((r) => r.state === ResidentState.ToDorm).length + crewToDorm;
   state.metrics.hygieneCleaningResidents = state.residents.filter((r) => r.state === ResidentState.Cleaning).length + crewCleaning;
+  state.metrics.crewCleaning = crewCleaning;
+  state.metrics.crewSelfCare = crewRestingInDorm + crewToDorm + crewCleaning;
+  state.metrics.crewAvgEnergy = avgCrewEnergy;
+  state.metrics.crewAvgHygiene = avgCrewHygiene;
   state.metrics.cafeteriaQueueingCount =
     state.visitors.filter((v) => v.state === VisitorState.Queueing || v.state === VisitorState.ToCafeteria).length +
     state.residents.filter((r) => r.state === ResidentState.ToCafeteria).length;
@@ -6647,11 +6766,23 @@ function computeMetrics(state: StationState): void {
   let crewOnLogisticsJobs = 0;
   let crewBlockedNoPath = 0;
   for (const crew of state.crewMembers) {
-    if (crew.resting) crewResting += 1;
-    if (crew.activeJobId !== null) crewOnLogisticsJobs += 1;
-    if (!crew.resting && crew.activeJobId === null && crew.role !== 'idle') crewAssignedWorking += 1;
-    if (crew.role === 'idle' && !crew.resting && crew.activeJobId === null) crewIdleAvailable += 1;
+    if (crew.resting) {
+      crewResting += 1;
+      idleCrewByReason.idle_resting += 1;
+      continue;
+    }
+    if (crew.activeJobId !== null) {
+      crewOnLogisticsJobs += 1;
+      continue;
+    }
+    if (crew.role !== 'idle') {
+      crewAssignedWorking += 1;
+      continue;
+    }
     if (crew.idleReason === 'idle_no_path') crewBlockedNoPath += 1;
+    if (crew.idleReason === 'idle_available' || crew.idleReason === 'idle_no_jobs') {
+      crewIdleAvailable += 1;
+    }
     idleCrewByReason[crew.idleReason] += 1;
   }
   state.metrics.crewAssignedWorking = crewAssignedWorking;
@@ -6711,6 +6842,9 @@ function computeMetrics(state: StationState): void {
   };
   state.metrics.lifeSupportInactiveReasons = collectLifeSupportInactiveReasons(state);
   const roomWarnings = collectTopRoomWarnings(state);
+  const serviceReachability = collectServiceNodeReachability(state);
+  state.metrics.serviceNodesTotal = serviceReachability.nodeTiles.length;
+  state.metrics.serviceNodesUnreachable = serviceReachability.unreachableNodeTiles.length;
   const criticalFloorWarnings: string[] = [];
   if (
     state.metrics.requiredCriticalStaff.lifeSupport > 0 &&
@@ -6790,6 +6924,7 @@ function computeMetrics(state: StationState): void {
     roomWarnings.unshift(...criticalFloorWarnings.reverse());
   }
   state.metrics.topRoomWarnings = roomWarnings.slice(0, 3);
+  state.metrics.roomWarningsCount = roomWarnings.length;
 
   const moraleParts = [
     { label: 'fatigue', value: crewFatiguePenalty },
@@ -6959,6 +7094,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       escalatedFightRate: 0,
       residentSocialAvg: 0,
       residentSafetyAvg: 0,
+      residentHungerAvg: 0,
+      residentEnergyAvg: 0,
+      residentHygieneAvg: 0,
       load: 0,
       capacity: 0,
       loadPct: 0,
@@ -7026,6 +7164,21 @@ export function createInitialState(options?: { seed?: number }): StationState {
       topBacklogType: 'none',
       oldestPendingJobAgeSec: 0,
       stalledJobs: 0,
+      expiredJobsByReason: {
+        none: 0,
+        stalled_path_blocked: 0,
+        stalled_unreachable_source: 0,
+        stalled_unreachable_dropoff: 0,
+        stalled_no_supply: 0
+      },
+      expiredJobsByContext: {
+        queued: 0,
+        assigned: 0,
+        carrying: 0,
+        unknown: 0
+      },
+      jobCountsByItem: createJobCountsByItem(),
+      jobCountsByType: createJobCountsByType(),
       deathsTotal: 0,
       recentDeaths: 0,
       distressedResidents: 0,
@@ -7050,6 +7203,10 @@ export function createInitialState(options?: { seed?: number }): StationState {
       crewAssignedWorking: 0,
       crewIdleAvailable: 0,
       crewResting: 0,
+      crewCleaning: 0,
+      crewSelfCare: 0,
+      crewAvgEnergy: 100,
+      crewAvgHygiene: 100,
       crewOnLogisticsJobs: 0,
       crewBlockedNoPath: 0,
       crewRestCap: 0,
@@ -7145,6 +7302,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       residentDepartures: 0,
       residentSatisfactionAvg: 0,
       topRoomWarnings: [],
+      roomWarningsCount: 0,
+      serviceNodesTotal: 0,
+      serviceNodesUnreachable: 0,
       criticalUnstaffedSec: {
         lifeSupport: 0,
         hydroponics: 0,

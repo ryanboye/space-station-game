@@ -27,38 +27,38 @@ export interface ProgressionTooltipCopy {
 export const PROGRESSION_TOOLTIP_COPY: Record<UnlockTier, ProgressionTooltipCopy> = {
   0: {
     name: "You've arrived",
-    theme: 'Get your first crew a place to sleep.',
+    theme: 'Keep core life support running and set up starter resupply.',
     trigger: 'Start here — build a dorm and hire one crew member.',
   },
   1: {
-    name: 'Sustenance',
-    theme: 'Keep your visitors fed.',
+    name: 'Guest Services',
+    theme: 'Add lounge and market service for visiting traffic.',
     trigger: 'Unlocks when your first visitor arrives at your station.',
   },
   2: {
-    name: 'Commerce',
-    theme: 'Turn traffic into credits.',
+    name: 'Production Logistics',
+    theme: 'Scale material storage and produce goods for market sale.',
     trigger: 'Unlocks when you earn 500 credits and serve 3 visitor types.',
   },
   3: {
-    name: 'Logistics',
-    theme: 'Move goods, stock markets, expand capacity.',
+    name: 'Advanced Operations',
+    theme: 'Add security, health, recreation, and advanced traffic controls.',
     trigger: 'Unlocks when you complete one workshop → market trade cycle.',
   },
   4: {
-    name: 'Civic & Security',
-    theme: 'Respond to incidents before they spiral.',
+    name: 'Governance Roadmap',
+    theme: 'Future civic rules and deeper zone control.',
     trigger: 'Unlocks when you resolve one dispatched security incident.',
   },
   5: {
-    name: 'Health & Residents',
-    theme: 'Treat the injured. Convert visitors into permanent residents.',
+    name: 'Health Roadmap',
+    theme: 'Future resident care and medical depth.',
     trigger:
       'Unlocks when you treat one injured crew and convert one visitor to resident.',
   },
   6: {
     name: 'Specialization',
-    theme: 'Pick an identity. Open the full sandbox.',
+    theme: 'Complete the current progression track.',
     trigger: 'Unlocks when you complete the Health & Residents tier.',
   },
 };

@@ -62,6 +62,9 @@ import {
   type ShipSize,
   type ShipType,
   type HousingPolicy,
+  type ItemType,
+  type JobStallReason,
+  type JobStatusCounts,
   type StationState,
   ModuleType,
   RoomType,
@@ -97,15 +100,46 @@ app.innerHTML = `
       <span class="hud-item"><span class="hud-label">Food</span><span class="hud-value" id="hud-food">--</span></span>
       <span class="hud-item"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
       <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
-      <span class="hud-item"><span class="hud-label">Visitors</span><span class="hud-value" id="hud-visitors">--</span></span>
+      <span class="hud-item"><span class="hud-label">Materials</span><span class="hud-value" id="hud-materials">--</span></span>
     </div>
     <div class="top-actions">
-      <button id="open-save-modal" class="topbar-btn">Save / Load</button>
-      <button id="load-autosave" class="topbar-btn hidden">Load last session</button>
-      <button id="open-market" class="topbar-btn">Market</button>
-      <button id="open-expansion-modal" class="topbar-btn">Expand</button>
-      <button id="open-progression-modal" class="topbar-btn">Progress</button>
-      <button id="camera-reset" class="topbar-btn">Fit</button>
+      <button id="open-save-modal" class="topbar-btn utility-icon" aria-label="Save / Load" title="Save / Load">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 4h11l3 3v13H5z" />
+          <path d="M8 4v6h8V4" />
+          <path d="M8 20v-6h8v6" />
+        </svg>
+      </button>
+      <button id="load-autosave" class="topbar-btn utility-icon hidden" aria-label="Load last session" title="Load last session">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 12a8 8 0 1 0 2.35-5.65" />
+          <path d="M4 5v5h5" />
+          <path d="M12 8v5l3 2" />
+        </svg>
+      </button>
+      <button id="open-expansion-modal" class="topbar-btn utility-icon" aria-label="Map Expansion" title="Map Expansion">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M8 4H4v4" />
+          <path d="M16 4h4v4" />
+          <path d="M8 20H4v-4" />
+          <path d="M16 20h4v-4" />
+          <path d="M4 4l6 6" />
+          <path d="M20 4l-6 6" />
+          <path d="M4 20l6-6" />
+          <path d="M20 20l-6-6" />
+        </svg>
+      </button>
+      <button id="camera-reset" class="topbar-btn utility-icon" aria-label="Fit Map" title="Fit Map">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 9V5h4" />
+          <path d="M16 5h4v4" />
+          <path d="M20 15v4h-4" />
+          <path d="M8 19H4v-4" />
+          <path d="M12 8v8" />
+          <path d="M8 12h8" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
     </div>
     <div class="sim-controls">
       <span class="sim-clock" id="hud-clock">Cycle 0 | Day 1 | 00:00</span>
@@ -120,29 +154,28 @@ app.innerHTML = `
     <div id="game-stage">
       <canvas id="game"></canvas>
     </div>
-    <div class="floating-stack left-stack" aria-label="Station tactical overview">
-      <section class="hud-card">
-        <div class="hud-card-title">Station Overview</div>
-        <div class="overview-grid">
-          <div class="row compact list-row"><span>Population</span><span class="value" id="overview-population">0</span></div>
-          <div class="row compact list-row"><span>Oxygen</span><span class="value" id="overview-oxygen">0%</span></div>
-          <div class="row compact list-row"><span>Power</span><span class="value" id="overview-power">0%</span></div>
-          <div class="row compact list-row"><span>Food</span><span class="value" id="overview-food">0</span></div>
-          <div class="row compact list-row"><span>Morale</span><span class="value" id="overview-morale">0%</span></div>
-          <div class="row compact list-row"><span>Hull</span><span class="value" id="overview-hull">0%</span></div>
-          <div class="row compact list-row"><span>Threat</span><span class="value" id="overview-threat">Low</span></div>
-        </div>
-      </section>
-      <section class="hud-card task-card">
-        <div class="hud-card-title">Tasks</div>
+    <div class="floating-stack left-stack" aria-label="Station tasks">
+      <details class="hud-card task-card overlay-card" open>
+        <summary class="hud-card-title">Tasks</summary>
         <div id="quest-bar" aria-live="polite"></div>
-      </section>
-      <section class="hud-card alert-card">
-        <div class="hud-card-title">Alerts</div>
-        <div id="alert-list" class="alert-list">No active alerts</div>
-      </section>
+        <div id="tier-checklist" class="tier-checklist">No active checklist</div>
+      </details>
     </div>
     <div id="bottom-dock">
+      <section class="dock-card command-card">
+        <div class="hud-card-title">Command</div>
+        <div class="command-actions">
+          <button id="open-market" class="primary-command">Market</button>
+          <button id="open-progression-modal" class="primary-command">Progress</button>
+          <button id="edit-priorities" class="secondary-command">Priorities</button>
+        </div>
+        <div class="traffic-controls">
+          <div class="row compact list-row"><span>Ships / cycle</span><span class="value" id="ships-label">1</span></div>
+          <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
+          <small id="traffic-status" class="traffic-status">Paused</small>
+        </div>
+        <div class="row compact list-row command-note"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
+      </section>
       <section class="dock-card selected-card">
         <div class="hud-card-title">Selection</div>
         <div id="selection-summary" class="selection-summary">No room, dock, or resident selected.</div>
@@ -150,9 +183,13 @@ app.innerHTML = `
         <small id="dock-preview">Dock preview: n/a</small>
       </section>
       <section class="dock-card ops-card">
-        <div class="hud-card-title">Station Ops</div>
-        <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">0 / 0 (free 0)</span></div>
-        <div class="row compact list-row"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Security 0/0 | Reactor 0/0 | Dorms 0/0</span></div>
+        <div class="hud-card-title ops-card-head">
+          <span>Station Ops</span>
+          <button id="open-ops-modal" class="mini-action-btn">Details</button>
+        </div>
+        <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Work 0 | Idle 0 | Log 0 | Rest 0 | Block 0</span></div>
+        <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
+        <div class="row compact list-row"><span>Systems</span><span class="value" id="ops">Caf 0/0 | Food K0/0 H0/0 | LS 0/0 | R 0/0</span></div>
         <div class="row compact list-row"><span>Jobs</span><span class="value" id="jobs">P0 A0 X0 D0 | none</span></div>
         <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
       </section>
@@ -163,8 +200,12 @@ app.innerHTML = `
         <small id="morale-reasons">Crew morale drivers: none</small>
         <small id="rating-reasons">Station rating drivers: none</small>
       </section>
-      <details class="dock-card diagnostics-card mini-collapse">
-        <summary>Diagnostics</summary>
+      <section class="dock-card diagnostics-card">
+        <div class="hud-card-title">Alerts</div>
+        <div id="alert-list" class="alert-list is-clear">No active alerts</div>
+        <button id="clear-bodies" class="alert-action">Clear Bodies (-6 materials)</button>
+        <details class="mini-collapse">
+          <summary>Diagnostics</summary>
         <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Materials 0 | Credits 0</span></div>
         <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
         <div class="row compact list-row"><span>Power</span><span class="value" id="power">0 / 0</span></div>
@@ -211,13 +252,20 @@ app.innerHTML = `
         <small id="trade-status">Trade: workshop +0.0/s | market use 0.0/s | stock 0.0 | sold/min 0.0 | stockouts/min 0.0</small>
         <small id="room-usage">Usage: to dorm 0 | resting 0 | hygiene 0 | queue 0 | eating 0 | hydro staff 0/0</small>
         <small id="room-flow">Flow/min: dorm 0.0 | hygiene 0.0 | meals 0.0 | dorm fail 0.0</small>
-      </details>
+        </details>
+      </section>
     </div>
   </div>
   <aside id="panel">
     <h2>Build Palette</h2>
+    <div class="palette-tabs" aria-label="Build palette categories">
+      <button class="palette-tab active" data-palette-target="structure">Build</button>
+      <button class="palette-tab" data-palette-target="rooms">Rooms</button>
+      <button class="palette-tab" data-palette-target="modules">Modules</button>
+      <button class="palette-tab" data-palette-target="overlays">Overlays</button>
+    </div>
     <div id="toolbar" aria-label="Build tools">
-      <div class="tool-row">
+      <div class="tool-row palette-section active" data-palette-section="structure">
         <span class="tool-row-label">Structure</span>
         <button class="tool-btn" data-tool-tile="floor" title="Floor (1)"><span class="tool-key">1</span>Floor</button>
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
@@ -226,7 +274,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
       </div>
-      <div class="tool-row" data-tool-section="rooms">
+      <div class="tool-row palette-section" data-palette-section="rooms" data-tool-section="rooms">
         <span class="tool-row-label">Rooms</span>
         <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
         <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
@@ -245,7 +293,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
         <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
       </div>
-      <div class="tool-row" data-tool-section="modules">
+      <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
         <span class="tool-row-label">Furniture</span>
         <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
         <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
@@ -266,35 +314,26 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
         <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
+        <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
+        <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
       </div>
-      <div class="tool-row">
+      <div class="tool-row palette-section" data-palette-section="overlays">
         <span class="tool-row-label">Overlays</span>
         <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
         <button class="tool-btn" data-tool-zone="restricted" title="Paint Restricted zone (9)"><span class="tool-key">9</span>Restricted</button>
-        <button class="tool-btn" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
-        <button class="tool-btn" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
+        <button id="toggle-zones" class="tool-btn overlay-toggle">Zones: OFF</button>
+        <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Nodes: OFF</button>
+        <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Inventory Overlay: OFF</button>
+        <button id="toggle-glow" class="tool-btn overlay-toggle">Glow: ON</button>
+        <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
+        <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle">Force Fallback: OFF</button>
       </div>
     </div>
-    <div class="panel-actions">
-      <button id="toggle-zones" class="topbar-btn">Zones: OFF</button>
-      <button id="toggle-service-nodes" class="topbar-btn">Service Nodes: OFF</button>
-      <button id="toggle-inventory-overlay" class="topbar-btn">Inventory Overlay: OFF</button>
-      <button id="toggle-glow" class="topbar-btn">Glow: ON</button>
-      <button id="toggle-sprites" class="topbar-btn">Sprites: OFF</button>
-      <button id="toggle-sprite-fallback" class="topbar-btn">Force Fallback: OFF</button>
-      <button id="clear-bodies">Clear Bodies (-6 materials)</button>
-      <button id="edit-priorities">Edit Priorities</button>
-      <div class="row compact list-row"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
-    </div>
-    <details class="section mini-collapse">
-      <summary class="legend-title">Traffic & Tax</summary>
-      <div class="row"><span>Ships / cycle</span><span class="value" id="ships-label">1</span></div>
-      <input type="range" id="ships" min="0" max="3" step="1" value="1" />
-      <div class="row" style="margin-top:8px;"><span>Visitor Tax Rate</span><span class="value" id="tax-label">20%</span></div>
-      <input type="range" id="tax" min="0" max="50" step="1" value="20" />
-    </details>
-
   </aside>
+  <div class="hidden-controls" aria-hidden="true">
+    <span id="tax-label">20%</span>
+    <input type="range" id="tax" min="0" max="50" step="1" value="20" tabindex="-1" />
+  </div>
   <div id="save-modal" class="modal hidden">
     <div class="modal-card save-modal-card">
       <div class="modal-head">
@@ -428,6 +467,85 @@ app.innerHTML = `
         <label class="priority-row">Lounge <input type="range" min="1" max="10" step="1" data-priority="lounge" /><span id="prio-lounge">1</span></label>
         <label class="priority-row">Security <input type="range" min="1" max="10" step="1" data-priority="security" /><span id="prio-security">1</span></label>
         <label class="priority-row">Hygiene <input type="range" min="1" max="10" step="1" data-priority="hygiene" /><span id="prio-hygiene">1</span></label>
+      </div>
+    </div>
+  </div>
+  <div id="ops-modal" class="modal hidden">
+    <div class="modal-card ops-modal-card">
+      <div class="modal-head">
+        <h2>Station Ops</h2>
+        <button id="close-ops-modal" class="ghost-btn">Close</button>
+      </div>
+      <div class="ops-modal-summary" aria-label="Crew work state summary">
+        <div class="ops-state-chip"><span>Work</span><strong id="ops-chip-work">0</strong></div>
+        <div class="ops-state-chip"><span>Idle</span><strong id="ops-chip-idle">0</strong></div>
+        <div class="ops-state-chip"><span>Logistics</span><strong id="ops-chip-logistics">0</strong></div>
+        <div class="ops-state-chip"><span>Resting</span><strong id="ops-chip-resting">0</strong></div>
+        <div class="ops-state-chip blocked"><span>Blocked</span><strong id="ops-chip-blocked">0</strong></div>
+      </div>
+      <div class="ops-modal-tabs" aria-label="Station ops sections">
+        <button id="ops-tab-crew" class="ops-tab-btn" data-ops-tab="crew">Crew</button>
+        <button id="ops-tab-jobs" class="ops-tab-btn active" data-ops-tab="jobs">Jobs</button>
+        <button id="ops-tab-rooms" class="ops-tab-btn" data-ops-tab="rooms">Rooms</button>
+        <button id="ops-tab-food" class="ops-tab-btn" data-ops-tab="food">Food</button>
+        <button id="ops-tab-traffic" class="ops-tab-btn" data-ops-tab="traffic">Traffic</button>
+      </div>
+      <div class="ops-modal-grid">
+        <section class="ops-modal-section ops-tab-panel" data-ops-panel="crew">
+          <div class="section-title">Crew State</div>
+          <div id="ops-modal-idle" class="metric-list" data-metric-title="Idle">Idle reasons</div>
+          <small id="ops-modal-crew-why" class="ops-note">Crew: no blockers</small>
+          <div id="ops-modal-shifts" class="metric-list" data-metric-title="Rest">Rest shifts</div>
+          <div id="ops-modal-crew-needs" class="metric-list" data-metric-title="Needs">Crew needs</div>
+          <div id="ops-modal-staffing" class="metric-list" data-metric-title="Staffing">Critical staffing</div>
+          <div id="ops-modal-duty-transit" class="metric-list" data-metric-title="Transit">Duty transit</div>
+        </section>
+        <section class="ops-modal-section ops-tab-panel active" data-ops-panel="jobs">
+          <div class="section-title">Jobs</div>
+          <div id="ops-modal-jobs" class="metric-list" data-metric-title="Queue">Queue</div>
+          <div id="ops-modal-pending-work" class="ops-detail-list" data-detail-title="Pending Work">Pending work</div>
+          <div id="ops-modal-job-extra" class="metric-list" data-metric-title="Timing">Timing</div>
+          <div id="ops-modal-stalls" class="metric-list" data-metric-title="Stalls">Stalls</div>
+          <div id="ops-modal-expired" class="metric-list" data-metric-title="Expired Why">Expired reasons</div>
+          <div id="ops-modal-expired-work" class="ops-detail-list" data-detail-title="Expired Work">Expired work</div>
+          <div id="ops-modal-expired-context" class="metric-list" data-metric-title="Expired At">Expired context</div>
+          <div id="ops-modal-retargets" class="metric-list" data-metric-title="Dispatch">Dispatch</div>
+          <small id="ops-modal-job-why" class="ops-note">Jobs: queue healthy</small>
+        </section>
+        <section class="ops-modal-section ops-tab-panel" data-ops-panel="rooms">
+          <div class="section-title">Rooms & Systems</div>
+          <div id="ops-modal-room-health" class="metric-list" data-metric-title="Health">Room health</div>
+          <div id="ops-modal-room-warnings" class="ops-detail-list" data-detail-title="Warnings">Room warnings</div>
+          <div id="ops-modal-systems" class="metric-list" data-metric-title="Core">Core systems</div>
+          <div id="ops-modal-systems-extra" class="metric-list" data-metric-title="Service">Service rooms</div>
+          <div id="ops-modal-life-support" class="metric-list" data-metric-title="Life Support">Life support</div>
+          <div id="ops-modal-room-usage" class="metric-list" data-metric-title="Usage">Room usage</div>
+          <div id="ops-modal-room-flow" class="metric-list" data-metric-title="Flow">Flow</div>
+          <small id="ops-modal-room-why" class="ops-note">Rooms: no warnings</small>
+        </section>
+        <section class="ops-modal-section ops-tab-panel" data-ops-panel="food">
+          <div class="section-title">Food & Trade</div>
+          <div id="ops-modal-food-flow" class="metric-list" data-metric-title="Food Flow">Food flow</div>
+          <div id="ops-modal-kitchen" class="metric-list" data-metric-title="Kitchen">Kitchen</div>
+          <div id="ops-modal-trade" class="metric-list" data-metric-title="Trade">Trade</div>
+          <small id="ops-modal-food-chain" class="ops-note">Food chain: none</small>
+        </section>
+        <section class="ops-modal-section ops-tab-panel" data-ops-panel="traffic">
+          <div class="section-title">Traffic, Visitors & Residents</div>
+          <div class="ops-modal-traffic-grid">
+            <div id="ops-modal-traffic" class="metric-list" data-metric-title="Traffic">Traffic</div>
+            <div id="ops-modal-berths" class="metric-list" data-metric-title="Berths">Berths</div>
+          </div>
+          <div id="ops-modal-demand" class="metric-list" data-metric-title="Demand">Demand</div>
+          <div id="ops-modal-archetypes" class="metric-list" data-metric-title="Visitor Mix">Visitors</div>
+          <div id="ops-modal-resident-needs" class="metric-list" data-metric-title="Residents">Resident needs</div>
+          <div id="ops-modal-ships" class="metric-list" data-metric-title="Ships / Min">Ships</div>
+          <div id="ops-modal-walk" class="metric-list" data-metric-title="Movement">Walk</div>
+          <div id="ops-modal-rating-penalties" class="metric-list" data-metric-title="Rating Penalties">Rating penalties</div>
+          <div id="ops-modal-rating-bonuses" class="metric-list" data-metric-title="Rating Bonuses">Rating bonuses</div>
+          <div id="ops-modal-rating-failures" class="metric-list" data-metric-title="Failure Why">Service failures</div>
+          <small id="ops-modal-rating">Station rating drivers: none</small>
+        </section>
       </div>
     </div>
   </div>
@@ -604,6 +722,7 @@ applyCanvasSize();
 
 const shipsInput = document.querySelector<HTMLInputElement>('#ships')!;
 const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
+const trafficStatusEl = document.querySelector<HTMLElement>('#traffic-status')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
 const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
@@ -630,6 +749,7 @@ const moraleEl = document.querySelector<HTMLSpanElement>('#morale')!;
 const stationRatingEl = document.querySelector<HTMLSpanElement>('#station-rating')!;
 const visitorFeelingsEl = document.querySelector<HTMLElement>('#visitor-feelings')!;
 const crewEl = document.querySelector<HTMLSpanElement>('#crew')!;
+const opsTrafficEl = document.querySelector<HTMLSpanElement>('#ops-traffic')!;
 const opsEl = document.querySelector<HTMLSpanElement>('#ops')!;
 const opsExtraEl = document.querySelector<HTMLElement>('#ops-extra')!;
 const moraleReasonsEl = document.querySelector<HTMLElement>('#morale-reasons')!;
@@ -701,6 +821,54 @@ const closeExpansionModalBtn = document.querySelector<HTMLButtonElement>('#close
 const expansionModal = document.querySelector<HTMLDivElement>('#expansion-modal')!;
 const priorityModal = document.querySelector<HTMLDivElement>('#priority-modal')!;
 const closePriorityBtn = document.querySelector<HTMLButtonElement>('#close-priority')!;
+const opsModal = document.querySelector<HTMLDivElement>('#ops-modal')!;
+const openOpsModalBtn = document.querySelector<HTMLButtonElement>('#open-ops-modal')!;
+const closeOpsModalBtn = document.querySelector<HTMLButtonElement>('#close-ops-modal')!;
+const opsChipWorkEl = document.querySelector<HTMLElement>('#ops-chip-work')!;
+const opsChipIdleEl = document.querySelector<HTMLElement>('#ops-chip-idle')!;
+const opsChipLogisticsEl = document.querySelector<HTMLElement>('#ops-chip-logistics')!;
+const opsChipRestingEl = document.querySelector<HTMLElement>('#ops-chip-resting')!;
+const opsChipBlockedEl = document.querySelector<HTMLElement>('#ops-chip-blocked')!;
+const opsTabButtons = [...document.querySelectorAll<HTMLButtonElement>('.ops-tab-btn')];
+const opsTabPanels = [...document.querySelectorAll<HTMLElement>('.ops-tab-panel')];
+const opsModalIdleEl = document.querySelector<HTMLElement>('#ops-modal-idle')!;
+const opsModalCrewWhyEl = document.querySelector<HTMLElement>('#ops-modal-crew-why')!;
+const opsModalShiftsEl = document.querySelector<HTMLElement>('#ops-modal-shifts')!;
+const opsModalCrewNeedsEl = document.querySelector<HTMLElement>('#ops-modal-crew-needs')!;
+const opsModalStaffingEl = document.querySelector<HTMLElement>('#ops-modal-staffing')!;
+const opsModalDutyTransitEl = document.querySelector<HTMLElement>('#ops-modal-duty-transit')!;
+const opsModalJobsEl = document.querySelector<HTMLElement>('#ops-modal-jobs')!;
+const opsModalPendingWorkEl = document.querySelector<HTMLElement>('#ops-modal-pending-work')!;
+const opsModalJobExtraEl = document.querySelector<HTMLElement>('#ops-modal-job-extra')!;
+const opsModalStallsEl = document.querySelector<HTMLElement>('#ops-modal-stalls')!;
+const opsModalExpiredEl = document.querySelector<HTMLElement>('#ops-modal-expired')!;
+const opsModalExpiredWorkEl = document.querySelector<HTMLElement>('#ops-modal-expired-work')!;
+const opsModalExpiredContextEl = document.querySelector<HTMLElement>('#ops-modal-expired-context')!;
+const opsModalRetargetsEl = document.querySelector<HTMLElement>('#ops-modal-retargets')!;
+const opsModalJobWhyEl = document.querySelector<HTMLElement>('#ops-modal-job-why')!;
+const opsModalRoomHealthEl = document.querySelector<HTMLElement>('#ops-modal-room-health')!;
+const opsModalRoomWarningsEl = document.querySelector<HTMLElement>('#ops-modal-room-warnings')!;
+const opsModalSystemsEl = document.querySelector<HTMLElement>('#ops-modal-systems')!;
+const opsModalSystemsExtraEl = document.querySelector<HTMLElement>('#ops-modal-systems-extra')!;
+const opsModalLifeSupportEl = document.querySelector<HTMLElement>('#ops-modal-life-support')!;
+const opsModalRoomUsageEl = document.querySelector<HTMLElement>('#ops-modal-room-usage')!;
+const opsModalRoomFlowEl = document.querySelector<HTMLElement>('#ops-modal-room-flow')!;
+const opsModalRoomWhyEl = document.querySelector<HTMLElement>('#ops-modal-room-why')!;
+const opsModalFoodFlowEl = document.querySelector<HTMLElement>('#ops-modal-food-flow')!;
+const opsModalKitchenEl = document.querySelector<HTMLElement>('#ops-modal-kitchen')!;
+const opsModalTradeEl = document.querySelector<HTMLElement>('#ops-modal-trade')!;
+const opsModalFoodChainEl = document.querySelector<HTMLElement>('#ops-modal-food-chain')!;
+const opsModalTrafficEl = document.querySelector<HTMLElement>('#ops-modal-traffic')!;
+const opsModalBerthsEl = document.querySelector<HTMLElement>('#ops-modal-berths')!;
+const opsModalDemandEl = document.querySelector<HTMLElement>('#ops-modal-demand')!;
+const opsModalArchetypesEl = document.querySelector<HTMLElement>('#ops-modal-archetypes')!;
+const opsModalResidentNeedsEl = document.querySelector<HTMLElement>('#ops-modal-resident-needs')!;
+const opsModalShipsEl = document.querySelector<HTMLElement>('#ops-modal-ships')!;
+const opsModalWalkEl = document.querySelector<HTMLElement>('#ops-modal-walk')!;
+const opsModalRatingPenaltiesEl = document.querySelector<HTMLElement>('#ops-modal-rating-penalties')!;
+const opsModalRatingBonusesEl = document.querySelector<HTMLElement>('#ops-modal-rating-bonuses')!;
+const opsModalRatingFailuresEl = document.querySelector<HTMLElement>('#ops-modal-rating-failures')!;
+const opsModalRatingEl = document.querySelector<HTMLElement>('#ops-modal-rating')!;
 const foodFlowEl = document.querySelector<HTMLElement>('#food-flow')!;
 const powerEl = document.querySelector<HTMLSpanElement>('#power')!;
 const incidentsEl = document.querySelector<HTMLSpanElement>('#incidents')!;
@@ -782,19 +950,13 @@ const hudPowerEl = document.querySelector<HTMLElement>('#hud-power')!;
 const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
 const hudCreditsEl = document.querySelector<HTMLElement>('#hud-credits')!;
 const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
-const hudVisitorsEl = document.querySelector<HTMLElement>('#hud-visitors')!;
+const hudMaterialsEl = document.querySelector<HTMLElement>('#hud-materials')!;
 const hudWaterEl = document.querySelector<HTMLElement>('#hud-water')!;
 const hudFoodEl = document.querySelector<HTMLElement>('#hud-food')!;
 const hudMoraleEl = document.querySelector<HTMLElement>('#hud-morale')!;
 const hudClockEl = document.querySelector<HTMLElement>('#hud-clock')!;
-const overviewPopulationEl = document.querySelector<HTMLElement>('#overview-population')!;
-const overviewOxygenEl = document.querySelector<HTMLElement>('#overview-oxygen')!;
-const overviewPowerEl = document.querySelector<HTMLElement>('#overview-power')!;
-const overviewFoodEl = document.querySelector<HTMLElement>('#overview-food')!;
-const overviewMoraleEl = document.querySelector<HTMLElement>('#overview-morale')!;
-const overviewHullEl = document.querySelector<HTMLElement>('#overview-hull')!;
-const overviewThreatEl = document.querySelector<HTMLElement>('#overview-threat')!;
 const alertListEl = document.querySelector<HTMLElement>('#alert-list')!;
+const tierChecklistEl = document.querySelector<HTMLElement>('#tier-checklist')!;
 const selectionSummaryEl = document.querySelector<HTMLElement>('#selection-summary')!;
 const devTierOverlayEl = document.querySelector<HTMLElement>('#dev-tier-overlay')!;
 // Enable dev-only HUD surfaces via `?dev=1`. Read once at startup; the
@@ -889,66 +1051,64 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     theme: 'Keep oxygen, food, and beds stable before adding complexity.',
     buildings: ['Reactor', 'Life Support', 'Dorm', 'Hygiene', 'Hydroponics', 'Kitchen', 'Cafeteria', 'Dock'],
     citizenNeeds: ['Core survival loop: hunger, rest, hygiene'],
-    visitorNeeds: ['Visitors only demand cafeteria service while lounge/market are tier-locked'],
+    visitorNeeds: ['Visitors can be served by the starting cafeteria while guest services are locked'],
     ships: ['Tourist', 'Trader'],
-    systems: ['Baseline staffing, food chain, and pressure management']
+    systems: ['Baseline staffing, food chain, pressure management, and starter material intake']
   },
   1: {
-    name: 'Sustenance',
-    theme: 'First visitor arrives — build the food chain that keeps them alive.',
-    buildings: ['Hydroponics', 'Kitchen', 'Cafeteria'],
-    citizenNeeds: ['Hunger becomes binding once visitors start consuming'],
-    visitorNeeds: ['Cafeteria service gates visitor satisfaction + rating'],
-    ships: ['No new family'],
-    systems: ['Food pipeline: hydroponics → kitchen → cafeteria serving']
-  },
-  2: {
-    name: 'Commerce',
-    theme: 'Leisure and commerce come online once visitors flow reliably.',
+    name: 'Guest Services',
+    theme: 'First visitor arrives - add social and shopping service.',
     buildings: ['Lounge', 'Market'],
     citizenNeeds: ['Social comfort matters more with lounge access'],
     visitorNeeds: ['Lounge + market demand starts appearing in ship service checks'],
-    ships: ['No new family (tourist/trader mix shifts toward leisure + shopping)'],
+    ships: ['No new family'],
     systems: ['Leisure and market throughput begin impacting rating and credits']
   },
-  3: {
-    name: 'Logistics',
-    theme: 'Scale production + item flow into a sustained trade economy.',
-    buildings: ['Workshop', 'Logistics Stock', 'Storage'],
+  2: {
+    name: 'Production Logistics',
+    theme: 'Scale material storage and convert raw materials into trade goods.',
+    buildings: ['Workshop', 'Storage'],
     citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
     visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
     ships: ['Industrial'],
-    systems: ['Trade-good pipeline: workshop → storage → market stall sale']
+    systems: ['Full goods chain: intake -> storage -> workshop -> market stall sale']
   },
-  // Placeholder T4..T6 presentation entries — content copy mirrors the
-  // progression strawman. Final wording lands with awfml's milestone
-  // framework.
+  3: {
+    name: 'Advanced Operations',
+    theme: 'Security, treatment, recreation, and advanced traffic controls.',
+    buildings: ['Security', 'Brig', 'Clinic', 'Rec Hall'],
+    citizenNeeds: ['Safety, recovery, and richer social sinks affect retention'],
+    visitorNeeds: ['Security, treatment, and housing-readiness demands begin evaluating'],
+    ships: ['Military', 'Colonist'],
+    systems: ['Incident containment, health state handling, and advanced dock filters']
+  },
+  // T4..T6 are roadmap milestones until distinct content gates land.
   4: {
-    name: 'Orbital Nexus',
-    theme: 'Safety, containment, and resident-facing amenities.',
-    buildings: ['Security', 'Brig', 'Rec Hall'],
-    citizenNeeds: ['Safety and richer social sinks affect retention'],
-    visitorNeeds: ['Security and housing-readiness demands begin evaluating'],
+    name: 'Governance Roadmap',
+    theme: 'Future civic rules and deeper zone control.',
+    buildings: ['Roadmap milestone'],
+    citizenNeeds: ['No new build unlocks in this pass'],
+    visitorNeeds: ['No new ship service demands in this pass'],
     ships: ['No new family'],
-    systems: ['Incident containment + zone controls']
+    systems: ['Advanced milestone tracking']
   },
   5: {
-    name: 'Medical Wing',
-    theme: 'Mortality, treatment, and resident conversion.',
-    buildings: ['Clinic', 'Morgue'],
-    citizenNeeds: ['Medical recovery + private resident housing'],
-    visitorNeeds: ['Treatment-eligible visitors + body logistics'],
+    name: 'Health Roadmap',
+    theme: 'Future resident care and medical depth.',
+    buildings: ['Roadmap milestone'],
+    citizenNeeds: ['No new build unlocks in this pass'],
+    visitorNeeds: ['No new ship service demands in this pass'],
     ships: ['No new family'],
-    systems: ['Health state machine + morgue overflow']
+    systems: ['Advanced milestone tracking']
   },
   6: {
     name: 'Specialization',
-    theme: 'Station identity + advanced ship families.',
-    buildings: ['Station-identity selector'],
-    citizenNeeds: ['Identity-driven satisfaction modifiers'],
-    visitorNeeds: ['Specialized traffic matching station type'],
-    ships: ['Military', 'Colonist'],
-    systems: ['End of tutorial — full sandbox unlocked']
+    theme: 'Complete the current progression track.',
+    buildings: ['Roadmap milestone'],
+    citizenNeeds: ['No new build unlocks in this pass'],
+    visitorNeeds: ['No new ship service demands in this pass'],
+    ships: ['No new family'],
+    systems: ['End of current progression']
   }
 };
 
@@ -1057,7 +1217,8 @@ function refreshUnlockLegendAndHotkeys(): void {
 /**
  * Refresh the persistent top-of-canvas HUD status strip.
  *
- * Shows Power / Oxygen / Credits / Crew / Visitors — the five numbers
+ * Shows Power / Oxygen / Credits / Crew / Materials — the high-frequency
+ * status numbers that should always remain visible.
  * awfml wanted at-a-glance without cracking the sidebar (Starlight-Station
  * dashboard vibe). Pulled from the same state surfaces the sidebar panels
  * use so we stay a read-only render consumer:
@@ -1068,7 +1229,7 @@ function refreshUnlockLegendAndHotkeys(): void {
  *   - Oxygen: `airQuality` (0-100 life-support %, the sim's "oxygen").
  *   - Credits: `state.metrics.credits` (integer station bank).
  *   - Crew: `state.crew.total` (hired head-count).
- *   - Visitors: `state.metrics.visitorsCount` (on-station right now).
+ *   - Materials: `state.metrics.materials` (construction fuel).
  *
  * Uses simple red/yellow/green thresholds matching the existing sidebar
  * treatments so the HUD reads the same at a glance.
@@ -1088,7 +1249,7 @@ function refreshHudStatus(): void {
 
   hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
   hudCrewEl.textContent = String(state.crew.total);
-  hudVisitorsEl.textContent = String(state.metrics.visitorsCount);
+  hudMaterialsEl.textContent = String(Math.round(state.metrics.materials));
   hudWaterEl.textContent = String(Math.round(state.metrics.waterStock));
   hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
   hudMoraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
@@ -1104,39 +1265,561 @@ function refreshHudStatus(): void {
   hudClockEl.textContent = `Cycle ${cycle} | Day ${day} | ${minutes}:${seconds}`;
 }
 
-function setMetricTone(el: HTMLElement, tone: 'ok' | 'warn' | 'danger' | 'muted'): void {
-  el.classList.remove('tone-ok', 'tone-warn', 'tone-danger', 'tone-muted');
-  el.classList.add(`tone-${tone}`);
+const VISITOR_TRAFFIC_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+
+function hasVisitorDock(): boolean {
+  return state.docks.some((dock) => dock.purpose === 'visitor');
 }
 
-function refreshHudOverview(): void {
-  const powerDemand = state.metrics.powerDemand;
-  const powerSupply = state.metrics.powerSupply;
-  const oxygen = Math.round(state.metrics.airQuality);
-  const loadPct = Math.round(state.metrics.loadPct);
-  const morale = Math.round(state.metrics.morale);
-  const hull = Math.round(state.metrics.pressurizationPct);
-  const threat =
-    state.metrics.incidentsOpen > 0 || state.metrics.criticalResidents > 0
-      ? 'High'
-      : state.metrics.leakingTiles > 0 || state.metrics.distressedResidents > 0
-        ? 'Elevated'
-        : 'Low';
+function hasEligibleVisitorDock(): boolean {
+  return state.docks.some((dock) => {
+    if (dock.purpose !== 'visitor' || dock.allowedShipSizes.length === 0) return false;
+    return VISITOR_TRAFFIC_TYPES.some(
+      (shipType) => dock.allowedShipTypes.includes(shipType) && isShipTypeUnlocked(state, shipType)
+    );
+  });
+}
 
-  overviewPopulationEl.textContent = `${state.crew.total + state.metrics.visitorsCount}`;
-  overviewOxygenEl.textContent = `${oxygen}%`;
-  overviewPowerEl.textContent = `${loadPct}% (${Math.round(powerDemand)}/${Math.round(powerSupply)})`;
-  overviewFoodEl.textContent = `${Math.round(state.metrics.mealStock)} meals`;
-  overviewMoraleEl.textContent = `${morale}%`;
-  overviewHullEl.textContent = `${hull}%`;
-  overviewThreatEl.textContent = threat;
+function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
+  trafficStatusEl.textContent = text;
+  trafficStatusEl.classList.remove('tone-muted', 'tone-ok', 'tone-warn');
+  trafficStatusEl.classList.add(`tone-${tone}`);
+}
 
-  setMetricTone(overviewOxygenEl, oxygen < 35 ? 'danger' : oxygen < 70 ? 'warn' : 'ok');
-  setMetricTone(overviewPowerEl, powerDemand > powerSupply ? 'danger' : loadPct > 85 ? 'warn' : 'ok');
-  setMetricTone(overviewFoodEl, state.metrics.mealStock < 8 ? 'danger' : state.metrics.mealStock < 25 ? 'warn' : 'ok');
-  setMetricTone(overviewMoraleEl, morale < 40 ? 'danger' : morale < 65 ? 'warn' : 'ok');
-  setMetricTone(overviewHullEl, hull < 60 ? 'danger' : hull < 85 ? 'warn' : 'ok');
-  setMetricTone(overviewThreatEl, threat === 'High' ? 'danger' : threat === 'Elevated' ? 'warn' : 'ok');
+function refreshTrafficStatus(): void {
+  const shipsPerCycle = clamp(state.controls.shipsPerCycle, 0, 3);
+  const activeTransientShips = state.arrivingShips.filter((ship) => ship.kind === 'transient').length;
+  if (shipsPerCycle <= 0) {
+    setTrafficStatus('Traffic off', 'muted');
+    return;
+  }
+  if (!hasVisitorDock()) {
+    setTrafficStatus('Build a visitor dock', 'warn');
+    return;
+  }
+  if (!hasEligibleVisitorDock()) {
+    setTrafficStatus('Dock filters block traffic', 'warn');
+    return;
+  }
+  if (state.controls.paused) {
+    setTrafficStatus('Paused - press play for arrivals', 'muted');
+    return;
+  }
+  if (activeTransientShips > 0 || state.pendingSpawns.length > 0) {
+    setTrafficStatus(`${activeTransientShips} ship${activeTransientShips === 1 ? '' : 's'} active`, 'ok');
+    return;
+  }
+  const elapsed = Math.max(0, state.now - state.lastCycleTime);
+  const seconds = Math.max(1, Math.ceil(state.cycleDuration - elapsed));
+  setTrafficStatus(`Next wave in ${seconds}s`, 'ok');
+}
+
+type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';
+type OpsMetricItem = {
+  label: string;
+  value: string | number;
+  tone?: OpsMetricTone;
+};
+type OpsDetailItem = {
+  label: string;
+  value: string | number;
+  tone?: OpsMetricTone;
+};
+type OpsTab = 'crew' | 'jobs' | 'rooms' | 'food' | 'traffic';
+
+let activeOpsTab: OpsTab = 'jobs';
+
+function setOpsTab(tab: OpsTab): void {
+  activeOpsTab = tab;
+  for (const button of opsTabButtons) {
+    const active = button.dataset.opsTab === tab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  }
+  for (const panel of opsTabPanels) {
+    panel.classList.toggle('active', panel.dataset.opsPanel === tab);
+  }
+}
+
+function setMetricList(el: HTMLElement, items: OpsMetricItem[]): void {
+  const nodes = items.map((item) => {
+    const metric = document.createElement('span');
+    metric.className = `metric-pill tone-${item.tone ?? 'default'}`;
+
+    const label = document.createElement('span');
+    label.className = 'metric-label';
+    label.textContent = item.label;
+
+    const value = document.createElement('strong');
+    value.className = 'metric-value';
+    value.textContent = String(item.value);
+
+    metric.append(label, value);
+    return metric;
+  });
+  el.replaceChildren(...nodes);
+}
+
+function setDetailList(el: HTMLElement, items: OpsDetailItem[], emptyText = 'None'): void {
+  const shown = items.filter((item) => String(item.value) !== '0' && String(item.value) !== '');
+  const nodes = shown.length > 0
+    ? shown.map((item) => {
+        const row = document.createElement('span');
+        row.className = `ops-detail-row tone-${item.tone ?? 'default'}`;
+
+        const label = document.createElement('span');
+        label.className = 'ops-detail-label';
+        label.textContent = item.label;
+
+        const value = document.createElement('strong');
+        value.className = 'ops-detail-value';
+        value.textContent = String(item.value);
+
+        row.append(label, value);
+        return row;
+      })
+    : [(() => {
+        const empty = document.createElement('span');
+        empty.className = 'ops-detail-empty';
+        empty.textContent = emptyText;
+        return empty;
+      })()];
+  el.replaceChildren(...nodes);
+}
+
+const JOB_STALL_LABELS: Record<JobStallReason, string> = {
+  none: 'Timed Out',
+  stalled_path_blocked: 'Path',
+  stalled_unreachable_source: 'Source',
+  stalled_unreachable_dropoff: 'Dropoff',
+  stalled_no_supply: 'Supply'
+};
+
+const ITEM_LABELS: Record<ItemType, string> = {
+  rawMeal: 'Raw food',
+  meal: 'Meals',
+  rawMaterial: 'Materials',
+  tradeGood: 'Trade goods',
+  body: 'Bodies'
+};
+
+function statusBreakdownText(counts: JobStatusCounts, key: keyof JobStatusCounts): string {
+  return counts[key] > 0 ? String(counts[key]) : '0';
+}
+
+function dominantCountReason<T extends string>(counts: Record<T, number>): T | null {
+  let topReason: T | null = null;
+  let topCount = 0;
+  for (const [reason, count] of Object.entries(counts) as Array<[T, number]>) {
+    if (count > topCount) {
+      topReason = reason;
+      topCount = count;
+    }
+  }
+  return topReason;
+}
+
+function jobWhyText(): string {
+  const stalledReason = dominantCountReason(state.metrics.stalledJobsByReason);
+  const expiredReason = dominantCountReason(state.metrics.expiredJobsByReason);
+  if (state.metrics.logisticsDispatchSlots <= 0 && state.metrics.pendingJobs > 0) {
+    return 'Jobs: dispatch saturated; all hauler slots are occupied.';
+  }
+  if (stalledReason && stalledReason !== 'none' && state.metrics.stalledJobsByReason[stalledReason] > 0) {
+    return `Jobs: current stalls are mostly ${JOB_STALL_LABELS[stalledReason].toLowerCase()} problems.`;
+  }
+  if (expiredReason && state.metrics.expiredJobsByReason[expiredReason] > 0) {
+    if (expiredReason === 'none') {
+      return 'Jobs: expired work mostly timed out without a path/source/dropoff stall; this usually means the queue outlived the available hauler capacity.';
+    }
+    return `Jobs: expired work is mostly ${JOB_STALL_LABELS[expiredReason].toLowerCase()} related.`;
+  }
+  if (state.metrics.oldestPendingJobAgeSec > 30) {
+    return 'Jobs: queue is aging even without a clear stall reason.';
+  }
+  return 'Jobs: queue healthy.';
+}
+
+function crewWhyText(): string {
+  const waiting = state.metrics.idleCrewByReason.idle_waiting_reassign;
+  if (waiting <= 0) return 'Crew: no one is waiting for reassignment.';
+  if (state.metrics.pendingJobs <= 0) return 'Crew: waiting workers are roaming because no jobs are pending.';
+  if (state.metrics.logisticsDispatchSlots <= 0) {
+    return `Crew: ${waiting} waiting while pending jobs exceed the current logistics crew cap.`;
+  }
+  if (state.metrics.stalledJobs > 0) {
+    return `Crew: ${waiting} waiting while the dispatcher avoids stalled jobs.`;
+  }
+  return `Crew: ${waiting} waiting for the next dispatcher pass; pending jobs exist but were not assigned this tick.`;
+}
+
+function roomWhyText(): string {
+  const serviceText =
+    state.metrics.serviceNodesTotal > 0
+      ? `${state.metrics.serviceNodesUnreachable}/${state.metrics.serviceNodesTotal} service nodes unreachable`
+      : 'no service nodes built';
+  const warningText = state.metrics.topRoomWarnings.join('; ') || 'no room warnings';
+  return `Rooms: ${serviceText}; ${warningText}.`;
+}
+
+function ratingWhyText(): string {
+  const drivers = state.metrics.stationRatingDrivers.filter((driver) => driver !== 'none');
+  return `Station rating drivers: ${drivers.join('; ') || 'none'}`;
+}
+
+function crewOpsSummaryText(compact = false): string {
+  const logisticsLabel = compact ? 'Log' : 'Logistics';
+  const restingLabel = compact ? 'Rest' : 'Resting';
+  const blockedLabel = compact ? 'Block' : 'Blocked';
+  return `Work ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | ` +
+    `${logisticsLabel} ${state.metrics.crewOnLogisticsJobs} | ${restingLabel} ${state.metrics.crewResting} | ` +
+    `${blockedLabel} ${state.metrics.crewBlockedNoPath}`;
+}
+
+function trafficOpsSummaryText(): string {
+  return `Visitors ${state.metrics.visitorsCount} | Docked ${state.metrics.dockedShips} | Exits ${state.metrics.exitsPerMin}/min`;
+}
+
+function coreOpsSummaryText(): string {
+  return `Caf ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | ` +
+    `Food K${state.ops.kitchenActive}/${state.ops.kitchenTotal} H${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
+    `LS ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | R ${state.ops.reactorsActive}/${state.ops.reactorsTotal}`;
+}
+
+function jobsSummaryText(): string {
+  return `P${state.metrics.pendingJobs} A${state.metrics.assignedJobs} X${state.metrics.expiredJobs} D${state.metrics.completedJobs} | ${state.metrics.topBacklogType}`;
+}
+
+function criticalStaffingText(): string {
+  return `Critical staffing R ${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor} | ` +
+    `LS ${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport} | ` +
+    `HY ${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics} | ` +
+    `KI ${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen} | ` +
+    `CF ${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}`;
+}
+
+function idleReasonsText(): string {
+  return `Idle reasons: available ${state.metrics.idleCrewByReason.idle_available} | no jobs ${state.metrics.idleCrewByReason.idle_no_jobs} | ` +
+    `resting ${state.metrics.idleCrewByReason.idle_resting} | no path ${state.metrics.idleCrewByReason.idle_no_path} | ` +
+    `waiting ${state.metrics.idleCrewByReason.idle_waiting_reassign}`;
+}
+
+function stallReasonsText(): string {
+  return `Stalls: blocked ${state.metrics.stalledJobsByReason.stalled_path_blocked} | ` +
+    `src ${state.metrics.stalledJobsByReason.stalled_unreachable_source} | ` +
+    `dst ${state.metrics.stalledJobsByReason.stalled_unreachable_dropoff} | ` +
+    `supply ${state.metrics.stalledJobsByReason.stalled_no_supply}`;
+}
+
+function jobsExtraText(): string {
+  return `Avg age ${state.metrics.avgJobAgeSec.toFixed(1)}s | Oldest ${state.metrics.oldestPendingJobAgeSec.toFixed(1)}s | ` +
+    `Delivery ${state.metrics.deliveryLatencySec.toFixed(1)}s | Stalled ${state.metrics.stalledJobs} | ` +
+    `shortfall sec R ${state.metrics.criticalShortfallSec.reactor.toFixed(1)} LS ${state.metrics.criticalShortfallSec.lifeSupport.toFixed(1)} ` +
+    `HY ${state.metrics.criticalShortfallSec.hydroponics.toFixed(1)} KI ${state.metrics.criticalShortfallSec.kitchen.toFixed(1)} ` +
+    `CF ${state.metrics.criticalShortfallSec.cafeteria.toFixed(1)}`;
+}
+
+function crewShiftsText(): string {
+  return `Shifts: resting ${state.metrics.crewRestingNow}/${state.metrics.crewRestCap} | ` +
+    `wake budget ${state.metrics.crewEmergencyWakeBudget} | woken ${state.metrics.crewWokenForAir} | ` +
+    `lockouts ${state.metrics.crewPingPongPreventions}`;
+}
+
+function crewRetargetsText(): string {
+  return `Crew retargets/min: ${state.metrics.crewRetargetsPerMin.toFixed(1)} | ` +
+    `critical drops/min: ${state.metrics.criticalStaffDropsPerMin.toFixed(1)} | ` +
+    `dispatch ${state.metrics.logisticsDispatchSlots} | pressure ${(state.metrics.logisticsPressure * 100).toFixed(0)}%`;
+}
+
+function opsExtraText(): string {
+  return `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Workshop ${state.ops.workshopActive}/${state.ops.workshopTotal} | ` +
+    `Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
+    `Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | ` +
+    `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
+    `Brig ${state.ops.brigActive}/${state.ops.brigTotal} | RecHall ${state.ops.recHallActive}/${state.ops.recHallTotal}`;
+}
+
+function roomUsageText(): string {
+  return `Usage: to dorm ${state.metrics.toDormResidents} | resting ${state.metrics.dormSleepingResidents} | ` +
+    `hygiene ${state.metrics.hygieneCleaningResidents} | queue ${state.metrics.cafeteriaQueueingCount} | ` +
+    `eating ${state.metrics.cafeteriaEatingCount} | hydro staff ${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes} | ` +
+    `life nodes ${state.metrics.lifeSupportActiveNodes}`;
+}
+
+function roomFlowText(): string {
+  return `Flow/min: dorm ${state.metrics.dormVisitsPerMin.toFixed(1)} | hygiene ${state.metrics.hygieneUsesPerMin.toFixed(1)} | ` +
+    `meals ${state.metrics.mealsConsumedPerMin.toFixed(1)} | dorm fail ${state.metrics.dormFailedAttemptsPerMin.toFixed(1)} | ` +
+    `failed needs H/E/Y ${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}`;
+}
+
+function foodFlowText(): string {
+  return `Food flow: +${state.metrics.rawFoodProdRate.toFixed(1)} raw/s -> kitchen +${state.metrics.kitchenMealProdRate.toFixed(1)} meals/s, use ${state.metrics.mealUseRate.toFixed(1)} meals/s`;
+}
+
+function kitchenStatusText(): string {
+  return `Kitchen: active ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | raw ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`;
+}
+
+function tradeStatusText(): string {
+  return `Trade: workshop +${state.metrics.workshopTradeGoodProdRate.toFixed(1)}/s | ` +
+    `market use ${state.metrics.marketTradeGoodUseRate.toFixed(1)}/s | stock ${state.metrics.marketTradeGoodStock.toFixed(1)} | ` +
+    `sold/min ${state.metrics.tradeGoodsSoldPerMin.toFixed(1)} | stockouts/min ${state.metrics.marketStockoutsPerMin.toFixed(1)}`;
+}
+
+function foodChainHintText(): string {
+  const foodBlocked =
+    state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:')) ??
+    state.metrics.topRoomWarnings.find((w) => w.startsWith('food chain blocked:'));
+  return `Food chain: ${foodBlocked ?? 'stable'}`;
+}
+
+function refreshOpsModal(): void {
+  opsChipWorkEl.textContent = String(state.metrics.crewAssignedWorking);
+  opsChipIdleEl.textContent = String(state.metrics.crewIdleAvailable);
+  opsChipLogisticsEl.textContent = String(state.metrics.crewOnLogisticsJobs);
+  opsChipRestingEl.textContent = String(state.metrics.crewResting);
+  opsChipBlockedEl.textContent = String(state.metrics.crewBlockedNoPath);
+  for (const button of opsTabButtons) {
+    switch (button.dataset.opsTab) {
+      case 'crew':
+        button.textContent = `Crew ${state.metrics.crewIdleAvailable}/${state.metrics.crewOnLogisticsJobs}`;
+        break;
+      case 'jobs':
+        button.textContent = `Jobs ${state.metrics.pendingJobs}/${state.metrics.expiredJobs}`;
+        break;
+      case 'rooms':
+        button.textContent = `Rooms ${state.metrics.roomWarningsCount}`;
+        break;
+      case 'food':
+        button.textContent = `Food ${Math.round(state.metrics.mealStock)}`;
+        break;
+      case 'traffic':
+        button.textContent = `Traffic ${state.metrics.visitorsCount}`;
+        break;
+    }
+  }
+  setOpsTab(activeOpsTab);
+  setMetricList(opsModalIdleEl, [
+    { label: 'Available', value: state.metrics.idleCrewByReason.idle_available },
+    { label: 'No Jobs', value: state.metrics.idleCrewByReason.idle_no_jobs, tone: state.metrics.idleCrewByReason.idle_no_jobs > 0 ? 'muted' : 'default' },
+    { label: 'No Path', value: state.metrics.idleCrewByReason.idle_no_path, tone: state.metrics.idleCrewByReason.idle_no_path > 0 ? 'danger' : 'default' },
+    { label: 'Waiting', value: state.metrics.idleCrewByReason.idle_waiting_reassign, tone: state.metrics.idleCrewByReason.idle_waiting_reassign > 0 ? 'warn' : 'default' },
+  ]);
+  opsModalCrewWhyEl.textContent = crewWhyText();
+  setMetricList(opsModalShiftsEl, [
+    { label: 'Resting', value: `${state.metrics.crewRestingNow}/${state.metrics.crewRestCap}` },
+    { label: 'Cleaning', value: state.metrics.crewCleaning },
+    { label: 'Self-Care', value: state.metrics.crewSelfCare },
+    { label: 'Wake Budget', value: state.metrics.crewEmergencyWakeBudget },
+    { label: 'Woken', value: state.metrics.crewWokenForAir },
+  ]);
+  setMetricList(opsModalCrewNeedsEl, [
+    { label: 'Energy Avg', value: `${state.metrics.crewAvgEnergy.toFixed(0)}%`, tone: state.metrics.crewAvgEnergy < 45 ? 'warn' : 'default' },
+    { label: 'Hygiene Avg', value: `${state.metrics.crewAvgHygiene.toFixed(0)}%`, tone: state.metrics.crewAvgHygiene < 45 ? 'warn' : 'default' },
+    { label: 'Fatigue Driver', value: state.metrics.crewMoraleDrivers.find((d) => d.startsWith('fatigue'))?.replace('fatigue ', '') ?? '0.0' },
+    { label: 'Hygiene Driver', value: state.metrics.crewMoraleDrivers.find((d) => d.startsWith('hygiene'))?.replace('hygiene ', '') ?? '0.0' },
+  ]);
+  setMetricList(opsModalStaffingEl, [
+    { label: 'Reactor', value: `${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor}` },
+    { label: 'Life Support', value: `${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport}` },
+    { label: 'Hydro', value: `${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics}` },
+    { label: 'Kitchen', value: `${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen}` },
+    { label: 'Cafeteria', value: `${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}` },
+  ]);
+  setMetricList(opsModalDutyTransitEl, [
+    { label: 'Reactor', value: state.metrics.staffInTransitBySystem.reactor },
+    { label: 'Life Support', value: state.metrics.staffInTransitBySystem.lifeSupport },
+    { label: 'Hydro', value: state.metrics.staffInTransitBySystem.hydroponics },
+    { label: 'Kitchen', value: state.metrics.staffInTransitBySystem.kitchen },
+    { label: 'Cafeteria', value: state.metrics.staffInTransitBySystem.cafeteria },
+  ]);
+  setMetricList(opsModalJobsEl, [
+    { label: 'Pending', value: state.metrics.pendingJobs, tone: state.metrics.pendingJobs > 20 ? 'warn' : 'default' },
+    { label: 'Assigned', value: state.metrics.assignedJobs },
+    { label: 'Expired', value: state.metrics.expiredJobs, tone: state.metrics.expiredJobs > 0 ? 'danger' : 'default' },
+    { label: 'Done', value: state.metrics.completedJobs },
+    { label: 'Backlog', value: state.metrics.topBacklogType },
+  ]);
+  setDetailList(opsModalPendingWorkEl, [
+    { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'pending') },
+    { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'pending') },
+    { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'pending') },
+    { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'pending') },
+    { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'pending') },
+    { label: ITEM_LABELS.tradeGood, value: statusBreakdownText(state.metrics.jobCountsByItem.tradeGood, 'pending') },
+    { label: ITEM_LABELS.body, value: statusBreakdownText(state.metrics.jobCountsByItem.body, 'pending') },
+  ], 'No pending work');
+  setMetricList(opsModalJobExtraEl, [
+    { label: 'Avg Age', value: `${state.metrics.avgJobAgeSec.toFixed(1)}s` },
+    { label: 'Oldest', value: `${state.metrics.oldestPendingJobAgeSec.toFixed(1)}s`, tone: state.metrics.oldestPendingJobAgeSec > 30 ? 'warn' : 'default' },
+    { label: 'Delivery', value: `${state.metrics.deliveryLatencySec.toFixed(1)}s` },
+  ]);
+  setMetricList(opsModalStallsEl, [
+    { label: 'Path', value: state.metrics.stalledJobsByReason.stalled_path_blocked, tone: state.metrics.stalledJobsByReason.stalled_path_blocked > 0 ? 'warn' : 'default' },
+    { label: 'Source', value: state.metrics.stalledJobsByReason.stalled_unreachable_source, tone: state.metrics.stalledJobsByReason.stalled_unreachable_source > 0 ? 'warn' : 'default' },
+    { label: 'Dropoff', value: state.metrics.stalledJobsByReason.stalled_unreachable_dropoff, tone: state.metrics.stalledJobsByReason.stalled_unreachable_dropoff > 0 ? 'warn' : 'default' },
+    { label: 'Supply', value: state.metrics.stalledJobsByReason.stalled_no_supply, tone: state.metrics.stalledJobsByReason.stalled_no_supply > 0 ? 'warn' : 'default' },
+  ]);
+  setMetricList(opsModalExpiredEl, [
+    { label: 'Timed Out', value: state.metrics.expiredJobsByReason.none, tone: state.metrics.expiredJobsByReason.none > 0 ? 'warn' : 'default' },
+    { label: 'Path', value: state.metrics.expiredJobsByReason.stalled_path_blocked, tone: state.metrics.expiredJobsByReason.stalled_path_blocked > 0 ? 'danger' : 'default' },
+    { label: 'Source', value: state.metrics.expiredJobsByReason.stalled_unreachable_source, tone: state.metrics.expiredJobsByReason.stalled_unreachable_source > 0 ? 'danger' : 'default' },
+    { label: 'Dropoff', value: state.metrics.expiredJobsByReason.stalled_unreachable_dropoff, tone: state.metrics.expiredJobsByReason.stalled_unreachable_dropoff > 0 ? 'danger' : 'default' },
+    { label: 'Supply', value: state.metrics.expiredJobsByReason.stalled_no_supply, tone: state.metrics.expiredJobsByReason.stalled_no_supply > 0 ? 'danger' : 'default' },
+  ]);
+  setDetailList(opsModalExpiredWorkEl, [
+    { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'expired'), tone: state.metrics.jobCountsByType.deliver.expired > 0 ? 'warn' : 'default' },
+    { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'expired'), tone: state.metrics.jobCountsByType.pickup.expired > 0 ? 'warn' : 'default' },
+    { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'expired') },
+    { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'expired') },
+    { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'expired') },
+    { label: ITEM_LABELS.tradeGood, value: statusBreakdownText(state.metrics.jobCountsByItem.tradeGood, 'expired') },
+    { label: ITEM_LABELS.body, value: statusBreakdownText(state.metrics.jobCountsByItem.body, 'expired') },
+  ], 'No expired work');
+  setMetricList(opsModalExpiredContextEl, [
+    { label: 'Queued', value: state.metrics.expiredJobsByContext.queued, tone: state.metrics.expiredJobsByContext.queued > 0 ? 'warn' : 'default' },
+    { label: 'Assigned', value: state.metrics.expiredJobsByContext.assigned, tone: state.metrics.expiredJobsByContext.assigned > 0 ? 'warn' : 'default' },
+    { label: 'Carrying', value: state.metrics.expiredJobsByContext.carrying, tone: state.metrics.expiredJobsByContext.carrying > 0 ? 'danger' : 'default' },
+    { label: 'Unknown', value: state.metrics.expiredJobsByContext.unknown, tone: state.metrics.expiredJobsByContext.unknown > 0 ? 'warn' : 'default' },
+  ]);
+  setMetricList(opsModalRetargetsEl, [
+    { label: 'Retargets', value: `${state.metrics.crewRetargetsPerMin.toFixed(1)}/m` },
+    { label: 'Drops', value: `${state.metrics.criticalStaffDropsPerMin.toFixed(1)}/m`, tone: state.metrics.criticalStaffDropsPerMin > 0 ? 'warn' : 'default' },
+    { label: 'Slots', value: state.metrics.logisticsDispatchSlots },
+    { label: 'Pressure', value: `${(state.metrics.logisticsPressure * 100).toFixed(0)}%`, tone: state.metrics.logisticsPressure > 0.85 ? 'warn' : 'default' },
+  ]);
+  opsModalJobWhyEl.textContent = jobWhyText();
+  setMetricList(opsModalRoomHealthEl, [
+    { label: 'Warnings', value: state.metrics.roomWarningsCount, tone: state.metrics.roomWarningsCount > 0 ? 'warn' : 'default' },
+    { label: 'Service Nodes', value: state.metrics.serviceNodesTotal },
+    { label: 'Unreachable', value: state.metrics.serviceNodesUnreachable, tone: state.metrics.serviceNodesUnreachable > 0 ? 'warn' : 'default' },
+    { label: 'Pressure', value: `${state.metrics.pressurizationPct.toFixed(0)}%`, tone: state.metrics.pressurizationPct < 95 ? 'warn' : 'default' },
+    { label: 'Leaks', value: state.metrics.leakingTiles, tone: state.metrics.leakingTiles > 0 ? 'danger' : 'default' },
+  ]);
+  setDetailList(
+    opsModalRoomWarningsEl,
+    state.metrics.topRoomWarnings.map((warning, index) => ({
+      label: `Warning ${index + 1}`,
+      value: warning,
+      tone: 'warn' as const
+    })),
+    'No room warnings'
+  );
+  setMetricList(opsModalSystemsEl, [
+    { label: 'Cafeteria', value: `${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal}` },
+    { label: 'Kitchen', value: `${state.ops.kitchenActive}/${state.ops.kitchenTotal}` },
+    { label: 'Hydro', value: `${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal}` },
+    { label: 'Life Support', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
+    { label: 'Reactor', value: `${state.ops.reactorsActive}/${state.ops.reactorsTotal}` },
+  ]);
+  setMetricList(opsModalSystemsExtraEl, [
+    { label: 'Workshop', value: `${state.ops.workshopActive}/${state.ops.workshopTotal}` },
+    { label: 'Hygiene', value: `${state.ops.hygieneActive}/${state.ops.hygieneTotal}` },
+    { label: 'Lounge', value: `${state.ops.loungeActive}/${state.ops.loungeTotal}` },
+    { label: 'Market', value: `${state.ops.marketActive}/${state.ops.marketTotal}` },
+    { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
+  ]);
+  setMetricList(opsModalLifeSupportEl, [
+    { label: 'Active', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
+    { label: 'Air', value: `+${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s`, tone: state.metrics.lifeSupportActiveAirPerSec <= 0 ? 'warn' : 'ok' },
+    { label: 'Potential', value: `+${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s` },
+  ]);
+  setMetricList(opsModalRoomUsageEl, [
+    { label: 'Dorm', value: state.metrics.toDormResidents },
+    { label: 'Resting', value: state.metrics.dormSleepingResidents },
+    { label: 'Hygiene', value: state.metrics.hygieneCleaningResidents },
+    { label: 'Queue', value: state.metrics.cafeteriaQueueingCount },
+    { label: 'Eating', value: state.metrics.cafeteriaEatingCount },
+    { label: 'Hydro Staff', value: `${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes}` },
+    { label: 'LS Nodes', value: state.metrics.lifeSupportActiveNodes },
+  ]);
+  setMetricList(opsModalRoomFlowEl, [
+    { label: 'Dorm/m', value: state.metrics.dormVisitsPerMin.toFixed(1) },
+    { label: 'Hygiene/m', value: state.metrics.hygieneUsesPerMin.toFixed(1) },
+    { label: 'Meals/m', value: state.metrics.mealsConsumedPerMin.toFixed(1) },
+    { label: 'Dorm Fails/m', value: state.metrics.dormFailedAttemptsPerMin.toFixed(1), tone: state.metrics.dormFailedAttemptsPerMin > 0 ? 'warn' : 'default' },
+    { label: 'Failed H/E/Y', value: `${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}` },
+  ]);
+  opsModalRoomWhyEl.textContent = roomWhyText();
+  setMetricList(opsModalFoodFlowEl, [
+    { label: 'Raw Food', value: `+${state.metrics.rawFoodProdRate.toFixed(1)}/s`, tone: state.metrics.rawFoodProdRate > 0 ? 'ok' : 'default' },
+    { label: 'Meals', value: `+${state.metrics.kitchenMealProdRate.toFixed(1)}/s`, tone: state.metrics.kitchenMealProdRate > 0 ? 'ok' : 'default' },
+    { label: 'Use', value: `${state.metrics.mealUseRate.toFixed(1)}/s` },
+  ]);
+  setMetricList(opsModalKitchenEl, [
+    { label: 'Active', value: `${state.ops.kitchenActive}/${state.ops.kitchenTotal}` },
+    { label: 'Raw Buffer', value: state.metrics.kitchenRawBuffer.toFixed(1), tone: state.metrics.kitchenRawBuffer <= 0 && state.ops.kitchenActive > 0 ? 'warn' : 'default' },
+    { label: 'Meal/s', value: `+${state.metrics.kitchenMealProdRate.toFixed(1)}` },
+  ]);
+  setMetricList(opsModalTradeEl, [
+    { label: 'Workshop', value: `+${state.metrics.workshopTradeGoodProdRate.toFixed(1)}/s` },
+    { label: 'Stock', value: state.metrics.marketTradeGoodStock.toFixed(1) },
+    { label: 'Sold/m', value: state.metrics.tradeGoodsSoldPerMin.toFixed(1) },
+    { label: 'Stockouts/m', value: state.metrics.marketStockoutsPerMin.toFixed(1), tone: state.metrics.marketStockoutsPerMin > 0 ? 'warn' : 'default' },
+  ]);
+  opsModalFoodChainEl.textContent = foodChainHintText();
+  setMetricList(opsModalTrafficEl, [
+    { label: 'Visitors', value: state.metrics.visitorsCount },
+    { label: 'Docked', value: state.metrics.dockedShips },
+    { label: 'Exits/m', value: state.metrics.exitsPerMin },
+  ]);
+  setMetricList(opsModalBerthsEl, [
+    { label: 'Visitor', value: `${state.metrics.visitorBerthsOccupied}/${state.metrics.visitorBerthsTotal}` },
+    { label: 'Resident', value: `${state.metrics.residentBerthsOccupied}/${state.metrics.residentBerthsTotal}` },
+    { label: 'Ships', value: state.metrics.residentShipsDocked },
+  ]);
+  setMetricList(opsModalDemandEl, [
+    { label: 'Cafeteria', value: `${Math.round(state.metrics.shipDemandCafeteriaPct)}%` },
+    { label: 'Market', value: `${Math.round(state.metrics.shipDemandMarketPct)}%` },
+    { label: 'Lounge', value: `${Math.round(state.metrics.shipDemandLoungePct)}%` },
+  ]);
+  setMetricList(opsModalArchetypesEl, [
+    { label: 'Diner', value: state.metrics.visitorsByArchetype.diner },
+    { label: 'Shopper', value: state.metrics.visitorsByArchetype.shopper },
+    { label: 'Lounger', value: state.metrics.visitorsByArchetype.lounger },
+    { label: 'Rusher', value: state.metrics.visitorsByArchetype.rusher },
+  ]);
+  setMetricList(opsModalResidentNeedsEl, [
+    { label: 'Residents', value: state.metrics.residentsCount },
+    { label: 'Hunger', value: `${state.metrics.residentHungerAvg.toFixed(0)}%`, tone: state.metrics.residentHungerAvg > 0 && state.metrics.residentHungerAvg < 45 ? 'warn' : 'default' },
+    { label: 'Energy', value: `${state.metrics.residentEnergyAvg.toFixed(0)}%`, tone: state.metrics.residentEnergyAvg > 0 && state.metrics.residentEnergyAvg < 45 ? 'warn' : 'default' },
+    { label: 'Hygiene', value: `${state.metrics.residentHygieneAvg.toFixed(0)}%`, tone: state.metrics.residentHygieneAvg > 0 && state.metrics.residentHygieneAvg < 45 ? 'warn' : 'default' },
+    { label: 'Social', value: `${state.metrics.residentSocialAvg.toFixed(0)}%` },
+    { label: 'Safety', value: `${state.metrics.residentSafetyAvg.toFixed(0)}%` },
+    { label: 'Satisfaction', value: `${state.metrics.residentSatisfactionAvg.toFixed(0)}%` },
+  ]);
+  setMetricList(opsModalShipsEl, [
+    { label: 'Tour', value: state.metrics.shipsByTypePerMin.tourist.toFixed(1) },
+    { label: 'Trade', value: state.metrics.shipsByTypePerMin.trader.toFixed(1) },
+    { label: 'Industrial', value: state.metrics.shipsByTypePerMin.industrial.toFixed(1) },
+    { label: 'Military', value: state.metrics.shipsByTypePerMin.military.toFixed(1) },
+    { label: 'Colonist', value: state.metrics.shipsByTypePerMin.colonist.toFixed(1) },
+  ]);
+  setMetricList(opsModalWalkEl, [
+    { label: 'Avg Walk', value: state.metrics.avgVisitorWalkDistance.toFixed(1) },
+    { label: 'Skipped Docks', value: state.metrics.shipsSkippedNoEligibleDock, tone: state.metrics.shipsSkippedNoEligibleDock > 0 ? 'warn' : 'default' },
+    { label: 'Queue Timeouts', value: state.metrics.shipsTimedOutInQueue, tone: state.metrics.shipsTimedOutInQueue > 0 ? 'danger' : 'default' },
+  ]);
+  setMetricList(opsModalRatingPenaltiesEl, [
+    { label: 'Queue Timeout', value: `${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.queueTimeout > 0 ? 'danger' : 'default' },
+    { label: 'No Dock', value: `${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.noEligibleDock > 0 ? 'warn' : 'default' },
+    { label: 'Service Fail', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
+    { label: 'Long Walks', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
+  ]);
+  setMetricList(opsModalRatingBonusesEl, [
+    { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
+    { label: 'Leisure', value: `${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.leisureService > 0 ? 'ok' : 'default' },
+    { label: 'Exits', value: `${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.successfulExit > 0 ? 'ok' : 'default' },
+    { label: 'Residents', value: `${state.metrics.stationRatingBonusPerMin.residentRetention.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.residentRetention > 0 ? 'ok' : 'default' },
+  ]);
+  setMetricList(opsModalRatingFailuresEl, [
+    { label: 'No Leisure', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath > 0 ? 'warn' : 'default' },
+    { label: 'Missing Svc', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing > 0 ? 'warn' : 'default' },
+    { label: 'Patience', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail > 0 ? 'warn' : 'default' },
+    { label: 'Dock Wait', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout > 0 ? 'danger' : 'default' },
+    { label: 'Trespass', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.trespass.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.trespass > 0 ? 'danger' : 'default' },
+  ]);
+  opsModalRatingEl.textContent = ratingWhyText();
 }
 
 function refreshAlertPanel(): void {
@@ -1243,6 +1926,68 @@ function tierProgressSnapshot(): TierProgressSnapshot {
   };
 }
 
+function checklistRatio(current: number, target: number): { label: string; done: boolean } {
+  const safeCurrent = Math.max(0, Math.floor(current));
+  return {
+    label: `${Math.min(safeCurrent, target)}/${target}`,
+    done: safeCurrent >= target,
+  };
+}
+
+function tierChecklistItems(): Array<{ label: string; value: string; done: boolean }> {
+  const tier = getUnlockTier(state);
+  const nextTier = tier >= 6 ? null : ((tier + 1) as UnlockTier);
+  if (nextTier === null) {
+    return [{ label: 'Tutorial complete', value: 'Sandbox unlocked', done: true }];
+  }
+  if (nextTier === 1) {
+    const visitors = checklistRatio(state.metrics.archetypesServedLifetime, 1);
+    return [{ label: 'First visitor arrives', value: visitors.label, done: visitors.done }];
+  }
+  if (nextTier === 2) {
+    const credits = checklistRatio(state.metrics.creditsEarnedLifetime, 500);
+    const archetypes = checklistRatio(state.metrics.archetypesServedLifetime, 3);
+    return [
+      { label: 'Earn credits', value: `${credits.label}c`, done: credits.done },
+      { label: 'Serve visitor types', value: archetypes.label, done: archetypes.done },
+    ];
+  }
+  if (nextTier === 3) {
+    const trades = checklistRatio(state.metrics.tradeCyclesCompletedLifetime, 1);
+    return [{ label: 'Workshop to market trade', value: trades.label, done: trades.done }];
+  }
+  if (nextTier === 4) {
+    const incidents = checklistRatio(state.metrics.incidentsResolvedLifetime, 1);
+    return [{ label: 'Resolve dispatched incident', value: incidents.label, done: incidents.done }];
+  }
+  if (nextTier === 5) {
+    const treated = checklistRatio(state.metrics.actorsTreatedLifetime, 1);
+    const residents = checklistRatio(state.metrics.residentsConvertedLifetime, 1);
+    return [
+      { label: 'Treat a patient', value: treated.label, done: treated.done },
+      { label: 'Convert resident', value: residents.label, done: residents.done },
+    ];
+  }
+  return [{ label: 'Complete health loop', value: '0/1', done: false }];
+}
+
+function refreshTierChecklist(): void {
+  const progress = tierProgressSnapshot();
+  const heading = progress.nextTier === null
+    ? 'All tiers unlocked'
+    : `Next: Tier ${progress.nextTier} (${progress.pct}%)`;
+  const rows = tierChecklistItems()
+    .map((item) => `
+      <div class="checklist-item ${item.done ? 'done' : ''}">
+        <span class="checkmark">${item.done ? '✓' : ''}</span>
+        <span>${item.label}</span>
+        <span class="value">${item.value}</span>
+      </div>
+    `)
+    .join('');
+  tierChecklistEl.innerHTML = `<div class="checklist-heading">${heading}</div>${rows}`;
+}
+
 function formatTierList(items: string[]): string {
   return items.length > 0 ? items.join(', ') : 'None';
 }
@@ -1300,6 +2045,7 @@ function refreshProgressionModal(): void {
 }
 
 const simSpeeds: Array<1 | 2 | 4> = [1, 2, 4];
+type PaletteSection = 'structure' | 'rooms' | 'modules' | 'overlays';
 const market = {
   hireCost: 14,
   fireRefund: 5,
@@ -1343,6 +2089,8 @@ let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
 let hoveredTile: number | null = null;
+let activePaletteSection: PaletteSection = 'structure';
+let lastPaletteToolKey = '';
 let isRightPanning = false;
 let panStartClientX = 0;
 let panStartClientY = 0;
@@ -1389,6 +2137,18 @@ function refreshMarketUi(): void {
 
   const spread = market.buyMat25Cost - market.sellMat25Gain;
   marketRateEl.textContent = spread <= 8 ? 'Favorable' : spread <= 12 ? 'Normal' : 'Tight';
+}
+
+function materialBuyStatusText(
+  result: ReturnType<typeof buyMaterialsDetailed>,
+  amount: number
+): string {
+  if (result.ok) return `Purchased +${amount} materials`;
+  if (result.reason === 'insufficient_credits') return 'Not enough credits';
+  if (result.reason === 'no_logistics_stock') {
+    return 'Build Logistics Stock + Intake Pallet to receive materials';
+  }
+  return `Need ${result.requiredAmount.toFixed(1)} free intake capacity; add Intake Pallets`;
 }
 
 function refreshPriorityUi(): void {
@@ -1466,6 +2226,50 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'med-bed': ModuleType.MedBed,
   clear: ModuleType.None,
 };
+
+function toolPaletteSection(tool: BuildTool): PaletteSection {
+  if (tool.kind === 'room') return 'rooms';
+  if (tool.kind === 'module') return 'modules';
+  if (tool.kind === 'zone') return 'overlays';
+  return 'structure';
+}
+
+function toolPaletteKey(tool: BuildTool): string {
+  if (tool.kind === 'tile') return `tile:${tool.tile}`;
+  if (tool.kind === 'room') return `room:${tool.room}`;
+  if (tool.kind === 'module') return `module:${tool.module}`;
+  if (tool.kind === 'zone') return `zone:${tool.zone}`;
+  return 'none';
+}
+
+function setPaletteSection(section: PaletteSection): void {
+  activePaletteSection = section;
+  document.querySelectorAll<HTMLButtonElement>('.palette-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.paletteTarget === section);
+  });
+  document.querySelectorAll<HTMLElement>('#toolbar .palette-section').forEach((row) => {
+    row.classList.toggle('active', row.dataset.paletteSection === section);
+  });
+}
+
+function refreshPaletteMenu(): void {
+  const key = toolPaletteKey(currentTool);
+  if (key !== lastPaletteToolKey) {
+    lastPaletteToolKey = key;
+    setPaletteSection(toolPaletteSection(currentTool));
+  }
+}
+
+function wirePaletteMenu(): void {
+  document.querySelectorAll<HTMLButtonElement>('.palette-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.paletteTarget as PaletteSection | undefined;
+      if (section) setPaletteSection(section);
+    });
+  });
+  setPaletteSection(activePaletteSection);
+}
+
 function wireToolbar(): void {
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1507,6 +2311,7 @@ function wireToolbar(): void {
   });
 }
 function refreshToolbar(): void {
+  refreshPaletteMenu();
   const toolKind = currentTool.kind;
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
     const tileKey = btn.dataset.toolTile;
@@ -1550,6 +2355,7 @@ function refreshToolbar(): void {
     if (locked && lockedTitle) btn.title = lockedTitle;
   });
 }
+wirePaletteMenu();
 wireToolbar();
 
 refreshUnlockLegendAndHotkeys();
@@ -2698,11 +3504,20 @@ function wireModal({ modal, openBtn, closeBtn, beforeOpen, beforeClose }: ModalW
   });
 }
 
+for (const button of opsTabButtons) {
+  button.addEventListener('click', () => {
+    const tab = button.dataset.opsTab as OpsTab | undefined;
+    if (!tab) return;
+    setOpsTab(tab);
+  });
+}
+
 wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
 wireModal({ modal: marketModal, openBtn: openMarketBtn, closeBtn: closeMarketBtn });
 wireModal({ modal: expansionModal, openBtn: openExpansionModalBtn, closeBtn: closeExpansionModalBtn, beforeOpen: refreshExpansionUi });
 wireModal({ modal: progressionModal, openBtn: openProgressionModalBtn, closeBtn: closeProgressionModalBtn, beforeOpen: refreshProgressionModal });
 wireModal({ modal: priorityModal, openBtn: editPrioritiesBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
+wireModal({ modal: opsModal, openBtn: openOpsModalBtn, closeBtn: closeOpsModalBtn, beforeOpen: refreshOpsModal });
 wireModal({ modal: dockModal, closeBtn: closeDockBtn });
 wireModal({
   modal: roomModal,
@@ -2972,24 +3787,12 @@ saveImportBtn.addEventListener('click', () => {
 
 buySmallBtn.addEventListener('click', () => {
   const result = buyMaterialsDetailed(state, market.buyMat25Cost, 25);
-  marketNoteEl.textContent = result.ok
-    ? 'Purchased +25 materials'
-    : result.reason === 'insufficient_credits'
-      ? 'Not enough credits'
-      : result.reason === 'no_logistics_stock'
-        ? 'Need Logistics Stock + Intake Pallet'
-        : `Not enough intake capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+  marketNoteEl.textContent = materialBuyStatusText(result, 25);
 });
 
 buyLargeBtn.addEventListener('click', () => {
   const result = buyMaterialsDetailed(state, market.buyMat80Cost, 80);
-  marketNoteEl.textContent = result.ok
-    ? 'Purchased +80 materials'
-    : result.reason === 'insufficient_credits'
-      ? 'Not enough credits'
-      : result.reason === 'no_logistics_stock'
-        ? 'Need Logistics Stock + Intake Pallet'
-        : `Not enough intake capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+  marketNoteEl.textContent = materialBuyStatusText(result, 80);
 });
 
 hireCrewBtn.addEventListener('click', () => {
@@ -3132,8 +3935,9 @@ function frame(now: number): void {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
   refreshHudStatus();
-  refreshHudOverview();
+  refreshTrafficStatus();
   refreshAlertPanel();
+  refreshTierChecklist();
   refreshSelectionSummary();
   refreshDevTierOverlay();
   visitorsEl.textContent = String(state.metrics.visitorsCount);
@@ -3146,28 +3950,16 @@ function frame(now: number): void {
   visitorFeelingsEl.textContent = `Visitor feelings: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
   moraleReasonsEl.textContent = `Crew morale drivers: ${state.metrics.crewMoraleDrivers.join(' | ') || 'none'}`;
   ratingReasonsEl.textContent = `Station rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
-  crewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
+  crewEl.textContent = crewOpsSummaryText(true);
+  opsTrafficEl.textContent = trafficOpsSummaryText();
   crewBreakdownEl.textContent = `Crew: work ${state.metrics.crewAssignedWorking} | idle ${state.metrics.crewIdleAvailable} | resting ${state.metrics.crewResting} | logistics ${state.metrics.crewOnLogisticsJobs} | blocked ${state.metrics.crewBlockedNoPath}`;
-  crewShiftsEl.textContent = `Shifts: resting ${state.metrics.crewRestingNow}/${state.metrics.crewRestCap} | wake budget ${state.metrics.crewEmergencyWakeBudget} | woken ${state.metrics.crewWokenForAir}`;
+  crewShiftsEl.textContent = crewShiftsText();
   crewLockoutsEl.textContent = `Emergency lockouts prevented: ${state.metrics.crewPingPongPreventions}`;
-  criticalStaffingLineEl.textContent =
-    `Critical staffing R ${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor} | ` +
-    `LS ${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport} | ` +
-    `HY ${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics} | ` +
-    `KI ${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen} | ` +
-    `CF ${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}`;
-  opsEl.textContent = `Cafeteria ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | Security ${state.ops.securityActive}/${state.ops.securityTotal} | Reactor ${state.ops.reactorsActive}/${state.ops.reactorsTotal} | Dorms ${state.ops.dormsActive}/${state.ops.dormsTotal}`;
-  opsExtraEl.textContent =
-    `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Workshop ${state.ops.workshopActive}/${state.ops.workshopTotal} | ` +
-    `Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
-    `Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | ` +
-    `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
-    `Brig ${state.ops.brigActive}/${state.ops.brigTotal} | RecHall ${state.ops.recHallActive}/${state.ops.recHallTotal}`;
-  kitchenStatusEl.textContent = `Kitchen: active ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | raw ${state.metrics.kitchenRawBuffer.toFixed(1)} | meal +${state.metrics.kitchenMealProdRate.toFixed(1)}/s`;
-  tradeStatusEl.textContent =
-    `Trade: workshop +${state.metrics.workshopTradeGoodProdRate.toFixed(1)}/s | ` +
-    `market use ${state.metrics.marketTradeGoodUseRate.toFixed(1)}/s | stock ${state.metrics.marketTradeGoodStock.toFixed(1)} | ` +
-    `sold/min ${state.metrics.tradeGoodsSoldPerMin.toFixed(1)} | stockouts/min ${state.metrics.marketStockoutsPerMin.toFixed(1)}`;
+  criticalStaffingLineEl.textContent = criticalStaffingText();
+  opsEl.textContent = coreOpsSummaryText();
+  opsExtraEl.textContent = opsExtraText();
+  kitchenStatusEl.textContent = kitchenStatusText();
+  tradeStatusEl.textContent = tradeStatusText();
   demandStripEl.textContent = `Current demand: Caf ${Math.round(state.metrics.shipDemandCafeteriaPct)}% | Market ${Math.round(state.metrics.shipDemandMarketPct)}% | Lounge ${Math.round(state.metrics.shipDemandLoungePct)}%`;
   archetypeStripEl.textContent = `Visitors: Diner ${state.metrics.visitorsByArchetype.diner} | Shopper ${state.metrics.visitorsByArchetype.shopper} | Lounger ${state.metrics.visitorsByArchetype.lounger} | Rusher ${state.metrics.visitorsByArchetype.rusher}`;
   shipTypeStripEl.textContent =
@@ -3178,28 +3970,20 @@ function frame(now: number): void {
     `Col ${state.metrics.shipsByTypePerMin.colonist.toFixed(1)}`;
   refreshUnlockLegendAndHotkeys();
   refreshProgressionModal();
-  roomUsageEl.textContent = `Usage: to dorm ${state.metrics.toDormResidents} | resting ${state.metrics.dormSleepingResidents} | hygiene ${state.metrics.hygieneCleaningResidents} | queue ${state.metrics.cafeteriaQueueingCount} | eating ${state.metrics.cafeteriaEatingCount} | hydro staff ${state.metrics.hydroponicsStaffed}/${state.metrics.hydroponicsActiveGrowNodes} | life nodes ${state.metrics.lifeSupportActiveNodes}`;
-  roomFlowEl.textContent = `Flow/min: dorm ${state.metrics.dormVisitsPerMin.toFixed(1)} | hygiene ${state.metrics.hygieneUsesPerMin.toFixed(1)} | meals ${state.metrics.mealsConsumedPerMin.toFixed(1)} | dorm fail ${state.metrics.dormFailedAttemptsPerMin.toFixed(1)} | failed needs H/E/Y ${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}`;
+  roomUsageEl.textContent = roomUsageText();
+  roomFlowEl.textContent = roomFlowText();
   resourcesEl.textContent = `Raw Meal ${Math.round(state.metrics.rawFoodStock)} -> Meals ${Math.round(state.metrics.mealStock)} | Water ${Math.round(state.metrics.waterStock)} | Air ${Math.round(state.metrics.airQuality)}%`;
   resourcesEl.style.color = state.metrics.airQuality < 35 ? '#ff7676' : '#d6deeb';
   pressureEl.textContent = `${Math.round(state.metrics.pressurizationPct)}% sealed | ${state.metrics.leakingTiles} leaking tiles`;
   pressureEl.style.color = state.metrics.pressurizationPct > 85 ? '#6edb8f' : state.metrics.pressurizationPct > 60 ? '#ffcf6e' : '#ff7676';
   economyEl.textContent = `Materials ${Math.round(state.metrics.materials)} | Credits ${Math.round(state.metrics.credits)}`;
   economyFlowEl.textContent = `Credits/min: +${state.metrics.creditsGrossPerMin.toFixed(1)} gross | -${state.metrics.creditsPayrollPerMin.toFixed(1)} payroll | net ${state.metrics.creditsNetPerMin >= 0 ? '+' : ''}${state.metrics.creditsNetPerMin.toFixed(1)}`;
-  jobsEl.textContent = `P${state.metrics.pendingJobs} A${state.metrics.assignedJobs} X${state.metrics.expiredJobs} D${state.metrics.completedJobs} | ${state.metrics.topBacklogType}`;
-  idleReasonsEl.textContent = `Idle reasons: available ${state.metrics.idleCrewByReason.idle_available} | no jobs ${state.metrics.idleCrewByReason.idle_no_jobs} | resting ${state.metrics.idleCrewByReason.idle_resting} | no path ${state.metrics.idleCrewByReason.idle_no_path} | waiting ${state.metrics.idleCrewByReason.idle_waiting_reassign}`;
-  stallReasonsEl.textContent = `Stalls: blocked ${state.metrics.stalledJobsByReason.stalled_path_blocked} | src ${state.metrics.stalledJobsByReason.stalled_unreachable_source} | dst ${state.metrics.stalledJobsByReason.stalled_unreachable_dropoff} | supply ${state.metrics.stalledJobsByReason.stalled_no_supply}`;
-  crewRetargetsEl.textContent =
-    `Crew retargets/min: ${state.metrics.crewRetargetsPerMin.toFixed(1)} | ` +
-    `critical drops/min: ${state.metrics.criticalStaffDropsPerMin.toFixed(1)} | ` +
-    `dispatch ${state.metrics.logisticsDispatchSlots} | pressure ${(state.metrics.logisticsPressure * 100).toFixed(0)}%`;
-  jobsExtraEl.textContent =
-    `Avg age ${state.metrics.avgJobAgeSec.toFixed(1)}s | Oldest ${state.metrics.oldestPendingJobAgeSec.toFixed(1)}s | Delivery ${state.metrics.deliveryLatencySec.toFixed(1)}s | Stalled ${state.metrics.stalledJobs} | ` +
-    `shortfall sec R ${state.metrics.criticalShortfallSec.reactor.toFixed(1)} LS ${state.metrics.criticalShortfallSec.lifeSupport.toFixed(1)} HY ${state.metrics.criticalShortfallSec.hydroponics.toFixed(1)} KI ${state.metrics.criticalShortfallSec.kitchen.toFixed(1)} CF ${state.metrics.criticalShortfallSec.cafeteria.toFixed(1)}`;
-  const foodBlocked =
-    state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:')) ??
-    state.metrics.topRoomWarnings.find((w) => w.startsWith('food chain blocked:'));
-  foodChainHintEl.textContent = `Food chain: ${foodBlocked ?? 'stable'}`;
+  jobsEl.textContent = jobsSummaryText();
+  idleReasonsEl.textContent = idleReasonsText();
+  stallReasonsEl.textContent = stallReasonsText();
+  crewRetargetsEl.textContent = crewRetargetsText();
+  jobsExtraEl.textContent = jobsExtraText();
+  foodChainHintEl.textContent = foodChainHintText();
   roomWarningsEl.textContent = `Room warnings: ${state.metrics.topRoomWarnings.join(' | ') || 'none'}`;
   updateMarketRates();
   refreshMarketUi();
@@ -3216,7 +4000,7 @@ function frame(now: number): void {
   sellFoodSmallBtn.disabled = state.metrics.rawFoodStock < 20;
   sellFoodLargeBtn.disabled = state.metrics.rawFoodStock < 60;
   clearBodiesBtn.disabled = state.metrics.bodyCount <= 0 || state.metrics.materials < 6;
-  foodFlowEl.textContent = `Food flow: +${state.metrics.rawFoodProdRate.toFixed(1)} raw/s -> kitchen +${state.metrics.kitchenMealProdRate.toFixed(1)} meals/s, use ${state.metrics.mealUseRate.toFixed(1)} meals/s`;
+  foodFlowEl.textContent = foodFlowText();
   powerEl.textContent = `${Math.round(state.metrics.powerDemand)} / ${Math.round(state.metrics.powerSupply)}`;
   powerEl.style.color = state.metrics.powerDemand > state.metrics.powerSupply ? '#ff7676' : '#6edb8f';
   incidentsEl.textContent =
@@ -3309,6 +4093,7 @@ function frame(now: number): void {
   } else {
     agentModal.classList.add('hidden');
   }
+  if (!opsModal.classList.contains('hidden')) refreshOpsModal();
   if (selectedDockId !== null) {
     const dock = state.docks.find((d) => d.id === selectedDockId) ?? null;
     if (dock) {
@@ -3422,12 +4207,17 @@ function writeAutosave(): void {
 function offerAutosaveLoadOnColdStart(): void {
   const record = readAutosaveRecord();
   if (!record) return;
-  loadAutosaveBtn.textContent = `Load last session (saved ${formatClock(record.savedAt)})`;
+  const loadLabel = `Load last session (saved ${formatClock(record.savedAt)})`;
+  loadAutosaveBtn.title = loadLabel;
+  loadAutosaveBtn.setAttribute('aria-label', loadLabel);
   loadAutosaveBtn.classList.remove('hidden');
   loadAutosaveBtn.addEventListener('click', () => {
     const parsed = parseAndMigrateSave(record.payloadText);
     if (!parsed.ok) {
-      loadAutosaveBtn.textContent = 'Autosave load failed — record cleared';
+      const failLabel = 'Autosave load failed - record cleared';
+      loadAutosaveBtn.classList.add('load-error');
+      loadAutosaveBtn.title = failLabel;
+      loadAutosaveBtn.setAttribute('aria-label', failLabel);
       try {
         localStorage.removeItem(AUTOSAVE_KEY);
       } catch {
@@ -3444,7 +4234,10 @@ function offerAutosaveLoadOnColdStart(): void {
       autosaveStatusEl.classList.remove('hidden');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      loadAutosaveBtn.textContent = `Autosave load failed: ${msg}`;
+      const failLabel = `Autosave load failed: ${msg}`;
+      loadAutosaveBtn.classList.add('load-error');
+      loadAutosaveBtn.title = failLabel;
+      loadAutosaveBtn.setAttribute('aria-label', failLabel);
     }
   });
 }

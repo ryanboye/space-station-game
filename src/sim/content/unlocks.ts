@@ -37,7 +37,7 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier1_sustenance',
     tier: 1,
-    name: 'Sustenance',
+    name: 'Guest Services',
     description: 'First visitor arrives. Unlocks lounge, market, and market stall.',
     trigger: {
       // Starter state has no kitchen/cafeteria, so mealsServedTotal never
@@ -51,8 +51,8 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier2_commerce',
     tier: 2,
-    name: 'Commerce',
-    description: 'Balance revenue vs visitor diversity. Unlocks lounge + market + tax slider.',
+    name: 'Production Logistics',
+    description: 'Balance revenue vs visitor diversity. Unlocks workshop, storage, storage racks, and industrial ships.',
     trigger: {
       predicate: (m: Metrics) =>
         m.creditsEarnedLifetime >= TIER2_CREDIT_THRESHOLD &&
@@ -68,8 +68,8 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier3_logistics',
     tier: 3,
-    name: 'Logistics',
-    description: 'Item-chain loop. Unlocks workshop, storage, intake pallets, industrial ships.',
+    name: 'Advanced Operations',
+    description: 'Item-chain loop proven. Unlocks security, brig, clinic, rec hall, and advanced ship families.',
     trigger: {
       predicate: (m: Metrics) => m.tradeCyclesCompletedLifetime >= TIER3_TRADE_CYCLES_THRESHOLD,
       progress: (m: Metrics) =>
@@ -80,8 +80,8 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier4_governance',
     tier: 4,
-    name: 'Governance',
-    description: 'Safety + rules. Unlocks security, brig, rec hall, restricted zones.',
+    name: 'Governance Roadmap',
+    description: 'Advanced milestone for future rules, civic systems, and zone depth.',
     trigger: {
       predicate: (m: Metrics) => m.incidentsResolvedLifetime >= TIER4_INCIDENTS_RESOLVED_THRESHOLD,
       progress: (m: Metrics) =>
@@ -92,8 +92,8 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier5_health',
     tier: 5,
-    name: 'Health',
-    description: 'Injury + mortality + residents. Unlocks clinic, morgue, resident housing.',
+    name: 'Health Roadmap',
+    description: 'Advanced milestone for deeper treatment, mortality, and resident systems.',
     trigger: {
       predicate: (m: Metrics) =>
         m.actorsTreatedLifetime >= TIER5_ACTORS_TREATED_THRESHOLD &&
@@ -110,7 +110,7 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
     id: 'tier6_specialization',
     tier: 6,
     name: 'Specialization',
-    description: 'Station identity. Unlocks station-type selector + military/colonist ships.',
+    description: 'Station identity roadmap. Marks completion of the current progression track.',
     trigger: {
       // T6 is the "tutorial complete" marker — gated on reaching T5.
       predicate: (_m: Metrics) => false,
@@ -141,7 +141,7 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.LifeSupport]: 0,
   [RoomType.Lounge]: 1,
   [RoomType.Market]: 1,
-  [RoomType.LogisticsStock]: 2,
+  [RoomType.LogisticsStock]: 0,
   [RoomType.Storage]: 2,
 };
 
@@ -163,7 +163,7 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Shower]: 0,
   [ModuleType.Sink]: 0,
   [ModuleType.MarketStall]: 1,
-  [ModuleType.IntakePallet]: 2,
+  [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,
 };
 

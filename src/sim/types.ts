@@ -270,6 +270,13 @@ export interface CrewMember {
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
 export type JobType = 'pickup' | 'deliver';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
+export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
+export type JobStatusCounts = {
+  pending: number;
+  assigned: number;
+  expired: number;
+  done: number;
+};
 
 export interface TransportJob {
   id: number;
@@ -287,6 +294,7 @@ export interface TransportJob {
   lastProgressAt: number;
   stallReason?: JobStallReason;
   stalledSince?: number;
+  expiredFromState?: Exclude<JobState, 'done' | 'expired'>;
 }
 
 export interface ItemNode {
@@ -434,6 +442,9 @@ export interface Metrics {
   escalatedFightRate: number;
   residentSocialAvg: number;
   residentSafetyAvg: number;
+  residentHungerAvg: number;
+  residentEnergyAvg: number;
+  residentHygieneAvg: number;
   load: number;
   capacity: number;
   loadPct: number;
@@ -500,6 +511,10 @@ export interface Metrics {
   topBacklogType: JobType | 'none';
   oldestPendingJobAgeSec: number;
   stalledJobs: number;
+  expiredJobsByReason: Record<JobStallReason, number>;
+  expiredJobsByContext: Record<JobExpiryContext, number>;
+  jobCountsByItem: Record<ItemType, JobStatusCounts>;
+  jobCountsByType: Record<JobType, JobStatusCounts>;
   deathsTotal: number;
   recentDeaths: number;
   distressedResidents: number;
@@ -524,6 +539,10 @@ export interface Metrics {
   crewAssignedWorking: number;
   crewIdleAvailable: number;
   crewResting: number;
+  crewCleaning: number;
+  crewSelfCare: number;
+  crewAvgEnergy: number;
+  crewAvgHygiene: number;
   crewOnLogisticsJobs: number;
   crewBlockedNoPath: number;
   crewRestCap: number;
@@ -601,6 +620,9 @@ export interface Metrics {
   residentDepartures: number;
   residentSatisfactionAvg: number;
   topRoomWarnings: string[];
+  roomWarningsCount: number;
+  serviceNodesTotal: number;
+  serviceNodesUnreachable: number;
   criticalUnstaffedSec: {
     lifeSupport: number;
     hydroponics: number;
