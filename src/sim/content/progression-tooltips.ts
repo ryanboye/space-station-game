@@ -46,15 +46,16 @@ export const PROGRESSION_TOOLTIP_COPY: Record<UnlockTier, ProgressionTooltipCopy
     trigger: 'Unlocks when you complete one workshop → market trade cycle.',
   },
   4: {
-    name: 'Governance Roadmap',
-    theme: 'Future civic rules and deeper zone control.',
-    trigger: 'Unlocks when you resolve one dispatched security incident.',
+    name: 'Permanent Habitation',
+    theme: 'Build private resident quarters and residential docking.',
+    trigger:
+      'Unlocks when you treat one patient and resolve one dispatched incident.',
   },
   5: {
-    name: 'Health Roadmap',
-    theme: 'Future resident care and medical depth.',
+    name: 'Specialization Roadmap',
+    theme: 'Future specialization, civic depth, and station identity.',
     trigger:
-      'Unlocks when you treat one injured crew and convert one visitor to resident.',
+      'Unlocks when you house 5 permanent residents with 5 private beds and a residential berth.',
   },
   6: {
     name: 'Specialization',

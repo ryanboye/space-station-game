@@ -73,6 +73,9 @@ export interface StationSnapshotV1 {
     airQuality: number;
     legacyMaterialStock: number;
   };
+  crew: {
+    total: number;
+  };
   inventoryByTile: Array<{
     tileIndex: number;
     items: Partial<Record<ItemType, number>>;
@@ -263,6 +266,9 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       airQuality: state.metrics.airQuality,
       legacyMaterialStock: state.legacyMaterialStock
     },
+    crew: {
+      total: state.crew.total
+    },
     inventoryByTile,
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
@@ -426,6 +432,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   } else {
     warnings.push('resources missing; defaulted.');
   }
+  let crewTotal = defaultState.crew.total;
+  if (isRecord(snapshotRaw.crew)) {
+    crewTotal = clamp(Math.round(asFiniteNumber(snapshotRaw.crew.total, crewTotal)), 0, 40);
+  } else {
+    warnings.push('crew missing; defaulted.');
+  }
 
   const inventoryByTile: StationSnapshotV1['inventoryByTile'] = [];
   if (Array.isArray(snapshotRaw.inventoryByTile)) {
@@ -539,6 +551,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       waterStock,
       airQuality,
       legacyMaterialStock
+    },
+    crew: {
+      total: crewTotal
     },
     inventoryByTile,
     controls: {
@@ -798,6 +813,9 @@ export function hydrateStateFromSave(
   next.metrics.waterStock = Math.max(0, snapshot.resources.waterStock);
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
+  next.crew.total = clamp(Math.round(snapshot.crew.total), 0, 40);
+  next.crew.free = next.crew.total;
+  next.crew.assigned = 0;
 
   // Restore lifetime counters so predicate-driven tier progression
   // (archetypesServedLifetime is derived from archetypesEverSeen in

@@ -28,9 +28,11 @@ const TIER1_VISITOR_ARRIVAL_THRESHOLD = 1;
 const TIER2_CREDIT_THRESHOLD = 500;
 const TIER2_ARCHETYPE_THRESHOLD = 3;
 const TIER3_TRADE_CYCLES_THRESHOLD = 1;
+const TIER4_ACTORS_TREATED_THRESHOLD = 1;
 const TIER4_INCIDENTS_RESOLVED_THRESHOLD = 1;
-const TIER5_ACTORS_TREATED_THRESHOLD = 1;
-const TIER5_RESIDENTS_CONVERTED_THRESHOLD = 1;
+const TIER5_RESIDENTS_THRESHOLD = 5;
+const TIER5_PRIVATE_BEDS_THRESHOLD = 5;
+const TIER5_RESIDENTIAL_BERTHS_THRESHOLD = 1;
 const TIER6_ELIGIBLE_TIER = 5;
 
 export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
@@ -80,30 +82,37 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
   {
     id: 'tier4_governance',
     tier: 4,
-    name: 'Governance Roadmap',
-    description: 'Advanced milestone for future rules, civic systems, and zone depth.',
+    name: 'Permanent Habitation',
+    description: 'Advanced operations proven. Unlocks permanent quarters and residential docking.',
     trigger: {
-      predicate: (m: Metrics) => m.incidentsResolvedLifetime >= TIER4_INCIDENTS_RESOLVED_THRESHOLD,
+      predicate: (m: Metrics) =>
+        m.actorsTreatedLifetime >= TIER4_ACTORS_TREATED_THRESHOLD &&
+        m.incidentsResolvedLifetime >= TIER4_INCIDENTS_RESOLVED_THRESHOLD,
       progress: (m: Metrics) =>
-        progressTo(m.incidentsResolvedLifetime, TIER4_INCIDENTS_RESOLVED_THRESHOLD),
-      tooltip: 'Resolve one dispatched incident.',
+        Math.min(
+          progressTo(m.actorsTreatedLifetime, TIER4_ACTORS_TREATED_THRESHOLD),
+          progressTo(m.incidentsResolvedLifetime, TIER4_INCIDENTS_RESOLVED_THRESHOLD),
+        ),
+      tooltip: 'Treat a patient at a clinic and resolve one dispatched incident.',
     },
   },
   {
     id: 'tier5_health',
     tier: 5,
-    name: 'Health Roadmap',
-    description: 'Advanced milestone for deeper treatment, mortality, and resident systems.',
+    name: 'Specialization Roadmap',
+    description: 'Resident housing loop proven. Establishes the current roadmap endpoint.',
     trigger: {
       predicate: (m: Metrics) =>
-        m.actorsTreatedLifetime >= TIER5_ACTORS_TREATED_THRESHOLD &&
-        m.residentsConvertedLifetime >= TIER5_RESIDENTS_CONVERTED_THRESHOLD,
+        m.residentsCount >= TIER5_RESIDENTS_THRESHOLD &&
+        m.residentPrivateBedsTotal >= TIER5_PRIVATE_BEDS_THRESHOLD &&
+        m.residentBerthsTotal >= TIER5_RESIDENTIAL_BERTHS_THRESHOLD,
       progress: (m: Metrics) =>
         Math.min(
-          progressTo(m.actorsTreatedLifetime, TIER5_ACTORS_TREATED_THRESHOLD),
-          progressTo(m.residentsConvertedLifetime, TIER5_RESIDENTS_CONVERTED_THRESHOLD),
+          progressTo(m.residentsCount, TIER5_RESIDENTS_THRESHOLD),
+          progressTo(m.residentPrivateBedsTotal, TIER5_PRIVATE_BEDS_THRESHOLD),
+          progressTo(m.residentBerthsTotal, TIER5_RESIDENTIAL_BERTHS_THRESHOLD),
         ),
-      tooltip: 'Treat a patient at a clinic and convert a visitor to a resident.',
+      tooltip: 'House 5 permanent residents with 5 private beds and a residential berth.',
     },
   },
   {

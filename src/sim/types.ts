@@ -476,6 +476,7 @@ export interface Metrics {
   residentBerthsTotal: number;
   residentBerthsOccupied: number;
   residentShipsDocked: number;
+  residentPrivateBedsTotal: number;
   averageDockTime: number;
   bayUtilizationPct: number;
   exitsPerMin: number;

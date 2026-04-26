@@ -1,6 +1,7 @@
 import './styles.css';
 import { renderWorld } from './render/render';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
+import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
 import {
   applyLegendStates,
   attachLegendTooltipHandlers,
@@ -1082,19 +1083,18 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     ships: ['Military', 'Colonist'],
     systems: ['Incident containment, health state handling, and advanced dock filters']
   },
-  // T4..T6 are roadmap milestones until distinct content gates land.
   4: {
-    name: 'Governance Roadmap',
-    theme: 'Future civic rules and deeper zone control.',
-    buildings: ['Roadmap milestone'],
-    citizenNeeds: ['No new build unlocks in this pass'],
-    visitorNeeds: ['No new ship service demands in this pass'],
+    name: 'Permanent Habitation',
+    theme: 'Make the station a real home with private quarters and residential docking.',
+    buildings: ['Private Resident Dorms', 'Resident Hygiene', 'Residential Berth'],
+    citizenNeeds: ['Residents need food, rest, hygiene, safety, and social stability'],
+    visitorNeeds: ['High-value visitors can convert into permanent residents when housing is ready'],
     ships: ['No new family'],
-    systems: ['Advanced milestone tracking']
+    systems: ['Residential berth assignment, private bed capacity, resident needs, tax, and departure loops']
   },
   5: {
-    name: 'Health Roadmap',
-    theme: 'Future resident care and medical depth.',
+    name: 'Specialization Roadmap',
+    theme: 'Future specialization, civic depth, and station identity.',
     buildings: ['Roadmap milestone'],
     citizenNeeds: ['No new build unlocks in this pass'],
     visitorNeeds: ['No new ship service demands in this pass'],
@@ -1957,15 +1957,21 @@ function tierChecklistItems(): Array<{ label: string; value: string; done: boole
     return [{ label: 'Workshop to market trade', value: trades.label, done: trades.done }];
   }
   if (nextTier === 4) {
-    const incidents = checklistRatio(state.metrics.incidentsResolvedLifetime, 1);
-    return [{ label: 'Resolve dispatched incident', value: incidents.label, done: incidents.done }];
-  }
-  if (nextTier === 5) {
     const treated = checklistRatio(state.metrics.actorsTreatedLifetime, 1);
-    const residents = checklistRatio(state.metrics.residentsConvertedLifetime, 1);
+    const incidents = checklistRatio(state.metrics.incidentsResolvedLifetime, 1);
     return [
       { label: 'Treat a patient', value: treated.label, done: treated.done },
-      { label: 'Convert resident', value: residents.label, done: residents.done },
+      { label: 'Resolve dispatched incident', value: incidents.label, done: incidents.done },
+    ];
+  }
+  if (nextTier === 5) {
+    const residents = checklistRatio(state.metrics.residentsCount, 5);
+    const beds = checklistRatio(state.metrics.residentPrivateBedsTotal, 5);
+    const berths = checklistRatio(state.metrics.residentBerthsTotal, 1);
+    return [
+      { label: 'Permanent residents', value: residents.label, done: residents.done },
+      { label: 'Private resident beds', value: beds.label, done: beds.done },
+      { label: 'Residential berth', value: berths.label, done: berths.done },
     ];
   }
   return [{ label: 'Complete health loop', value: '0/1', done: false }];
@@ -2226,6 +2232,55 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'med-bed': ModuleType.MedBed,
   clear: ModuleType.None,
 };
+
+const MODULE_PALETTE_ICON_MAX_W = 46;
+const MODULE_PALETTE_ICON_MAX_H = 34;
+
+function refreshModulePaletteSprites(): void {
+  document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn[data-tool-module]').forEach((btn) => {
+    const moduleKey = btn.dataset.toolModule;
+    const module = moduleKey ? TOOLBAR_MODULE_MAP[moduleKey] : undefined;
+    if (!module || module === ModuleType.None) return;
+
+    let frameEl = btn.querySelector<HTMLElement>('.tool-sprite-frame');
+    let spriteEl = btn.querySelector<HTMLElement>('.tool-sprite');
+    if (!frameEl || !spriteEl) {
+      frameEl = document.createElement('span');
+      frameEl.className = 'tool-sprite-frame';
+      frameEl.setAttribute('aria-hidden', 'true');
+      spriteEl = document.createElement('span');
+      spriteEl.className = 'tool-sprite';
+      frameEl.appendChild(spriteEl);
+
+      const keyEl = btn.querySelector('.tool-key');
+      if (keyEl?.nextSibling) {
+        btn.insertBefore(frameEl, keyEl.nextSibling);
+      } else {
+        btn.insertBefore(frameEl, btn.firstChild);
+      }
+    }
+
+    btn.classList.add('has-sprite');
+    const spriteKey = MODULE_SPRITE_KEYS[module];
+    const frame = spriteAtlas.getFrame(spriteKey);
+    const image = spriteAtlas.image;
+    if (!spriteAtlas.ready || !image || !frame) {
+      btn.classList.add('sprite-missing');
+      spriteEl.removeAttribute('style');
+      return;
+    }
+
+    const scale = Math.min(MODULE_PALETTE_ICON_MAX_W / frame.w, MODULE_PALETTE_ICON_MAX_H / frame.h);
+    const iconW = Math.max(1, Math.round(frame.w * scale));
+    const iconH = Math.max(1, Math.round(frame.h * scale));
+    btn.classList.remove('sprite-missing');
+    spriteEl.style.width = `${iconW}px`;
+    spriteEl.style.height = `${iconH}px`;
+    spriteEl.style.backgroundImage = `url("${image.src}")`;
+    spriteEl.style.backgroundSize = `${Math.round(image.naturalWidth * scale)}px ${Math.round(image.naturalHeight * scale)}px`;
+    spriteEl.style.backgroundPosition = `${Math.round(-frame.x * scale)}px ${Math.round(-frame.y * scale)}px`;
+  });
+}
 
 function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'room') return 'rooms';
@@ -2935,9 +2990,25 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
   const maxX = Math.max(a.x, b.x);
   const minY = Math.min(a.y, b.y);
   const maxY = Math.max(a.y, b.y);
+  const paintTiles: number[] = [];
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const idx = toIndex(x, y, state.width);
+      paintTiles.push(toIndex(x, y, state.width));
+    }
+  }
+
+  if (currentTool.kind === 'tile') {
+    const core = fromIndex(state.core.serviceTile, state.width);
+    paintTiles.sort((left, right) => {
+      const aTile = fromIndex(left, state.width);
+      const bTile = fromIndex(right, state.width);
+      const aDist = Math.abs(aTile.x - core.x) + Math.abs(aTile.y - core.y);
+      const bDist = Math.abs(bTile.x - core.x) + Math.abs(bTile.y - core.y);
+      return currentTool.tile === TileType.Space ? bDist - aDist : aDist - bDist;
+    });
+  }
+
+  for (const idx of paintTiles) {
       if (currentTool.kind === 'tile') {
         const changed = trySetTile(state, idx, currentTool.tile!);
         if (!changed) continue;
@@ -2958,7 +3029,6 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
           tryPlaceModule(state, currentTool.module!, idx, state.controls.moduleRotation);
         }
       }
-    }
   }
 }
 
@@ -3316,6 +3386,7 @@ window.addEventListener('keydown', (e) => {
       if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
         void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
           spriteAtlas = loaded;
+          refreshModulePaletteSprites();
         });
       }
       break;
@@ -3463,6 +3534,7 @@ toggleSpritesBtn.addEventListener('click', () => {
   if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
     void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
       spriteAtlas = loaded;
+      refreshModulePaletteSprites();
     });
   }
   syncToggleLabels();
@@ -4244,6 +4316,7 @@ function offerAutosaveLoadOnColdStart(): void {
 
 async function startGameLoop(): Promise<void> {
   spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
+  refreshModulePaletteSprites();
   offerAutosaveLoadOnColdStart();
   if (autosaveTimer !== null) clearInterval(autosaveTimer);
   autosaveTimer = setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);

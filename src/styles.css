@@ -1583,6 +1583,48 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   overflow-wrap: anywhere;
 }
 
+#toolbar .tool-btn.has-sprite {
+  min-height: 74px;
+}
+
+#toolbar .tool-sprite-frame {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 36px;
+  margin: -1px 0 0;
+  border-radius: 4px;
+  background:
+    radial-gradient(circle at 50% 56%, rgba(123, 167, 217, 0.18), transparent 62%),
+    rgba(7, 12, 18, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(123, 167, 217, 0.14);
+  overflow: hidden;
+}
+
+#toolbar .tool-sprite {
+  display: block;
+  image-rendering: auto;
+  background-repeat: no-repeat;
+}
+
+#toolbar .tool-btn.sprite-missing .tool-sprite-frame {
+  display: none;
+}
+
+#toolbar .tool-btn.locked .tool-sprite-frame {
+  opacity: 0.44;
+  filter: grayscale(0.45);
+}
+
+#toolbar .tool-btn.active .tool-sprite-frame {
+  background:
+    radial-gradient(circle at 50% 56%, rgba(110, 219, 143, 0.24), transparent 64%),
+    rgba(9, 20, 28, 0.48);
+  box-shadow:
+    inset 0 0 0 1px rgba(123, 167, 217, 0.34),
+    0 0 12px rgba(123, 167, 217, 0.14);
+}
+
 #toolbar .utility-tool {
   border-color: #43576e;
   background: rgba(35, 48, 62, 0.92);

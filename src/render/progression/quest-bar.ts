@@ -127,6 +127,7 @@ export function renderQuestBar(
   const dom = mountQuestBar(container);
   const tier = state.unlocks.tier;
   const isTerminal = tier >= 6;
+  const nextTier = isTerminal ? null : ((tier + 1) as UnlockTier);
 
   // Title: "TIER N — NAME" (or "TUTORIAL COMPLETE" at terminal).
   const emoji = TIER_EMOJI[tier] ?? '⬡';
@@ -141,8 +142,7 @@ export function renderQuestBar(
   // Goal: next tier's trigger copy (or terminal sandbox-unlocked line).
   if (isTerminal) {
     dom.goal.textContent = 'Full sandbox unlocked — build what you want.';
-  } else {
-    const nextTier = (tier + 1) as UnlockTier;
+  } else if (nextTier !== null) {
     const nextCopy = copyFor(nextTier);
     dom.goal.textContent = nextCopy?.trigger
       ? `Goal: ${nextCopy.trigger}`
@@ -153,7 +153,9 @@ export function renderQuestBar(
   // Terminal locks to 100%; otherwise read triggerProgress[tier+1].
   const rawProgress = isTerminal
     ? 1
-    : state.unlocks.triggerProgress[(tier + 1) as UnlockTier] ?? 0;
+    : nextTier !== null
+    ? state.unlocks.triggerProgress[nextTier] ?? 0
+    : 0;
   const clamped = Math.max(0, Math.min(1, rawProgress));
   const pctInt = Math.round(clamped * 100);
 

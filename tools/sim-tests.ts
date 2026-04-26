@@ -157,6 +157,21 @@ function setupPrivateResidentHousing(state: StationState): { cabinTile: number; 
   };
 }
 
+function setupFiveResidentHabitation(state: StationState): void {
+  paintRoom(state, RoomType.Dorm, 10, 22, 19, 25);
+  paintRoom(state, RoomType.Hygiene, 21, 22, 23, 24);
+  const dormPolicyOk = setRoomHousingPolicy(state, toIndex(10, 22, state.width), 'private_resident');
+  const hygienePolicyOk = setRoomHousingPolicy(state, toIndex(21, 22, state.width), 'resident');
+  assertCondition(dormPolicyOk, 'Expected to set dorm housing policy to private_resident.');
+  assertCondition(hygienePolicyOk, 'Expected to set hygiene housing policy to resident.');
+  for (let i = 0; i < 5; i++) {
+    placeModuleOrThrow(state, ModuleType.Bed, 10 + i * 2, 23);
+    spawnResidentActor(state, 12 + i, 20, 7000 + i, {
+      housingUnitId: toIndex(10, 22, state.width)
+    });
+  }
+}
+
 function createDockedTransientShip(state: StationState, dockId: number, shipId: number): ArrivingShip {
   const dock = dockByIdOrThrow(state, dockId);
   const center = dock.tiles
@@ -513,6 +528,34 @@ function testMaterialsChainEndToEnd(): void {
 
   const sold = sellMaterials(state, 10, 5);
   assertCondition(sold, 'Selling materials should remove raw materials from logistics/storage inventory.');
+}
+
+function testIntakeMaterialsMoveToStorage(): void {
+  const state = createInitialState({ seed: 3021 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 18);
+  paintRoom(state, RoomType.Storage, 10, 16, 13, 18);
+  placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 10, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 12, 17);
+  state.crew.total = 8;
+  state.metrics.credits = 800;
+  state.legacyMaterialStock = 0;
+  state.metrics.materials = 0;
+
+  const bought = buyMaterials(state, 0, 35);
+  assertCondition(bought, 'Buying materials should deposit raw materials into intake pallets.');
+  runFor(state, 180);
+
+  const intakeStock = state.itemNodes
+    .filter((node) => state.rooms[node.tileIndex] === RoomType.LogisticsStock)
+    .reduce((sum, node) => sum + (node.items.rawMaterial ?? 0), 0);
+  const storageStock = state.itemNodes
+    .filter((node) => state.rooms[node.tileIndex] === RoomType.Storage)
+    .reduce((sum, node) => sum + (node.items.rawMaterial ?? 0), 0);
+  assertCondition(storageStock >= 30, `Storage racks should receive most raw materials from intake (storage ${storageStock.toFixed(1)}).`);
+  assertCondition(intakeStock <= 5, `Intake pallets should drain into storage when storage has capacity (intake ${intakeStock.toFixed(1)}).`);
 }
 
 function testInventoryOverlayToggleState(): void {
@@ -1277,6 +1320,7 @@ function testSaveRoundtripLayoutAndResources(): void {
   placeModuleOrThrow(state, ModuleType.Table, 18, 10);
   const dockId = placeEastHullDock(state, 8, 9);
   setDockPurpose(state, dockId, 'residential');
+  state.crew.total = 17;
   state.controls.shipsPerCycle = 2;
   state.controls.taxRate = 0.31;
   state.metrics.credits = 321;
@@ -1316,6 +1360,7 @@ function testSaveRoundtripLayoutAndResources(): void {
   assertCondition(Math.round(loaded.metrics.waterStock) === 88, 'Water stock should be restored from save.');
   assertCondition(Math.round(loaded.metrics.airQuality) === 67, 'Air quality should be restored from save.');
   assertCondition(Math.round(loaded.legacyMaterialStock) === 145, 'Legacy material stock should be restored from save.');
+  assertCondition(loaded.crew.total === 17, 'Crew total should be restored from save.');
   assertCondition(loaded.controls.shipsPerCycle === 2, 'Ship-per-cycle control should be restored from save.');
   assertCondition(Math.abs(loaded.controls.taxRate - 0.31) < 0.001, 'Tax rate should be restored from save.');
 }
@@ -1325,6 +1370,7 @@ function testSaveLoadRegeneratesRuntimeEntities(): void {
   buildHabitat(state);
   setupCoreRooms(state);
   setupFoodChain(state);
+  state.crew.total = 13;
   const dockId = placeEastHullDock(state, 8, 9);
   const ship = createDockedTransientShip(state, dockId, 9200);
   spawnReturningVisitor(state, dockByIdOrThrow(state, dockId).tiles[0], 720, ship.id);
@@ -1358,6 +1404,7 @@ function testSaveLoadRegeneratesRuntimeEntities(): void {
     loaded.crewMembers.length === loaded.crew.total,
     'Crew members should be regenerated from crew total, not persisted one-to-one.'
   );
+  assertCondition(loaded.crew.total === 13, 'Crew total should survive static save/load.');
   assertCondition(loaded.jobs.length === 0, 'Jobs should be reset during static-only load.');
   assertCondition(loaded.arrivingShips.length === 0, 'Arriving ships should be reset during static-only load.');
   assertCondition(loaded.pendingSpawns.length === 0, 'Pending spawns should be reset during static-only load.');
@@ -2045,16 +2092,29 @@ function testUnlockTier3TriggersOnTradeCycle(): void {
   assertCondition(getUnlockTier(state) >= 3, 'Tier 3 should unlock when tradeCyclesCompletedLifetime >= 1.');
 }
 
-function testUnlockTier4TriggersOnResolvedIncident(): void {
+function testUnlockTier4TriggersOnTreatmentAndIncident(): void {
   const state = createInitialState({ seed: 5105 });
   buildHabitat(state);
   setUnlockTierForTest(state, 3);
   state.controls.paused = true;
   tick(state, 0);
-  assertCondition(getUnlockTier(state) === 3, 'Tier 4 should not unlock without a resolved incident.');
+  assertCondition(getUnlockTier(state) === 3, 'Tier 4 should not unlock without treatment and incident response.');
+  state.metrics.actorsTreatedLifetime = 1;
   state.metrics.incidentsResolvedLifetime = 1;
   tick(state, 0);
-  assertCondition(getUnlockTier(state) >= 4, 'Tier 4 should unlock when incidentsResolvedLifetime >= 1.');
+  assertCondition(getUnlockTier(state) >= 4, 'Tier 4 should unlock after treatment and one resolved incident.');
+}
+
+function testUnlockTier5TriggersOnPermanentHabitation(): void {
+  const state = createInitialState({ seed: 51051 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 4);
+  setupFiveResidentHabitation(state);
+  const dockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, dockId, 'residential');
+  state.controls.paused = true;
+  tick(state, 0);
+  assertCondition(getUnlockTier(state) >= 5, 'Tier 5 should unlock with 5 residents, 5 private beds, and a residential berth.');
 }
 
 function testRebuildDockEntitiesPreservesAllowedShips(): void {
@@ -2980,7 +3040,8 @@ function run(): void {
   testUnlockTier1TriggersAfterStability();
   testUnlockTier2RequiresLogisticsSignal();
   testUnlockTier3TriggersOnTradeCycle();
-  testUnlockTier4TriggersOnResolvedIncident();
+  testUnlockTier4TriggersOnTreatmentAndIncident();
+  testUnlockTier5TriggersOnPermanentHabitation();
   testRebuildDockEntitiesPreservesAllowedShips();
   testRebuildDockEntitiesPaintOverExistingDockIsIdempotent();
   testRebuildDockEntitiesSplitsOnMiddleTileDeletion();
@@ -3013,6 +3074,7 @@ function run(): void {
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();
   testMaterialsChainEndToEnd();
+  testIntakeMaterialsMoveToStorage();
   testInventoryOverlayToggleState();
   testRoomInspectorInventoryBreakdown();
   testMarketBuyCapacityContext();

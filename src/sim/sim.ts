@@ -4008,6 +4008,29 @@ function itemNodeFreeCapacity(state: StationState, tileIndex: number): number {
   return Math.max(0, node.capacity - used);
 }
 
+function openJobAmountToTile(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
+): number {
+  let amount = 0;
+  for (const job of state.jobs) {
+    if (job.toTile !== tileIndex || job.itemType !== itemType) continue;
+    if (job.state !== 'pending' && job.state !== 'assigned' && job.state !== 'in_progress') continue;
+    amount += Math.max(0, job.amount - job.pickedUpAmount);
+    if (job.state === 'in_progress') amount += job.pickedUpAmount;
+  }
+  return amount;
+}
+
+function itemNodeUnreservedCapacity(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
+): number {
+  return Math.max(0, itemNodeFreeCapacity(state, tileIndex) - openJobAmountToTile(state, tileIndex, itemType));
+}
+
 function totalItemCapacityAtTargets(state: StationState, tileIndices: number[]): number {
   let total = 0;
   for (const tileIndex of tileIndices) {
@@ -4067,7 +4090,7 @@ function takeItemAcrossTargets(
 function materialInventoryTiles(state: StationState): number[] {
   const logisticsTargets = collectServiceTargets(state, RoomType.LogisticsStock);
   const storageTargets = collectServiceTargets(state, RoomType.Storage);
-  return [...new Set([...logisticsTargets, ...storageTargets])];
+  return [...new Set([...storageTargets, ...logisticsTargets])];
 }
 
 function materialInventoryTotal(state: StationState): number {
@@ -4200,21 +4223,29 @@ function createRawMaterialTransportJobs(state: StationState): void {
 
   if (intakeTargets.length > 0 && storageTargets.length > 0) {
     const intakeSources = intakeTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') > 0.3);
-    const storageDestinations = storageTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') < 12);
+    const storageDestinations = storageTargets.filter((tile) => itemNodeUnreservedCapacity(state, tile, 'rawMaterial') > 0.3);
     if (intakeSources.length > 0 && storageDestinations.length > 0) {
       const from = intakeSources[randomInt(0, intakeSources.length - 1, state.rng)];
       const to = storageDestinations[randomInt(0, storageDestinations.length - 1, state.rng)];
-      enqueueTransportJob(state, 'deliver', 'rawMaterial', 1.2, from, to);
+      const amount = Math.min(1.2, itemStockAtNode(state, from, 'rawMaterial'), itemNodeUnreservedCapacity(state, to, 'rawMaterial'));
+      if (amount > 0.05) enqueueTransportJob(state, 'deliver', 'rawMaterial', amount, from, to);
     }
   }
 
   if (storageTargets.length > 0 && workshopTargets.length > 0) {
     const storageSources = storageTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') > 0.3);
-    const workshopDestinations = workshopTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMaterial') < 8);
+    const workshopDestinations = workshopTargets.filter(
+      (tile) => itemStockAtNode(state, tile, 'rawMaterial') + openJobAmountToTile(state, tile, 'rawMaterial') < 8
+    );
     if (storageSources.length > 0 && workshopDestinations.length > 0) {
       const from = storageSources[randomInt(0, storageSources.length - 1, state.rng)];
       const to = workshopDestinations[randomInt(0, workshopDestinations.length - 1, state.rng)];
-      enqueueTransportJob(state, 'deliver', 'rawMaterial', 1.0, from, to);
+      const rawTargetSpace = Math.max(
+        0,
+        8 - itemStockAtNode(state, to, 'rawMaterial') - openJobAmountToTile(state, to, 'rawMaterial')
+      );
+      const amount = Math.min(1.0, itemStockAtNode(state, from, 'rawMaterial'), itemNodeUnreservedCapacity(state, to, 'rawMaterial'), rawTargetSpace);
+      if (amount > 0.05) enqueueTransportJob(state, 'deliver', 'rawMaterial', amount, from, to);
     }
   }
 }
@@ -6591,6 +6622,7 @@ function computeMetrics(state: StationState): void {
   const bays = state.docks;
   const visitorBerths = bays.filter((d) => d.purpose === 'visitor');
   const residentialBerths = bays.filter((d) => d.purpose === 'residential');
+  const residentPrivateBedsTotal = privateHousingUnits(state).length;
   const dockedShips = state.arrivingShips.filter((s) => s.stage === 'docked').length;
   const residentShipsDocked = state.arrivingShips.filter((s) => s.kind === 'resident_home' && s.stage === 'docked').length;
   const bayUtilizationPct = bays.length > 0 ? (dockedShips / bays.length) * 100 : 0;
@@ -6662,6 +6694,7 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentBerthsTotal = residentialBerths.length;
   state.metrics.residentBerthsOccupied = residentialBerths.filter((d) => d.occupiedByShipId !== null).length;
   state.metrics.residentShipsDocked = residentShipsDocked;
+  state.metrics.residentPrivateBedsTotal = residentPrivateBedsTotal;
   state.metrics.averageDockTime = averageDockTime;
   state.metrics.bayUtilizationPct = bayUtilizationPct;
   state.metrics.dockZonesTotal = bays.length;
@@ -7128,6 +7161,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       residentBerthsTotal: 0,
       residentBerthsOccupied: 0,
       residentShipsDocked: 0,
+      residentPrivateBedsTotal: 0,
       averageDockTime: 0,
       bayUtilizationPct: 0,
       exitsPerMin: 0,
