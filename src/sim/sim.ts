@@ -598,7 +598,21 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   RoomType.Lounge,
   RoomType.Market,
   RoomType.LogisticsStock,
-  RoomType.Storage
+  RoomType.Storage,
+  // Without this entry, painting Berth tiles bumps roomVersion → cache
+  // invalidates → ensureRoomClustersCache rebuilds, but its loop only
+  // iterates CACHED_ROOM_TYPES (sim.ts:787), so Berth tiles never get
+  // entered into state.derived.clusterByTile. Downstream, getRoomInspectorAt
+  // (sim.ts:3185) does:
+  //   const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  //   if (!clusterMeta || clusterMeta.room !== room) return null;
+  // and returns null for every click on a Berth tile. refreshRoomModal
+  // then renders default text ("type=none, cluster=0 tiles, Berth: n/a")
+  // because it received a null inspector. The mouseup handler subsequently
+  // calls roomModal.classList.remove('hidden'), so the modal opens but its
+  // contents are stale — exactly the symptom BMO reported (modal visible,
+  // type=none, cluster=0 tiles, all defaults).
+  RoomType.Berth
 ];
 
 function createEmptyDerivedCache(): StationState['derived'] {
