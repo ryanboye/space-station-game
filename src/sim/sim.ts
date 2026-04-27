@@ -5260,7 +5260,13 @@ function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
   const visitorDockTiles = state.docks
     .filter((dock) => dock.purpose === 'visitor')
     .flatMap((dock) => dock.tiles);
-  return visitorDockTiles.length > 0 ? visitorDockTiles : collectTiles(state, TileType.Dock);
+  if (visitorDockTiles.length > 0) return visitorDockTiles;
+  const tileDocks = collectTiles(state, TileType.Dock);
+  if (tileDocks.length > 0) return tileDocks;
+  // Berth-only stations: visitors arrived via a Berth ship and there are
+  // no Dock tiles or visitor-purpose docks. Fall back to the Berth-room
+  // tiles so visitors have a valid exit path.
+  return collectRooms(state, RoomType.Berth);
 }
 
 function assignPathToDock(state: StationState, visitor: Visitor): void {
@@ -5698,7 +5704,13 @@ function updateVisitorLogic(
     }
     if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
       visitor.path = [];
-      if (state.tiles[visitor.tileIndex] === TileType.Dock) {
+      // Despawn when the visitor has reached an exit tile. Dock tiles are
+      // explicit; Berth-room tiles are the equivalent for berth-arrivals
+      // (a ship docked at a Berth has no underlying Dock tile type).
+      const onExitTile =
+        state.tiles[visitor.tileIndex] === TileType.Dock ||
+        state.rooms[visitor.tileIndex] === RoomType.Berth;
+      if (onExitTile) {
         state.recentExitTimes.push(state.now);
         occupancyByTile.set(
           visitor.tileIndex,
