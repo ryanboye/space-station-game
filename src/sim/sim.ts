@@ -8170,9 +8170,34 @@ export function getUnlockTier(state: StationState): UnlockTier {
 //   5. modules reachable? (collectServiceTargets returns)
 export function diagnoseFoodChain(state: StationState): {
   summary: Record<string, number | string>;
-  jobs: Array<{ id: number; itemType: string; from: number; to: number; state: string; assignedTo: number | null; stallReason?: string }>;
+  jobs: Array<{
+    id: number;
+    itemType: string;
+    from: number;
+    to: number;
+    state: string;
+    assignedTo: number | null;
+    amount: number;
+    pickedUpAmount: number;
+    ageSec: number;
+    sinceProgressSec: number;
+    stallReason?: string;
+  }>;
   paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
   crewByRole: Record<string, number>;
+  crewDetail: Array<{
+    id: number;
+    role: string;
+    assignedSystem: string | null;
+    energy: number;
+    resting: boolean;
+    activeJobId: number | null;
+    blockedTicks: number;
+    carrying: string | null;
+    tile: number;
+    pathLen: number;
+    healthState: string;
+  }>;
 } {
   const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
   const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
@@ -8228,19 +8253,60 @@ export function diagnoseFoodChain(state: StationState): {
     powerDemand: state.metrics.powerDemand,
   };
 
+  // ── v2 fields (BMO follow-up 2026-04-27): visitor stats + per-crew detail
+  // + per-job liveness for diagnosing the secondary stall mode.
+  const visitorBuckets = { hungry: 0, queueing: 0, eating: 0, leisure: 0, leaving: 0, other: 0 };
+  for (const v of state.visitors) {
+    if (v.state === VisitorState.ToCafeteria) visitorBuckets.hungry += 1;
+    else if (v.state === VisitorState.Queueing) visitorBuckets.queueing += 1;
+    else if (v.state === VisitorState.Eating) visitorBuckets.eating += 1;
+    else if (v.state === VisitorState.Leisure || v.state === VisitorState.ToLeisure) visitorBuckets.leisure += 1;
+    else if (v.state === VisitorState.ToDock) visitorBuckets.leaving += 1;
+    else visitorBuckets.other += 1;
+  }
+  Object.assign(summary, {
+    visitorTotal: state.visitors.length,
+    visitorHungry: visitorBuckets.hungry,
+    visitorQueueing: visitorBuckets.queueing,
+    visitorEating: visitorBuckets.eating,
+    visitorLeisure: visitorBuckets.leisure,
+    visitorLeaving: visitorBuckets.leaving,
+  });
+
+  const crewDetail = state.crewMembers.map((c) => ({
+    id: c.id,
+    role: c.role,
+    assignedSystem: c.assignedSystem,
+    energy: Number(c.energy.toFixed(1)),
+    resting: c.resting,
+    activeJobId: c.activeJobId,
+    blockedTicks: c.blockedTicks,
+    carrying: c.carryingItemType ? `${c.carryingItemType}(${c.carryingAmount.toFixed(1)})` : null,
+    tile: c.tileIndex,
+    pathLen: c.path.length,
+    healthState: c.healthState,
+  }));
+
+  const jobsDetail = openRawJobs.map((j) => ({
+    id: j.id,
+    itemType: j.itemType,
+    from: j.fromTile,
+    to: j.toTile,
+    state: j.state,
+    assignedTo: j.assignedCrewId,
+    amount: j.amount,
+    pickedUpAmount: j.pickedUpAmount,
+    ageSec: Number((state.now - j.createdAt).toFixed(1)),
+    sinceProgressSec: Number((state.now - j.lastProgressAt).toFixed(1)),
+    stallReason: j.stallReason,
+  }));
+
   return {
     summary,
-    jobs: openRawJobs.map((j) => ({
-      id: j.id,
-      itemType: j.itemType,
-      from: j.fromTile,
-      to: j.toTile,
-      state: j.state,
-      assignedTo: j.assignedCrewId,
-      stallReason: j.stallReason,
-    })),
+    jobs: jobsDetail,
     paths,
     crewByRole,
+    crewDetail,
   };
 }
 
