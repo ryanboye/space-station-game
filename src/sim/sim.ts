@@ -7378,23 +7378,31 @@ export function createInitialState(options?: { seed?: number }): StationState {
   const roomHousingPolicies = new Array<HousingPolicy>(GRID_WIDTH * GRID_HEIGHT).fill('visitor');
   const modules = new Array<ModuleType>(GRID_WIDTH * GRID_HEIGHT).fill(ModuleType.None);
   const moduleOccupancyByTile = new Array<number | null>(GRID_WIDTH * GRID_HEIGHT).fill(null);
+  const coreX = Math.floor(GRID_WIDTH / 2);
+  const coreY = Math.floor(GRID_HEIGHT / 2);
+  const starterFloorMinX = coreX - 5;
+  const starterFloorMaxX = coreX + 4;
+  const starterFloorMinY = coreY - 6;
+  const starterFloorMaxY = coreY + 3;
+  const starterWallMinX = starterFloorMinX - 1;
+  const starterWallMaxX = starterFloorMaxX + 1;
+  const starterWallMinY = starterFloorMinY - 1;
+  const starterWallMaxY = starterFloorMaxY + 1;
 
-  for (let y = 14; y < 24; y++) {
-    for (let x = 25; x < 35; x++) {
+  for (let y = starterFloorMinY; y <= starterFloorMaxY; y++) {
+    for (let x = starterFloorMinX; x <= starterFloorMaxX; x++) {
       tiles[toIndex(x, y, GRID_WIDTH)] = TileType.Floor;
     }
   }
-  for (let y = 13; y < 25; y++) {
-    tiles[toIndex(24, y, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(35, y, GRID_WIDTH)] = TileType.Wall;
+  for (let y = starterWallMinY; y <= starterWallMaxY; y++) {
+    tiles[toIndex(starterWallMinX, y, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(starterWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
   }
-  for (let x = 24; x < 36; x++) {
-    tiles[toIndex(x, 13, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, 24, GRID_WIDTH)] = TileType.Wall;
+  for (let x = starterWallMinX; x <= starterWallMaxX; x++) {
+    tiles[toIndex(x, starterWallMinY, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(x, starterWallMaxY, GRID_WIDTH)] = TileType.Wall;
   }
 
-  const coreX = Math.floor(GRID_WIDTH / 2);
-  const coreY = Math.floor(GRID_HEIGHT / 2);
   const frameTiles: number[] = [];
   for (let y = coreY - 1; y <= coreY + 1; y++) {
     for (let x = coreX - 1; x <= coreX + 1; x++) {

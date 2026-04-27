@@ -1229,13 +1229,16 @@ function testMapExpansionNorthRemapsRuntimeReferences(): void {
   state.bodyTiles = [toIndex(17, 17, state.width)];
   state.pathOccupancyByTile = new Map([[toIndex(18, 18, state.width), 2]]);
   state.effects.blockedUntilByTile = new Map([[toIndex(19, 19, state.width), state.now + 5]]);
+  const oldWidth = state.width;
+  const oldHeight = state.height;
+  const expansionStep = 40;
 
   const result = expandMap(state, 'north');
   assertCondition(result.ok, 'North expansion should succeed.');
   if (!result.ok) return;
 
-  const remapNorth = (index: number): number => index + 40 * state.width;
-  assertCondition(state.height === 80, 'North expansion should increase height by 40.');
+  const remapNorth = (index: number): number => index + expansionStep * state.width;
+  assertCondition(state.height === oldHeight + expansionStep, 'North expansion should increase height by 40.');
   assertCondition(state.tiles[remapNorth(trackedTile)] === TileType.Door, 'Tracked tile should remap after north expansion.');
   assertCondition(module.originTile !== state.moduleInstances[0].originTile, 'Module origin should be remapped.');
   assertCondition(
@@ -1243,25 +1246,25 @@ function testMapExpansionNorthRemapsRuntimeReferences(): void {
     'Module origin tile should shift north by 40 rows.'
   );
   assertCondition(state.visitors[0].tileIndex === remapNorth(visitorTileBefore), 'Visitor tile index should be remapped.');
-  assertCondition(Math.abs(state.visitors[0].y - (visitorYBefore + 40)) < 0.001, 'Visitor world Y should shift by 40.');
+  assertCondition(Math.abs(state.visitors[0].y - (visitorYBefore + expansionStep)) < 0.001, 'Visitor world Y should shift by 40.');
   assertCondition(state.residents[0].tileIndex === remapNorth(residentBefore.tileIndex), 'Resident tile index should remap.');
   assertCondition(
     state.residents[0].reservedTargetTile === remapNorth(residentBefore.reservedTargetTile!),
     'Resident reserved target should remap.'
   );
   assertCondition(state.crewMembers[0].tileIndex === remapNorth(crewTileBefore), 'Crew tile index should remap.');
-  assertCondition(state.crewMembers[0].targetTile === remapNorth(toIndex(16, 14, 60)), 'Crew target tile should remap.');
-  assertCondition(Math.abs(state.crewMembers[0].y - (crewYBefore + 40)) < 0.001, 'Crew world Y should shift by 40.');
+  assertCondition(state.crewMembers[0].targetTile === remapNorth(toIndex(16, 14, oldWidth)), 'Crew target tile should remap.');
+  assertCondition(Math.abs(state.crewMembers[0].y - (crewYBefore + expansionStep)) < 0.001, 'Crew world Y should shift by 40.');
   assertCondition(state.jobs[0].fromTile === remapNorth(fromTileBefore), 'Job source tile should remap.');
   assertCondition(state.jobs[0].toTile === remapNorth(toTileBefore), 'Job target tile should remap.');
   assertCondition(state.pendingSpawns[0].dockIndex === remapNorth(dock.tiles[0]), 'Pending spawn dock index should remap.');
-  assertCondition(state.bodyTiles[0] === remapNorth(toIndex(17, 17, 60)), 'Body tile should remap.');
+  assertCondition(state.bodyTiles[0] === remapNorth(toIndex(17, 17, oldWidth)), 'Body tile should remap.');
 
   const pathKeys = [...state.pathOccupancyByTile.keys()];
   const blockedKeys = [...state.effects.blockedUntilByTile.keys()];
-  assertCondition(pathKeys.length === 1 && pathKeys[0] === remapNorth(toIndex(18, 18, 60)), 'Path occupancy keys should remap.');
+  assertCondition(pathKeys.length === 1 && pathKeys[0] === remapNorth(toIndex(18, 18, oldWidth)), 'Path occupancy keys should remap.');
   assertCondition(
-    blockedKeys.length === 1 && blockedKeys[0] === remapNorth(toIndex(19, 19, 60)),
+    blockedKeys.length === 1 && blockedKeys[0] === remapNorth(toIndex(19, 19, oldWidth)),
     'Blocked tile effect keys should remap.'
   );
 
@@ -1272,7 +1275,7 @@ function testMapExpansionNorthRemapsRuntimeReferences(): void {
       (arriving) =>
         arriving.id === ship.id &&
         arriving.assignedDockId === dockId &&
-        Math.abs(arriving.bayCenterY - (ship.bayCenterY + 40)) < 0.001
+        Math.abs(arriving.bayCenterY - (ship.bayCenterY + expansionStep)) < 0.001
     ),
     'Docked ship should keep dock assignment and remapped bay center.'
   );

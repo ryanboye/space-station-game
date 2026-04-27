@@ -142,7 +142,7 @@ app.innerHTML = `
           <path d="M20 20l-6-6" />
         </svg>
       </button>
-      <button id="camera-reset" class="topbar-btn utility-icon" aria-label="Fit Map" title="Fit Map">
+      <button id="camera-reset" class="topbar-btn utility-icon" aria-label="Fit Station" title="Fit Station">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M4 9V5h4" />
           <path d="M16 5h4v4" />
@@ -682,12 +682,14 @@ const ctx: CanvasRenderingContext2D = ctxMaybe;
 
 const state = createInitialState();
 
-// T0 onboarding: pre-place a 2-tile visitor dock at east hull
-// (x=35, y=17..18) so ships arrive on a fresh start without the
-// player painting one first. setTile invokes rebuildDockEntities to
-// auto-populate the dock entity.
-for (let dockY = 17; dockY <= 18; dockY++) {
-  setTile(state, toIndex(35, dockY, state.width), TileType.Dock);
+// T0 onboarding: pre-place a 2-tile visitor dock on the starter hull so
+// ships arrive on a fresh start without the player painting one first.
+// Keep it core-relative because the starter grid can grow while the
+// sealed room stays centered.
+const starterCore = fromIndex(state.core.centerTile, state.width);
+const starterDockX = starterCore.x + 5;
+for (let dockY = starterCore.y - 3; dockY <= starterCore.y - 2; dockY++) {
+  setTile(state, toIndex(starterDockX, dockY, state.width), TileType.Dock);
 }
 
 // ?scenario=<name> thin-spec cold-start loader: skip the starter grind
@@ -735,8 +737,10 @@ let zoom = 1;
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
 const FIT_MIN_ZOOM = 0.1;
+const FIT_STATION_MAX_ZOOM = 1.4;
+const FIT_STATION_MARGIN_TILES = 8;
 const EXPANSION_STEP_TILES = 40;
-const PAN_PADDING_MIN = 260;
+const PAN_PADDING_MIN = 720;
 let mapOffsetX = 0;
 let mapOffsetY = 0;
 
@@ -2480,8 +2484,8 @@ function clampViewportScroll(): void {
 function updateStageLayout(): void {
   const mapDisplayWidth = canvas.clientWidth;
   const mapDisplayHeight = canvas.clientHeight;
-  const padX = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientWidth * 0.75));
-  const padY = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientHeight * 0.75));
+  const padX = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientWidth * 1.4));
+  const padY = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientHeight * 1.4));
   mapOffsetX = padX;
   mapOffsetY = padY;
   gameStage.style.width = `${Math.round(mapDisplayWidth + padX * 2)}px`;
@@ -2511,15 +2515,45 @@ function centerViewportOnMapCenter(): void {
   clampViewportScroll();
 }
 
-function fitMapToViewport(): void {
-  const worldWidthPx = state.width * TILE_SIZE;
-  const worldHeightPx = state.height * TILE_SIZE;
-  if (worldWidthPx <= 0 || worldHeightPx <= 0) return;
-  const fitZoom = Math.min(gameWrap.clientWidth / worldWidthPx, gameWrap.clientHeight / worldHeightPx);
-  zoom = clamp(fitZoom, FIT_MIN_ZOOM, MAX_ZOOM);
+function getStationBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = state.width;
+  let minY = state.height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] === TileType.Space) continue;
+    const tile = fromIndex(i, state.width);
+    minX = Math.min(minX, tile.x);
+    minY = Math.min(minY, tile.y);
+    maxX = Math.max(maxX, tile.x);
+    maxY = Math.max(maxY, tile.y);
+  }
+
+  if (maxX < minX || maxY < minY) {
+    const core = fromIndex(state.core.centerTile, state.width);
+    return { minX: core.x, minY: core.y, maxX: core.x, maxY: core.y };
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+function fitStationToViewport(): void {
+  const bounds = getStationBounds();
+  const marginPx = FIT_STATION_MARGIN_TILES * TILE_SIZE;
+  const stationWidthPx = Math.max(TILE_SIZE, (bounds.maxX - bounds.minX + 1) * TILE_SIZE);
+  const stationHeightPx = Math.max(TILE_SIZE, (bounds.maxY - bounds.minY + 1) * TILE_SIZE);
+  const fitZoom = Math.min(
+    gameWrap.clientWidth / (stationWidthPx + marginPx * 2),
+    gameWrap.clientHeight / (stationHeightPx + marginPx * 2)
+  );
+  zoom = clamp(fitZoom, FIT_MIN_ZOOM, FIT_STATION_MAX_ZOOM);
   applyCanvasSize();
   updateStageLayout();
-  centerViewportOnMapCenter();
+  centerViewportOnWorldPx(
+    (bounds.minX + bounds.maxX + 1) * TILE_SIZE * 0.5,
+    (bounds.minY + bounds.maxY + 1) * TILE_SIZE * 0.5
+  );
 }
 
 function setZoomAtViewportPoint(nextZoom: number, viewportX: number, viewportY: number): void {
@@ -2563,11 +2597,11 @@ function refreshExpansionUi(): void {
 refreshExpansionUi();
 
 requestAnimationFrame(() => {
-  fitMapToViewport();
+  fitStationToViewport();
 });
 
 cameraResetBtn.addEventListener('click', () => {
-  fitMapToViewport();
+  fitStationToViewport();
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -4502,7 +4536,7 @@ function applyHydratedState(nextState: StationState): void {
   Object.assign(state, nextState);
   applyCanvasSize();
   updateStageLayout();
-  centerViewportOnMapCenter();
+  fitStationToViewport();
   clearUiSelectionsAfterLoad();
   syncControlsToUiFromState();
   refreshExpansionUi();

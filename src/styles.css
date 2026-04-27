@@ -182,11 +182,34 @@ body {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: linear-gradient(180deg, #101722 0%, #0b1119 100%);
+  background:
+    radial-gradient(circle at 13% 24%, rgba(212, 232, 255, 0.9) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 77% 18%, rgba(120, 172, 230, 0.8) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 41% 72%, rgba(238, 244, 255, 0.75) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 86% 82%, rgba(112, 154, 210, 0.65) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 52% 42%, rgba(82, 128, 190, 0.16), transparent 36%),
+    linear-gradient(180deg, #05080e 0%, #020409 100%);
+  background-size: 173px 149px, 241px 197px, 311px 263px, 421px 337px, 100% 100%, 100% 100%;
   border: 1px solid #2f3f53;
   border-radius: 8px;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(89, 107, 126, 0.34) transparent;
+}
+
+#game-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+#game-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#game-wrap::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(89, 107, 126, 0.34);
 }
 
 #game-wrap.panning {
@@ -265,12 +288,18 @@ body {
   position: relative;
   min-width: 100%;
   min-height: 100%;
+  background:
+    radial-gradient(circle at 20% 35%, rgba(255, 255, 255, 0.68) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 71% 68%, rgba(145, 195, 255, 0.58) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 44% 19%, rgba(90, 132, 190, 0.12), transparent 38%);
+  background-size: 239px 211px, 353px 307px, 100% 100%;
 }
 
 canvas {
   position: absolute;
   display: block;
   image-rendering: pixelated;
+  box-shadow: 0 0 0 1px rgba(52, 74, 101, 0.22);
 }
 
 .topbar-note {
@@ -1265,8 +1294,13 @@ h2 {
   border-radius: 6px;
   border-color: rgba(89, 107, 126, 0.72);
   background:
+    radial-gradient(circle at 13% 24%, rgba(212, 232, 255, 0.9) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 77% 18%, rgba(120, 172, 230, 0.8) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 41% 72%, rgba(238, 244, 255, 0.75) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 86% 82%, rgba(112, 154, 210, 0.65) 0 1px, transparent 1.5px),
     radial-gradient(circle at 50% 20%, rgba(37, 48, 60, 0.2) 0%, rgba(6, 9, 13, 0) 45%),
-    linear-gradient(180deg, #090d13 0%, #05080d 100%);
+    linear-gradient(180deg, #05080e 0%, #020409 100%);
+  background-size: 173px 149px, 241px 197px, 311px 263px, 421px 337px, 100% 100%, 100% 100%;
 }
 
 #dev-tier-overlay {

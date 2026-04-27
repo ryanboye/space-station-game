@@ -1,5 +1,5 @@
-export const GRID_WIDTH = 60;
-export const GRID_HEIGHT = 40;
+export const GRID_WIDTH = 100;
+export const GRID_HEIGHT = 80;
 export const TILE_SIZE = 32;
 
 // Which offline sprite-generator pipeline produced the atlas currently
