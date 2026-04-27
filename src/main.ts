@@ -11,6 +11,7 @@ import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
+import { sigilForFaction } from './sim/system-map';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
@@ -19,6 +20,7 @@ import {
   createInitialState,
   expandMap,
   fireCrew,
+  getBerthInspectorAt,
   getHousingInspectorAt,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
@@ -116,6 +118,15 @@ app.innerHTML = `
           <path d="M4 12a8 8 0 1 0 2.35-5.65" />
           <path d="M4 5v5h5" />
           <path d="M12 8v5l3 2" />
+        </svg>
+      </button>
+      <button id="open-system-map-modal" class="topbar-btn utility-icon" aria-label="System Map (F4)" title="System Map (F4)">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="12" cy="12" r="6" fill="none" />
+          <circle cx="12" cy="12" r="10" fill="none" />
+          <circle cx="18" cy="12" r="1" />
+          <circle cx="6" cy="6" r="1" />
         </svg>
       </button>
       <button id="open-expansion-modal" class="topbar-btn utility-icon" aria-label="Map Expansion" title="Map Expansion">
@@ -293,6 +304,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
         <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
         <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
+        <button class="tool-btn" data-tool-room="berth" title="Build Berth (E) — dock-migration v0"><span class="tool-key">E</span>Berth</button>
       </div>
       <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
         <span class="tool-row-label">Furniture</span>
@@ -314,6 +326,9 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
         <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
         <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
+        <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
+        <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
+        <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -608,9 +623,22 @@ app.innerHTML = `
         <option value="private_resident">Private Resident</option>
       </select>
       <small id="room-modal-housing">Housing: n/a</small>
+      <small id="room-modal-berth">Berth: n/a</small>
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
       <small id="room-modal-hints">Hints: none</small>
+    </div>
+  </div>
+  <div id="system-map-modal" class="modal hidden">
+    <div class="modal-card system-map-modal-card">
+      <div class="modal-head">
+        <h2>System Map</h2>
+        <button id="close-system-map" class="ghost-btn">Close</button>
+      </div>
+      <small id="system-map-summary" class="system-map-summary">Loading...</small>
+      <canvas id="system-map-canvas" width="520" height="520" aria-label="Star system map"></canvas>
+      <div id="system-map-factions" class="system-map-factions"></div>
+      <div id="system-map-lanes" class="system-map-lanes"></div>
     </div>
   </div>
   <div id="agent-modal" class="modal hidden">
@@ -820,6 +848,13 @@ const marketModal = document.querySelector<HTMLDivElement>('#market-modal')!;
 const openExpansionModalBtn = document.querySelector<HTMLButtonElement>('#open-expansion-modal')!;
 const closeExpansionModalBtn = document.querySelector<HTMLButtonElement>('#close-expansion-modal')!;
 const expansionModal = document.querySelector<HTMLDivElement>('#expansion-modal')!;
+const openSystemMapModalBtn = document.querySelector<HTMLButtonElement>('#open-system-map-modal')!;
+const closeSystemMapBtn = document.querySelector<HTMLButtonElement>('#close-system-map')!;
+const systemMapModal = document.querySelector<HTMLDivElement>('#system-map-modal')!;
+const systemMapCanvas = document.querySelector<HTMLCanvasElement>('#system-map-canvas')!;
+const systemMapSummaryEl = document.querySelector<HTMLElement>('#system-map-summary')!;
+const systemMapFactionsEl = document.querySelector<HTMLElement>('#system-map-factions')!;
+const systemMapLanesEl = document.querySelector<HTMLElement>('#system-map-lanes')!;
 const priorityModal = document.querySelector<HTMLDivElement>('#priority-modal')!;
 const closePriorityBtn = document.querySelector<HTMLButtonElement>('#close-priority')!;
 const opsModal = document.querySelector<HTMLDivElement>('#ops-modal')!;
@@ -932,6 +967,7 @@ const roomModalHousingEl = document.querySelector<HTMLElement>('#room-modal-hous
 const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
 const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
+const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
 const agentModal = document.querySelector<HTMLDivElement>('#agent-modal')!;
 const closeAgentBtn = document.querySelector<HTMLButtonElement>('#close-agent')!;
 const agentKindEl = document.querySelector<HTMLElement>('#agent-kind')!;
@@ -1834,6 +1870,12 @@ function refreshAlertPanel(): void {
     alerts.push({ tone: state.metrics.pressurizationPct < 60 ? 'danger' : 'warn', text: `Hull ${Math.round(state.metrics.pressurizationPct)}%, leaks ${state.metrics.leakingTiles}` });
   }
   if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  // Dock-migration v0: surface ship-waiting-on-capability hints. The
+  // sim writes shipsQueuedNoCapabilityHint each cycle when a berth
+  // would fit by size but not by capability tags.
+  if (state.metrics.shipsQueuedNoCapabilityCount > 0 && state.metrics.shipsQueuedNoCapabilityHint) {
+    alerts.push({ tone: 'warn', text: state.metrics.shipsQueuedNoCapabilityHint });
+  }
   const criticalWarning = state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:'));
   if (criticalWarning) alerts.push({ tone: 'warn', text: criticalWarning.replace('critical staffing: ', 'Staffing: ') });
   if (alerts.length === 0) {
@@ -2210,6 +2252,7 @@ const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   market: RoomType.Market,
   'logistics-stock': RoomType.LogisticsStock,
   storage: RoomType.Storage,
+  berth: RoomType.Berth,
 };
 const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   bed: ModuleType.Bed,
@@ -2230,6 +2273,9 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'cell-console': ModuleType.CellConsole,
   'rec-unit': ModuleType.RecUnit,
   'med-bed': ModuleType.MedBed,
+  gangway: ModuleType.Gangway,
+  'customs-counter': ModuleType.CustomsCounter,
+  'cargo-arm': ModuleType.CargoArm,
   clear: ModuleType.None,
 };
 
@@ -2849,6 +2895,29 @@ function refreshRoomModal(): void {
     roomModalHousingEl.textContent = 'Housing: n/a';
     roomModalHousingEl.style.color = '#8ea2bd';
   }
+  // Dock-migration v0: berth-specific info. Shows installed
+  // capability tags + which ship types this berth can/cannot accept.
+  if (inspector.room === RoomType.Berth) {
+    const berth = getBerthInspectorAt(state, selectedRoomTile!);
+    if (berth) {
+      const caps = berth.capabilities.length > 0 ? berth.capabilities.join(', ') : 'none installed';
+      const accepts = berth.acceptedShipTypes.length > 0 ? berth.acceptedShipTypes.join(', ') : 'none yet — install capability modules';
+      const rejects = berth.rejectedShipTypes
+        .map((r) => `${r.shipType} (needs ${r.missing.join('+')})`)
+        .join(' | ');
+      const occ = berth.occupiedByShipId !== null ? ` | occupied by ship #${berth.occupiedByShipId}` : ' | empty';
+      roomModalBerthEl.textContent =
+        `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles)${occ} | capabilities: ${caps} | accepts: ${accepts}` +
+        (rejects ? ` | rejects: ${rejects}` : '');
+      roomModalBerthEl.style.color = berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
+    } else {
+      roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
+      roomModalBerthEl.style.color = '#ff7676';
+    }
+  } else {
+    roomModalBerthEl.textContent = 'Berth: n/a';
+    roomModalBerthEl.style.color = '#8ea2bd';
+  }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
   roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;
   roomModalHintsEl.textContent = `Hints: ${inspector.hints.join(' | ') || 'none'}`;
@@ -3371,6 +3440,11 @@ window.addEventListener('keydown', (e) => {
     case 'A':
       selectRoomTool(RoomType.RecHall);
       break;
+    case 'e':
+    case 'E':
+      // Dock-migration v0: Berth room paint.
+      selectRoomTool(RoomType.Berth);
+      break;
     case '[':
       state.controls.moduleRotation = 0;
       break;
@@ -3393,6 +3467,18 @@ window.addEventListener('keydown', (e) => {
     case 'F3':
       state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
       break;
+    case 'F4':
+      // System Map modal toggle. Y is taken by Clinic (and every other
+      // letter is also bound), so the System Map screen rides the F-key
+      // convention used by F2/F3 view toggles.
+      e.preventDefault();
+      if (systemMapModal.classList.contains('hidden')) {
+        refreshSystemMapModal();
+        systemMapModal.classList.remove('hidden');
+      } else {
+        systemMapModal.classList.add('hidden');
+      }
+      break;
     case '8':
       currentTool = { kind: 'zone', zone: ZoneType.Public };
       toolLockMessage = '';
@@ -3413,6 +3499,7 @@ window.addEventListener('keydown', (e) => {
       priorityModal.classList.add('hidden');
       dockModal.classList.add('hidden');
       roomModal.classList.add('hidden');
+      systemMapModal.classList.add('hidden');
       currentTool = { kind: 'none' };
       toolLockMessage = '';
       isPainting = false;
@@ -3584,9 +3671,196 @@ for (const button of opsTabButtons) {
   });
 }
 
+function refreshSystemMapModal(): void {
+  const sys = state.system;
+  const ctx2d = systemMapCanvas.getContext('2d');
+  if (!ctx2d) return;
+  const W = systemMapCanvas.width;
+  const H = systemMapCanvas.height;
+  ctx2d.clearRect(0, 0, W, H);
+  // Backdrop
+  ctx2d.fillStyle = '#070b15';
+  ctx2d.fillRect(0, 0, W, H);
+
+  if (!sys) {
+    systemMapSummaryEl.textContent = 'No system data available for this save.';
+    systemMapFactionsEl.textContent = '';
+    systemMapLanesEl.textContent = '';
+    ctx2d.fillStyle = '#7a8294';
+    ctx2d.font = '14px sans-serif';
+    ctx2d.textAlign = 'center';
+    ctx2d.fillText('No system map (legacy save)', W / 2, H / 2);
+    return;
+  }
+
+  const cx = W / 2;
+  const cy = H / 2;
+  const maxR = Math.min(W, H) * 0.46;
+
+  // Asteroid belts (rings, drawn first as a faint dotted band)
+  ctx2d.save();
+  for (const belt of sys.asteroidBelts) {
+    const inner = belt.innerRadius * maxR;
+    const outer = belt.outerRadius * maxR;
+    ctx2d.fillStyle = belt.resourceType === 'metal'
+      ? 'rgba(180, 180, 200, 0.10)'
+      : belt.resourceType === 'ice'
+      ? 'rgba(160, 220, 240, 0.10)'
+      : 'rgba(220, 200, 160, 0.10)';
+    ctx2d.beginPath();
+    ctx2d.arc(cx, cy, outer, 0, Math.PI * 2);
+    ctx2d.arc(cx, cy, inner, 0, Math.PI * 2, true);
+    ctx2d.fill('evenodd');
+    // Stipple
+    ctx2d.fillStyle = 'rgba(220, 220, 230, 0.55)';
+    const dotCount = 60;
+    for (let i = 0; i < dotCount; i++) {
+      const t = (i / dotCount) * Math.PI * 2 + (belt.id.length * 0.13);
+      const r = inner + ((i * 37) % 100) / 100 * (outer - inner);
+      const x = cx + Math.cos(t) * r;
+      const y = cy + Math.sin(t) * r;
+      ctx2d.fillRect(x, y, 1.2, 1.2);
+    }
+  }
+  ctx2d.restore();
+
+  // Faint orbit guide rings for planets
+  ctx2d.strokeStyle = 'rgba(120, 130, 160, 0.18)';
+  ctx2d.lineWidth = 1;
+  for (const planet of sys.planets) {
+    ctx2d.beginPath();
+    ctx2d.arc(cx, cy, planet.orbitRadius * maxR, 0, Math.PI * 2);
+    ctx2d.stroke();
+  }
+
+  // Lane rays + labels (N/E/S/W projected outward)
+  const laneDirs: Array<{ lane: 'north' | 'east' | 'south' | 'west'; dx: number; dy: number; label: string }> = [
+    { lane: 'north', dx: 0, dy: -1, label: 'N' },
+    { lane: 'east', dx: 1, dy: 0, label: 'E' },
+    { lane: 'south', dx: 0, dy: 1, label: 'S' },
+    { lane: 'west', dx: -1, dy: 0, label: 'W' }
+  ];
+  ctx2d.lineWidth = 2;
+  for (const dir of laneDirs) {
+    const sector = sys.laneSectors[dir.lane];
+    const dom = sector.dominantFactionId
+      ? sys.factions.find((f) => f.id === sector.dominantFactionId)
+      : null;
+    ctx2d.strokeStyle = dom?.color ?? 'rgba(140, 150, 180, 0.55)';
+    ctx2d.beginPath();
+    ctx2d.moveTo(cx + dir.dx * 12, cy + dir.dy * 12);
+    // Stop the ray well inside the canvas edge so labels don't need to
+    // render off-canvas; long-form lane info lives in the DOM list below.
+    const rayMax = maxR - 4;
+    ctx2d.lineTo(cx + dir.dx * rayMax, cy + dir.dy * rayMax);
+    ctx2d.stroke();
+    // Compass label inside the canvas at the ray's far end.
+    ctx2d.fillStyle = '#e6eaf2';
+    ctx2d.font = 'bold 14px sans-serif';
+    ctx2d.textAlign = 'center';
+    ctx2d.textBaseline = 'middle';
+    const lx = cx + dir.dx * (maxR - 18);
+    const ly = cy + dir.dy * (maxR - 18);
+    ctx2d.fillText(dir.label, lx, ly);
+  }
+
+  // Planets
+  for (const planet of sys.planets) {
+    const r = planet.orbitRadius * maxR;
+    const px = cx + Math.cos(planet.orbitAngle) * r;
+    const py = cy + Math.sin(planet.orbitAngle) * r;
+    const faction = sys.factions.find((f) => f.id === planet.factionId);
+    const planetColor = planet.bodyType === 'gas'
+      ? '#c2a36b'
+      : planet.bodyType === 'ice'
+      ? '#a9d8ee'
+      : '#8d6f5a';
+    const planetRadius = planet.bodyType === 'gas' ? 8 : planet.bodyType === 'ice' ? 6 : 5;
+    ctx2d.fillStyle = planetColor;
+    ctx2d.beginPath();
+    ctx2d.arc(px, py, planetRadius, 0, Math.PI * 2);
+    ctx2d.fill();
+    // Faction-color outline
+    if (faction) {
+      ctx2d.strokeStyle = faction.color;
+      ctx2d.lineWidth = 2;
+      ctx2d.beginPath();
+      ctx2d.arc(px, py, planetRadius + 2, 0, Math.PI * 2);
+      ctx2d.stroke();
+    }
+    // Label
+    ctx2d.fillStyle = '#e6eaf2';
+    ctx2d.font = '11px sans-serif';
+    ctx2d.textAlign = 'left';
+    ctx2d.textBaseline = 'middle';
+    const sigil = faction ? `[${sigilForFaction(faction)}] ` : '';
+    ctx2d.fillText(`${sigil}${planet.displayName}`, px + planetRadius + 6, py);
+  }
+
+  // Sun (center)
+  const sunGrad = ctx2d.createRadialGradient(cx, cy, 2, cx, cy, 18);
+  sunGrad.addColorStop(0, '#fff7c2');
+  sunGrad.addColorStop(0.6, '#f5b94a');
+  sunGrad.addColorStop(1, 'rgba(245, 185, 74, 0)');
+  ctx2d.fillStyle = sunGrad;
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, 18, 0, Math.PI * 2);
+  ctx2d.fill();
+  ctx2d.fillStyle = '#fff5b8';
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, 5, 0, Math.PI * 2);
+  ctx2d.fill();
+
+  // Station pip — small white square at center, on top of the sun
+  ctx2d.fillStyle = '#0b1020';
+  ctx2d.fillRect(cx - 3, cy - 3, 6, 6);
+  ctx2d.strokeStyle = '#e6eaf2';
+  ctx2d.lineWidth = 1;
+  ctx2d.strokeRect(cx - 3, cy - 3, 6, 6);
+
+  // Summary line
+  systemMapSummaryEl.textContent = `${sys.factions.length} factions · ${sys.planets.length} planets · ${sys.asteroidBelts.length} belts · seed ${sys.seedAtCreation}`;
+
+  // Faction legend
+  systemMapFactionsEl.innerHTML = '<div class="section-title">Factions</div>' + sys.factions.map((f) => {
+    const swatch = `<span style="display:inline-block;width:10px;height:10px;background:${f.color};margin-right:6px;vertical-align:middle;border-radius:2px;"></span>`;
+    return `<div class="row compact list-row"><span>${swatch}[${sigilForFaction(f)}] ${f.displayName}</span></div>`;
+  }).join('');
+
+  // Lane legend — vertical stacked layout so long faction lists wrap
+  // instead of being clipped by the right edge of the modal.
+  const laneNames: Record<string, string> = {
+    N: 'North',
+    E: 'East',
+    S: 'South',
+    W: 'West'
+  };
+  const laneLines = laneDirs.map((d) => {
+    const sector = sys.laneSectors[d.lane];
+    const factionsAlong = sector.factionIds
+      .map((id) => sys.factions.find((f) => f.id === id))
+      .filter((f): f is NonNullable<typeof f> => !!f);
+    const dom = sector.dominantFactionId
+      ? sys.factions.find((f) => f.id === sector.dominantFactionId)
+      : null;
+    const tag = factionsAlong.length > 0
+      ? factionsAlong.map((f) => `[${sigilForFaction(f)}] ${f.displayName}`).join(', ')
+      : 'unclaimed';
+    const domLabel = dom ? ` &mdash; dominant: [${sigilForFaction(dom)}] ${dom.displayName}` : '';
+    return `<div class="system-map-lane-row"><strong>${d.label} (${laneNames[d.label] ?? d.label})</strong><div class="system-map-lane-detail">${tag}${domLabel}</div></div>`;
+  }).join('');
+  systemMapLanesEl.innerHTML = '<div class="section-title">Lanes</div>' + laneLines;
+}
+
 wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
 wireModal({ modal: marketModal, openBtn: openMarketBtn, closeBtn: closeMarketBtn });
 wireModal({ modal: expansionModal, openBtn: openExpansionModalBtn, closeBtn: closeExpansionModalBtn, beforeOpen: refreshExpansionUi });
+wireModal({
+  modal: systemMapModal,
+  openBtn: openSystemMapModalBtn,
+  closeBtn: closeSystemMapBtn,
+  beforeOpen: refreshSystemMapModal
+});
 wireModal({ modal: progressionModal, openBtn: openProgressionModalBtn, closeBtn: closeProgressionModalBtn, beforeOpen: refreshProgressionModal });
 wireModal({ modal: priorityModal, openBtn: editPrioritiesBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
 wireModal({ modal: opsModal, openBtn: openOpsModalBtn, closeBtn: closeOpsModalBtn, beforeOpen: refreshOpsModal });

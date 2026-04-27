@@ -1,5 +1,6 @@
 import { findPath as findPathCore } from './path';
 import {
+  BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
   PROCESS_RATES,
   ROOM_DEFINITIONS,
@@ -15,8 +16,11 @@ import {
   isModuleUnlockedAtTier,
   isRoomUnlockedAtTier
 } from './content/unlocks';
+import { generateSystemMap, laneWeightsFromSystem } from './system-map';
 import {
   type ArrivingShip,
+  type BerthSizeClass,
+  type CapabilityTag,
   type CardinalDirection,
   type CrewIdleReason,
   type CrewPriorityPreset,
@@ -261,22 +265,41 @@ function normalizeTrafficWeights(weights: Record<ShipType, number>): Record<Ship
 
 function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfile> {
   const profiles = {} as Record<SpaceLane, LaneProfile>;
+  // System-map driven path (MVP): derive lane weights from the dominant
+  // factions' shipBias tables. Legacy fallback (system null/undefined)
+  // keeps the prior pure-RNG behavior so old saves and any path that
+  // somehow loses state.system still produces valid weights.
+  //
+  // PRNG discipline: even when system-driven, we still consume the same
+  // number of rng() calls per lane (5: traffic + 4 placeholder draws)
+  // so seeded scenarios in tools/sim-tests.ts retain their existing
+  // sequence. Without this, replacing the legacy weight roll silently
+  // shifted every later random draw and broke deterministic tests.
+  const system = state.system ?? null;
   for (const lane of LANES) {
+    const trafficVolume = clamp(0.6 + state.rng() * 0.8, 0.4, 1.6);
     const touristBase = 0.25 + state.rng() * 0.45;
     const traderBase = 0.2 + state.rng() * 0.45;
     const industrialBase = 0.15 + state.rng() * 0.35;
     const militaryBase = 0.08 + state.rng() * 0.22;
     const colonistBase = 0.1 + state.rng() * 0.26;
-    profiles[lane] = {
-      trafficVolume: clamp(0.6 + state.rng() * 0.8, 0.4, 1.6),
-      weights: normalizeTrafficWeights({
-        tourist: touristBase,
-        trader: traderBase,
-        industrial: industrialBase,
-        military: militaryBase,
-        colonist: colonistBase
-      })
-    };
+    if (system) {
+      profiles[lane] = {
+        trafficVolume,
+        weights: normalizeTrafficWeights(laneWeightsFromSystem(system, lane))
+      };
+    } else {
+      profiles[lane] = {
+        trafficVolume,
+        weights: normalizeTrafficWeights({
+          tourist: touristBase,
+          trader: traderBase,
+          industrial: industrialBase,
+          military: militaryBase,
+          colonist: colonistBase
+        })
+      };
+    }
   }
   return profiles;
 }
@@ -595,7 +618,21 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   RoomType.Lounge,
   RoomType.Market,
   RoomType.LogisticsStock,
-  RoomType.Storage
+  RoomType.Storage,
+  // Without this entry, painting Berth tiles bumps roomVersion → cache
+  // invalidates → ensureRoomClustersCache rebuilds, but its loop only
+  // iterates CACHED_ROOM_TYPES (sim.ts:787), so Berth tiles never get
+  // entered into state.derived.clusterByTile. Downstream, getRoomInspectorAt
+  // (sim.ts:3185) does:
+  //   const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  //   if (!clusterMeta || clusterMeta.room !== room) return null;
+  // and returns null for every click on a Berth tile. refreshRoomModal
+  // then renders default text ("type=none, cluster=0 tiles, Berth: n/a")
+  // because it received a null inspector. The mouseup handler subsequently
+  // calls roomModal.classList.remove('hidden'), so the modal opens but its
+  // contents are stale — exactly the symptom BMO reported (modal visible,
+  // type=none, cluster=0 tiles, all defaults).
+  RoomType.Berth
 ];
 
 function createEmptyDerivedCache(): StationState['derived'] {
@@ -2255,6 +2292,186 @@ function rebuildDockEntities(state: StationState): void {
   state.derived.cacheVersions.dockEntitiesTopologyVersion = state.topologyVersion;
 }
 
+// ---------------------------------------------------------------------------
+// Berth (RoomType.Berth) helpers — dock-migration v0.
+//
+// A Berth is a regular rectangular room paint. Capability tags are derived
+// from the modules placed inside the room cluster's tiles. Ship→berth
+// matching is via `pickBerthForShip` (size-class + capability superset).
+//
+// v1: U-shape strict validation, airlock primitive, save migration.
+// ---------------------------------------------------------------------------
+
+function berthSizeClassForArea(area: number): BerthSizeClass {
+  if (area >= BERTH_SIZE_MIN.large) return 'large';
+  if (area >= BERTH_SIZE_MIN.medium) return 'medium';
+  return 'small';
+}
+
+function shipSizeFitsBerth(shipSize: ShipSize, berthSize: BerthSizeClass): boolean {
+  // Ships dock at berths of equal-or-greater class. small ⊂ medium ⊂ large.
+  if (berthSize === 'large') return true;
+  if (berthSize === 'medium') return shipSize !== 'large';
+  return shipSize === 'small';
+}
+
+const MODULE_CAPABILITY_TAGS: Partial<Record<ModuleType, CapabilityTag>> = {
+  [ModuleType.Gangway]: 'gangway',
+  [ModuleType.CustomsCounter]: 'customs',
+  [ModuleType.CargoArm]: 'cargo'
+};
+
+function computeBerthCapabilities(state: StationState, clusterTiles: number[]): CapabilityTag[] {
+  const tileSet = new Set(clusterTiles);
+  const tags = new Set<CapabilityTag>();
+  for (const m of state.moduleInstances) {
+    const tag = MODULE_CAPABILITY_TAGS[m.type];
+    if (!tag) continue;
+    // Any module footprint tile inside the berth contributes its tag.
+    if (m.tiles.some((t) => tileSet.has(t))) {
+      tags.add(tag);
+    }
+  }
+  return [...tags];
+}
+
+interface BerthCandidate {
+  anchorTile: number;
+  tiles: number[];
+  size: BerthSizeClass;
+  capabilities: CapabilityTag[];
+  occupiedByShipId: number | null;
+}
+
+function listBerthCandidates(state: StationState): BerthCandidate[] {
+  const clusters = roomClusters(state, RoomType.Berth);
+  // Map of berth-anchor → ship currently bound there.
+  const occupiedByAnchor = new Map<number, number>();
+  for (const ship of state.arrivingShips) {
+    if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+      occupiedByAnchor.set(ship.assignedBerthAnchor, ship.id);
+    }
+  }
+  const out: BerthCandidate[] = [];
+  for (const cluster of clusters) {
+    if (cluster.length === 0) continue;
+    const anchor = cluster.reduce((best, t) => (t < best ? t : best), cluster[0]);
+    out.push({
+      anchorTile: anchor,
+      tiles: cluster,
+      size: berthSizeClassForArea(cluster.length),
+      capabilities: computeBerthCapabilities(state, cluster),
+      occupiedByShipId: occupiedByAnchor.get(anchor) ?? null
+    });
+  }
+  return out;
+}
+
+function isCapabilitySuperset(have: CapabilityTag[], required: CapabilityTag[]): boolean {
+  for (const tag of required) {
+    if (!have.includes(tag)) return false;
+  }
+  return true;
+}
+
+/**
+ * Find a free Berth room that can accept a ship of the given type+size.
+ * Uses ship size class + ship requiredCapabilities (from SHIP_PROFILES).
+ * Returns null if no berth matches — caller then falls back to legacy
+ * Dock-tile pathing in `pickDockForShip`. v0 doesn't break old saves.
+ */
+function pickBerthForShip(
+  state: StationState,
+  shipType: ShipType,
+  shipSize: ShipSize
+): BerthCandidate | null {
+  const required = SHIP_PROFILES[shipType]?.requiredCapabilities ?? [];
+  const candidates = listBerthCandidates(state)
+    .filter((b) => b.occupiedByShipId === null)
+    .filter((b) => shipSizeFitsBerth(shipSize, b.size))
+    .filter((b) => isCapabilitySuperset(b.capabilities, required));
+  if (candidates.length === 0) return null;
+  // Pick the smallest-fit berth (cheapest by area), tiebreak on lower anchor index.
+  candidates.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile);
+  return candidates[0];
+}
+
+/**
+ * Did at least one berth exist that could fit the ship's size class? If
+ * yes but `pickBerthForShip` returned null, the failure was capability
+ * mismatch — surface a hint in the alert panel.
+ */
+// Dock-migration v0: UI-facing inspector for berth tiles. Given a tile
+// inside a Berth room, returns the berth's size class, installed
+// capability tags, accepted/rejected ship types, and current occupancy.
+// `null` if the tile is not part of a Berth cluster.
+export interface BerthInspector {
+  anchorTile: number;
+  clusterTiles: number[];
+  size: BerthSizeClass;
+  capabilities: CapabilityTag[];
+  acceptedShipTypes: ShipType[];
+  rejectedShipTypes: Array<{ shipType: ShipType; missing: CapabilityTag[] }>;
+  occupiedByShipId: number | null;
+}
+
+export function getBerthInspectorAt(state: StationState, tileIndex: number): BerthInspector | null {
+  if (tileIndex < 0 || tileIndex >= state.rooms.length) return null;
+  if (state.rooms[tileIndex] !== RoomType.Berth) return null;
+  ensureRoomClustersCache(state);
+  const meta = state.derived.clusterByTile.get(tileIndex);
+  if (!meta || meta.room !== RoomType.Berth) return null;
+  const cluster = meta.cluster;
+  const capabilities = computeBerthCapabilities(state, cluster);
+  const size = berthSizeClassForArea(cluster.length);
+  const accepted: ShipType[] = [];
+  const rejected: Array<{ shipType: ShipType; missing: CapabilityTag[] }> = [];
+  const shipTypes: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+  for (const t of shipTypes) {
+    const required = SHIP_PROFILES[t]?.requiredCapabilities ?? [];
+    const missing = required.filter((tag) => !capabilities.includes(tag));
+    if (missing.length === 0) accepted.push(t);
+    else rejected.push({ shipType: t, missing });
+  }
+  let occupiedByShipId: number | null = null;
+  for (const ship of state.arrivingShips) {
+    if (ship.assignedBerthAnchor === cluster[0]) {
+      occupiedByShipId = ship.id;
+      break;
+    }
+  }
+  return {
+    anchorTile: cluster[0],
+    clusterTiles: cluster,
+    size,
+    capabilities,
+    acceptedShipTypes: accepted,
+    rejectedShipTypes: rejected,
+    occupiedByShipId
+  };
+}
+
+function describeMissingCapabilities(
+  state: StationState,
+  shipType: ShipType,
+  shipSize: ShipSize
+): string | null {
+  const required = SHIP_PROFILES[shipType]?.requiredCapabilities ?? [];
+  if (required.length === 0) return null;
+  const sizeFit = listBerthCandidates(state).filter((b) => shipSizeFitsBerth(shipSize, b.size));
+  if (sizeFit.length === 0) return null; // no size match, not a capability issue
+  // Find the closest-by-capability berth and report missing tags.
+  let bestMissing: CapabilityTag[] | null = null;
+  for (const cand of sizeFit) {
+    const missing = required.filter((t) => !cand.capabilities.includes(t));
+    if (bestMissing === null || missing.length < bestMissing.length) {
+      bestMissing = missing;
+    }
+  }
+  if (!bestMissing || bestMissing.length === 0) return null;
+  return `${shipType} ship waiting — needs ${bestMissing.join(' + ')}`;
+}
+
 type PrivateHousingUnit = {
   id: number;
   cabinTile: number;
@@ -3547,14 +3764,25 @@ function dinersOnTile(state: StationState, tileIndex: number): number {
 
 function scheduleCycleArrivals(state: StationState): void {
   const ships = clamp(state.controls.shipsPerCycle, 0, MAX_SHIPS_PER_CYCLE);
+  // Refresh "no-capability" hint each cycle. Stays empty unless we
+  // actually queue a ship below for capability reasons.
+  state.metrics.shipsQueuedNoCapabilityCount = 0;
+  state.metrics.shipsQueuedNoCapabilityHint = '';
+  // Berth-only stations are valid in v0: if a Berth exists, we still
+  // schedule arrivals even when there are no legacy Docks.
+  const hasAnyBerth = roomClusters(state, RoomType.Berth).length > 0;
   for (let s = 0; s < ships; s++) {
-    if (state.docks.length === 0) continue;
+    if (state.docks.length === 0 && !hasAnyBerth) continue;
     const lanesWithDocks = LANES.filter((lane) => state.docks.some((d) => d.lane === lane && d.purpose === 'visitor'));
-    if (lanesWithDocks.length === 0) continue;
-    const weightedLaneTotal = lanesWithDocks.reduce((acc, lane) => acc + state.laneProfiles[lane].trafficVolume, 0);
+    // If no docks but berths exist: roll a lane purely from traffic so
+    // the approach/depart animation still works (lanes are cosmetic
+    // for berth-bound ships in v0).
+    if (lanesWithDocks.length === 0 && !hasAnyBerth) continue;
+    const lanePool = lanesWithDocks.length > 0 ? lanesWithDocks : LANES;
+    const weightedLaneTotal = lanePool.reduce((acc, lane) => acc + state.laneProfiles[lane].trafficVolume, 0);
     let laneRoll = state.rng() * Math.max(0.0001, weightedLaneTotal);
-    let lane = lanesWithDocks[0];
-    for (const candidateLane of lanesWithDocks) {
+    let lane = lanePool[0];
+    for (const candidateLane of lanePool) {
       laneRoll -= state.laneProfiles[candidateLane].trafficVolume;
       if (laneRoll <= 0) {
         lane = candidateLane;
@@ -3568,6 +3796,14 @@ function scheduleCycleArrivals(state: StationState): void {
       for (const type of dock.allowedShipTypes) {
         if (!isShipTypeUnlocked(state, type)) continue;
         availableTypes.add(type);
+      }
+    }
+    // Berth-only path: if no legacy dock is on this lane but berths
+    // exist anywhere, allow all unlocked ship types as candidates so
+    // the cycle still spawns. v1 will give berths their own lane bias.
+    if (availableTypes.size === 0 && hasAnyBerth) {
+      for (const type of ['tourist', 'trader', 'industrial', 'military', 'colonist'] as ShipType[]) {
+        if (isShipTypeUnlocked(state, type)) availableTypes.add(type);
       }
     }
     if (availableTypes.size === 0) {
@@ -3594,20 +3830,33 @@ function scheduleCycleArrivals(state: StationState): void {
     const preferred = preferredShipSize(state.rng);
     const sizeOrder: ShipSize[] =
       preferred === 'large' ? ['large', 'medium', 'small'] : preferred === 'medium' ? ['medium', 'small', 'large'] : ['small', 'medium', 'large'];
+    const allBerths = listBerthCandidates(state);
     let sizeWanted: ShipSize | null = null;
     for (const size of sizeOrder) {
-      const hasCompatible = laneDocks.some(
+      const hasCompatibleDock = laneDocks.some(
         (d) =>
           d.allowedShipTypes.includes(shipType) &&
           d.allowedShipSizes.includes(size) &&
           shipSizeForBay(d.area, size) !== null
       );
-      if (hasCompatible) {
+      // Dock-migration v0: a berth that fits this size class also
+      // counts as "compatible" for size selection — capability-check
+      // happens later via `pickBerthForShip`.
+      const hasCompatibleBerth = allBerths.some((b) => shipSizeFitsBerth(size, b.size));
+      if (hasCompatibleDock || hasCompatibleBerth) {
         sizeWanted = size;
         break;
       }
     }
     if (!sizeWanted) continue;
+
+    // Try berth first (dock-migration v0): if a Berth room with the
+    // required capabilities is free and big enough, ships dock there.
+    const berth = pickBerthForShip(state, shipType, sizeWanted);
+    if (berth) {
+      spawnShipAtBerth(state, lane, shipType, berth, undefined, sizeWanted);
+      continue;
+    }
 
     const eligibleDocks = laneDocks.filter(
       (d) =>
@@ -3615,7 +3864,16 @@ function scheduleCycleArrivals(state: StationState): void {
         d.allowedShipSizes.includes(sizeWanted) &&
         shipSizeForBay(d.area, sizeWanted) !== null
     );
-    if (eligibleDocks.length === 0) continue;
+    if (eligibleDocks.length === 0) {
+      // No legacy dock match; surface a capability hint if a berth
+      // was the closest fit but lacked the right modules.
+      const hint = describeMissingCapabilities(state, shipType, sizeWanted);
+      if (hint) {
+        state.metrics.shipsQueuedNoCapabilityCount += 1;
+        state.metrics.shipsQueuedNoCapabilityHint = hint;
+      }
+      continue;
+    }
     const freeDock = eligibleDocks.find((d) => d.occupiedByShipId === null);
     if (!freeDock) {
       const queueEntry: DockQueueEntry = {
@@ -3810,6 +4068,67 @@ function spawnShipAtDock(
     lane,
     originDockId: dockId,
     assignedDockId: dockId,
+    assignedBerthAnchor: null,
+    queueState: forcedShipId ? 'queued' : 'none',
+    stage: 'approach',
+    stageTime: 0,
+    passengersTotal: Math.max(2, passengersTotal),
+    passengersSpawned: 0,
+    passengersBoarded: 0,
+    minimumBoarding: Math.max(2, Math.round(Math.max(2, passengersTotal) * 0.25)),
+    spawnCarry: 0,
+    dockedAt: 0,
+    residentIds: [],
+    manifestDemand: manifest.demand,
+    manifestMix: manifest.mix
+  });
+  state.usageTotals.shipsByType[shipType] += 1;
+}
+
+/**
+ * Dock-migration v0: spawn a ship bound to a Berth room (no legacy
+ * Dock tile cluster involved). The ship's bayCenter is the centroid
+ * of the berth interior. `assignedDockId` stays null; the renderer
+ * detects berth-binding via `assignedBerthAnchor`.
+ */
+function spawnShipAtBerth(
+  state: StationState,
+  lane: SpaceLane,
+  shipType: ShipType,
+  berth: BerthCandidate,
+  forcedShipId?: number,
+  forcedSize?: ShipSize
+): void {
+  // Pick the largest size that still fits this berth's class.
+  const wanted = forcedSize ?? preferredShipSize(state.rng);
+  let size: ShipSize = wanted;
+  if (!shipSizeFitsBerth(size, berth.size)) {
+    if (shipSizeFitsBerth('medium', berth.size)) size = 'medium';
+    else size = 'small';
+  }
+  const passengersTotal = Math.round(SHIP_BASE_PASSENGERS[size] * (0.78 + state.rng() * 0.7));
+  const manifest = generateShipManifest(state, shipType);
+  const shipId = forcedShipId ?? state.shipSpawnCounter++;
+  const center = berth.tiles
+    .map((tile) => fromIndex(tile, state.width))
+    .reduce(
+      (acc, pos) => ({ x: acc.x + pos.x, y: acc.y + pos.y }),
+      { x: 0, y: 0 }
+    );
+  const centerX = center.x / Math.max(1, berth.tiles.length) + 0.5;
+  const centerY = center.y / Math.max(1, berth.tiles.length) + 0.5;
+  state.arrivingShips.push({
+    id: shipId,
+    kind: 'transient',
+    size,
+    bayTiles: [...berth.tiles],
+    bayCenterX: centerX,
+    bayCenterY: centerY,
+    shipType,
+    lane,
+    originDockId: null,
+    assignedDockId: null,
+    assignedBerthAnchor: berth.anchorTile,
     queueState: forcedShipId ? 'queued' : 'none',
     stage: 'approach',
     stageTime: 0,
@@ -4941,7 +5260,13 @@ function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
   const visitorDockTiles = state.docks
     .filter((dock) => dock.purpose === 'visitor')
     .flatMap((dock) => dock.tiles);
-  return visitorDockTiles.length > 0 ? visitorDockTiles : collectTiles(state, TileType.Dock);
+  if (visitorDockTiles.length > 0) return visitorDockTiles;
+  const tileDocks = collectTiles(state, TileType.Dock);
+  if (tileDocks.length > 0) return tileDocks;
+  // Berth-only stations: visitors arrived via a Berth ship and there are
+  // no Dock tiles or visitor-purpose docks. Fall back to the Berth-room
+  // tiles so visitors have a valid exit path.
+  return collectRooms(state, RoomType.Berth);
 }
 
 function assignPathToDock(state: StationState, visitor: Visitor): void {
@@ -5379,7 +5704,13 @@ function updateVisitorLogic(
     }
     if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
       visitor.path = [];
-      if (state.tiles[visitor.tileIndex] === TileType.Dock) {
+      // Despawn when the visitor has reached an exit tile. Dock tiles are
+      // explicit; Berth-room tiles are the equivalent for berth-arrivals
+      // (a ship docked at a Berth has no underlying Dock tile type).
+      const onExitTile =
+        state.tiles[visitor.tileIndex] === TileType.Dock ||
+        state.rooms[visitor.tileIndex] === RoomType.Berth;
+      if (onExitTile) {
         state.recentExitTimes.push(state.now);
         occupancyByTile.set(
           visitor.tileIndex,
@@ -7036,7 +7367,11 @@ function expireEffects(state: StationState): void {
 }
 
 export function createInitialState(options?: { seed?: number }): StationState {
-  const rng = makeRng(options?.seed ?? 1337);
+  const seed = options?.seed ?? 1337;
+  const rng = makeRng(seed);
+  // Roll the system map from a sub-seed so it doesn't deplete the
+  // primary rng (which scenario builders + manifest gen rely on).
+  const system = generateSystemMap(seed);
   const tiles = new Array<TileType>(GRID_WIDTH * GRID_HEIGHT).fill(TileType.Space);
   const zones = new Array<ZoneType>(GRID_WIDTH * GRID_HEIGHT).fill(ZoneType.Public);
   const rooms = new Array<RoomType>(GRID_WIDTH * GRID_HEIGHT).fill(RoomType.None);
@@ -7075,7 +7410,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles.push(idx);
     }
   }
-  const laneProfiles = generateLaneProfiles({ rng } as StationState);
+  const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
 
   return {
     width: GRID_WIDTH,
@@ -7093,6 +7428,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles
     },
     docks: [],
+    system,
+    seedAtCreation: seed,
     laneProfiles,
     dockQueue: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
@@ -7167,6 +7504,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       exitsPerMin: 0,
       shipsSkippedNoEligibleDock: 0,
       shipsTimedOutInQueue: 0,
+      shipsQueuedNoCapabilityCount: 0,
+      shipsQueuedNoCapabilityHint: '',
       dockQueueLengthByLane: { north: 0, east: 0, south: 0, west: 0 },
       avgVisitorWalkDistance: 0,
       dockZonesTotal: 0,

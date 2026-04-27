@@ -51,6 +51,60 @@ All mutators bump version counters and clear caches. **All return false on failu
 | `setZone` | `sim.ts:7757` | Public/Restricted paint. |
 | `expandMap` | `sim.ts:7553` | Buys 40 tiles in a direction (see Expansion below). |
 
+## Room activation — *why a painted room is "inactive"*
+
+**Painting a room is not enough — the cluster has to *activate* to do anything.** Activation is the moment a room transitions from "tiles painted but doing nothing" to "modules running, visitors using it, contributing to metrics." If you paint a Cafeteria but visitors never eat there, it almost certainly hasn't activated.
+
+A room activates when ALL the following are true:
+
+1. **Cluster size ≥ `minTiles`.** The contiguous painted area must hit the minimum.
+2. **All `requiredModules` are placed inside the cluster** at the required counts.
+3. **`activationChecks` pass** (per-room; see table below):
+   - **`door: true`** — at least one Door tile must be on the cluster's perimeter (the wall-tile border of the room). Open-plan rooms (no internal walls between them) won't activate — the room needs its own walled enclosure with a door.
+   - **`path: true`** — a path must exist from the room to the station's core / dock for visitors and crew to actually reach it.
+   - **`pressurization: true`** — the room's tiles must be pressurized (sealed by walls + door, no leaks).
+
+If ANY check fails, the room is **inactive**: no production, no visitor service, no incident detection, no contribution to metrics. There is **no on-screen alert** explaining the failure — you have to **click the room and read the inspector's `Inactive reasons:` line.** (The alerts panel surfaces some warnings but not the per-room inactive reasons — see `docs/12-ui.md` trip-wires.)
+
+### Per-room activation requirements
+
+Source: `src/sim/balance.ts:132` (`ROOM_DEFINITIONS`).
+
+| Room | minTiles | Required modules | door | path | pressurization | staffed |
+|---|---|---|---|---|---|---|
+| Cafeteria | **12** | 1 ServingStation + 2 Tables | ✓ | ✓ | ✓ | — |
+| Kitchen | **8** | 1 Stove | ✓ | ✓ | ✓ | — |
+| Hydroponics | **8** | 1 GrowStation | ✓ | ✓ | ✓ | — |
+| Workshop | **10** | 1 Workbench | ✓ | ✓ | ✓ | — |
+| Market | **10** | 1 MarketStall | ✓ | ✓ | ✓ | — |
+| LogisticsStock | **6** | 1 IntakePallet | ✓ | ✓ | ✓ | — |
+| Storage | **8** | 2 StorageRack | ✓ | ✓ | ✓ | — |
+| Dorm | **6** | 1 Bed | ✓ | ✓ | ✓ | — |
+| Hygiene | **8** | 1 Shower + 1 Sink | ✓ | ✓ | ✓ | — |
+| LifeSupport | **6** | — | ✓ | ✓ | ✓ | — |
+| Lounge | **10** | any of: Couch / GameStation | ✓ | ✓ | ✓ | — |
+| RecHall | **10** | 1 RecUnit | ✓ | ✓ | ✓ | — |
+| Clinic | **8** | 1 MedBed | ✓ | ✓ | ✓ | — |
+| Reactor | 4 | — | ✓ | ✓ | (no) | — |
+| Security | **6** | 1 Terminal | ✓ | ✓ | ✓ | **required** |
+| Brig | **8** | 1 CellConsole | ✓ | ✓ | ✓ | **required** |
+| Berth | 4 (v0) | — | (no) | (no) | (no) | — |
+
+### Common "why is my room inactive" failures
+
+- "**below minimum size**" — paint more floor + room until cluster ≥ minTiles.
+- "**missing required modules**" — count exact required modules. Cafeteria especially needs ServingStation + 2× Tables (not 1).
+- "**missing door**" — the room cluster's *perimeter* must have a Wall tile that is a Door. Paint Wall around the room (turning open-plan to enclosed), then paint a Door tile in that wall.
+- "**not pressurized**" — leaks. Outer Wall is missing somewhere or there's a path to space tiles.
+- "**path blocked**" — the room can be reached by walking only through doors and walkable tiles? If isolated, paint a corridor.
+- "**too large for service nodes**" — Cafeteria with 12 tiles but only 1 Table = the throughput per tile is too low. Add more tables/serving stations until "ok".
+
+### Practical playtesting workflow
+
+When testing programmatically (the harness): **don't just paint the room — also paint walls + a door + verify minTiles + place all required modules.** The `room=N` field in the snapshot will show the room is painted, but `room.active=false` until activation succeeds. Use `getRoomDiagnosticAt(state, tileIndex)` to read the live `inactive reasons` per cluster.
+
+---
+
 ## Materials &amp; construction cost
 
 There are two material accounting models running side-by-side:
