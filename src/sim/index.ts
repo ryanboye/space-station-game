@@ -13,6 +13,7 @@ export {
   canExpandDirection,
   clearBodies,
   createInitialState,
+  diagnoseFoodChain,
   expandMap,
   fireCrew,
   getBerthInspectorAt,

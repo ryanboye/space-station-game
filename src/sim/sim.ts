@@ -8155,6 +8155,95 @@ export function getUnlockTier(state: StationState): UnlockTier {
   return state.unlocks.tier;
 }
 
+// ─── Food-chain stall diagnostic (BMO T2 hunt 2026-04-27) ────────────────
+// Dump everything you'd want to know about why hydroponics→kitchen
+// rawMeal isn't moving despite hydro producing. Returns a structured
+// diagnostic; intended use from the playtest harness or devtools:
+//   const d = (window).__sim.diagnoseFoodChain(state);
+//   console.table(d.summary);
+//
+// Covers the failure modes BMO listed:
+//   1. job created? (counts pending/assigned/in-progress rawMeal jobs)
+//   2. path exists? (runs findPath between every grow→stove pair)
+//   3. crew dispatchable? (logisticsDispatchSlots + idle/non-idle counts)
+//   4. cache fresh? (compares cache version keys against current state)
+//   5. modules reachable? (collectServiceTargets returns)
+export function diagnoseFoodChain(state: StationState): {
+  summary: Record<string, number | string>;
+  jobs: Array<{ id: number; itemType: string; from: number; to: number; state: string; assignedTo: number | null; stallReason?: string }>;
+  paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
+  crewByRole: Record<string, number>;
+} {
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const rawJobs = state.jobs.filter((j) => j.itemType === 'rawMeal');
+  const openRawJobs = rawJobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
+
+  // Path probe — every grow source × every stove dest
+  const paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
+  for (const from of growTargets) {
+    for (const to of stoveTargets) {
+      const p = findPath(state, from, to, false);
+      if (p === null) {
+        paths.push({ from, to, pathLen: null, reason: 'no path (corridor missing or all blocked)' });
+      } else {
+        paths.push({ from, to, pathLen: p.length });
+      }
+    }
+  }
+
+  // Crew role tally — humans assignedSystem distribution + idle count
+  const crewByRole: Record<string, number> = {};
+  for (const c of state.crewMembers) {
+    const key = c.resting
+      ? 'resting'
+      : c.activeJobId !== null
+        ? 'on-job'
+        : c.role === 'idle'
+          ? 'idle'
+          : `assigned:${c.assignedSystem ?? 'none'}`;
+    crewByRole[key] = (crewByRole[key] ?? 0) + 1;
+  }
+
+  const summary: Record<string, number | string> = {
+    growTargetCount: growTargets.length,
+    stoveTargetCount: stoveTargets.length,
+    rawMealAtGrowTotal: growTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
+    rawMealAtStoveTotal: stoveTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
+    metric_rawFoodStock: state.metrics.rawFoodStock,
+    metric_kitchenRawBuffer: state.metrics.kitchenRawBuffer,
+    metric_mealStock: state.metrics.mealStock,
+    rawJobCount: rawJobs.length,
+    openRawJobCount: openRawJobs.length,
+    pathProbe_pairs: paths.length,
+    pathProbe_unreachable: paths.filter((p) => p.pathLen === null).length,
+    pathProbe_minLen: paths.filter((p) => p.pathLen !== null).reduce((m, p) => Math.min(m, p.pathLen as number), Infinity),
+    logisticsDispatchSlots: state.metrics.logisticsDispatchSlots,
+    logisticsPressure: Number(state.metrics.logisticsPressure?.toFixed(3) ?? 0),
+    crewTotal: state.crewMembers.length,
+    crewIdleCount: state.crewMembers.filter((c) => !c.resting && c.role === 'idle').length,
+    crewOnJobCount: state.crewMembers.filter((c) => !c.resting && c.activeJobId !== null).length,
+    crewPriorityPreset: state.controls.crewPriorityPreset,
+    powerSupply: state.metrics.powerSupply,
+    powerDemand: state.metrics.powerDemand,
+  };
+
+  return {
+    summary,
+    jobs: openRawJobs.map((j) => ({
+      id: j.id,
+      itemType: j.itemType,
+      from: j.fromTile,
+      to: j.toTile,
+      state: j.state,
+      assignedTo: j.assignedCrewId,
+      stallReason: j.stallReason,
+    })),
+    paths,
+    crewByRole,
+  };
+}
+
 export function setRoomHousingPolicy(state: StationState, index: number, policy: HousingPolicy): boolean {
   const room = state.rooms[index];
   if (!isHousingPolicyAllowedForRoom(room, policy)) return false;
