@@ -18,6 +18,7 @@ import {
   canExpandDirection,
   clearBodies,
   createInitialState,
+  diagnoseFoodChain,
   expandMap,
   fireCrew,
   getBerthInspectorAt,
@@ -4612,6 +4613,7 @@ declare global {
     __harnessLoadSave: (json: string) => void;
     __harnessPauseAndFlush: () => void;
     __harnessAdvanceSim: (seconds: number, step?: number) => void;
+    __harnessDiagnoseFoodChain: () => unknown;
     __harnessReady: boolean;
   }
 }
@@ -4664,6 +4666,14 @@ window.__harnessAdvanceSim = (seconds: number, step = 0.25) => {
   for (let i = 0; i < steps; i++) {
     tick(state, step);
   }
+};
+
+// Food-chain diagnostic — covers BMO's T2 stall hunt 2026-04-27. Call
+// from devtools or harness to get a structured dump of "why isn't
+// hydroponics→kitchen rawMeal moving?" Includes job state, path probe
+// for every grow→stove pair, crew role distribution, and live metrics.
+window.__harnessDiagnoseFoodChain = () => {
+  return JSON.parse(JSON.stringify(diagnoseFoodChain(state)));
 };
 
 window.__harnessReady = true;
