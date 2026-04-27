@@ -62,8 +62,8 @@ When a scoped feature ships, `docs/` gets updated to reflect the new state of th
 - Keep player-facing examples concrete. "After T6, when the player clicks the system-map button, they see…" is more useful than "the system map provides spatial context."
 - Status header at the top: `**Status:** drafting | aligning | locked | shipped | abandoned`.
 
-## Active scopes (as of 2026-04-26)
+## Active scopes (as of 2026-04-27)
 
-- `system-map.md` — multi-scale map (station / outer hull / star system). Currently *drafting*.
-- `contracts.md` — external nudges with breach penalties. Currently *drafting*. Depends on `system-map`.
-- `dock-migration.md` — berths as proper U-shaped buildings with size matching, capability-tag modules, and airlocks as a separate exterior-door primitive. Currently *drafting*. Sequence after `system-map` for cohesive new-game flow.
+- `system-map.md` — multi-scale map (station / outer hull / star system). Currently *aligning* (v2 incorporates seb review). **v1 milestone with `contracts.md`.**
+- `contracts.md` — external nudges with breach penalties. Currently *aligning* (v2 incorporates seb review). **v1 milestone with `system-map.md`.** Depends on `system-map`.
+- `dock-migration.md` — berths as proper U-shaped buildings with size matching, capability-tag modules, and airlocks as a separate exterior-door primitive. Currently *aligning* (v2 incorporates seb review). **v2 milestone — ships after `system-map` + `contracts` v1 lands.**

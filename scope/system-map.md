@@ -1,9 +1,10 @@
 # Scope: System Map
 
-**Status:** drafting
+**Status:** aligning (v2 — incorporates seb 2026-04-27 review)
 **Owner:** awfml
 **Depends on:** none (this is the foundation layer)
 **Blocks:** `contracts.md`, harvest extension, faction relationships
+**Recommended sequencing:** v1 milestone — ship together with `contracts.md`. `dock-migration.md` is v2.
 
 ## TL;DR
 
@@ -108,7 +109,7 @@ The map is not real-time interactive (no pan-and-shoot, no orbits-update-each-ti
 - **(b) Choose at new-game** — system map shows 3–5 candidate locations with different proximity profiles; player picks one (Surviving Mars sponsor pattern).
 - **(c) Rolled but biased** — system rolls a layout, then offers the player 1 of 3 positions within that layout (compromise).
 
-**Recommendation:** (b). Lets the player commit to an identity ("I'm starting near the Industrial Combine border") before committing to the build. Costs a new-game screen, which we don't have anyway. Worth doing.
+**Recommendation (v2, after seb review):** **(c) — hybrid.** Roll the layout from `state.seed`; offer the player **3 candidate spawn positions within that layout** to pick from. Same identity-commit as (b), with a much cheaper UX surface (no full Surviving-Mars-style sponsor selection screen — just three pip-marked positions on the rolled system, click one). Original recommendation was (b); seb pointed out (c) gets the same player payoff at lower implementation cost.
 
 ### 4. What does "lane crosses territory" actually mean mathematically?
 
@@ -145,6 +146,21 @@ The system map is a *backdrop* for randomness. It doesn't generate tiles, change
 ### Example C: Why arrivals shift after T6
 
 > The player reaches T6. A future scope's contract chain shifts a planet's faction from Industrial Combine to Free Port (the system map is mostly frozen, but specific events can flip ownership). The next time the player checks the System Map, the western planet now shows the Free Port sigil. Their west lane traffic profile changes accordingly — fewer materials freighters, more luxury traders.
+
+## Pause &amp; save discipline
+
+(Added v2 per seb review — every scope should explicitly call out pause/save behavior so it's not a footgun later.)
+
+**During pause:**
+- The system-map modal is fully usable while paused (read-only diagram, no sim ticks needed).
+- Faction reputation / lane bias data is NOT updated during pause (they read from `state.system` which is static; downstream effects only re-derive on tick).
+- Opening the modal does not unpause.
+
+**Save / load:**
+- **`state.system` is regenerated from `state.seed` on load**, NOT serialized to the save envelope. This means: same seed → same system, deterministic. Saves stay small (no 50KB faction-name blob baggage).
+- **Mutations to `state.system`** (e.g. a future event that flips a planet's faction ownership) DO need to be serialized. v1 has none — system is frozen post-roll. When mutations land in a future scope, they get serialized as a sparse delta from the seed-derived baseline, not the full re-snapshot.
+- The save schema bumps to v3 with an OPTIONAL `state.system.deltas[]` slot. v3 saves without deltas can still be loaded by v2-aware code (forward-compatible).
+- **Old saves (pre-v3)** load with `state.system = generateSystemMap(state.seed ?? legacySeed)` where legacySeed is a constant fallback. No data is lost — just no system-map UI on those saves until they save again.
 
 ## What this scope explicitly retires
 

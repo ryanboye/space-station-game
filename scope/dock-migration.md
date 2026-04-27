@@ -1,9 +1,10 @@
 # Scope: Dock Migration — Berths as Real Buildings
 
-**Status:** drafting
+**Status:** aligning (v2 — incorporates seb 2026-04-27 review)
 **Owner:** awfml
 **Depends on:** none structurally; sequencing-wise probably ships *after* `system-map.md` so the new game flow exists.
 **Blocks:** Harvester dispatch (depends on having a real dock that harvesters depart from).
+**Recommended sequencing:** **v2 milestone** — `system-map.md` + `contracts.md` ship as v1 first; dock-migration follows after that pair has landed and feedback confirms the framing. This is the biggest refactor of the three; deferring lets the smaller scopes inform decisions here.
 
 ## TL;DR
 
@@ -131,7 +132,15 @@ A dock is a **place where a ship lives** while it's at the station. The player *
 - (b) **Door with an `isExterior` flag.** Reuses existing Door rendering and tile semantics. Less new code, more conditionality.
 - (c) **Door + a placement constraint.** A door tile placed on the boundary between Berth-room and station-interior is automatically "an airlock." No new tile type or flag — the *role* is inferred from position.
 
-**Recommendation:** **(a) new tile type.** Airlocks need different sprites (animated open/close cycle), different sound/render hooks, and different pressurization semantics. The `isExterior` flag (b) muddles the trip-wire about "doors are pressure barriers." Inferred-by-position (c) is too magic.
+**Recommendation (v2, after seb review):** **(a) new tile type** — confirmed. Airlocks need different sprites (animated open/close cycle), different sound/render hooks, and different pressurization semantics. The `isExterior` flag (b) muddles the trip-wire about "doors are pressure barriers." Inferred-by-position (c) is too magic.
+
+**Scope-exit criteria added per seb:** Before this scope can move from `aligning` → `locked`, **`docs/02-build-and-world.md` must be updated with a dedicated "Airlocks" section** documenting:
+- That Airlock is a new TileType separate from Wall and Door
+- Its pressurization semantics (barrier when sealed, walkable transit zone when cycling)
+- Its placement constraint (only on the boundary between a Berth's interior and the station interior)
+- Its rendering distinctness (so future agents don't accidentally collapse it back into Door)
+
+This prevents the question being re-litigated by every agent who later touches the codebase.
 
 ### 2. Berth module footprint sizing — fixed or variable?
 
@@ -210,6 +219,25 @@ A v2 save has `Dock` tiles painted in a strip on the hull. v3 needs to:
 ### Example C: An airlock failure
 
 > Player accidentally builds an airlock without sealing the rest of the wall properly. When the next visitor arrives, station pressurization drops to 80%. Alert panel lights up. Player sees the leak via the depressurized red wash overlay (`docs/03-utilities.md`). They patch the wall, pressurization recovers. **Airlock-as-only-exterior-door makes pressurization a real architectural concern, not a tutorial step.**
+
+## Pause &amp; save discipline
+
+(Added v2 per seb review.)
+
+**During pause:**
+- Painting walls / berth-floor / airlocks is fully usable while paused (existing build-while-paused pattern).
+- Berth-bound ships freeze in their `approach`/`docked`/`depart` stages. Visitor disembark-via-airlock animations pause.
+- Airlock cycle states (open/sealed) freeze.
+- Player can inspect berth modal, change capability tags, demolish modules, etc. while paused — same affordance as other rooms.
+
+**Save / load:**
+- Each Berth is a regular Room (`RoomType.Berth`) — its tile arrays + module instances are already serialized via `state.rooms[]` / `state.moduleInstances[]`.
+- **Airlock tiles** are a new `TileType` so v2 → v3 schema migration adds them to the tile-type union. Old saves without Airlock tiles load fine; their existing `Dock` clusters get auto-converted (per Open Q §5).
+- **Berth size class** (S/M/L) is computed-on-demand from cluster area (`berthSizeClassForArea`); not serialized — derived state only.
+- **Berth capability tags** are computed-on-demand from installed modules; not serialized.
+- **Ship `requiredCapabilities`** is static data on `SHIP_PROFILES`; not serialized.
+- **Dock entity ids** stay stable across save/load since cluster identification is by tile array, not transient pointers.
+- **Pre-v3 saves** with old `Dock` tiles auto-migrate one-time via `hydrateStateFromSave`'s migration step (per Q §5 recommendation): each contiguous Dock cluster becomes a Small or Medium Berth with a default Gangway. UI banner notifies.
 
 ## What this scope explicitly retires
 

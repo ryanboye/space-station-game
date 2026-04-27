@@ -1,9 +1,10 @@
 # Scope: Contracts
 
-**Status:** drafting
+**Status:** aligning (v2 — incorporates seb 2026-04-27 review)
 **Owner:** awfml
 **Depends on:** `system-map.md` (factions are contract sources)
 **Blocks:** Long-haul / capstone contracts (future scope)
+**Recommended sequencing:** v1 milestone — ship together with `system-map.md`. `dock-migration.md` is v2.
 
 ## TL;DR
 
@@ -118,7 +119,16 @@ For each shape, what state field parameterizes the target threshold?
 
 **Option C:** Penalty is *smaller* than reward (reward = +1500/+5; breach = -800/-3). Low-stakes feel — accepting feels free.
 
-**Recommendation:** **Option B for v1.** Loss-aversion is the actual mechanic that makes contracts *matter*. Without an asymmetric downside, ignoring is dominant — you get "Project Highrise nag boxes" instead of meaningful commitments.
+**Recommendation (v2, after seb review):** **Option B direction (penalty > reward)** AND **cap the breach penalty at half the player's credits-on-hand**:
+
+```ts
+const effectiveBreach = {
+  credits: Math.min(spec.breachPenalty.credits, state.metrics.credits * 0.5),
+  ratingDelta: spec.breachPenalty.ratingDelta,  // not capped
+};
+```
+
+Reasoning (seb's catch): Option B uncapped is a single-misjudge save-bust footgun — accept a contract worth +1500c / breach at -2500c when you have 1800c, miss it, and your treasury is wiped. The half-treasury floor preserves loss-aversion (always meaningfully painful) without the bust scenario (always recoverable). Original recommendation was Option B uncapped; this is the v2 tweak.
 
 ### 4. Should breached contracts have a "degrade" intermediate state?
 
@@ -194,6 +204,23 @@ Today, pause skips `updateResources` and agent updates but still calls `computeM
 > > Expires in 1 cycle.
 >
 > The player has 11 residents. Adding 7 more in 1 cycle is improbable; maintaining 18 for 6 more cycles is doubtful given current dorm capacity. They let it expire un-accepted. **No penalty, no upfront cash, no harm done.** Walking away is a real choice.
+
+## Pause &amp; save discipline
+
+(Added v2 per seb review.)
+
+**During pause:**
+- Contract clocks (`expiresAtCycle`, `durationCycles`) **freeze**. Pause is "thinking mode" — punishing thinking-while-paused is bad design.
+- The contract modal is fully usable while paused (read-only browsing of offers).
+- Accepting a contract while paused is allowed; the contract becomes `active` but the clock doesn't tick until unpause.
+- Per Q §7 above.
+
+**Save / load:**
+- `state.endgame.contracts*` arrays ARE serialized to the save envelope (v2 → v3 migration).
+- `state.endgame.contractRollSeed` is also serialized so save-load reproduces deterministic offer rolls.
+- Reward/penalty deltas already applied to `creditsEarnedLifetime` etc. are NOT re-applied on load (those fields are monotonic + already in usageTotals).
+- **Old saves (pre-v3)** load with empty `state.endgame.contracts*` arrays. The roll scheduler starts fresh on next cycle.
+- Contract templates (`src/sim/content/contracts.ts`) are static code, not serialized. Adding a new template version-bumps the game; old saves see new templates on next roll.
 
 ## What this scope explicitly retires
 
