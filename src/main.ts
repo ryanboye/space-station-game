@@ -2144,6 +2144,7 @@ function refreshAlertPanel(): void {
 const CREW_REST_THRESHOLD_UI = 42;
 const CREW_REST_CRITICAL_UI = 18;
 const CREW_CLEAN_THRESHOLD_UI = 38;
+const CREW_TOILET_THRESHOLD_UI = 25;
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({
@@ -2191,11 +2192,20 @@ function formatCrewSelectionHtml(crewId: number): string {
   if (!inspector) return 'Selected crew is no longer available.';
   const crew = state.crewMembers.find((c) => c.id === crewId);
 
-  const roleLabel = inspector.resting ? 'Resting' : inspector.cleaning ? 'Cleaning' : inspector.leisure ? 'Leisure' : inspector.role;
+  const roleLabel = inspector.resting
+    ? 'Resting'
+    : inspector.toileting
+      ? 'Toilet'
+      : inspector.cleaning
+        ? 'Cleaning'
+        : inspector.leisure
+          ? 'Leisure'
+          : inspector.role;
   const systemLabel = inspector.assignedSystem ?? inspector.lastSystem ?? 'unassigned';
 
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
   const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
+  const bladderHint = `seeks toilet at <${CREW_TOILET_THRESHOLD_UI}`;
 
   const parts: string[] = [];
   parts.push(`<div class="agent-card__head">
@@ -2209,6 +2219,7 @@ function formatCrewSelectionHtml(crewId: number): string {
   parts.push(`<div class="agent-card__needs">
     ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
     ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
+    ${needBarHtml('Bladder', inspector.bladder, CREW_TOILET_THRESHOLD_UI, null, bladderHint)}
   </div>`);
 
   if (inspector.activeJobId !== null) {

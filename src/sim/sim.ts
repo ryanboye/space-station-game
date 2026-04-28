@@ -216,6 +216,14 @@ const CREW_SHIFT_WINDOW_SEC = 10;
 const CREW_MAX_RESTING_RATIO = 0.35;
 const CREW_EMERGENCY_WAKE_RATIO = 0.15;
 const CREW_CLEAN_HYGIENE_THRESHOLD = 38;
+// Bladder is a short-cycle need (~3x faster decay than energy). Crew seek a
+// Hygiene tile at the threshold; visit is brief (5-7 sec dwell), then they
+// return to whatever they were doing. Mirrors the visitor toilet v0 pattern.
+const CREW_BLADDER_TOILET_THRESHOLD = 25;
+const CREW_BLADDER_DECAY_PER_SEC = 1.25;
+const CREW_BLADDER_RELIEF_PER_SEC = 22;
+const CREW_BLADDER_EXIT_THRESHOLD = 88;
+const CREW_TOILET_MAX_PER_TILE = 1;
 const KITCHEN_CONVERSION_RATE = PROCESS_RATES.kitchenMealPerSecPerStove;
 const WORKSHOP_TRADE_GOOD_RATE = PROCESS_RATES.workshopTradeGoodPerSecPerWorkbench;
 const WORKSHOP_MATERIALS_PER_TRADE_GOOD = PROCESS_RATES.workshopRawMaterialPerTradeGood;
@@ -2752,8 +2760,10 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     retargetAt: 0,
     energy: 100,
     hygiene: 88,
+    bladder: 70,
     resting: false,
     cleaning: false,
+    toileting: false,
     leisure: false,
     activeJobId: null,
     carryingItemType: null,
@@ -2762,6 +2772,7 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     idleReason: 'idle_available',
     restSessionActive: false,
     cleanSessionActive: false,
+    toiletSessionActive: false,
     leisureSessionActive: false,
     leisureUntil: 0,
     restLockUntil: 0,
@@ -5884,6 +5895,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     const publicInterference = crew.activeJobId !== null ? routePublicInterference(crew.lastRouteExposure) : 0;
     if (publicInterference > 0) state.usageTotals.crewPublicInterference += publicInterference * dt;
     crew.hygiene = clamp(crew.hygiene - dt * (0.2 + publicInterference * CREW_PUBLIC_CROWD_DRAIN * 0.45), 0, 100);
+    if (!crew.toileting) {
+      crew.bladder = clamp(crew.bladder - dt * CREW_BLADDER_DECAY_PER_SEC, 0, 100);
+    }
     if (crew.activeJobId !== null) {
       if (crew.resting) {
         crew.resting = false;
@@ -5896,12 +5910,21 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.cleaning = false;
         crew.cleanSessionActive = false;
       }
+      if (crew.toileting) {
+        crew.toileting = false;
+        crew.toiletSessionActive = false;
+      }
       clearCrewLeisure(crew);
     }
     if (airEmergency) {
       if (crew.cleaning) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
+        setCrewPath(state, crew, []);
+      }
+      if (crew.toileting) {
+        crew.toileting = false;
+        crew.toiletSessionActive = false;
         setCrewPath(state, crew, []);
       }
       if (crew.leisure) {
@@ -5944,9 +5967,29 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         setCrewPath(state, crew, []);
         crew.idleReason = 'idle_resting';
         crew.cleaning = false;
+        crew.toileting = false;
+        crew.toiletSessionActive = false;
         clearCrewLeisure(crew);
         currentResting += 1;
         state.metrics.crewRestingNow = currentResting;
+      } else if (crew.activeJobId === null && crew.bladder < CREW_BLADDER_TOILET_THRESHOLD) {
+        // Bladder is short-cycle: toilet interrupts cleaning/leisure but not active jobs or rest.
+        const hygieneTargets = preferredHygieneTargets(state);
+        if (hygieneTargets.length > 0 && !airEmergency) {
+          crew.toileting = true;
+          crew.toiletSessionActive = false;
+          crew.role = 'idle';
+          crew.targetTile = null;
+          crew.lastSystem = null;
+          crew.assignedSystem = null;
+          crew.assignmentHoldUntil = 0;
+          setCrewPath(state, crew, []);
+          clearCrewLeisure(crew);
+          if (crew.cleaning) {
+            crew.cleaning = false;
+            crew.cleanSessionActive = false;
+          }
+        }
       } else if (crew.activeJobId === null && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
         const hygieneTargets = preferredHygieneTargets(state);
         if (hygieneTargets.length > 0 && !airEmergency) {
@@ -6019,6 +6062,51 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       if (crew.hygiene >= 90) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
+        setCrewPath(state, crew, []);
+      }
+      continue;
+    }
+
+    // Toilet: short-cycle Hygiene visit driven by bladder. Prefers a Hygiene tile
+    // that isn't already occupied by another toileter (capacity guard) so visitors
+    // and crew don't all queue at the same stall. Relief is fast (~5-7 sec to top up).
+    if (crew.toileting && !crew.resting) {
+      const hygieneTargets = preferredHygieneTargets(state);
+      if (hygieneTargets.length === 0) {
+        crew.toileting = false;
+        crew.toiletSessionActive = false;
+      } else if (state.rooms[crew.tileIndex] !== RoomType.Hygiene) {
+        if (crew.path.length === 0) {
+          // Filter targets by current toileter occupancy so multiple crew distribute
+          // across stalls. Falls back to any Hygiene tile if all are crowded.
+          const uncrowded = hygieneTargets.filter((tile) => {
+            const occupants = state.crewMembers.reduce((n, other) => {
+              if (other.id === crew.id || !other.toileting) return n;
+              const target = other.path.length > 0 ? other.path[other.path.length - 1] : other.tileIndex;
+              return target === tile ? n + 1 : n;
+            }, 0);
+            return occupants < CREW_TOILET_MAX_PER_TILE;
+          });
+          const choice = uncrowded.length > 0 ? uncrowded : hygieneTargets;
+          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, choice, false, 'crew') ?? []);
+        }
+        const moveResult = moveCrew(crew);
+        if (moveResult === 'blocked') {
+          crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+          crew.idleReason = 'idle_no_path';
+        } else if (moveResult === 'moved') {
+          crew.blockedTicks = 0;
+        }
+      } else {
+        if (!crew.toiletSessionActive) {
+          crew.toiletSessionActive = true;
+          state.usageTotals.hygiene += 0.4;
+        }
+        crew.bladder = clamp(crew.bladder + dt * CREW_BLADDER_RELIEF_PER_SEC, 0, 100);
+      }
+      if (crew.bladder >= CREW_BLADDER_EXIT_THRESHOLD) {
+        crew.toileting = false;
+        crew.toiletSessionActive = false;
         setCrewPath(state, crew, []);
       }
       continue;
@@ -9853,9 +9941,11 @@ export function getResidentInspectorById(state: StationState, residentId: number
 
 function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.resting) return 'rest';
+  if (crew.toileting) return 'toilet';
   if (crew.cleaning) return 'clean';
   if (crew.leisure) return 'social';
   if (crew.activeJobId !== null) return 'logistics';
+  if (crew.bladder <= CREW_BLADDER_TOILET_THRESHOLD) return 'toilet';
   if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
   if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
   if (crew.assignedSystem !== null) return 'staff_post';
@@ -9900,6 +9990,13 @@ function crewInspectorAction(
       currentAction: 'resting',
       actionReason: `energy ${crew.energy.toFixed(1)} recovering before returning to duty`,
       stateLabel: 'resting'
+    };
+  }
+  if (crew.toileting) {
+    return {
+      currentAction: crew.path.length > 0 ? 'walking to hygiene' : 'using restroom',
+      actionReason: `bladder ${crew.bladder.toFixed(0)} (toilet at <${CREW_BLADDER_TOILET_THRESHOLD})`,
+      stateLabel: 'toilet'
     };
   }
   if (crew.cleaning) {
@@ -9957,8 +10054,10 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     lastSystem: crew.lastSystem,
     energy: crew.energy,
     hygiene: crew.hygiene,
+    bladder: crew.bladder,
     resting: crew.resting,
     cleaning: crew.cleaning,
+    toileting: crew.toileting,
     leisure: crew.leisure,
     activeJobId: crew.activeJobId,
     carryingItemType: crew.carryingItemType,

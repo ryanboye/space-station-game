@@ -377,8 +377,13 @@ export interface CrewMember {
   retargetAt: number;
   energy: number;
   hygiene: number;
+  // Short-cycle bladder need. Decays ~3x faster than energy and triggers a brief
+  // Hygiene-room visit (toilet) at the threshold. Visible in the agent inspector
+  // alongside energy/hygiene, mirroring the visitor toilet v0.
+  bladder: number;
   resting: boolean;
   cleaning: boolean;
+  toileting: boolean;
   leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;
@@ -387,6 +392,7 @@ export interface CrewMember {
   idleReason: CrewIdleReason;
   restSessionActive: boolean;
   cleanSessionActive: boolean;
+  toiletSessionActive: boolean;
   leisureSessionActive: boolean;
   leisureUntil: number;
   restLockUntil: number;
@@ -998,7 +1004,7 @@ export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
 export type VisitorDesire = 'eat' | 'toilet' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
 export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
-export type CrewDesire = 'rest' | 'clean' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
+export type CrewDesire = 'rest' | 'clean' | 'toilet' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
 
 export interface AgentInspectorBase {
   id: number;
@@ -1059,8 +1065,10 @@ export interface CrewInspector extends AgentInspectorBase {
   lastSystem: CrewPrioritySystem | null;
   energy: number;
   hygiene: number;
+  bladder: number;
   resting: boolean;
   cleaning: boolean;
+  toileting: boolean;
   leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;

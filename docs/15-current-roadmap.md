@@ -74,6 +74,8 @@ Goal: make crew feel like hired workers with roles instead of a single generalis
 - Connect mechanics to maintenance debt and repair jobs.
 - Keep emergency overrides readable and testable.
 
+**Note (2026-04-28)**: hold this packet until other systems are working. The current generalist pool is helpful for balance — splitting crew into specialties prematurely makes shortages harder to reason about. Revisit after maintenance debt has a visible repair loop and at least one need (toilet) is fully wired.
+
 ## Later
 
 - Berth approach clearance and larger ship approach geometry.
