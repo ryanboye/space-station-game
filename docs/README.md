@@ -36,6 +36,7 @@ Every system doc follows the same shape:
 | `11-render.md` | Render pipeline, wall systems, glow, sprite atlas |
 | `12-ui.md` | `main.ts` DOM driver, hotkeys, URL flags, harness hooks, save/load |
 | `13-pipelines.md` | Sprite tools, harness, sim-tests, deployment, CI, repo config |
+| `20-station-layout-project-plans.md` | Handoff specs for berth approach, route intent, utilities, compartments, and adjacency |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions
