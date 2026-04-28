@@ -64,6 +64,14 @@ Downstream caches (pressurization, item-node-by-tile, dock-by-tile, static rende
 
 If you fork a wall-rendering path or add a new derived cache, **include the relevant version counter in your cache key** or it won't invalidate. See `11-render.md` for the static-layer cache key and `99-trip-wires.md` for the wallRenderMode trip-wire.
 
+## Pathing and route intent
+
+Raw A* lives in `src/sim/path.ts`. The sim wrapper in `src/sim/sim.ts` caches successful routes and records path perf metrics. Path requests now carry a `PathIntent`: `visitor`, `resident`, `crew`, `logistics`, or `security`.
+
+Intent changes soft tile costs, not the walkable topology. Walls, space, blocked effects, and restricted-zone rules are still the hard blockers. Back-of-house rooms are expensive for visitors, social rooms are expensive for logistics, crew are mildly biased away from crowded public rooms, and security responders mostly take the shortest route. The path cache key includes intent, so do not add a new route mode without extending the key and the tests in `tools/sim-tests.ts`.
+
+Assigned paths also carry a compact route-exposure score. Visitors apply it when they complete service trips, residents apply it when they complete need trips, and logistics crew apply public-interference drain while a hauling route is active. This keeps bad layout feedback bounded to trip outcomes rather than penalizing every walking tick for every actor.
+
 ## Initial state
 
 `createInitialState({ seed })` (`sim.ts:7005`) sets up:

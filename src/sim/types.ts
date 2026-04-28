@@ -25,6 +25,24 @@ export enum ZoneType {
   Restricted = 'restricted'
 }
 
+export type PathIntent = 'visitor' | 'resident' | 'crew' | 'logistics' | 'security';
+
+export interface PathOptions {
+  allowRestricted: boolean;
+  intent: PathIntent;
+}
+
+export interface RouteExposure {
+  distance: number;
+  publicTiles: number;
+  serviceTiles: number;
+  cargoTiles: number;
+  residentialTiles: number;
+  securityTiles: number;
+  socialTiles: number;
+  crowdCost: number;
+}
+
 export type IncidentType = 'fight' | 'trespass';
 export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
 export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality' | 'escaped';
@@ -164,6 +182,7 @@ export interface Visitor {
   originShipId: number | null;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
+  lastRouteExposure?: RouteExposure;
 }
 
 export enum ResidentState {
@@ -215,6 +234,7 @@ export interface Resident {
   agitation?: number;
   activeIncidentId?: number | null;
   confrontationUntil?: number;
+  lastRouteExposure?: RouteExposure;
 }
 
 export type CrewRole = 'idle' | 'reactor' | 'cafeteria' | 'security';
@@ -288,6 +308,7 @@ export interface CrewMember {
   retargetCountWindow: number;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
+  lastRouteExposure?: RouteExposure;
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
@@ -673,12 +694,14 @@ export interface Metrics {
     noEligibleDock: number;
     serviceFailure: number;
     longWalks: number;
+    routeExposure: number;
   };
   stationRatingPenaltyTotal: {
     queueTimeout: number;
     noEligibleDock: number;
     serviceFailure: number;
     longWalks: number;
+    routeExposure: number;
   };
   stationRatingBonusPerMin: {
     mealService: number;
@@ -715,6 +738,9 @@ export interface Metrics {
   residentSatisfactionAvg: number;
   topRoomWarnings: string[];
   roomWarningsCount: number;
+  visitorServiceExposurePenaltyPerMin: number;
+  residentBadRouteStressPerMin: number;
+  crewPublicInterferencePerMin: number;
   serviceNodesTotal: number;
   serviceNodesUnreachable: number;
   criticalUnstaffedSec: {
@@ -1118,11 +1144,12 @@ export interface StationState {
       lounge: number;
     };
     ratingDelta: number;
-    ratingFromShipTimeout: number;
-    ratingFromShipSkip: number;
-    ratingFromVisitorFailure: number;
-    ratingFromWalkDissatisfaction: number;
-    ratingFromVisitorFailureByReason: {
+  ratingFromShipTimeout: number;
+  ratingFromShipSkip: number;
+  ratingFromVisitorFailure: number;
+  ratingFromWalkDissatisfaction: number;
+  ratingFromRouteExposure: number;
+  ratingFromVisitorFailureByReason: {
       noLeisurePath: number;
       shipServicesMissing: number;
       patienceBail: number;
@@ -1141,9 +1168,12 @@ export interface StationState {
     residentDepartures: number;
     ratingFromResidentDeparture: number;
     ratingFromResidentRetention: number;
-    visitorWalkDistance: number;
-    visitorWalkTrips: number;
-    criticalStaffDrops: number;
+  visitorWalkDistance: number;
+  visitorWalkTrips: number;
+  visitorServiceExposurePenalty: number;
+  residentBadRouteStress: number;
+  crewPublicInterference: number;
+  criticalStaffDrops: number;
     securityDispatches: number;
     securityResolved: number;
     securityResponseSecTotal: number;

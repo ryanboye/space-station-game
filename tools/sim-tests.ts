@@ -5,6 +5,7 @@ import {
   collectServiceNodeReachability,
   expandMap,
   createInitialState,
+  findPath,
   getUnlockTier,
   getNextExpansionCost,
   isModuleUnlocked,
@@ -419,6 +420,203 @@ function setupLeisure(state: StationState, withModule: boolean): void {
   if (withModule) {
     placeModuleOrThrow(state, ModuleType.Couch, 23, 11);
   }
+}
+
+function paintPathIntentTile(state: StationState, x: number, y: number, room: RoomType = RoomType.None): number {
+  const tile = toIndex(x, y, state.width);
+  state.tiles[tile] = TileType.Floor;
+  state.rooms[tile] = room;
+  state.zones[tile] = ZoneType.Public;
+  return tile;
+}
+
+function setupPathIntentCorridorState(includePublicBypass = true): { state: StationState; start: number; goal: number } {
+  const state = createInitialState({ seed: 3091 });
+  state.tiles.fill(TileType.Space);
+  state.rooms.fill(RoomType.None);
+  state.zones.fill(ZoneType.Public);
+  state.modules.fill(ModuleType.None);
+  state.moduleInstances = [];
+  state.moduleOccupancyByTile.fill(null);
+  state.effects.blockedUntilByTile.clear();
+  state.derived.pathCache.clear();
+  state.pathOccupancyByTile.clear();
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+
+  const start = paintPathIntentTile(state, 10, 10);
+  const goal = paintPathIntentTile(state, 20, 10);
+
+  for (let x = 11; x <= 19; x++) {
+    const room = x >= 13 && x <= 17 ? RoomType.Storage : RoomType.None;
+    paintPathIntentTile(state, x, 10, room);
+  }
+
+  if (includePublicBypass) {
+    for (let y = 11; y <= 14; y++) paintPathIntentTile(state, 10, y);
+    for (let x = 11; x <= 19; x++) {
+      const room = x >= 13 && x <= 17 ? RoomType.Cafeteria : RoomType.None;
+      paintPathIntentTile(state, x, 14, room);
+    }
+    for (let y = 11; y <= 14; y++) paintPathIntentTile(state, 20, y);
+  }
+
+  return { state, start, goal };
+}
+
+function pathHasRoom(state: StationState, path: number[], room: RoomType): boolean {
+  return path.some((tile) => state.rooms[tile] === room);
+}
+
+function testPathIntentVisitorAvoidsServiceCorridor(): void {
+  const { state, start, goal } = setupPathIntentCorridorState();
+  const visitorPath = findPath(state, start, goal, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
+  const securityPath = findPath(state, start, goal, { allowRestricted: false, intent: 'security' }, state.pathOccupancyByTile);
+
+  assertCondition(!!visitorPath, 'Visitor should find a path through the public bypass.');
+  assertCondition(!!securityPath, 'Security should find the direct route.');
+  assertCondition(!pathHasRoom(state, visitorPath!, RoomType.Storage), 'Visitor path should avoid the storage corridor when a public bypass exists.');
+  assertCondition(pathHasRoom(state, visitorPath!, RoomType.Cafeteria), 'Visitor path should use the public cafeteria bypass.');
+  assertCondition(pathHasRoom(state, securityPath!, RoomType.Storage), 'Security path should take the shortest direct service corridor.');
+  assertCondition(securityPath!.length < visitorPath!.length, 'Security path should be shorter than the visitor public route.');
+}
+
+function testPathIntentLogisticsPrefersServiceCorridor(): void {
+  const { state, start, goal } = setupPathIntentCorridorState();
+  const logisticsPath = findPath(state, start, goal, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
+
+  assertCondition(!!logisticsPath, 'Logistics should find a path.');
+  assertCondition(pathHasRoom(state, logisticsPath!, RoomType.Storage), 'Logistics path should prefer the direct storage corridor.');
+  assertCondition(!pathHasRoom(state, logisticsPath!, RoomType.Cafeteria), 'Logistics path should avoid the cafeteria bypass.');
+}
+
+function testPathIntentVisitorServiceFallback(): void {
+  const { state, start, goal } = setupPathIntentCorridorState(false);
+  const visitorPath = findPath(state, start, goal, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
+
+  assertCondition(!!visitorPath, 'Visitor should still route through service space when it is the only path.');
+  assertCondition(pathHasRoom(state, visitorPath!, RoomType.Storage), 'Visitor fallback path should cross storage instead of deadlocking.');
+}
+
+function testPathCacheSeparatesIntent(): void {
+  const { state, start, goal } = setupPathIntentCorridorState();
+  const visitorPath = findPath(state, start, goal, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
+  const logisticsPath = findPath(state, start, goal, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
+  const cacheKeys = [...state.derived.pathCache.keys()];
+
+  assertCondition(!!visitorPath && !!logisticsPath, 'Visitor and logistics paths should both resolve.');
+  assertCondition(!pathHasRoom(state, visitorPath!, RoomType.Storage), 'Cached visitor route should stay visitor-specific.');
+  assertCondition(pathHasRoom(state, logisticsPath!, RoomType.Storage), 'Cached logistics route should stay logistics-specific.');
+  assertCondition(cacheKeys.some((key) => key.includes('|visitor|')), 'Path cache should include a visitor intent key.');
+  assertCondition(cacheKeys.some((key) => key.includes('|logistics|')), 'Path cache should include a logistics intent key.');
+}
+
+function testVisitorRouteExposurePenalty(): void {
+  const clean = createInitialState({ seed: 3092 });
+  buildHabitat(clean);
+  setupCoreRooms(clean);
+  setupFoodChain(clean);
+  spawnVisitor(clean, 18, 10, 3092);
+  const cleanVisitor = clean.visitors[0];
+  cleanVisitor.carryingMeal = true;
+  cleanVisitor.reservedTargetTile = toIndex(18, 10, clean.width);
+  cleanVisitor.tileIndex = cleanVisitor.reservedTargetTile;
+  cleanVisitor.x = 18.5;
+  cleanVisitor.y = 10.5;
+  cleanVisitor.lastRouteExposure = {
+    distance: 6,
+    publicTiles: 6,
+    serviceTiles: 0,
+    cargoTiles: 0,
+    residentialTiles: 0,
+    securityTiles: 0,
+    socialTiles: 4,
+    crowdCost: 0
+  };
+  tick(clean, 0.25);
+
+  const bad = createInitialState({ seed: 3093 });
+  buildHabitat(bad);
+  setupCoreRooms(bad);
+  setupFoodChain(bad);
+  spawnVisitor(bad, 18, 10, 3093);
+  const badVisitor = bad.visitors[0];
+  badVisitor.carryingMeal = true;
+  badVisitor.reservedTargetTile = toIndex(18, 10, bad.width);
+  badVisitor.tileIndex = badVisitor.reservedTargetTile;
+  badVisitor.x = 18.5;
+  badVisitor.y = 10.5;
+  badVisitor.lastRouteExposure = {
+    distance: 6,
+    publicTiles: 1,
+    serviceTiles: 2,
+    cargoTiles: 4,
+    residentialTiles: 0,
+    securityTiles: 0,
+    socialTiles: 0,
+    crowdCost: 0
+  };
+  tick(bad, 0.25);
+
+  assertCondition(clean.usageTotals.ratingFromRouteExposure === 0, 'Clean visitor route should not create route-exposure rating penalty.');
+  assertCondition(
+    bad.usageTotals.ratingFromRouteExposure > clean.usageTotals.ratingFromRouteExposure,
+    'Visitor route through cargo/service space should create route-exposure rating penalty.'
+  );
+}
+
+function testResidentBadRouteStress(): void {
+  const state = createInitialState({ seed: 3094 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  spawnResidentActor(state, 18, 10, 3094, {
+    state: ResidentState.ToCafeteria,
+    reservedTargetTile: toIndex(18, 10, state.width),
+    path: [toIndex(18, 10, state.width)],
+    lastRouteExposure: {
+      distance: 8,
+      publicTiles: 2,
+      serviceTiles: 3,
+      cargoTiles: 4,
+      residentialTiles: 0,
+      securityTiles: 1,
+      socialTiles: 0,
+      crowdCost: 0
+    }
+  });
+  const resident = state.residents[0];
+  const initialStress = resident.stress;
+  const initialSatisfaction = resident.satisfaction;
+  tick(state, 0.25);
+
+  assertCondition(state.usageTotals.residentBadRouteStress > 0, 'Resident bad route should record route stress.');
+  assertCondition(resident.stress > initialStress, 'Resident bad route should increase stress on need arrival.');
+  assertCondition(resident.satisfaction < initialSatisfaction, 'Resident bad route should reduce satisfaction on need arrival.');
+}
+
+function testCrewPublicInterferenceMetric(): void {
+  const state = createInitialState({ seed: 3095 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 1;
+  runFor(state, 0.25);
+  const crew = state.crewMembers[0];
+  assertCondition(!!crew, 'Expected one crew member for public-interference test.');
+  crew.activeJobId = 99999;
+  crew.lastRouteExposure = {
+    distance: 8,
+    publicTiles: 8,
+    serviceTiles: 0,
+    cargoTiles: 0,
+    residentialTiles: 0,
+    securityTiles: 0,
+    socialTiles: 6,
+    crowdCost: 4
+  };
+  tick(state, 0.25);
+
+  assertCondition(state.usageTotals.crewPublicInterference > 0, 'Crew logistics through public/social space should record interference.');
 }
 
 function testAutonomousRoomsNoStaff(): void {
@@ -3204,6 +3402,13 @@ function run(): void {
   testCafeteriaMissingServingStation();
   testBedFootprintRotation();
   testWallLightRequiresAdjacentWall();
+  testPathIntentVisitorAvoidsServiceCorridor();
+  testPathIntentLogisticsPrefersServiceCorridor();
+  testPathIntentVisitorServiceFallback();
+  testPathCacheSeparatesIntent();
+  testVisitorRouteExposurePenalty();
+  testResidentBadRouteStress();
+  testCrewPublicInterferenceMetric();
   testFoodChainEndToEnd();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();

@@ -1,4 +1,4 @@
-import { ZoneType, isWalkable, type StationState } from './types';
+import { RoomType, ZoneType, isWalkable, type PathOptions, type StationState } from './types';
 
 const CARDINAL_DELTAS: Array<[number, number]> = [
   [1, 0],
@@ -91,14 +91,149 @@ function rebuildPath(cameFrom: Int32Array, goal: number): number[] {
   return out;
 }
 
+function normalizePathOptions(optionsOrAllowRestricted: boolean | PathOptions): PathOptions {
+  if (typeof optionsOrAllowRestricted === 'boolean') {
+    return { allowRestricted: optionsOrAllowRestricted, intent: 'visitor' };
+  }
+  return optionsOrAllowRestricted;
+}
+
+function routeIntentTileCost(state: StationState, tile: number, goal: number, options: PathOptions): number {
+  if (tile === goal) return 0;
+  const room = state.rooms[tile];
+  const restrictedCost = state.zones[tile] === ZoneType.Restricted ? restrictedSoftCost(options.intent) : 0;
+  switch (options.intent) {
+    case 'visitor':
+      return restrictedCost + visitorRoomCost(room);
+    case 'resident':
+      return restrictedCost + residentRoomCost(room);
+    case 'crew':
+      return crewRoomCost(room);
+    case 'logistics':
+      return logisticsRoomCost(room);
+    case 'security':
+      return 0;
+  }
+}
+
+function restrictedSoftCost(intent: PathOptions['intent']): number {
+  switch (intent) {
+    case 'visitor':
+      return 7;
+    case 'resident':
+      return 3;
+    case 'crew':
+    case 'logistics':
+    case 'security':
+      return 0;
+  }
+}
+
+function visitorRoomCost(room: RoomType): number {
+  switch (room) {
+    case RoomType.Reactor:
+    case RoomType.LifeSupport:
+      return 10;
+    case RoomType.Security:
+    case RoomType.Brig:
+      return 8;
+    case RoomType.LogisticsStock:
+    case RoomType.Storage:
+    case RoomType.Workshop:
+      return 7;
+    case RoomType.Berth:
+    case RoomType.Dorm:
+    case RoomType.Hygiene:
+      return 5;
+    case RoomType.Kitchen:
+    case RoomType.Hydroponics:
+      return 4;
+    case RoomType.Clinic:
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+function residentRoomCost(room: RoomType): number {
+  switch (room) {
+    case RoomType.LogisticsStock:
+    case RoomType.Storage:
+    case RoomType.Workshop:
+    case RoomType.Berth:
+      return 4;
+    case RoomType.Reactor:
+    case RoomType.LifeSupport:
+    case RoomType.Security:
+    case RoomType.Brig:
+      return 2;
+    case RoomType.Kitchen:
+    case RoomType.Hydroponics:
+      return 1.5;
+    case RoomType.Clinic:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function crewRoomCost(room: RoomType): number {
+  switch (room) {
+    case RoomType.Cafeteria:
+    case RoomType.Lounge:
+    case RoomType.Market:
+    case RoomType.RecHall:
+      return 1.5;
+    case RoomType.Dorm:
+    case RoomType.Hygiene:
+      return 0.75;
+    default:
+      return 0;
+  }
+}
+
+function logisticsRoomCost(room: RoomType): number {
+  switch (room) {
+    case RoomType.Dorm:
+    case RoomType.Hygiene:
+      return 8;
+    case RoomType.Cafeteria:
+    case RoomType.Lounge:
+    case RoomType.Market:
+    case RoomType.RecHall:
+      return 7;
+    case RoomType.Clinic:
+      return 5;
+    case RoomType.Security:
+    case RoomType.Brig:
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+function occupancyPenaltyForIntent(options: PathOptions, occupancy: number): number {
+  switch (options.intent) {
+    case 'security':
+      return Math.min(1, occupancy * 0.15);
+    case 'crew':
+    case 'logistics':
+      return Math.min(2.5, occupancy * 0.35);
+    case 'visitor':
+    case 'resident':
+      return Math.min(3, occupancy * 0.45);
+  }
+}
+
 export function findPath(
   state: StationState,
   start: number,
   goal: number,
-  allowRestricted: boolean,
+  optionsOrAllowRestricted: boolean | PathOptions,
   occupancyByTile?: Map<number, number>
 ): number[] | null {
   if (start === goal) return [];
+  const options = normalizePathOptions(optionsOrAllowRestricted);
   const { width, height } = state;
   const mapSize = width * height;
   const cameFrom = new Int32Array(mapSize);
@@ -130,10 +265,11 @@ export function findPath(
       if (!isWalkable(state.tiles[next])) continue;
       const blockedUntil = state.effects.blockedUntilByTile.get(next) ?? 0;
       if (state.now < blockedUntil) continue;
-      if (!allowRestricted && state.zones[next] === ZoneType.Restricted && next !== goal) continue;
+      if (!options.allowRestricted && state.zones[next] === ZoneType.Restricted && next !== goal) continue;
       if (closed[next]) continue;
-      const occupancyPenalty = Math.min(3, (occupancyByTile?.get(next) ?? 0) * 0.45);
-      const tentativeG = currentG + 1 + occupancyPenalty;
+      const occupancyPenalty = occupancyPenaltyForIntent(options, occupancyByTile?.get(next) ?? 0);
+      const routeCost = routeIntentTileCost(state, next, goal, options);
+      const tentativeG = currentG + 1 + occupancyPenalty + routeCost;
       if (tentativeG >= gScore[next]) continue;
       cameFrom[next] = current;
       gScore[next] = tentativeG;

@@ -39,6 +39,8 @@ Patience starts at 0 and increments during failure conditions (no path, queueing
 
 - **Cafeteria flow.** Walk to ServingStation → wait if no meal at reserved tile → pick up meal → walk to a Table → eat for `visitorEatBaseSec[archetype] + jitter` (`balance.ts:271`). Pays via `mealExitPayout` (`sim.ts:5025`).
 - **Leisure.** Market or lounge, picked by `pickVisitorPrimaryPreference`. Market spend = `marketTradeGoodUsePerVisitorPerSec = 0.32 × visitor.spendMultiplier × marketHelperMultiplier` (`balance.ts:250` × `sim.ts:5009`).
+- **Route intent.** Visitor paths use the `visitor` intent, which makes storage, workshop, reactor, life-support, security, brig, berth, dorm, and hygiene tiles expensive but still traversable as a fallback. This is intentionally soft: visitors should dislike bad station layout, not deadlock because one service corridor is unavoidable.
+- **Route exposure.** When a visitor completes a meal, market, or lounge trip, the route they just took is scored. Cargo/service/security/residential exposure creates a small `bad routes` station-rating penalty and can add patience pressure if severe. Long-walk dissatisfaction now uses actual route distance when available, including berth-origin trips.
 - **Trespass.** Stepping into a Restricted-zone tile flips `visitor.trespassed = true` and may spawn a `trespass` IncidentEntity (`sim.ts:5071`–5087); suppression reduced by nearby security aura.
 - **Air exposure.** `applyAirExposure` (`sim.ts:1993`):
   - `≥ AIR_DISTRESS_EXPOSURE_SEC = 18 s` → distressed
@@ -110,10 +112,15 @@ Phase biases the target picker.
 3. Critical-need: hygiene.
 4. Critical-need: cafeteria.
 5. Low-safety: secure room.
-6. Work-phase: work targets.
-7. Socialize-phase: leisure.
-8. General rest/hygiene/cafeteria.
-9. Idle wander.
+6. Severe social deficit: leisure, even outside the socialize routine phase.
+7. Work-phase: work targets.
+8. Socialize-phase: leisure.
+9. General rest/hygiene/cafeteria.
+10. Idle wander.
+
+Resident movement uses the `resident` path intent. It keeps public/social and housing routes cheap while adding soft cost to cargo/service/security rooms. The fallback still allows a resident to cross awkward spaces if that is the only path to a need.
+
+When a resident completes a need trip, route exposure is applied once. Cargo/service/security-heavy routes add stress, reduce satisfaction, and can shave safety. Critical needs still win; the bad-route effect is feedback on layout, not a reason to abandon food, hygiene, or sleep.
 
 ### Roles &amp; buffs
 

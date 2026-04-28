@@ -70,6 +70,10 @@ Custom weights via `setCrewPriorityWeight` (`sim.ts:8376`), exposed in the Prior
 
 Covered in `04-logistics.md`. An idle crew member (no post need them, fatigue OK) gets handed the cheapest pending job.
 
+Hauling uses the `logistics` path intent. Logistics routes strongly prefer storage, stock, workshop, kitchen, hydroponics, and berth/service space over cafeteria, lounge, market, dorm, or hygiene paths. Posted crew and self-care movement use the `crew` intent instead, while security incident responders use `security` so they can cut through the station quickly.
+
+If a logistics route crosses public/social/crowded spaces, the sim records `crewPublicInterference` and adds a small extra energy/hygiene drain while that route is active. This is the first mechanical reason to build back-of-house service corridors instead of forcing haulers through the public concourse.
+
 ## Idle reasons
 
 When a crew can't find work, `idleReason` (`types.ts:198`) tells the UI why. Surfaces in `idleReasonsText` (`main.ts:1501`). Examples: `no-post-available`, `path-blocked`, `tier-locked`, `no-jobs-available`. Crew on hauling jobs are bucketed into `crewOnLogisticsJobs`.

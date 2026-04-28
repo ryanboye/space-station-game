@@ -44,6 +44,8 @@ import {
   type VisitorDesire,
   type HousingPolicy,
   type LaneProfile,
+  type PathIntent,
+  type PathOptions,
   type CrewMember,
   type CrewRole,
   type JobStallReason,
@@ -52,6 +54,7 @@ import {
   type JobExpiryContext,
   type ItemType,
   type ResidentRole,
+  type RouteExposure,
   type ShipServiceTag,
   type ShipType,
   type UnlockTier,
@@ -107,6 +110,9 @@ const SHIP_DOCKED_TIME = TASK_TIMINGS.shipDockedPassengerSpawnSec;
 const SHIP_DEPART_TIME = TASK_TIMINGS.shipDepartSec;
 const SHIP_MAX_DOCKED_TIME = TASK_TIMINGS.shipMaxDockedSec;
 const MAX_DINERS_PER_CAF_TILE = SERVICE_CAPACITY.tableMaxDiners;
+const VISITOR_ROUTE_EXPOSURE_RATING_PENALTY = 0.012;
+const RESIDENT_BAD_ROUTE_STRESS = 0.28;
+const CREW_PUBLIC_CROWD_DRAIN = 0.018;
 
 const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Space]: 0,
@@ -409,7 +415,12 @@ function updateUnlockProgress(state: StationState): void {
 function serviceFailureRatingPenalty(
   state: StationState,
   amount: number,
-  bucket: 'ratingFromVisitorFailure' | 'ratingFromShipSkip' | 'ratingFromShipTimeout' | 'ratingFromWalkDissatisfaction'
+  bucket:
+    | 'ratingFromVisitorFailure'
+    | 'ratingFromShipSkip'
+    | 'ratingFromShipTimeout'
+    | 'ratingFromWalkDissatisfaction'
+    | 'ratingFromRouteExposure'
 ): void {
   state.usageTotals.ratingDelta -= amount;
   state.usageTotals[bucket] += amount;
@@ -442,11 +453,12 @@ function chooseNearestPath(
   state: StationState,
   start: number,
   targets: number[],
-  allowRestricted: boolean
+  allowRestricted: boolean,
+  intent: PathIntent = 'visitor'
 ): number[] | null {
   let best: number[] | null = null;
   for (const target of targets) {
-    const path = findPath(state, start, target, allowRestricted, state.pathOccupancyByTile);
+    const path = findPath(state, start, target, { allowRestricted, intent }, state.pathOccupancyByTile);
     if (!path) continue;
     if (!best || path.length < best.length) {
       best = path;
@@ -455,7 +467,7 @@ function chooseNearestPath(
   // Fallback: if strict zoning blocks all routes, allow restricted traversal.
   if (!best && !allowRestricted) {
     for (const target of targets) {
-      const path = findPath(state, start, target, true, state.pathOccupancyByTile);
+      const path = findPath(state, start, target, { allowRestricted: true, intent }, state.pathOccupancyByTile);
       if (!path) continue;
       if (!best || path.length < best.length) {
         best = path;
@@ -677,22 +689,22 @@ function pathCacheKey(
   state: StationState,
   start: number,
   goal: number,
-  allowRestricted: boolean,
+  options: PathOptions,
   occupancyByTile?: Map<number, number>
 ): string {
   // Occupancy-sensitive routes are still cached, but with a short TTL bucket.
   const occupancyBucket = occupancyByTile ? Math.floor(state.now * 4) : -1;
-  return `${start}>${goal}|${allowRestricted ? 1 : 0}|${occupancyBucket}`;
+  return `${start}>${goal}|${options.allowRestricted ? 1 : 0}|${options.intent}|${occupancyBucket}`;
 }
 
 function cachedPathLookup(
   state: StationState,
   start: number,
   goal: number,
-  allowRestricted: boolean,
+  options: PathOptions,
   occupancyByTile?: Map<number, number>
 ): number[] | null {
-  const key = pathCacheKey(state, start, goal, allowRestricted, occupancyByTile);
+  const key = pathCacheKey(state, start, goal, options, occupancyByTile);
   const cached = state.derived.pathCache.get(key);
   if (
     cached &&
@@ -702,7 +714,7 @@ function cachedPathLookup(
   ) {
     return [...cached.path];
   }
-  const path = findPathCore(state, start, goal, allowRestricted, occupancyByTile);
+  const path = findPathCore(state, start, goal, options, occupancyByTile);
   if (path) {
     if (state.derived.pathCache.size >= PATH_CACHE_MAX_ENTRIES) {
       const oldestKey = state.derived.pathCache.keys().next().value as string | undefined;
@@ -718,15 +730,23 @@ function cachedPathLookup(
   return path;
 }
 
-function findPath(
+function normalizePathOptions(optionsOrAllowRestricted: boolean | PathOptions): PathOptions {
+  if (typeof optionsOrAllowRestricted === 'boolean') {
+    return { allowRestricted: optionsOrAllowRestricted, intent: 'visitor' };
+  }
+  return optionsOrAllowRestricted;
+}
+
+export function findPath(
   state: StationState,
   start: number,
   goal: number,
-  allowRestricted: boolean,
+  optionsOrAllowRestricted: boolean | PathOptions,
   occupancyByTile?: Map<number, number>
 ): number[] | null {
   const started = perfNowMs();
-  const path = cachedPathLookup(state, start, goal, allowRestricted, occupancyByTile);
+  const options = normalizePathOptions(optionsOrAllowRestricted);
+  const path = cachedPathLookup(state, start, goal, options, occupancyByTile);
   state.metrics.pathCallsPerTick += 1;
   state.metrics.pathMs += perfNowMs() - started;
   return path;
@@ -1949,6 +1969,81 @@ function pathCongestion(path: number[], occupancyByTile: Map<number, number>): n
   return total / path.length;
 }
 
+function scoreRouteExposure(state: StationState, path: number[]): RouteExposure {
+  const exposure: RouteExposure = {
+    distance: path.length,
+    publicTiles: 0,
+    serviceTiles: 0,
+    cargoTiles: 0,
+    residentialTiles: 0,
+    securityTiles: 0,
+    socialTiles: 0,
+    crowdCost: 0
+  };
+  for (const tile of path) {
+    const room = state.rooms[tile];
+    exposure.crowdCost += state.pathOccupancyByTile.get(tile) ?? 0;
+    if (state.zones[tile] === ZoneType.Public) exposure.publicTiles += 1;
+    if (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market || room === RoomType.RecHall) {
+      exposure.socialTiles += 1;
+      continue;
+    }
+    if (room === RoomType.LogisticsStock || room === RoomType.Storage || room === RoomType.Berth) {
+      exposure.cargoTiles += 1;
+      continue;
+    }
+    if (
+      room === RoomType.Reactor ||
+      room === RoomType.LifeSupport ||
+      room === RoomType.Workshop ||
+      room === RoomType.Kitchen ||
+      room === RoomType.Hydroponics
+    ) {
+      exposure.serviceTiles += 1;
+      continue;
+    }
+    if (room === RoomType.Dorm || room === RoomType.Hygiene) {
+      exposure.residentialTiles += 1;
+      continue;
+    }
+    if (room === RoomType.Security || room === RoomType.Brig) {
+      exposure.securityTiles += 1;
+    }
+  }
+  return exposure;
+}
+
+function routeExposureDiscomfort(exposure: RouteExposure | undefined): number {
+  if (!exposure) return 0;
+  return (
+    exposure.serviceTiles * 0.45 +
+    exposure.cargoTiles * 0.75 +
+    exposure.securityTiles * 0.5 +
+    exposure.residentialTiles * 0.25 +
+    exposure.crowdCost * 0.08
+  );
+}
+
+function routePublicInterference(exposure: RouteExposure | undefined): number {
+  if (!exposure) return 0;
+  return exposure.socialTiles * 0.55 + exposure.crowdCost * 0.08;
+}
+
+function setVisitorPath(state: StationState, visitor: Visitor, path: number[]): void {
+  visitor.path = path;
+  visitor.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
+}
+
+function setResidentPath(state: StationState, resident: Resident, path: number[]): void {
+  resident.path = path;
+  resident.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
+}
+
+function setCrewPath(state: StationState, crew: CrewMember, path: number[]): void {
+  crew.path = path;
+  crew.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
+}
+
 function isStationedSecurityResponder(state: StationState, crew: CrewMember): boolean {
   const room = state.rooms[crew.tileIndex];
   return (
@@ -2009,7 +2104,7 @@ function pickSecurityResponder(
   if (stationedSecurity.length <= 0) return null;
   let best: { crew: CrewMember; path: number[]; score: number } | null = null;
   for (const crew of stationedSecurity) {
-    const path = findPath(state, crew.tileIndex, incidentTile, true, state.pathOccupancyByTile);
+    const path = findPath(state, crew.tileIndex, incidentTile, { allowRestricted: true, intent: 'security' }, state.pathOccupancyByTile);
     if (!path) continue;
     const score = path.length + pathCongestion(path, state.pathOccupancyByTile) * 0.55;
     if (!best || score < best.score) {
@@ -2553,7 +2648,8 @@ function privateHousingUnits(state: StationState): PrivateHousingUnit[] {
       .sort((a, b) => a.originTile - b.originTile);
     for (const bed of beds) {
       const hasHygienePath = hygieneTargets.some(
-        (target) => findPath(state, bed.originTile, target, true, state.pathOccupancyByTile) !== null
+        (target) =>
+          findPath(state, bed.originTile, target, { allowRestricted: true, intent: 'resident' }, state.pathOccupancyByTile) !== null
       );
       if (!hasHygienePath) continue;
       units.push({
@@ -2579,7 +2675,7 @@ function pickPrivateHousingUnitForResident(
   const availableUnits = privateHousingUnits(state).filter((unit) => !assignedBeds.has(unit.bedModuleId));
   let best: { unit: PrivateHousingUnit; pathToBed: number[] } | null = null;
   for (const unit of availableUnits) {
-    const path = findPath(state, startTile, unit.bedTile, true, state.pathOccupancyByTile);
+    const path = findPath(state, startTile, unit.bedTile, { allowRestricted: true, intent: 'resident' }, state.pathOccupancyByTile);
     if (!path) continue;
     if (!best || path.length < best.pathToBed.length) {
       best = { unit, pathToBed: path };
@@ -2680,7 +2776,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
     housing.unit.cabinTile,
     housing.unit.bedModuleId
   );
-  resident.path = housing.pathToBed;
+  setResidentPath(state, resident, housing.pathToBed);
   state.residents.push(resident);
   ship.residentIds.push(resident.id);
   state.usageTotals.residentConversionSuccesses += 1;
@@ -2786,7 +2882,7 @@ function assignCrewJobs(state: StationState): void {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
         crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
-        crew.path = [];
+        setCrewPath(state, crew, []);
       }
       state.metrics.crewWokenForAir = wakeCount;
     }
@@ -2897,7 +2993,7 @@ function assignCrewJobs(state: StationState): void {
         const taskCount = targetCountsByTile.get(key) ?? 0;
         const taskCapacity = capacityByTarget.get(key) ?? 1;
         if (taskCount >= taskCapacity) continue;
-        const path = findPath(state, crew.tileIndex, task.tileIndex, true, state.pathOccupancyByTile);
+        const path = findPath(state, crew.tileIndex, task.tileIndex, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
         if (!path) continue;
         const weight = state.controls.crewPriorityWeights[system];
         const criticalUrgency = remainingCritical > 0 ? 4 : 1;
@@ -2918,7 +3014,7 @@ function assignCrewJobs(state: StationState): void {
       crew.assignedSystem = null;
       if (changed) {
         crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
-        crew.path = [];
+        setCrewPath(state, crew, []);
       }
       continue;
     }
@@ -2964,7 +3060,7 @@ function assignCrewJobs(state: StationState): void {
       crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
       crew.assignmentStickyUntil = state.now + CREW_ASSIGNMENT_STICKY_SEC;
       crew.assignmentHoldUntil = state.now + CREW_ASSIGNMENT_HOLD_SEC;
-      crew.path = [];
+      setCrewPath(state, crew, []);
       if (changedSystem) {
         crew.retargetCountWindow += 1;
         state.usageTotals.crewRetargets += 1;
@@ -3732,7 +3828,8 @@ function countQueuePressureByTile(state: StationState): Map<number, number> {
 
 function pickLeastLoadedCafeteriaPath(
   state: StationState,
-  start: number
+  start: number,
+  intent: PathIntent = 'visitor'
 ): { path: number[]; target: number | null } {
   const cafeterias = collectCafeteriaTableTargets(state);
   const demandByTile = countCafeteriaDemandByTile(state);
@@ -3746,7 +3843,7 @@ function pickLeastLoadedCafeteriaPath(
       continue;
     }
     const seated = dinersOnTile(state, target);
-    const path = findPath(state, start, target, false, state.pathOccupancyByTile);
+    const path = findPath(state, start, target, { allowRestricted: false, intent }, state.pathOccupancyByTile);
     if (!path) continue;
     const demand = demandByTile.get(target) ?? 0;
     const reserved = reservedByTile.get(target) ?? 0;
@@ -3764,7 +3861,11 @@ function pickLeastLoadedCafeteriaPath(
   return { path: bestPath ?? [], target: bestTarget };
 }
 
-function pickServingStationPath(state: StationState, start: number): { path: number[]; target: number | null } {
+function pickServingStationPath(
+  state: StationState,
+  start: number,
+  intent: PathIntent = 'visitor'
+): { path: number[]; target: number | null } {
   const servingTargets = collectServingTargets(state);
   const reservedByTile = countReservedServingTargets(state);
   const queuePressureByTile = countQueuePressureByTile(state);
@@ -3772,7 +3873,7 @@ function pickServingStationPath(state: StationState, start: number): { path: num
   let bestTarget: number | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const target of servingTargets) {
-    const path = findPath(state, start, target, false, state.pathOccupancyByTile);
+    const path = findPath(state, start, target, { allowRestricted: false, intent }, state.pathOccupancyByTile);
     if (!path) continue;
     const reserved = reservedByTile.get(target) ?? 0;
     const queued = queuePressureByTile.get(target) ?? 0;
@@ -3788,13 +3889,13 @@ function pickServingStationPath(state: StationState, start: number): { path: num
   return { path: bestPath ?? [], target: bestTarget };
 }
 
-function pickQueueSpotPath(state: StationState, start: number): number[] {
+function pickQueueSpotPath(state: StationState, start: number, intent: PathIntent = 'visitor'): number[] {
   const spots = collectQueueTargets(state, RoomType.Cafeteria);
   const queuePressure = countQueuePressureByTile(state);
   let bestPath: number[] | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const spot of spots) {
-    const path = findPath(state, start, spot, false, state.pathOccupancyByTile);
+    const path = findPath(state, start, spot, { allowRestricted: false, intent }, state.pathOccupancyByTile);
     if (!path) continue;
     const queued = queuePressure.get(spot) ?? 0;
     const occupancy = state.pathOccupancyByTile.get(spot) ?? 0;
@@ -4559,7 +4660,7 @@ function createFoodTransportJobs(state: StationState): void {
     let best: { from: number; to: number; dist: number } | null = null;
     for (const from of rawMealSources) {
       for (const to of rawMealDestinations) {
-        const path = findPath(state, from, to, false, state.pathOccupancyByTile);
+        const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
         if (!path) continue;
         if (!best || path.length < best.dist) best = { from, to, dist: path.length };
       }
@@ -4577,7 +4678,7 @@ function createFoodTransportJobs(state: StationState): void {
       let best: { from: number; to: number; dist: number } | null = null;
       for (const from of mealSources) {
         for (const to of mealDestinations) {
-          const path = findPath(state, from, to, false, state.pathOccupancyByTile);
+          const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
           if (!path) continue;
           if (!best || path.length < best.dist) best = { from, to, dist: path.length };
         }
@@ -4655,7 +4756,7 @@ function createTradeGoodTransportJobs(state: StationState): void {
   let bestTo = marketTargets[0];
   let bestDist = Number.POSITIVE_INFINITY;
   for (const to of marketTargets) {
-    const path = findPath(state, fromTile, to, false, state.pathOccupancyByTile);
+    const path = findPath(state, fromTile, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
     if (!path) continue;
     if (path.length < bestDist) {
       bestDist = path.length;
@@ -4774,7 +4875,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     let bestLen = Number.POSITIVE_INFINITY;
     for (const job of pendingJobs) {
       if (job.state !== 'pending') continue;
-      const path = findPath(state, crew.tileIndex, job.fromTile, true, state.pathOccupancyByTile);
+      const path = findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
       if (!path) continue;
       if (path.length < bestLen) {
         bestLen = path.length;
@@ -4803,7 +4904,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     crew.activeJobId = bestJob.id;
     crew.cleaning = false;
     crew.cleanSessionActive = false;
-    crew.path = bestPath;
+    setCrewPath(state, crew, bestPath);
     if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
       markJobStall(state, bestJob, 'stalled_unreachable_source');
     }
@@ -5013,7 +5114,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   };
   for (const crew of state.crewMembers) {
     crew.idleReason = 'idle_available';
-    crew.hygiene = clamp(crew.hygiene - dt * 0.2, 0, 100);
+    const publicInterference = crew.activeJobId !== null ? routePublicInterference(crew.lastRouteExposure) : 0;
+    if (publicInterference > 0) state.usageTotals.crewPublicInterference += publicInterference * dt;
+    crew.hygiene = clamp(crew.hygiene - dt * (0.2 + publicInterference * CREW_PUBLIC_CROWD_DRAIN * 0.45), 0, 100);
     if (crew.activeJobId !== null) {
       if (crew.resting) {
         crew.resting = false;
@@ -5031,7 +5134,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       if (crew.cleaning) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
-        crew.path = [];
+        setCrewPath(state, crew, []);
       }
       const canInterruptRest = criticalAirEmergency || state.now >= crew.restLockUntil;
       if (crew.resting && crew.energy > 35 && canInterruptRest) {
@@ -5039,13 +5142,13 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.restSessionActive = false;
         crew.taskLockUntil = state.now + CREW_TASK_LOCK_SEC;
         crew.assignmentHoldUntil = 0;
-        crew.path = [];
+        setCrewPath(state, crew, []);
         currentResting = Math.max(0, currentResting - 1);
         state.metrics.crewRestingNow = currentResting;
       }
     }
     if (!crew.resting) {
-      crew.energy = clamp(crew.energy - dt * 0.42, 0, 100);
+      crew.energy = clamp(crew.energy - dt * (0.42 + publicInterference * CREW_PUBLIC_CROWD_DRAIN), 0, 100);
       const needsCriticalRest = crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD;
       const shiftMatches = crew.shiftBucket === shiftBucketNow;
       const belowRestCap = currentResting < state.metrics.crewRestCap;
@@ -5066,7 +5169,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.lastSystem = null;
         crew.assignedSystem = null;
         crew.assignmentHoldUntil = 0;
-        crew.path = [];
+        setCrewPath(state, crew, []);
         crew.idleReason = 'idle_resting';
         crew.cleaning = false;
         currentResting += 1;
@@ -5081,7 +5184,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           crew.lastSystem = null;
           crew.assignedSystem = null;
           crew.assignmentHoldUntil = 0;
-          crew.path = [];
+          setCrewPath(state, crew, []);
         }
       }
     }
@@ -5097,7 +5200,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       const hygieneTargets = preferredHygieneTargets(state);
       if (hygieneTargets.length > 0 && state.rooms[crew.tileIndex] !== RoomType.Hygiene) {
         if (crew.path.length === 0) {
-          crew.path = chooseNearestPath(state, crew.tileIndex, hygieneTargets, false) ?? [];
+          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, hygieneTargets, false, 'crew') ?? []);
         }
         const moveResult = moveCrew(crew);
         if (moveResult === 'blocked') {
@@ -5118,7 +5221,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       if (crew.hygiene >= 90) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
-        crew.path = [];
+        setCrewPath(state, crew, []);
       }
       continue;
     }
@@ -5128,7 +5231,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       const dormTargets = preferredDormTargets(state);
       if (dormTargets.length > 0 && state.rooms[crew.tileIndex] !== RoomType.Dorm) {
         if (crew.path.length === 0) {
-          crew.path = chooseNearestPath(state, crew.tileIndex, dormTargets, false) ?? [];
+          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, dormTargets, false, 'crew') ?? []);
           if (crew.path.length === 0) {
             crew.idleReason = 'idle_no_path';
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
@@ -5154,7 +5257,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.resting = false;
         crew.restSessionActive = false;
         crew.restCooldownUntil = state.now + CREW_REST_COOLDOWN_SEC;
-        crew.path = [];
+        setCrewPath(state, crew, []);
         crew.targetTile = null;
         crew.lastSystem = null;
         crew.assignedSystem = null;
@@ -5172,7 +5275,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.activeJobId = null;
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
-        crew.path = [];
+        setCrewPath(state, crew, []);
       } else {
         const targetTile = crew.carryingAmount > 0 ? job.toTile : job.fromTile;
         if (crew.tileIndex === targetTile) {
@@ -5186,7 +5289,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               job.expiresAt = state.now + JOB_TTL_SEC;
               job.lastProgressAt = state.now;
               crew.activeJobId = null;
-              crew.path = [];
+              setCrewPath(state, crew, []);
             } else {
               takeItemStockAtNode(state, job.fromTile, job.itemType, pickup);
               crew.carryingItemType = job.itemType;
@@ -5195,7 +5298,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               job.state = 'in_progress';
               job.lastProgressAt = state.now;
               markJobStall(state, job, 'none');
-              crew.path = [];
+              setCrewPath(state, crew, []);
             }
           } else {
             const delivered = addItemStockAtNode(state, job.toTile, job.itemType, crew.carryingAmount);
@@ -5220,11 +5323,15 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             crew.activeJobId = null;
             crew.carryingItemType = null;
             crew.carryingAmount = 0;
-            crew.path = [];
+            setCrewPath(state, crew, []);
           }
         } else {
           if (crew.path.length === 0) {
-            crew.path = findPath(state, crew.tileIndex, targetTile, true, state.pathOccupancyByTile) ?? [];
+            setCrewPath(
+              state,
+              crew,
+              findPath(state, crew.tileIndex, targetTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+            );
             if (crew.path.length === 0) {
               markJobStall(
                 state,
@@ -5243,7 +5350,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
             markJobStall(state, job, 'stalled_path_blocked');
             if (crew.path.length === 0 || state.now - job.lastProgressAt > 2) {
-              crew.path = findPath(state, crew.tileIndex, targetTile, true, state.pathOccupancyByTile) ?? [];
+              setCrewPath(
+                state,
+                crew,
+                findPath(state, crew.tileIndex, targetTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+              );
             }
           }
         }
@@ -5252,8 +5363,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
 
     if (crew.targetTile !== null && crew.path.length === 0 && crew.tileIndex !== crew.targetTile) {
-      const path = findPath(state, crew.tileIndex, crew.targetTile, true, state.pathOccupancyByTile);
-      crew.path = path ?? [];
+      const path = findPath(state, crew.tileIndex, crew.targetTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
+      setCrewPath(state, crew, path ?? []);
       if (crew.path.length === 0) {
         crew.idleReason = 'idle_no_path';
         crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
@@ -5261,13 +5372,17 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
 
     if (crew.targetTile === crew.tileIndex && crew.role !== 'idle') {
-      crew.path = [];
+      setCrewPath(state, crew, []);
       continue;
     }
 
     if (crew.role === 'idle' && crew.path.length === 0 && idleTargets.length > 0 && state.now >= crew.retargetAt) {
       const next = idleTargets[randomInt(0, idleTargets.length - 1, state.rng)];
-      crew.path = findPath(state, crew.tileIndex, next, false, state.pathOccupancyByTile) ?? [];
+      setCrewPath(
+        state,
+        crew,
+        findPath(state, crew.tileIndex, next, { allowRestricted: false, intent: 'crew' }, state.pathOccupancyByTile) ?? []
+      );
       crew.retargetAt = state.now + 5 + state.rng() * 8;
       if (crew.path.length === 0) {
         crew.idleReason = 'idle_no_path';
@@ -5294,21 +5409,21 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
 function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
   if (visitor.carryingMeal) {
     const nextTable = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-    visitor.path = nextTable.path;
+    setVisitorPath(state, visitor, nextTable.path);
     visitor.reservedTargetTile = nextTable.target;
     visitor.state = VisitorState.ToCafeteria;
     return;
   }
   visitor.reservedTargetTile = null;
   const nextServing = pickServingStationPath(state, visitor.tileIndex);
-  visitor.path = nextServing.path;
+  setVisitorPath(state, visitor, nextServing.path);
   visitor.reservedServingTile = nextServing.target;
   visitor.state = VisitorState.ToCafeteria;
   if (visitor.path.length > 0 || (nextServing.target !== null && visitor.tileIndex === nextServing.target)) {
     return;
   }
   const queuePath = pickQueueSpotPath(state, visitor.tileIndex);
-  visitor.path = queuePath;
+  setVisitorPath(state, visitor, queuePath);
   visitor.state = VisitorState.Queueing;
 }
 
@@ -5336,7 +5451,7 @@ function assignPathToDock(state: StationState, visitor: Visitor): void {
   visitor.reservedTargetTile = null;
   visitor.reservedServingTile = null;
   visitor.carryingMeal = false;
-  visitor.path = chooseNearestPath(state, visitor.tileIndex, docks, false) ?? [];
+  setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, docks, false) ?? []);
 }
 
 function visitorWalkDistanceFromDock(state: StationState, tileIndex: number): number {
@@ -5352,8 +5467,12 @@ function visitorWalkDistanceFromDock(state: StationState, tileIndex: number): nu
   return Number.isFinite(best) ? best : 0;
 }
 
-function applyVisitorWalkDissatisfaction(state: StationState, tileIndex: number): void {
-  const walk = visitorWalkDistanceFromDock(state, tileIndex);
+function applyVisitorWalkDissatisfaction(
+  state: StationState,
+  tileIndex: number,
+  exposure?: RouteExposure
+): void {
+  const walk = exposure ? exposure.distance : visitorWalkDistanceFromDock(state, tileIndex);
   state.usageTotals.visitorWalkDistance += walk;
   state.usageTotals.visitorWalkTrips += 1;
   if (walk > VISITOR_COMFORT_WALK_THRESHOLD) {
@@ -5366,6 +5485,32 @@ function addVisitorPatience(state: StationState, visitor: Visitor, amount: numbe
   const taxStress = taxAware ? state.controls.taxRate * visitor.taxSensitivity * 0.5 : 0;
   const modifier = (1 + taxStress) / Math.max(0.45, visitor.patienceMultiplier);
   visitor.patience += amount * modifier;
+}
+
+function applyVisitorCompletedRouteExperience(state: StationState, visitor: Visitor): void {
+  const exposure = visitor.lastRouteExposure;
+  applyVisitorWalkDissatisfaction(state, visitor.tileIndex, exposure);
+  const discomfort = routeExposureDiscomfort(exposure);
+  if (discomfort > 0) {
+    const penalty = Math.min(0.28, discomfort * VISITOR_ROUTE_EXPOSURE_RATING_PENALTY);
+    serviceFailureRatingPenalty(state, penalty, 'ratingFromRouteExposure');
+    state.usageTotals.visitorServiceExposurePenalty += penalty;
+    if (discomfort >= 5) addVisitorPatience(state, visitor, discomfort * 0.018, false);
+  }
+  visitor.lastRouteExposure = undefined;
+}
+
+function applyResidentCompletedRouteExperience(state: StationState, resident: Resident): void {
+  const exposure = resident.lastRouteExposure;
+  const discomfort = routeExposureDiscomfort(exposure);
+  if (discomfort > 0) {
+    const stress = Math.min(3.2, discomfort * RESIDENT_BAD_ROUTE_STRESS);
+    resident.stress = clamp(resident.stress + stress, 0, 120);
+    resident.satisfaction = clamp(resident.satisfaction - stress * 0.75, 0, 100);
+    resident.safety = clamp(resident.safety - (exposure?.securityTiles ?? 0) * 0.12 - (exposure?.cargoTiles ?? 0) * 0.05, 0, 100);
+    state.usageTotals.residentBadRouteStress += stress;
+  }
+  resident.lastRouteExposure = undefined;
 }
 
 function registerVisitorServiceFailure(state: StationState, amount: number): void {
@@ -5381,7 +5526,7 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   if (allTargets.length === 0) return false;
 
   if (visitor.archetype === 'rusher') {
-    visitor.path = chooseNearestPath(state, visitor.tileIndex, allTargets, false) ?? [];
+    setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, allTargets, false) ?? []);
     visitor.state = VisitorState.ToLeisure;
     return visitor.path.length > 0;
   }
@@ -5397,7 +5542,7 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
     if (targets.length === 0) continue;
     const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
     if (path.length === 0) continue;
-    visitor.path = path;
+    setVisitorPath(state, visitor, path);
     visitor.state = VisitorState.ToLeisure;
     return true;
   }
@@ -5455,7 +5600,7 @@ function assignPathToLeisure(state: StationState, visitor: Visitor): boolean {
 
 function assignPathToTable(state: StationState, visitor: Visitor): boolean {
   const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
-  visitor.path = next.path;
+  setVisitorPath(state, visitor, next.path);
   visitor.reservedTargetTile = next.target;
   return visitor.path.length > 0 || (next.target !== null && next.target === visitor.tileIndex);
 }
@@ -5530,21 +5675,29 @@ function updateVisitorLogic(
 
         if (visitor.path.length === 0) {
           if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
-            visitor.path = findPath(
+            setVisitorPath(
               state,
-              visitor.tileIndex,
-              visitor.reservedServingTile,
-              false,
-              state.pathOccupancyByTile
-            ) ?? [];
+              visitor,
+              findPath(
+                state,
+                visitor.tileIndex,
+                visitor.reservedServingTile,
+                { allowRestricted: false, intent: 'visitor' },
+                state.pathOccupancyByTile
+              ) ?? []
+            );
           } else if (visitor.carryingMeal && visitor.reservedTargetTile !== null && visitor.tileIndex !== visitor.reservedTargetTile) {
-            visitor.path = findPath(
+            setVisitorPath(
               state,
-              visitor.tileIndex,
-              visitor.reservedTargetTile,
-              false,
-              state.pathOccupancyByTile
-            ) ?? [];
+              visitor,
+              findPath(
+                state,
+                visitor.tileIndex,
+                visitor.reservedTargetTile,
+                { allowRestricted: false, intent: 'visitor' },
+                state.pathOccupancyByTile
+              ) ?? []
+            );
           }
         }
         const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
@@ -5563,7 +5716,7 @@ function updateVisitorLogic(
           assignPathToCafeteria(state, visitor);
         }
         if (visitor.blockedTicks >= BLOCKED_LOCAL_REROUTE_TICKS) {
-          visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+          setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex));
           visitor.state = VisitorState.Queueing;
         }
         if (visitor.blockedTicks >= BLOCKED_FULL_REROUTE_TICKS) {
@@ -5580,13 +5733,13 @@ function updateVisitorLogic(
               visitor.reservedServingTile = null;
               visitor.state = VisitorState.ToCafeteria;
               if (!assignPathToTable(state, visitor)) {
-                visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+                setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex));
                 visitor.state = VisitorState.Queueing;
               }
             } else {
               addVisitorFailurePenalty(state, 0.012 * dt, 'patienceBail');
               if (!isCafeteriaQueueSpot(state, visitor.tileIndex)) {
-                visitor.path = pickQueueSpotPath(state, visitor.tileIndex);
+                setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex));
               }
               visitor.state = VisitorState.Queueing;
             }
@@ -5609,10 +5762,10 @@ function updateVisitorLogic(
           visitor.state = VisitorState.Eating;
           const eatBase = TASK_TIMINGS.visitorEatBaseSec[visitor.archetype];
           visitor.eatTimer = eatBase + state.rng() * TASK_TIMINGS.visitorEatJitterSec;
-          visitor.path = [];
+          applyVisitorCompletedRouteExperience(state, visitor);
+          setVisitorPath(state, visitor, []);
           state.usageTotals.meals += 1;
           state.usageTotals.visitorLeisureEntries.cafeteria += 1;
-          applyVisitorWalkDissatisfaction(state, visitor.tileIndex);
           if (visitor.reservedTargetTile !== null && visitor.reservedTargetTile !== visitor.tileIndex) {
             state.metrics.cafeteriaNonNodeSeatedCount++;
           }
@@ -5679,8 +5832,8 @@ function updateVisitorLogic(
         }
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
         visitor.eatTimer = baseDwell + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
-        visitor.path = [];
-        applyVisitorWalkDissatisfaction(state, visitor.tileIndex);
+        applyVisitorCompletedRouteExperience(state, visitor);
+        setVisitorPath(state, visitor, []);
       }
     } else if (visitor.state === VisitorState.Leisure) {
       visitor.eatTimer -= dt;
@@ -5765,7 +5918,7 @@ function updateVisitorLogic(
       addVisitorFailurePenalty(state, 0.05, 'patienceBail');
     }
     if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
-      visitor.path = [];
+      setVisitorPath(state, visitor, []);
       // Despawn when the visitor has reached an exit tile. Dock tiles are
       // explicit; Berth-room tiles are the equivalent for berth-arrivals
       // (a ship docked at a Berth has no underlying Dock tile type).
@@ -5897,7 +6050,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
   updateResidentRoutinePhase(state, resident);
   if (resident.leaveIntent >= RESIDENT_LEAVE_INTENT_TRIGGER) {
     resident.state = ResidentState.ToHomeShip;
-    resident.path = chooseNearestPath(state, resident.tileIndex, residentHomeDockTargets(state, resident), true) ?? [];
+    setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, residentHomeDockTargets(state, resident), true, 'resident') ?? []);
     return;
   }
 
@@ -5908,7 +6061,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
 
   if (criticalNeed && resident.energy < DORM_SEEK_ENERGY_THRESHOLD && dormTargets.length > 0) {
     resident.state = ResidentState.ToDorm;
-    resident.path = chooseNearestPath(state, resident.tileIndex, dormTargets, false) ?? [];
+    setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, dormTargets, false, 'resident') ?? []);
     if (resident.path.length > 0) return;
     noteFailedNeedAttempt(state, 'dorm');
     noteFailedNeedAttempt(state, 'energy');
@@ -5919,7 +6072,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
 
   if (criticalNeed && resident.hygiene < 45 && hygieneTargets.length > 0) {
     resident.state = ResidentState.ToHygiene;
-    resident.path = chooseNearestPath(state, resident.tileIndex, hygieneTargets, false) ?? [];
+    setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, hygieneTargets, false, 'resident') ?? []);
     if (resident.path.length > 0) return;
     noteFailedNeedAttempt(state, 'hygiene');
   } else if (criticalNeed && resident.hygiene < 45) {
@@ -5928,10 +6081,10 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
 
   if (criticalNeed && resident.hunger < 55 && cafeteriaTargets.length > 0 && state.metrics.mealStock > 3) {
     resident.state = ResidentState.ToCafeteria;
-    resident.path = pickQueueSpotPath(state, resident.tileIndex);
+    setResidentPath(state, resident, pickQueueSpotPath(state, resident.tileIndex, 'resident'));
     if (resident.path.length === 0) {
-      const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex);
-      resident.path = next.path;
+      const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex, 'resident');
+      setResidentPath(state, resident, next.path);
       resident.reservedTargetTile = next.target;
     }
     if (resident.path.length > 0) return;
@@ -5944,7 +6097,16 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     const safeTargets = residentSafeTargets(state, securityAuraByTile);
     if (safeTargets.length > 0) {
       resident.state = ResidentState.ToSecurity;
-      resident.path = chooseNearestPath(state, resident.tileIndex, safeTargets, false) ?? [];
+      setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, safeTargets, false, 'resident') ?? []);
+      if (resident.path.length > 0) return;
+    }
+  }
+
+  if (!criticalNeed && resident.social < 35) {
+    const leisureTargets = residentLeisureTargets(state);
+    if (leisureTargets.length > 0) {
+      resident.state = ResidentState.ToLeisure;
+      setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, leisureTargets, false, 'resident') ?? []);
       if (resident.path.length > 0) return;
     }
   }
@@ -5953,7 +6115,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     const workTargets = residentWorkTargets(state, resident);
     if (workTargets.length > 0) {
       resident.state = ResidentState.ToLeisure;
-      resident.path = chooseNearestPath(state, resident.tileIndex, workTargets, false) ?? [];
+      setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, workTargets, false, 'resident') ?? []);
       if (resident.path.length > 0) return;
     }
   }
@@ -5962,14 +6124,14 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     const leisureTargets = residentLeisureTargets(state);
     if (leisureTargets.length > 0) {
       resident.state = ResidentState.ToLeisure;
-      resident.path = chooseNearestPath(state, resident.tileIndex, leisureTargets, false) ?? [];
+      setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, leisureTargets, false, 'resident') ?? []);
       if (resident.path.length > 0) return;
     }
   }
 
   if (resident.energy < DORM_SEEK_ENERGY_THRESHOLD && dormTargets.length > 0) {
     resident.state = ResidentState.ToDorm;
-    resident.path = chooseNearestPath(state, resident.tileIndex, dormTargets, false) ?? [];
+    setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, dormTargets, false, 'resident') ?? []);
     if (resident.path.length > 0) return;
     noteFailedNeedAttempt(state, 'dorm');
     noteFailedNeedAttempt(state, 'energy');
@@ -5980,7 +6142,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
 
   if (resident.hygiene < 45 && hygieneTargets.length > 0) {
     resident.state = ResidentState.ToHygiene;
-    resident.path = chooseNearestPath(state, resident.tileIndex, hygieneTargets, false) ?? [];
+    setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, hygieneTargets, false, 'resident') ?? []);
     if (resident.path.length > 0) return;
     noteFailedNeedAttempt(state, 'hygiene');
   } else if (resident.hygiene < 45) {
@@ -5989,10 +6151,10 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
 
   if (resident.hunger < 55 && cafeteriaTargets.length > 0 && state.metrics.mealStock > 3) {
     resident.state = ResidentState.ToCafeteria;
-    resident.path = pickQueueSpotPath(state, resident.tileIndex);
+    setResidentPath(state, resident, pickQueueSpotPath(state, resident.tileIndex, 'resident'));
     if (resident.path.length === 0) {
-      const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex);
-      resident.path = next.path;
+      const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex, 'resident');
+      setResidentPath(state, resident, next.path);
       resident.reservedTargetTile = next.target;
     }
     if (resident.path.length > 0) return;
@@ -6006,9 +6168,13 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     const walkTargets = resident.routinePhase === 'socialize' ? residentLeisureTargets(state) : collectIdleWalkTiles(state);
     if (walkTargets.length > 0) {
       const target = walkTargets[randomInt(0, walkTargets.length - 1, state.rng)];
-      resident.path = findPath(state, resident.tileIndex, target, false, state.pathOccupancyByTile) ?? [];
+      setResidentPath(
+        state,
+        resident,
+        findPath(state, resident.tileIndex, target, { allowRestricted: false, intent: 'resident' }, state.pathOccupancyByTile) ?? []
+      );
     } else {
-      resident.path = [];
+      setResidentPath(state, resident, []);
     }
     resident.retargetAt = state.now + 5 + state.rng() * 8;
   }
@@ -6213,7 +6379,7 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
             delayedSecurityPenalty) *
             brigContainmentMultiplier;
         incident.stage = 'intervening';
-        responder.crew.path = responder.path;
+        setCrewPath(state, responder.crew, responder.path);
         responder.crew.targetTile = incident.tileIndex;
         responder.crew.role = 'security';
         responder.crew.assignedSystem = 'security';
@@ -6324,7 +6490,7 @@ function updateResidentLogic(
     }
     if (activeFight) {
       resident.state = ResidentState.Idle;
-      resident.path = [];
+      setResidentPath(state, resident, []);
       resident.reservedTargetTile = null;
       resident.stress = clamp(resident.stress + dt * 0.6, 0, 120);
       resident.agitation = clamp(Math.max(resident.agitation, RESIDENT_AGITATION_CONFRONTATION_THRESHOLD + 15), 0, 100);
@@ -6461,7 +6627,7 @@ function updateResidentLogic(
       }
     } else if (resident.state === ResidentState.ToHomeShip) {
       if (resident.path.length === 0) {
-        resident.path = chooseNearestPath(state, resident.tileIndex, residentHomeDockTargets(state, resident), true) ?? [];
+        setResidentPath(state, resident, chooseNearestPath(state, resident.tileIndex, residentHomeDockTargets(state, resident), true, 'resident') ?? []);
       }
       const moveResult = moveAlongPath(state, resident, dt, occupancyByTile);
       if (moveResult === 'blocked') {
@@ -6495,11 +6661,11 @@ function updateResidentLogic(
       if (moveResult !== 'moved') resident.stress = clamp(resident.stress + dt * 0.2, 0, 120);
 
       if (resident.blockedTicks >= BLOCKED_REPATH_TICKS && resident.state === ResidentState.ToCafeteria) {
-        resident.path = pickQueueSpotPath(state, resident.tileIndex);
+        setResidentPath(state, resident, pickQueueSpotPath(state, resident.tileIndex, 'resident'));
       }
       if (resident.blockedTicks >= BLOCKED_LOCAL_REROUTE_TICKS && resident.state === ResidentState.ToCafeteria) {
-        const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex);
-        resident.path = next.path;
+        const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex, 'resident');
+        setResidentPath(state, resident, next.path);
         resident.reservedTargetTile = next.target;
       }
       if (resident.blockedTicks >= BLOCKED_FULL_REROUTE_TICKS) {
@@ -6514,30 +6680,33 @@ function updateResidentLogic(
         ) {
           resident.state = ResidentState.Eating;
           resident.actionTimer = TASK_TIMINGS.residentEatSec;
-          resident.path = [];
+          applyResidentCompletedRouteExperience(state, resident);
+          setResidentPath(state, resident, []);
           state.usageTotals.meals += 1;
           if (resident.reservedTargetTile !== null && resident.reservedTargetTile !== resident.tileIndex) {
             state.metrics.cafeteriaNonNodeSeatedCount++;
           }
           resident.reservedTargetTile = null;
         } else {
-          const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex);
-          resident.path = next.path;
+          const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex, 'resident');
+          setResidentPath(state, resident, next.path);
           resident.reservedTargetTile = next.target;
         }
       } else if (resident.state === ResidentState.ToCafeteria && isCafeteriaQueueSpot(state, resident.tileIndex)) {
-        const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex);
-        resident.path = next.path;
+        const next = pickLeastLoadedCafeteriaPath(state, resident.tileIndex, 'resident');
+        setResidentPath(state, resident, next.path);
         resident.reservedTargetTile = next.target;
       } else if (resident.state === ResidentState.ToDorm && state.rooms[resident.tileIndex] === RoomType.Dorm) {
         resident.state = ResidentState.Sleeping;
         resident.actionTimer = TASK_TIMINGS.residentSleepSec;
-        resident.path = [];
+        applyResidentCompletedRouteExperience(state, resident);
+        setResidentPath(state, resident, []);
         state.usageTotals.dorm += 1;
       } else if (resident.state === ResidentState.ToHygiene && state.rooms[resident.tileIndex] === RoomType.Hygiene) {
         resident.state = ResidentState.Cleaning;
         resident.actionTimer = TASK_TIMINGS.residentCleanSec;
-        resident.path = [];
+        applyResidentCompletedRouteExperience(state, resident);
+        setResidentPath(state, resident, []);
         state.usageTotals.hygiene += 1;
       } else if (
         resident.state === ResidentState.ToLeisure &&
@@ -6548,13 +6717,14 @@ function updateResidentLogic(
       ) {
         resident.state = ResidentState.Leisure;
         resident.actionTimer = TASK_TIMINGS.visitorLeisureBaseSec.lounger * (0.55 + state.rng() * 0.35);
-        resident.path = [];
+        applyResidentCompletedRouteExperience(state, resident);
+        setResidentPath(state, resident, []);
       } else if (
         resident.state === ResidentState.ToSecurity &&
         (state.rooms[resident.tileIndex] === RoomType.Security || (securityAuraByTile.get(resident.tileIndex) ?? 0) >= 0.5)
       ) {
         resident.state = ResidentState.Idle;
-        resident.path = [];
+        setResidentPath(state, resident, []);
         resident.retargetAt = state.now + 2 + state.rng() * 3;
       } else if (
         (resident.state === ResidentState.ToCafeteria ||
@@ -7258,6 +7428,9 @@ function computeMetrics(state: StationState): void {
     state.usageTotals.visitorWalkTrips > 0
       ? state.usageTotals.visitorWalkDistance / state.usageTotals.visitorWalkTrips
       : 0;
+  state.metrics.visitorServiceExposurePenaltyPerMin = state.usageTotals.visitorServiceExposurePenalty / runMinutes;
+  state.metrics.residentBadRouteStressPerMin = state.usageTotals.residentBadRouteStress / runMinutes;
+  state.metrics.crewPublicInterferencePerMin = state.usageTotals.crewPublicInterference / runMinutes;
   state.metrics.dormVisitsPerMin = state.usageTotals.dorm / runMinutes;
   state.metrics.dormFailedAttemptsPerMin = state.failedNeedAttempts.dorm / runMinutes;
   state.metrics.hygieneUsesPerMin = state.usageTotals.hygiene / runMinutes;
@@ -7332,6 +7505,15 @@ function computeMetrics(state: StationState): void {
   if (state.metrics.airQuality < 20 && state.metrics.lifeSupportInactiveReasons.length > 0) {
     roomWarnings.unshift(`life-support blocked: ${state.metrics.lifeSupportInactiveReasons.join(', ')}`);
   }
+  if (state.metrics.visitorServiceExposurePenaltyPerMin > 0.02) {
+    roomWarnings.unshift('layout friction: visitors see back-of-house routes');
+  }
+  if (state.metrics.residentBadRouteStressPerMin > 0.2) {
+    roomWarnings.unshift('layout friction: residents cross service spaces');
+  }
+  if (state.metrics.crewPublicInterferencePerMin > 2) {
+    roomWarnings.unshift('layout friction: logistics crosses public areas');
+  }
   if (state.ops.marketTotal > 0) {
     if (state.ops.marketActive <= 0) {
       roomWarnings.unshift('trade chain blocked: market inactive');
@@ -7370,6 +7552,7 @@ function computeMetrics(state: StationState): void {
     { label: 'no eligible dock', value: state.usageTotals.ratingFromShipSkip },
     { label: 'service failure', value: state.usageTotals.ratingFromVisitorFailure },
     { label: 'long walks', value: state.usageTotals.ratingFromWalkDissatisfaction },
+    { label: 'bad routes', value: state.usageTotals.ratingFromRouteExposure },
     { label: 'resident departures', value: state.usageTotals.ratingFromResidentDeparture }
   ]
     .filter((p) => p.value > 0.01)
@@ -7381,13 +7564,15 @@ function computeMetrics(state: StationState): void {
     queueTimeout: state.usageTotals.ratingFromShipTimeout,
     noEligibleDock: state.usageTotals.ratingFromShipSkip,
     serviceFailure: state.usageTotals.ratingFromVisitorFailure,
-    longWalks: state.usageTotals.ratingFromWalkDissatisfaction
+    longWalks: state.usageTotals.ratingFromWalkDissatisfaction,
+    routeExposure: state.usageTotals.ratingFromRouteExposure
   };
   state.metrics.stationRatingPenaltyPerMin = {
     queueTimeout: state.usageTotals.ratingFromShipTimeout / runMinutes,
     noEligibleDock: state.usageTotals.ratingFromShipSkip / runMinutes,
     serviceFailure: state.usageTotals.ratingFromVisitorFailure / runMinutes,
-    longWalks: state.usageTotals.ratingFromWalkDissatisfaction / runMinutes
+    longWalks: state.usageTotals.ratingFromWalkDissatisfaction / runMinutes,
+    routeExposure: state.usageTotals.ratingFromRouteExposure / runMinutes
   };
   state.metrics.stationRatingBonusTotal = {
     mealService: state.usageTotals.ratingFromVisitorSuccessByReason.mealService,
@@ -7699,13 +7884,15 @@ export function createInitialState(options?: { seed?: number }): StationState {
         queueTimeout: 0,
         noEligibleDock: 0,
         serviceFailure: 0,
-        longWalks: 0
+        longWalks: 0,
+        routeExposure: 0
       },
       stationRatingPenaltyTotal: {
         queueTimeout: 0,
         noEligibleDock: 0,
         serviceFailure: 0,
-        longWalks: 0
+        longWalks: 0,
+        routeExposure: 0
       },
       stationRatingBonusPerMin: {
         mealService: 0,
@@ -7748,6 +7935,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       residentSatisfactionAvg: 0,
       topRoomWarnings: [],
       roomWarningsCount: 0,
+      visitorServiceExposurePenaltyPerMin: 0,
+      residentBadRouteStressPerMin: 0,
+      crewPublicInterferencePerMin: 0,
       serviceNodesTotal: 0,
       serviceNodesUnreachable: 0,
       criticalUnstaffedSec: {
@@ -7892,6 +8082,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       ratingFromShipSkip: 0,
       ratingFromVisitorFailure: 0,
       ratingFromWalkDissatisfaction: 0,
+      ratingFromRouteExposure: 0,
       ratingFromVisitorFailureByReason: {
         noLeisurePath: 0,
         shipServicesMissing: 0,
@@ -7913,6 +8104,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       ratingFromResidentRetention: 0,
       visitorWalkDistance: 0,
       visitorWalkTrips: 0,
+      visitorServiceExposurePenalty: 0,
+      residentBadRouteStress: 0,
+      crewPublicInterference: 0,
       criticalStaffDrops: 0,
       securityDispatches: 0,
       securityResolved: 0,
@@ -8280,7 +8474,7 @@ export function diagnoseFoodChain(state: StationState): {
   const paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
   for (const from of growTargets) {
     for (const to of stoveTargets) {
-      const p = findPath(state, from, to, false);
+      const p = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' });
       if (p === null) {
         paths.push({ from, to, pathLen: null, reason: 'no path (corridor missing or all blocked)' });
       } else {

@@ -248,10 +248,10 @@ app.innerHTML = `
         <small id="berth-summary">Berths: visitor 0/0 | resident 0/0 | resident ships 0</small>
         <small id="resident-loop-summary">Resident loop: convert 0/0 | departures 0 | tax +0.0/min</small>
         <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
-        <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
+        <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0 | routes 0.0</small>
         <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service">Service/min: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
-        <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0</small>
+        <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0 | routes 0.0</small>
         <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service-total">Service total: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
         <small id="rating-insight-events">Events: skipped docks 0 | queue timeouts 0 | service fails/min 0.0</small>
@@ -1846,6 +1846,7 @@ function refreshOpsModal(): void {
     { label: 'No Dock', value: `${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.noEligibleDock > 0 ? 'warn' : 'default' },
     { label: 'Service Fail', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
     { label: 'Long Walks', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
+    { label: 'Bad Routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalRatingBonusesEl, [
     { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
@@ -4422,7 +4423,8 @@ function frame(now: number): void {
     `Penalty/min: timeout ${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(2)} | ` +
     `no dock ${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(2)} | ` +
     `service ${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(2)} | ` +
-    `walk ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)}`;
+    `walk ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)} | ` +
+    `routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)}`;
   ratingInsightBonusEl.textContent =
     `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
     `leisure ${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(2)} | ` +
@@ -4446,7 +4448,8 @@ function frame(now: number): void {
     `Total penalty: timeout ${state.metrics.stationRatingPenaltyTotal.queueTimeout.toFixed(1)} | ` +
     `no dock ${state.metrics.stationRatingPenaltyTotal.noEligibleDock.toFixed(1)} | ` +
     `service ${state.metrics.stationRatingPenaltyTotal.serviceFailure.toFixed(1)} | ` +
-    `walk ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)}`;
+    `walk ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)} | ` +
+    `routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)}`;
   ratingInsightBonusTotalEl.textContent =
     `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
     `leisure ${state.metrics.stationRatingBonusTotal.leisureService.toFixed(1)} | ` +
