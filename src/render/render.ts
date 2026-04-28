@@ -22,6 +22,7 @@ import {
   collectServiceNodeReachability,
   getDockByTile,
   resolveWallLightFacing,
+  validateBerthModulePlacement,
   validateDockPlacement
 } from '../sim/sim';
 import {
@@ -315,6 +316,136 @@ function drawTileSprite(
   return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[tileType], px, py, TILE_SIZE, TILE_SIZE);
 }
 
+function hasSameRoomNeighbor(state: StationState, tileIndex: number, dx: number, dy: number, room: RoomType): boolean {
+  const { x, y } = fromIndex(tileIndex, state.width);
+  const nx = x + dx;
+  const ny = y + dy;
+  if (!inBounds(nx, ny, state.width, state.height)) return false;
+  return state.rooms[ny * state.width + nx] === room;
+}
+
+function hasTileNeighbor(state: StationState, tileIndex: number, dx: number, dy: number, tile: TileType): boolean {
+  const { x, y } = fromIndex(tileIndex, state.width);
+  const nx = x + dx;
+  const ny = y + dy;
+  if (!inBounds(nx, ny, state.width, state.height)) return tile === TileType.Space;
+  return state.tiles[ny * state.width + nx] === tile;
+}
+
+function drawBerthHazardEdge(ctx: CanvasRenderingContext2D, px: number, py: number, edge: 'north' | 'east' | 'south' | 'west'): void {
+  const stripe = Math.max(2, Math.round(3 * PX));
+  const band = Math.max(2, Math.round(2 * PX));
+  ctx.save();
+  ctx.beginPath();
+  if (edge === 'north') ctx.rect(px, py, TILE_SIZE, band);
+  if (edge === 'south') ctx.rect(px, py + TILE_SIZE - band, TILE_SIZE, band);
+  if (edge === 'west') ctx.rect(px, py, band, TILE_SIZE);
+  if (edge === 'east') ctx.rect(px + TILE_SIZE - band, py, band, TILE_SIZE);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(255, 198, 66, 0.85)';
+  ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = 'rgba(20, 24, 30, 0.8)';
+  ctx.lineWidth = Math.max(1, Math.round(PX));
+  for (let o = -TILE_SIZE; o < TILE_SIZE * 2; o += stripe) {
+    ctx.beginPath();
+    if (edge === 'north' || edge === 'south') {
+      ctx.moveTo(px + o, py);
+      ctx.lineTo(px + o + stripe, py + TILE_SIZE);
+    } else {
+      ctx.moveTo(px, py + o);
+      ctx.lineTo(px + TILE_SIZE, py + o + stripe);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawBerthSupportArm(ctx: CanvasRenderingContext2D, px: number, py: number, edge: 'north' | 'east' | 'south' | 'west'): void {
+  const cx = px + TILE_SIZE * 0.5;
+  const cy = py + TILE_SIZE * 0.5;
+  const pad = Math.max(2, Math.round(3 * PX));
+  const len = TILE_SIZE * 0.34;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(33, 43, 55, 0.95)';
+  ctx.lineWidth = Math.max(2, Math.round(3 * PX));
+  ctx.beginPath();
+  if (edge === 'north') {
+    ctx.moveTo(cx, py + pad);
+    ctx.lineTo(cx, py + pad + len);
+    ctx.lineTo(cx + TILE_SIZE * 0.16, py + pad + len + TILE_SIZE * 0.1);
+  } else if (edge === 'south') {
+    ctx.moveTo(cx, py + TILE_SIZE - pad);
+    ctx.lineTo(cx, py + TILE_SIZE - pad - len);
+    ctx.lineTo(cx - TILE_SIZE * 0.16, py + TILE_SIZE - pad - len - TILE_SIZE * 0.1);
+  } else if (edge === 'west') {
+    ctx.moveTo(px + pad, cy);
+    ctx.lineTo(px + pad + len, cy);
+    ctx.lineTo(px + pad + len + TILE_SIZE * 0.1, cy - TILE_SIZE * 0.16);
+  } else {
+    ctx.moveTo(px + TILE_SIZE - pad, cy);
+    ctx.lineTo(px + TILE_SIZE - pad - len, cy);
+    ctx.lineTo(px + TILE_SIZE - pad - len - TILE_SIZE * 0.1, cy + TILE_SIZE * 0.16);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(151, 184, 205, 0.78)';
+  ctx.lineWidth = Math.max(1, Math.round(PX));
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(80, 248, 176, 0.85)';
+  ctx.fillRect(cx - PX, cy - PX, Math.max(1, Math.round(2 * PX)), Math.max(1, Math.round(2 * PX)));
+  ctx.restore();
+}
+
+function drawBerthTileTexture(ctx: CanvasRenderingContext2D, state: StationState, tileIndex: number, px: number, py: number): void {
+  const inset = Math.max(1, Math.round(1.5 * PX));
+  const grateStep = Math.max(3, Math.round(4 * PX));
+  const grad = ctx.createLinearGradient(px, py, px + TILE_SIZE, py + TILE_SIZE);
+  grad.addColorStop(0, '#07111b');
+  grad.addColorStop(0.55, '#111b27');
+  grad.addColorStop(1, '#0a121d');
+
+  ctx.save();
+  ctx.fillStyle = grad;
+  ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+  ctx.fillStyle = 'rgba(86, 125, 156, 0.14)';
+  ctx.fillRect(px + inset, py + inset, TILE_SIZE - inset * 2, TILE_SIZE - inset * 2);
+
+  ctx.strokeStyle = 'rgba(155, 207, 235, 0.16)';
+  ctx.lineWidth = Math.max(1, Math.round(PX));
+  for (let x = px + grateStep; x < px + TILE_SIZE; x += grateStep) {
+    ctx.beginPath();
+    ctx.moveTo(x, py + inset);
+    ctx.lineTo(x, py + TILE_SIZE - inset);
+    ctx.stroke();
+  }
+  for (let y = py + grateStep; y < py + TILE_SIZE; y += grateStep) {
+    ctx.beginPath();
+    ctx.moveTo(px + inset, y);
+    ctx.lineTo(px + TILE_SIZE - inset, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = 'rgba(92, 160, 210, 0.34)';
+  ctx.strokeRect(px + inset, py + inset, TILE_SIZE - inset * 2, TILE_SIZE - inset * 2);
+  ctx.fillStyle = 'rgba(190, 225, 245, 0.28)';
+  const bolt = Math.max(1, Math.round(PX));
+  ctx.fillRect(px + inset + bolt, py + inset + bolt, bolt, bolt);
+  ctx.fillRect(px + TILE_SIZE - inset - bolt * 2, py + inset + bolt, bolt, bolt);
+  ctx.fillRect(px + inset + bolt, py + TILE_SIZE - inset - bolt * 2, bolt, bolt);
+  ctx.fillRect(px + TILE_SIZE - inset - bolt * 2, py + TILE_SIZE - inset - bolt * 2, bolt, bolt);
+
+  if (!hasSameRoomNeighbor(state, tileIndex, 0, -1, RoomType.Berth)) drawBerthHazardEdge(ctx, px, py, 'north');
+  if (!hasSameRoomNeighbor(state, tileIndex, 1, 0, RoomType.Berth)) drawBerthHazardEdge(ctx, px, py, 'east');
+  if (!hasSameRoomNeighbor(state, tileIndex, 0, 1, RoomType.Berth)) drawBerthHazardEdge(ctx, px, py, 'south');
+  if (!hasSameRoomNeighbor(state, tileIndex, -1, 0, RoomType.Berth)) drawBerthHazardEdge(ctx, px, py, 'west');
+  if (hasTileNeighbor(state, tileIndex, 0, -1, TileType.Wall)) drawBerthSupportArm(ctx, px, py, 'north');
+  if (hasTileNeighbor(state, tileIndex, 1, 0, TileType.Wall)) drawBerthSupportArm(ctx, px, py, 'east');
+  if (hasTileNeighbor(state, tileIndex, 0, 1, TileType.Wall)) drawBerthSupportArm(ctx, px, py, 'south');
+  if (hasTileNeighbor(state, tileIndex, -1, 0, TileType.Wall)) drawBerthSupportArm(ctx, px, py, 'west');
+  ctx.restore();
+}
+
 function renderDoorLayer(ctx: CanvasRenderingContext2D, state: StationState, spriteAtlas: SpriteAtlas): void {
   for (let i = 0; i < state.tiles.length; i++) {
     if (state.tiles[i] !== TileType.Door) continue;
@@ -505,6 +636,59 @@ function pickFloorOverlayKey(state: StationState, tileIndex: number): string | n
   return FLOOR_GRIME_SPRITE_KEYS[(hash >>> 4) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
 }
 
+function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationState['moduleInstances'][number], px: number, py: number, w: number, h: number): boolean {
+  if (module.type !== ModuleType.Gangway && module.type !== ModuleType.CustomsCounter && module.type !== ModuleType.CargoArm) {
+    return false;
+  }
+  ctx.save();
+  ctx.fillStyle = 'rgba(7, 11, 18, 0.82)';
+  ctx.strokeStyle = 'rgba(188, 218, 240, 0.72)';
+  ctx.lineWidth = Math.max(1, Math.round(PX));
+  ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), w - Math.round(4 * PX), h - Math.round(4 * PX));
+  ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), w - Math.round(5 * PX), h - Math.round(5 * PX));
+
+  if (module.type === ModuleType.Gangway) {
+    const cx = px + w * 0.5;
+    ctx.fillStyle = 'rgba(45, 67, 84, 0.95)';
+    ctx.fillRect(px + w * 0.28, py + h * 0.12, w * 0.44, h * 0.76);
+    ctx.strokeStyle = 'rgba(117, 184, 224, 0.75)';
+    ctx.beginPath();
+    ctx.moveTo(cx, py + h * 0.18);
+    ctx.lineTo(cx, py + h * 0.82);
+    ctx.stroke();
+    ctx.fillStyle = '#63f0b2';
+    ctx.fillRect(px + w * 0.38, py + h * 0.66, Math.max(2, w * 0.24), Math.max(1, h * 0.07));
+  } else if (module.type === ModuleType.CustomsCounter) {
+    ctx.fillStyle = 'rgba(65, 48, 36, 0.95)';
+    ctx.fillRect(px + w * 0.16, py + h * 0.58, w * 0.68, h * 0.2);
+    ctx.fillStyle = 'rgba(81, 120, 152, 0.9)';
+    ctx.fillRect(px + w * 0.24, py + h * 0.2, w * 0.52, h * 0.28);
+    ctx.fillStyle = '#ffd36a';
+    ctx.fillRect(px + w * 0.42, py + h * 0.28, w * 0.16, h * 0.08);
+    ctx.strokeStyle = 'rgba(227, 239, 255, 0.65)';
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.22, py + h * 0.56);
+    ctx.lineTo(px + w * 0.78, py + h * 0.56);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = 'rgba(42, 48, 58, 0.98)';
+    ctx.fillRect(px + w * 0.1, py + h * 0.12, w * 0.28, h * 0.24);
+    ctx.strokeStyle = 'rgba(244, 186, 74, 0.9)';
+    ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.24, py + h * 0.24);
+    ctx.lineTo(px + w * 0.58, py + h * 0.42);
+    ctx.lineTo(px + w * 0.72, py + h * 0.68);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(210, 225, 238, 0.88)';
+    ctx.fillRect(px + w * 0.66, py + h * 0.62, w * 0.16, h * 0.16);
+    ctx.strokeStyle = 'rgba(109, 169, 209, 0.72)';
+    ctx.strokeRect(px + w * 0.08, py + h * 0.48, w * 0.36, h * 0.36);
+  }
+  ctx.restore();
+  return true;
+}
+
 function drawModuleVisual(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -535,6 +719,7 @@ function drawModuleVisual(
       return;
     }
   }
+  if (drawBerthModuleVisual(ctx, module, px, py, w, h)) return;
   ctx.fillStyle = 'rgba(10, 14, 22, 0.78)';
   ctx.fillRect(px + Math.round(3 * PX), py + Math.round(3 * PX), w - Math.round(6 * PX), h - Math.round(6 * PX));
   ctx.strokeStyle = 'rgba(214, 228, 245, 0.72)';
@@ -1051,6 +1236,9 @@ function ensureStaticLayer(
       ctx.fillStyle = tileColor[tileType];
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
+    if (state.rooms[i] === RoomType.Berth && state.tiles[i] !== TileType.Space) {
+      drawBerthTileTexture(ctx, state, i, px, py);
+    }
     if (state.controls.showZones && state.tiles[i] !== TileType.Space) {
       if (state.zones[i] === ZoneType.Restricted) {
         ctx.fillStyle = 'rgba(255, 90, 90, 0.25)';
@@ -1238,6 +1426,7 @@ function validateModulePreviewPlacement(
     if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) return { valid: false, tiles };
     if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
   }
+  if (validateBerthModulePlacement(state, moduleType, tiles)) return { valid: false, tiles };
   if (moduleType === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
     return { valid: false, tiles };
   }
