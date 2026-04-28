@@ -2295,9 +2295,9 @@ function rebuildDockEntities(state: StationState): void {
 // ---------------------------------------------------------------------------
 // Berth (RoomType.Berth) helpers — dock-migration v0.
 //
-// A Berth is a regular rectangular room paint. Capability tags are derived
-// from the modules placed inside the room cluster's tiles. Ship→berth
-// matching is via `pickBerthForShip` (size-class + capability superset).
+// A Berth is a regular room paint whose hull-facing edge is open to space.
+// Capability tags are derived from modules placed inside the room cluster.
+// Ship→berth matching is via `pickBerthForShip` (size + exposure + caps).
 //
 // v1: U-shape strict validation, airlock primitive, save migration.
 // ---------------------------------------------------------------------------
@@ -2321,6 +2321,47 @@ const MODULE_CAPABILITY_TAGS: Partial<Record<ModuleType, CapabilityTag>> = {
   [ModuleType.CargoArm]: 'cargo'
 };
 
+function tileTouchesSpace(state: StationState, tile: number): boolean {
+  const { x, y } = fromIndex(tile, state.width);
+  const neighbors = [
+    { x, y: y - 1 },
+    { x: x + 1, y },
+    { x, y: y + 1 },
+    { x: x - 1, y }
+  ];
+  for (const n of neighbors) {
+    if (!inBounds(n.x, n.y, state.width, state.height)) return true;
+    if (state.tiles[toIndex(n.x, n.y, state.width)] === TileType.Space) return true;
+  }
+  return false;
+}
+
+function tileTouchesWallOrSpace(state: StationState, tile: number): boolean {
+  const { x, y } = fromIndex(tile, state.width);
+  const neighbors = [
+    { x, y: y - 1 },
+    { x: x + 1, y },
+    { x, y: y + 1 },
+    { x: x - 1, y }
+  ];
+  for (const n of neighbors) {
+    if (!inBounds(n.x, n.y, state.width, state.height)) return true;
+    const neighborTile = state.tiles[toIndex(n.x, n.y, state.width)];
+    if (neighborTile === TileType.Space || neighborTile === TileType.Wall) return true;
+  }
+  return false;
+}
+
+export function validateBerthModulePlacement(state: StationState, module: ModuleType, tiles: number[]): string | null {
+  if (module === ModuleType.Gangway && !tiles.some((tile) => tileTouchesSpace(state, tile))) {
+    return 'gangway must touch the berth edge open to space';
+  }
+  if (module === ModuleType.CargoArm && !tiles.some((tile) => tileTouchesWallOrSpace(state, tile))) {
+    return 'cargo arm must sit on a berth edge';
+  }
+  return null;
+}
+
 function computeBerthCapabilities(state: StationState, clusterTiles: number[]): CapabilityTag[] {
   const tileSet = new Set(clusterTiles);
   const tags = new Set<CapabilityTag>();
@@ -2335,10 +2376,15 @@ function computeBerthCapabilities(state: StationState, clusterTiles: number[]): 
   return [...tags];
 }
 
+function berthHasSpaceExposure(state: StationState, clusterTiles: number[]): boolean {
+  return clusterTiles.some((tile) => tileTouchesSpace(state, tile));
+}
+
 interface BerthCandidate {
   anchorTile: number;
   tiles: number[];
   size: BerthSizeClass;
+  spaceExposed: boolean;
   capabilities: CapabilityTag[];
   occupiedByShipId: number | null;
 }
@@ -2360,6 +2406,7 @@ function listBerthCandidates(state: StationState): BerthCandidate[] {
       anchorTile: anchor,
       tiles: cluster,
       size: berthSizeClassForArea(cluster.length),
+      spaceExposed: berthHasSpaceExposure(state, cluster),
       capabilities: computeBerthCapabilities(state, cluster),
       occupiedByShipId: occupiedByAnchor.get(anchor) ?? null
     });
@@ -2389,6 +2436,7 @@ function pickBerthForShip(
   const candidates = listBerthCandidates(state)
     .filter((b) => b.occupiedByShipId === null)
     .filter((b) => shipSizeFitsBerth(shipSize, b.size))
+    .filter((b) => b.spaceExposed)
     .filter((b) => isCapabilitySuperset(b.capabilities, required));
   if (candidates.length === 0) return null;
   // Pick the smallest-fit berth (cheapest by area), tiebreak on lower anchor index.
@@ -2409,6 +2457,7 @@ export interface BerthInspector {
   anchorTile: number;
   clusterTiles: number[];
   size: BerthSizeClass;
+  spaceExposed: boolean;
   capabilities: CapabilityTag[];
   acceptedShipTypes: ShipType[];
   rejectedShipTypes: Array<{ shipType: ShipType; missing: CapabilityTag[] }>;
@@ -2424,6 +2473,8 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
   const cluster = meta.cluster;
   const capabilities = computeBerthCapabilities(state, cluster);
   const size = berthSizeClassForArea(cluster.length);
+  const anchorTile = cluster.reduce((best, t) => (t < best ? t : best), cluster[0]);
+  const spaceExposed = berthHasSpaceExposure(state, cluster);
   const accepted: ShipType[] = [];
   const rejected: Array<{ shipType: ShipType; missing: CapabilityTag[] }> = [];
   const shipTypes: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
@@ -2435,15 +2486,16 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
   }
   let occupiedByShipId: number | null = null;
   for (const ship of state.arrivingShips) {
-    if (ship.assignedBerthAnchor === cluster[0]) {
+    if (ship.assignedBerthAnchor === anchorTile) {
       occupiedByShipId = ship.id;
       break;
     }
   }
   return {
-    anchorTile: cluster[0],
+    anchorTile,
     clusterTiles: cluster,
     size,
+    spaceExposed,
     capabilities,
     acceptedShipTypes: accepted,
     rejectedShipTypes: rejected,
@@ -2457,12 +2509,16 @@ function describeMissingCapabilities(
   shipSize: ShipSize
 ): string | null {
   const required = SHIP_PROFILES[shipType]?.requiredCapabilities ?? [];
-  if (required.length === 0) return null;
   const sizeFit = listBerthCandidates(state).filter((b) => shipSizeFitsBerth(shipSize, b.size));
-  if (sizeFit.length === 0) return null; // no size match, not a capability issue
+  if (sizeFit.length === 0) return null; // no size match, not a berth-readiness issue
+  const exposed = sizeFit.filter((b) => b.spaceExposed);
+  if (exposed.length === 0) {
+    return `${shipType} ship waiting - berth needs one edge open to space`;
+  }
+  if (required.length === 0) return null;
   // Find the closest-by-capability berth and report missing tags.
   let bestMissing: CapabilityTag[] | null = null;
-  for (const cand of sizeFit) {
+  for (const cand of exposed) {
     const missing = required.filter((t) => !cand.capabilities.includes(t));
     if (bestMissing === null || missing.length < bestMissing.length) {
       bestMissing = missing;
@@ -4031,6 +4087,12 @@ function tryBoardVisitorOriginShipAtTile(
     return { boarded: true, ship };
   }
   return { boarded: false, ship: null };
+}
+
+function isVisitorExitTile(state: StationState, tileIndex: number): boolean {
+  // Dock-migration v0: legacy ships board from Dock tiles; berth ships
+  // board from the Berth room tiles bound into ArrivingShip.bayTiles.
+  return state.tiles[tileIndex] === TileType.Dock || state.rooms[tileIndex] === RoomType.Berth;
 }
 
 function spawnShipAtDock(
@@ -5662,7 +5724,7 @@ function updateVisitorLogic(
       }
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt);
-      if (state.tiles[visitor.tileIndex] === TileType.Dock) {
+      if (isVisitorExitTile(state, visitor.tileIndex)) {
         const boardedResult = tryBoardVisitorOriginShipAtTile(state, visitor, visitor.tileIndex);
         if (boardedResult.boarded && boardedResult.ship) {
           const converted = maybeConvertVisitorToResident(state, visitor, boardedResult.ship);
@@ -5707,9 +5769,7 @@ function updateVisitorLogic(
       // Despawn when the visitor has reached an exit tile. Dock tiles are
       // explicit; Berth-room tiles are the equivalent for berth-arrivals
       // (a ship docked at a Berth has no underlying Dock tile type).
-      const onExitTile =
-        state.tiles[visitor.tileIndex] === TileType.Dock ||
-        state.rooms[visitor.tileIndex] === RoomType.Berth;
+      const onExitTile = isVisitorExitTile(state, visitor.tileIndex);
       if (onExitTile) {
         state.recentExitTimes.push(state.now);
         occupancyByTile.set(
@@ -6953,10 +7013,12 @@ function computeMetrics(state: StationState): void {
   const bays = state.docks;
   const visitorBerths = bays.filter((d) => d.purpose === 'visitor');
   const residentialBerths = bays.filter((d) => d.purpose === 'residential');
+  const roomBerths = listBerthCandidates(state);
   const residentPrivateBedsTotal = privateHousingUnits(state).length;
   const dockedShips = state.arrivingShips.filter((s) => s.stage === 'docked').length;
   const residentShipsDocked = state.arrivingShips.filter((s) => s.kind === 'resident_home' && s.stage === 'docked').length;
-  const bayUtilizationPct = bays.length > 0 ? (dockedShips / bays.length) * 100 : 0;
+  const bayCapacityTotal = bays.length + roomBerths.length;
+  const bayUtilizationPct = bayCapacityTotal > 0 ? (dockedShips / bayCapacityTotal) * 100 : 0;
   const averageDockTime =
     state.dockedShipsCompleted > 0 ? state.dockedTimeTotal / state.dockedShipsCompleted : 0;
   state.recentExitTimes = state.recentExitTimes.filter((t) => state.now - t <= 60);
@@ -7020,8 +7082,10 @@ function computeMetrics(state: StationState): void {
   state.metrics.stationRating = clamp(STATION_RATING_START + state.usageTotals.ratingDelta, 0, 100);
   state.metrics.stationRatingTrendPerMin = ratingDeltaPerMin;
   state.metrics.dockedShips = dockedShips;
-  state.metrics.visitorBerthsTotal = visitorBerths.length;
-  state.metrics.visitorBerthsOccupied = visitorBerths.filter((d) => d.occupiedByShipId !== null).length;
+  state.metrics.visitorBerthsTotal = visitorBerths.length + roomBerths.length;
+  state.metrics.visitorBerthsOccupied =
+    visitorBerths.filter((d) => d.occupiedByShipId !== null).length +
+    roomBerths.filter((b) => b.occupiedByShipId !== null).length;
   state.metrics.residentBerthsTotal = residentialBerths.length;
   state.metrics.residentBerthsOccupied = residentialBerths.filter((d) => d.occupiedByShipId !== null).length;
   state.metrics.residentShipsDocked = residentShipsDocked;
@@ -8634,6 +8698,8 @@ export function tryPlaceModule(
       return { ok: false, reason: 'footprint crosses room boundary' };
     }
   }
+  const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
+  if (berthModuleReason) return { ok: false, reason: berthModuleReason };
 
   state.moduleInstances.push({
     id: state.moduleSpawnCounter++,

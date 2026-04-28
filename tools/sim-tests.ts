@@ -209,6 +209,43 @@ function createDockedTransientShip(state: StationState, dockId: number, shipId: 
   return ship;
 }
 
+function createDockedBerthShip(state: StationState, berthTiles: number[], shipId: number): ArrivingShip {
+  const center = berthTiles
+    .map((tile) => fromIndex(tile, state.width))
+    .reduce(
+      (acc, pos) => ({ x: acc.x + pos.x, y: acc.y + pos.y }),
+      { x: 0, y: 0 }
+    );
+  const anchorTile = berthTiles.reduce((best, tile) => Math.min(best, tile), berthTiles[0]);
+  const ship: ArrivingShip = {
+    id: shipId,
+    kind: 'transient',
+    size: 'small',
+    bayTiles: [...berthTiles],
+    bayCenterX: center.x / Math.max(1, berthTiles.length) + 0.5,
+    bayCenterY: center.y / Math.max(1, berthTiles.length) + 0.5,
+    shipType: 'tourist',
+    lane: 'north',
+    originDockId: null,
+    assignedDockId: null,
+    assignedBerthAnchor: anchorTile,
+    queueState: 'none',
+    stage: 'docked',
+    stageTime: 0,
+    passengersTotal: 1,
+    passengersSpawned: 1,
+    passengersBoarded: 0,
+    minimumBoarding: 1,
+    spawnCarry: 0,
+    dockedAt: state.now,
+    residentIds: [],
+    manifestDemand: { cafeteria: 0.5, market: 0.25, lounge: 0.25 },
+    manifestMix: { diner: 0.55, shopper: 0.2, lounger: 0.15, rusher: 0.1 }
+  };
+  state.arrivingShips.push(ship);
+  return ship;
+}
+
 function spawnReturningVisitor(state: StationState, dockTile: number, id: number, originShipId: number): void {
   const center = fromIndex(dockTile, state.width);
   const v: Visitor = {
@@ -974,6 +1011,100 @@ function testVisitorBerthsAcceptTrafficResidentialDoNot(): void {
   const visitorDock = dockByIdOrThrow(state, visitorDockId);
   assertCondition(residentialDock.occupiedByShipId === null, 'Residential berth should stay unused by scheduled traffic.');
   assertCondition(visitorDock.purpose === 'visitor', 'Visitor berth purpose should remain visitor.');
+}
+
+function testBerthVisitorsBoardAndDespawnOnReturn(): void {
+  const state = createInitialState({ seed: 30161 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const berthTiles: number[] = [];
+  for (let y = 9; y <= 11; y++) {
+    for (let x = 9; x <= 11; x++) {
+      const tile = toIndex(x, y, state.width);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+      berthTiles.push(tile);
+    }
+  }
+  const ship = createDockedBerthShip(state, berthTiles, 91001);
+  spawnReturningVisitor(state, berthTiles[0], 505, ship.id);
+
+  runFor(state, 1);
+
+  assertCondition(state.visitors.length === 0, 'Berth visitor should despawn after reaching its origin berth.');
+  assertCondition(ship.passengersBoarded === 1, 'Berth visitor should board its berth-bound origin ship.');
+  assertCondition(state.recentExitTimes.length > 0, 'Berth visitor exit should count as a recent exit.');
+}
+
+function testBerthTrafficRequiresSpaceExposure(): void {
+  const state = createInitialState({ seed: 30162 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  state.controls.shipsPerCycle = 1;
+  for (let y = 9; y <= 11; y++) {
+    for (let x = 9; x <= 11; x++) {
+      const tile = toIndex(x, y, state.width);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+    }
+  }
+
+  runFor(state, 20);
+
+  assertCondition(state.arrivingShips.length === 0, 'Internal berth should not receive ships.');
+  assertCondition(
+    state.metrics.shipsQueuedNoCapabilityHint.includes('open to space'),
+    'Internal berth should explain that it needs an edge open to space.'
+  );
+}
+
+function testOpenBerthReceivesScheduledTraffic(): void {
+  const state = createInitialState({ seed: 30163 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  state.controls.shipsPerCycle = 1;
+  const berthTiles: number[] = [];
+  for (let y = 9; y <= 13; y++) {
+    for (let x = 44; x <= 48; x++) {
+      const tile = toIndex(x, y, state.width);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+      berthTiles.push(tile);
+    }
+  }
+  placeModuleOrThrow(state, ModuleType.Gangway, 48, 11);
+  placeModuleOrThrow(state, ModuleType.CustomsCounter, 44, 11);
+  placeModuleOrThrow(state, ModuleType.CargoArm, 47, 9);
+
+  runFor(state, 20);
+
+  assertCondition(
+    state.arrivingShips.some((ship) => ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined),
+    'Open-to-space berth should receive scheduled berth ships.'
+  );
+  assertCondition(state.metrics.visitorBerthsTotal >= 1, 'Room-painted berths should count in visitor berth metrics.');
+}
+
+function testBerthSupportModulePlacementRules(): void {
+  const state = createInitialState({ seed: 30164 });
+  buildHabitat(state);
+  for (let y = 9; y <= 13; y++) {
+    for (let x = 44; x <= 48; x++) {
+      const tile = toIndex(x, y, state.width);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+    }
+  }
+
+  const middleGangway = tryPlaceModule(state, ModuleType.Gangway, toIndex(46, 11, state.width));
+  assertCondition(!middleGangway.ok, 'Gangway should require the berth edge open to space.');
+  const edgeGangway = tryPlaceModule(state, ModuleType.Gangway, toIndex(48, 11, state.width));
+  assertCondition(edgeGangway.ok, `Gangway on open berth edge should place: ${edgeGangway.reason ?? 'unknown'}`);
+
+  const middleCargo = tryPlaceModule(state, ModuleType.CargoArm, toIndex(45, 10, state.width));
+  assertCondition(!middleCargo.ok, 'Cargo arm should require a berth edge.');
+  const edgeCargo = tryPlaceModule(state, ModuleType.CargoArm, toIndex(47, 9, state.width));
+  assertCondition(edgeCargo.ok, `Cargo arm on berth edge should place: ${edgeCargo.reason ?? 'unknown'}`);
 }
 
 function testConversionBlockedWithoutResidentialBerth(): void {
@@ -3093,6 +3224,10 @@ function run(): void {
   testJobMetricsConsistency();
   testActiveLogisticsCrewDoNotRestBeforeCompletingJobs();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
+  testBerthVisitorsBoardAndDespawnOnReturn();
+  testBerthTrafficRequiresSpaceExposure();
+  testOpenBerthReceivesScheduledTraffic();
+  testBerthSupportModulePlacementRules();
   testConversionBlockedWithoutResidentialBerth();
   testConversionBlockedWithoutPrivateHousing();
   testConversionCreatesResidentHomeShip();

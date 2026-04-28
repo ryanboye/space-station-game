@@ -51,6 +51,19 @@ Set with `normalizeTrafficWeights` (`sim.ts:248`). The biases come into play whe
 2. `docked` — visitors spawn (`generateShipManifest` `sim.ts:1376`); ship occupies the dock.
 3. `depart` — 2 s, then ship is removed from `state.arrivingShips`.
 
+Dock-migration v0 also supports `spawnShipAtBerth`: `assignedDockId = null`, `assignedBerthAnchor` points at the Berth room anchor, and `bayTiles` are the Berth room tiles. Visitors return to those `bayTiles` and despawn/board from `RoomType.Berth` tiles.
+
+Berth rooms are ship pads, not sealed rooms. A valid traffic berth needs:
+
+- One contiguous `RoomType.Berth` cluster. Size class comes from area: small 4+, medium 20+, large 42+.
+- At least one berth tile adjacent to `TileType.Space` or the map edge.
+- Capability modules for the ship type:
+  - `Gangway` = passenger access. Must be placed on the open-to-space berth edge.
+  - `CustomsCounter` = customs/processing support. Can sit anywhere inside the berth.
+  - `CargoArm` = freight support. Must sit on a berth edge touching wall or space.
+
+Ship matching uses both size and capabilities: tourist needs gangway, trader/colonist need gangway + customs, industrial needs cargo, military needs all three.
+
 **Resident home-ships** flip `kind = 'resident_home'` and override the depart stage back to `docked` while `residentIds.length > 0` (`sim.ts:3721`). They stay forever until the last resident leaves.
 
 ### Queue
@@ -82,6 +95,7 @@ If no eligible dock is free at arrival time, the ship goes to `state.dockQueue` 
 
 - A dock cluster splits into two if you delete a tile in the middle. The first new cluster keeps the original id; the other gets a fresh one. Code that holds a `dockId` reference across topology mutations may dangle.
 - Resident home-ships violate the normal depart stage. Don't write a ship-cleanup pass that auto-removes ships in `depart` after a timeout.
+- Berth ships do not have a legacy `assignedDockId`; code that frees dock occupancy or checks visitor exits must also consider `assignedBerthAnchor`/`RoomType.Berth`.
 - The lane bias (north = leisure, etc.) is initialized in `generateLaneProfiles` but is **not** locked — `normalizeTrafficWeights` is called whenever weights are mutated.
 - `validateDockPlacementAt` requires both an outward-facing Space tile *and* a 4-deep approach corridor. Building dock tiles flush against another building's exterior wall fails silently — there's no UI hint.
 - `pickDockForShip` (the eligible-dock matcher) consumes both `allowedShipTypes` and `allowedShipSizes`. If you delete a dock's allowed-types entry the ships will queue forever.

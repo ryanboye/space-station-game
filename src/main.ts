@@ -2937,14 +2937,15 @@ function refreshRoomModal(): void {
     if (berth) {
       const caps = berth.capabilities.length > 0 ? berth.capabilities.join(', ') : 'none installed';
       const accepts = berth.acceptedShipTypes.length > 0 ? berth.acceptedShipTypes.join(', ') : 'none yet — install capability modules';
+      const exposure = berth.spaceExposed ? 'open to space' : 'sealed inside - expose one edge to space';
       const rejects = berth.rejectedShipTypes
         .map((r) => `${r.shipType} (needs ${r.missing.join('+')})`)
         .join(' | ');
       const occ = berth.occupiedByShipId !== null ? ` | occupied by ship #${berth.occupiedByShipId}` : ' | empty';
       roomModalBerthEl.textContent =
-        `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles)${occ} | capabilities: ${caps} | accepts: ${accepts}` +
+        `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles) | ${exposure}${occ} | capabilities: ${caps} | accepts: ${accepts}` +
         (rejects ? ` | rejects: ${rejects}` : '');
-      roomModalBerthEl.style.color = berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
+      roomModalBerthEl.style.color = berth.spaceExposed && berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
     } else {
       roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
       roomModalBerthEl.style.color = '#ff7676';

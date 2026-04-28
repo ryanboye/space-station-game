@@ -88,7 +88,7 @@ Source: `src/sim/balance.ts:132` (`ROOM_DEFINITIONS`).
 | Reactor | 4 | — | ✓ | ✓ | (no) | — |
 | Security | **6** | 1 Terminal | ✓ | ✓ | ✓ | **required** |
 | Brig | **8** | 1 CellConsole | ✓ | ✓ | ✓ | **required** |
-| Berth | 4 (v0) | — | (no) | (no) | (no) | — |
+| Berth | 4 (v0) | capability modules by ship type | (no) | (no) | (no) | one edge open to space |
 
 ### Common "why is my room inactive" failures
 
@@ -98,6 +98,8 @@ Source: `src/sim/balance.ts:132` (`ROOM_DEFINITIONS`).
 - "**not pressurized**" — leaks. Outer Wall is missing somewhere or there's a path to space tiles.
 - "**path blocked**" — the room can be reached by walking only through doors and walkable tiles? If isolated, paint a corridor.
 - "**too large for service nodes**" — Cafeteria with 12 tiles but only 1 Table = the throughput per tile is too low. Add more tables/serving stations until "ok".
+- "**berth needs one edge open to space**" — Berth room paint is a ship bay, not an enclosed room. At least one berth tile must touch Space or the map edge.
+- Berth support placement is edge-aware: Gangway belongs on the open-to-space edge, Cargo Arm belongs on a berth edge, and Customs can sit anywhere inside the berth.
 
 ### Practical playtesting workflow
 

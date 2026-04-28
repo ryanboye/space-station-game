@@ -9,7 +9,7 @@ Two distinct populations sharing a lot of code. **Visitors** arrive on ships, co
 `Visitor` (`src/sim/types.ts:...`). State machine in `VisitorState` (`types.ts:110`):
 
 ```
-Spawned → ToCafeteria → Queueing → Eating → ToLeisure → Leisure → ToDock → (departed)
+Spawned → ToCafeteria → Queueing → Eating → ToLeisure → Leisure → ToDock → (board ship / departed)
 ```
 
 Service can be skipped depending on archetype.
@@ -20,7 +20,7 @@ Service can be skipped depending on archetype.
 2. Pick a lane weighted by `state.laneProfiles[lane].trafficVolume` (`sim.ts:262`–283).
 3. Pick a ship type weighted by `laneProfiles[lane].weights[type]`. Type must be `isShipTypeUnlocked` (`sim.ts:348`) — `industrial` requires T2, `military`/`colonist` T3.
 4. Pick a size via `preferredShipSize` (`sim.ts:1249`), find an eligible dock (allowedShipTypes ∩ allowedShipSizes ∩ dock area large enough). If none: queue at `state.dockQueue` with `DOCK_QUEUE_MAX_TIME_SEC = 18 s` timeout.
-5. `spawnShipAtDock` (`sim.ts:3778`) creates an `ArrivingShip`. Stages: `approach` (2 s) → `docked` (visitors spawn) → `depart` (2 s).
+5. `spawnShipAtDock` / `spawnShipAtBerth` creates an `ArrivingShip`. Stages: `approach` (2 s) → `docked` (visitors spawn) → `depart` (2 s).
 6. Manifest: `generateShipManifest` (`sim.ts:1376`) blends `SHIP_PROFILES[shipType].manifestBaseline` (`src/sim/content/ships.ts:3`) with the archetype mix.
 
 ### Archetypes
@@ -165,4 +165,5 @@ The T5 "Health" unlock predicate requires both `actorsTreatedLifetime ≥ 1` and
 - Resident home-ships persistently occupy a dock. Don't write code that auto-departs ships with `residentIds.length > 0`.
 - Resident `state` and `routinePhase` are independent — the routine biases the target picker but doesn't override critical-need overrides. Don't reorder the priority cascade in `assignResidentTarget` without re-running the resident scenarios in `tools/sim-tests.ts`.
 - Visitor patience starts at 0 and *increments* — high patience is bad. Don't invert the sign.
+- Berth-bound visitors exit from `RoomType.Berth` tiles, not `TileType.Dock` tiles. Keep visitor departure checks using the shared exit-tile helper rather than checking dock tiles directly.
 - `applyAirExposure` is shared between visitors and residents. Changing thresholds affects both populations.
