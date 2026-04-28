@@ -8156,18 +8156,27 @@ export function getUnlockTier(state: StationState): UnlockTier {
 }
 
 // ─── Food-chain stall diagnostic (BMO T2 hunt 2026-04-27) ────────────────
-// Dump everything you'd want to know about why hydroponics→kitchen
-// rawMeal isn't moving despite hydro producing. Returns a structured
-// diagnostic; intended use from the playtest harness or devtools:
+// Dump everything you'd want to know about why food isn't moving through
+// the chain. Returns a structured diagnostic; intended use from the
+// playtest harness or devtools:
 //   const d = (window).__sim.diagnoseFoodChain(state);
 //   console.table(d.summary);
+//   console.table(d.paths);     // ← grow → stove leg (raw meal hauling)
+//   console.table(d.mealPaths); // ← stove → serving leg (cooked meal hauling, seb 2026-04-28)
 //
-// Covers the failure modes BMO listed:
-//   1. job created? (counts pending/assigned/in-progress rawMeal jobs)
-//   2. path exists? (runs findPath between every grow→stove pair)
-//   3. crew dispatchable? (logisticsDispatchSlots + idle/non-idle counts)
-//   4. cache fresh? (compares cache version keys against current state)
-//   5. modules reachable? (collectServiceTargets returns)
+// Covers two stall legs:
+//   LEG 1 (grow → stove): rawMeal hauling. Hydro produces but kitchen empty.
+//     - jobs?  openRawJobCount
+//     - paths? `paths` (grow × stove) — pathLen:null = corridor missing
+//   LEG 2 (stove → serving): cooked-meal hauling. Kitchen produces but
+//     serving line empty / visitors starve.
+//     - jobs?  openMealJobCount
+//     - paths? `mealPaths` (stove × serving) — pathLen:null = K→C blocked
+//
+// Plus standard diagnostics:
+//   - crew dispatchable? (logisticsDispatchSlots + idle/non-idle counts)
+//   - modules reachable? (collectServiceTargets returns)
+//   - visitor flow stats (hungry / queueing / eating / leaving)
 export function diagnoseFoodChain(state: StationState): {
   summary: Record<string, number | string>;
   jobs: Array<{
@@ -8184,6 +8193,7 @@ export function diagnoseFoodChain(state: StationState): {
     stallReason?: string;
   }>;
   paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
+  mealPaths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
   crewByRole: Record<string, number>;
   crewDetail: Array<{
     id: number;
@@ -8201,8 +8211,17 @@ export function diagnoseFoodChain(state: StationState): {
 } {
   const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
   const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  // ── BMO follow-up 2026-04-28 (seb): stove→serving path probe.
+  // The original `paths` covers the rawMeal leg (grow → stove). The next
+  // leg in the food chain is cooked-meal hauling: stove → serving station
+  // in the Cafeteria. If THAT leg is path-blocked, kitchen accumulates
+  // meals but visitors starve at the serving line. Same probe shape so
+  // the harness can `console.table(d.mealPaths)` identically to d.paths.
+  const servingTargets = collectServiceTargets(state, RoomType.Cafeteria);
   const rawJobs = state.jobs.filter((j) => j.itemType === 'rawMeal');
   const openRawJobs = rawJobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
+  const mealJobs = state.jobs.filter((j) => j.itemType === 'meal');
+  const openMealJobs = mealJobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
 
   // Path probe — every grow source × every stove dest
   const paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
@@ -8213,6 +8232,24 @@ export function diagnoseFoodChain(state: StationState): {
         paths.push({ from, to, pathLen: null, reason: 'no path (corridor missing or all blocked)' });
       } else {
         paths.push({ from, to, pathLen: p.length });
+      }
+    }
+  }
+
+  // mealPaths probe — every stove source × every serving dest. Mirrors the
+  // grow→stove probe above so the harness can diagnose the second food-leg
+  // failure mode the same way: `pathLen: null` for every pair → corridor
+  // missing between Kitchen and Cafeteria. Keeps the probe O(stoves * servings)
+  // — typical layouts cap each at ~3-4, so worst case ~16 findPath calls
+  // (well within the same envelope as the original probe).
+  const mealPaths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
+  for (const from of stoveTargets) {
+    for (const to of servingTargets) {
+      const p = findPath(state, from, to, false);
+      if (p === null) {
+        mealPaths.push({ from, to, pathLen: null, reason: 'no path (kitchen→cafeteria corridor missing or all blocked)' });
+      } else {
+        mealPaths.push({ from, to, pathLen: p.length });
       }
     }
   }
@@ -8233,16 +8270,24 @@ export function diagnoseFoodChain(state: StationState): {
   const summary: Record<string, number | string> = {
     growTargetCount: growTargets.length,
     stoveTargetCount: stoveTargets.length,
+    servingTargetCount: servingTargets.length,
     rawMealAtGrowTotal: growTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
     rawMealAtStoveTotal: stoveTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
+    mealAtStoveTotal: stoveTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'meal'), 0),
+    mealAtServingTotal: servingTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'meal'), 0),
     metric_rawFoodStock: state.metrics.rawFoodStock,
     metric_kitchenRawBuffer: state.metrics.kitchenRawBuffer,
     metric_mealStock: state.metrics.mealStock,
     rawJobCount: rawJobs.length,
     openRawJobCount: openRawJobs.length,
+    mealJobCount: mealJobs.length,
+    openMealJobCount: openMealJobs.length,
     pathProbe_pairs: paths.length,
     pathProbe_unreachable: paths.filter((p) => p.pathLen === null).length,
     pathProbe_minLen: paths.filter((p) => p.pathLen !== null).reduce((m, p) => Math.min(m, p.pathLen as number), Infinity),
+    mealPathProbe_pairs: mealPaths.length,
+    mealPathProbe_unreachable: mealPaths.filter((p) => p.pathLen === null).length,
+    mealPathProbe_minLen: mealPaths.filter((p) => p.pathLen !== null).reduce((m, p) => Math.min(m, p.pathLen as number), Infinity),
     logisticsDispatchSlots: state.metrics.logisticsDispatchSlots,
     logisticsPressure: Number(state.metrics.logisticsPressure?.toFixed(3) ?? 0),
     crewTotal: state.crewMembers.length,
@@ -8287,24 +8332,31 @@ export function diagnoseFoodChain(state: StationState): {
     healthState: c.healthState,
   }));
 
-  const jobsDetail = openRawJobs.map((j) => ({
-    id: j.id,
-    itemType: j.itemType,
-    from: j.fromTile,
-    to: j.toTile,
-    state: j.state,
-    assignedTo: j.assignedCrewId,
-    amount: j.amount,
-    pickedUpAmount: j.pickedUpAmount,
-    ageSec: Number((state.now - j.createdAt).toFixed(1)),
-    sinceProgressSec: Number((state.now - j.lastProgressAt).toFixed(1)),
-    stallReason: j.stallReason,
-  }));
+  // Surface BOTH legs in the jobs detail so console.table(d.jobs) shows
+  // rawMeal AND meal jobs together — easier to spot which leg is stuck
+  // than splitting them across two arrays. The itemType column carries
+  // the leg identity. Sorted by createdAt so oldest stalls come first.
+  const jobsDetail = [...openRawJobs, ...openMealJobs]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((j) => ({
+      id: j.id,
+      itemType: j.itemType,
+      from: j.fromTile,
+      to: j.toTile,
+      state: j.state,
+      assignedTo: j.assignedCrewId,
+      amount: j.amount,
+      pickedUpAmount: j.pickedUpAmount,
+      ageSec: Number((state.now - j.createdAt).toFixed(1)),
+      sinceProgressSec: Number((state.now - j.lastProgressAt).toFixed(1)),
+      stallReason: j.stallReason,
+    }));
 
   return {
     summary,
     jobs: jobsDetail,
     paths,
+    mealPaths,
     crewByRole,
     crewDetail,
   };
