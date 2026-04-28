@@ -28,6 +28,7 @@ import {
   type CrewTaskCandidate,
   type CrewPriorityWeights,
   type CriticalCapacityTargets,
+  type BerthConfig,
   type DockEntity,
   type DockPurpose,
   type DockQueueEntry,
@@ -864,6 +865,11 @@ function ensureRoomClustersCache(state: StationState): void {
   state.derived.cacheVersions.roomClustersVersion = version;
   state.derived.cacheVersions.activeRoomTilesVersion = '';
   state.derived.cacheVersions.diagnosticsVersion = '';
+  // Drop berth-config rows whose anchor tile is no longer the lowest
+  // tile of a Berth cluster (cluster split / merged / repainted).
+  // Cheap — O(berthConfigs × valid anchors) on cluster-version bumps
+  // only, which are already rare.
+  pruneOrphanedBerthConfigs(state);
 }
 
 function ensureServiceTargetsCache(state: StationState): void {
@@ -2389,7 +2395,19 @@ function pickBerthForShip(
   const candidates = listBerthCandidates(state)
     .filter((b) => b.occupiedByShipId === null)
     .filter((b) => shipSizeFitsBerth(shipSize, b.size))
-    .filter((b) => isCapabilitySuperset(b.capabilities, required));
+    .filter((b) => isCapabilitySuperset(b.capabilities, required))
+    // Per-berth player allowlist (dock-modal parity follow-up): a
+    // berth with no config row defaults to "all allowed" (legacy
+    // behavior preserved). With a config row, the player's filters
+    // gate ship type + size on top of the capability check above.
+    .filter((b) => {
+      const cfg = findBerthConfigByAnchor(state, b.anchorTile);
+      if (!cfg) return true;
+      return (
+        cfg.allowedShipTypes.includes(shipType) &&
+        cfg.allowedShipSizes.includes(shipSize)
+      );
+    });
   if (candidates.length === 0) return null;
   // Pick the smallest-fit berth (cheapest by area), tiebreak on lower anchor index.
   candidates.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile);
@@ -2413,6 +2431,24 @@ export interface BerthInspector {
   acceptedShipTypes: ShipType[];
   rejectedShipTypes: Array<{ shipType: ShipType; missing: CapabilityTag[] }>;
   occupiedByShipId: number | null;
+  // Dock-migration v0 follow-up: the player's per-berth allowlists
+  // (parity with DockEntity.allowedShipTypes / allowedShipSizes).
+  // Populated from `state.berthConfigs` if a row exists for this
+  // anchor; otherwise reflects the default ("all allowed") so the UI
+  // can show the player what the current filters look like without
+  // forcing the config row to materialize until they change something.
+  allowedShipTypes: ShipType[];
+  allowedShipSizes: ShipSize[];
+  // Derived (info-only, not stored): the lane this berth opens onto,
+  // computed from the cluster's exterior space-tile boundary. Returns
+  // the lane with the most adjacent space tiles, or null if the berth
+  // has no exterior boundary (fully enclosed — won't accept ships
+  // anyway, but the UI shows that explicitly).
+  derivedFacing: SpaceLane | null;
+  // Hard-coded for v0: berths are always 'visitor'. v1 may add
+  // residential berths for crew-shuttle traffic, at which point this
+  // becomes a stored field. UI shows it info-only with the v0 caveat.
+  purpose: DockPurpose;
 }
 
 export function getBerthInspectorAt(state: StationState, tileIndex: number): BerthInspector | null {
@@ -2440,6 +2476,13 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
       break;
     }
   }
+  const cfg = findBerthConfigByAnchor(state, cluster[0]);
+  const allowedShipTypes = cfg
+    ? [...cfg.allowedShipTypes]
+    : [...ALL_SHIP_TYPES_FOR_BERTH];
+  const allowedShipSizes = cfg
+    ? [...cfg.allowedShipSizes]
+    : [...ALL_SHIP_SIZES_FOR_BERTH];
   return {
     anchorTile: cluster[0],
     clusterTiles: cluster,
@@ -2447,8 +2490,53 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     capabilities,
     acceptedShipTypes: accepted,
     rejectedShipTypes: rejected,
-    occupiedByShipId
+    occupiedByShipId,
+    allowedShipTypes,
+    allowedShipSizes,
+    derivedFacing: deriveBerthFacing(state, cluster),
+    purpose: 'visitor'
   };
+}
+
+/**
+ * Look at the cluster's exterior boundary and pick the cardinal
+ * direction with the most adjacent Space tiles — that's the side
+ * ships approach from. Returns null if the berth has no exterior
+ * Space boundary (fully sealed inside the station — won't actually
+ * accept traffic but the UI shows it explicitly).
+ */
+function deriveBerthFacing(state: StationState, cluster: number[]): SpaceLane | null {
+  const counts: Record<SpaceLane, number> = { north: 0, east: 0, south: 0, west: 0 };
+  const clusterSet = new Set(cluster);
+  for (const tile of cluster) {
+    const p = fromIndex(tile, state.width);
+    const probes: Array<{ lane: SpaceLane; nx: number; ny: number }> = [
+      { lane: 'north', nx: p.x, ny: p.y - 1 },
+      { lane: 'east', nx: p.x + 1, ny: p.y },
+      { lane: 'south', nx: p.x, ny: p.y + 1 },
+      { lane: 'west', nx: p.x - 1, ny: p.y }
+    ];
+    for (const { lane, nx, ny } of probes) {
+      // Out-of-bounds counts as space — cluster is on the station edge
+      // facing that lane.
+      if (!inBounds(nx, ny, state.width, state.height)) {
+        counts[lane] += 1;
+        continue;
+      }
+      const ni = toIndex(nx, ny, state.width);
+      if (clusterSet.has(ni)) continue;
+      if (state.tiles[ni] === TileType.Space) counts[lane] += 1;
+    }
+  }
+  let best: SpaceLane | null = null;
+  let bestCount = 0;
+  for (const lane of ['north', 'east', 'south', 'west'] as SpaceLane[]) {
+    if (counts[lane] > bestCount) {
+      best = lane;
+      bestCount = counts[lane];
+    }
+  }
+  return best;
 }
 
 function describeMissingCapabilities(
@@ -7428,6 +7516,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles
     },
     docks: [],
+    berthConfigs: [],
     system,
     seedAtCreation: seed,
     laneProfiles,
@@ -9011,6 +9100,103 @@ export function setDockAllowedShipSize(state: StationState, dockId: number, size
   if (next.size === 0) next.add('small');
   dock.allowedShipSizes = shipSizesUpTo(dock.maxSizeByArea).filter((s) => next.has(s));
   bumpDockVersion(state);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Dock-migration v0 follow-up: per-berth player-set filters (parity
+// with setDockAllowedShipType / setDockAllowedShipSize for the
+// berth-room config UI). Capability tags continue to gate which ship
+// types CAN dock; these filters let the player further restrict the
+// allowlist on a per-berth basis. Storage lives in
+// `state.berthConfigs` keyed by berth-cluster anchor tile (lowest
+// tile index in the cluster). Orphaned entries — anchor no longer
+// leads a Berth cluster — are pruned in ensureRoomClustersCache.
+// ────────────────────────────────────────────────────────────────────
+
+const ALL_SHIP_TYPES_FOR_BERTH: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+const ALL_SHIP_SIZES_FOR_BERTH: ShipSize[] = ['small', 'medium', 'large'];
+
+function findBerthConfigByAnchor(state: StationState, anchorTile: number): BerthConfig | undefined {
+  return state.berthConfigs.find((c) => c.anchorTile === anchorTile);
+}
+
+function makeDefaultBerthConfig(anchorTile: number): BerthConfig {
+  return {
+    anchorTile,
+    allowedShipTypes: [...ALL_SHIP_TYPES_FOR_BERTH],
+    allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH]
+  };
+}
+
+/**
+ * Look up (or create) the BerthConfig for a berth cluster anchor.
+ * Caller is responsible for passing a valid anchor (lowest tile index
+ * inside an existing Berth cluster) — invalid anchors get a config
+ * row that the orphan-prune pass will sweep on the next room-cluster
+ * recompute, so the worst case is one wasted entry.
+ */
+export function ensureBerthConfig(state: StationState, anchorTile: number): BerthConfig {
+  let cfg = findBerthConfigByAnchor(state, anchorTile);
+  if (!cfg) {
+    cfg = makeDefaultBerthConfig(anchorTile);
+    state.berthConfigs.push(cfg);
+  }
+  return cfg;
+}
+
+/**
+ * Remove BerthConfig entries whose anchor is no longer the lowest
+ * tile of a Berth cluster. Called from ensureRoomClustersCache after
+ * the cluster cache has been rebuilt — guarantees the room-version
+ * key has just rolled, so we know the anchor set is fresh.
+ */
+function pruneOrphanedBerthConfigs(state: StationState): void {
+  if (state.berthConfigs.length === 0) return;
+  const validAnchors = new Set<number>();
+  const berthClusters = state.derived.roomClustersByRoom.get(RoomType.Berth) ?? [];
+  for (const cluster of berthClusters) {
+    if (cluster.length === 0) continue;
+    const anchor = cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]);
+    validAnchors.add(anchor);
+  }
+  state.berthConfigs = state.berthConfigs.filter((c) => validAnchors.has(c.anchorTile));
+}
+
+export function setBerthAllowedShipType(
+  state: StationState,
+  anchorTile: number,
+  shipType: ShipType,
+  allowed: boolean
+): void {
+  // Capability check: if the player toggles a type the berth's modules
+  // can't actually accept, we still record the choice — the capability
+  // filter in pickBerthForShip is the hard gate, this is the soft one.
+  // Tier-locked types still need to be unlocked first (mirrors dock).
+  if (allowed && !isShipTypeUnlocked(state, shipType)) return;
+  const cfg = ensureBerthConfig(state, anchorTile);
+  const next = new Set(cfg.allowedShipTypes);
+  if (allowed) next.add(shipType);
+  else next.delete(shipType);
+  // Mirror dock invariant: never leave the allowlist empty — a berth
+  // with zero allowed types is a dead berth that confuses traffic
+  // logic. Default fallback is 'tourist' (the always-unlocked type).
+  if (next.size === 0) next.add('tourist');
+  cfg.allowedShipTypes = ALL_SHIP_TYPES_FOR_BERTH.filter((t) => next.has(t));
+}
+
+export function setBerthAllowedShipSize(
+  state: StationState,
+  anchorTile: number,
+  size: ShipSize,
+  allowed: boolean
+): void {
+  const cfg = ensureBerthConfig(state, anchorTile);
+  const next = new Set(cfg.allowedShipSizes);
+  if (allowed) next.add(size);
+  else next.delete(size);
+  // Mirror dock invariant: never leave the size-allowlist empty.
+  if (next.size === 0) next.add('small');
+  cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
 }
 
 export function validateDockPlacement(
