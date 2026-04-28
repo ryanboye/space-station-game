@@ -179,10 +179,23 @@ function paintEmitters(
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
 
-  // Per-tile reactor-floor glow — picks up every reactor floor cell. A
-  // typical reactor bank has a handful of tiles; total cost is ≪1ms.
+  // Per-tile reactor glow — picks up every reactor floor cell. Two
+  // shapes hit this loop:
+  //   1. tile.reactor (TileType.Reactor) — the canonical reactor floor
+  //      sprite, painted by the static layer.
+  //   2. plain Floor tiles whose room metadata is Reactor (e.g. the
+  //      demo/cold-start-prototype path that sets room metadata before
+  //      it stamps tile types). Without this branch the glow only
+  //      lights up wherever (1) happens to coincide and the rest of
+  //      the cluster reads as ordinary floor, which awfml flagged as
+  //      visually confusing during the cold-start review.
+  // A typical reactor bank has a handful of tiles; total cost is ≪1ms.
   for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] !== TileType.Reactor) continue;
+    const tileType = state.tiles[i];
+    const isReactorTile = tileType === TileType.Reactor;
+    const isReactorFloor =
+      tileType === TileType.Floor && state.rooms[i] === RoomType.Reactor;
+    if (!isReactorTile && !isReactorFloor) continue;
     const { x, y } = fromIndex(i, state.width);
     const cx = (x + 0.5) * TILE_SIZE;
     const cy = (y + 0.5) * TILE_SIZE;
