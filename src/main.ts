@@ -26,6 +26,8 @@ import {
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getMaintenanceTileDiagnostic,
+  getRoutePressureDiagnostics,
+  getRoutePressureTileDiagnostic,
   getRoomDiagnosticAt,
   getRoomEnvironmentTileDiagnostic,
   getRoomInspectorAt,
@@ -179,6 +181,11 @@ app.innerHTML = `
         <div id="quest-bar" aria-live="polite"></div>
         <div id="tier-checklist" class="tier-checklist">No active checklist</div>
       </details>
+      <section id="diagnostic-key" class="hud-card diagnostic-key hidden" aria-live="polite">
+        <div class="hud-card-title" id="diagnostic-key-title">Diagnostics</div>
+        <div id="diagnostic-key-stats" class="diagnostic-key-stats"></div>
+        <div id="diagnostic-key-rows" class="diagnostic-key-rows"></div>
+      </section>
     </div>
     <div id="bottom-dock">
       <section class="dock-card command-card">
@@ -277,6 +284,13 @@ app.innerHTML = `
   </div>
   <aside id="panel">
     <h2>Build Palette</h2>
+    <section id="agent-side-panel" class="side-inspector side-agent-panel hidden" aria-live="polite">
+      <div class="side-inspector-head">
+        <h3 id="agent-side-title">Agent Inspector</h3>
+        <button id="close-agent-side" class="mini-action-btn">Close</button>
+      </div>
+      <div id="agent-side-body" class="side-inspector-body">No agent selected.</div>
+    </section>
     <div class="palette-tabs" aria-label="Build palette categories">
       <button class="palette-tab active" data-palette-target="structure">Build</button>
       <button class="palette-tab" data-palette-target="rooms">Rooms</button>
@@ -355,6 +369,7 @@ app.innerHTML = `
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="service-noise" title="Show service noise heatmap">Service Noise</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="maintenance" title="Show maintenance debt heatmap">Maintenance</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show active route pressure heatmap">Route Pressure</button>
         <small id="diagnostic-readout" class="diagnostic-readout">Diagnostics off</small>
         <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
         <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle">Force Fallback: OFF</button>
@@ -792,6 +807,10 @@ const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-spri
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
 const diagnosticOverlayBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-diagnostic-overlay]'));
 const diagnosticReadoutEl = document.querySelector<HTMLElement>('#diagnostic-readout')!;
+const diagnosticKeyEl = document.querySelector<HTMLElement>('#diagnostic-key')!;
+const diagnosticKeyTitleEl = document.querySelector<HTMLElement>('#diagnostic-key-title')!;
+const diagnosticKeyStatsEl = document.querySelector<HTMLElement>('#diagnostic-key-stats')!;
+const diagnosticKeyRowsEl = document.querySelector<HTMLElement>('#diagnostic-key-rows')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 
 const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
@@ -800,7 +819,8 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   'visitor-status': 'Visitor Status',
   'resident-comfort': 'Resident Comfort',
   'service-noise': 'Service Noise',
-  maintenance: 'Maintenance'
+  maintenance: 'Maintenance',
+  'route-pressure': 'Route Pressure'
 };
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
@@ -808,7 +828,8 @@ const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'visitor-status',
   'resident-comfort',
   'service-noise',
-  'maintenance'
+  'maintenance',
+  'route-pressure'
 ];
 
 function isDiagnosticOverlay(value: string | undefined): value is DiagnosticOverlay {
@@ -816,6 +837,18 @@ function isDiagnosticOverlay(value: string | undefined): value is DiagnosticOver
 }
 
 let lastDiagnosticReadoutText = '';
+let lastDiagnosticKeySignature = '';
+
+type DiagnosticKeyRow = {
+  color: string;
+  label: string;
+};
+
+type DiagnosticKeyModel = {
+  title: string;
+  stats: string;
+  rows: DiagnosticKeyRow[];
+};
 
 function diagnosticHoverPrefix(): string {
   if (hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return 'Hover a tile for local values.';
@@ -845,6 +878,16 @@ function diagnosticReadoutText(): string {
     if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no system debt here.`;
     return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}%; output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%.`;
   }
+  if (overlay === 'route-pressure') {
+    const routePressure = getRoutePressureDiagnostics(state);
+    const globalLine = `Routes: ${routePressure.activePaths} active | ${routePressure.pressuredTiles} tiles | ${routePressure.conflictTiles} conflicts`;
+    if (hoveredTile === null) return `${globalLine}\nHover a route tile to see V/R/C/L pressure.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getRoutePressureTileDiagnostic(state, p.x, p.y, routePressure);
+    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no planned route here.`;
+    const reason = diagnostic.reasons.length > 0 ? ` ${diagnostic.reasons.slice(0, 2).join(' | ')}` : ' no route conflict reason.';
+    return `${globalLine}\n${diagnosticHoverPrefix()}: V${diagnostic.visitorCount} R${diagnostic.residentCount} C${diagnostic.crewCount} L${diagnostic.logisticsCount}; conflicts ${diagnostic.conflictScore}.${reason}`;
+  }
   if (hoveredTile === null) {
     const label = DIAGNOSTIC_OVERLAY_LABELS[overlay];
     return `${label}\nHover a room tile for score and gameplay effect.`;
@@ -868,6 +911,102 @@ function refreshDiagnosticReadout(): void {
     diagnosticReadoutEl.classList.toggle('active', state.controls.diagnosticOverlay !== 'none');
     lastDiagnosticReadoutText = text;
   }
+}
+
+function diagnosticKeyModel(): DiagnosticKeyModel | null {
+  switch (state.controls.diagnosticOverlay) {
+    case 'life-support':
+      return {
+        title: 'Air Coverage',
+        stats: `${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered | ${state.metrics.poorLifeSupportTiles} poor | active ${state.metrics.lifeSupportActiveNodes}`,
+        rows: [
+          { color: '#37d3e6', label: 'Reliable coverage near active life support' },
+          { color: '#ffd65c', label: 'Distant coverage, watch room readiness' },
+          { color: '#ee4f4f', label: 'Disconnected or no active air source' }
+        ]
+      };
+    case 'visitor-status':
+      return {
+        title: 'Visitor Status',
+        stats: `avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env penalty ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`,
+        rows: [
+          { color: '#52d1a7', label: 'Appealing public-facing space' },
+          { color: '#ffd65c', label: 'Mixed or mildly ugly surroundings' },
+          { color: '#ee6854', label: 'Industrial, noisy, cargo-adjacent view' }
+        ]
+      };
+    case 'resident-comfort':
+      return {
+        title: 'Resident Comfort',
+        stats: `avg ${state.metrics.residentComfortAvg.toFixed(1)} | stress ${state.metrics.residentEnvironmentStressPerMin.toFixed(1)}/m`,
+        rows: [
+          { color: '#6edb8f', label: 'Comfortable residential/support area' },
+          { color: '#ffd65c', label: 'Mixed comfort, tolerable friction' },
+          { color: '#ee784a', label: 'Stressful service/noise adjacency' }
+        ]
+      };
+    case 'service-noise':
+      return {
+        title: 'Service Noise',
+        stats: `near dorms ${state.metrics.serviceNoiseNearDorms.toFixed(1)}`,
+        rows: [
+          { color: 'rgba(40, 48, 60, 0.75)', label: 'Quiet or no meaningful noise' },
+          { color: '#ffd65c', label: 'Noisy service friction' },
+          { color: '#ee4f4f', label: 'Harsh industrial adjacency' }
+        ]
+      };
+    case 'maintenance':
+      return {
+        title: 'Maintenance',
+        stats: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open jobs ${state.metrics.maintenanceJobsOpen}`,
+        rows: [
+          { color: '#6edb8f', label: 'Healthy reactor/life-support system' },
+          { color: '#ffd65c', label: 'Moderate debt, maintenance should visit' },
+          { color: '#ee4f4f', label: 'Serious debt reducing system output' }
+        ]
+      };
+    case 'route-pressure': {
+      const routePressure = getRoutePressureDiagnostics(state);
+      return {
+        title: 'Route Pressure',
+        stats: `${routePressure.activePaths} paths | ${routePressure.pressuredTiles} tiles | ${routePressure.conflictTiles} conflicts`,
+        rows: [
+          { color: '#52d1a7', label: 'Visitor routes' },
+          { color: '#ff7ad8', label: 'Resident routes' },
+          { color: '#5cd8ff', label: 'Crew post/self-care routes' },
+          { color: '#b07cff', label: 'Logistics hauling routes' },
+          { color: '#ee4f4f', label: 'Mixed public/back-of-house conflict' }
+        ]
+      };
+    }
+    case 'none':
+      return null;
+  }
+}
+
+function renderDiagnosticKeyRows(rows: DiagnosticKeyRow[]): string {
+  return rows
+    .map(
+      (row) =>
+        `<div class="diagnostic-key-row"><span class="diagnostic-key-swatch" style="background:${escapeHtml(row.color)}"></span><span>${escapeHtml(row.label)}</span></div>`
+    )
+    .join('');
+}
+
+function refreshDiagnosticKey(): void {
+  const model = diagnosticKeyModel();
+  if (!model) {
+    diagnosticKeyEl.classList.add('hidden');
+    lastDiagnosticKeySignature = '';
+    return;
+  }
+  const signature = `${model.title}|${model.stats}|${model.rows.map((row) => `${row.color}:${row.label}`).join('|')}`;
+  if (signature === lastDiagnosticKeySignature) return;
+  diagnosticKeyEl.classList.remove('hidden');
+  diagnosticKeyTitleEl.textContent = model.title;
+  diagnosticKeyStatsEl.textContent = model.stats;
+  diagnosticKeyRowsEl.innerHTML = renderDiagnosticKeyRows(model.rows);
+  lastDiagnosticKeySignature = signature;
 }
 
 const autosaveStatusEl = document.querySelector<HTMLElement>('#autosave-status')!;
@@ -1069,6 +1208,10 @@ const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints'
 const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
 const agentModal = document.querySelector<HTMLDivElement>('#agent-modal')!;
 const closeAgentBtn = document.querySelector<HTMLButtonElement>('#close-agent')!;
+const agentSidePanel = document.querySelector<HTMLElement>('#agent-side-panel')!;
+const closeAgentSideBtn = document.querySelector<HTMLButtonElement>('#close-agent-side')!;
+const agentSideTitleEl = document.querySelector<HTMLElement>('#agent-side-title')!;
+const agentSideBodyEl = document.querySelector<HTMLElement>('#agent-side-body')!;
 const agentKindEl = document.querySelector<HTMLElement>('#agent-kind')!;
 const agentIdEl = document.querySelector<HTMLElement>('#agent-id')!;
 const agentStateEl = document.querySelector<HTMLElement>('#agent-state')!;
@@ -2048,7 +2191,7 @@ function formatCrewSelectionHtml(crewId: number): string {
   if (!inspector) return 'Selected crew is no longer available.';
   const crew = state.crewMembers.find((c) => c.id === crewId);
 
-  const roleLabel = inspector.resting ? 'Resting' : inspector.cleaning ? 'Cleaning' : inspector.role;
+  const roleLabel = inspector.resting ? 'Resting' : inspector.cleaning ? 'Cleaning' : inspector.leisure ? 'Leisure' : inspector.role;
   const systemLabel = inspector.assignedSystem ?? inspector.lastSystem ?? 'unassigned';
 
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
@@ -2092,6 +2235,79 @@ function formatCrewSelectionHtml(crewId: number): string {
     parts.push(`<div class="agent-card__warn">⚠ Path blocked ${inspector.blockedTicks} ticks</div>`);
   }
   return parts.join('');
+}
+
+function selectedAgentTitle(): string {
+  if (!selectedAgent) return 'Agent Inspector';
+  if (selectedAgent.kind === 'visitor') return `Visitor #${selectedAgent.id}`;
+  if (selectedAgent.kind === 'resident') return `Resident #${selectedAgent.id}`;
+  return `Crew #${selectedAgent.id}`;
+}
+
+function formatVisitorInspectorHtml(visitorId: number): string {
+  const inspector = getVisitorInspectorById(state, visitorId);
+  if (!inspector) return 'Selected visitor is no longer available.';
+  return [
+    `<div class="agent-card__head"><span class="agent-card__title">Visitor #${inspector.id}</span><span class="agent-card__role">${escapeHtml(inspector.archetype)} · ${escapeHtml(inspector.primaryPreference)}</span></div>`,
+    `<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`,
+    `<div class="agent-card__reason">${escapeHtml(inspector.actionReason)}</div>`,
+    `<div class="side-inspector-grid">
+      <span>State</span><strong>${escapeHtml(inspector.state)}</strong>
+      <span>Desire</span><strong>${escapeHtml(inspector.desire)}</strong>
+      <span>Target</span><strong>${escapeHtml(formatTileLabel(inspector.targetTile))}</strong>
+      <span>Path</span><strong>${inspector.pathLength} steps</strong>
+      <span>Health</span><strong style="color:${healthColor(inspector.healthState)}">${escapeHtml(inspector.healthState)}</strong>
+      <span>Patience</span><strong>${inspector.patience.toFixed(1)}</strong>
+    </div>`,
+    `<div class="agent-card__route">Meal ${inspector.servedMeal ? 'served' : 'not served'} · carrying ${inspector.carryingMeal ? 'yes' : 'no'} · serving ${escapeHtml(formatTileLabel(inspector.reservedServingTile))}</div>`
+  ].join('');
+}
+
+function formatResidentInspectorHtml(residentId: number): string {
+  const inspector = getResidentInspectorById(state, residentId);
+  if (!inspector) return 'Selected resident is no longer available.';
+  return [
+    `<div class="agent-card__head"><span class="agent-card__title">Resident #${inspector.id}</span><span class="agent-card__role">${escapeHtml(inspector.role)} · ${escapeHtml(inspector.routinePhase)}</span></div>`,
+    `<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`,
+    `<div class="agent-card__reason">${escapeHtml(inspector.actionReason)}</div>`,
+    `<div class="agent-card__needs">
+      ${needBarHtml('Hunger', inspector.hunger, 55, 20, 'eats below 55')}
+      ${needBarHtml('Energy', inspector.energy, 42, 18, 'rests below 42')}
+      ${needBarHtml('Hygiene', inspector.hygiene, 45, null, 'cleans below 45')}
+      ${needBarHtml('Safety', inspector.safety, 35, null, 'seeks safety below 35')}
+    </div>`,
+    `<div class="side-inspector-grid">
+      <span>Desire</span><strong>${escapeHtml(inspector.desire)}</strong>
+      <span>Target</span><strong>${escapeHtml(formatTileLabel(inspector.targetTile))}</strong>
+      <span>Path</span><strong>${inspector.pathLength} steps</strong>
+      <span>Stress</span><strong>${inspector.stress.toFixed(1)}</strong>
+      <span>Satisfaction</span><strong>${inspector.satisfaction.toFixed(1)}</strong>
+      <span>Leave</span><strong>${inspector.leaveIntent.toFixed(1)}</strong>
+    </div>`
+  ].join('');
+}
+
+function selectedAgentInspectorHtml(): string {
+  if (!selectedAgent) return 'No agent selected.';
+  if (selectedAgent.kind === 'visitor') return formatVisitorInspectorHtml(selectedAgent.id);
+  if (selectedAgent.kind === 'resident') return formatResidentInspectorHtml(selectedAgent.id);
+  return formatCrewSelectionHtml(selectedAgent.id);
+}
+
+function refreshAgentSidePanel(): boolean {
+  if (!selectedAgent) {
+    agentSidePanel.classList.add('hidden');
+    return false;
+  }
+  const html = selectedAgentInspectorHtml();
+  if (html.includes('no longer available')) {
+    agentSidePanel.classList.add('hidden');
+    return false;
+  }
+  agentSideTitleEl.textContent = selectedAgentTitle();
+  agentSideBodyEl.innerHTML = html;
+  agentSidePanel.classList.remove('hidden');
+  return true;
 }
 
 function refreshSelectionSummary(): void {
@@ -2168,14 +2384,26 @@ function routeTileColor(roomType: RoomType): string {
 // segments are colored by room category so the player can see why the route
 // was chosen (cheap green corridors vs. costly orange social tiles). Endpoints
 // get markers — circle at the crew, diamond at the destination.
-function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
-  if (!selectedAgent || selectedAgent.kind !== 'crew') return;
-  const crew = state.crewMembers.find((c) => c.id === selectedAgent!.id);
-  if (!crew) return;
-  if (crew.path.length === 0) return;
+function selectedAgentRouteData(): { x: number; y: number; path: number[] } | null {
+  if (!selectedAgent) return null;
+  if (selectedAgent.kind === 'crew') {
+    const crew = state.crewMembers.find((c) => c.id === selectedAgent!.id);
+    return crew && crew.path.length > 0 ? { x: crew.x, y: crew.y, path: crew.path } : null;
+  }
+  if (selectedAgent.kind === 'visitor') {
+    const visitor = state.visitors.find((v) => v.id === selectedAgent!.id);
+    return visitor && visitor.path.length > 0 ? { x: visitor.x, y: visitor.y, path: visitor.path } : null;
+  }
+  const resident = state.residents.find((r) => r.id === selectedAgent!.id);
+  return resident && resident.path.length > 0 ? { x: resident.x, y: resident.y, path: resident.path } : null;
+}
 
-  const startPx = crew.x * TILE_SIZE;
-  const startPy = crew.y * TILE_SIZE;
+function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
+  const route = selectedAgentRouteData();
+  if (!route) return;
+
+  const startPx = route.x * TILE_SIZE;
+  const startPy = route.y * TILE_SIZE;
 
   ctx.save();
   ctx.lineWidth = Math.max(2, TILE_SIZE * 0.12);
@@ -2187,7 +2415,7 @@ function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
   ctx.lineWidth = Math.max(4, TILE_SIZE * 0.2);
   ctx.beginPath();
   ctx.moveTo(startPx, startPy);
-  for (const tile of crew.path) {
+  for (const tile of route.path) {
     const tx = tile % state.width;
     const ty = Math.floor(tile / state.width);
     ctx.lineTo((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
@@ -2198,7 +2426,7 @@ function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
   ctx.lineWidth = Math.max(2, TILE_SIZE * 0.12);
   let prevPx = startPx;
   let prevPy = startPy;
-  for (const tile of crew.path) {
+  for (const tile of route.path) {
     const tx = tile % state.width;
     const ty = Math.floor(tile / state.width);
     const cx = (tx + 0.5) * TILE_SIZE;
@@ -2219,7 +2447,7 @@ function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
   ctx.arc(startPx, startPy, TILE_SIZE * 0.32, 0, Math.PI * 2);
   ctx.stroke();
 
-  const endTile = crew.path[crew.path.length - 1];
+  const endTile = route.path[route.path.length - 1];
   const endX = (endTile % state.width + 0.5) * TILE_SIZE;
   const endY = (Math.floor(endTile / state.width) + 0.5) * TILE_SIZE;
   ctx.fillStyle = '#ffe06a';
@@ -3154,6 +3382,7 @@ function clearUiSelectionsAfterLoad(): void {
   dockModal.classList.add('hidden');
   roomModal.classList.add('hidden');
   agentModal.classList.add('hidden');
+  agentSidePanel.classList.add('hidden');
   saveModal.classList.add('hidden');
 }
 refreshSaveUi();
@@ -3249,7 +3478,15 @@ function refreshRoomModal(): void {
     roomModalInventoryEl.style.color = '#8ea2bd';
   }
   roomModalFlowEl.textContent = `Flow: ${inspector.flowHints?.join(' | ') || 'n/a'}`;
-  roomModalFlowEl.style.color = '#8ea2bd';
+  if (inspector.routePressure && inspector.routePressure.pressuredTiles > 0) {
+    const routeReasons = inspector.routePressure.reasons.length > 0
+      ? ` | ${inspector.routePressure.reasons.join(' | ')}`
+      : '';
+    roomModalFlowEl.textContent +=
+      ` | Routes: pressure ${inspector.routePressure.pressuredTiles} tiles | conflicts ${inspector.routePressure.conflictTiles} | max ${inspector.routePressure.maxPressure}${routeReasons}`;
+  }
+  roomModalFlowEl.style.color =
+    inspector.routePressure && inspector.routePressure.conflictTiles > 0 ? '#ffcf6e' : '#8ea2bd';
   if (inspector.room === 'cafeteria' && inspector.cafeteriaLoad) {
     const load = inspector.cafeteriaLoad;
     roomModalCapacityEl.textContent =
@@ -3346,7 +3583,7 @@ function formatTileLabel(tileIndex: number | null): string {
 }
 
 function pickInspectableAgent(worldX: number, worldY: number, clickedTile: number): SelectedAgent | null {
-  const maxDistance = 0.55;
+  const maxDistance = 0.85;
   const maxDistanceSq = maxDistance * maxDistance;
   let best: { candidate: SelectedAgent; distSq: number } | null = null;
   for (const visitor of state.visitors) {
@@ -3436,7 +3673,7 @@ function refreshAgentModal(): boolean {
     agentCrewDetailsEl.textContent =
       `Crew: role ${inspector.role} | system ${inspector.assignedSystem ?? 'none'} | last ${inspector.lastSystem ?? 'none'} | ` +
       `energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | resting ${inspector.resting ? 'yes' : 'no'} | ` +
-      `cleaning ${inspector.cleaning ? 'yes' : 'no'} | job ${inspector.activeJobId ?? 'none'} | ` +
+      `cleaning ${inspector.cleaning ? 'yes' : 'no'} | leisure ${inspector.leisure ? 'yes' : 'no'} | job ${inspector.activeJobId ?? 'none'} | ` +
       `carrying ${inspector.carryingItemType ?? 'none'} ${inspector.carryingAmount.toFixed(1)} | idle ${inspector.idleReason}`;
     return true;
   }
@@ -3604,15 +3841,6 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || isRightPanning) return;
   const tile = toTileCoords(e.clientX, e.clientY);
   if (!tile) return;
-  const canOpenInspectors = currentTool.kind === 'none';
-  if (!canOpenInspectors) {
-    selectedDockId = null;
-    selectedRoomTile = null;
-    selectedAgent = null;
-    dockModal.classList.add('hidden');
-    roomModal.classList.add('hidden');
-    agentModal.classList.add('hidden');
-  }
   isPainting = true;
   paintStart = tile;
   paintCurrent = tile;
@@ -3633,7 +3861,7 @@ canvas.addEventListener('mouseup', (e) => {
     const canOpenInspectors = currentTool.kind === 'none';
     const singleClick = paintStart.x === paintCurrent.x && paintStart.y === paintCurrent.y;
     const clickedTile = singleClick ? toIndex(paintStart.x, paintStart.y, state.width) : null;
-    if (canOpenInspectors && singleClick && clickedTile !== null) {
+    if (singleClick && clickedTile !== null) {
       const world = toWorldCoords(e.clientX, e.clientY);
       if (world) {
         const agent = pickInspectableAgent(world.x, world.y, clickedTile);
@@ -3641,12 +3869,10 @@ canvas.addEventListener('mouseup', (e) => {
           selectedAgent = agent;
           selectedDockId = null;
           selectedRoomTile = null;
-          if (refreshAgentModal()) {
-            agentModal.classList.remove('hidden');
-          } else {
+          if (!refreshAgentSidePanel()) {
             selectedAgent = null;
-            agentModal.classList.add('hidden');
           }
+          agentModal.classList.add('hidden');
           dockModal.classList.add('hidden');
           roomModal.classList.add('hidden');
           isPainting = false;
@@ -3655,7 +3881,9 @@ canvas.addEventListener('mouseup', (e) => {
           return;
         }
       }
+    }
 
+    if (canOpenInspectors && singleClick && clickedTile !== null) {
       const dock = getDockByTile(state, clickedTile);
       if (dock) {
         selectedDockId = dock.id;
@@ -3689,9 +3917,17 @@ canvas.addEventListener('mouseup', (e) => {
       selectedDockId = null;
       selectedRoomTile = null;
       agentModal.classList.add('hidden');
+      agentSidePanel.classList.add('hidden');
       dockModal.classList.add('hidden');
       roomModal.classList.add('hidden');
     } else {
+      selectedDockId = null;
+      selectedRoomTile = null;
+      selectedAgent = null;
+      dockModal.classList.add('hidden');
+      roomModal.classList.add('hidden');
+      agentModal.classList.add('hidden');
+      agentSidePanel.classList.add('hidden');
       applyRectPaint(paintStart, paintCurrent);
     }
   }
@@ -4035,6 +4271,7 @@ function syncToggleLabels(): void {
         : `${label}: ${active ? 'ON' : 'Off'}`;
   }
   refreshDiagnosticReadout();
+  refreshDiagnosticKey();
 }
 syncToggleLabels();
 
@@ -4328,7 +4565,14 @@ wireModal({
   closeBtn: closeAgentBtn,
   beforeClose: () => {
     selectedAgent = null;
+    agentSidePanel.classList.add('hidden');
   }
+});
+
+closeAgentSideBtn.addEventListener('click', () => {
+  selectedAgent = null;
+  agentSidePanel.classList.add('hidden');
+  agentModal.classList.add('hidden');
 });
 
 for (const system of prioritySystems) {
@@ -4706,6 +4950,7 @@ function frame(now: number): void {
   refreshToolbar();
   refreshSpriteStatus();
   refreshDiagnosticReadout();
+  refreshDiagnosticKey();
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
@@ -4885,16 +5130,14 @@ function frame(now: number): void {
     `service fails/min ${state.metrics.visitorServiceFailuresPerMin.toFixed(1)} | ` +
     `resident departures ${state.metrics.residentDepartures}`;
   if (selectedAgent !== null) {
-    if (refreshAgentModal()) {
-      if (agentModal.classList.contains('hidden')) {
-        agentModal.classList.remove('hidden');
-      }
-    } else {
+    if (!refreshAgentSidePanel()) {
       selectedAgent = null;
-      agentModal.classList.add('hidden');
+      agentSidePanel.classList.add('hidden');
     }
+    agentModal.classList.add('hidden');
   } else {
     agentModal.classList.add('hidden');
+    agentSidePanel.classList.add('hidden');
   }
   if (!opsModal.classList.contains('hidden')) refreshOpsModal();
   if (selectedDockId !== null) {

@@ -25,6 +25,8 @@ export {
   getLifeSupportTileDiagnostic,
   getMaintenanceTileDiagnostic,
   getNextExpansionCost,
+  getRoutePressureDiagnostics,
+  getRoutePressureTileDiagnostic,
   getResidentInspectorById,
   getRoomEnvironmentTileDiagnostic,
   getRoomDiagnosticAt,

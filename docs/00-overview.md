@@ -40,15 +40,16 @@ public/assets/sprites/ ← atlas.png + atlas.json (runtime art)
 docs/                  ← you are here
 ```
 
-Top-level `.md` files cover product strategy, not engineering:
+Product strategy now lives in `docs/` with the rest of the knowledge base:
 
-- `PRODUCT_PLAN.md` — daily PR ledger + product requirements (live, edited by tinyclaw).
-- `VISION_DRAFT.md` — long-term design pillars.
-- `IMPLEMENTATION_PHASES.md` — phased roadmap.
-- `build-contstrain-feature.md` — directional-docking + expansion MVP spec.
+- `docs/15-current-roadmap.md` — live roadmap, MVP target, next work, swarm guidance.
+- `docs/20-station-layout-project-plans.md` — implementation-ready project packets.
+- `docs/21-agent-handoff-layout-sim.md` — current handoff notes for the active layout/simulation push.
+- `VISION_DRAFT.md` — short vision statement, intentionally not an implementation checklist.
+- `PRODUCT_PLAN.md` and `IMPLEMENTATION_PHASES.md` — retired pointers kept so old links do not mislead agents.
 - `README.md` — quickstart, GH Pages setup, save sharing.
 
-When working on a feature, read `PRODUCT_PLAN.md §0` first to see active lanes and recent PRs.
+When working on a feature, read `docs/15-current-roadmap.md` first, then the relevant system doc and `99-trip-wires.md`.
 
 ## Core concepts
 

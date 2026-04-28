@@ -62,6 +62,9 @@ import {
   type MaintenanceSystem,
   type ResidentRole,
   type RouteExposure,
+  type RoutePressureDiagnostics,
+  type RoutePressureDominant,
+  type RoutePressureTileDiagnostic,
   type RoomEnvironmentScore,
   type RoomEnvironmentTileDiagnostic,
   type ShipServiceTag,
@@ -494,6 +497,33 @@ function chooseNearestPath(
     }
   }
   return best;
+}
+
+function chooseCrewRestPath(
+  state: StationState,
+  crew: CrewMember,
+  targets: number[],
+  occupancyByTile: Map<number, number>
+): number[] | null {
+  let best: { path: number[]; score: number } | null = null;
+  for (const target of targets) {
+    const occupied = occupancyByTile.get(target) ?? 0;
+    if (target !== crew.tileIndex && occupied >= MAX_OCCUPANTS_PER_TILE) continue;
+    const restTargetLoad = state.crewMembers.reduce((sum, other) => {
+      if (other.id === crew.id || !other.resting) return sum;
+      const plannedTarget = other.path.length > 0 ? other.path[other.path.length - 1] : other.tileIndex;
+      return plannedTarget === target ? sum + 1 : sum;
+    }, 0);
+    const path =
+      findPath(state, crew.tileIndex, target, { allowRestricted: false, intent: 'crew' }, occupancyByTile) ??
+      findPath(state, crew.tileIndex, target, { allowRestricted: true, intent: 'crew' }, occupancyByTile);
+    if (!path) continue;
+    const nextTile = path[0] ?? target;
+    const nextOccupancy = occupancyByTile.get(nextTile) ?? 0;
+    const score = path.length + restTargetLoad * 18 + occupied * 10 + nextOccupancy * 5;
+    if (!best || score < best.score) best = { path, score };
+  }
+  return best?.path ?? null;
 }
 
 function collectTiles(state: StationState, tile: TileType): number[] {
@@ -1445,6 +1475,242 @@ export function getMaintenanceTileDiagnostic(
     debt,
     outputMultiplier: maintenanceOutputMultiplierFromDebt(debt)
   };
+}
+
+function emptyRoutePressureDiagnostics(state: StationState): RoutePressureDiagnostics {
+  return {
+    visitorByTile: new Uint16Array(state.tiles.length),
+    residentByTile: new Uint16Array(state.tiles.length),
+    crewByTile: new Uint16Array(state.tiles.length),
+    logisticsByTile: new Uint16Array(state.tiles.length),
+    activePaths: 0,
+    pressuredTiles: 0,
+    conflictTiles: 0,
+    maxPressure: 0
+  };
+}
+
+function routePressureRoomConflicts(
+  room: RoomType,
+  visitorCount: number,
+  residentCount: number,
+  crewCount: number,
+  logisticsCount: number
+): { publicConflict: boolean; serviceConflict: boolean } {
+  const publicActors = visitorCount + residentCount;
+  const backOfHouseActors = crewCount + logisticsCount;
+  const publicFacing =
+    room === RoomType.Cafeteria ||
+    room === RoomType.Lounge ||
+    room === RoomType.Market ||
+    room === RoomType.RecHall;
+  const residential = room === RoomType.Dorm || room === RoomType.Hygiene;
+  const service =
+    room === RoomType.Reactor ||
+    room === RoomType.LifeSupport ||
+    room === RoomType.Workshop ||
+    room === RoomType.Kitchen ||
+    room === RoomType.Hydroponics ||
+    room === RoomType.Storage ||
+    room === RoomType.LogisticsStock ||
+    room === RoomType.Berth ||
+    room === RoomType.Security ||
+    room === RoomType.Brig;
+  return {
+    publicConflict: backOfHouseActors > 0 && (publicFacing || residential),
+    serviceConflict: publicActors > 0 && service
+  };
+}
+
+function routePressureReasons(
+  room: RoomType,
+  visitorCount: number,
+  residentCount: number,
+  crewCount: number,
+  logisticsCount: number,
+  totalCount: number,
+  publicConflict: boolean,
+  serviceConflict: boolean
+): string[] {
+  const reasons: string[] = [];
+  const publicActors = visitorCount + residentCount;
+  const backOfHouseActors = crewCount + logisticsCount;
+  const publicFacing =
+    room === RoomType.Cafeteria ||
+    room === RoomType.Lounge ||
+    room === RoomType.Market ||
+    room === RoomType.RecHall;
+  const residential = room === RoomType.Dorm || room === RoomType.Hygiene;
+  const service =
+    room === RoomType.Reactor ||
+    room === RoomType.LifeSupport ||
+    room === RoomType.Workshop ||
+    room === RoomType.Kitchen ||
+    room === RoomType.Hydroponics ||
+    room === RoomType.Storage ||
+    room === RoomType.LogisticsStock ||
+    room === RoomType.Berth ||
+    room === RoomType.Security ||
+    room === RoomType.Brig;
+
+  if (serviceConflict && service) {
+    if (visitorCount > 0) reasons.push('visitors crossing service/back-of-house space');
+    if (residentCount > 0) reasons.push('residents crossing service/back-of-house space');
+  }
+  if (publicConflict && publicFacing) {
+    if (logisticsCount > 0) reasons.push('logistics route crossing public/social room');
+    if (crewCount > 0) reasons.push('crew work route crossing public/social room');
+  }
+  if (publicConflict && residential) {
+    if (logisticsCount > 0) reasons.push('logistics route crossing housing/support room');
+    if (crewCount > 0) reasons.push('crew route crossing housing/support room');
+  }
+  if (publicActors > 0 && backOfHouseActors > 0) reasons.push('mixed public and back-of-house traffic');
+  if (logisticsCount > 0 && (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market)) {
+    reasons.push('hauling through visitor-facing space hurts station vibe');
+  }
+  if (visitorCount > 0 && (room === RoomType.Storage || room === RoomType.LogisticsStock || room === RoomType.Workshop)) {
+    reasons.push('visitor route exposes cargo/industrial work');
+  }
+  if (residentCount > 0 && (room === RoomType.Reactor || room === RoomType.LifeSupport || room === RoomType.Security || room === RoomType.Brig)) {
+    reasons.push('resident route crosses utility/security space');
+  }
+  if (crewCount > 0 && publicFacing && totalCount >= 3) reasons.push('crew route slowed by public crowding');
+  if (logisticsCount > 0 && totalCount >= 3) reasons.push('logistics pressure on a busy tile');
+  if (totalCount >= MAX_OCCUPANTS_PER_TILE) reasons.push('narrow tile at occupancy risk');
+  return [...new Set(reasons)];
+}
+
+function routePressureDominant(
+  visitorCount: number,
+  residentCount: number,
+  crewCount: number,
+  logisticsCount: number
+): RoutePressureDominant {
+  let dominant: RoutePressureDominant = null;
+  let best = 0;
+  const candidates: Array<{ key: Exclude<RoutePressureDominant, null>; value: number }> = [
+    { key: 'visitor', value: visitorCount },
+    { key: 'resident', value: residentCount },
+    { key: 'crew', value: crewCount },
+    { key: 'logistics', value: logisticsCount }
+  ];
+  for (const candidate of candidates) {
+    if (candidate.value > best) {
+      best = candidate.value;
+      dominant = candidate.key;
+    }
+  }
+  return dominant;
+}
+
+function routePressureTileFromCounts(
+  state: StationState,
+  tileIndex: number,
+  diagnostics: RoutePressureDiagnostics
+): RoutePressureTileDiagnostic {
+  const visitorCount = diagnostics.visitorByTile[tileIndex] ?? 0;
+  const residentCount = diagnostics.residentByTile[tileIndex] ?? 0;
+  const crewCount = diagnostics.crewByTile[tileIndex] ?? 0;
+  const logisticsCount = diagnostics.logisticsByTile[tileIndex] ?? 0;
+  const totalCount = visitorCount + residentCount + crewCount + logisticsCount;
+  const mixedUse = Math.min(visitorCount + residentCount, crewCount + logisticsCount);
+  const roomConflicts = routePressureRoomConflicts(state.rooms[tileIndex], visitorCount, residentCount, crewCount, logisticsCount);
+  const conflictScore = mixedUse + (roomConflicts.publicConflict ? 1 : 0) + (roomConflicts.serviceConflict ? 1 : 0);
+  const reasons = routePressureReasons(
+    state.rooms[tileIndex],
+    visitorCount,
+    residentCount,
+    crewCount,
+    logisticsCount,
+    totalCount,
+    roomConflicts.publicConflict,
+    roomConflicts.serviceConflict
+  );
+  return {
+    tileIndex,
+    visitorCount,
+    residentCount,
+    crewCount,
+    logisticsCount,
+    totalCount,
+    dominant: routePressureDominant(visitorCount, residentCount, crewCount, logisticsCount),
+    conflictScore,
+    publicConflict: roomConflicts.publicConflict,
+    serviceConflict: roomConflicts.serviceConflict,
+    reasons
+  };
+}
+
+export function getRoutePressureDiagnostics(state: StationState): RoutePressureDiagnostics {
+  const diagnostics = emptyRoutePressureDiagnostics(state);
+  const addPath = (path: readonly number[], bucket: Uint16Array): void => {
+    if (path.length <= 0) return;
+    diagnostics.activePaths += 1;
+    for (const tile of path) {
+      if (tile < 0 || tile >= state.tiles.length) continue;
+      bucket[tile] += 1;
+    }
+  };
+
+  for (const visitor of state.visitors) addPath(visitor.path, diagnostics.visitorByTile);
+  for (const resident of state.residents) addPath(resident.path, diagnostics.residentByTile);
+  for (const crew of state.crewMembers) {
+    addPath(crew.path, crew.activeJobId !== null ? diagnostics.logisticsByTile : diagnostics.crewByTile);
+  }
+
+  for (let tile = 0; tile < state.tiles.length; tile++) {
+    const tileDiagnostic = routePressureTileFromCounts(state, tile, diagnostics);
+    if (tileDiagnostic.totalCount <= 0) continue;
+    diagnostics.pressuredTiles += 1;
+    diagnostics.maxPressure = Math.max(diagnostics.maxPressure, tileDiagnostic.totalCount);
+    if (tileDiagnostic.conflictScore > 0) diagnostics.conflictTiles += 1;
+  }
+  return diagnostics;
+}
+
+export function getRoutePressureTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number,
+  diagnostics: RoutePressureDiagnostics = getRoutePressureDiagnostics(state)
+): RoutePressureTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  const tileDiagnostic = routePressureTileFromCounts(state, tileIndex, diagnostics);
+  return tileDiagnostic.totalCount > 0 ? tileDiagnostic : null;
+}
+
+function summarizeRoutePressureForTiles(
+  state: StationState,
+  tiles: readonly number[],
+  diagnostics: RoutePressureDiagnostics = getRoutePressureDiagnostics(state)
+): NonNullable<RoomInspector['routePressure']> {
+  let activePaths = 0;
+  let pressuredTiles = 0;
+  let conflictTiles = 0;
+  let maxPressure = 0;
+  const reasonCounts = new Map<string, number>();
+  for (const tile of tiles) {
+    if (tile < 0 || tile >= state.tiles.length) continue;
+    const diagnostic = routePressureTileFromCounts(state, tile, diagnostics);
+    if (diagnostic.totalCount <= 0) continue;
+    activePaths += diagnostic.totalCount;
+    pressuredTiles += 1;
+    maxPressure = Math.max(maxPressure, diagnostic.totalCount);
+    if (diagnostic.conflictScore > 0) conflictTiles += 1;
+    for (const reason of diagnostic.reasons) {
+      reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+    }
+  }
+  if (pressuredTiles <= 0) {
+    return { activePaths: 0, pressuredTiles: 0, conflictTiles: 0, maxPressure: 0, reasons: [] };
+  }
+  const reasons = [...reasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 4)
+    .map(([reason, count]) => `${reason} (${count})`);
+  return { activePaths, pressuredTiles, conflictTiles, maxPressure, reasons };
 }
 
 function averageLifeSupportDistanceForTiles(coverage: LifeSupportCoverage, tiles: number[]): number | null {
@@ -2488,6 +2754,7 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     hygiene: 88,
     resting: false,
     cleaning: false,
+    leisure: false,
     activeJobId: null,
     carryingItemType: null,
     carryingAmount: 0,
@@ -2495,6 +2762,8 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     idleReason: 'idle_available',
     restSessionActive: false,
     cleanSessionActive: false,
+    leisureSessionActive: false,
+    leisureUntil: 0,
     restLockUntil: 0,
     restCooldownUntil: 0,
     taskLockUntil: 0,
@@ -3363,6 +3632,7 @@ function assignCrewJobs(state: StationState): void {
     crew.targetTile = best.tileIndex;
     crew.lastSystem = best.system as CrewPrioritySystem;
     crew.assignedSystem = best.system as CrewPrioritySystem;
+    clearCrewLeisure(crew);
     assignedBySystem.set(best.system as CrewPrioritySystem, (assignedBySystem.get(best.system as CrewPrioritySystem) ?? 0) + 1);
     assignedTargetCounts.set(`${best.system}:${best.tileIndex}`, (assignedTargetCounts.get(`${best.system}:${best.tileIndex}`) ?? 0) + 1);
     criticalRemaining.set(best.system as CrewPrioritySystem, Math.max(0, (criticalRemaining.get(best.system as CrewPrioritySystem) ?? 0) - 1));
@@ -4124,6 +4394,13 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     if (tableNodes <= 1 && queueingVisitors >= 3) warnings.push('too few tables for demand');
     if (queueNodes <= 1 && queueingVisitors >= 2) warnings.push('queue access bottleneck');
   }
+  const routePressure = summarizeRoutePressureForTiles(state, cluster);
+  if (routePressure.conflictTiles > 0) {
+    warnings.push(`route conflicts ${routePressure.conflictTiles} tiles`);
+  }
+  if (routePressure.reasons.length > 0) {
+    hints.push(`route: ${routePressure.reasons.join(' | ')}`);
+  }
 
   return {
     room,
@@ -4149,6 +4426,7 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     inventory,
     flowHints,
     environment,
+    routePressure,
     cafeteriaLoad
   };
 }
@@ -4761,6 +5039,21 @@ function preferredHygieneTargets(state: StationState): number[] {
   return activeRoomTargets(state, RoomType.Hygiene).filter((idx) =>
     state.roomHousingPolicies[idx] === 'crew' || state.roomHousingPolicies[idx] === 'visitor'
   );
+}
+
+function crewLeisureTargets(state: StationState): number[] {
+  return [
+    ...activeRoomTargets(state, RoomType.Lounge),
+    ...activeRoomTargets(state, RoomType.RecHall),
+    ...activeRoomTargets(state, RoomType.Market),
+    ...activeRoomTargets(state, RoomType.Cafeteria)
+  ];
+}
+
+function clearCrewLeisure(crew: CrewMember): void {
+  crew.leisure = false;
+  crew.leisureSessionActive = false;
+  crew.leisureUntil = 0;
 }
 
 function residentDormTargets(state: StationState): number[] {
@@ -5377,6 +5670,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     crew.activeJobId = bestJob.id;
     crew.cleaning = false;
     crew.cleanSessionActive = false;
+    clearCrewLeisure(crew);
     setCrewPath(state, crew, bestPath);
     if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
       markJobStall(state, bestJob, 'stalled_unreachable_source');
@@ -5602,11 +5896,16 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.cleaning = false;
         crew.cleanSessionActive = false;
       }
+      clearCrewLeisure(crew);
     }
     if (airEmergency) {
       if (crew.cleaning) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
+        setCrewPath(state, crew, []);
+      }
+      if (crew.leisure) {
+        clearCrewLeisure(crew);
         setCrewPath(state, crew, []);
       }
       const canInterruptRest = criticalAirEmergency || state.now >= crew.restLockUntil;
@@ -5645,6 +5944,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         setCrewPath(state, crew, []);
         crew.idleReason = 'idle_resting';
         crew.cleaning = false;
+        clearCrewLeisure(crew);
         currentResting += 1;
         state.metrics.crewRestingNow = currentResting;
       } else if (crew.activeJobId === null && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
@@ -5652,6 +5952,31 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         if (hygieneTargets.length > 0 && !airEmergency) {
           crew.cleaning = true;
           crew.cleanSessionActive = false;
+          crew.role = 'idle';
+          crew.targetTile = null;
+          crew.lastSystem = null;
+          crew.assignedSystem = null;
+          crew.assignmentHoldUntil = 0;
+          setCrewPath(state, crew, []);
+          clearCrewLeisure(crew);
+        }
+      } else if (
+        crew.activeJobId === null &&
+        crew.role === 'idle' &&
+        !crew.cleaning &&
+        !crew.leisure &&
+        !airEmergency &&
+        crew.energy >= 58 &&
+        crew.hygiene >= 58 &&
+        state.now >= crew.retargetAt
+      ) {
+        const targets = crewLeisureTargets(state);
+        const shouldSeekLeisure =
+          targets.length > 0 &&
+          (state.metrics.morale < 72 || state.metrics.crewIdleAvailable > 2 || state.rng() < 0.28);
+        if (shouldSeekLeisure) {
+          crew.leisure = true;
+          crew.leisureSessionActive = false;
           crew.role = 'idle';
           crew.targetTile = null;
           crew.lastSystem = null;
@@ -5704,7 +6029,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       const dormTargets = preferredDormTargets(state);
       if (dormTargets.length > 0 && state.rooms[crew.tileIndex] !== RoomType.Dorm) {
         if (crew.path.length === 0) {
-          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, dormTargets, false, 'crew') ?? []);
+          setCrewPath(state, crew, chooseCrewRestPath(state, crew, dormTargets, occupancyByTile) ?? []);
           if (crew.path.length === 0) {
             crew.idleReason = 'idle_no_path';
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
@@ -5714,6 +6039,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         if (moveResult === 'blocked') {
           crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
           crew.idleReason = 'idle_no_path';
+          if (crew.blockedTicks >= BLOCKED_REPATH_TICKS) {
+            setCrewPath(state, crew, []);
+          }
         } else if (moveResult === 'moved') {
           crew.blockedTicks = 0;
         }
@@ -5738,6 +6066,39 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.retargetAt = 0;
         currentResting = Math.max(0, currentResting - 1);
         state.metrics.crewRestingNow = currentResting;
+      }
+      continue;
+    }
+
+    if (crew.leisure && !crew.resting && !crew.cleaning && crew.activeJobId === null) {
+      const targets = crewLeisureTargets(state);
+      if (targets.length === 0) {
+        clearCrewLeisure(crew);
+      } else if (!targets.includes(crew.tileIndex)) {
+        if (crew.path.length === 0) {
+          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, targets, false, 'crew') ?? []);
+        }
+        const moveResult = moveCrew(crew);
+        if (moveResult === 'blocked') {
+          crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+          crew.idleReason = 'idle_no_path';
+          if (crew.blockedTicks >= BLOCKED_REPATH_TICKS) setCrewPath(state, crew, []);
+        } else if (moveResult === 'moved') {
+          crew.blockedTicks = 0;
+        }
+      } else {
+        if (!crew.leisureSessionActive) {
+          crew.leisureSessionActive = true;
+          crew.leisureUntil = state.now + 5 + state.rng() * 5;
+        }
+        crew.energy = clamp(crew.energy + dt * 3.5, 0, 100);
+        crew.hygiene = clamp(crew.hygiene - dt * 0.08, 0, 100);
+        crew.idleReason = 'idle_available';
+        if (state.now >= crew.leisureUntil || crew.energy >= 96) {
+          clearCrewLeisure(crew);
+          setCrewPath(state, crew, []);
+          crew.retargetAt = state.now + 18 + state.rng() * 18;
+        }
       }
       continue;
     }
@@ -6007,15 +6368,53 @@ function registerVisitorServiceFailure(state: StationState, amount: number): voi
   addVisitorFailurePenalty(state, Math.min(0.12, amount * 0.03), 'noLeisurePath');
 }
 
+function visitorVisitAge(state: StationState, visitor: Visitor): number {
+  return Math.max(0, state.now - visitor.spawnedAt);
+}
+
+function shouldSeekVisitorHygiene(state: StationState, visitor: Visitor): boolean {
+  if (visitor.archetype === 'rusher') return false;
+  if (visitorVisitAge(state, visitor) < 18) return false;
+  const chanceByArchetype: Record<VisitorArchetype, number> = {
+    diner: 0.18,
+    shopper: 0.24,
+    lounger: 0.3,
+    rusher: 0
+  };
+  return state.rng() < chanceByArchetype[visitor.archetype];
+}
+
+function assignPathToVisitorHygiene(state: StationState, visitor: Visitor): boolean {
+  const hygieneTargets = preferredHygieneTargets(state);
+  if (hygieneTargets.length === 0) return false;
+  const reserved = countReservedServiceTargets(state);
+  let best: { path: number[]; target: number; score: number } | null = null;
+  for (const target of hygieneTargets) {
+    const path = findPath(state, visitor.tileIndex, target, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
+    if (!path) continue;
+    const occupancy = state.pathOccupancyByTile.get(target) ?? 0;
+    const score = path.length + (reserved.get(target) ?? 0) * 5 + occupancy * 4;
+    if (!best || score < best.score) best = { path, target, score };
+  }
+  if (!best) return false;
+  setVisitorPath(state, visitor, best.path);
+  visitor.reservedTargetTile = best.target;
+  visitor.reservedServingTile = null;
+  visitor.state = VisitorState.ToLeisure;
+  return visitor.path.length > 0 || visitor.tileIndex === best.target;
+}
+
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
   const loungeTargets = activeRoomTargets(state, RoomType.Lounge);
   const recHallTargets = activeRoomTargets(state, RoomType.RecHall);
   const marketTargets = activeRoomTargets(state, RoomType.Market);
   const allTargets = [...loungeTargets, ...recHallTargets, ...marketTargets];
+  if (shouldSeekVisitorHygiene(state, visitor) && assignPathToVisitorHygiene(state, visitor)) return true;
   if (allTargets.length === 0) return false;
 
   if (visitor.archetype === 'rusher') {
     setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, allTargets, false) ?? []);
+    visitor.reservedTargetTile = visitor.path.length > 0 ? visitor.path[visitor.path.length - 1] : null;
     visitor.state = VisitorState.ToLeisure;
     return visitor.path.length > 0;
   }
@@ -6032,6 +6431,7 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
     const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
     if (path.length === 0) continue;
     setVisitorPath(state, visitor, path);
+    visitor.reservedTargetTile = path[path.length - 1] ?? null;
     visitor.state = VisitorState.ToLeisure;
     return true;
   }
@@ -6311,17 +6711,23 @@ function updateVisitorLogic(
         state.modules[visitor.tileIndex] === ModuleType.GameStation ||
         state.modules[visitor.tileIndex] === ModuleType.RecUnit;
       const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
-      if (atLoungeModule || atMarketModule) {
+      const atHygieneService =
+        state.rooms[visitor.tileIndex] === RoomType.Hygiene &&
+        (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
+      if (atLoungeModule || atMarketModule || atHygieneService) {
         visitor.state = VisitorState.Leisure;
-        visitorSuccessRatingBonus(state, 0.04, 'leisureService');
+        visitorSuccessRatingBonus(state, atHygieneService ? 0.025 : 0.04, 'leisureService');
         if (atMarketModule) {
           state.usageTotals.visitorLeisureEntries.market += 1;
+        } else if (atHygieneService) {
+          state.usageTotals.hygiene += 1;
         } else {
           state.usageTotals.visitorLeisureEntries.lounge += 1;
         }
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
-        visitor.eatTimer = baseDwell + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
+        visitor.eatTimer = (atHygieneService ? 2.8 : baseDwell) + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
         applyVisitorCompletedRouteExperience(state, visitor);
+        visitor.reservedTargetTile = null;
         setVisitorPath(state, visitor, []);
       }
     } else if (visitor.state === VisitorState.Leisure) {
@@ -9194,11 +9600,20 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   };
 }
 
-function visitorInspectorDesire(visitor: Visitor): VisitorDesire {
+function visitorInspectorDesire(state: StationState, visitor: Visitor): VisitorDesire {
   if (visitor.state === VisitorState.ToDock) return 'exit_station';
   if (!visitor.servedMeal || visitor.carryingMeal || visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing) {
     return 'eat';
   }
+  if (visitor.state === VisitorState.ToLeisure || visitor.state === VisitorState.Leisure) {
+    return visitorLeisureNeedLabel(state, visitor);
+  }
+  return visitor.servedMeal ? 'exit_station' : 'eat';
+}
+
+function visitorLeisureNeedLabel(state: StationState, visitor: Visitor): VisitorDesire {
+  const target = visitor.reservedTargetTile ?? visitor.tileIndex;
+  if (target >= 0 && target < state.rooms.length && state.rooms[target] === RoomType.Hygiene) return 'toilet';
   if (visitor.state === VisitorState.ToLeisure || visitor.state === VisitorState.Leisure) return 'leisure';
   return visitor.servedMeal ? 'exit_station' : 'eat';
 }
@@ -9210,7 +9625,7 @@ function visitorInspectorTargetTile(visitor: Visitor): number | null {
   return null;
 }
 
-function visitorInspectorAction(visitor: Visitor): { currentAction: string; actionReason: string } {
+function visitorInspectorAction(state: StationState, visitor: Visitor): { currentAction: string; actionReason: string } {
   if (visitor.state === VisitorState.ToCafeteria) {
     if (!visitor.carryingMeal) {
       return {
@@ -9242,15 +9657,20 @@ function visitorInspectorAction(visitor: Visitor): { currentAction: string; acti
     };
   }
   if (visitor.state === VisitorState.ToLeisure) {
+    const need = visitorLeisureNeedLabel(state, visitor);
     return {
-      currentAction: 'walking to leisure',
-      actionReason: `${visitor.primaryPreference} preference with archetype ${visitor.archetype}`
+      currentAction: need === 'toilet' ? 'walking to hygiene' : 'walking to leisure',
+      actionReason:
+        need === 'toilet'
+          ? `comfort stop after ${visitorVisitAge(state, visitor).toFixed(0)}s visit`
+          : `${visitor.primaryPreference} preference with archetype ${visitor.archetype}`
     };
   }
   if (visitor.state === VisitorState.Leisure) {
+    const need = visitorLeisureNeedLabel(state, visitor);
     return {
-      currentAction: 'using leisure service',
-      actionReason: `leisure timer ${visitor.eatTimer.toFixed(1)}s remaining`
+      currentAction: need === 'toilet' ? 'using hygiene service' : 'using leisure service',
+      actionReason: `${need === 'toilet' ? 'comfort' : 'leisure'} timer ${visitor.eatTimer.toFixed(1)}s remaining`
     };
   }
   return {
@@ -9263,7 +9683,7 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
   const visitor = state.visitors.find((v) => v.id === visitorId);
   if (!visitor) return null;
   const targetTile = visitorInspectorTargetTile(visitor);
-  const action = visitorInspectorAction(visitor);
+  const action = visitorInspectorAction(state, visitor);
   return {
     id: visitor.id,
     kind: 'visitor',
@@ -9284,7 +9704,7 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
     carryingMeal: visitor.carryingMeal,
     reservedServingTile: visitor.reservedServingTile,
     reservedTargetTile: visitor.reservedTargetTile,
-    desire: visitorInspectorDesire(visitor)
+    desire: visitorInspectorDesire(state, visitor)
   };
 }
 
@@ -9434,6 +9854,7 @@ export function getResidentInspectorById(state: StationState, residentId: number
 function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.resting) return 'rest';
   if (crew.cleaning) return 'clean';
+  if (crew.leisure) return 'social';
   if (crew.activeJobId !== null) return 'logistics';
   if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
   if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
@@ -9488,6 +9909,15 @@ function crewInspectorAction(
       stateLabel: 'cleaning'
     };
   }
+  if (crew.leisure) {
+    return {
+      currentAction: crew.path.length > 0 ? 'walking to social space' : 'taking leisure time',
+      actionReason: crew.leisureSessionActive
+        ? `off-duty recovery ${Math.max(0, crew.leisureUntil - state.now).toFixed(1)}s remaining`
+        : 'off-duty social recovery before returning to work',
+      stateLabel: 'leisure'
+    };
+  }
   if (crew.assignedSystem !== null) {
     return {
       currentAction: `staffing ${crew.assignedSystem}`,
@@ -9529,6 +9959,7 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     hygiene: crew.hygiene,
     resting: crew.resting,
     cleaning: crew.cleaning,
+    leisure: crew.leisure,
     activeJobId: crew.activeJobId,
     carryingItemType: crew.carryingItemType,
     carryingAmount: crew.carryingAmount,

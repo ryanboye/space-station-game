@@ -1395,6 +1395,54 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   content: '+';
 }
 
+.diagnostic-key.hidden {
+  display: none;
+}
+
+.diagnostic-key {
+  display: grid;
+  gap: 7px;
+  background: linear-gradient(180deg, rgba(12, 18, 24, 0.92) 0%, rgba(6, 10, 15, 0.88) 100%);
+}
+
+.diagnostic-key .hud-card-title {
+  margin-bottom: 0;
+}
+
+.diagnostic-key-stats {
+  padding: 6px 7px;
+  border: 1px solid rgba(123, 167, 217, 0.26);
+  border-radius: 5px;
+  background: rgba(7, 12, 18, 0.48);
+  color: #dce7f4;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.diagnostic-key-rows {
+  display: grid;
+  gap: 5px;
+}
+
+.diagnostic-key-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  color: #aebed0;
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.diagnostic-key-swatch {
+  width: 18px;
+  height: 11px;
+  border: 1px solid rgba(227, 239, 255, 0.35);
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(7, 12, 18, 0.24);
+}
+
 #bottom-dock .row {
   margin-bottom: 5px;
 }
@@ -1560,6 +1608,58 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   color: var(--text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.side-inspector {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(89, 107, 126, 0.34);
+}
+
+.side-inspector.hidden {
+  display: none;
+}
+
+.side-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.side-inspector-head h3 {
+  margin: 0;
+  color: #f3f6f9;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.side-inspector-body {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(123, 167, 217, 0.28);
+  border-radius: 6px;
+  background: rgba(7, 12, 18, 0.52);
+}
+
+.side-inspector-grid {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
+  gap: 5px 8px;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.side-inspector-grid strong {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .agent-card__head {

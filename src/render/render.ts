@@ -5,6 +5,7 @@ import {
   TileType,
   type DiagnosticOverlay,
   type LifeSupportCoverageDiagnostic,
+  type RoutePressureDiagnostics,
   type ShipSize,
   type ShipType,
   type SpaceLane,
@@ -26,6 +27,8 @@ import {
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
   getMaintenanceTileDiagnostic,
+  getRoutePressureDiagnostics,
+  getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
   resolveWallLightFacing,
   validateBerthModulePlacement,
@@ -1510,6 +1513,16 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     .map((debt) => `${debt.key}:${Math.round(debt.debt)}`)
     .sort()
     .join(',');
+  const routeKey =
+    overlay === 'route-pressure'
+      ? [
+          state.visitors.map((actor) => `${actor.id}:${actor.path.length}:${actor.path[0] ?? -1}:${actor.path[actor.path.length - 1] ?? -1}`).join(','),
+          state.residents.map((actor) => `${actor.id}:${actor.path.length}:${actor.path[0] ?? -1}:${actor.path[actor.path.length - 1] ?? -1}`).join(','),
+          state.crewMembers
+            .map((actor) => `${actor.id}:${actor.activeJobId ?? 'post'}:${actor.path.length}:${actor.path[0] ?? -1}:${actor.path[actor.path.length - 1] ?? -1}`)
+            .join(',')
+        ].join('|')
+      : '';
   return [
     overlay,
     state.width,
@@ -1523,7 +1536,8 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     state.metrics.activeCriticalStaff.lifeSupport,
     state.ops.lifeSupportActive,
     state.ops.lifeSupportTotal,
-    debtKey
+    debtKey,
+    routeKey
   ].join('|');
 }
 
@@ -1586,6 +1600,33 @@ function maintenanceDiagnosticColor(state: StationState, tileIndex: number): str
   return rgba(238, 79, 79, 0.38);
 }
 
+function routePressureDiagnosticColor(
+  state: StationState,
+  tileIndex: number,
+  diagnostics: RoutePressureDiagnostics
+): string | null {
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y, diagnostics);
+  if (!diagnostic) return null;
+  if (diagnostic.conflictScore > 0) {
+    const t = clamp01(diagnostic.conflictScore / 5);
+    return mixRgba([255, 214, 92], [238, 79, 79], t, 0.2 + t * 0.28);
+  }
+  const t = clamp01(diagnostic.totalCount / Math.max(2, diagnostics.maxPressure));
+  switch (diagnostic.dominant) {
+    case 'visitor':
+      return rgba(82, 209, 167, 0.13 + t * 0.22);
+    case 'resident':
+      return rgba(255, 122, 216, 0.12 + t * 0.2);
+    case 'logistics':
+      return rgba(176, 124, 255, 0.13 + t * 0.22);
+    case 'crew':
+      return rgba(92, 216, 255, 0.12 + t * 0.2);
+    default:
+      return null;
+  }
+}
+
 function drawDiagnosticOverlayLayer(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -1593,6 +1634,7 @@ function drawDiagnosticOverlayLayer(
 ): void {
   if (overlay === 'none') return;
   const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
+  const routePressureDiagnostics = overlay === 'route-pressure' ? getRoutePressureDiagnostics(state) : null;
   for (let i = 0; i < state.tiles.length; i++) {
     let color: string | null = null;
     if (overlay === 'life-support') {
@@ -1600,6 +1642,9 @@ function drawDiagnosticOverlayLayer(
       color = lifeSupportDiagnosticColor(state, i, lifeSupportCoverage);
     } else if (overlay === 'maintenance') {
       color = maintenanceDiagnosticColor(state, i);
+    } else if (overlay === 'route-pressure') {
+      if (!routePressureDiagnostics) continue;
+      color = routePressureDiagnosticColor(state, i, routePressureDiagnostics);
     } else {
       color = environmentDiagnosticColor(state, i, overlay);
     }
@@ -1676,6 +1721,15 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         scale: 'green healthy | red output loss',
         color: '#ffbc52'
       };
+    case 'route-pressure': {
+      const pressure = getRoutePressureDiagnostics(state);
+      return {
+        title: 'Route Pressure',
+        line: `paths ${pressure.activePaths} | tiles ${pressure.pressuredTiles} | conflicts ${pressure.conflictTiles}`,
+        scale: 'green/pink/blue/purple intent | red conflict',
+        color: '#ffd65c'
+      };
+    }
     case 'none':
       return null;
   }
@@ -1697,6 +1751,11 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic) return `hover ${pos.x},${pos.y}: no reactor/life-support maintenance debt`;
     return `hover ${pos.x},${pos.y}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}% | output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%`;
+  }
+  if (overlay === 'route-pressure') {
+    const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic) return `hover ${pos.x},${pos.y}: no active planned routes`;
+    return `hover ${pos.x},${pos.y}: total ${diagnostic.totalCount} | V${diagnostic.visitorCount} R${diagnostic.residentCount} C${diagnostic.crewCount} L${diagnostic.logisticsCount} | conflicts ${diagnostic.conflictScore}`;
   }
   const diagnostic = getRoomEnvironmentTileDiagnostic(state, pos.x, pos.y);
   if (!diagnostic || diagnostic.sampledTiles <= 0) return `hover ${pos.x},${pos.y}: no room environment sample`;
@@ -2198,7 +2257,6 @@ export function renderWorld(
     ctx.textBaseline = 'middle';
     ctx.fillText(line, Math.round(8 * PX), Math.round(84 * PX));
   }
-  drawDiagnosticOverlayLegend(ctx, state, hoveredTile);
   if (state.metrics.bodyCount > 0) {
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';
     ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));

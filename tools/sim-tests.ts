@@ -18,6 +18,8 @@ import {
   getResidentInspectorById,
   getLifeSupportTileDiagnostic,
   getMaintenanceTileDiagnostic,
+  getRoutePressureDiagnostics,
+  getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
   setRoomHousingPolicy,
   getVisitorInspectorById,
@@ -536,6 +538,56 @@ function testPathCacheSeparatesIntent(): void {
   assertCondition(cacheKeys.some((key) => key.includes('|logistics|')), 'Path cache should include a logistics intent key.');
 }
 
+function testRoutePressureDiagnosticsCountsAndConflicts(): void {
+  const { state } = setupPathIntentCorridorState();
+  const conflictTile = toIndex(14, 10, state.width);
+  state.crew.total = 1;
+  tick(state, 0);
+  spawnVisitor(state, 10, 10, 90001);
+  state.visitors[0].path = [toIndex(11, 10, state.width), conflictTile, toIndex(15, 10, state.width)];
+  const crew = state.crewMembers[0];
+  crew.activeJobId = 333;
+  crew.path = [toIndex(13, 10, state.width), conflictTile, toIndex(15, 10, state.width)];
+  state.jobs.push({
+    id: 333,
+    type: 'deliver',
+    itemType: 'rawMeal',
+    amount: 1,
+    fromTile: toIndex(13, 10, state.width),
+    toTile: toIndex(15, 10, state.width),
+    assignedCrewId: crew.id,
+    createdAt: state.now,
+    expiresAt: state.now + 90,
+    state: 'assigned',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none'
+  });
+
+  const diagnostics = getRoutePressureDiagnostics(state);
+  const tileDiagnostic = getRoutePressureTileDiagnostic(state, 14, 10, diagnostics);
+
+  assertCondition(diagnostics.activePaths >= 2, 'Route pressure diagnostics should count actor paths.');
+  assertCondition(!!tileDiagnostic, 'Route pressure tile diagnostic should exist on shared route tile.');
+  if (!tileDiagnostic) return;
+  assertCondition(tileDiagnostic.visitorCount === 1, 'Route pressure should count visitor path pressure.');
+  assertCondition(tileDiagnostic.logisticsCount === 1, 'Route pressure should count logistics path pressure.');
+  assertCondition(tileDiagnostic.conflictScore > 0, 'Mixed public/logistics traffic should create a conflict score.');
+  assertCondition(
+    tileDiagnostic.reasons.some((reason) => reason.includes('visitor')),
+    'Route pressure diagnostic should explain visitor/service conflict.'
+  );
+  assertCondition(diagnostics.conflictTiles > 0, 'Route pressure diagnostics should aggregate conflict tiles.');
+  const inspector = getRoomInspectorAt(state, conflictTile);
+  assertCondition(!!inspector?.routePressure, 'Room inspector should expose route pressure summary.');
+  assertCondition(inspector!.routePressure!.conflictTiles > 0, 'Room inspector should count route conflicts inside the room.');
+  assertCondition(
+    inspector!.routePressure!.reasons.some((reason) => reason.includes('visitor')),
+    'Room inspector should summarize the route conflict reason.'
+  );
+}
+
 function testVisitorRouteExposurePenalty(): void {
   const clean = createInitialState({ seed: 3092 });
   buildHabitat(clean);
@@ -729,6 +781,34 @@ function testRoomEnvironmentInspectorWarning(): void {
   assertCondition(
     inspector!.warnings.includes('housing room near noisy service space'),
     'Dorm inspector should warn when housing is near noisy service space.'
+  );
+}
+
+function testVisitorAuxiliaryHygieneNeedIsInspectable(): void {
+  const state = createInitialState({ seed: 31005 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Hygiene, 12, 10, 14, 12);
+  placeModuleOrThrow(state, ModuleType.Shower, 12, 11);
+  placeModuleOrThrow(state, ModuleType.Sink, 14, 11);
+  spawnVisitor(state, 8, 11, 31005);
+  const visitor = state.visitors[0];
+  const hygieneTile = toIndex(12, 11, state.width);
+  visitor.state = VisitorState.ToLeisure;
+  visitor.servedMeal = true;
+  visitor.patience = 0;
+  visitor.spawnedAt = state.now - 40;
+  visitor.reservedTargetTile = hygieneTile;
+  visitor.path = findPath(state, visitor.tileIndex, hygieneTile, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile) ?? [];
+
+  runFor(state, 3);
+
+  const inspector = getVisitorInspectorById(state, visitor.id);
+  assertCondition(!!inspector, 'Visitor inspector should exist for hygiene auxiliary visit.');
+  assertCondition(inspector!.desire === 'toilet', 'Visitor inspector should expose hygiene/toilet desire.');
+  assertCondition(
+    inspector!.currentAction === 'using hygiene service',
+    'Visitor inspector should show hygiene service usage.'
   );
 }
 
@@ -1565,6 +1645,50 @@ function testActiveLogisticsCrewDoNotRestBeforeCompletingJobs(): void {
   assertCondition(state.metrics.crewIdleAvailable === 0, 'Active logistics crew should not count as available idle.');
   assertCondition(state.metrics.crewSelfCare === 0, 'Active logistics crew should not count as self-care.');
   assertCondition(state.jobs[0].state !== 'expired', 'Active logistics job should not expire because crew entered self-care.');
+}
+
+function testCrewRestAvoidsOverloadedDormTarget(): void {
+  const state = createInitialState({ seed: 30103 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Dorm, 10, 10, 18, 13);
+  placeModuleOrThrow(state, ModuleType.Bed, 10, 11);
+  placeModuleOrThrow(state, ModuleType.Bed, 15, 11);
+  state.crew.total = 5;
+  tick(state, 0.25);
+
+  const crowdedTarget = toIndex(10, 11, state.width);
+  const openTarget = toIndex(15, 11, state.width);
+  const waitingTile = toIndex(8, 11, state.width);
+  const setCrewTile = (crewIndex: number, tile: number): void => {
+    const crew = state.crewMembers[crewIndex];
+    const center = fromIndex(tile, state.width);
+    crew.x = center.x + 0.5;
+    crew.y = center.y + 0.5;
+    crew.tileIndex = tile;
+    crew.path = [];
+    crew.activeJobId = null;
+    crew.role = 'idle';
+    crew.targetTile = null;
+    crew.assignedSystem = null;
+    crew.lastSystem = null;
+    crew.resting = true;
+    crew.restSessionActive = true;
+    crew.cleaning = false;
+    crew.energy = 35;
+    crew.hygiene = 80;
+    crew.blockedTicks = 0;
+  };
+  for (let i = 0; i < 4; i++) setCrewTile(i, crowdedTarget);
+  setCrewTile(4, waitingTile);
+  state.crewMembers[4].restSessionActive = false;
+  state.crewMembers[4].blockedTicks = 3;
+
+  tick(state, 0.25);
+
+  const route = state.crewMembers[4].path;
+  assertCondition(route.length > 0, 'Resting crew outside the dorm should receive a rest route.');
+  assertCondition(route[route.length - 1] === openTarget, 'Rest routing should avoid already overloaded dorm target.');
 }
 
 function testVisitorBerthsAcceptTrafficResidentialDoNot(): void {
@@ -2415,6 +2539,50 @@ function testCrewInspectorLogisticsShapeAndPurity(): void {
   assertCondition(inspector.targetTile === fromTile, 'Crew target should point at the pickup while not carrying.');
   assertCondition(inspector.activeJobId === 7701, 'Crew inspector should expose active job id.');
   assertCondition(before === after, 'Crew inspector getter should not mutate actor state.');
+}
+
+function testCrewLeisureSocialNeedIsInspectable(): void {
+  const state = createInitialState({ seed: 30416 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Lounge, 12, 10, 15, 12);
+  placeModuleOrThrow(state, ModuleType.Couch, 12, 11);
+  tick(state, 0);
+
+  const crew = state.crewMembers[0];
+  const loungeTile = toIndex(12, 11, state.width);
+  crew.tileIndex = toIndex(10, 11, state.width);
+  crew.x = 10.5;
+  crew.y = 11.5;
+  crew.role = 'idle';
+  crew.activeJobId = null;
+  crew.assignedSystem = null;
+  crew.targetTile = null;
+  crew.resting = false;
+  crew.cleaning = false;
+  crew.leisure = true;
+  crew.leisureSessionActive = false;
+  crew.leisureUntil = 0;
+  crew.energy = 72;
+  crew.hygiene = 88;
+  crew.path = findPath(state, crew.tileIndex, loungeTile, { allowRestricted: false, intent: 'crew' }, state.pathOccupancyByTile) ?? [];
+
+  runFor(state, 4);
+
+  const before = snapshotActors(state);
+  const inspector = getCrewInspectorById(state, crew.id);
+  const after = snapshotActors(state);
+
+  assertCondition(!!inspector, 'Crew inspector should resolve during leisure.');
+  if (!inspector) return;
+  assertCondition(inspector.leisure, 'Crew inspector should expose leisure state.');
+  assertCondition(inspector.desire === 'social', 'Crew desire should expose social recovery while on leisure.');
+  assertCondition(inspector.state === 'leisure', 'Crew state label should show leisure.');
+  assertCondition(
+    inspector.currentAction === 'taking leisure time' || inspector.currentAction === 'walking to social space',
+    'Crew action should explain leisure or social routing.'
+  );
+  assertCondition(before === after, 'Crew leisure inspector getter should not mutate actor state.');
 }
 
 function testAgentInspectorMissingId(): void {
@@ -3838,6 +4006,7 @@ function run(): void {
   testPathIntentLogisticsPrefersServiceCorridor();
   testPathIntentVisitorServiceFallback();
   testPathCacheSeparatesIntent();
+  testRoutePressureDiagnosticsCountsAndConflicts();
   testVisitorRouteExposurePenalty();
   testResidentBadRouteStress();
   testCrewPublicInterferenceMetric();
@@ -3852,6 +4021,7 @@ function run(): void {
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
   testResidentComfortDiagnosticHelperHighlightsServiceNoise();
   testMaintenanceDiagnosticHelperReportsUtilityDebt();
+  testVisitorAuxiliaryHygieneNeedIsInspectable();
   testFoodChainEndToEnd();
   testFoodJobsDoNotLetRawBacklogBlockMeals();
   testLowFoodAssignsFoodChainCrew();
@@ -3872,6 +4042,7 @@ function run(): void {
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
   testActiveLogisticsCrewDoNotRestBeforeCompletingJobs();
+  testCrewRestAvoidsOverloadedDormTarget();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
   testBerthVisitorsBoardAndDespawnOnReturn();
   testBerthTrafficRequiresSpaceExposure();
@@ -3896,6 +4067,7 @@ function run(): void {
   testVisitorInspectorShapeAndPurity();
   testResidentInspectorThresholdsAndPurity();
   testCrewInspectorLogisticsShapeAndPurity();
+  testCrewLeisureSocialNeedIsInspectable();
   testAgentInspectorMissingId();
   testImmediateDefuseMajority();
   testProximitySuppressionEffectiveness();

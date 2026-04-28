@@ -72,6 +72,8 @@ Intent changes soft tile costs, not the walkable topology. Walls, space, blocked
 
 Assigned paths also carry a compact route-exposure score. Visitors apply it when they complete service trips, residents apply it when they complete need trips, and logistics crew apply public-interference drain while a hauling route is active. This keeps bad layout feedback bounded to trip outcomes rather than penalizing every walking tick for every actor.
 
+Route-pressure diagnostics aggregate current planned paths by intent (`visitor`, `resident`, posted `crew`, and active-job `logistics`). The overlay is intentionally a live debugging surface, not a saved metric: it shows which tiles are carrying traffic now and marks conflicts where public/residential movement crosses back-of-house flow.
+
 ## Room environment
 
 Rooms also carry lightweight environment traits in `ROOM_ENVIRONMENT_TRAITS`: visitor status, residential comfort, service noise, and public appeal. `roomEnvironmentScoreAt` samples nearby room tiles in a small radius and produces a local score used by visitors, residents, metrics, and the room inspector.

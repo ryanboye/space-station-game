@@ -60,7 +60,8 @@ export type DiagnosticOverlay =
   | 'visitor-status'
   | 'resident-comfort'
   | 'service-noise'
-  | 'maintenance';
+  | 'maintenance'
+  | 'route-pressure';
 
 export type IncidentType = 'fight' | 'trespass';
 export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
@@ -314,6 +315,33 @@ export interface MaintenanceTileDiagnostic {
   debt: number;
   outputMultiplier: number;
 }
+
+export type RoutePressureDominant = 'visitor' | 'resident' | 'crew' | 'logistics' | null;
+
+export interface RoutePressureDiagnostics {
+  visitorByTile: Uint16Array;
+  residentByTile: Uint16Array;
+  crewByTile: Uint16Array;
+  logisticsByTile: Uint16Array;
+  activePaths: number;
+  pressuredTiles: number;
+  conflictTiles: number;
+  maxPressure: number;
+}
+
+export interface RoutePressureTileDiagnostic {
+  tileIndex: number;
+  visitorCount: number;
+  residentCount: number;
+  crewCount: number;
+  logisticsCount: number;
+  totalCount: number;
+  dominant: RoutePressureDominant;
+  conflictScore: number;
+  publicConflict: boolean;
+  serviceConflict: boolean;
+  reasons: string[];
+}
 export interface CrewTaskCandidate {
   id: string;
   kind: CrewTaskKind;
@@ -351,6 +379,7 @@ export interface CrewMember {
   hygiene: number;
   resting: boolean;
   cleaning: boolean;
+  leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;
   carryingAmount: number;
@@ -358,6 +387,8 @@ export interface CrewMember {
   idleReason: CrewIdleReason;
   restSessionActive: boolean;
   cleanSessionActive: boolean;
+  leisureSessionActive: boolean;
+  leisureUntil: number;
   restLockUntil: number;
   restCooldownUntil: number;
   taskLockUntil: number;
@@ -936,6 +967,13 @@ export interface RoomInspector {
   };
   flowHints?: string[];
   environment?: RoomEnvironmentScore;
+  routePressure?: {
+    activePaths: number;
+    pressuredTiles: number;
+    conflictTiles: number;
+    maxPressure: number;
+    reasons: string[];
+  };
   cafeteriaLoad?: {
     tableNodes: number;
     queueNodes: number;
@@ -957,10 +995,10 @@ export interface HousingInspector {
 
 export type AgentInspectorKind = 'visitor' | 'resident' | 'crew';
 export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
-export type VisitorDesire = 'eat' | 'leisure' | 'exit_station';
+export type VisitorDesire = 'eat' | 'toilet' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
 export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
-export type CrewDesire = 'rest' | 'clean' | 'logistics' | 'staff_post' | 'idle';
+export type CrewDesire = 'rest' | 'clean' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
 
 export interface AgentInspectorBase {
   id: number;
@@ -1023,6 +1061,7 @@ export interface CrewInspector extends AgentInspectorBase {
   hygiene: number;
   resting: boolean;
   cleaning: boolean;
+  leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;
   carryingAmount: number;
