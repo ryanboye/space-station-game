@@ -3,6 +3,8 @@ import {
   RoomType,
   TILE_SIZE,
   TileType,
+  type DiagnosticOverlay,
+  type LifeSupportCoverageDiagnostic,
   type ShipSize,
   type ShipType,
   type SpaceLane,
@@ -21,6 +23,10 @@ import {
   collectQueueTargets,
   collectServiceNodeReachability,
   getDockByTile,
+  getLifeSupportCoverageDiagnostics,
+  getLifeSupportTileDiagnostic,
+  getMaintenanceTileDiagnostic,
+  getRoomEnvironmentTileDiagnostic,
   resolveWallLightFacing,
   validateBerthModulePlacement,
   validateDockPlacement
@@ -172,6 +178,7 @@ type ServiceOverlayCache = {
 
 let staticLayerCache: CachedLayer | null = null;
 let decorativeLayerCache: CachedLayer | null = null;
+let diagnosticOverlayCache: CachedLayer | null = null;
 const serviceOverlayCache: ServiceOverlayCache = {
   key: '',
   builtAt: 0,
@@ -1484,6 +1491,260 @@ function visitorMoodColor(state: StationState, visitorIndex: number): string {
   return toHex(r, g, b);
 }
 
+function rgba(r: number, g: number, b: number, a: number): string {
+  return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${a.toFixed(3)})`;
+}
+
+function mixRgba(
+  a: [number, number, number],
+  b: [number, number, number],
+  t: number,
+  alpha: number
+): string {
+  const k = clamp01(t);
+  return rgba(mixChannel(a[0], b[0], k), mixChannel(a[1], b[1], k), mixChannel(a[2], b[2], k), alpha);
+}
+
+function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverlay): string {
+  const debtKey = state.maintenanceDebts
+    .map((debt) => `${debt.key}:${Math.round(debt.debt)}`)
+    .sort()
+    .join(',');
+  return [
+    overlay,
+    state.width,
+    state.height,
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.metrics.lifeSupportCoveragePct.toFixed(1),
+    state.metrics.poorLifeSupportTiles,
+    state.metrics.lifeSupportActiveNodes,
+    state.metrics.activeCriticalStaff.lifeSupport,
+    state.ops.lifeSupportActive,
+    state.ops.lifeSupportTotal,
+    debtKey
+  ].join('|');
+}
+
+function lifeSupportDiagnosticColor(
+  state: StationState,
+  tileIndex: number,
+  coverage: LifeSupportCoverageDiagnostic
+): string | null {
+  if (state.tiles[tileIndex] === TileType.Space || state.tiles[tileIndex] === TileType.Wall) return null;
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y, coverage);
+  if (!diagnostic?.walkablePressurized || !diagnostic.hasLifeSupportSystem) return null;
+  if (diagnostic.noActiveSource) return rgba(232, 89, 89, 0.34);
+  if (!diagnostic.reachable) return rgba(238, 79, 79, 0.4);
+  const distance = diagnostic.distance ?? 0;
+  if (!diagnostic.poorCoverage) {
+    const t = clamp01(distance / 18);
+    return mixRgba([55, 211, 230], [255, 213, 94], t, 0.18 + t * 0.08);
+  }
+  const t = clamp01((distance - 18) / 14);
+  return mixRgba([255, 188, 82], [238, 79, 79], t, 0.3 + t * 0.08);
+}
+
+function signedDiagnosticColor(value: number, positive: [number, number, number], negative: [number, number, number]): string | null {
+  if (Math.abs(value) < 0.12) return null;
+  const t = clamp01(Math.abs(value) / 2.4);
+  const base: [number, number, number] = value >= 0 ? positive : negative;
+  const alpha = 0.11 + t * 0.23;
+  return rgba(base[0], base[1], base[2], alpha);
+}
+
+function environmentDiagnosticColor(state: StationState, tileIndex: number, overlay: DiagnosticOverlay): string | null {
+  if (state.tiles[tileIndex] === TileType.Space || state.tiles[tileIndex] === TileType.Wall) return null;
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getRoomEnvironmentTileDiagnostic(state, pos.x, pos.y);
+  if (!diagnostic || diagnostic.sampledTiles <= 0) return null;
+  if (overlay === 'visitor-status') {
+    const value = diagnostic.visitorStatus + diagnostic.publicAppeal * 0.35 - diagnostic.serviceNoise * 0.25;
+    return signedDiagnosticColor(value, [82, 209, 167], [238, 104, 84]);
+  }
+  if (overlay === 'resident-comfort') {
+    const value = diagnostic.residentialComfort + diagnostic.publicAppeal * 0.12 - diagnostic.serviceNoise * 0.35;
+    return signedDiagnosticColor(value, [110, 219, 143], [238, 120, 74]);
+  }
+  if (overlay === 'service-noise') {
+    if (diagnostic.serviceNoise <= 0.15) return null;
+    const t = clamp01(diagnostic.serviceNoise / 2.6);
+    return mixRgba([255, 214, 92], [238, 79, 79], t, 0.12 + t * 0.28);
+  }
+  return null;
+}
+
+function maintenanceDiagnosticColor(state: StationState, tileIndex: number): string | null {
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
+  if (!diagnostic) return null;
+  if (diagnostic.debt <= 0) return rgba(110, 219, 143, 0.1);
+  if (diagnostic.debt < 35) return rgba(110, 219, 143, 0.14);
+  if (diagnostic.debt < 65) return rgba(255, 214, 92, 0.26);
+  return rgba(238, 79, 79, 0.38);
+}
+
+function drawDiagnosticOverlayLayer(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  overlay: DiagnosticOverlay
+): void {
+  if (overlay === 'none') return;
+  const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
+  for (let i = 0; i < state.tiles.length; i++) {
+    let color: string | null = null;
+    if (overlay === 'life-support') {
+      if (!lifeSupportCoverage) continue;
+      color = lifeSupportDiagnosticColor(state, i, lifeSupportCoverage);
+    } else if (overlay === 'maintenance') {
+      color = maintenanceDiagnosticColor(state, i);
+    } else {
+      color = environmentDiagnosticColor(state, i, overlay);
+    }
+    if (!color) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    ctx.fillStyle = color;
+    ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    if (overlay === 'maintenance') {
+      const diagnostic = getMaintenanceTileDiagnostic(state, x, y);
+      if (diagnostic && diagnostic.debt >= 65) {
+        ctx.strokeStyle = 'rgba(255, 224, 150, 0.85)';
+        ctx.strokeRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+      }
+    }
+  }
+}
+
+function ensureDiagnosticOverlayLayer(
+  state: StationState,
+  widthPx: number,
+  heightPx: number
+): CachedLayer | null {
+  const overlay = state.controls.diagnosticOverlay;
+  if (overlay === 'none') {
+    if (diagnosticOverlayCache) diagnosticOverlayCache.key = '';
+    return null;
+  }
+  diagnosticOverlayCache = ensureCachedLayer(diagnosticOverlayCache, widthPx, heightPx);
+  const layer = diagnosticOverlayCache;
+  const key = diagnosticOverlayCacheKey(state, overlay);
+  if (layer.key === key) return layer;
+  layer.key = key;
+  layer.ctx.clearRect(0, 0, widthPx, heightPx);
+  drawDiagnosticOverlayLayer(layer.ctx, state, overlay);
+  return layer;
+}
+
+function diagnosticOverlayLegendLine(state: StationState): { title: string; line: string; scale: string; color: string } | null {
+  switch (state.controls.diagnosticOverlay) {
+    case 'life-support':
+      return {
+        title: 'Air Coverage',
+        line: `coverage ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles}`,
+        scale: 'cyan close | red poor/disconnected',
+        color: '#37d3e6'
+      };
+    case 'visitor-status':
+      return {
+        title: 'Visitor Status',
+        line: `avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env penalty ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`,
+        scale: 'green appealing | red industrial',
+        color: '#52d1a7'
+      };
+    case 'resident-comfort':
+      return {
+        title: 'Resident Comfort',
+        line: `avg ${state.metrics.residentComfortAvg.toFixed(1)} | stress ${state.metrics.residentEnvironmentStressPerMin.toFixed(1)}/m`,
+        scale: 'green comfortable | red stressful',
+        color: '#6edb8f'
+      };
+    case 'service-noise':
+      return {
+        title: 'Service Noise',
+        line: `dorm noise ${state.metrics.serviceNoiseNearDorms.toFixed(1)}`,
+        scale: 'yellow noisy | red harsh',
+        color: '#ffd65c'
+      };
+    case 'maintenance':
+      return {
+        title: 'Maintenance',
+        line: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`,
+        scale: 'green healthy | red output loss',
+        color: '#ffbc52'
+      };
+    case 'none':
+      return null;
+  }
+}
+
+function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | null): string | null {
+  const overlay = state.controls.diagnosticOverlay;
+  if (overlay === 'none' || hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return null;
+  const pos = fromIndex(hoveredTile, state.width);
+  if (overlay === 'life-support') {
+    const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic?.walkablePressurized) return `hover ${pos.x},${pos.y}: not a pressurized walkable tile`;
+    if (!diagnostic.hasLifeSupportSystem) return `hover ${pos.x},${pos.y}: no life support built yet`;
+    if (diagnostic.noActiveSource) return `hover ${pos.x},${pos.y}: no active air source -> oxygen risk`;
+    if (!diagnostic.reachable) return `hover ${pos.x},${pos.y}: disconnected from active air -> oxygen risk`;
+    return `hover ${pos.x},${pos.y}: air distance ${diagnostic.distance ?? 0} | ${diagnostic.poorCoverage ? 'poor' : 'covered'} room readiness`;
+  }
+  if (overlay === 'maintenance') {
+    const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic) return `hover ${pos.x},${pos.y}: no reactor/life-support maintenance debt`;
+    return `hover ${pos.x},${pos.y}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}% | output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%`;
+  }
+  const diagnostic = getRoomEnvironmentTileDiagnostic(state, pos.x, pos.y);
+  if (!diagnostic || diagnostic.sampledTiles <= 0) return `hover ${pos.x},${pos.y}: no room environment sample`;
+  if (overlay === 'visitor-status') {
+    return `hover ${pos.x},${pos.y}: visitor ${diagnostic.visitorStatus.toFixed(1)} | discomfort ${diagnostic.visitorDiscomfort.toFixed(1)} -> rating/service appeal`;
+  }
+  if (overlay === 'resident-comfort') {
+    return `hover ${pos.x},${pos.y}: comfort ${diagnostic.residentialComfort.toFixed(1)} | stress ${diagnostic.residentDiscomfort.toFixed(1)} -> satisfaction`;
+  }
+  if (overlay === 'service-noise') {
+    return `hover ${pos.x},${pos.y}: noise ${diagnostic.serviceNoise.toFixed(1)} -> visitor status + resident comfort penalties`;
+  }
+  return null;
+}
+
+function drawDiagnosticOverlayLegend(ctx: CanvasRenderingContext2D, state: StationState, hoveredTile: number | null): void {
+  const legend = diagnosticOverlayLegendLine(state);
+  if (!legend) return;
+  const x = Math.round(150 * PX);
+  const y = Math.round(44 * PX);
+  const hoverLine = diagnosticOverlayHoverLine(state, hoveredTile);
+  const lines = hoverLine ? [legend.title, legend.line, legend.scale, hoverLine] : [legend.title, legend.line, legend.scale];
+  ctx.font = `${Math.round(10 * PX)}px monospace`;
+  const textW = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  const pad = Math.round(5 * PX);
+  const lineHeight = Math.round(13 * PX);
+  const boxW = Math.max(Math.round(220 * PX), Math.ceil(textW + pad * 2));
+  const boxH = Math.round(10 * PX) + lineHeight * lines.length;
+  ctx.fillStyle = 'rgba(8, 16, 28, 0.78)';
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeStyle = 'rgba(123, 167, 217, 0.5)';
+  ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+  ctx.fillStyle = legend.color;
+  ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(legend.title, x + pad, y + Math.round(4 * PX));
+  ctx.fillStyle = '#d3deed';
+  ctx.font = `${Math.round(10 * PX)}px monospace`;
+  ctx.fillText(legend.line, x + pad, y + Math.round(17 * PX));
+  ctx.fillStyle = '#91a7c1';
+  ctx.fillText(legend.scale, x + pad, y + Math.round(30 * PX));
+  if (hoverLine) {
+    ctx.fillStyle = '#f0d792';
+    ctx.fillText(hoverLine, x + pad, y + Math.round(43 * PX));
+  }
+}
+
 function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState, widthPx: number, heightPx: number): void {
   const totalTraffic = Math.max(
     0.0001,
@@ -1598,6 +1859,8 @@ export function renderWorld(
   // state.controls.showGlow; cache key includes dynamic signatures (med-bed
   // occupancy, kitchen-active) so frame cost is ~0 when nothing changes.
   renderGlowPass(ctx, state, widthPx, heightPx, useSprites);
+  const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx);
+  if (diagnosticLayer) ctx.drawImage(diagnosticLayer.canvas, 0, 0);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);
@@ -1935,6 +2198,7 @@ export function renderWorld(
     ctx.textBaseline = 'middle';
     ctx.fillText(line, Math.round(8 * PX), Math.round(84 * PX));
   }
+  drawDiagnosticOverlayLegend(ctx, state, hoveredTile);
   if (state.metrics.bodyCount > 0) {
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';
     ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));

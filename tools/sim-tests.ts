@@ -14,7 +14,11 @@ import {
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockPurpose,
+  getCrewInspectorById,
   getResidentInspectorById,
+  getLifeSupportTileDiagnostic,
+  getMaintenanceTileDiagnostic,
+  getRoomEnvironmentTileDiagnostic,
   setRoomHousingPolicy,
   getVisitorInspectorById,
   getRoomDiagnosticAt,
@@ -847,6 +851,111 @@ function testLifeSupportCoverageDetectsDisconnectedWing(): void {
   );
 }
 
+function testLifeSupportDiagnosticHelperDetectsDisconnectedWing(): void {
+  const state = createInitialState({ seed: 5310 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  placeCrewAtSystemAnchor(state, toIndex(9, 6, state.width), 'life-support');
+  const isolatedTile = addSealedIsolatedDorm(state);
+  tick(state, 0.25);
+
+  const pos = fromIndex(isolatedTile, state.width);
+  const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y);
+  assertCondition(!!diagnostic, 'Life-support diagnostic should return a tile result.');
+  assertCondition(diagnostic!.hasLifeSupportSystem, 'Life-support diagnostic should know life-support exists.');
+  assertCondition(diagnostic!.sourceCount > 0, 'Life-support diagnostic should count active sources.');
+  assertCondition(diagnostic!.poorCoverage, 'Disconnected wing should report poor life-support coverage.');
+  assertCondition(!diagnostic!.reachable, 'Disconnected wing should not be reachable from active life support.');
+}
+
+function testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency(): void {
+  const clean = createInitialState({ seed: 5311 });
+  buildHabitat(clean);
+  setupFoodChain(clean);
+  tick(clean, 0.25);
+  const cleanDiagnostic = getRoomEnvironmentTileDiagnostic(clean, 18, 10);
+
+  const noisy = createInitialState({ seed: 5312 });
+  buildHabitat(noisy);
+  paintRoom(noisy, RoomType.Reactor, 12, 10, 15, 13);
+  paintRoom(noisy, RoomType.Workshop, 22, 10, 26, 13);
+  paintRoom(noisy, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(noisy, ModuleType.ServingStation, 16, 12);
+  placeModuleOrThrow(noisy, ModuleType.Table, 16, 10);
+  placeModuleOrThrow(noisy, ModuleType.Table, 19, 10);
+  tick(noisy, 0.25);
+  const noisyDiagnostic = getRoomEnvironmentTileDiagnostic(noisy, 16, 10);
+
+  assertCondition(!!cleanDiagnostic && !!noisyDiagnostic, 'Visitor status diagnostics should return scores.');
+  assertCondition(
+    noisyDiagnostic!.visitorStatus < cleanDiagnostic!.visitorStatus,
+    'Industrial neighbors should lower visitor-status diagnostics.'
+  );
+  assertCondition(
+    noisyDiagnostic!.visitorDiscomfort > cleanDiagnostic!.visitorDiscomfort,
+    'Industrial neighbors should raise visitor discomfort diagnostics.'
+  );
+}
+
+function testResidentComfortDiagnosticHelperHighlightsServiceNoise(): void {
+  const clean = createInitialState({ seed: 5313 });
+  buildHabitat(clean);
+  paintRoom(clean, RoomType.Dorm, 20, 10, 22, 12);
+  placeModuleOrThrow(clean, ModuleType.Bed, 20, 11);
+  tick(clean, 0.25);
+  const cleanDiagnostic = getRoomEnvironmentTileDiagnostic(clean, 20, 11);
+
+  const noisy = createInitialState({ seed: 5314 });
+  buildHabitat(noisy);
+  paintRoom(noisy, RoomType.Workshop, 16, 10, 19, 13);
+  paintRoom(noisy, RoomType.Reactor, 23, 10, 25, 13);
+  paintRoom(noisy, RoomType.Dorm, 20, 10, 22, 12);
+  placeModuleOrThrow(noisy, ModuleType.Bed, 20, 11);
+  tick(noisy, 0.25);
+  const noisyDiagnostic = getRoomEnvironmentTileDiagnostic(noisy, 20, 11);
+
+  assertCondition(!!cleanDiagnostic && !!noisyDiagnostic, 'Resident comfort diagnostics should return scores.');
+  assertCondition(
+    noisyDiagnostic!.serviceNoise > cleanDiagnostic!.serviceNoise,
+    'Service adjacency should increase service-noise diagnostics.'
+  );
+  assertCondition(
+    noisyDiagnostic!.residentialComfort < cleanDiagnostic!.residentialComfort,
+    'Service adjacency should reduce resident-comfort diagnostics.'
+  );
+  assertCondition(
+    noisyDiagnostic!.residentDiscomfort > cleanDiagnostic!.residentDiscomfort,
+    'Service adjacency should raise resident discomfort diagnostics.'
+  );
+}
+
+function testMaintenanceDiagnosticHelperReportsUtilityDebt(): void {
+  const state = createInitialState({ seed: 5315 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  const reactorAnchor = toIndex(6, 6, state.width);
+  const cleanDiagnostic = getMaintenanceTileDiagnostic(state, 6, 6);
+  state.maintenanceDebts = [{
+    key: `reactor:${reactorAnchor}`,
+    system: 'reactor',
+    anchorTile: reactorAnchor,
+    debt: 80,
+    lastServicedAt: 0
+  }];
+  const degradedDiagnostic = getMaintenanceTileDiagnostic(state, 6, 6);
+  const nonUtilityDiagnostic = getMaintenanceTileDiagnostic(state, 20, 20);
+
+  assertCondition(!!cleanDiagnostic, 'Maintenance diagnostic should exist on reactor tiles.');
+  assertCondition(cleanDiagnostic!.debt === 0, 'Healthy reactor diagnostic should report zero debt.');
+  assertCondition(!!degradedDiagnostic, 'Maintenance diagnostic should exist after debt injection.');
+  assertCondition(degradedDiagnostic!.debt === 80, 'Maintenance diagnostic should report matching debt.');
+  assertCondition(
+    degradedDiagnostic!.outputMultiplier < cleanDiagnostic!.outputMultiplier,
+    'Maintenance diagnostic should expose output degradation.'
+  );
+  assertCondition(nonUtilityDiagnostic === null, 'Maintenance diagnostic should stay null on unrelated tiles.');
+}
+
 function testAutonomousRoomsNoStaff(): void {
   const state = createInitialState({ seed: 3001 });
   buildHabitat(state);
@@ -924,6 +1033,51 @@ function testFoodChainEndToEnd(): void {
   assertCondition(state.metrics.createdJobs > 0, 'Food chain should create hauling jobs.');
   assertCondition(state.metrics.completedJobs > 0, 'Food chain should complete hauling jobs.');
   assertCondition(state.metrics.mealsServedTotal > 0, 'Visitor should be served through serving station -> table flow.');
+}
+
+function testFoodJobsDoNotLetRawBacklogBlockMeals(): void {
+  const state = createInitialState({ seed: 30045 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  tick(state, 0);
+
+  const growNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Hydroponics);
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  const servingNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Cafeteria);
+  assertCondition(!!growNode && !!stoveNode && !!servingNode, 'Food fixture should expose grow/stove/serving item nodes.');
+  if (!growNode || !stoveNode || !servingNode) return;
+
+  growNode.items.rawMeal = 18;
+  stoveNode.items.meal = 6;
+  servingNode.items.meal = 0;
+  state.jobs.length = 0;
+  state.jobSpawnCounter = 1000;
+  for (let i = 0; i < 10; i++) {
+    state.jobs.push({
+      id: i + 1,
+      type: 'deliver',
+      itemType: 'rawMeal',
+      amount: 1,
+      fromTile: growNode.tileIndex,
+      toTile: stoveNode.tileIndex,
+      assignedCrewId: null,
+      createdAt: state.now,
+      expiresAt: state.now + 90,
+      state: 'pending',
+      pickedUpAmount: 0,
+      completedAt: null,
+      lastProgressAt: state.now,
+      stallReason: 'none'
+    });
+  }
+
+  tick(state, 0);
+
+  assertCondition(
+    state.jobs.some((job) => job.itemType === 'meal' && (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress')),
+    'Meal delivery jobs should still spawn when raw-food jobs are already at their per-type cap.'
+  );
 }
 
 function testLowFoodAssignsFoodChainCrew(): void {
@@ -2121,7 +2275,8 @@ function testInventoryReapplyClampsCapacity(): void {
 function snapshotActors(state: StationState): string {
   return JSON.stringify({
     visitors: state.visitors,
-    residents: state.residents
+    residents: state.residents,
+    crew: state.crewMembers
   });
 }
 
@@ -2214,10 +2369,59 @@ function testResidentInspectorThresholdsAndPurity(): void {
   assertCondition(beforeReturn === afterReturn, 'Resident inspector getter should remain non-mutating after desire switch.');
 }
 
+function testCrewInspectorLogisticsShapeAndPurity(): void {
+  const state = createInitialState({ seed: 30415 });
+  buildHabitat(state);
+  tick(state, 0);
+  assertCondition(state.crewMembers.length > 0, 'Crew inspector fixture should create crew members.');
+  const crew = state.crewMembers[0];
+  const fromTile = toIndex(10, 10, state.width);
+  const toTile = toIndex(12, 10, state.width);
+  crew.tileIndex = toIndex(8, 10, state.width);
+  crew.x = 8.5;
+  crew.y = 10.5;
+  crew.activeJobId = 7701;
+  crew.carryingItemType = null;
+  crew.carryingAmount = 0;
+  crew.assignedSystem = null;
+  crew.lastSystem = null;
+  crew.path = [toIndex(9, 10, state.width), fromTile];
+  state.jobs.push({
+    id: 7701,
+    type: 'deliver',
+    itemType: 'meal',
+    amount: 1.2,
+    fromTile,
+    toTile,
+    assignedCrewId: crew.id,
+    createdAt: state.now,
+    expiresAt: state.now + 90,
+    state: 'assigned',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none'
+  });
+
+  const before = snapshotActors(state);
+  const inspector = getCrewInspectorById(state, crew.id);
+  const after = snapshotActors(state);
+
+  assertCondition(!!inspector, 'Crew inspector should resolve by id.');
+  if (!inspector) return;
+  assertCondition(inspector.kind === 'crew', 'Crew inspector kind should be crew.');
+  assertCondition(inspector.desire === 'logistics', 'Crew desire should reflect active logistics jobs.');
+  assertCondition(inspector.currentAction === 'walking to meal pickup', 'Crew action should show pickup path before carrying.');
+  assertCondition(inspector.targetTile === fromTile, 'Crew target should point at the pickup while not carrying.');
+  assertCondition(inspector.activeJobId === 7701, 'Crew inspector should expose active job id.');
+  assertCondition(before === after, 'Crew inspector getter should not mutate actor state.');
+}
+
 function testAgentInspectorMissingId(): void {
   const state = createInitialState({ seed: 3042 });
   assertCondition(getVisitorInspectorById(state, 999999) === null, 'Unknown visitor id should return null inspector.');
   assertCondition(getResidentInspectorById(state, 999999) === null, 'Unknown resident id should return null inspector.');
+  assertCondition(getCrewInspectorById(state, 999999) === null, 'Unknown crew id should return null inspector.');
 }
 
 function seedAggressiveResidents(state: StationState, startId: number, pairs: number): void {
@@ -3644,7 +3848,12 @@ function run(): void {
   testMaintenanceDebtReducesLifeSupportAir();
   testCrewAtUtilityReducesMaintenanceDebt();
   testLifeSupportCoverageDetectsDisconnectedWing();
+  testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
+  testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
+  testResidentComfortDiagnosticHelperHighlightsServiceNoise();
+  testMaintenanceDiagnosticHelperReportsUtilityDebt();
   testFoodChainEndToEnd();
+  testFoodJobsDoNotLetRawBacklogBlockMeals();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();
   testMaterialsChainEndToEnd();
@@ -3686,6 +3895,7 @@ function run(): void {
   testInventoryReapplyClampsCapacity();
   testVisitorInspectorShapeAndPurity();
   testResidentInspectorThresholdsAndPurity();
+  testCrewInspectorLogisticsShapeAndPurity();
   testAgentInspectorMissingId();
   testImmediateDefuseMajority();
   testProximitySuppressionEffectiveness();

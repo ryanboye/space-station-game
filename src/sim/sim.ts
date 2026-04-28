@@ -24,6 +24,8 @@ import {
   type CapabilityTag,
   type CardinalDirection,
   type CrewIdleReason,
+  type CrewDesire,
+  type CrewInspector,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type CrewTaskCandidate,
@@ -38,6 +40,8 @@ import {
   type HousingInspector,
   type IncidentType,
   type VisitorInspector,
+  type LifeSupportCoverageDiagnostic,
+  type LifeSupportTileDiagnostic,
   type ResidentInspector,
   type ResidentDesire,
   type ResidentDominantNeed,
@@ -54,10 +58,12 @@ import {
   type JobStatusCounts,
   type JobExpiryContext,
   type ItemType,
+  type MaintenanceTileDiagnostic,
   type MaintenanceSystem,
   type ResidentRole,
   type RouteExposure,
   type RoomEnvironmentScore,
+  type RoomEnvironmentTileDiagnostic,
   type ShipServiceTag,
   type ShipType,
   type UnlockTier,
@@ -1363,6 +1369,81 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
     poorTiles,
     avgDistance: coveredTiles > 0 ? totalDistance / coveredTiles : 0,
     coveragePct: walkablePressurizedTiles > 0 ? (coveredTiles / walkablePressurizedTiles) * 100 : 100
+  };
+}
+
+export function getLifeSupportCoverageDiagnostics(state: StationState): LifeSupportCoverageDiagnostic {
+  const coverage = computeLifeSupportCoverage(state);
+  return {
+    ...coverage,
+    hasLifeSupportSystem: collectRooms(state, RoomType.LifeSupport).length > 0
+  };
+}
+
+export function getLifeSupportTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number,
+  coverage: LifeSupportCoverageDiagnostic = getLifeSupportCoverageDiagnostics(state)
+): LifeSupportTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  const walkablePressurized = isWalkable(state.tiles[tileIndex]) && state.pressurized[tileIndex];
+  const rawDistance = coverage.distanceByTile[tileIndex];
+  const reachable = walkablePressurized && rawDistance >= 0;
+  const distance = reachable ? rawDistance : null;
+  const noActiveSource = coverage.hasLifeSupportSystem && coverage.sourceCount <= 0 && walkablePressurized;
+  const poorCoverage =
+    walkablePressurized &&
+    coverage.hasLifeSupportSystem &&
+    (coverage.sourceCount <= 0 || rawDistance < 0 || rawDistance > 18);
+  return {
+    tileIndex,
+    walkablePressurized,
+    hasLifeSupportSystem: coverage.hasLifeSupportSystem,
+    sourceCount: coverage.sourceCount,
+    reachable,
+    distance,
+    poorCoverage,
+    noActiveSource
+  };
+}
+
+export function getRoomEnvironmentTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number
+): RoomEnvironmentTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  if (!isWalkable(state.tiles[tileIndex])) return null;
+  const environment = roomEnvironmentScoreAt(state, tileIndex);
+  return {
+    ...environment,
+    visitorDiscomfort: visitorEnvironmentDiscomfort(environment),
+    residentDiscomfort: residentEnvironmentDiscomfort(environment)
+  };
+}
+
+export function getMaintenanceTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number
+): MaintenanceTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  const room = state.rooms[tileIndex];
+  if (room !== RoomType.Reactor && room !== RoomType.LifeSupport) return null;
+  ensureRoomClustersCache(state);
+  const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  if (!clusterMeta || clusterMeta.room !== room) return null;
+  const system: MaintenanceSystem = room === RoomType.Reactor ? 'reactor' : 'life-support';
+  const debt = maintenanceDebtFor(state, system, clusterMeta.anchor);
+  return {
+    system,
+    anchorTile: clusterMeta.anchor,
+    debt,
+    outputMultiplier: maintenanceOutputMultiplierFromDebt(debt)
   };
 }
 
@@ -4816,6 +4897,20 @@ function openJobAmountToTile(
   return amount;
 }
 
+function openJobAmountFromTile(
+  state: StationState,
+  tileIndex: number,
+  itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
+): number {
+  let amount = 0;
+  for (const job of state.jobs) {
+    if (job.fromTile !== tileIndex || job.itemType !== itemType) continue;
+    if (job.state !== 'pending' && job.state !== 'assigned' && job.state !== 'in_progress') continue;
+    amount += Math.max(0, job.amount - job.pickedUpAmount);
+  }
+  return amount;
+}
+
 function itemNodeUnreservedCapacity(
   state: StationState,
   tileIndex: number,
@@ -4955,6 +5050,89 @@ function markJobStall(state: StationState, job: StationState['jobs'][number], re
   }
 }
 
+// Burst-fill transport job dispatch: within a single tick, spawn jobs up to the open-job
+// cap, distributing across (source, destination) pairs by tracking in-tick reservations.
+// Each iteration picks the source with the most unreserved supply (tiebreak: shortest
+// path), so multiple hydroponics tiles drain in parallel instead of one pair monopolizing.
+function dispatchTransportJobs(
+  state: StationState,
+  itemType: 'rawMeal' | 'meal',
+  sources: number[],
+  destinations: number[],
+  config: {
+    cap: number;
+    openCount: number;
+    targetStock: number;
+    nearAmount: number;
+    farAmount: number;
+    nearDistance: number;
+  }
+): void {
+  if (sources.length === 0 || destinations.length === 0) return;
+  if (config.openCount >= config.cap) return;
+
+  // Path graph is stable within a single tick; cache findPath results across iterations.
+  const pathLenCache = new Map<number, number | null>();
+  const getPathLen = (from: number, to: number): number | null => {
+    const key = from * state.tiles.length + to;
+    if (pathLenCache.has(key)) return pathLenCache.get(key) ?? null;
+    const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
+    const len = path ? path.length : null;
+    pathLenCache.set(key, len);
+    return len;
+  };
+
+  const tickFromReserved = new Map<number, number>();
+  const tickToReserved = new Map<number, number>();
+  let openCount = config.openCount;
+
+  while (openCount < config.cap) {
+    let best: { from: number; to: number; dist: number; supply: number } | null = null;
+    for (const from of sources) {
+      const supply =
+        itemStockAtNode(state, from, itemType) -
+        openJobAmountFromTile(state, from, itemType) -
+        (tickFromReserved.get(from) ?? 0);
+      if (supply <= 0.3) continue;
+      for (const to of destinations) {
+        const tickTo = tickToReserved.get(to) ?? 0;
+        const projectedStock =
+          itemStockAtNode(state, to, itemType) + openJobAmountToTile(state, to, itemType) + tickTo;
+        if (projectedStock >= config.targetStock - 0.3) continue;
+        if (itemNodeUnreservedCapacity(state, to, itemType) - tickTo <= 0.3) continue;
+        const dist = getPathLen(from, to);
+        if (dist === null) continue;
+        const better =
+          !best ||
+          supply > best.supply + 0.5 ||
+          (Math.abs(supply - best.supply) <= 0.5 && dist < best.dist);
+        if (better) best = { from, to, dist, supply };
+      }
+    }
+    if (!best) break;
+
+    const tickFrom = tickFromReserved.get(best.from) ?? 0;
+    const tickTo = tickToReserved.get(best.to) ?? 0;
+    const available = Math.max(
+      0,
+      itemStockAtNode(state, best.from, itemType) - openJobAmountFromTile(state, best.from, itemType) - tickFrom
+    );
+    const targetNeed = Math.max(
+      0,
+      config.targetStock - itemStockAtNode(state, best.to, itemType) - openJobAmountToTile(state, best.to, itemType) - tickTo
+    );
+    const targetSpace = Math.max(0, itemNodeUnreservedCapacity(state, best.to, itemType) - tickTo);
+    const baseAmount = best.dist <= config.nearDistance ? config.nearAmount : config.farAmount;
+    const amount = Math.min(baseAmount, available, targetNeed, targetSpace);
+    if (amount <= 0.05) break;
+
+    enqueueTransportJob(state, 'deliver', itemType, amount, best.from, best.to);
+    tickFromReserved.set(best.from, tickFrom + amount);
+    tickToReserved.set(best.to, tickTo + amount);
+    openCount++;
+  }
+}
+
 function createFoodTransportJobs(state: StationState): void {
   const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
   const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
@@ -4962,43 +5140,27 @@ function createFoodTransportJobs(state: StationState): void {
   if (growTargets.length === 0 || stoveTargets.length === 0) return;
 
   const openJobs = state.jobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
-  const openFoodJobs = openJobs.filter((j) => j.itemType === 'rawMeal' || j.itemType === 'meal');
-  if (openFoodJobs.length >= MAX_PENDING_FOOD_JOBS) return;
+  const openRawMealJobs = openJobs.filter((j) => j.itemType === 'rawMeal');
+  const openMealJobs = openJobs.filter((j) => j.itemType === 'meal');
 
-  const rawMealSources = growTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMeal') > 0.3);
-  const rawMealDestinations = stoveTargets.filter((tile) => itemStockAtNode(state, tile, 'rawMeal') < 8);
-  if (rawMealSources.length > 0 && rawMealDestinations.length > 0) {
-    let best: { from: number; to: number; dist: number } | null = null;
-    for (const from of rawMealSources) {
-      for (const to of rawMealDestinations) {
-        const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
-        if (!path) continue;
-        if (!best || path.length < best.dist) best = { from, to, dist: path.length };
-      }
-    }
-    if (best) {
-      const amount = best.dist <= 8 ? 1.4 : 1.0;
-      enqueueTransportJob(state, 'deliver', 'rawMeal', amount, best.from, best.to);
-    }
-  }
+  dispatchTransportJobs(state, 'rawMeal', growTargets, stoveTargets, {
+    cap: MAX_PENDING_FOOD_JOBS,
+    openCount: openRawMealJobs.length,
+    targetStock: 8,
+    nearAmount: 1.4,
+    farAmount: 1.0,
+    nearDistance: 8,
+  });
 
   if (servingTargets.length > 0) {
-    const mealSources = stoveTargets.filter((tile) => itemStockAtNode(state, tile, 'meal') > 0.3);
-    const mealDestinations = servingTargets.filter((tile) => itemStockAtNode(state, tile, 'meal') < 10);
-    if (mealSources.length > 0 && mealDestinations.length > 0) {
-      let best: { from: number; to: number; dist: number } | null = null;
-      for (const from of mealSources) {
-        for (const to of mealDestinations) {
-          const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
-          if (!path) continue;
-          if (!best || path.length < best.dist) best = { from, to, dist: path.length };
-        }
-      }
-      if (best) {
-        const amount = best.dist <= 8 ? 1.2 : 0.9;
-        enqueueTransportJob(state, 'deliver', 'meal', amount, best.from, best.to);
-      }
-    }
+    dispatchTransportJobs(state, 'meal', stoveTargets, servingTargets, {
+      cap: MAX_PENDING_FOOD_JOBS,
+      openCount: openMealJobs.length,
+      targetStock: 10,
+      nearAmount: 1.2,
+      farAmount: 0.9,
+      nearDistance: 8,
+    });
   }
 }
 
@@ -8391,6 +8553,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       paused: true,
       simSpeed: 1,
       shipsPerCycle: 1,
+      diagnosticOverlay: 'none',
       showZones: true,
       showServiceNodes: false,
       showInventoryOverlay: false,
@@ -9264,6 +9427,112 @@ export function getResidentInspectorById(state: StationState, residentId: number
     housingUnitId: resident.housingUnitId,
     bedModuleId: resident.bedModuleId,
     dominantNeed: residentInspectorDominantNeed(resident),
+    desire
+  };
+}
+
+function crewInspectorDesire(crew: CrewMember): CrewDesire {
+  if (crew.resting) return 'rest';
+  if (crew.cleaning) return 'clean';
+  if (crew.activeJobId !== null) return 'logistics';
+  if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
+  if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
+  if (crew.assignedSystem !== null) return 'staff_post';
+  return 'idle';
+}
+
+function crewInspectorTargetTile(state: StationState, crew: CrewMember): number | null {
+  if (crew.activeJobId !== null) {
+    const job = state.jobs.find((j) => j.id === crew.activeJobId);
+    if (job) return crew.carryingItemType !== null || job.state === 'in_progress' ? job.toTile : job.fromTile;
+  }
+  if (crew.targetTile !== null) return crew.targetTile;
+  if (crew.path.length > 0) return crew.path[crew.path.length - 1];
+  return null;
+}
+
+function crewInspectorAction(
+  state: StationState,
+  crew: CrewMember,
+  desire: CrewDesire
+): { currentAction: string; actionReason: string; stateLabel: string } {
+  if (crew.activeJobId !== null) {
+    const job = state.jobs.find((j) => j.id === crew.activeJobId);
+    if (job) {
+      const carrying = crew.carryingItemType !== null || job.pickedUpAmount > 0;
+      const currentAction = carrying ? `delivering ${job.itemType}` : `walking to ${job.itemType} pickup`;
+      const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
+      return {
+        currentAction,
+        actionReason: `job #${job.id} ${job.state} | ${job.fromTile}->${job.toTile} | ${job.pickedUpAmount.toFixed(1)}/${job.amount.toFixed(1)}${stall}`,
+        stateLabel: 'logistics'
+      };
+    }
+    return {
+      currentAction: 'logistics assignment missing',
+      actionReason: `active job #${crew.activeJobId} no longer exists`,
+      stateLabel: 'logistics'
+    };
+  }
+  if (crew.resting) {
+    return {
+      currentAction: 'resting',
+      actionReason: `energy ${crew.energy.toFixed(1)} recovering before returning to duty`,
+      stateLabel: 'resting'
+    };
+  }
+  if (crew.cleaning) {
+    return {
+      currentAction: 'cleaning up',
+      actionReason: `hygiene ${crew.hygiene.toFixed(1)} below comfort threshold`,
+      stateLabel: 'cleaning'
+    };
+  }
+  if (crew.assignedSystem !== null) {
+    return {
+      currentAction: `staffing ${crew.assignedSystem}`,
+      actionReason: crew.targetTile !== null
+        ? `priority weight ${state.controls.crewPriorityWeights[crew.assignedSystem]} at tile ${crew.targetTile}`
+        : `assigned to ${crew.assignedSystem} without a current post`,
+      stateLabel: crew.assignedSystem
+    };
+  }
+  return {
+    currentAction: crew.path.length > 0 ? 'walking' : 'idle',
+    actionReason: desire === 'idle' ? crew.idleReason : `next desire is ${desire}`,
+    stateLabel: 'idle'
+  };
+}
+
+export function getCrewInspectorById(state: StationState, crewId: number): CrewInspector | null {
+  const crew = state.crewMembers.find((c) => c.id === crewId);
+  if (!crew) return null;
+  const desire = crewInspectorDesire(crew);
+  const action = crewInspectorAction(state, crew, desire);
+  return {
+    id: crew.id,
+    kind: 'crew',
+    state: action.stateLabel,
+    tileIndex: crew.tileIndex,
+    x: crew.x,
+    y: crew.y,
+    healthState: crew.healthState,
+    blockedTicks: crew.blockedTicks,
+    pathLength: crew.path.length,
+    targetTile: crewInspectorTargetTile(state, crew),
+    currentAction: action.currentAction,
+    actionReason: action.actionReason,
+    role: crew.role,
+    assignedSystem: crew.assignedSystem,
+    lastSystem: crew.lastSystem,
+    energy: crew.energy,
+    hygiene: crew.hygiene,
+    resting: crew.resting,
+    cleaning: crew.cleaning,
+    activeJobId: crew.activeJobId,
+    carryingItemType: crew.carryingItemType,
+    carryingAmount: crew.carryingAmount,
+    idleReason: crew.idleReason,
     desire
   };
 }

@@ -1562,6 +1562,113 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   line-height: 1.35;
 }
 
+.agent-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 3px;
+}
+
+.agent-card__title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-card__role {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-card__action {
+  color: var(--text);
+}
+
+.agent-card__reason,
+.agent-card__job,
+.agent-card__route,
+.agent-card__idle {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.agent-card__warn {
+  color: var(--warn);
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.agent-card__needs {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.need-bar {
+  display: grid;
+  grid-template-columns: 52px 1fr 28px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.need-bar__label {
+  color: var(--muted);
+}
+
+.need-bar__track {
+  position: relative;
+  height: 8px;
+  background: rgba(8, 14, 22, 0.6);
+  border: 1px solid rgba(89, 107, 126, 0.34);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.need-bar__fill {
+  height: 100%;
+  background: var(--ok);
+  transition: width 240ms ease-out;
+}
+
+.need-bar__threshold {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: rgba(214, 222, 235, 0.5);
+  pointer-events: none;
+}
+
+.need-bar--ok .need-bar__fill {
+  background: var(--ok);
+}
+
+.need-bar--warn .need-bar__fill {
+  background: var(--warn);
+}
+
+.need-bar--low .need-bar__fill {
+  background: var(--danger);
+}
+
+.need-bar--critical .need-bar__fill {
+  background: var(--danger);
+  animation: need-bar-pulse 1.2s ease-in-out infinite;
+}
+
+.need-bar__value {
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes need-bar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 .diagnostics-card {
   max-height: 190px;
   overflow: auto;
@@ -1652,6 +1759,24 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   letter-spacing: 0;
 }
 
+.diagnostic-readout {
+  grid-column: 1 / -1;
+  min-height: 48px;
+  padding: 7px 8px;
+  border: 1px solid rgba(123, 167, 217, 0.34);
+  border-radius: 5px;
+  background: rgba(7, 12, 18, 0.58);
+  color: #9fb4cd;
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: pre-line;
+}
+
+.diagnostic-readout.active {
+  border-color: rgba(255, 214, 92, 0.42);
+  color: #dce7f4;
+}
+
 #toolbar .tool-row-sep {
   display: none;
 }
@@ -1697,6 +1822,21 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   background-repeat: no-repeat;
 }
 
+#toolbar .tool-btn.sprite-fallback .tool-sprite {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 24px;
+  border: 1px solid rgba(123, 167, 217, 0.42);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(36, 51, 64, 0.94), rgba(13, 21, 30, 0.94));
+  color: #d7e8ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
 #toolbar .tool-btn.sprite-missing .tool-sprite-frame {
   display: none;
 }
@@ -1720,7 +1860,8 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
   background: rgba(35, 48, 62, 0.92);
 }
 
-#toolbar .overlay-toggle {
+#toolbar .overlay-toggle,
+#toolbar .diagnostic-toggle {
   min-height: 44px;
   padding: 7px 6px;
   font-weight: 700;

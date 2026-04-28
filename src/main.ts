@@ -22,8 +22,12 @@ import {
   expandMap,
   fireCrew,
   getBerthInspectorAt,
+  getCrewInspectorById,
   getHousingInspectorAt,
+  getLifeSupportTileDiagnostic,
+  getMaintenanceTileDiagnostic,
   getRoomDiagnosticAt,
+  getRoomEnvironmentTileDiagnostic,
   getRoomInspectorAt,
   getUnlockTier,
   getResidentInspectorById,
@@ -62,6 +66,7 @@ import {
   type CardinalDirection,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
+  type DiagnosticOverlay,
   type SpaceLane,
   type ShipSize,
   type ShipType,
@@ -80,6 +85,7 @@ import {
   inBounds,
   toIndex,
   type BuildTool,
+  type RouteExposure,
   type UnlockTier
 } from './sim/types';
 
@@ -342,6 +348,14 @@ app.innerHTML = `
         <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Nodes: OFF</button>
         <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Inventory Overlay: OFF</button>
         <button id="toggle-glow" class="tool-btn overlay-toggle">Glow: ON</button>
+        <span class="tool-row-label diagnostic-row-label">Diagnostics</span>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Hide diagnostic heatmaps">Diagnostics: OFF</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show life-support coverage heatmap">Air Coverage</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show visitor status heatmap">Visitor Status</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="service-noise" title="Show service noise heatmap">Service Noise</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="maintenance" title="Show maintenance debt heatmap">Maintenance</button>
+        <small id="diagnostic-readout" class="diagnostic-readout">Diagnostics off</small>
         <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
         <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle">Force Fallback: OFF</button>
       </div>
@@ -370,7 +384,7 @@ app.innerHTML = `
         <button id="save-delete">Delete</button>
         <button id="save-download">Download JSON</button>
       </div>
-      <small>Export selected save (copy/paste JSON):</small>
+      <small>Selected save summary:</small>
       <textarea id="save-export" class="save-textarea" readonly spellcheck="false"></textarea>
       <small>Import save JSON as a new slot:</small>
       <textarea id="save-import" class="save-textarea" spellcheck="false"></textarea>
@@ -660,6 +674,7 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Blocked Ticks</span><span class="value" id="agent-blocked">0</span></div>
       <small id="agent-visitor-details">Visitor: n/a</small>
       <small id="agent-resident-details">Resident: n/a</small>
+      <small id="agent-crew-details">Crew: n/a</small>
     </div>
   </div>
 `;
@@ -775,7 +790,86 @@ const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#to
 const toggleGlowBtn = document.querySelector<HTMLButtonElement>('#toggle-glow')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
+const diagnosticOverlayBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-diagnostic-overlay]'));
+const diagnosticReadoutEl = document.querySelector<HTMLElement>('#diagnostic-readout')!;
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
+
+const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
+  none: 'Diagnostics',
+  'life-support': 'Air Coverage',
+  'visitor-status': 'Visitor Status',
+  'resident-comfort': 'Resident Comfort',
+  'service-noise': 'Service Noise',
+  maintenance: 'Maintenance'
+};
+const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
+  'none',
+  'life-support',
+  'visitor-status',
+  'resident-comfort',
+  'service-noise',
+  'maintenance'
+];
+
+function isDiagnosticOverlay(value: string | undefined): value is DiagnosticOverlay {
+  return DIAGNOSTIC_OVERLAYS.includes(value as DiagnosticOverlay);
+}
+
+let lastDiagnosticReadoutText = '';
+
+function diagnosticHoverPrefix(): string {
+  if (hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return 'Hover a tile for local values.';
+  const p = fromIndex(hoveredTile, state.width);
+  return `Tile ${p.x},${p.y}`;
+}
+
+function diagnosticReadoutText(): string {
+  const overlay = state.controls.diagnosticOverlay;
+  if (overlay === 'none') return 'Diagnostics off';
+  if (overlay === 'life-support') {
+    const globalLine = `Air: ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered | poor ${state.metrics.poorLifeSupportTiles}`;
+    if (hoveredTile === null) return `${globalLine}\nHover a tile to see source distance and risk.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getLifeSupportTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic?.walkablePressurized) return `${globalLine}\n${diagnosticHoverPrefix()}: not pressurized/walkable.`;
+    if (!diagnostic.hasLifeSupportSystem) return `${globalLine}\n${diagnosticHoverPrefix()}: no life-support system built yet.`;
+    if (diagnostic.noActiveSource) return `${globalLine}\n${diagnosticHoverPrefix()}: no active source; oxygen risk.`;
+    if (!diagnostic.reachable) return `${globalLine}\n${diagnosticHoverPrefix()}: disconnected from active air.`;
+    return `${globalLine}\n${diagnosticHoverPrefix()}: distance ${diagnostic.distance ?? 0}; ${diagnostic.poorCoverage ? 'poor room readiness' : 'covered'}.`;
+  }
+  if (overlay === 'maintenance') {
+    const globalLine = `Maintenance: max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
+    if (hoveredTile === null) return `${globalLine}\nHover reactor or life-support tiles for output loss.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getMaintenanceTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no system debt here.`;
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}%; output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%.`;
+  }
+  if (hoveredTile === null) {
+    const label = DIAGNOSTIC_OVERLAY_LABELS[overlay];
+    return `${label}\nHover a room tile for score and gameplay effect.`;
+  }
+  const p = fromIndex(hoveredTile, state.width);
+  const diagnostic = getRoomEnvironmentTileDiagnostic(state, p.x, p.y);
+  if (!diagnostic || diagnostic.sampledTiles <= 0) return `${diagnosticHoverPrefix()}: no room environment sample.`;
+  if (overlay === 'visitor-status') {
+    return `Visitor Status: avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m\n${diagnosticHoverPrefix()}: score ${diagnostic.visitorStatus.toFixed(1)}, discomfort ${diagnostic.visitorDiscomfort.toFixed(1)}; affects rating/service appeal.`;
+  }
+  if (overlay === 'resident-comfort') {
+    return `Resident Comfort: avg ${state.metrics.residentComfortAvg.toFixed(1)} | stress ${state.metrics.residentEnvironmentStressPerMin.toFixed(1)}/m\n${diagnosticHoverPrefix()}: comfort ${diagnostic.residentialComfort.toFixed(1)}, stress ${diagnostic.residentDiscomfort.toFixed(1)}; affects satisfaction.`;
+  }
+  return `Service Noise: dorm noise ${state.metrics.serviceNoiseNearDorms.toFixed(1)}\n${diagnosticHoverPrefix()}: noise ${diagnostic.serviceNoise.toFixed(1)}; lowers visitor status and resident comfort nearby.`;
+}
+
+function refreshDiagnosticReadout(): void {
+  const text = diagnosticReadoutText();
+  if (text !== lastDiagnosticReadoutText) {
+    diagnosticReadoutEl.textContent = text;
+    diagnosticReadoutEl.classList.toggle('active', state.controls.diagnosticOverlay !== 'none');
+    lastDiagnosticReadoutText = text;
+  }
+}
+
 const autosaveStatusEl = document.querySelector<HTMLElement>('#autosave-status')!;
 const loadAutosaveBtn = document.querySelector<HTMLButtonElement>('#load-autosave')!;
 const visitorsEl = document.querySelector<HTMLSpanElement>('#visitors')!;
@@ -987,6 +1081,7 @@ const agentHealthEl = document.querySelector<HTMLElement>('#agent-health')!;
 const agentBlockedEl = document.querySelector<HTMLElement>('#agent-blocked')!;
 const agentVisitorDetailsEl = document.querySelector<HTMLElement>('#agent-visitor-details')!;
 const agentResidentDetailsEl = document.querySelector<HTMLElement>('#agent-resident-details')!;
+const agentCrewDetailsEl = document.querySelector<HTMLElement>('#agent-crew-details')!;
 // HUD status strip elements — persistent top-of-canvas sim-game status bar.
 const hudPowerEl = document.querySelector<HTMLElement>('#hud-power')!;
 const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
@@ -1309,10 +1404,11 @@ function refreshHudStatus(): void {
 const VISITOR_TRAFFIC_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 
 function hasVisitorDock(): boolean {
-  return state.docks.some((dock) => dock.purpose === 'visitor');
+  return state.docks.some((dock) => dock.purpose === 'visitor') || state.metrics.visitorBerthsTotal > 0;
 }
 
 function hasEligibleVisitorDock(): boolean {
+  if (state.metrics.visitorBerthsTotal > 0) return true;
   return state.docks.some((dock) => {
     if (dock.purpose !== 'visitor' || dock.allowedShipSizes.length === 0) return false;
     return VISITOR_TRAFFIC_TYPES.some(
@@ -1335,7 +1431,7 @@ function refreshTrafficStatus(): void {
     return;
   }
   if (!hasVisitorDock()) {
-    setTrafficStatus('Build a visitor dock', 'warn');
+    setTrafficStatus('Build visitor dock or berth', 'warn');
     return;
   }
   if (!hasEligibleVisitorDock()) {
@@ -1899,6 +1995,105 @@ function refreshAlertPanel(): void {
     .join('');
 }
 
+// Energy threshold the sim uses to push crew into a rest cycle. Mirrors
+// CREW_REST_ENERGY_THRESHOLD in sim.ts — kept in sync manually because exporting
+// the constant would couple the UI to internal sim numerics.
+const CREW_REST_THRESHOLD_UI = 42;
+const CREW_REST_CRITICAL_UI = 18;
+const CREW_CLEAN_THRESHOLD_UI = 38;
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c] as string));
+}
+
+function needBarHtml(label: string, value: number, threshold: number, criticalThreshold: number | null, hint: string): string {
+  const pct = Math.max(0, Math.min(100, value));
+  const tone = criticalThreshold !== null && value < criticalThreshold
+    ? 'critical'
+    : value < threshold
+      ? 'low'
+      : value < threshold + 20
+        ? 'warn'
+        : 'ok';
+  const markerLeft = `${Math.max(0, Math.min(100, threshold))}%`;
+  return `<div class="need-bar need-bar--${tone}" title="${escapeHtml(hint)}">
+    <span class="need-bar__label">${escapeHtml(label)}</span>
+    <div class="need-bar__track">
+      <div class="need-bar__fill" style="width:${pct.toFixed(0)}%"></div>
+      <div class="need-bar__threshold" style="left:${markerLeft}"></div>
+    </div>
+    <span class="need-bar__value">${value.toFixed(0)}</span>
+  </div>`;
+}
+
+// Builds a per-route exposure summary (e.g. "3 social, 2 service tiles"). Mirrors
+// the cost categories in path.ts/logisticsRoomCost so the player can see *why* a
+// route was chosen — long path through cafeteria reads as "social: 5" here.
+function routeExposureSummary(exposure: RouteExposure): string {
+  const parts: string[] = [];
+  if (exposure.socialTiles > 0) parts.push(`${exposure.socialTiles} social`);
+  if (exposure.serviceTiles > 0) parts.push(`${exposure.serviceTiles} service`);
+  if (exposure.cargoTiles > 0) parts.push(`${exposure.cargoTiles} cargo`);
+  if (exposure.residentialTiles > 0) parts.push(`${exposure.residentialTiles} residential`);
+  if (exposure.securityTiles > 0) parts.push(`${exposure.securityTiles} security`);
+  if (exposure.publicTiles > 0) parts.push(`${exposure.publicTiles} public`);
+  if (parts.length === 0) parts.push('back-of-house');
+  return parts.join(', ');
+}
+
+function formatCrewSelectionHtml(crewId: number): string {
+  const inspector = getCrewInspectorById(state, crewId);
+  if (!inspector) return 'Selected crew is no longer available.';
+  const crew = state.crewMembers.find((c) => c.id === crewId);
+
+  const roleLabel = inspector.resting ? 'Resting' : inspector.cleaning ? 'Cleaning' : inspector.role;
+  const systemLabel = inspector.assignedSystem ?? inspector.lastSystem ?? 'unassigned';
+
+  const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
+  const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
+
+  const parts: string[] = [];
+  parts.push(`<div class="agent-card__head">
+    <span class="agent-card__title">Crew #${inspector.id}</span>
+    <span class="agent-card__role">${escapeHtml(roleLabel)} · ${escapeHtml(systemLabel)}</span>
+  </div>`);
+  parts.push(`<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`);
+  if (inspector.actionReason) {
+    parts.push(`<div class="agent-card__reason">${escapeHtml(inspector.actionReason)}</div>`);
+  }
+  parts.push(`<div class="agent-card__needs">
+    ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
+    ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
+  </div>`);
+
+  if (inspector.activeJobId !== null) {
+    const job = state.jobs.find((j) => j.id === inspector.activeJobId);
+    if (job) {
+      const carrying = inspector.carryingAmount > 0
+        ? `carrying ${inspector.carryingAmount.toFixed(1)} ${inspector.carryingItemType ?? ''}`
+        : 'en-route to pickup';
+      parts.push(`<div class="agent-card__job">
+        Job #${job.id}: ${escapeHtml(job.itemType)} ${job.amount.toFixed(1)} (${carrying})
+      </div>`);
+    }
+  } else if (inspector.idleReason !== 'idle_available') {
+    parts.push(`<div class="agent-card__idle">Idle: ${escapeHtml(inspector.idleReason.replace('idle_', ''))}</div>`);
+  }
+
+  if (crew?.lastRouteExposure && crew.lastRouteExposure.distance > 0 && inspector.activeJobId !== null) {
+    parts.push(`<div class="agent-card__route">
+      Route: ${crew.lastRouteExposure.distance} tiles · ${escapeHtml(routeExposureSummary(crew.lastRouteExposure))}
+    </div>`);
+  }
+
+  if (inspector.blockedTicks > 4) {
+    parts.push(`<div class="agent-card__warn">⚠ Path blocked ${inspector.blockedTicks} ticks</div>`);
+  }
+  return parts.join('');
+}
+
 function refreshSelectionSummary(): void {
   if (selectedAgent !== null) {
     if (selectedAgent.kind === 'visitor') {
@@ -1908,10 +2103,14 @@ function refreshSelectionSummary(): void {
         : 'Selected visitor is no longer available.';
       return;
     }
-    const inspector = getResidentInspectorById(state, selectedAgent.id);
-    selectionSummaryEl.textContent = inspector
-      ? `Resident #${inspector.id}: ${inspector.role} | ${inspector.currentAction} | ${inspector.healthState}`
-      : 'Selected resident is no longer available.';
+    if (selectedAgent.kind === 'resident') {
+      const inspector = getResidentInspectorById(state, selectedAgent.id);
+      selectionSummaryEl.textContent = inspector
+        ? `Resident #${inspector.id}: ${inspector.role} | ${inspector.currentAction} | ${inspector.healthState}`
+        : 'Selected resident is no longer available.';
+      return;
+    }
+    selectionSummaryEl.innerHTML = formatCrewSelectionHtml(selectedAgent.id);
     return;
   }
   if (selectedDockId !== null) {
@@ -1929,6 +2128,112 @@ function refreshSelectionSummary(): void {
     return;
   }
   selectionSummaryEl.textContent = 'No room, dock, or resident selected.';
+}
+
+// Color a tile by its room category so the route polyline visually shows *why* a
+// segment is cheap or costly. Mirrors the route-intent cost categories in path.ts —
+// social/residential are penalized for logistics, service tiles are not. The user
+// can see "this hauler routed through 3 cafeteria tiles" without reading code.
+function routeTileColor(roomType: RoomType): string {
+  switch (roomType) {
+    case RoomType.Cafeteria:
+    case RoomType.Lounge:
+    case RoomType.Market:
+    case RoomType.RecHall:
+      return '#ff9d3a'; // social — +7 logistics cost
+    case RoomType.Dorm:
+    case RoomType.Hygiene:
+      return '#ff7ad8'; // residential — +8 logistics cost
+    case RoomType.Reactor:
+    case RoomType.LifeSupport:
+    case RoomType.Workshop:
+    case RoomType.Kitchen:
+    case RoomType.Hydroponics:
+      return '#5cd8ff'; // service
+    case RoomType.Storage:
+    case RoomType.LogisticsStock:
+    case RoomType.Berth:
+      return '#b07cff'; // cargo
+    case RoomType.Security:
+    case RoomType.Brig:
+      return '#ff5050'; // security
+    case RoomType.Clinic:
+      return '#ffd86a'; // clinic
+    default:
+      return '#5cf598'; // open corridor — no penalty
+  }
+}
+
+// Draws the selected crew member's planned path on top of the world. Tile
+// segments are colored by room category so the player can see why the route
+// was chosen (cheap green corridors vs. costly orange social tiles). Endpoints
+// get markers — circle at the crew, diamond at the destination.
+function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
+  if (!selectedAgent || selectedAgent.kind !== 'crew') return;
+  const crew = state.crewMembers.find((c) => c.id === selectedAgent!.id);
+  if (!crew) return;
+  if (crew.path.length === 0) return;
+
+  const startPx = crew.x * TILE_SIZE;
+  const startPy = crew.y * TILE_SIZE;
+
+  ctx.save();
+  ctx.lineWidth = Math.max(2, TILE_SIZE * 0.12);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Translucent black halo so the colored line reads against any tile.
+  ctx.strokeStyle = 'rgba(8, 14, 22, 0.55)';
+  ctx.lineWidth = Math.max(4, TILE_SIZE * 0.2);
+  ctx.beginPath();
+  ctx.moveTo(startPx, startPy);
+  for (const tile of crew.path) {
+    const tx = tile % state.width;
+    const ty = Math.floor(tile / state.width);
+    ctx.lineTo((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
+  }
+  ctx.stroke();
+
+  // Colored segments: each segment recolors based on the room of the *next* tile.
+  ctx.lineWidth = Math.max(2, TILE_SIZE * 0.12);
+  let prevPx = startPx;
+  let prevPy = startPy;
+  for (const tile of crew.path) {
+    const tx = tile % state.width;
+    const ty = Math.floor(tile / state.width);
+    const cx = (tx + 0.5) * TILE_SIZE;
+    const cy = (ty + 0.5) * TILE_SIZE;
+    ctx.strokeStyle = routeTileColor(state.rooms[tile]);
+    ctx.beginPath();
+    ctx.moveTo(prevPx, prevPy);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    prevPx = cx;
+    prevPy = cy;
+  }
+
+  // Endpoint markers: ring at crew, diamond at destination.
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(startPx, startPy, TILE_SIZE * 0.32, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const endTile = crew.path[crew.path.length - 1];
+  const endX = (endTile % state.width + 0.5) * TILE_SIZE;
+  const endY = (Math.floor(endTile / state.width) + 0.5) * TILE_SIZE;
+  ctx.fillStyle = '#ffe06a';
+  ctx.strokeStyle = 'rgba(8, 14, 22, 0.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(endX, endY - TILE_SIZE * 0.28);
+  ctx.lineTo(endX + TILE_SIZE * 0.28, endY);
+  ctx.lineTo(endX, endY + TILE_SIZE * 0.28);
+  ctx.lineTo(endX - TILE_SIZE * 0.28, endY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }
 
 // Dev-only overlay — "time to tier" at a glance for playtest pacing.
@@ -2136,7 +2441,7 @@ type SaveStore = {
   saves: LocalSaveRecord[];
 };
 
-type SelectedAgent = { kind: 'visitor' | 'resident'; id: number };
+type SelectedAgent = { kind: 'visitor' | 'resident' | 'crew'; id: number };
 
 let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
 let selectedDockId: number | null = null;
@@ -2290,6 +2595,37 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
 
 const MODULE_PALETTE_ICON_MAX_W = 46;
 const MODULE_PALETTE_ICON_MAX_H = 34;
+const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
+  [ModuleType.None]: '',
+  [ModuleType.WallLight]: 'LT',
+  [ModuleType.Bed]: 'BD',
+  [ModuleType.Table]: 'TB',
+  [ModuleType.ServingStation]: 'SV',
+  [ModuleType.Stove]: 'ST',
+  [ModuleType.Workbench]: 'WB',
+  [ModuleType.MedBed]: 'MD',
+  [ModuleType.CellConsole]: 'CL',
+  [ModuleType.RecUnit]: 'RC',
+  [ModuleType.GrowStation]: 'GR',
+  [ModuleType.Terminal]: 'TM',
+  [ModuleType.Couch]: 'CH',
+  [ModuleType.GameStation]: 'GM',
+  [ModuleType.Shower]: 'SH',
+  [ModuleType.Sink]: 'SK',
+  [ModuleType.MarketStall]: 'MK',
+  [ModuleType.IntakePallet]: 'IN',
+  [ModuleType.StorageRack]: 'SR',
+  [ModuleType.Gangway]: 'GW',
+  [ModuleType.CustomsCounter]: 'CC',
+  [ModuleType.CargoArm]: 'CA'
+};
+
+function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {
+  btn.classList.remove('sprite-missing');
+  btn.classList.add('sprite-fallback');
+  spriteEl.removeAttribute('style');
+  spriteEl.textContent = MODULE_PALETTE_FALLBACK_LABEL[module] || '?';
+}
 
 function refreshModulePaletteSprites(): void {
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn[data-tool-module]').forEach((btn) => {
@@ -2320,8 +2656,7 @@ function refreshModulePaletteSprites(): void {
     const frame = spriteAtlas.getFrame(spriteKey);
     const image = spriteAtlas.image;
     if (!spriteAtlas.ready || !image || !frame) {
-      btn.classList.add('sprite-missing');
-      spriteEl.removeAttribute('style');
+      applyModulePaletteFallback(btn, spriteEl, module);
       return;
     }
 
@@ -2329,6 +2664,8 @@ function refreshModulePaletteSprites(): void {
     const iconW = Math.max(1, Math.round(frame.w * scale));
     const iconH = Math.max(1, Math.round(frame.h * scale));
     btn.classList.remove('sprite-missing');
+    btn.classList.remove('sprite-fallback');
+    spriteEl.textContent = '';
     spriteEl.style.width = `${iconW}px`;
     spriteEl.style.height = `${iconH}px`;
     spriteEl.style.backgroundImage = `url("${image.src}")`;
@@ -2428,6 +2765,7 @@ function refreshToolbar(): void {
     const zoneKey = btn.dataset.toolZone;
     const roomKey = btn.dataset.toolRoom;
     const moduleKey = btn.dataset.toolModule;
+    const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
     let active = false;
     let locked = false;
     let lockedTitle = '';
@@ -2436,6 +2774,8 @@ function refreshToolbar(): void {
     } else if (zoneKey && toolKind === 'zone') {
       const z = TOOLBAR_ZONE_MAP[zoneKey];
       active = z !== undefined && z === currentTool.zone;
+    } else if (isDiagnosticOverlay(diagnosticOverlayKey)) {
+      active = state.controls.diagnosticOverlay === diagnosticOverlayKey;
     } else if (btn.dataset.toolClearroom) {
       active = toolKind === 'room' && currentTool.room === RoomType.None;
     } else if (roomKey) {
@@ -2708,12 +3048,21 @@ function trimSaveStore(saves: LocalSaveRecord[]): { saves: LocalSaveRecord[]; re
   };
 }
 
-function toDisplaySaveJson(text: string): string {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return text;
-  }
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib.toFixed(1)} KB`;
+  return `${(kib / 1024).toFixed(2)} MB`;
+}
+
+function toDisplaySaveSummary(save: LocalSaveRecord): string {
+  return [
+    'Selected save is ready.',
+    `Name: ${save.name}`,
+    `Updated: ${new Date(save.updatedAt).toLocaleString()}`,
+    `JSON size: ${formatByteSize(save.payloadText.length)}`,
+    'Use Download JSON for the full export.'
+  ].join('\n');
 }
 
 function getSelectedSave(store: SaveStore): LocalSaveRecord | null {
@@ -2769,7 +3118,7 @@ function refreshSaveUi(preferredSaveId?: string): void {
     saveDownloadBtn.disabled = false;
     saveCountEl.textContent = String(saves.length);
     const selected = getSelectedSave({ storeVersion: 1, saves });
-    saveExportTextarea.value = selected ? toDisplaySaveJson(selected.payloadText) : '';
+    saveExportTextarea.value = selected ? toDisplaySaveSummary(selected) : '';
   }
   if (warnings.length > 0) {
     setSaveStatus(warnings.join(' '), 'warn');
@@ -3018,11 +3367,22 @@ function pickInspectableAgent(worldX: number, worldY: number, clickedTile: numbe
       best = { candidate: { kind: 'resident', id: resident.id }, distSq };
     }
   }
+  for (const crew of state.crewMembers) {
+    const dx = crew.x - worldX;
+    const dy = crew.y - worldY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > maxDistanceSq) continue;
+    if (!best || distSq < best.distSq) {
+      best = { candidate: { kind: 'crew', id: crew.id }, distSq };
+    }
+  }
   if (best) return best.candidate;
   const residentOnTile = state.residents.find((resident) => resident.tileIndex === clickedTile);
   if (residentOnTile) return { kind: 'resident', id: residentOnTile.id };
   const visitorOnTile = state.visitors.find((visitor) => visitor.tileIndex === clickedTile);
   if (visitorOnTile) return { kind: 'visitor', id: visitorOnTile.id };
+  const crewOnTile = state.crewMembers.find((crew) => crew.tileIndex === clickedTile);
+  if (crewOnTile) return { kind: 'crew', id: crewOnTile.id };
   return null;
 }
 
@@ -3053,6 +3413,31 @@ function refreshAgentModal(): boolean {
       `patience ${inspector.patience.toFixed(1)} | served ${inspector.servedMeal ? 'yes' : 'no'} | carrying ${inspector.carryingMeal ? 'yes' : 'no'} | ` +
       `serving ${formatTileLabel(inspector.reservedServingTile)} | table ${formatTileLabel(inspector.reservedTargetTile)}`;
     agentResidentDetailsEl.textContent = 'Resident: n/a';
+    agentCrewDetailsEl.textContent = 'Crew: n/a';
+    return true;
+  }
+
+  if (selectedAgent.kind === 'crew') {
+    const inspector = getCrewInspectorById(state, selectedAgent.id);
+    if (!inspector) return false;
+    agentKindEl.textContent = 'crew';
+    agentIdEl.textContent = String(inspector.id);
+    agentStateEl.textContent = inspector.state;
+    agentActionEl.textContent = inspector.currentAction;
+    agentReasonEl.textContent = `Reason: ${inspector.actionReason}`;
+    agentDesireEl.textContent = inspector.desire;
+    agentTargetEl.textContent = formatTileLabel(inspector.targetTile);
+    agentPathEl.textContent = `${inspector.pathLength} steps`;
+    agentHealthEl.textContent = inspector.healthState;
+    agentHealthEl.style.color = healthColor(inspector.healthState);
+    agentBlockedEl.textContent = String(inspector.blockedTicks);
+    agentVisitorDetailsEl.textContent = 'Visitor: n/a';
+    agentResidentDetailsEl.textContent = 'Resident: n/a';
+    agentCrewDetailsEl.textContent =
+      `Crew: role ${inspector.role} | system ${inspector.assignedSystem ?? 'none'} | last ${inspector.lastSystem ?? 'none'} | ` +
+      `energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | resting ${inspector.resting ? 'yes' : 'no'} | ` +
+      `cleaning ${inspector.cleaning ? 'yes' : 'no'} | job ${inspector.activeJobId ?? 'none'} | ` +
+      `carrying ${inspector.carryingItemType ?? 'none'} ${inspector.carryingAmount.toFixed(1)} | idle ${inspector.idleReason}`;
     return true;
   }
 
@@ -3076,6 +3461,7 @@ function refreshAgentModal(): boolean {
     `stress ${inspector.stress.toFixed(1)} | agi ${inspector.agitation.toFixed(1)} | confront ${inspector.inConfrontation ? 'yes' : 'no'} | ` +
     `satisfaction ${inspector.satisfaction.toFixed(1)} | leave ${inspector.leaveIntent.toFixed(1)} | ` +
     `dominant ${inspector.dominantNeed} | home dock ${inspector.homeDockId ?? 'none'} | bed ${inspector.bedModuleId ?? 'none'}`;
+  agentCrewDetailsEl.textContent = 'Crew: n/a';
   return true;
 }
 
@@ -3494,6 +3880,7 @@ window.addEventListener('keydown', (e) => {
     case 'o':
     case 'O':
       state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
+      syncToggleLabels();
       break;
     case 'F2':
       state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
@@ -3503,9 +3890,11 @@ window.addEventListener('keydown', (e) => {
           refreshModulePaletteSprites();
         });
       }
+      syncToggleLabels();
       break;
     case 'F3':
       state.controls.showSpriteFallback = !state.controls.showSpriteFallback;
+      syncToggleLabels();
       break;
     case 'F4':
       // System Map modal toggle. Y is taken by Clinic (and every other
@@ -3633,6 +4022,19 @@ function syncToggleLabels(): void {
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
     ? 'Force Fallback: ON'
     : 'Force Fallback: OFF';
+  for (const btn of diagnosticOverlayBtns) {
+    const overlay = btn.dataset.diagnosticOverlay;
+    if (!isDiagnosticOverlay(overlay)) continue;
+    const active = state.controls.diagnosticOverlay === overlay;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+    const label = DIAGNOSTIC_OVERLAY_LABELS[overlay];
+    btn.textContent =
+      overlay === 'none'
+        ? `Diagnostics: ${active ? 'OFF' : 'Off'}`
+        : `${label}: ${active ? 'ON' : 'Off'}`;
+  }
+  refreshDiagnosticReadout();
 }
 syncToggleLabels();
 
@@ -3655,6 +4057,15 @@ toggleGlowBtn.addEventListener('click', () => {
   state.controls.showGlow = !state.controls.showGlow;
   syncToggleLabels();
 });
+
+for (const btn of diagnosticOverlayBtns) {
+  btn.addEventListener('click', () => {
+    const overlay = btn.dataset.diagnosticOverlay;
+    if (!isDiagnosticOverlay(overlay)) return;
+    state.controls.diagnosticOverlay = overlay;
+    syncToggleLabels();
+  });
+}
 
 toggleSpritesBtn.addEventListener('click', () => {
   state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
@@ -4070,7 +4481,7 @@ function loadSelectedSave(): void {
 saveSlotSelect.addEventListener('change', () => {
   const { store } = readSaveStore();
   const selected = getSelectedSave(store);
-  saveExportTextarea.value = selected ? toDisplaySaveJson(selected.payloadText) : '';
+  saveExportTextarea.value = selected ? toDisplaySaveSummary(selected) : '';
 });
 
 saveCreateBtn.addEventListener('click', () => {
@@ -4287,12 +4698,14 @@ function frame(now: number): void {
   tick(state, dt);
   const renderStart = performance.now();
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
+  drawSelectedAgentRoute(ctx);
   state.metrics.renderMs = performance.now() - renderStart;
   // Toolbar reflects active tool (any kind) and locked state (room+module
   // per current unlock tier). Called every frame — ~40 DOM attribute
   // toggles, cheap.
   refreshToolbar();
   refreshSpriteStatus();
+  refreshDiagnosticReadout();
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;

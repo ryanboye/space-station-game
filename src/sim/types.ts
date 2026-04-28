@@ -54,6 +54,14 @@ export interface RoomEnvironmentScore extends RoomEnvironmentTraits {
   sampledTiles: number;
 }
 
+export type DiagnosticOverlay =
+  | 'none'
+  | 'life-support'
+  | 'visitor-status'
+  | 'resident-comfort'
+  | 'service-noise'
+  | 'maintenance';
+
 export type IncidentType = 'fight' | 'trespass';
 export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
 export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality' | 'escaped';
@@ -271,6 +279,40 @@ export interface MaintenanceDebt {
   anchorTile: number;
   debt: number;
   lastServicedAt: number;
+}
+
+export interface LifeSupportCoverageDiagnostic {
+  distanceByTile: Int16Array;
+  sourceCount: number;
+  coveredTiles: number;
+  walkablePressurizedTiles: number;
+  poorTiles: number;
+  avgDistance: number;
+  coveragePct: number;
+  hasLifeSupportSystem: boolean;
+}
+
+export interface LifeSupportTileDiagnostic {
+  tileIndex: number;
+  walkablePressurized: boolean;
+  hasLifeSupportSystem: boolean;
+  sourceCount: number;
+  reachable: boolean;
+  distance: number | null;
+  poorCoverage: boolean;
+  noActiveSource: boolean;
+}
+
+export interface RoomEnvironmentTileDiagnostic extends RoomEnvironmentScore {
+  visitorDiscomfort: number;
+  residentDiscomfort: number;
+}
+
+export interface MaintenanceTileDiagnostic {
+  system: MaintenanceSystem;
+  anchorTile: number;
+  debt: number;
+  outputMultiplier: number;
 }
 export interface CrewTaskCandidate {
   id: string;
@@ -913,11 +955,12 @@ export interface HousingInspector {
   validPrivateHousing: boolean;
 }
 
-export type AgentInspectorKind = 'visitor' | 'resident';
+export type AgentInspectorKind = 'visitor' | 'resident' | 'crew';
 export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
 export type VisitorDesire = 'eat' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
 export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
+export type CrewDesire = 'rest' | 'clean' | 'logistics' | 'staff_post' | 'idle';
 
 export interface AgentInspectorBase {
   id: number;
@@ -968,6 +1011,23 @@ export interface ResidentInspector extends AgentInspectorBase {
   bedModuleId: number | null;
   dominantNeed: ResidentDominantNeed;
   desire: ResidentDesire;
+}
+
+export interface CrewInspector extends AgentInspectorBase {
+  kind: 'crew';
+  state: string;
+  role: CrewRole;
+  assignedSystem: CrewPrioritySystem | null;
+  lastSystem: CrewPrioritySystem | null;
+  energy: number;
+  hygiene: number;
+  resting: boolean;
+  cleaning: boolean;
+  activeJobId: number | null;
+  carryingItemType: ItemType | null;
+  carryingAmount: number;
+  idleReason: CrewIdleReason;
+  desire: CrewDesire;
 }
 
 export interface CrewState {
@@ -1069,6 +1129,7 @@ export interface Controls {
   paused: boolean;
   simSpeed: 1 | 2 | 4;
   shipsPerCycle: number;
+  diagnosticOverlay: DiagnosticOverlay;
   showZones: boolean;
   showServiceNodes: boolean;
   showInventoryOverlay: boolean;
