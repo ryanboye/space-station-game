@@ -1759,6 +1759,7 @@ function refreshOpsModal(): void {
     { label: 'Lounge', value: `${state.ops.loungeActive}/${state.ops.loungeTotal}` },
     { label: 'Market', value: `${state.ops.marketActive}/${state.ops.marketTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
+    { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalLifeSupportEl, [
     { label: 'Active', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },

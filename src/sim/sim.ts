@@ -54,6 +54,7 @@ import {
   type JobStatusCounts,
   type JobExpiryContext,
   type ItemType,
+  type MaintenanceSystem,
   type ResidentRole,
   type RouteExposure,
   type RoomEnvironmentScore,
@@ -118,6 +119,12 @@ const CREW_PUBLIC_CROWD_DRAIN = 0.018;
 const ROOM_ENVIRONMENT_RADIUS = 5;
 const VISITOR_ENVIRONMENT_RATING_PENALTY = 0.018;
 const RESIDENT_ENVIRONMENT_STRESS = 0.32;
+const MAINTENANCE_DEBT_WARNING = 30;
+const MAINTENANCE_DEBT_SEVERE = 60;
+const MAINTENANCE_IDLE_RISE_PER_MIN = 0.16;
+const MAINTENANCE_REACTOR_RISE_PER_MIN = 0.6;
+const MAINTENANCE_LIFE_SUPPORT_RISE_PER_MIN = 0.8;
+const MAINTENANCE_STAFF_REPAIR_PER_MIN = 4.5;
 
 const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Space]: 0,
@@ -1243,6 +1250,54 @@ function roomMatchesCrewSystem(system: CrewPrioritySystem, room: RoomType): bool
   return room === systemRoomType(system);
 }
 
+function maintenanceKey(system: MaintenanceSystem, anchorTile: number): string {
+  return `${system}:${anchorTile}`;
+}
+
+function maintenanceRoom(system: MaintenanceSystem): RoomType {
+  return system === 'reactor' ? RoomType.Reactor : RoomType.LifeSupport;
+}
+
+function clusterAnchor(cluster: number[]): number {
+  return cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]);
+}
+
+function maintenanceDebtFor(state: StationState, system: MaintenanceSystem, anchorTile: number): number {
+  return state.maintenanceDebts.find((debt) => debt.key === maintenanceKey(system, anchorTile))?.debt ?? 0;
+}
+
+function maxMaintenanceDebtForSystem(state: StationState, system: MaintenanceSystem): number {
+  let max = 0;
+  for (const debt of state.maintenanceDebts) {
+    if (debt.system === system) max = Math.max(max, debt.debt);
+  }
+  return max;
+}
+
+function maintenanceOutputMultiplierFromDebt(debt: number): number {
+  if (debt <= MAINTENANCE_DEBT_WARNING) return 1;
+  if (debt <= MAINTENANCE_DEBT_SEVERE) {
+    return 1 - ((debt - MAINTENANCE_DEBT_WARNING) / (MAINTENANCE_DEBT_SEVERE - MAINTENANCE_DEBT_WARNING)) * 0.15;
+  }
+  if (debt <= 85) return 0.85 - ((debt - MAINTENANCE_DEBT_SEVERE) / 25) * 0.2;
+  return clamp(0.65 - ((debt - 85) / 15) * 0.25, 0.4, 0.65);
+}
+
+function maintenanceOutputMultiplierForSystem(state: StationState, system: MaintenanceSystem): number {
+  let total = 0;
+  let count = 0;
+  for (const debt of state.maintenanceDebts) {
+    if (debt.system !== system) continue;
+    total += maintenanceOutputMultiplierFromDebt(debt.debt);
+    count += 1;
+  }
+  return count > 0 ? total / count : 1;
+}
+
+function maintenanceDebtAtAnchor(state: StationState, system: MaintenanceSystem, anchorTile: number) {
+  return state.maintenanceDebts.find((debt) => debt.key === maintenanceKey(system, anchorTile)) ?? null;
+}
+
 function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTargets {
   const hasRoom = (room: RoomType): boolean => roomClusterAnchors(state, room).length > 0;
   const hasService = (room: RoomType): boolean => {
@@ -1255,9 +1310,11 @@ function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTa
     state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK ||
     state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW ||
     (state.metrics.visitorsCount > 0 && state.metrics.mealStock < FOOD_CHAIN_TARGET_MEAL_STOCK);
+  const needsReactorMaintenance = maxMaintenanceDebtForSystem(state, 'reactor') >= MAINTENANCE_DEBT_WARNING;
+  const needsLifeSupportMaintenance = maxMaintenanceDebtForSystem(state, 'life-support') >= MAINTENANCE_DEBT_WARNING;
   return {
-    requiredReactorPosts: needsPowerStaff && hasRoom(RoomType.Reactor) ? 1 : 0,
-    requiredLifeSupportPosts: needsAirStaff && hasRoom(RoomType.LifeSupport) ? 1 : 0,
+    requiredReactorPosts: (needsPowerStaff || needsReactorMaintenance) && hasRoom(RoomType.Reactor) ? 1 : 0,
+    requiredLifeSupportPosts: (needsAirStaff || needsLifeSupportMaintenance) && hasRoom(RoomType.LifeSupport) ? 1 : 0,
     requiredHydroPosts: needsFoodStaff && hasService(RoomType.Hydroponics) ? 1 : 0,
     requiredKitchenPosts: needsFoodStaff && hasService(RoomType.Kitchen) ? 1 : 0,
     requiredCafeteriaPosts: needsFoodStaff && hasService(RoomType.Cafeteria) ? 1 : 0
@@ -3459,6 +3516,53 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
   state.ops.dormsActive = operationalClustersForRoom(state, RoomType.Dorm, 0, false, dt, updateDebounce).length;
 }
 
+function updateMaintenanceDebt(state: StationState, dt: number): void {
+  const seenKeys = new Set<string>();
+  const minutes = dt / 60;
+  const processSystem = (system: MaintenanceSystem): void => {
+    const room = maintenanceRoom(system);
+    const activeAnchors = new Set(
+      operationalClustersForRoom(state, room, system === 'reactor' ? CREW_PER_REACTOR : CREW_PER_LIFE_SUPPORT, false).map(
+        clusterAnchor
+      )
+    );
+    for (const cluster of roomClusters(state, room)) {
+      const anchor = clusterAnchor(cluster);
+      const key = maintenanceKey(system, anchor);
+      seenKeys.add(key);
+      let debt = state.maintenanceDebts.find((entry) => entry.key === key);
+      if (!debt) {
+        debt = { key, system, anchorTile: anchor, debt: 0, lastServicedAt: state.now };
+        state.maintenanceDebts.push(debt);
+      }
+
+      const wasOpen = debt.debt >= MAINTENANCE_DEBT_WARNING;
+      let risePerMin = activeAnchors.has(anchor)
+        ? system === 'reactor'
+          ? MAINTENANCE_REACTOR_RISE_PER_MIN
+          : MAINTENANCE_LIFE_SUPPORT_RISE_PER_MIN
+        : MAINTENANCE_IDLE_RISE_PER_MIN;
+      if (system === 'reactor' && state.metrics.powerDemand > state.metrics.powerSupply) risePerMin += 0.45;
+      if (system === 'life-support' && state.metrics.airQuality < 35) risePerMin += 0.55;
+
+      const maintainers = state.crewMembers.filter(
+        (crew) =>
+          !crew.resting &&
+          crew.activeJobId === null &&
+          crew.assignedSystem === system &&
+          cluster.includes(crew.tileIndex)
+      ).length;
+      debt.debt = clamp(debt.debt + risePerMin * minutes - maintainers * MAINTENANCE_STAFF_REPAIR_PER_MIN * minutes, 0, 100);
+      if (maintainers > 0) debt.lastServicedAt = state.now;
+      if (wasOpen && debt.debt < MAINTENANCE_DEBT_WARNING) state.usageTotals.maintenanceJobsResolved += 1;
+    }
+  };
+
+  processSystem('reactor');
+  processSystem('life-support');
+  state.maintenanceDebts = state.maintenanceDebts.filter((debt) => seenKeys.has(debt.key));
+}
+
 function updateCriticalStaffTracking(state: StationState, dt: number): void {
   const criticalTargets = computeCriticalCapacityTargets(state);
   const needsAirFloor = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
@@ -3732,6 +3836,14 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   }
   if (room === RoomType.LifeSupport) {
     hints.push(`air +${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s of +${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s potential`);
+  }
+  if (room === RoomType.Reactor || room === RoomType.LifeSupport) {
+    const system: MaintenanceSystem = room === RoomType.Reactor ? 'reactor' : 'life-support';
+    const debt = maintenanceDebtAtAnchor(state, system, clusterMeta.anchor);
+    const value = debt?.debt ?? 0;
+    hints.push(`maintenance ${value.toFixed(0)}% | output ${(maintenanceOutputMultiplierFromDebt(value) * 100).toFixed(0)}%`);
+    if (value >= MAINTENANCE_DEBT_SEVERE) warnings.push('maintenance critical output degraded');
+    else if (value >= MAINTENANCE_DEBT_WARNING) warnings.push('maintenance needed');
   }
   if (room === RoomType.Clinic) {
     hints.push('clinic stabilizes distressed actors');
@@ -6993,9 +7105,10 @@ function updateResources(state: StationState, dt: number): void {
   }
   state.metrics.materials = Math.max(0, state.legacyMaterialStock + logisticsRawMaterial + storageRawMaterial);
 
+  const lifeSupportMaintenanceMultiplier = maintenanceOutputMultiplierForSystem(state, 'life-support');
   state.metrics.waterStock = clamp(
     state.metrics.waterStock +
-      state.ops.lifeSupportActive * 0.72 * powerRatio * dt -
+      state.ops.lifeSupportActive * 0.72 * powerRatio * lifeSupportMaintenanceMultiplier * dt -
       (state.residents.length * 0.04 + state.crewMembers.length * 0.03) * dt,
     0,
     260
@@ -7003,11 +7116,13 @@ function updateResources(state: StationState, dt: number): void {
 
   const airDemand = state.residents.length * 0.12 + state.visitors.length * 0.05 + state.crewMembers.length * 0.08;
   const lifeSupportPotentialTiles = collectRooms(state, RoomType.LifeSupport).length;
-  const lifeSupportActiveTiles = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false)
-    .flat()
-    .length;
+  const lifeSupportActiveClusters = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false);
   const lifeSupportPotentialAirPerSec = lifeSupportPotentialTiles * LIFE_SUPPORT_AIR_PER_TILE;
-  const lifeSupportActiveAirPerSec = lifeSupportActiveTiles * LIFE_SUPPORT_AIR_PER_TILE * powerRatio;
+  const lifeSupportActiveAirPerSec = lifeSupportActiveClusters.reduce((acc, cluster) => {
+    const anchor = clusterAnchor(cluster);
+    const multiplier = maintenanceOutputMultiplierFromDebt(maintenanceDebtFor(state, 'life-support', anchor));
+    return acc + cluster.length * LIFE_SUPPORT_AIR_PER_TILE * powerRatio * multiplier;
+  }, 0);
   const airSupply = lifeSupportActiveAirPerSec + (state.metrics.pressurizationPct / 100) * PASSIVE_AIR_PER_SEC_AT_100_PRESSURE;
   const airDeltaPerSec = (airSupply - airDemand) * 1.7 - leakPenalty * 1.2;
   state.metrics.lifeSupportPotentialAirPerSec = lifeSupportPotentialAirPerSec;
@@ -7231,7 +7346,8 @@ function computeMetrics(state: StationState): void {
   }
   const securityCoveragePct = securableTiles > 0 ? (secureTiles / securableTiles) * 100 : 0;
 
-  const powerSupply = BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR;
+  const reactorMaintenanceMultiplier = maintenanceOutputMultiplierForSystem(state, 'reactor');
+  const powerSupply = BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier;
   const powerDemand =
     9 +
     visitorsCount * 0.35 +
@@ -7427,6 +7543,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.visitorStatusAvg = visitorEnvironment.visitorStatus;
   state.metrics.residentComfortAvg = residentEnvironment.residentialComfort;
   state.metrics.serviceNoiseNearDorms = dormEnvironment.serviceNoise;
+  const maintenanceDebtTotal = state.maintenanceDebts.reduce((acc, debt) => acc + debt.debt, 0);
+  state.metrics.maintenanceDebtAvg =
+    state.maintenanceDebts.length > 0 ? maintenanceDebtTotal / state.maintenanceDebts.length : 0;
+  state.metrics.maintenanceDebtMax = state.maintenanceDebts.reduce((max, debt) => Math.max(max, debt.debt), 0);
+  state.metrics.maintenanceJobsOpen = state.maintenanceDebts.filter((debt) => debt.debt >= MAINTENANCE_DEBT_WARNING).length;
   state.recentDeathTimes = state.recentDeathTimes.filter((t) => state.now - t <= 60);
   state.metrics.recentDeaths = state.recentDeathTimes.length;
   const crewRestingInDorm = state.crewMembers.filter((c) => c.resting && state.rooms[c.tileIndex] === RoomType.Dorm).length;
@@ -7582,6 +7703,7 @@ function computeMetrics(state: StationState): void {
   state.metrics.crewPublicInterferencePerMin = state.usageTotals.crewPublicInterference / runMinutes;
   state.metrics.visitorEnvironmentPenaltyPerMin = state.usageTotals.visitorEnvironmentPenalty / runMinutes;
   state.metrics.residentEnvironmentStressPerMin = state.usageTotals.residentEnvironmentStress / runMinutes;
+  state.metrics.maintenanceJobsResolvedPerMin = state.usageTotals.maintenanceJobsResolved / runMinutes;
   state.metrics.dormVisitsPerMin = state.usageTotals.dorm / runMinutes;
   state.metrics.dormFailedAttemptsPerMin = state.failedNeedAttempts.dorm / runMinutes;
   state.metrics.hygieneUsesPerMin = state.usageTotals.hygiene / runMinutes;
@@ -7673,6 +7795,11 @@ function computeMetrics(state: StationState): void {
   }
   if (state.metrics.serviceNoiseNearDorms > 0.9) {
     roomWarnings.unshift('layout noise: dorms near loud systems');
+  }
+  if (state.metrics.maintenanceDebtMax >= MAINTENANCE_DEBT_SEVERE) {
+    roomWarnings.unshift('maintenance critical: utility output degraded');
+  } else if (state.metrics.maintenanceJobsOpen > 0) {
+    roomWarnings.unshift('maintenance needed: reactor/life-support debt rising');
   }
   if (state.ops.marketTotal > 0) {
     if (state.ops.marketActive <= 0) {
@@ -7861,6 +7988,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     visitors: [],
     residents: [],
     crewMembers: [],
+    maintenanceDebts: [],
     arrivingShips: [],
     pendingSpawns: [],
     metrics: {
@@ -8108,6 +8236,10 @@ export function createInitialState(options?: { seed?: number }): StationState {
       serviceNoiseNearDorms: 0,
       visitorEnvironmentPenaltyPerMin: 0,
       residentEnvironmentStressPerMin: 0,
+      maintenanceDebtAvg: 0,
+      maintenanceDebtMax: 0,
+      maintenanceJobsOpen: 0,
+      maintenanceJobsResolvedPerMin: 0,
       serviceNodesTotal: 0,
       serviceNodesUnreachable: 0,
       criticalUnstaffedSec: {
@@ -8280,6 +8412,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       crewPublicInterference: 0,
       visitorEnvironmentPenalty: 0,
       residentEnvironmentStress: 0,
+      maintenanceJobsResolved: 0,
       criticalStaffDrops: 0,
       securityDispatches: 0,
       securityResolved: 0,
@@ -8477,6 +8610,14 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     path: crew.path.map(remapIndex),
     targetTile: remapOptionalIndex(crew.targetTile)
   }));
+  state.maintenanceDebts = state.maintenanceDebts.map((debt) => {
+    const anchorTile = remapIndex(debt.anchorTile);
+    return {
+      ...debt,
+      anchorTile,
+      key: maintenanceKey(debt.system, anchorTile)
+    };
+  });
   state.arrivingShips = state.arrivingShips.map((ship) => ({
     ...ship,
     bayTiles: ship.bayTiles.map(remapIndex),
@@ -9456,6 +9597,7 @@ export function tick(state: StationState, frameDt: number): void {
   expireJobs(state);
   ensurePressurizationUpToDate(state);
   refreshRoomOpsFromCrewPresence(state, dt, true);
+  updateMaintenanceDebt(state, dt);
   updateResources(state, dt);
 
   const occupancyByTile = buildOccupancyMap(state);

@@ -408,6 +408,8 @@ const CREW_PUBLIC_CROWD_DRAIN = 0.12;
 
 # P4 - Crew Specialties and Maintenance Debt
 
+Status: maintenance-debt v0 implemented; crew specialties remain open. Reactor and life-support clusters now track `MaintenanceDebt` keyed by `system:anchorTile`. Debt above 30 creates a maintenance need through existing critical post assignment, reduces utility output, appears in ops metrics/room warnings, and is repaired by crew standing in the matching utility cluster.
+
 ## Product Goal
 
 Reactor and life support should feel real because trained crew maintain them. Hiring "more crew" should become less interesting than hiring the right crew and placing their work routes well.
@@ -521,10 +523,10 @@ Create maintenance tasks as crew post tasks, not transport jobs, in v0:
    - `assignCrewJobs`,
    - `assignJobsToIdleCrew`,
    - `pickSecurityResponder`.
-4. Add maintenance debt state and migration.
-5. Add debt update before `updateResources` consumes reactor/life-support output.
-6. Apply debt multipliers to `powerSupply` and `lifeSupportActiveAirPerSec`.
-7. Add crew maintenance tasks and metrics:
+4. Add maintenance debt state and migration. State done; save persistence is still open.
+5. Add debt update before `updateResources` consumes reactor/life-support output. Done.
+6. Apply debt multipliers to `powerSupply` and `lifeSupportActiveAirPerSec`. Done.
+7. Add crew maintenance tasks and metrics. Done via existing utility post assignment instead of a separate task kind:
    - `maintenanceDebtAvg`
    - `maintenanceJobsOpen`
    - `maintenanceJobsResolvedPerMin`

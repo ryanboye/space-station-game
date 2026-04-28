@@ -264,6 +264,14 @@ export type CrewPrioritySystem =
   | 'hygiene';
 export type CrewPriorityWeights = Record<CrewPrioritySystem, number>;
 export type CrewTaskKind = 'critical_post' | 'post' | 'logistics';
+export type MaintenanceSystem = 'reactor' | 'life-support';
+export interface MaintenanceDebt {
+  key: string;
+  system: MaintenanceSystem;
+  anchorTile: number;
+  debt: number;
+  lastServicedAt: number;
+}
 export interface CrewTaskCandidate {
   id: string;
   kind: CrewTaskKind;
@@ -759,6 +767,10 @@ export interface Metrics {
   serviceNoiseNearDorms: number;
   visitorEnvironmentPenaltyPerMin: number;
   residentEnvironmentStressPerMin: number;
+  maintenanceDebtAvg: number;
+  maintenanceDebtMax: number;
+  maintenanceJobsOpen: number;
+  maintenanceJobsResolvedPerMin: number;
   serviceNodesTotal: number;
   serviceNodesUnreachable: number;
   criticalUnstaffedSec: {
@@ -1101,6 +1113,7 @@ export interface StationState {
   visitors: Visitor[];
   residents: Resident[];
   crewMembers: CrewMember[];
+  maintenanceDebts: MaintenanceDebt[];
   arrivingShips: ArrivingShip[];
   pendingSpawns: PendingSpawn[];
   metrics: Metrics;
@@ -1195,6 +1208,7 @@ export interface StationState {
     crewPublicInterference: number;
     visitorEnvironmentPenalty: number;
     residentEnvironmentStress: number;
+    maintenanceJobsResolved: number;
     criticalStaffDrops: number;
     securityDispatches: number;
     securityResolved: number;

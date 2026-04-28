@@ -46,6 +46,8 @@ All defined at `sim.ts:85`–97; almost all are 1.
 5. **Preempt** the current assignment only if the new score exceeds it by `1.25 × + 2` (`sim.ts:215`–216). This is the anti-thrash gate.
 6. **Air emergency override** — if `airQuality < 25` or air-blocked warning is active, up to `CREW_EMERGENCY_WAKE_RATIO = 0.15` of the crew can be woken from rest to re-staff life-support (`sim.ts:186`).
 
+Reactor and life-support maintenance debt also contributes to `criticalTargets`: once a utility cluster reaches 30 debt, the existing post assignment system treats that utility as needing staff. Crew standing in the matching cluster reduce debt over time, so distant utility rooms are harder to keep healthy.
+
 ## Rest, fatigue, hygiene — `updateCrewLogic`
 
 `sim.ts:4581`:
@@ -85,6 +87,7 @@ When a crew can't find work, `idleReason` (`types.ts:198`) tells the UI why. Sur
 - Crew render as blue circles or sprite variants (`render.ts:1635`).
 - Priority modal lets the player nudge the weights to bias the scoring.
 - `staffInTransitBySystem` metric distinguishes crew "walking to post" from "at post" — relevant when a critical room is across the map.
+- Utility rooms expose maintenance health in room inspector hints and ops metrics; high maintenance debt reduces reactor power or life-support air/water output.
 
 ## Tunables
 

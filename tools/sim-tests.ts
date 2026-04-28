@@ -381,6 +381,27 @@ function spawnResidentActor(
   state.residents.push({ ...resident, ...overrides });
 }
 
+function placeCrewAtSystemAnchor(state: StationState, tileIndex: number, system: 'reactor' | 'life-support'): void {
+  state.crew.total = Math.max(state.crew.total, 1);
+  runFor(state, 0.25);
+  const crew = state.crewMembers[0];
+  assertCondition(!!crew, 'Expected crew member to exist.');
+  const center = fromIndex(tileIndex, state.width);
+  crew.x = center.x + 0.5;
+  crew.y = center.y + 0.5;
+  crew.tileIndex = tileIndex;
+  crew.path = [];
+  crew.role = 'reactor';
+  crew.targetTile = tileIndex;
+  crew.assignedSystem = system;
+  crew.lastSystem = system;
+  crew.resting = false;
+  crew.cleaning = false;
+  crew.activeJobId = null;
+  crew.energy = 100;
+  crew.hygiene = 100;
+}
+
 function setupCoreRooms(state: StationState): void {
   // Critical support rooms so pressure/air remains sane during longer runs.
   paintRoom(state, RoomType.Reactor, 6, 6, 7, 7);
@@ -705,6 +726,82 @@ function testRoomEnvironmentInspectorWarning(): void {
     inspector!.warnings.includes('housing room near noisy service space'),
     'Dorm inspector should warn when housing is near noisy service space.'
   );
+}
+
+function testMaintenanceDebtReducesReactorPower(): void {
+  const clean = createInitialState({ seed: 3101 });
+  buildHabitat(clean);
+  setupCoreRooms(clean);
+  const reactorAnchor = toIndex(6, 6, clean.width);
+  placeCrewAtSystemAnchor(clean, reactorAnchor, 'reactor');
+  tick(clean, 0.25);
+
+  const degraded = createInitialState({ seed: 3102 });
+  buildHabitat(degraded);
+  setupCoreRooms(degraded);
+  const degradedAnchor = toIndex(6, 6, degraded.width);
+  placeCrewAtSystemAnchor(degraded, degradedAnchor, 'reactor');
+  degraded.maintenanceDebts = [{
+    key: `reactor:${degradedAnchor}`,
+    system: 'reactor',
+    anchorTile: degradedAnchor,
+    debt: 80,
+    lastServicedAt: 0
+  }];
+  tick(degraded, 0.25);
+
+  assertCondition(degraded.metrics.powerSupply < clean.metrics.powerSupply, 'High reactor maintenance debt should reduce power supply.');
+  assertCondition(degraded.metrics.maintenanceDebtMax > 60, 'High reactor debt should surface in maintenance metrics.');
+}
+
+function testMaintenanceDebtReducesLifeSupportAir(): void {
+  const clean = createInitialState({ seed: 3103 });
+  buildHabitat(clean);
+  setupCoreRooms(clean);
+  clean.metrics.airQuality = 20;
+  const lifeSupportAnchor = toIndex(9, 6, clean.width);
+  placeCrewAtSystemAnchor(clean, lifeSupportAnchor, 'life-support');
+  tick(clean, 0.25);
+
+  const degraded = createInitialState({ seed: 3104 });
+  buildHabitat(degraded);
+  setupCoreRooms(degraded);
+  degraded.metrics.airQuality = 20;
+  const degradedAnchor = toIndex(9, 6, degraded.width);
+  placeCrewAtSystemAnchor(degraded, degradedAnchor, 'life-support');
+  degraded.maintenanceDebts = [{
+    key: `life-support:${degradedAnchor}`,
+    system: 'life-support',
+    anchorTile: degradedAnchor,
+    debt: 80,
+    lastServicedAt: 0
+  }];
+  tick(degraded, 0.25);
+
+  assertCondition(
+    degraded.metrics.lifeSupportActiveAirPerSec < clean.metrics.lifeSupportActiveAirPerSec,
+    'High life-support maintenance debt should reduce active air output.'
+  );
+}
+
+function testCrewAtUtilityReducesMaintenanceDebt(): void {
+  const state = createInitialState({ seed: 3105 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  const reactorAnchor = toIndex(6, 6, state.width);
+  placeCrewAtSystemAnchor(state, reactorAnchor, 'reactor');
+  state.maintenanceDebts = [{
+    key: `reactor:${reactorAnchor}`,
+    system: 'reactor',
+    anchorTile: reactorAnchor,
+    debt: 50,
+    lastServicedAt: 0
+  }];
+  runFor(state, 8);
+
+  const debt = state.maintenanceDebts.find((entry) => entry.key === `reactor:${reactorAnchor}`);
+  assertCondition(!!debt, 'Expected reactor maintenance debt entry to remain.');
+  assertCondition(debt!.debt < 50, 'Crew standing at a utility post should reduce maintenance debt.');
 }
 
 function testAutonomousRoomsNoStaff(): void {
@@ -3500,6 +3597,9 @@ function run(): void {
   testVisitorRoomEnvironmentPenalty();
   testResidentRoomEnvironmentStress();
   testRoomEnvironmentInspectorWarning();
+  testMaintenanceDebtReducesReactorPower();
+  testMaintenanceDebtReducesLifeSupportAir();
+  testCrewAtUtilityReducesMaintenanceDebt();
   testFoodChainEndToEnd();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();

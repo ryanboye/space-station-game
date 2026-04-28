@@ -42,6 +42,8 @@ Air quality below thresholds drives:
 - Air emergencies that wake crew from rest (`CREW_EMERGENCY_WAKE_RATIO = 0.15`, `sim.ts:186`).
 - Alerts panel entries.
 
+Life-support output is now multiplied by maintenance health. Each life-support room cluster has a `MaintenanceDebt` entry; debt below 30 is harmless, debt above 30 lowers active air/water output, and severe debt appears in room warnings.
+
 ## Power
 
 `computeMetrics` (`sim.ts:6510`–6526):
@@ -49,10 +51,22 @@ Air quality below thresholds drives:
 - `BASE_POWER_SUPPLY = 14` (`sim.ts:99`)
 - `POWER_PER_REACTOR = 22` (`sim.ts:100`)
 - Demand summed across active rooms with per-room weights.
+- Reactor output is multiplied by reactor maintenance health. Debt above 30 gradually lowers output; severe debt can become the top room warning.
 - `powerRatio` = `clamp(supply / demand, 0.35, 1.0)` (`sim.ts:6193`).
 - `powerRatio` scales hydroponics, kitchen, workshop, and life-support output — a brownout shrinks throughput proportionally without taking systems fully offline.
 
 A power deficit doesn't kill rooms; it just thins their output.
+
+## Maintenance Debt
+
+Reactor and life-support room clusters accumulate `MaintenanceDebt`. The debt key is `system:anchorTile`, where the anchor is the lowest tile index in the cluster. Built but idle clusters rise slowly; active reactor/life-support clusters rise faster, with extra pressure from power deficits or low air.
+
+Crew assigned to the matching utility system and standing in that cluster reduce debt. Once debt reaches 30, it opens a maintenance need and can pull crew back to the utility post through the existing critical-staffing assignment path. Metrics:
+
+- `maintenanceDebtAvg`
+- `maintenanceDebtMax`
+- `maintenanceJobsOpen`
+- `maintenanceJobsResolvedPerMin`
 
 ## Water (`metrics.waterStock`, 0–260)
 
