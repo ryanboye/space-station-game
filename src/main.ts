@@ -1847,6 +1847,7 @@ function refreshOpsModal(): void {
     { label: 'Service Fail', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
     { label: 'Long Walks', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
     { label: 'Bad Routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
+    { label: 'Environment', value: `${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.environment > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalRatingBonusesEl, [
     { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
@@ -4424,7 +4425,8 @@ function frame(now: number): void {
     `no dock ${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(2)} | ` +
     `service ${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(2)} | ` +
     `walk ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)} | ` +
-    `routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)}`;
+    `routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)} | ` +
+    `env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(2)}`;
   ratingInsightBonusEl.textContent =
     `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
     `leisure ${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(2)} | ` +
@@ -4449,7 +4451,8 @@ function frame(now: number): void {
     `no dock ${state.metrics.stationRatingPenaltyTotal.noEligibleDock.toFixed(1)} | ` +
     `service ${state.metrics.stationRatingPenaltyTotal.serviceFailure.toFixed(1)} | ` +
     `walk ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)} | ` +
-    `routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)}`;
+    `routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)} | ` +
+    `env ${state.metrics.stationRatingPenaltyTotal.environment.toFixed(1)}`;
   ratingInsightBonusTotalEl.textContent =
     `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
     `leisure ${state.metrics.stationRatingBonusTotal.leisureService.toFixed(1)} | ` +

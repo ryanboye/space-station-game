@@ -725,6 +725,8 @@ This should not require animated doors yet.
 
 # P7 - Adjacency and Status Scoring
 
+Status: v0 implemented. Room traits live in `ROOM_ENVIRONMENT_TRAITS`, sampled by `roomEnvironmentScoreAt`. Visitors now take a small environment rating penalty at service completion and market spend gets a small status adjustment. Residents take arrival stress/satisfaction loss when need rooms are noisy or uncomfortable. Metrics/inspector surfaces exist for `visitorStatusAvg`, `residentComfortAvg`, `serviceNoiseNearDorms`, and per-minute environment stress/penalty. Follow-up remains: conversion chance can still use residential comfort directly.
+
 ## Product Goal
 
 Adjacency should make layout expressive. Visitors should prefer polished public spaces. Residents should want quiet private life. Crew and logistics should prefer back-of-house access. This extends pathing into "how the station feels."
@@ -807,15 +809,15 @@ Suggested v0 trait examples:
 
 ## Implementation Steps
 
-1. Add `ROOM_TRAITS`.
-2. Add environmental scoring helper with simple radius scan. Cache later only if perf says it matters.
-3. Apply visitor status at service completion and market spend.
-4. Apply dorm comfort to resident satisfaction and resident conversion chance.
-5. Add metrics:
+1. Add `ROOM_TRAITS`. Done as `ROOM_ENVIRONMENT_TRAITS`.
+2. Add environmental scoring helper with simple radius scan. Done; cache later only if perf says it matters.
+3. Apply visitor status at service completion and market spend. Done.
+4. Apply dorm comfort to resident satisfaction and resident conversion chance. Satisfaction/stress done; conversion chance still open.
+5. Add metrics. Done:
    - `visitorStatusAvg`
    - `residentComfortAvg`
    - `serviceNoiseNearDorms`
-6. Surface in room inspector:
+6. Surface in room inspector. Done as numeric environment hints plus warnings:
    - "Comfort: high/medium/low"
    - "Status: high/medium/low"
    - "Noise: low/medium/high"

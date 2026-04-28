@@ -619,6 +619,94 @@ function testCrewPublicInterferenceMetric(): void {
   assertCondition(state.usageTotals.crewPublicInterference > 0, 'Crew logistics through public/social space should record interference.');
 }
 
+function testVisitorRoomEnvironmentPenalty(): void {
+  const clean = createInitialState({ seed: 3096 });
+  buildHabitat(clean);
+  setupFoodChain(clean);
+  spawnVisitor(clean, 18, 10, 3096);
+  const cleanVisitor = clean.visitors[0];
+  cleanVisitor.carryingMeal = true;
+  cleanVisitor.reservedTargetTile = toIndex(18, 10, clean.width);
+  cleanVisitor.tileIndex = cleanVisitor.reservedTargetTile;
+  cleanVisitor.x = 18.5;
+  cleanVisitor.y = 10.5;
+  tick(clean, 0.25);
+
+  const noisy = createInitialState({ seed: 3097 });
+  buildHabitat(noisy);
+  paintRoom(noisy, RoomType.Reactor, 12, 10, 15, 13);
+  paintRoom(noisy, RoomType.Workshop, 22, 10, 26, 13);
+  paintRoom(noisy, RoomType.Cafeteria, 16, 10, 21, 13);
+  placeModuleOrThrow(noisy, ModuleType.ServingStation, 16, 12);
+  placeModuleOrThrow(noisy, ModuleType.Table, 16, 10);
+  placeModuleOrThrow(noisy, ModuleType.Table, 19, 10);
+  spawnVisitor(noisy, 16, 10, 3097);
+  const noisyVisitor = noisy.visitors[0];
+  noisyVisitor.carryingMeal = true;
+  noisyVisitor.reservedTargetTile = toIndex(16, 10, noisy.width);
+  noisyVisitor.tileIndex = noisyVisitor.reservedTargetTile;
+  noisyVisitor.x = 16.5;
+  noisyVisitor.y = 10.5;
+  tick(noisy, 0.25);
+
+  assertCondition(clean.usageTotals.ratingFromEnvironment === 0, 'Clean visitor room should not create an environment penalty.');
+  assertCondition(
+    noisy.usageTotals.ratingFromEnvironment > clean.usageTotals.ratingFromEnvironment,
+    'Industrial neighbors around visitor rooms should create an environment rating penalty.'
+  );
+}
+
+function testResidentRoomEnvironmentStress(): void {
+  const clean = createInitialState({ seed: 3098 });
+  buildHabitat(clean);
+  paintRoom(clean, RoomType.Dorm, 20, 10, 22, 12);
+  placeModuleOrThrow(clean, ModuleType.Bed, 20, 11);
+  spawnResidentActor(clean, 20, 11, 3098, {
+    state: ResidentState.ToDorm,
+    reservedTargetTile: toIndex(20, 11, clean.width),
+    path: [toIndex(20, 11, clean.width)]
+  });
+  tick(clean, 0.25);
+
+  const noisy = createInitialState({ seed: 3099 });
+  buildHabitat(noisy);
+  paintRoom(noisy, RoomType.Workshop, 16, 10, 19, 13);
+  paintRoom(noisy, RoomType.Reactor, 23, 10, 25, 13);
+  paintRoom(noisy, RoomType.Dorm, 20, 10, 22, 12);
+  placeModuleOrThrow(noisy, ModuleType.Bed, 20, 11);
+  spawnResidentActor(noisy, 20, 11, 3099, {
+    state: ResidentState.ToDorm,
+    reservedTargetTile: toIndex(20, 11, noisy.width),
+    path: [toIndex(20, 11, noisy.width)]
+  });
+  const noisyResident = noisy.residents[0];
+  const noisyInitialStress = noisyResident.stress;
+  tick(noisy, 0.25);
+
+  assertCondition(clean.usageTotals.residentEnvironmentStress === 0, 'Clean dorm environment should not record arrival environment stress.');
+  assertCondition(noisy.usageTotals.residentEnvironmentStress > 0, 'Noisy dorm environment should record resident environment stress.');
+  assertCondition(noisyResident.stress > noisyInitialStress, 'Noisy dorm environment should increase resident stress.');
+  assertCondition(noisy.metrics.serviceNoiseNearDorms > clean.metrics.serviceNoiseNearDorms, 'Dorm noise metric should increase near service rooms.');
+}
+
+function testRoomEnvironmentInspectorWarning(): void {
+  const state = createInitialState({ seed: 3100 });
+  buildHabitat(state);
+  paintRoom(state, RoomType.Workshop, 16, 10, 19, 13);
+  paintRoom(state, RoomType.Reactor, 23, 10, 25, 13);
+  paintRoom(state, RoomType.Dorm, 20, 10, 22, 12);
+  placeModuleOrThrow(state, ModuleType.Bed, 20, 11);
+  tick(state, 0.25);
+
+  const inspector = getRoomInspectorAt(state, toIndex(20, 11, state.width));
+  assertCondition(!!inspector?.environment, 'Room inspector should expose environment scores.');
+  assertCondition(inspector!.environment!.serviceNoise > 0.9, 'Dorm inspector should report nearby service noise.');
+  assertCondition(
+    inspector!.warnings.includes('housing room near noisy service space'),
+    'Dorm inspector should warn when housing is near noisy service space.'
+  );
+}
+
 function testAutonomousRoomsNoStaff(): void {
   const state = createInitialState({ seed: 3001 });
   buildHabitat(state);
@@ -3409,6 +3497,9 @@ function run(): void {
   testVisitorRouteExposurePenalty();
   testResidentBadRouteStress();
   testCrewPublicInterferenceMetric();
+  testVisitorRoomEnvironmentPenalty();
+  testResidentRoomEnvironmentStress();
+  testRoomEnvironmentInspectorWarning();
   testFoodChainEndToEnd();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();

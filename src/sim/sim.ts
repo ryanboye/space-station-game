@@ -3,6 +3,7 @@ import {
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
   PROCESS_RATES,
+  ROOM_ENVIRONMENT_TRAITS,
   ROOM_DEFINITIONS,
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
@@ -55,6 +56,7 @@ import {
   type ItemType,
   type ResidentRole,
   type RouteExposure,
+  type RoomEnvironmentScore,
   type ShipServiceTag,
   type ShipType,
   type UnlockTier,
@@ -113,6 +115,9 @@ const MAX_DINERS_PER_CAF_TILE = SERVICE_CAPACITY.tableMaxDiners;
 const VISITOR_ROUTE_EXPOSURE_RATING_PENALTY = 0.012;
 const RESIDENT_BAD_ROUTE_STRESS = 0.28;
 const CREW_PUBLIC_CROWD_DRAIN = 0.018;
+const ROOM_ENVIRONMENT_RADIUS = 5;
+const VISITOR_ENVIRONMENT_RATING_PENALTY = 0.018;
+const RESIDENT_ENVIRONMENT_STRESS = 0.32;
 
 const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Space]: 0,
@@ -421,6 +426,7 @@ function serviceFailureRatingPenalty(
     | 'ratingFromShipTimeout'
     | 'ratingFromWalkDissatisfaction'
     | 'ratingFromRouteExposure'
+    | 'ratingFromEnvironment'
 ): void {
   state.usageTotals.ratingDelta -= amount;
   state.usageTotals[bucket] += amount;
@@ -2011,6 +2017,92 @@ function scoreRouteExposure(state: StationState, path: number[]): RouteExposure 
     }
   }
   return exposure;
+}
+
+function roomEnvironmentScoreAt(state: StationState, tileIndex: number, radius = ROOM_ENVIRONMENT_RADIUS): RoomEnvironmentScore {
+  const origin = fromIndex(tileIndex, state.width);
+  const score: RoomEnvironmentScore = {
+    visitorStatus: 0,
+    residentialComfort: 0,
+    serviceNoise: 0,
+    publicAppeal: 0,
+    sampledTiles: 0
+  };
+  let weightTotal = 0;
+  for (let y = Math.max(0, origin.y - radius); y <= Math.min(state.height - 1, origin.y + radius); y++) {
+    for (let x = Math.max(0, origin.x - radius); x <= Math.min(state.width - 1, origin.x + radius); x++) {
+      const dist = Math.abs(x - origin.x) + Math.abs(y - origin.y);
+      if (dist > radius) continue;
+      const room = state.rooms[toIndex(x, y, state.width)];
+      if (room === RoomType.None) continue;
+      const traits = ROOM_ENVIRONMENT_TRAITS[room];
+      const weight = 1 / (1 + dist);
+      score.visitorStatus += traits.visitorStatus * weight;
+      score.residentialComfort += traits.residentialComfort * weight;
+      score.serviceNoise += traits.serviceNoise * weight;
+      score.publicAppeal += traits.publicAppeal * weight;
+      score.sampledTiles += 1;
+      weightTotal += weight;
+    }
+  }
+  if (weightTotal <= 0) return score;
+  score.visitorStatus /= weightTotal;
+  score.residentialComfort /= weightTotal;
+  score.serviceNoise /= weightTotal;
+  score.publicAppeal /= weightTotal;
+  return score;
+}
+
+function visitorEnvironmentDiscomfort(environment: RoomEnvironmentScore): number {
+  return clamp(
+    -environment.visitorStatus + environment.serviceNoise * 0.4 - environment.publicAppeal * 0.2,
+    0,
+    8
+  );
+}
+
+function residentEnvironmentDiscomfort(environment: RoomEnvironmentScore): number {
+  return clamp(
+    -environment.residentialComfort * 0.95 + environment.serviceNoise * 0.55 - environment.publicAppeal * 0.08,
+    0,
+    8
+  );
+}
+
+function emptyRoomEnvironmentScore(): RoomEnvironmentScore {
+  return { visitorStatus: 0, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0, sampledTiles: 0 };
+}
+
+function averageRoomEnvironmentForRooms(
+  state: StationState,
+  rooms: RoomType[],
+  maxSamples = 80
+): RoomEnvironmentScore {
+  const roomSet = new Set(rooms);
+  const candidates: number[] = [];
+  for (let tile = 0; tile < state.rooms.length; tile++) {
+    if (roomSet.has(state.rooms[tile])) candidates.push(tile);
+  }
+  if (candidates.length === 0) return emptyRoomEnvironmentScore();
+  const total = emptyRoomEnvironmentScore();
+  const stride = Math.max(1, Math.ceil(candidates.length / maxSamples));
+  let count = 0;
+  for (let i = 0; i < candidates.length; i += stride) {
+    const score = roomEnvironmentScoreAt(state, candidates[i]);
+    total.visitorStatus += score.visitorStatus;
+    total.residentialComfort += score.residentialComfort;
+    total.serviceNoise += score.serviceNoise;
+    total.publicAppeal += score.publicAppeal;
+    total.sampledTiles += score.sampledTiles;
+    count += 1;
+  }
+  if (count <= 0) return total;
+  total.visitorStatus /= count;
+  total.residentialComfort /= count;
+  total.serviceNoise /= count;
+  total.publicAppeal /= count;
+  total.sampledTiles = count;
+  return total;
 }
 
 function routeExposureDiscomfort(exposure: RouteExposure | undefined): number {
@@ -3674,6 +3766,22 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
       }
     }
   }
+  const environment = roomEnvironmentScoreAt(state, tileIndex);
+  if (
+    (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market || room === RoomType.RecHall) &&
+    visitorEnvironmentDiscomfort(environment) > 1.2
+  ) {
+    warnings.push('visitor-facing room feels too industrial');
+  }
+  if (
+    (room === RoomType.Dorm || room === RoomType.Hygiene) &&
+    (residentEnvironmentDiscomfort(environment) > 0.8 || environment.serviceNoise > 0.9)
+  ) {
+    warnings.push('housing room near noisy service space');
+  }
+  hints.push(
+    `environment status ${environment.visitorStatus.toFixed(1)} | comfort ${environment.residentialComfort.toFixed(1)} | noise ${environment.serviceNoise.toFixed(1)}`
+  );
 
   let cafeteriaLoad: RoomInspector['cafeteriaLoad'] | undefined;
   if (room === RoomType.Cafeteria) {
@@ -3757,6 +3865,7 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     housingPolicy: room === RoomType.Dorm || room === RoomType.Hygiene ? state.roomHousingPolicies[tileIndex] : undefined,
     inventory,
     flowHints,
+    environment,
     cafeteriaLoad
   };
 }
@@ -5497,6 +5606,14 @@ function applyVisitorCompletedRouteExperience(state: StationState, visitor: Visi
     state.usageTotals.visitorServiceExposurePenalty += penalty;
     if (discomfort >= 5) addVisitorPatience(state, visitor, discomfort * 0.018, false);
   }
+  const environment = roomEnvironmentScoreAt(state, visitor.tileIndex);
+  const environmentDiscomfort = visitorEnvironmentDiscomfort(environment);
+  if (environmentDiscomfort > 0) {
+    const penalty = Math.min(0.24, environmentDiscomfort * VISITOR_ENVIRONMENT_RATING_PENALTY);
+    serviceFailureRatingPenalty(state, penalty, 'ratingFromEnvironment');
+    state.usageTotals.visitorEnvironmentPenalty += penalty;
+    if (environmentDiscomfort >= 2.5) addVisitorPatience(state, visitor, environmentDiscomfort * 0.012, false);
+  }
   visitor.lastRouteExposure = undefined;
 }
 
@@ -5509,6 +5626,14 @@ function applyResidentCompletedRouteExperience(state: StationState, resident: Re
     resident.satisfaction = clamp(resident.satisfaction - stress * 0.75, 0, 100);
     resident.safety = clamp(resident.safety - (exposure?.securityTiles ?? 0) * 0.12 - (exposure?.cargoTiles ?? 0) * 0.05, 0, 100);
     state.usageTotals.residentBadRouteStress += stress;
+  }
+  const environment = roomEnvironmentScoreAt(state, resident.tileIndex);
+  const environmentDiscomfort = residentEnvironmentDiscomfort(environment);
+  if (environmentDiscomfort > 0) {
+    const stress = Math.min(2.8, environmentDiscomfort * RESIDENT_ENVIRONMENT_STRESS);
+    resident.stress = clamp(resident.stress + stress, 0, 120);
+    resident.satisfaction = clamp(resident.satisfaction - stress * 0.65, 0, 100);
+    state.usageTotals.residentEnvironmentStress += stress;
   }
   resident.lastRouteExposure = undefined;
 }
@@ -5856,6 +5981,13 @@ function updateVisitorLogic(
           addVisitorPatience(state, visitor, dt * 0.35);
           addVisitorFailurePenalty(state, 0.01 * dt, 'shipServicesMissing');
         }
+        const environment = roomEnvironmentScoreAt(state, visitor.tileIndex);
+        const marketStatus = clamp(
+          environment.visitorStatus + environment.publicAppeal * 0.3 - environment.serviceNoise * 0.2,
+          -1.5,
+          2.5
+        );
+        spendMultiplier *= clamp(1 + marketStatus * 0.06, 0.85, 1.15);
         const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
         state.metrics.credits += spend;
         state.metrics.creditsEarnedLifetime += spend;
@@ -7278,6 +7410,23 @@ function computeMetrics(state: StationState): void {
     state.residents.length > 0
       ? state.residents.reduce((acc, resident) => acc + resident.satisfaction, 0) / state.residents.length
       : 0;
+  const visitorEnvironment = averageRoomEnvironmentForRooms(state, [
+    RoomType.Cafeteria,
+    RoomType.Lounge,
+    RoomType.Market,
+    RoomType.RecHall
+  ]);
+  const residentEnvironment = averageRoomEnvironmentForRooms(state, [
+    RoomType.Dorm,
+    RoomType.Hygiene,
+    RoomType.Cafeteria,
+    RoomType.Lounge,
+    RoomType.RecHall
+  ]);
+  const dormEnvironment = averageRoomEnvironmentForRooms(state, [RoomType.Dorm]);
+  state.metrics.visitorStatusAvg = visitorEnvironment.visitorStatus;
+  state.metrics.residentComfortAvg = residentEnvironment.residentialComfort;
+  state.metrics.serviceNoiseNearDorms = dormEnvironment.serviceNoise;
   state.recentDeathTimes = state.recentDeathTimes.filter((t) => state.now - t <= 60);
   state.metrics.recentDeaths = state.recentDeathTimes.length;
   const crewRestingInDorm = state.crewMembers.filter((c) => c.resting && state.rooms[c.tileIndex] === RoomType.Dorm).length;
@@ -7431,6 +7580,8 @@ function computeMetrics(state: StationState): void {
   state.metrics.visitorServiceExposurePenaltyPerMin = state.usageTotals.visitorServiceExposurePenalty / runMinutes;
   state.metrics.residentBadRouteStressPerMin = state.usageTotals.residentBadRouteStress / runMinutes;
   state.metrics.crewPublicInterferencePerMin = state.usageTotals.crewPublicInterference / runMinutes;
+  state.metrics.visitorEnvironmentPenaltyPerMin = state.usageTotals.visitorEnvironmentPenalty / runMinutes;
+  state.metrics.residentEnvironmentStressPerMin = state.usageTotals.residentEnvironmentStress / runMinutes;
   state.metrics.dormVisitsPerMin = state.usageTotals.dorm / runMinutes;
   state.metrics.dormFailedAttemptsPerMin = state.failedNeedAttempts.dorm / runMinutes;
   state.metrics.hygieneUsesPerMin = state.usageTotals.hygiene / runMinutes;
@@ -7514,6 +7665,15 @@ function computeMetrics(state: StationState): void {
   if (state.metrics.crewPublicInterferencePerMin > 2) {
     roomWarnings.unshift('layout friction: logistics crosses public areas');
   }
+  if (state.metrics.visitorStatusAvg < -0.35 || state.metrics.visitorEnvironmentPenaltyPerMin > 0.02) {
+    roomWarnings.unshift('layout status: public rooms feel industrial');
+  }
+  if (state.metrics.residentComfortAvg < -0.15 || state.metrics.residentEnvironmentStressPerMin > 0.15) {
+    roomWarnings.unshift('layout comfort: residents near service rooms');
+  }
+  if (state.metrics.serviceNoiseNearDorms > 0.9) {
+    roomWarnings.unshift('layout noise: dorms near loud systems');
+  }
   if (state.ops.marketTotal > 0) {
     if (state.ops.marketActive <= 0) {
       roomWarnings.unshift('trade chain blocked: market inactive');
@@ -7553,6 +7713,7 @@ function computeMetrics(state: StationState): void {
     { label: 'service failure', value: state.usageTotals.ratingFromVisitorFailure },
     { label: 'long walks', value: state.usageTotals.ratingFromWalkDissatisfaction },
     { label: 'bad routes', value: state.usageTotals.ratingFromRouteExposure },
+    { label: 'bad environment', value: state.usageTotals.ratingFromEnvironment },
     { label: 'resident departures', value: state.usageTotals.ratingFromResidentDeparture }
   ]
     .filter((p) => p.value > 0.01)
@@ -7565,14 +7726,16 @@ function computeMetrics(state: StationState): void {
     noEligibleDock: state.usageTotals.ratingFromShipSkip,
     serviceFailure: state.usageTotals.ratingFromVisitorFailure,
     longWalks: state.usageTotals.ratingFromWalkDissatisfaction,
-    routeExposure: state.usageTotals.ratingFromRouteExposure
+    routeExposure: state.usageTotals.ratingFromRouteExposure,
+    environment: state.usageTotals.ratingFromEnvironment
   };
   state.metrics.stationRatingPenaltyPerMin = {
     queueTimeout: state.usageTotals.ratingFromShipTimeout / runMinutes,
     noEligibleDock: state.usageTotals.ratingFromShipSkip / runMinutes,
     serviceFailure: state.usageTotals.ratingFromVisitorFailure / runMinutes,
     longWalks: state.usageTotals.ratingFromWalkDissatisfaction / runMinutes,
-    routeExposure: state.usageTotals.ratingFromRouteExposure / runMinutes
+    routeExposure: state.usageTotals.ratingFromRouteExposure / runMinutes,
+    environment: state.usageTotals.ratingFromEnvironment / runMinutes
   };
   state.metrics.stationRatingBonusTotal = {
     mealService: state.usageTotals.ratingFromVisitorSuccessByReason.mealService,
@@ -7885,14 +8048,16 @@ export function createInitialState(options?: { seed?: number }): StationState {
         noEligibleDock: 0,
         serviceFailure: 0,
         longWalks: 0,
-        routeExposure: 0
+        routeExposure: 0,
+        environment: 0
       },
       stationRatingPenaltyTotal: {
         queueTimeout: 0,
         noEligibleDock: 0,
         serviceFailure: 0,
         longWalks: 0,
-        routeExposure: 0
+        routeExposure: 0,
+        environment: 0
       },
       stationRatingBonusPerMin: {
         mealService: 0,
@@ -7938,6 +8103,11 @@ export function createInitialState(options?: { seed?: number }): StationState {
       visitorServiceExposurePenaltyPerMin: 0,
       residentBadRouteStressPerMin: 0,
       crewPublicInterferencePerMin: 0,
+      visitorStatusAvg: 0,
+      residentComfortAvg: 0,
+      serviceNoiseNearDorms: 0,
+      visitorEnvironmentPenaltyPerMin: 0,
+      residentEnvironmentStressPerMin: 0,
       serviceNodesTotal: 0,
       serviceNodesUnreachable: 0,
       criticalUnstaffedSec: {
@@ -8083,6 +8253,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       ratingFromVisitorFailure: 0,
       ratingFromWalkDissatisfaction: 0,
       ratingFromRouteExposure: 0,
+      ratingFromEnvironment: 0,
       ratingFromVisitorFailureByReason: {
         noLeisurePath: 0,
         shipServicesMissing: 0,
@@ -8107,6 +8278,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       visitorServiceExposurePenalty: 0,
       residentBadRouteStress: 0,
       crewPublicInterference: 0,
+      visitorEnvironmentPenalty: 0,
+      residentEnvironmentStress: 0,
       criticalStaffDrops: 0,
       securityDispatches: 0,
       securityResolved: 0,

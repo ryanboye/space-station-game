@@ -43,6 +43,17 @@ export interface RouteExposure {
   crowdCost: number;
 }
 
+export interface RoomEnvironmentTraits {
+  visitorStatus: number;
+  residentialComfort: number;
+  serviceNoise: number;
+  publicAppeal: number;
+}
+
+export interface RoomEnvironmentScore extends RoomEnvironmentTraits {
+  sampledTiles: number;
+}
+
 export type IncidentType = 'fight' | 'trespass';
 export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
 export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality' | 'escaped';
@@ -695,6 +706,7 @@ export interface Metrics {
     serviceFailure: number;
     longWalks: number;
     routeExposure: number;
+    environment: number;
   };
   stationRatingPenaltyTotal: {
     queueTimeout: number;
@@ -702,6 +714,7 @@ export interface Metrics {
     serviceFailure: number;
     longWalks: number;
     routeExposure: number;
+    environment: number;
   };
   stationRatingBonusPerMin: {
     mealService: number;
@@ -741,6 +754,11 @@ export interface Metrics {
   visitorServiceExposurePenaltyPerMin: number;
   residentBadRouteStressPerMin: number;
   crewPublicInterferencePerMin: number;
+  visitorStatusAvg: number;
+  residentComfortAvg: number;
+  serviceNoiseNearDorms: number;
+  visitorEnvironmentPenaltyPerMin: number;
+  residentEnvironmentStressPerMin: number;
   serviceNodesTotal: number;
   serviceNodesUnreachable: number;
   criticalUnstaffedSec: {
@@ -860,6 +878,7 @@ export interface RoomInspector {
     byItem: Partial<Record<ItemType, number>>;
   };
   flowHints?: string[];
+  environment?: RoomEnvironmentScore;
   cafeteriaLoad?: {
     tableNodes: number;
     queueNodes: number;
@@ -1144,12 +1163,13 @@ export interface StationState {
       lounge: number;
     };
     ratingDelta: number;
-  ratingFromShipTimeout: number;
-  ratingFromShipSkip: number;
-  ratingFromVisitorFailure: number;
-  ratingFromWalkDissatisfaction: number;
-  ratingFromRouteExposure: number;
-  ratingFromVisitorFailureByReason: {
+    ratingFromShipTimeout: number;
+    ratingFromShipSkip: number;
+    ratingFromVisitorFailure: number;
+    ratingFromWalkDissatisfaction: number;
+    ratingFromRouteExposure: number;
+    ratingFromEnvironment: number;
+    ratingFromVisitorFailureByReason: {
       noLeisurePath: number;
       shipServicesMissing: number;
       patienceBail: number;
@@ -1168,12 +1188,14 @@ export interface StationState {
     residentDepartures: number;
     ratingFromResidentDeparture: number;
     ratingFromResidentRetention: number;
-  visitorWalkDistance: number;
-  visitorWalkTrips: number;
-  visitorServiceExposurePenalty: number;
-  residentBadRouteStress: number;
-  crewPublicInterference: number;
-  criticalStaffDrops: number;
+    visitorWalkDistance: number;
+    visitorWalkTrips: number;
+    visitorServiceExposurePenalty: number;
+    residentBadRouteStress: number;
+    crewPublicInterference: number;
+    visitorEnvironmentPenalty: number;
+    residentEnvironmentStress: number;
+    criticalStaffDrops: number;
     securityDispatches: number;
     securityResolved: number;
     securityResponseSecTotal: number;

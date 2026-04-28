@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type RoomDefinition, type ShipType } from './types';
+import { ModuleType, RoomType, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -127,6 +127,27 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: false,
     allowedRooms: [RoomType.Berth]
   }
+};
+
+export const ROOM_ENVIRONMENT_TRAITS: Record<RoomType, RoomEnvironmentTraits> = {
+  [RoomType.None]: { visitorStatus: 0, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0 },
+  [RoomType.Cafeteria]: { visitorStatus: 0.8, residentialComfort: 0.25, serviceNoise: 0.2, publicAppeal: 1.0 },
+  [RoomType.Kitchen]: { visitorStatus: -0.8, residentialComfort: -0.35, serviceNoise: 1.3, publicAppeal: -0.2 },
+  [RoomType.Workshop]: { visitorStatus: -1.35, residentialComfort: -0.9, serviceNoise: 2.0, publicAppeal: -0.6 },
+  [RoomType.Clinic]: { visitorStatus: 0.1, residentialComfort: 0.6, serviceNoise: 0.1, publicAppeal: 0.1 },
+  [RoomType.Brig]: { visitorStatus: -1.4, residentialComfort: -0.8, serviceNoise: 0.35, publicAppeal: -1.0 },
+  [RoomType.RecHall]: { visitorStatus: 0.85, residentialComfort: 0.75, serviceNoise: 0.65, publicAppeal: 0.95 },
+  [RoomType.Reactor]: { visitorStatus: -1.8, residentialComfort: -1.2, serviceNoise: 2.6, publicAppeal: -1.3 },
+  [RoomType.Security]: { visitorStatus: -0.75, residentialComfort: -0.25, serviceNoise: 0.25, publicAppeal: -0.35 },
+  [RoomType.Dorm]: { visitorStatus: -0.25, residentialComfort: 1.45, serviceNoise: 0.05, publicAppeal: -0.2 },
+  [RoomType.Hygiene]: { visitorStatus: -0.45, residentialComfort: 0.55, serviceNoise: 0.15, publicAppeal: -0.25 },
+  [RoomType.Hydroponics]: { visitorStatus: 0.35, residentialComfort: 0.8, serviceNoise: 0.35, publicAppeal: 0.45 },
+  [RoomType.LifeSupport]: { visitorStatus: -1.25, residentialComfort: -0.8, serviceNoise: 1.7, publicAppeal: -0.95 },
+  [RoomType.Lounge]: { visitorStatus: 1.35, residentialComfort: 0.8, serviceNoise: 0.15, publicAppeal: 1.5 },
+  [RoomType.Market]: { visitorStatus: 1.25, residentialComfort: 0.25, serviceNoise: 0.25, publicAppeal: 1.35 },
+  [RoomType.LogisticsStock]: { visitorStatus: -1.45, residentialComfort: -0.8, serviceNoise: 1.55, publicAppeal: -0.9 },
+  [RoomType.Storage]: { visitorStatus: -1.15, residentialComfort: -0.6, serviceNoise: 1.1, publicAppeal: -0.65 },
+  [RoomType.Berth]: { visitorStatus: -0.2, residentialComfort: -0.45, serviceNoise: 0.85, publicAppeal: 0.15 }
 };
 
 export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {

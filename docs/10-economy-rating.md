@@ -62,10 +62,11 @@ A long-running accumulator, **not derived per tick**. `usageTotals.ratingDelta` 
 | Ship-skip / queue timeout | `addShipSkipPenalty` | − |
 | Walk dissatisfaction | (path failures during service) | − |
 | Route exposure | scored when visitors complete service trips | − if visitors crossed cargo/service/security/residential spaces |
+| Room environment | scored when visitors complete service trips | − if visitor-facing rooms feel industrial/noisy |
 | Resident retention | `RESIDENT_RETENTION_RATING_BONUS_PER_SEC = 0.0009` | + |
 | Resident departure | `RESIDENT_DEPARTURE_RATING_PENALTY = 0.4` per departure (`sim.ts:154`) | − |
 
-Trend per minute: `ratingDelta / runMinutes`. Per-category visible breakdown: `metrics.stationRatingPenaltyPerMin` and `metrics.stationRatingBonusPerMin`. Penalty categories include `routeExposure`, surfaced in the UI as `routes` / `Bad Routes`.
+Trend per minute: `ratingDelta / runMinutes`. Per-category visible breakdown: `metrics.stationRatingPenaltyPerMin` and `metrics.stationRatingBonusPerMin`. Penalty categories include `routeExposure` and `environment`, surfaced in the UI as `routes` / `Bad Routes` and `env` / `Environment`.
 
 `metrics.stationRatingDrivers` is a `string[]` for the alert/HUD layer.
 
@@ -91,6 +92,7 @@ Not strictly economy but related: `state.controls.crewPriorityPreset` (`main.ts:
 - `RESIDENT_RETENTION_RATING_BONUS_PER_SEC = 0.0009`
 - `RESIDENT_DEPARTURE_RATING_PENALTY = 0.4`
 - `VISITOR_ROUTE_EXPOSURE_RATING_PENALTY`, `RESIDENT_BAD_ROUTE_STRESS`, `CREW_PUBLIC_CROWD_DRAIN`
+- `ROOM_ENVIRONMENT_RADIUS`, `VISITOR_ENVIRONMENT_RATING_PENALTY`, `RESIDENT_ENVIRONMENT_STRESS`
 - All `addXxxPenalty` per-reason coefficients (search `addVisitorFailurePenalty`, `addShipSkipPenalty`)
 
 ## Trip-wires

@@ -72,6 +72,12 @@ Intent changes soft tile costs, not the walkable topology. Walls, space, blocked
 
 Assigned paths also carry a compact route-exposure score. Visitors apply it when they complete service trips, residents apply it when they complete need trips, and logistics crew apply public-interference drain while a hauling route is active. This keeps bad layout feedback bounded to trip outcomes rather than penalizing every walking tick for every actor.
 
+## Room environment
+
+Rooms also carry lightweight environment traits in `ROOM_ENVIRONMENT_TRAITS`: visitor status, residential comfort, service noise, and public appeal. `roomEnvironmentScoreAt` samples nearby room tiles in a small radius and produces a local score used by visitors, residents, metrics, and the room inspector.
+
+Visitor-facing rooms near service/cargo/critical systems create a small `environment` station-rating penalty at service completion and can slightly reduce market spend. Dorm/hygiene/social arrivals near loud service rooms add resident stress and reduce satisfaction. These effects are intentionally smaller than survival needs and route exposure; they are layout feedback, not a hard blocker.
+
 ## Initial state
 
 `createInitialState({ seed })` (`sim.ts:7005`) sets up:
