@@ -804,6 +804,49 @@ function testCrewAtUtilityReducesMaintenanceDebt(): void {
   assertCondition(debt!.debt < 50, 'Crew standing at a utility post should reduce maintenance debt.');
 }
 
+function addSealedIsolatedDorm(state: StationState): number {
+  for (let x = 34; x <= 38; x++) {
+    setTile(state, toIndex(x, 23, state.width), TileType.Wall);
+    setTile(state, toIndex(x, 27, state.width), TileType.Wall);
+  }
+  for (let y = 23; y <= 27; y++) {
+    setTile(state, toIndex(34, y, state.width), TileType.Wall);
+    setTile(state, toIndex(38, y, state.width), TileType.Wall);
+  }
+  paintRoom(state, RoomType.Dorm, 35, 24, 37, 26);
+  const doorTile = toIndex(35, 24, state.width);
+  setTile(state, doorTile, TileType.Floor);
+  setRoom(state, doorTile, RoomType.Dorm);
+  return doorTile;
+}
+
+function testLifeSupportCoverageDetectsDisconnectedWing(): void {
+  const connected = createInitialState({ seed: 3106 });
+  buildHabitat(connected);
+  setupCoreRooms(connected);
+  placeCrewAtSystemAnchor(connected, toIndex(9, 6, connected.width), 'life-support');
+  tick(connected, 0.25);
+
+  const isolated = createInitialState({ seed: 3107 });
+  buildHabitat(isolated);
+  setupCoreRooms(isolated);
+  placeCrewAtSystemAnchor(isolated, toIndex(9, 6, isolated.width), 'life-support');
+  const isolatedTile = addSealedIsolatedDorm(isolated);
+  tick(isolated, 0.25);
+
+  assertCondition(
+    isolated.metrics.lifeSupportCoveragePct < connected.metrics.lifeSupportCoveragePct,
+    'Disconnected sealed wing should lower life-support coverage percentage.'
+  );
+  assertCondition(isolated.metrics.poorLifeSupportTiles > 0, 'Disconnected sealed wing should produce poor life-support tiles.');
+  const inspector = getRoomInspectorAt(isolated, isolatedTile);
+  assertCondition(!!inspector, 'Disconnected dorm should still inspect as a room.');
+  assertCondition(
+    inspector!.warnings.includes('no life-support coverage'),
+    'Disconnected room inspector should report missing life-support coverage.'
+  );
+}
+
 function testAutonomousRoomsNoStaff(): void {
   const state = createInitialState({ seed: 3001 });
   buildHabitat(state);
@@ -3600,6 +3643,7 @@ function run(): void {
   testMaintenanceDebtReducesReactorPower();
   testMaintenanceDebtReducesLifeSupportAir();
   testCrewAtUtilityReducesMaintenanceDebt();
+  testLifeSupportCoverageDetectsDisconnectedWing();
   testFoodChainEndToEnd();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();

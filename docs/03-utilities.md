@@ -44,6 +44,14 @@ Air quality below thresholds drives:
 
 Life-support output is now multiplied by maintenance health. Each life-support room cluster has a `MaintenanceDebt` entry; debt below 30 is harmless, debt above 30 lowers active air/water output, and severe debt appears in room warnings.
 
+Life-support coverage is also measured spatially. Active life-support source tiles run a multi-source BFS through walkable, pressurized tiles. The sim currently exposes this as diagnostics only:
+
+- `lifeSupportCoveragePct`
+- `avgLifeSupportDistance`
+- `poorLifeSupportTiles`
+
+Rooms disconnected from active life support show an inspector warning. Actors still use global air quality for exposure; local-air gameplay is the next P5 step.
+
 ## Power
 
 `computeMetrics` (`sim.ts:6510`–6526):

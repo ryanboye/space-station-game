@@ -1765,6 +1765,7 @@ function refreshOpsModal(): void {
     { label: 'Active', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
     { label: 'Air', value: `+${state.metrics.lifeSupportActiveAirPerSec.toFixed(1)}/s`, tone: state.metrics.lifeSupportActiveAirPerSec <= 0 ? 'warn' : 'ok' },
     { label: 'Potential', value: `+${state.metrics.lifeSupportPotentialAirPerSec.toFixed(1)}/s` },
+    { label: 'Coverage', value: `${state.metrics.lifeSupportCoveragePct.toFixed(0)}% / ${state.metrics.poorLifeSupportTiles} poor`, tone: state.metrics.poorLifeSupportTiles > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalRoomUsageEl, [
     { label: 'Dorm', value: state.metrics.toDormResidents },

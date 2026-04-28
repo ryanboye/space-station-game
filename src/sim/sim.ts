@@ -1298,6 +1298,86 @@ function maintenanceDebtAtAnchor(state: StationState, system: MaintenanceSystem,
   return state.maintenanceDebts.find((debt) => debt.key === maintenanceKey(system, anchorTile)) ?? null;
 }
 
+type LifeSupportCoverage = {
+  distanceByTile: Int16Array;
+  sourceCount: number;
+  coveredTiles: number;
+  walkablePressurizedTiles: number;
+  poorTiles: number;
+  avgDistance: number;
+  coveragePct: number;
+};
+
+function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
+  const distanceByTile = new Int16Array(state.width * state.height);
+  distanceByTile.fill(-1);
+  const sourceTiles = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false).flat();
+  const queue: number[] = [];
+  for (const tile of sourceTiles) {
+    if (!isWalkable(state.tiles[tile]) || !state.pressurized[tile]) continue;
+    if (distanceByTile[tile] === 0) continue;
+    distanceByTile[tile] = 0;
+    queue.push(tile);
+  }
+
+  let coveredTiles = queue.length;
+  let totalDistance = 0;
+  for (let qi = 0; qi < queue.length; qi++) {
+    const tile = queue[qi];
+    const p = fromIndex(tile, state.width);
+    const nextDistance = distanceByTile[tile] + 1;
+    const deltas = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+    for (const [dx, dy] of deltas) {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      const ni = toIndex(nx, ny, state.width);
+      if (distanceByTile[ni] >= 0) continue;
+      if (!isWalkable(state.tiles[ni]) || !state.pressurized[ni]) continue;
+      distanceByTile[ni] = nextDistance;
+      coveredTiles += 1;
+      totalDistance += nextDistance;
+      queue.push(ni);
+    }
+  }
+
+  let walkablePressurizedTiles = 0;
+  let poorTiles = 0;
+  for (let tile = 0; tile < state.tiles.length; tile++) {
+    if (!isWalkable(state.tiles[tile]) || !state.pressurized[tile]) continue;
+    walkablePressurizedTiles += 1;
+    const distance = distanceByTile[tile];
+    if (sourceTiles.length > 0 && (distance < 0 || distance > 18)) poorTiles += 1;
+  }
+
+  return {
+    distanceByTile,
+    sourceCount: sourceTiles.length,
+    coveredTiles,
+    walkablePressurizedTiles,
+    poorTiles,
+    avgDistance: coveredTiles > 0 ? totalDistance / coveredTiles : 0,
+    coveragePct: walkablePressurizedTiles > 0 ? (coveredTiles / walkablePressurizedTiles) * 100 : 100
+  };
+}
+
+function averageLifeSupportDistanceForTiles(coverage: LifeSupportCoverage, tiles: number[]): number | null {
+  let total = 0;
+  let count = 0;
+  for (const tile of tiles) {
+    const distance = coverage.distanceByTile[tile];
+    if (distance < 0) continue;
+    total += distance;
+    count += 1;
+  }
+  return count > 0 ? total / count : null;
+}
+
 function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTargets {
   const hasRoom = (room: RoomType): boolean => roomClusterAnchors(state, room).length > 0;
   const hasService = (room: RoomType): boolean => {
@@ -3894,6 +3974,16 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   hints.push(
     `environment status ${environment.visitorStatus.toFixed(1)} | comfort ${environment.residentialComfort.toFixed(1)} | noise ${environment.serviceNoise.toFixed(1)}`
   );
+  const lifeSupportCoverage = computeLifeSupportCoverage(state);
+  if (lifeSupportCoverage.sourceCount > 0) {
+    const avgLifeSupportDistance = averageLifeSupportDistanceForTiles(lifeSupportCoverage, cluster);
+    if (avgLifeSupportDistance === null) {
+      warnings.push('no life-support coverage');
+    } else {
+      hints.push(`life-support distance ${avgLifeSupportDistance.toFixed(1)}`);
+      if (avgLifeSupportDistance > 18) warnings.push('distant from life support');
+    }
+  }
 
   let cafeteriaLoad: RoomInspector['cafeteriaLoad'] | undefined;
   if (room === RoomType.Cafeteria) {
@@ -7568,6 +7658,10 @@ function computeMetrics(state: StationState): void {
     state.residents.filter((r) => r.state === ResidentState.Eating).length;
   state.metrics.hydroponicsActiveGrowNodes = activeRoomTargets(state, RoomType.Hydroponics).length;
   state.metrics.lifeSupportActiveNodes = activeRoomTargets(state, RoomType.LifeSupport).length;
+  const lifeSupportCoverage = computeLifeSupportCoverage(state);
+  state.metrics.lifeSupportCoveragePct = lifeSupportCoverage.coveragePct;
+  state.metrics.avgLifeSupportDistance = lifeSupportCoverage.avgDistance;
+  state.metrics.poorLifeSupportTiles = lifeSupportCoverage.poorTiles;
   state.metrics.hydroponicsStaffed = state.crewMembers.filter(
     (c) =>
       !c.resting &&
@@ -7777,6 +7871,11 @@ function computeMetrics(state: StationState): void {
   }
   if (state.metrics.airQuality < 20 && state.metrics.lifeSupportInactiveReasons.length > 0) {
     roomWarnings.unshift(`life-support blocked: ${state.metrics.lifeSupportInactiveReasons.join(', ')}`);
+  }
+  if (state.metrics.lifeSupportCoveragePct < 75 && state.ops.lifeSupportActive > 0) {
+    roomWarnings.unshift('life-support coverage: disconnected wing');
+  } else if (state.metrics.poorLifeSupportTiles > 0 && state.ops.lifeSupportActive > 0) {
+    roomWarnings.unshift('life-support coverage: distant rooms');
   }
   if (state.metrics.visitorServiceExposurePenaltyPerMin > 0.02) {
     roomWarnings.unshift('layout friction: visitors see back-of-house routes');
@@ -8240,6 +8339,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       maintenanceDebtMax: 0,
       maintenanceJobsOpen: 0,
       maintenanceJobsResolvedPerMin: 0,
+      lifeSupportCoveragePct: 100,
+      avgLifeSupportDistance: 0,
+      poorLifeSupportTiles: 0,
       serviceNodesTotal: 0,
       serviceNodesUnreachable: 0,
       criticalUnstaffedSec: {

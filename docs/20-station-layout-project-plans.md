@@ -556,6 +556,8 @@ Create maintenance tasks as crew post tasks, not transport jobs, in v0:
 
 # P5 - Local Utility Sectors v0
 
+Status: read-only coverage metrics implemented. Active life-support clusters now compute a multi-source BFS through walkable, pressurized tiles and expose `lifeSupportCoveragePct`, `avgLifeSupportDistance`, and `poorLifeSupportTiles`. Room inspector warns for rooms with no life-support coverage or long distance. Actor air exposure is still global; local-air gameplay remains open.
+
 ## Product Goal
 
 Life support and reactor placement should matter spatially. A station wing far from life support, or cut off behind bad doors/corridors, should have worse air/reliability than the core. This is the "utilities become real" step without building full pipe simulation yet.
@@ -621,9 +623,9 @@ Keep `metrics.airQuality` as station-wide average or blended HUD value, and add:
 
 ## Implementation Steps
 
-1. Add local-air storage/derived helper.
-2. Add `computeLocalAirQuality(state, dt)` after pressurization and before actor updates.
-3. Change air exposure for visitors/residents/crew to read local air.
+1. Add local-air storage/derived helper. Partially done as read-only coverage helper, no storage yet.
+2. Add `computeLocalAirQuality(state, dt)` after pressurization and before actor updates. Open.
+3. Change air exposure for visitors/residents/crew to read local air. Open.
 4. Keep existing global air trend math for now; local air is a distribution around that global value.
 5. Add render overlay toggle only if straightforward; otherwise surface metrics first.
 6. Add diagnostics to room inspector: local air average for selected room.

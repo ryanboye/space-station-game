@@ -771,6 +771,9 @@ export interface Metrics {
   maintenanceDebtMax: number;
   maintenanceJobsOpen: number;
   maintenanceJobsResolvedPerMin: number;
+  lifeSupportCoveragePct: number;
+  avgLifeSupportDistance: number;
+  poorLifeSupportTiles: number;
   serviceNodesTotal: number;
   serviceNodesUnreachable: number;
   criticalUnstaffedSec: {
