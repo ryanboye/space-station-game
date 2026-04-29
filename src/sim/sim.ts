@@ -4003,6 +4003,22 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
       if (debt.debt >= REPAIR_JOB_DEBT_THRESHOLD && !hasOpenRepairJobAt(state, anchor, system)) {
         enqueueRepairJob(state, system, anchor);
       }
+      // Fire ignition: sustained extreme debt without service ignites the cluster.
+      // Track the moment debt first crossed the ignition threshold; if it stays
+      // there for FIRE_IGNITE_GRACE_SEC and no fire is active, light it.
+      if (debt.debt >= FIRE_IGNITE_DEBT_THRESHOLD) {
+        if (!debt.ignitionRiskSince) {
+          debt.ignitionRiskSince = state.now;
+        } else if (
+          state.now - debt.ignitionRiskSince >= FIRE_IGNITE_GRACE_SEC &&
+          !state.effects.fires.some((f) => f.anchorTile === anchor)
+        ) {
+          igniteFire(state, system, anchor);
+          debt.ignitionRiskSince = state.now;
+        }
+      } else {
+        debt.ignitionRiskSince = 0;
+      }
     }
   };
 
@@ -5355,6 +5371,25 @@ function enqueueTransportJob(
 const REPAIR_JOB_DEBT_THRESHOLD = 45;
 const REPAIR_JOB_DEBT_TARGET = 32;
 const REPAIR_JOB_RATE_PER_SEC = 8;
+
+// Fire model: when reactor or life-support debt sustains above the ignition
+// threshold, the system ignites. Fires grow in intensity, spread to neighbors,
+// damage modules, and block the burning tile. Suppressed by FireExtinguisher
+// modules (passive radius decay) and by crew running an 'extinguish' job
+// (faster manual decay).
+const FIRE_IGNITE_DEBT_THRESHOLD = 92;
+const FIRE_IGNITE_GRACE_SEC = 18;
+const FIRE_INTENSITY_GROWTH_PER_SEC = 4.5;
+const FIRE_INTENSITY_MAX = 100;
+const FIRE_SPREAD_THRESHOLD = 55;
+const FIRE_SPREAD_CHANCE_PER_SEC = 0.32;
+const FIRE_BLOCK_INTENSITY = 30;
+const FIRE_BLOCK_DURATION_SEC = 1.5;
+const FIRE_MODULE_DESTROY_INTENSITY = 80;
+const FIRE_EXTINGUISHER_RADIUS = 6;
+const FIRE_EXTINGUISHER_RATE_PER_SEC = 9;
+const FIRE_EXTINGUISH_JOB_RATE_PER_SEC = 18;
+const FIRE_EXTINGUISH_JOB_TARGET = 100;
 function enqueueRepairJob(
   state: StationState,
   system: MaintenanceSystem,
@@ -5389,6 +5424,164 @@ function hasOpenRepairJobAt(state: StationState, anchorTile: number, system: Mai
     if (job.fromTile === anchorTile && job.repairSystem === system) return true;
   }
   return false;
+}
+
+function igniteFire(state: StationState, system: MaintenanceSystem, anchorTile: number): void {
+  state.effects.fires.push({
+    anchorTile,
+    system,
+    intensity: 35,
+    ignitedAt: state.now,
+    lastTick: state.now
+  });
+  // Cancel any open repair job at this anchor — repair through fire isn't safe.
+  for (const job of state.jobs) {
+    if (job.type !== 'repair') continue;
+    if (job.fromTile !== anchorTile) continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    job.expiredFromState = job.state;
+    job.state = 'expired';
+    if (job.assignedCrewId !== null) {
+      const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
+      if (crew) {
+        crew.activeJobId = null;
+      }
+    }
+  }
+  // Open an extinguish job for the burning tile so generalist crew respond.
+  enqueueExtinguishJob(state, anchorTile);
+}
+
+function enqueueExtinguishJob(state: StationState, fireTile: number): void {
+  for (const job of state.jobs) {
+    if (job.type !== 'extinguish') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    if (job.fromTile === fireTile) return;
+  }
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'extinguish',
+    itemType: 'rawMaterial',
+    amount: FIRE_EXTINGUISH_JOB_TARGET,
+    fromTile: fireTile,
+    toTile: fireTile,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + JOB_TTL_SEC,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none',
+    stalledSince: undefined
+  });
+  state.metrics.createdJobs += 1;
+}
+
+// Per-tick fire update: extinguisher modules within radius reduce intensity,
+// fires grow if unsuppressed, hot fires spread to walkable neighbors, and tiles
+// with intensity above the block threshold become impassable. When intensity
+// hits zero, the fire is removed and the maintenance debt for that cluster is
+// reduced (the fire is what burned away the debt — repair was just deferred).
+function updateFires(state: StationState, dt: number): void {
+  if (state.effects.fires.length === 0) return;
+
+  // Cache extinguisher tiles for radius check.
+  const extinguisherTiles: number[] = [];
+  for (const m of state.moduleInstances) {
+    if (m.type === ModuleType.FireExtinguisher) extinguisherTiles.push(m.originTile);
+  }
+
+  const survivors: typeof state.effects.fires = [];
+  for (const fire of state.effects.fires) {
+    const fx = fire.anchorTile % state.width;
+    const fy = Math.floor(fire.anchorTile / state.width);
+
+    // Passive extinguisher decay.
+    let decay = 0;
+    for (const tile of extinguisherTiles) {
+      const ex = tile % state.width;
+      const ey = Math.floor(tile / state.width);
+      const d = Math.abs(ex - fx) + Math.abs(ey - fy);
+      if (d <= FIRE_EXTINGUISHER_RADIUS) decay += FIRE_EXTINGUISHER_RATE_PER_SEC;
+    }
+
+    // Active extinguish-job decay (crew currently at this tile working on it).
+    let activeJobDecay = 0;
+    for (const job of state.jobs) {
+      if (job.type !== 'extinguish') continue;
+      if (job.fromTile !== fire.anchorTile) continue;
+      if (job.state !== 'in_progress') continue;
+      activeJobDecay += FIRE_EXTINGUISH_JOB_RATE_PER_SEC;
+    }
+
+    const growth = decay + activeJobDecay > 0 ? 0 : FIRE_INTENSITY_GROWTH_PER_SEC;
+    fire.intensity = clamp(fire.intensity + (growth - decay - activeJobDecay) * dt, 0, FIRE_INTENSITY_MAX);
+    fire.lastTick = state.now;
+
+    if (fire.intensity <= 0.5) {
+      // Fire out — close out the extinguish job and reset the debt entry.
+      for (const job of state.jobs) {
+        if (job.type !== 'extinguish') continue;
+        if (job.fromTile !== fire.anchorTile) continue;
+        if (job.state === 'done' || job.state === 'expired') continue;
+        job.state = 'done';
+        job.completedAt = state.now;
+      }
+      const debt = state.maintenanceDebts.find(
+        (d) => d.key === maintenanceKey(fire.system, fire.anchorTile)
+      );
+      if (debt) {
+        debt.debt = clamp(debt.debt - 50, 0, 100);
+        debt.ignitionRiskSince = 0;
+      }
+      continue;
+    }
+
+    // Block tile passage while burning hot.
+    if (fire.intensity >= FIRE_BLOCK_INTENSITY) {
+      state.effects.blockedUntilByTile.set(fire.anchorTile, state.now + FIRE_BLOCK_DURATION_SEC);
+    }
+
+    // Module damage: at high intensity, modules on burning tile take damage and
+    // are removed when fully damaged. v0: instant remove at threshold.
+    if (fire.intensity >= FIRE_MODULE_DESTROY_INTENSITY) {
+      for (let i = state.moduleInstances.length - 1; i >= 0; i--) {
+        const m = state.moduleInstances[i];
+        if (m.originTile === fire.anchorTile && m.type !== ModuleType.FireExtinguisher) {
+          state.moduleInstances.splice(i, 1);
+          bumpRoomVersion(state);
+        }
+      }
+    }
+
+    // Spread to walkable neighbors when intensity is high enough.
+    if (fire.intensity >= FIRE_SPREAD_THRESHOLD && state.rng() < FIRE_SPREAD_CHANCE_PER_SEC * dt) {
+      const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (const [dx, dy] of deltas) {
+        const nx = fx + dx;
+        const ny = fy + dy;
+        if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+        const next = ny * state.width + nx;
+        if (!isWalkable(state.tiles[next])) continue;
+        if (state.effects.fires.some((f) => f.anchorTile === next)) continue;
+        if (survivors.some((f) => f.anchorTile === next)) continue;
+        // Only spread once per tick per fire (first valid neighbor).
+        survivors.push({
+          anchorTile: next,
+          system: fire.system,
+          intensity: 28,
+          ignitedAt: state.now,
+          lastTick: state.now
+        });
+        enqueueExtinguishJob(state, next);
+        break;
+      }
+    }
+
+    survivors.push(fire);
+  }
+  state.effects.fires = survivors;
 }
 
 function markJobStall(state: StationState, job: StationState['jobs'][number], reason: JobStallReason): void {
@@ -5777,7 +5970,8 @@ function createJobCountsByType(): Record<JobType, JobStatusCounts> {
   return {
     pickup: createJobStatusCounts(),
     deliver: createJobStatusCounts(),
-    repair: createJobStatusCounts()
+    repair: createJobStatusCounts(),
+    extinguish: createJobStatusCounts()
   };
 }
 
@@ -6250,6 +6444,72 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
         setCrewPath(state, crew, []);
+      } else if (job.type === 'extinguish') {
+        // Extinguish: walk to the burning tile (or an adjacent walkable tile if
+        // the burning tile itself is blocked by intensity), stand and reduce
+        // intensity. Decay rate handled in updateFires when state==='in_progress'.
+        const fireTile = job.fromTile;
+        const fire = state.effects.fires.find((f) => f.anchorTile === fireTile);
+        if (!fire) {
+          // Fire's already out — close the job.
+          job.state = 'done';
+          job.completedAt = state.now;
+          crew.activeJobId = null;
+          setCrewPath(state, crew, []);
+          continue;
+        }
+        // Stand on an adjacent walkable tile, since the burning tile is blocked.
+        let approachTile = fireTile;
+        const fx = fireTile % state.width;
+        const fy = Math.floor(fireTile / state.width);
+        if (fire.intensity >= FIRE_BLOCK_INTENSITY) {
+          const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+          let bestNeighbor = -1;
+          let bestDist = Number.POSITIVE_INFINITY;
+          for (const [dx, dy] of deltas) {
+            const nx = fx + dx;
+            const ny = fy + dy;
+            if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+            const next = ny * state.width + nx;
+            if (!isWalkable(state.tiles[next])) continue;
+            if (state.effects.fires.some((f) => f.anchorTile === next && f.intensity >= FIRE_BLOCK_INTENSITY)) continue;
+            const cx = next % state.width;
+            const cy = Math.floor(next / state.width);
+            const distFromCrew = Math.abs(cx - (crew.tileIndex % state.width)) + Math.abs(cy - Math.floor(crew.tileIndex / state.width));
+            if (distFromCrew < bestDist) {
+              bestDist = distFromCrew;
+              bestNeighbor = next;
+            }
+          }
+          if (bestNeighbor >= 0) approachTile = bestNeighbor;
+        }
+        if (crew.tileIndex !== approachTile) {
+          if (crew.path.length === 0) {
+            setCrewPath(
+              state,
+              crew,
+              findPath(state, crew.tileIndex, approachTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ?? []
+            );
+            if (crew.path.length === 0) {
+              markJobStall(state, job, 'stalled_unreachable_source');
+            }
+          }
+          const moveResult = moveCrew(crew);
+          if (moveResult === 'moved') {
+            job.lastProgressAt = state.now;
+            markJobStall(state, job, 'none');
+            crew.blockedTicks = 0;
+          } else if (moveResult === 'blocked') {
+            crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+            markJobStall(state, job, 'stalled_path_blocked');
+          }
+        } else {
+          if (job.state !== 'in_progress') job.state = 'in_progress';
+          job.lastProgressAt = state.now;
+          // updateFires() applies the actual decay this tick because the job is
+          // in_progress with this fromTile. Crew just stays put.
+        }
+        continue;
       } else if (job.type === 'repair') {
         // Repair: walk to the system anchor tile and stand still while ticking
         // down the cluster's debt. No item carry. When the job's repair target
@@ -9189,7 +9449,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
       securityDelayUntil: 0,
       blockedUntilByTile: new Map(),
       trespassCooldownUntilByTile: new Map(),
-      securityAuraByTile: new Map()
+      securityAuraByTile: new Map(),
+      fires: []
     },
     topologyVersion: 0,
     roomVersion: 0,
@@ -10091,6 +10352,17 @@ function crewInspectorAction(
           stateLabel: 'repair'
         };
       }
+      if (job.type === 'extinguish') {
+        const fire = state.effects.fires.find((f) => f.anchorTile === job.fromTile);
+        const inProgress = job.state === 'in_progress';
+        return {
+          currentAction: inProgress ? 'extinguishing fire' : 'rushing to fire',
+          actionReason: fire
+            ? `fire at ${job.fromTile} | intensity ${fire.intensity.toFixed(0)}`
+            : `fire job #${job.id} ${job.state}`,
+          stateLabel: 'firefighting'
+        };
+      }
       const carrying = crew.carryingItemType !== null || job.pickedUpAmount > 0;
       const currentAction = carrying ? `delivering ${job.itemType}` : `walking to ${job.itemType} pickup`;
       const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
@@ -10620,6 +10892,7 @@ export function tick(state: StationState, frameDt: number): void {
   ensurePressurizationUpToDate(state);
   refreshRoomOpsFromCrewPresence(state, dt, true);
   updateMaintenanceDebt(state, dt);
+  updateFires(state, dt);
   updateResources(state, dt);
 
   const occupancyByTile = buildOccupancyMap(state);

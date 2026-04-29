@@ -350,6 +350,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
         <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
+        <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place Fire Extinguisher — passive sprinkler that suppresses nearby fires"><span class="tool-key">·</span>Fire Ext</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -2118,6 +2119,11 @@ function refreshAlertPanel(): void {
     alerts.push({ tone: state.metrics.pressurizationPct < 60 ? 'danger' : 'warn', text: `Hull ${Math.round(state.metrics.pressurizationPct)}%, leaks ${state.metrics.leakingTiles}` });
   }
   if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  if (state.effects.fires.length > 0) {
+    const total = state.effects.fires.length;
+    const peak = Math.round(state.effects.fires.reduce((m, f) => Math.max(m, f.intensity), 0));
+    alerts.push({ tone: 'danger', text: `🔥 Fire! ${total} tile${total > 1 ? 's' : ''} burning (peak ${peak})` });
+  }
   // Dock-migration v0: surface ship-waiting-on-capability hints. The
   // sim writes shipsQueuedNoCapabilityHint each cycle when a berth
   // would fit by size but not by capability tags.
@@ -2829,6 +2835,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   gangway: ModuleType.Gangway,
   'customs-counter': ModuleType.CustomsCounter,
   'cargo-arm': ModuleType.CargoArm,
+  'fire-extinguisher': ModuleType.FireExtinguisher,
   clear: ModuleType.None,
 };
 
@@ -2856,7 +2863,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.StorageRack]: 'SR',
   [ModuleType.Gangway]: 'GW',
   [ModuleType.CustomsCounter]: 'CC',
-  [ModuleType.CargoArm]: 'CA'
+  [ModuleType.CargoArm]: 'CA',
+  [ModuleType.FireExtinguisher]: 'FX'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

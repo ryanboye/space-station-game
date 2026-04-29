@@ -81,7 +81,8 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   // fallback (labeled rectangle). Atlas keys reserved for v1 art.
   [ModuleType.Gangway]: 'module.gangway',
   [ModuleType.CustomsCounter]: 'module.customs_counter',
-  [ModuleType.CargoArm]: 'module.cargo_arm'
+  [ModuleType.CargoArm]: 'module.cargo_arm',
+  [ModuleType.FireExtinguisher]: 'module.fire_extinguisher'
 };
 
 export const SHIP_SPRITE_KEYS: Record<ShipType, string> = {

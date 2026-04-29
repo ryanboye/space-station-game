@@ -131,7 +131,8 @@ export enum ModuleType {
   // for ease of testing.
   Gangway = 'gangway',
   CustomsCounter = 'customs-counter',
-  CargoArm = 'cargo-arm'
+  CargoArm = 'cargo-arm',
+  FireExtinguisher = 'fire-extinguisher'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -280,6 +281,10 @@ export interface MaintenanceDebt {
   anchorTile: number;
   debt: number;
   lastServicedAt: number;
+  // Time when debt first crossed the fire-ignition threshold. Reset to 0 when
+  // debt drops back under the threshold. Used to require a grace window before
+  // a sustained spike actually catches fire.
+  ignitionRiskSince?: number;
 }
 
 export interface LifeSupportCoverageDiagnostic {
@@ -410,7 +415,7 @@ export interface CrewMember {
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair';
+export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -1168,6 +1173,17 @@ export interface UnlockState {
   triggerProgress: Partial<Record<UnlockTier, number>>;
 }
 
+// Fire intensity 0-100 stored per anchor tile of a burning room cluster. Drives
+// canvas overlay, blocks logistics path through the tile (soft cost), and damages
+// hull/maintenance debt over time. Cleared when an extinguish job completes.
+export interface FireState {
+  anchorTile: number;
+  system: MaintenanceSystem;
+  intensity: number;
+  ignitedAt: number;
+  lastTick: number;
+}
+
 export interface Effects {
   cafeteriaStallUntil: number;
   brownoutUntil: number;
@@ -1175,6 +1191,7 @@ export interface Effects {
   blockedUntilByTile: Map<number, number>;
   trespassCooldownUntilByTile: Map<number, number>;
   securityAuraByTile: Map<number, number>;
+  fires: FireState[];
 }
 
 export interface Controls {

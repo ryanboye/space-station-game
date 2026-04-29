@@ -139,7 +139,8 @@ const moduleLetter: Record<ModuleType, string> = {
   // No atlas sprites — fallback path is the only render route.
   [ModuleType.Gangway]: 'g',
   [ModuleType.CustomsCounter]: 'c',
-  [ModuleType.CargoArm]: 'X'
+  [ModuleType.CargoArm]: 'X',
+  [ModuleType.FireExtinguisher]: 'F'
 };
 
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
@@ -2260,6 +2261,37 @@ export function renderWorld(
   if (state.metrics.bodyCount > 0) {
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';
     ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));
+  }
+  // Fire overlay: animated red/orange flicker on each burning tile. Always
+  // rendered (no toggle) — fires are an emergency state the player must see.
+  if (state.effects.fires.length > 0) {
+    for (const fire of state.effects.fires) {
+      const tx = fire.anchorTile % state.width;
+      const ty = Math.floor(fire.anchorTile / state.width);
+      const px = tx * TILE_SIZE;
+      const py = ty * TILE_SIZE;
+      const intensity = fire.intensity / 100;
+      const flicker = 0.7 + 0.3 * Math.sin(state.now * 9 + fire.anchorTile * 0.31);
+      // Base red wash
+      ctx.save();
+      ctx.fillStyle = `rgba(${200 + flicker * 30}, ${70 + flicker * 60}, 30, ${0.42 + intensity * 0.42})`;
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      // Inner bright core
+      const r = TILE_SIZE * (0.18 + intensity * 0.16);
+      ctx.fillStyle = `rgba(255, ${180 + flicker * 60}, ${90 + flicker * 40}, ${0.6 * intensity + 0.2})`;
+      ctx.beginPath();
+      ctx.arc(px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.5, r, 0, Math.PI * 2);
+      ctx.fill();
+      // Flame triangles
+      ctx.fillStyle = `rgba(255, 230, 130, ${0.7 * flicker})`;
+      ctx.beginPath();
+      ctx.moveTo(px + TILE_SIZE * 0.5, py + TILE_SIZE * (0.18 + 0.05 * flicker));
+      ctx.lineTo(px + TILE_SIZE * 0.34, py + TILE_SIZE * 0.55);
+      ctx.lineTo(px + TILE_SIZE * 0.66, py + TILE_SIZE * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
   }
   // Repair-job indicator: a small wrench badge over the anchor tile of any
   // open repair job. Pulses when a crew is actively servicing it. Surfaces the

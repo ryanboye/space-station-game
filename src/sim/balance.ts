@@ -126,6 +126,15 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 2,
     rotatable: false,
     allowedRooms: [RoomType.Berth]
+  },
+  // Fire extinguisher: passive sprinkler-style suppression. Reduces fire intensity
+  // each tick within FIRE_EXTINGUISHER_RADIUS tiles. Allowed in any room — players
+  // sprinkle them around critical areas (reactor, life-support, kitchen).
+  [ModuleType.FireExtinguisher]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
   }
 };
 
