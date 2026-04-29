@@ -410,7 +410,7 @@ export interface CrewMember {
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver';
+export type JobType = 'pickup' | 'deliver' | 'repair';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -437,6 +437,11 @@ export interface TransportJob {
   stallReason?: JobStallReason;
   stalledSince?: number;
   expiredFromState?: Exclude<JobState, 'done' | 'expired'>;
+  // Repair job fields. `type === 'repair'` means: walk to fromTile (system
+  // anchor), stand and reduce maintenance debt for that cluster. Item fields
+  // are unused for repair jobs but kept for shape compatibility.
+  repairSystem?: MaintenanceSystem;
+  repairProgress?: number;
 }
 
 export interface ItemNode {

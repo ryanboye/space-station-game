@@ -2261,4 +2261,39 @@ export function renderWorld(
     ctx.fillStyle = 'rgba(255, 180, 180, 0.95)';
     ctx.fillText(`Bodies: ${state.metrics.bodyCount}`, Math.round(8 * PX), Math.round(32 * PX));
   }
+  // Repair-job indicator: a small wrench badge over the anchor tile of any
+  // open repair job. Pulses when a crew is actively servicing it. Surfaces the
+  // maintenance debt → repair-job → crew loop without needing the diagnostic
+  // overlay toggled on.
+  for (const job of state.jobs) {
+    if (job.type !== 'repair') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    const tx = job.fromTile % state.width;
+    const ty = Math.floor(job.fromTile / state.width);
+    const cx = (tx + 0.5) * TILE_SIZE;
+    const cy = (ty + 0.5) * TILE_SIZE - TILE_SIZE * 0.18;
+    const r = TILE_SIZE * 0.22;
+    const inProgress = job.state === 'in_progress';
+    const pulse = inProgress ? 0.6 + 0.4 * Math.sin(state.now * 4) : 1;
+    ctx.save();
+    ctx.fillStyle = `rgba(8, 14, 22, 0.78)`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 207, 110, ${0.85 * pulse})`;
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.05);
+    ctx.stroke();
+    // Stylized wrench: short stem + open jaw
+    ctx.strokeStyle = `rgba(255, 230, 160, ${pulse})`;
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.06);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.45, cy + r * 0.45);
+    ctx.lineTo(cx + r * 0.15, cy - r * 0.15);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx + r * 0.25, cy - r * 0.25, r * 0.32, 0.4, Math.PI * 1.6);
+    ctx.stroke();
+    ctx.restore();
+  }
 }

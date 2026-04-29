@@ -3997,6 +3997,12 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
       debt.debt = clamp(debt.debt + risePerMin * minutes - maintainers * MAINTENANCE_STAFF_REPAIR_PER_MIN * minutes, 0, 100);
       if (maintainers > 0) debt.lastServicedAt = state.now;
       if (wasOpen && debt.debt < MAINTENANCE_DEBT_WARNING) state.usageTotals.maintenanceJobsResolved += 1;
+      // When debt crosses the repair-job threshold and no repair job is already
+      // outstanding for this anchor, queue one. Generalist crew pick it up via
+      // the same dispatcher as transport jobs.
+      if (debt.debt >= REPAIR_JOB_DEBT_THRESHOLD && !hasOpenRepairJobAt(state, anchor, system)) {
+        enqueueRepairJob(state, system, anchor);
+      }
     }
   };
 
@@ -5342,6 +5348,49 @@ function enqueueTransportJob(
   state.metrics.createdJobs += 1;
 }
 
+// Repair job: any generalist crew picks it up, walks to the system anchor, and
+// stands there ticking down debt. Distinct from the existing "maintainer staffed
+// at the post" reduction — that only applies to crew with assignedSystem set.
+// This loop lets idle crew help dig out a debt spike without needing a specialty.
+const REPAIR_JOB_DEBT_THRESHOLD = 45;
+const REPAIR_JOB_DEBT_TARGET = 32;
+const REPAIR_JOB_RATE_PER_SEC = 8;
+function enqueueRepairJob(
+  state: StationState,
+  system: MaintenanceSystem,
+  anchorTile: number
+): void {
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'repair',
+    itemType: 'rawMaterial',
+    amount: REPAIR_JOB_DEBT_TARGET,
+    fromTile: anchorTile,
+    toTile: anchorTile,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + JOB_TTL_SEC,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none',
+    stalledSince: undefined,
+    repairSystem: system,
+    repairProgress: 0
+  });
+  state.metrics.createdJobs += 1;
+}
+
+function hasOpenRepairJobAt(state: StationState, anchorTile: number, system: MaintenanceSystem): boolean {
+  for (const job of state.jobs) {
+    if (job.type !== 'repair') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    if (job.fromTile === anchorTile && job.repairSystem === system) return true;
+  }
+  return false;
+}
+
 function markJobStall(state: StationState, job: StationState['jobs'][number], reason: JobStallReason): void {
   if (reason === 'none') {
     job.stallReason = 'none';
@@ -5681,6 +5730,8 @@ function assignJobsToIdleCrew(state: StationState): void {
     crew.activeJobId = bestJob.id;
     crew.cleaning = false;
     crew.cleanSessionActive = false;
+    crew.toileting = false;
+    crew.toiletSessionActive = false;
     clearCrewLeisure(crew);
     setCrewPath(state, crew, bestPath);
     if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
@@ -5725,7 +5776,8 @@ function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
 function createJobCountsByType(): Record<JobType, JobStatusCounts> {
   return {
     pickup: createJobStatusCounts(),
-    deliver: createJobStatusCounts()
+    deliver: createJobStatusCounts(),
+    repair: createJobStatusCounts()
   };
 }
 
@@ -6198,6 +6250,65 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
         setCrewPath(state, crew, []);
+      } else if (job.type === 'repair') {
+        // Repair: walk to the system anchor tile and stand still while ticking
+        // down the cluster's debt. No item carry. When the job's repair target
+        // amount is reached or debt hits zero, the job completes.
+        const anchorTile = job.fromTile;
+        if (crew.tileIndex !== anchorTile) {
+          if (crew.path.length === 0) {
+            setCrewPath(
+              state,
+              crew,
+              findPath(state, crew.tileIndex, anchorTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ?? []
+            );
+            if (crew.path.length === 0) {
+              markJobStall(state, job, 'stalled_unreachable_source');
+            }
+          }
+          const moveResult = moveCrew(crew);
+          if (moveResult === 'moved') {
+            job.lastProgressAt = state.now;
+            markJobStall(state, job, 'none');
+            crew.blockedTicks = 0;
+          } else if (moveResult === 'blocked') {
+            crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+            markJobStall(state, job, 'stalled_path_blocked');
+          }
+        } else {
+          // At anchor: tick debt down. Job becomes 'in_progress' on first tick.
+          if (job.state !== 'in_progress') {
+            job.state = 'in_progress';
+          }
+          const system = job.repairSystem;
+          if (system) {
+            const debtEntry = state.maintenanceDebts.find(
+              (d) => d.key === maintenanceKey(system, anchorTile)
+            );
+            if (debtEntry) {
+              const reduction = Math.min(debtEntry.debt, REPAIR_JOB_RATE_PER_SEC * dt);
+              debtEntry.debt = Math.max(0, debtEntry.debt - reduction);
+              debtEntry.lastServicedAt = state.now;
+              job.repairProgress = (job.repairProgress ?? 0) + reduction;
+              job.lastProgressAt = state.now;
+              if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= 0.5) {
+                job.state = 'done';
+                job.completedAt = state.now;
+                markJobStall(state, job, 'none');
+                crew.activeJobId = null;
+                setCrewPath(state, crew, []);
+                state.usageTotals.maintenanceJobsResolved += 1;
+              }
+            } else {
+              // Debt cluster vanished (room destroyed?). Cancel.
+              job.state = 'done';
+              job.completedAt = state.now;
+              crew.activeJobId = null;
+              setCrewPath(state, crew, []);
+            }
+          }
+        }
+        continue;
       } else {
         const targetTile = crew.carryingAmount > 0 ? job.toTile : job.fromTile;
         if (crew.tileIndex === targetTile) {
@@ -9970,6 +10081,16 @@ function crewInspectorAction(
   if (crew.activeJobId !== null) {
     const job = state.jobs.find((j) => j.id === crew.activeJobId);
     if (job) {
+      if (job.type === 'repair') {
+        const at = crew.tileIndex === job.fromTile;
+        const sys = job.repairSystem ?? 'system';
+        const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
+        return {
+          currentAction: at ? `repairing ${sys}` : `walking to repair ${sys}`,
+          actionReason: `job #${job.id} ${job.state} | progress ${(job.repairProgress ?? 0).toFixed(1)}/${job.amount.toFixed(1)}${stall}`,
+          stateLabel: 'repair'
+        };
+      }
       const carrying = crew.carryingItemType !== null || job.pickedUpAmount > 0;
       const currentAction = carrying ? `delivering ${job.itemType}` : `walking to ${job.itemType} pickup`;
       const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
