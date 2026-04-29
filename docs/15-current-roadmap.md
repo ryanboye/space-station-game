@@ -26,6 +26,13 @@ The current design priority is not adding more hidden complexity. New systems sh
 - Route-pressure conflict reasons in hover/readouts and room inspectors.
 - First expanded visitor need: longer-stay visitors can route to Hygiene as a comfort/toilet stop, visible in the agent inspector.
 - First expanded crew need: idle crew can route to Lounge, RecHall, Market, or Cafeteria for off-duty leisure/social recovery, visible in the agent inspector.
+- Crew bladder/toilet need with capacity-guarded Hygiene visits, surfaced as a third bar in the agent inspector.
+- Maintenance repair job loop: generalist crew clear reactor/life-support debt with a visible wrench badge, no specialty required.
+- Fire v0: sustained reactor/life-support debt ignites, fires spread to neighbors, damage modules ≥80 intensity, and are suppressed by the new FireExtinguisher module or by crew running an extinguish job.
+- Local air gameplay (P5B): per-tile air quality from life-support coverage drives actor exposure; sealed-off wings and burning rooms are now locally lethal. Air overlay reads tile-level quality.
+- Vent module: extends life-support reach into a remote wing through corridors.
+- Visitor leisure depth: long-stay archetypes plan and execute 1-3 leisure stops (eat → market browse → lounge → exit), biased toward variety. Inspector shows browsing/relaxing labels with leg progress.
+- VendingMachine + Bench leisure modules.
 
 ## Partially Done
 
@@ -57,14 +64,11 @@ Goal: make people create believable demand for station services.
 - Reuse current rooms first: Dorm, Hygiene, Cafeteria, Lounge, Market, RecHall.
 - Surface everything in agent inspector, room inspector, metrics, and route-pressure overlay.
 
-### P5 - Local Air Gameplay
+### P5 - Local Air Gameplay (LANDED 2026-04-28)
 
-Goal: make life-support placement spatially meaningful now that air coverage is visible.
-
-- Add `airQualityAtTile` or local-air storage.
-- Keep global air as an average/trend metric.
-- Use life-support coverage and disconnected areas to drive local exposure.
-- Make actors in bad local air distressed while safe areas remain healthy.
+Local air now drives actor exposure per tile. Vent modules extend life-support
+reach. Fire ↔ air coupling lands as part of the same model. Future polish:
+breach mechanics that depressurize a tile or room.
 
 ### P4B - Staff Specialization and Repair
 
