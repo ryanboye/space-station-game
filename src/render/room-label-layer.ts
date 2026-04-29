@@ -20,7 +20,9 @@ const ROOM_LABELS: Record<RoomType, string> = {
   [RoomType.Market]: 'MARKET',
   [RoomType.LogisticsStock]: 'LOGISTICS',
   [RoomType.Storage]: 'STORAGE',
-  [RoomType.Berth]: 'BERTH'
+  [RoomType.Berth]: 'BERTH',
+  [RoomType.Cantina]: 'CANTINA',
+  [RoomType.Observatory]: 'OBSERVATORY'
 };
 
 type RoomComponent = {

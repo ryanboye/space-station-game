@@ -7731,7 +7731,9 @@ function residentLeisureTargets(state: StationState): number[] {
     ...activeRoomTargets(state, RoomType.Lounge),
     ...activeRoomTargets(state, RoomType.RecHall),
     ...activeRoomTargets(state, RoomType.Market),
-    ...activeRoomTargets(state, RoomType.Cafeteria)
+    ...activeRoomTargets(state, RoomType.Cafeteria),
+    ...activeRoomTargets(state, RoomType.Cantina),
+    ...activeRoomTargets(state, RoomType.Observatory)
   ];
 }
 
