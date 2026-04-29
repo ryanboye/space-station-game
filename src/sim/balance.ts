@@ -141,6 +141,18 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: false,
     allowedRooms: null
+  },
+  [ModuleType.VendingMachine]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Cafeteria, RoomType.Lounge, RoomType.Market, RoomType.RecHall]
+  },
+  [ModuleType.Bench]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Cafeteria, RoomType.Lounge, RoomType.Market, RoomType.RecHall]
   }
 };
 

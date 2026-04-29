@@ -137,7 +137,16 @@ export enum ModuleType {
   // source within VENT_REACH_FROM_LS tiles of an active LS cluster, projecting
   // fresh-air coverage in a radius. Lets the player extend air to a remote
   // wing without putting a second LS room there.
-  Vent = 'vent'
+  Vent = 'vent',
+  // Vending machine: 1x1 leisure module placed in any social room
+  // (Cafeteria, Lounge, Market, RecHall). Visitors in Leisure state on this
+  // tile spend extra credits per second (small but visible bonus). Gives the
+  // player a per-tile knob to boost a busy social room's revenue.
+  VendingMachine = 'vending-machine',
+  // Bench: 1x1 cosmetic seat. Allowed in social rooms (Cafeteria, Lounge,
+  // Market, RecHall). Slight room comfort bump via the existing public-appeal
+  // signal — visible decoration that the player can sprinkle around.
+  Bench = 'bench'
 }
 
 export type ModuleRotation = 0 | 90;

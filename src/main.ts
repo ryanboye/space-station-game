@@ -352,6 +352,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place Fire Extinguisher — passive sprinkler that suppresses nearby fires"><span class="tool-key">·</span>Fire Ext</button>
         <button class="tool-btn" data-tool-module="vent" title="Place Vent — projects life-support air through a radius, even far from a Life Support room"><span class="tool-key">·</span>Vent</button>
+        <button class="tool-btn" data-tool-module="vending-machine" title="Place Vending Machine (T1+) — visitors in leisure spend extra credits on this tile"><span class="tool-key">·</span>Vending</button>
+        <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — leisure seating in social rooms; small comfort bonus"><span class="tool-key">·</span>Bench</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -2843,6 +2845,8 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'cargo-arm': ModuleType.CargoArm,
   'fire-extinguisher': ModuleType.FireExtinguisher,
   vent: ModuleType.Vent,
+  'vending-machine': ModuleType.VendingMachine,
+  bench: ModuleType.Bench,
   clear: ModuleType.None,
 };
 
@@ -2872,7 +2876,9 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.CustomsCounter]: 'CC',
   [ModuleType.CargoArm]: 'CA',
   [ModuleType.FireExtinguisher]: 'FX',
-  [ModuleType.Vent]: 'VT'
+  [ModuleType.Vent]: 'VT',
+  [ModuleType.VendingMachine]: 'VM',
+  [ModuleType.Bench]: 'BN'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

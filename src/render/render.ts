@@ -141,7 +141,9 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.CustomsCounter]: 'c',
   [ModuleType.CargoArm]: 'X',
   [ModuleType.FireExtinguisher]: 'F',
-  [ModuleType.Vent]: 'V'
+  [ModuleType.Vent]: 'V',
+  [ModuleType.VendingMachine]: '$',
+  [ModuleType.Bench]: 'B'
 };
 
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];

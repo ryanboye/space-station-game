@@ -7394,6 +7394,15 @@ function updateVisitorLogic(
       }
     } else if (visitor.state === VisitorState.Leisure) {
       visitor.eatTimer -= dt;
+      // VendingMachine bonus: visitors at a vending tile spend a small flat
+      // amount per second regardless of room kind. Stacks with the market
+      // stall trade-good loop below when both apply.
+      if (state.modules[visitor.tileIndex] === ModuleType.VendingMachine) {
+        const vendSpend = dt * 0.42 * clamp(visitor.spendMultiplier, 0.7, 1.6);
+        state.metrics.credits += vendSpend;
+        state.metrics.creditsEarnedLifetime += vendSpend;
+        state.usageTotals.creditsMarketGross += vendSpend;
+      }
       if (state.modules[visitor.tileIndex] === ModuleType.MarketStall) {
         const requestedGoods = MARKET_TRADE_GOOD_USE_PER_SEC * dt * clamp(visitor.spendMultiplier, 0.7, 1.8);
         const consumedGoods = consumeTradeGoodsFromMarket(state, requestedGoods);

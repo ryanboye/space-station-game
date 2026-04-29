@@ -83,7 +83,9 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.CustomsCounter]: 'module.customs_counter',
   [ModuleType.CargoArm]: 'module.cargo_arm',
   [ModuleType.FireExtinguisher]: 'module.fire_extinguisher',
-  [ModuleType.Vent]: 'module.vent'
+  [ModuleType.Vent]: 'module.vent',
+  [ModuleType.VendingMachine]: 'module.vending_machine',
+  [ModuleType.Bench]: 'module.bench'
 };
 
 export const SHIP_SPRITE_KEYS: Record<ShipType, string> = {
