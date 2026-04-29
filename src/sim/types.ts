@@ -132,7 +132,12 @@ export enum ModuleType {
   Gangway = 'gangway',
   CustomsCounter = 'customs-counter',
   CargoArm = 'cargo-arm',
-  FireExtinguisher = 'fire-extinguisher'
+  FireExtinguisher = 'fire-extinguisher',
+  // Vent module: 1x1 air-distribution node. Acts as a secondary life-support
+  // source within VENT_REACH_FROM_LS tiles of an active LS cluster, projecting
+  // fresh-air coverage in a radius. Lets the player extend air to a remote
+  // wing without putting a second LS room there.
+  Vent = 'vent'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -1029,6 +1034,10 @@ export interface AgentInspectorBase {
   targetTile: number | null;
   currentAction: string;
   actionReason: string;
+  /** Local air quality (0..100) at the agent's current tile. */
+  localAir: number;
+  /** Cumulative low-oxygen exposure in seconds; compared against thresholds for distress/critical/death. */
+  airExposureSec: number;
 }
 
 export interface VisitorInspector extends AgentInspectorBase {
@@ -1238,6 +1247,11 @@ export interface StationState {
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
   pressurized: boolean[];
+  // Per-tile air quality 0..100. Computed each tick from life-support coverage
+  // distance + active source count. Local exposure checks (crew, visitor,
+  // resident) read this instead of metrics.airQuality so a sealed-off wing
+  // becomes locally lethal even when the station-wide average looks fine.
+  airQualityByTile: Float32Array;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
   itemNodes: ItemNode[];

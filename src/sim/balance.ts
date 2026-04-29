@@ -135,6 +135,12 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: false,
     allowedRooms: null
+  },
+  [ModuleType.Vent]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
   }
 };
 

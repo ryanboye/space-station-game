@@ -140,7 +140,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'g',
   [ModuleType.CustomsCounter]: 'c',
   [ModuleType.CargoArm]: 'X',
-  [ModuleType.FireExtinguisher]: 'F'
+  [ModuleType.FireExtinguisher]: 'F',
+  [ModuleType.Vent]: 'V'
 };
 
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
@@ -1514,6 +1515,12 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     .map((debt) => `${debt.key}:${Math.round(debt.debt)}`)
     .sort()
     .join(',');
+  // Fire signature drives cache busting on the air overlay so a flare-up
+  // visibly degrades local oxygen mid-frame.
+  const fireKey =
+    overlay === 'life-support'
+      ? state.effects.fires.map((f) => `${f.anchorTile}:${Math.round(f.intensity / 4)}`).sort().join(',')
+      : '';
   const routeKey =
     overlay === 'route-pressure'
       ? [
@@ -1538,6 +1545,7 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     state.ops.lifeSupportActive,
     state.ops.lifeSupportTotal,
     debtKey,
+    fireKey,
     routeKey
   ].join('|');
 }
@@ -1550,7 +1558,25 @@ function lifeSupportDiagnosticColor(
   if (state.tiles[tileIndex] === TileType.Space || state.tiles[tileIndex] === TileType.Wall) return null;
   const pos = fromIndex(tileIndex, state.width);
   const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y, coverage);
-  if (!diagnostic?.walkablePressurized || !diagnostic.hasLifeSupportSystem) return null;
+  if (!diagnostic?.walkablePressurized) return null;
+  // Prefer the live local air value when available — it folds in coverage
+  // distance, fire suppression, and pressurization in one number that the
+  // exposure check actually reads. Falls back to the static coverage diagnostic
+  // when the local map hasn't been computed yet.
+  const local = state.airQualityByTile[tileIndex];
+  if (Number.isFinite(local) && local >= 0) {
+    if (local <= 25) {
+      const t = clamp01((25 - local) / 25);
+      return mixRgba([238, 120, 84], [200, 40, 40], t, 0.32 + t * 0.18);
+    }
+    if (local <= 60) {
+      const t = clamp01((60 - local) / 35);
+      return mixRgba([255, 213, 94], [238, 120, 84], t, 0.18 + t * 0.16);
+    }
+    const t = clamp01((100 - local) / 40);
+    return mixRgba([55, 211, 230], [255, 213, 94], t, 0.14 + t * 0.08);
+  }
+  if (!diagnostic.hasLifeSupportSystem) return null;
   if (diagnostic.noActiveSource) return rgba(232, 89, 89, 0.34);
   if (!diagnostic.reachable) return rgba(238, 79, 79, 0.4);
   const distance = diagnostic.distance ?? 0;
@@ -1743,10 +1769,13 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
   if (overlay === 'life-support') {
     const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic?.walkablePressurized) return `hover ${pos.x},${pos.y}: not a pressurized walkable tile`;
-    if (!diagnostic.hasLifeSupportSystem) return `hover ${pos.x},${pos.y}: no life support built yet`;
-    if (diagnostic.noActiveSource) return `hover ${pos.x},${pos.y}: no active air source -> oxygen risk`;
-    if (!diagnostic.reachable) return `hover ${pos.x},${pos.y}: disconnected from active air -> oxygen risk`;
-    return `hover ${pos.x},${pos.y}: air distance ${diagnostic.distance ?? 0} | ${diagnostic.poorCoverage ? 'poor' : 'covered'} room readiness`;
+    const tile = pos.y * state.width + pos.x;
+    const local = state.airQualityByTile[tile];
+    const localStr = Number.isFinite(local) && local >= 0 ? ` | local air ${local.toFixed(0)}%` : '';
+    if (!diagnostic.hasLifeSupportSystem) return `hover ${pos.x},${pos.y}: no life support built yet${localStr}`;
+    if (diagnostic.noActiveSource) return `hover ${pos.x},${pos.y}: no active air source -> oxygen risk${localStr}`;
+    if (!diagnostic.reachable) return `hover ${pos.x},${pos.y}: disconnected from active air -> oxygen risk${localStr}`;
+    return `hover ${pos.x},${pos.y}: air distance ${diagnostic.distance ?? 0} | ${diagnostic.poorCoverage ? 'poor' : 'covered'} room readiness${localStr}`;
   }
   if (overlay === 'maintenance') {
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);

@@ -351,6 +351,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place Fire Extinguisher — passive sprinkler that suppresses nearby fires"><span class="tool-key">·</span>Fire Ext</button>
+        <button class="tool-btn" data-tool-module="vent" title="Place Vent — projects life-support air through a radius, even far from a Life Support room"><span class="tool-key">·</span>Vent</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -2222,11 +2223,16 @@ function formatCrewSelectionHtml(crewId: number): string {
   if (inspector.actionReason) {
     parts.push(`<div class="agent-card__reason">${escapeHtml(inspector.actionReason)}</div>`);
   }
+  const airHint = `local oxygen at this tile (distress <30, critical <15)`;
   parts.push(`<div class="agent-card__needs">
     ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
     ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
     ${needBarHtml('Bladder', inspector.bladder, CREW_TOILET_THRESHOLD_UI, null, bladderHint)}
+    ${needBarHtml('Air', inspector.localAir, 30, 15, airHint)}
   </div>`);
+  if (inspector.airExposureSec > 0.5) {
+    parts.push(`<div class="agent-card__warn">⚠ low-air exposure ${inspector.airExposureSec.toFixed(1)}s</div>`);
+  }
 
   if (inspector.activeJobId !== null) {
     const job = state.jobs.find((j) => j.id === inspector.activeJobId);
@@ -2836,6 +2842,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'customs-counter': ModuleType.CustomsCounter,
   'cargo-arm': ModuleType.CargoArm,
   'fire-extinguisher': ModuleType.FireExtinguisher,
+  vent: ModuleType.Vent,
   clear: ModuleType.None,
 };
 
@@ -2864,7 +2871,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'GW',
   [ModuleType.CustomsCounter]: 'CC',
   [ModuleType.CargoArm]: 'CA',
-  [ModuleType.FireExtinguisher]: 'FX'
+  [ModuleType.FireExtinguisher]: 'FX',
+  [ModuleType.Vent]: 'VT'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

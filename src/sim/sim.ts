@@ -1352,31 +1352,42 @@ type LifeSupportCoverage = {
   coveragePct: number;
 };
 
+// Vent module radius — how far a powered Vent projects fresh air. The vent
+// itself acts as a 0-distance source within that bubble, so a remote wing
+// can be reached from a Vent placed within VENT_REACH_FROM_LS of the main LS.
+const VENT_REACH_FROM_LS = 16;
+const VENT_PROJECTION_RADIUS = 6;
+
 function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
   const distanceByTile = new Int16Array(state.width * state.height);
   distanceByTile.fill(-1);
-  const sourceTiles = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false).flat();
+  const lsTiles = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false).flat();
   const queue: number[] = [];
-  for (const tile of sourceTiles) {
+  for (const tile of lsTiles) {
     if (!isWalkable(state.tiles[tile]) || !state.pressurized[tile]) continue;
     if (distanceByTile[tile] === 0) continue;
     distanceByTile[tile] = 0;
     queue.push(tile);
   }
+  // Vent modules within VENT_REACH_FROM_LS of an active LS source act as
+  // secondary 0-distance air sources in their own VENT_PROJECTION_RADIUS.
+  // First pass: BFS from LS to find which vents are reachable + within range.
+  // Second pass: extend the BFS from each powered vent.
+  const ventOriginTiles: number[] = [];
+  for (const m of state.moduleInstances) {
+    if (m.type === ModuleType.Vent) ventOriginTiles.push(m.originTile);
+  }
+  const sourceTiles = lsTiles.slice();
 
   let coveredTiles = queue.length;
   let totalDistance = 0;
+  const cardinalDeltas: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // Phase 1: BFS from LS sources only.
   for (let qi = 0; qi < queue.length; qi++) {
     const tile = queue[qi];
     const p = fromIndex(tile, state.width);
     const nextDistance = distanceByTile[tile] + 1;
-    const deltas = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1]
-    ];
-    for (const [dx, dy] of deltas) {
+    for (const [dx, dy] of cardinalDeltas) {
       const nx = p.x + dx;
       const ny = p.y + dy;
       if (!inBounds(nx, ny, state.width, state.height)) continue;
@@ -1387,6 +1398,83 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
       coveredTiles += 1;
       totalDistance += nextDistance;
       queue.push(ni);
+    }
+  }
+
+  // Phase 2: any vent module reached by phase 1 within VENT_REACH_FROM_LS becomes
+  // a secondary 0-distance source. We re-seed the BFS from those tiles so they
+  // project fresh air into a remote wing the main LS bubble couldn't reach.
+  let poweredVents = 0;
+  if (lsTiles.length > 0 && ventOriginTiles.length > 0) {
+    const ventQueue: number[] = [];
+    for (const ventTile of ventOriginTiles) {
+      const reach = distanceByTile[ventTile];
+      if (reach < 0 || reach > VENT_REACH_FROM_LS) continue;
+      if (!isWalkable(state.tiles[ventTile]) || !state.pressurized[ventTile]) continue;
+      poweredVents += 1;
+      // Vent itself: keep its existing distance (so the LS-side overlay still
+      // reads it correctly), but mark its projection radius freshly.
+      const vp = fromIndex(ventTile, state.width);
+      // Re-initialize tiles within VENT_PROJECTION_RADIUS that are currently
+      // worse than the distance they'd get from this vent. Use Manhattan radius
+      // for a simple bubble; BFS through walkable tiles for actual reach.
+      // Bound: only re-improve tiles whose current distance > 0 (LS sources stay
+      // at 0) and is larger than what vent would give.
+      const ventBfsQueue: number[] = [ventTile];
+      const ventDist = new Map<number, number>();
+      ventDist.set(ventTile, 0);
+      for (let qi = 0; qi < ventBfsQueue.length; qi++) {
+        const t = ventBfsQueue[qi];
+        const cur = ventDist.get(t) ?? 0;
+        if (cur >= VENT_PROJECTION_RADIUS) continue;
+        const tp = fromIndex(t, state.width);
+        for (const [dx, dy] of cardinalDeltas) {
+          const nx = tp.x + dx;
+          const ny = tp.y + dy;
+          if (!inBounds(nx, ny, state.width, state.height)) continue;
+          const ni = toIndex(nx, ny, state.width);
+          if (ventDist.has(ni)) continue;
+          if (!isWalkable(state.tiles[ni]) || !state.pressurized[ni]) continue;
+          ventDist.set(ni, cur + 1);
+          ventBfsQueue.push(ni);
+        }
+      }
+      // Apply: if vent gives a better (smaller) distance, overwrite. Tiles that
+      // were unreachable get queued.
+      for (const [tile, vd] of ventDist) {
+        const existing = distanceByTile[tile];
+        if (existing < 0 || existing > vd) {
+          if (existing < 0) {
+            coveredTiles += 1;
+          } else {
+            totalDistance -= existing;
+          }
+          distanceByTile[tile] = vd;
+          totalDistance += vd;
+          if (!ventQueue.includes(tile)) ventQueue.push(tile);
+        }
+      }
+    }
+    // Continue BFS from any newly-improved frontier so coverage propagates
+    // beyond the projection bubble through corridors.
+    for (let qi = 0; qi < ventQueue.length; qi++) {
+      const tile = ventQueue[qi];
+      const p = fromIndex(tile, state.width);
+      const nextDistance = distanceByTile[tile] + 1;
+      for (const [dx, dy] of cardinalDeltas) {
+        const nx = p.x + dx;
+        const ny = p.y + dy;
+        if (!inBounds(nx, ny, state.width, state.height)) continue;
+        const ni = toIndex(nx, ny, state.width);
+        if (!isWalkable(state.tiles[ni]) || !state.pressurized[ni]) continue;
+        const existing = distanceByTile[ni];
+        if (existing >= 0 && existing <= nextDistance) continue;
+        if (existing < 0) coveredTiles += 1;
+        else totalDistance -= existing;
+        distanceByTile[ni] = nextDistance;
+        totalDistance += nextDistance;
+        ventQueue.push(ni);
+      }
     }
   }
 
@@ -1401,7 +1489,7 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
 
   return {
     distanceByTile,
-    sourceCount: sourceTiles.length,
+    sourceCount: sourceTiles.length + poweredVents,
     coveredTiles,
     walkablePressurizedTiles,
     poorTiles,
@@ -2704,6 +2792,79 @@ function activeFightIncidentForResident(state: StationState, residentId: number)
     if (incident.residentParticipantIds.includes(residentId)) return incident;
   }
   return null;
+}
+
+// Read the local air quality at a tile. Falls back to the global metric if the
+// local map hasn't been computed yet (older saves, freshly expanded tiles).
+function airQualityAt(state: StationState, tileIndex: number): number {
+  if (tileIndex < 0 || tileIndex >= state.airQualityByTile.length) return state.metrics.airQuality;
+  const local = state.airQualityByTile[tileIndex];
+  if (Number.isNaN(local) || local <= -1) return state.metrics.airQuality;
+  return local;
+}
+
+// Recompute per-tile air quality each tick. The map blends three signals:
+//   1) Life-support coverage distance — close to a powered LS source = ~100,
+//      near the edge of reach = ~50, unreachable but pressurized = drifts down,
+//      vacuum/space tiles = 0.
+//   2) Pressurization — depressurized tiles drop fast (vacuum).
+//   3) Fire proximity — burning tiles and their immediate neighbors lose
+//      oxygen rapidly while a fire is active.
+// Values smooth toward their target so brief disruptions don't flicker the
+// inspector or cause whiplash exposure damage.
+function updateLocalAirQuality(state: StationState, dt: number): void {
+  const coverage = computeLifeSupportCoverage(state);
+  const total = state.tiles.length;
+  const fires = state.effects.fires;
+  const fireTiles = new Set<number>();
+  for (const fire of fires) {
+    fireTiles.add(fire.anchorTile);
+    const fx = fire.anchorTile % state.width;
+    const fy = Math.floor(fire.anchorTile / state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = fx + dx;
+      const ny = fy + dy;
+      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+      fireTiles.add(ny * state.width + nx);
+    }
+  }
+  const hasLS = coverage.sourceCount > 0;
+  for (let tile = 0; tile < total; tile++) {
+    let target: number;
+    if (!isWalkable(state.tiles[tile])) {
+      // Walls/space: always treated as 0 so the overlay reads them as bad
+      // (won't actually be exposed to since no actor stands there).
+      target = 0;
+    } else if (!state.pressurized[tile]) {
+      target = 5;
+    } else if (!hasLS) {
+      // No LS at all — fall back to the global metric so the existing macro
+      // air loop still drives gameplay until the player builds life support.
+      target = state.metrics.airQuality;
+    } else {
+      const dist = coverage.distanceByTile[tile];
+      if (dist < 0) {
+        // Pressurized but unreachable from any LS source — slow suffocation.
+        target = 18;
+      } else if (dist === 0) {
+        target = 100;
+      } else if (dist <= 6) {
+        target = 100 - (dist / 6) * 14; // 100 → 86
+      } else if (dist <= 16) {
+        target = 86 - ((dist - 6) / 10) * 26; // 86 → 60
+      } else if (dist <= 24) {
+        target = 60 - ((dist - 16) / 8) * 30; // 60 → 30
+      } else {
+        target = 28;
+      }
+      // Fire suppression: burning tile and neighbors lose oxygen rapidly.
+      if (fireTiles.has(tile)) target = Math.min(target, 18);
+    }
+    // Smooth toward target so single-tick disruptions don't whiplash exposure.
+    const current = state.airQualityByTile[tile];
+    const settle = current < 0 || Number.isNaN(current) ? target : current + (target - current) * Math.min(1, dt * 1.2);
+    state.airQualityByTile[tile] = clamp(settle, 0, 100);
+  }
 }
 
 function applyAirExposure(
@@ -6101,7 +6262,7 @@ function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: 
   if (state.crewMembers.length <= 0) return;
   const keep: CrewMember[] = [];
   for (const crew of state.crewMembers) {
-    const exposure = applyAirExposure(state, crew, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, crew, airQualityAt(state, crew.tileIndex), dt);
     if (exposure.died) {
       releaseCrewJobsOnDeath(state, crew.id);
       registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
@@ -6963,7 +7124,7 @@ function updateVisitorLogic(
   let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
-    const exposure = applyAirExposure(state, visitor, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, visitor, airQualityAt(state, visitor.tileIndex), dt);
     if (exposure.died) {
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
       continue;
@@ -7831,7 +7992,7 @@ function updateResidentLogic(
 ): void {
   const keep: Resident[] = [];
   for (const resident of state.residents) {
-    const exposure = applyAirExposure(state, resident, state.metrics.airQuality, dt);
+    const exposure = applyAirExposure(state, resident, airQualityAt(state, resident.tileIndex), dt);
     if (exposure.died) {
       unlinkResidentFromShip(state, resident);
       registerBodyDeathAtTile(state, resident.tileIndex, occupancyByTile);
@@ -8249,6 +8410,10 @@ function updateResources(state: StationState, dt: number): void {
   if (leakPenalty > 0) {
     state.metrics.airQuality = clamp(state.metrics.airQuality - leakPenalty * dt * 1.2, 0, 100);
   }
+  // Local air: each tile's quality is the global average shaped by life-support
+  // coverage distance, fire proximity, and pressurization. Read by exposure
+  // checks so a sealed wing or burning room becomes locally lethal.
+  updateLocalAirQuality(state, dt);
 
   if (state.metrics.airQuality <= 10 && lifeSupportPotentialAirPerSec > 0 && lifeSupportActiveAirPerSec <= 0) {
     state.metrics.airBlockedLowAirSec += dt;
@@ -9106,6 +9271,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     laneProfiles,
     dockQueue: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
+    airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     pathOccupancyByTile: new Map(),
     jobs: [],
     itemNodes: [],
@@ -9662,6 +9828,7 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   const modules = new Array<ModuleType>(newWidth * newHeight).fill(ModuleType.None);
   const moduleOccupancyByTile = new Array<number | null>(newWidth * newHeight).fill(null);
   const pressurized = new Array<boolean>(newWidth * newHeight).fill(false);
+  const airQualityByTile = new Float32Array(newWidth * newHeight).fill(100);
 
   for (let y = 0; y < oldHeight; y++) {
     for (let x = 0; x < oldWidth; x++) {
@@ -9674,6 +9841,7 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
       modules[newIndex] = state.modules[oldIndex];
       moduleOccupancyByTile[newIndex] = state.moduleOccupancyByTile[oldIndex];
       pressurized[newIndex] = state.pressurized[oldIndex];
+      airQualityByTile[newIndex] = state.airQualityByTile[oldIndex];
     }
   }
 
@@ -9687,6 +9855,7 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   state.modules = modules;
   state.moduleOccupancyByTile = moduleOccupancyByTile;
   state.pressurized = pressurized;
+  state.airQualityByTile = airQualityByTile;
 
   state.core.centerTile = remapIndex(state.core.centerTile);
   state.core.serviceTile = remapIndex(state.core.serviceTile);
@@ -10157,6 +10326,8 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
     targetTile,
     currentAction: action.currentAction,
     actionReason: action.actionReason,
+    localAir: airQualityAt(state, visitor.tileIndex),
+    airExposureSec: visitor.airExposureSec,
     archetype: visitor.archetype,
     primaryPreference: visitor.primaryPreference,
     patience: visitor.patience,
@@ -10290,6 +10461,8 @@ export function getResidentInspectorById(state: StationState, residentId: number
     targetTile: residentInspectorTargetTile(resident),
     currentAction: action.currentAction,
     actionReason: action.actionReason,
+    localAir: airQualityAt(state, resident.tileIndex),
+    airExposureSec: resident.airExposureSec,
     hunger: resident.hunger,
     energy: resident.energy,
     hygiene: resident.hygiene,
@@ -10442,6 +10615,8 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     targetTile: crewInspectorTargetTile(state, crew),
     currentAction: action.currentAction,
     actionReason: action.actionReason,
+    localAir: airQualityAt(state, crew.tileIndex),
+    airExposureSec: crew.airExposureSec,
     role: crew.role,
     assignedSystem: crew.assignedSystem,
     lastSystem: crew.lastSystem,

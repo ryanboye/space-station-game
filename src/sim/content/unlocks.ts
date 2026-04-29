@@ -183,6 +183,7 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.CustomsCounter]: 0,
   [ModuleType.CargoArm]: 0,
   [ModuleType.FireExtinguisher]: 0,
+  [ModuleType.Vent]: 0,
 };
 
 export function createInitialUnlockState(): UnlockState {
