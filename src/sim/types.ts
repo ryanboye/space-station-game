@@ -209,6 +209,13 @@ export interface Visitor {
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
   lastRouteExposure?: RouteExposure;
+  // Multi-leg leisure: long-stay archetypes (lounger, shopper) cycle through
+  // 2-3 leisure stops (eat → market → lounge → exit, etc). Legs decrement on
+  // each completed Leisure dwell; lastLeisureKind biases the next leg toward
+  // a different room type so visitors don't loop the same lounge twice.
+  leisureLegsRemaining: number;
+  leisureLegsPlanned: number;
+  lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | null;
 }
 
 export enum ResidentState {

@@ -279,7 +279,10 @@ function spawnReturningVisitor(state: StationState, dockTile: number, id: number
     spawnedAt: state.now - 80,
     originShipId,
     airExposureSec: 0,
-    healthState: 'healthy'
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null
   };
   state.visitors.push(v);
 }
@@ -337,7 +340,10 @@ function spawnVisitor(state: StationState, x: number, y: number, id: number): vo
     spawnedAt: state.now,
     originShipId: null,
     airExposureSec: 0,
-    healthState: 'healthy'
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null
   };
   state.visitors.push(v);
 }

@@ -3048,9 +3048,34 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     spawnedAt: state.now,
     originShipId: ship?.id ?? null,
     airExposureSec: 0,
-    healthState: 'healthy'
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null
   };
+  // Plan the trip up front. Long-stay archetypes do multi-room loops; rushers
+  // mostly eat-and-leave. Roll once at spawn so the inspector can show the
+  // visitor's intended itinerary and downstream rooms see a stable plan.
+  const plan = planVisitorLeisureLegs(state, archetype);
+  visitor.leisureLegsPlanned = plan;
+  visitor.leisureLegsRemaining = plan;
   state.visitors.push(visitor);
+}
+
+function planVisitorLeisureLegs(state: StationState, archetype: VisitorArchetype): number {
+  const roll = state.rng();
+  switch (archetype) {
+    case 'rusher':
+      return roll < 0.85 ? 0 : 1;
+    case 'diner':
+      return roll < 0.55 ? 0 : roll < 0.92 ? 1 : 2;
+    case 'shopper':
+      return roll < 0.18 ? 1 : roll < 0.78 ? 2 : 3;
+    case 'lounger':
+      return roll < 0.1 ? 1 : roll < 0.62 ? 2 : 3;
+    default:
+      return 1;
+  }
 }
 
 function ensureCrewPool(state: StationState): void {
@@ -7039,13 +7064,26 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
     return visitor.path.length > 0;
   }
 
-  const preferenceOrder: VisitorPreference[] =
+  // For multi-leg trips, bias toward a room kind the visitor hasn't already
+  // visited this trip — variety reads better in the inspector and exercises
+  // the route-pressure overlay across multiple destinations.
+  const baseOrder: VisitorPreference[] =
     visitor.primaryPreference === 'market'
       ? ['market', 'lounge', 'cafeteria']
       : visitor.primaryPreference === 'lounge'
         ? ['lounge', 'market', 'cafeteria']
         : ['lounge', 'market', 'cafeteria'];
-  for (const preference of preferenceOrder) {
+  const skipMarket = visitor.lastLeisureKind === 'market';
+  const skipLounge = visitor.lastLeisureKind === 'lounge' || visitor.lastLeisureKind === 'recHall';
+  const preferenceOrder = baseOrder.filter((p) => {
+    if (p === 'market' && skipMarket) return false;
+    if (p === 'lounge' && skipLounge) return false;
+    return true;
+  });
+  // If filtering left nothing (only one room type built), fall back to the full
+  // order so the visitor still gets to leisure somewhere.
+  const tryOrder = preferenceOrder.length > 0 ? preferenceOrder : baseOrder;
+  for (const preference of tryOrder) {
     const targets = preference === 'market' ? marketTargets : [...loungeTargets, ...recHallTargets];
     if (targets.length === 0) continue;
     const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
@@ -7295,7 +7333,11 @@ function updateVisitorLogic(
         visitor.servedMeal = true;
         state.metrics.mealsServedTotal += 1;
         visitorSuccessRatingBonus(state, 0.08, 'mealService');
-        if (shouldLeisureAfterMeal(state, visitor) && assignPathToLeisure(state, visitor)) {
+        // Multi-leg trip: visitors planned >0 legs at spawn cycle through
+        // leisure rooms before exiting. Falls back to legacy archetype roll
+        // if the plan was 0 (rusher-style quick-bite).
+        const wantsLeisure = visitor.leisureLegsRemaining > 0 || shouldLeisureAfterMeal(state, visitor);
+        if (wantsLeisure && assignPathToLeisure(state, visitor)) {
           visitor.state = VisitorState.ToLeisure;
         } else {
           visitor.state = VisitorState.ToDock;
@@ -7385,9 +7427,22 @@ function updateVisitorLogic(
         state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
       if (visitor.eatTimer <= 0) {
+        // Record this stop's room kind so the next leg picks somewhere new.
+        const room = state.rooms[visitor.tileIndex];
+        if (room === RoomType.Market) visitor.lastLeisureKind = 'market';
+        else if (room === RoomType.Lounge) visitor.lastLeisureKind = 'lounge';
+        else if (room === RoomType.RecHall) visitor.lastLeisureKind = 'recHall';
+        else if (room === RoomType.Hygiene) visitor.lastLeisureKind = 'hygiene';
+        if (visitor.leisureLegsRemaining > 0) visitor.leisureLegsRemaining -= 1;
+
+        // Hungry visitors prefer to eat first if they haven't yet. Otherwise,
+        // if there's still itinerary, do another leisure stop in a different
+        // room. Otherwise, exit.
         if (!visitor.servedMeal && state.ops.cafeteriasActive > 0 && shouldTryMealAfterLeisure(state, visitor)) {
           visitor.state = VisitorState.ToCafeteria;
           assignPathToCafeteria(state, visitor);
+        } else if (visitor.leisureLegsRemaining > 0 && assignPathToLeisure(state, visitor)) {
+          visitor.state = VisitorState.ToLeisure;
         } else {
           visitor.state = VisitorState.ToDock;
           assignPathToDock(state, visitor);
@@ -10287,19 +10342,36 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
   }
   if (visitor.state === VisitorState.ToLeisure) {
     const need = visitorLeisureNeedLabel(state, visitor);
+    const target = visitor.reservedTargetTile ?? -1;
+    const targetRoom = target >= 0 && target < state.rooms.length ? state.rooms[target] : RoomType.None;
+    const destLabel =
+      targetRoom === RoomType.Market ? 'market' :
+      targetRoom === RoomType.Lounge ? 'lounge' :
+      targetRoom === RoomType.RecHall ? 'rec hall' :
+      targetRoom === RoomType.Hygiene ? 'hygiene' : 'leisure';
+    const legSuffix = visitor.leisureLegsPlanned > 1
+      ? ` · leg ${visitor.leisureLegsPlanned - visitor.leisureLegsRemaining + 1}/${visitor.leisureLegsPlanned}`
+      : '';
     return {
-      currentAction: need === 'toilet' ? 'walking to hygiene' : 'walking to leisure',
+      currentAction: need === 'toilet' ? 'walking to hygiene' : `walking to ${destLabel}`,
       actionReason:
         need === 'toilet'
           ? `comfort stop after ${visitorVisitAge(state, visitor).toFixed(0)}s visit`
-          : `${visitor.primaryPreference} preference with archetype ${visitor.archetype}`
+          : `${visitor.archetype} on ${visitor.primaryPreference} circuit${legSuffix}`
     };
   }
   if (visitor.state === VisitorState.Leisure) {
     const need = visitorLeisureNeedLabel(state, visitor);
+    const room = state.rooms[visitor.tileIndex];
+    const verb =
+      need === 'toilet' ? 'using hygiene service' :
+      room === RoomType.Market ? 'browsing market stalls' :
+      room === RoomType.Lounge ? 'relaxing in lounge' :
+      room === RoomType.RecHall ? 'using rec hall' :
+      'using leisure service';
     return {
-      currentAction: need === 'toilet' ? 'using hygiene service' : 'using leisure service',
-      actionReason: `${need === 'toilet' ? 'comfort' : 'leisure'} timer ${visitor.eatTimer.toFixed(1)}s remaining`
+      currentAction: verb,
+      actionReason: `${need === 'toilet' ? 'comfort' : 'leisure'} timer ${visitor.eatTimer.toFixed(1)}s remaining${visitor.leisureLegsRemaining > 0 ? ` · ${visitor.leisureLegsRemaining} more stop${visitor.leisureLegsRemaining === 1 ? '' : 's'} planned` : ''}`
     };
   }
   return {
