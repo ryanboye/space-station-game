@@ -91,7 +91,9 @@ const roomOverlay: Record<RoomType, string> = {
   // Berth: cool steel-blue tint, distinct from Dorm's warmer blue and
   // the cyan dock-tile color. v0 placeholder; revisit when atlas
   // Berth floor sprite lands.
-  [RoomType.Berth]: 'rgba(120, 170, 220, 0.22)'
+  [RoomType.Berth]: 'rgba(120, 170, 220, 0.22)',
+  [RoomType.Cantina]: 'rgba(229, 138, 207, 0.24)',
+  [RoomType.Observatory]: 'rgba(140, 184, 255, 0.24)'
 };
 
 const roomLetter: Record<RoomType, string> = {
@@ -112,7 +114,9 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Market]: 'K',
   [RoomType.LogisticsStock]: 'N',
   [RoomType.Storage]: 'B',
-  [RoomType.Berth]: 'E'
+  [RoomType.Berth]: 'E',
+  [RoomType.Cantina]: 'X',
+  [RoomType.Observatory]: 'O'
 };
 
 const moduleLetter: Record<ModuleType, string> = {
@@ -143,7 +147,12 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.FireExtinguisher]: 'F',
   [ModuleType.Vent]: 'V',
   [ModuleType.VendingMachine]: '$',
-  [ModuleType.Bench]: 'B'
+  [ModuleType.Bench]: 'B',
+  [ModuleType.BarCounter]: 'r',
+  [ModuleType.Tap]: 't',
+  [ModuleType.Telescope]: 'O',
+  [ModuleType.WaterFountain]: '~',
+  [ModuleType.Plant]: '*'
 };
 
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];

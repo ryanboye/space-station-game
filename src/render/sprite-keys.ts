@@ -54,7 +54,9 @@ export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
   [RoomType.Storage]: 'room.storage',
   // Dock-migration v0: Berth has no atlas key yet — falls back to the
   // letter renderer in render.ts (drawRoomLabelLayer + roomLetter).
-  [RoomType.Berth]: 'room.berth'
+  [RoomType.Berth]: 'room.berth',
+  [RoomType.Cantina]: 'room.cantina',
+  [RoomType.Observatory]: 'room.observatory'
 };
 
 export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
@@ -85,7 +87,12 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.FireExtinguisher]: 'module.fire_extinguisher',
   [ModuleType.Vent]: 'module.vent',
   [ModuleType.VendingMachine]: 'module.vending_machine',
-  [ModuleType.Bench]: 'module.bench'
+  [ModuleType.Bench]: 'module.bench',
+  [ModuleType.BarCounter]: 'module.bar_counter',
+  [ModuleType.Tap]: 'module.tap',
+  [ModuleType.Telescope]: 'module.telescope',
+  [ModuleType.WaterFountain]: 'module.water_fountain',
+  [ModuleType.Plant]: 'module.plant'
 };
 
 export const SHIP_SPRITE_KEYS: Record<ShipType, string> = {

@@ -326,6 +326,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
         <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
         <button class="tool-btn" data-tool-room="berth" title="Build Berth (E) — dock-migration v0"><span class="tool-key">E</span>Berth</button>
+        <button class="tool-btn" data-tool-room="cantina" title="Build Cantina — drinks bar, social leisure for crew/visitors/residents"><span class="tool-key">·</span>Cantina</button>
+        <button class="tool-btn" data-tool-room="observatory" title="Build Observatory (T3+) — premium leisure with wonder bonus"><span class="tool-key">·</span>Observ.</button>
       </div>
       <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
         <span class="tool-row-label">Furniture</span>
@@ -354,6 +356,11 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="vent" title="Place Vent — projects life-support air through a radius, even far from a Life Support room"><span class="tool-key">·</span>Vent</button>
         <button class="tool-btn" data-tool-module="vending-machine" title="Place Vending Machine (T1+) — visitors in leisure spend extra credits on this tile"><span class="tool-key">·</span>Vending</button>
         <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — leisure seating in social rooms; small comfort bonus"><span class="tool-key">·</span>Bench</button>
+        <button class="tool-btn" data-tool-module="bar-counter" title="Place Bar Counter (Cantina-only) — drink service anchor"><span class="tool-key">·</span>Bar</button>
+        <button class="tool-btn" data-tool-module="tap" title="Place Tap (Cantina-only) — increases drink throughput"><span class="tool-key">·</span>Tap</button>
+        <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
+        <button class="tool-btn" data-tool-module="water-fountain" title="Place Water Fountain — basic crew thirst relief"><span class="tool-key">·</span>Water</button>
+        <button class="tool-btn" data-tool-module="plant" title="Place Plant (T1+) — small comfort/appeal bonus"><span class="tool-key">·</span>Plant</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -2154,6 +2161,7 @@ const CREW_REST_THRESHOLD_UI = 42;
 const CREW_REST_CRITICAL_UI = 18;
 const CREW_CLEAN_THRESHOLD_UI = 38;
 const CREW_TOILET_THRESHOLD_UI = 25;
+const CREW_THIRST_THRESHOLD_UI = 32;
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({
@@ -2205,16 +2213,19 @@ function formatCrewSelectionHtml(crewId: number): string {
     ? 'Resting'
     : inspector.toileting
       ? 'Toilet'
-      : inspector.cleaning
-        ? 'Cleaning'
-        : inspector.leisure
-          ? 'Leisure'
-          : inspector.role;
+      : inspector.drinking
+        ? 'Drinking'
+        : inspector.cleaning
+          ? 'Cleaning'
+          : inspector.leisure
+            ? 'Leisure'
+            : inspector.role;
   const systemLabel = inspector.assignedSystem ?? inspector.lastSystem ?? 'unassigned';
 
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
   const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
   const bladderHint = `seeks toilet at <${CREW_TOILET_THRESHOLD_UI}`;
+  const thirstHint = `seeks drink at <${CREW_THIRST_THRESHOLD_UI} (Cantina or Water Fountain)`;
 
   const parts: string[] = [];
   parts.push(`<div class="agent-card__head">
@@ -2230,6 +2241,7 @@ function formatCrewSelectionHtml(crewId: number): string {
     ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
     ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
     ${needBarHtml('Bladder', inspector.bladder, CREW_TOILET_THRESHOLD_UI, null, bladderHint)}
+    ${needBarHtml('Thirst', inspector.thirst, CREW_THIRST_THRESHOLD_UI, null, thirstHint)}
     ${needBarHtml('Air', inspector.localAir, 30, 15, airHint)}
   </div>`);
   if (inspector.airExposureSec > 0.5) {
@@ -2820,6 +2832,8 @@ const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   'logistics-stock': RoomType.LogisticsStock,
   storage: RoomType.Storage,
   berth: RoomType.Berth,
+  cantina: RoomType.Cantina,
+  observatory: RoomType.Observatory,
 };
 const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   bed: ModuleType.Bed,
@@ -2847,6 +2861,11 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   vent: ModuleType.Vent,
   'vending-machine': ModuleType.VendingMachine,
   bench: ModuleType.Bench,
+  'bar-counter': ModuleType.BarCounter,
+  tap: ModuleType.Tap,
+  telescope: ModuleType.Telescope,
+  'water-fountain': ModuleType.WaterFountain,
+  plant: ModuleType.Plant,
   clear: ModuleType.None,
 };
 
@@ -2878,7 +2897,12 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.FireExtinguisher]: 'FX',
   [ModuleType.Vent]: 'VT',
   [ModuleType.VendingMachine]: 'VM',
-  [ModuleType.Bench]: 'BN'
+  [ModuleType.Bench]: 'BN',
+  [ModuleType.BarCounter]: 'BC',
+  [ModuleType.Tap]: 'TP',
+  [ModuleType.Telescope]: 'TE',
+  [ModuleType.WaterFountain]: 'WF',
+  [ModuleType.Plant]: 'PL'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

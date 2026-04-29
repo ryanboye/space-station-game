@@ -155,6 +155,8 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   // Dock-migration v0: Berth available from T0 for testing.
   // v1: production probably wants T0 still, but worth re-evaluating.
   [RoomType.Berth]: 0,
+  [RoomType.Cantina]: 1,
+  [RoomType.Observatory]: 3,
 };
 
 export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
@@ -186,6 +188,11 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Vent]: 0,
   [ModuleType.VendingMachine]: 1,
   [ModuleType.Bench]: 1,
+  [ModuleType.BarCounter]: 1,
+  [ModuleType.Tap]: 1,
+  [ModuleType.Telescope]: 3,
+  [ModuleType.WaterFountain]: 0,
+  [ModuleType.Plant]: 1,
 };
 
 export function createInitialUnlockState(): UnlockState {

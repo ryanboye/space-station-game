@@ -152,7 +152,39 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     width: 2,
     height: 1,
     rotatable: true,
-    allowedRooms: [RoomType.Cafeteria, RoomType.Lounge, RoomType.Market, RoomType.RecHall]
+    allowedRooms: [RoomType.Cafeteria, RoomType.Lounge, RoomType.Market, RoomType.RecHall, RoomType.Cantina, RoomType.Observatory]
+  },
+  [ModuleType.BarCounter]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina],
+    itemNodeCapacity: 12
+  },
+  [ModuleType.Tap]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Cantina]
+  },
+  [ModuleType.Telescope]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Observatory],
+    visitorCapacity: 2
+  },
+  [ModuleType.WaterFountain]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
+  },
+  [ModuleType.Plant]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
   }
 };
 
@@ -174,7 +206,9 @@ export const ROOM_ENVIRONMENT_TRAITS: Record<RoomType, RoomEnvironmentTraits> = 
   [RoomType.Market]: { visitorStatus: 1.25, residentialComfort: 0.25, serviceNoise: 0.25, publicAppeal: 1.35 },
   [RoomType.LogisticsStock]: { visitorStatus: -1.45, residentialComfort: -0.8, serviceNoise: 1.55, publicAppeal: -0.9 },
   [RoomType.Storage]: { visitorStatus: -1.15, residentialComfort: -0.6, serviceNoise: 1.1, publicAppeal: -0.65 },
-  [RoomType.Berth]: { visitorStatus: -0.2, residentialComfort: -0.45, serviceNoise: 0.85, publicAppeal: 0.15 }
+  [RoomType.Berth]: { visitorStatus: -0.2, residentialComfort: -0.45, serviceNoise: 0.85, publicAppeal: 0.15 },
+  [RoomType.Cantina]: { visitorStatus: 1.5, residentialComfort: 0.55, serviceNoise: 0.5, publicAppeal: 1.65 },
+  [RoomType.Observatory]: { visitorStatus: 1.7, residentialComfort: 1.1, serviceNoise: 0.05, publicAppeal: 1.6 }
 };
 
 export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
@@ -316,6 +350,20 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
     requiredModules: [],
     requiredAnyOf: [],
     activationChecks: { door: false, path: false, pressurization: false },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Cantina]: {
+    minTiles: 8,
+    requiredModules: [{ module: ModuleType.BarCounter, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Observatory]: {
+    minTiles: 9,
+    requiredModules: [{ module: ModuleType.Telescope, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   }
 };

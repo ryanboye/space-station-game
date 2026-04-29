@@ -89,7 +89,14 @@ export enum RoomType {
   // dock *inside*. Capability tags are derived from contained modules
   // (Gangway/CustomsCounter/CargoArm) — see `computeBerthCapabilities`
   // in sim.ts. v1 will add U-shape strict validation.
-  Berth = 'berth'
+  Berth = 'berth',
+  // Cantina: bar / drinks venue. Distinct from Lounge: faster turnaround,
+  // higher per-visitor revenue, social environment. Modules: BarCounter, Tap.
+  // Visitors and crew route here for drinks during leisure circuits.
+  Cantina = 'cantina',
+  // Observatory: passive wonder room. Visitors gain a "wonder" leisure boost
+  // (longer dwell, higher rating contribution). Modules: Telescope.
+  Observatory = 'observatory'
 }
 
 // Berth capability tags drive ship→berth matching in v0.
@@ -146,7 +153,22 @@ export enum ModuleType {
   // Bench: 1x1 cosmetic seat. Allowed in social rooms (Cafeteria, Lounge,
   // Market, RecHall). Slight room comfort bump via the existing public-appeal
   // signal — visible decoration that the player can sprinkle around.
-  Bench = 'bench'
+  Bench = 'bench',
+  // BarCounter: 2x1 anchor of a Cantina. Acts as a serving point — visitors
+  // queue at the counter to receive a drink, then sit nearby (Bench/Couch).
+  BarCounter = 'bar-counter',
+  // Tap: 1x1 in Cantina. Each tap multiplies the cantina's drink throughput,
+  // letting the player scale a busy bar without a second room.
+  Tap = 'tap',
+  // Telescope: 2x2 in Observatory. Visitors using a telescope dwell longer
+  // and get a wonder rating bonus. Premium leisure module.
+  Telescope = 'telescope',
+  // WaterFountain: 1x1 thirst relief allowed in any room. Crew route here
+  // when thirsty if no Cantina is available.
+  WaterFountain = 'water-fountain',
+  // Plant: 1x1 decorative. Allowed anywhere; small public-appeal +
+  // residential-comfort bonus to surrounding tiles.
+  Plant = 'plant'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -224,7 +246,7 @@ export interface Visitor {
   // a different room type so visitors don't loop the same lounge twice.
   leisureLegsRemaining: number;
   leisureLegsPlanned: number;
-  lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | null;
+  lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | null;
 }
 
 export enum ResidentState {
@@ -407,9 +429,13 @@ export interface CrewMember {
   // Hygiene-room visit (toilet) at the threshold. Visible in the agent inspector
   // alongside energy/hygiene, mirroring the visitor toilet v0.
   bladder: number;
+  // Thirst: short-cycle drink need, satisfied by visiting a Cantina (BarCounter)
+  // or a WaterFountain anywhere. Decays slower than bladder, faster than energy.
+  thirst: number;
   resting: boolean;
   cleaning: boolean;
   toileting: boolean;
+  drinking: boolean;
   leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;
@@ -419,6 +445,7 @@ export interface CrewMember {
   restSessionActive: boolean;
   cleanSessionActive: boolean;
   toiletSessionActive: boolean;
+  drinkSessionActive: boolean;
   leisureSessionActive: boolean;
   leisureUntil: number;
   restLockUntil: number;
@@ -1035,7 +1062,7 @@ export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
 export type VisitorDesire = 'eat' | 'toilet' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
 export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
-export type CrewDesire = 'rest' | 'clean' | 'toilet' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
+export type CrewDesire = 'rest' | 'clean' | 'toilet' | 'drink' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
 
 export interface AgentInspectorBase {
   id: number;
@@ -1101,9 +1128,11 @@ export interface CrewInspector extends AgentInspectorBase {
   energy: number;
   hygiene: number;
   bladder: number;
+  thirst: number;
   resting: boolean;
   cleaning: boolean;
   toileting: boolean;
+  drinking: boolean;
   leisure: boolean;
   activeJobId: number | null;
   carryingItemType: ItemType | null;

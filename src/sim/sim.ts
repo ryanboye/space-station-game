@@ -224,6 +224,13 @@ const CREW_BLADDER_DECAY_PER_SEC = 1.25;
 const CREW_BLADDER_RELIEF_PER_SEC = 22;
 const CREW_BLADDER_EXIT_THRESHOLD = 88;
 const CREW_TOILET_MAX_PER_TILE = 1;
+// Thirst: short-cycle drink need. Slower decay than bladder so crew typically
+// only need a sip a few times per shift. Cantina or WaterFountain refills.
+const CREW_THIRST_DRINK_THRESHOLD = 32;
+const CREW_THIRST_DECAY_PER_SEC = 0.85;
+const CREW_THIRST_RELIEF_CANTINA_PER_SEC = 28;
+const CREW_THIRST_RELIEF_FOUNTAIN_PER_SEC = 18;
+const CREW_THIRST_EXIT_THRESHOLD = 90;
 const KITCHEN_CONVERSION_RATE = PROCESS_RATES.kitchenMealPerSecPerStove;
 const WORKSHOP_TRADE_GOOD_RATE = PROCESS_RATES.workshopTradeGoodPerSecPerWorkbench;
 const WORKSHOP_MATERIALS_PER_TRADE_GOOD = PROCESS_RATES.workshopRawMaterialPerTradeGood;
@@ -2922,9 +2929,11 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     energy: 100,
     hygiene: 88,
     bladder: 70,
+    thirst: 75,
     resting: false,
     cleaning: false,
     toileting: false,
+    drinking: false,
     leisure: false,
     activeJobId: null,
     carryingItemType: null,
@@ -2934,6 +2943,7 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     restSessionActive: false,
     cleanSessionActive: false,
     toiletSessionActive: false,
+    drinkSessionActive: false,
     leisureSessionActive: false,
     leisureUntil: 0,
     restLockUntil: 0,
@@ -5265,8 +5275,23 @@ function crewLeisureTargets(state: StationState): number[] {
     ...activeRoomTargets(state, RoomType.Lounge),
     ...activeRoomTargets(state, RoomType.RecHall),
     ...activeRoomTargets(state, RoomType.Market),
-    ...activeRoomTargets(state, RoomType.Cafeteria)
+    ...activeRoomTargets(state, RoomType.Cafeteria),
+    ...activeRoomTargets(state, RoomType.Cantina),
+    ...activeRoomTargets(state, RoomType.Observatory)
   ];
+}
+
+// Targets for a thirst stop: prefer Cantina (faster relief) but fall back to
+// any tile with a WaterFountain module so a station without a bar still works.
+function crewDrinkTargets(state: StationState): number[] {
+  const cantinas = activeRoomTargets(state, RoomType.Cantina);
+  const fountainTiles: number[] = [];
+  for (const m of state.moduleInstances) {
+    if (m.type !== ModuleType.WaterFountain) continue;
+    if (!isWalkable(state.tiles[m.originTile])) continue;
+    fountainTiles.push(m.originTile);
+  }
+  return [...cantinas, ...fountainTiles];
 }
 
 function clearCrewLeisure(crew: CrewMember): void {
@@ -6330,6 +6355,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     if (!crew.toileting) {
       crew.bladder = clamp(crew.bladder - dt * CREW_BLADDER_DECAY_PER_SEC, 0, 100);
     }
+    if (!crew.drinking) {
+      crew.thirst = clamp(crew.thirst - dt * CREW_THIRST_DECAY_PER_SEC, 0, 100);
+    }
     if (crew.activeJobId !== null) {
       if (crew.resting) {
         crew.resting = false;
@@ -6346,6 +6374,10 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.toileting = false;
         crew.toiletSessionActive = false;
       }
+      if (crew.drinking) {
+        crew.drinking = false;
+        crew.drinkSessionActive = false;
+      }
       clearCrewLeisure(crew);
     }
     if (airEmergency) {
@@ -6357,6 +6389,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       if (crew.toileting) {
         crew.toileting = false;
         crew.toiletSessionActive = false;
+        setCrewPath(state, crew, []);
+      }
+      if (crew.drinking) {
+        crew.drinking = false;
+        crew.drinkSessionActive = false;
         setCrewPath(state, crew, []);
       }
       if (crew.leisure) {
@@ -6421,6 +6458,25 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             crew.cleaning = false;
             crew.cleanSessionActive = false;
           }
+          if (crew.drinking) {
+            crew.drinking = false;
+            crew.drinkSessionActive = false;
+          }
+        }
+      } else if (crew.activeJobId === null && crew.thirst < CREW_THIRST_DRINK_THRESHOLD) {
+        // Thirst: route to Cantina or WaterFountain. Drink is brief and yields
+        // to bladder/cleaning if those needs spike during the trip.
+        const drinkTargets = crewDrinkTargets(state);
+        if (drinkTargets.length > 0 && !airEmergency) {
+          crew.drinking = true;
+          crew.drinkSessionActive = false;
+          crew.role = 'idle';
+          crew.targetTile = null;
+          crew.lastSystem = null;
+          crew.assignedSystem = null;
+          crew.assignmentHoldUntil = 0;
+          setCrewPath(state, crew, []);
+          clearCrewLeisure(crew);
         }
       } else if (crew.activeJobId === null && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
         const hygieneTargets = preferredHygieneTargets(state);
@@ -6540,6 +6596,43 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.toileting = false;
         crew.toiletSessionActive = false;
         setCrewPath(state, crew, []);
+      }
+      continue;
+    }
+
+    // Drinking: route to a Cantina (BarCounter or any tile in the room) or a
+    // WaterFountain. Cantinas refill faster (drinks > tap water).
+    if (crew.drinking && !crew.resting) {
+      const drinkTargets = crewDrinkTargets(state);
+      if (drinkTargets.length === 0) {
+        crew.drinking = false;
+        crew.drinkSessionActive = false;
+      } else {
+        const atFountain = state.modules[crew.tileIndex] === ModuleType.WaterFountain;
+        const atCantina = state.rooms[crew.tileIndex] === RoomType.Cantina;
+        if (!atFountain && !atCantina) {
+          if (crew.path.length === 0) {
+            setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, drinkTargets, false, 'crew') ?? []);
+          }
+          const moveResult = moveCrew(crew);
+          if (moveResult === 'blocked') {
+            crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+            crew.idleReason = 'idle_no_path';
+          } else if (moveResult === 'moved') {
+            crew.blockedTicks = 0;
+          }
+        } else {
+          if (!crew.drinkSessionActive) {
+            crew.drinkSessionActive = true;
+          }
+          const reliefRate = atCantina ? CREW_THIRST_RELIEF_CANTINA_PER_SEC : CREW_THIRST_RELIEF_FOUNTAIN_PER_SEC;
+          crew.thirst = clamp(crew.thirst + dt * reliefRate, 0, 100);
+        }
+        if (crew.thirst >= CREW_THIRST_EXIT_THRESHOLD) {
+          crew.drinking = false;
+          crew.drinkSessionActive = false;
+          setCrewPath(state, crew, []);
+        }
       }
       continue;
     }
@@ -7053,7 +7146,15 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   const loungeTargets = activeRoomTargets(state, RoomType.Lounge);
   const recHallTargets = activeRoomTargets(state, RoomType.RecHall);
   const marketTargets = activeRoomTargets(state, RoomType.Market);
-  const allTargets = [...loungeTargets, ...recHallTargets, ...marketTargets];
+  const cantinaTargets = activeRoomTargets(state, RoomType.Cantina);
+  const observatoryTargets = activeRoomTargets(state, RoomType.Observatory);
+  const allTargets = [
+    ...loungeTargets,
+    ...recHallTargets,
+    ...marketTargets,
+    ...cantinaTargets,
+    ...observatoryTargets
+  ];
   if (shouldSeekVisitorHygiene(state, visitor) && assignPathToVisitorHygiene(state, visitor)) return true;
   if (allTargets.length === 0) return false;
 
@@ -7067,24 +7168,33 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   // For multi-leg trips, bias toward a room kind the visitor hasn't already
   // visited this trip — variety reads better in the inspector and exercises
   // the route-pressure overlay across multiple destinations.
-  const baseOrder: VisitorPreference[] =
-    visitor.primaryPreference === 'market'
-      ? ['market', 'lounge', 'cafeteria']
-      : visitor.primaryPreference === 'lounge'
-        ? ['lounge', 'market', 'cafeteria']
-        : ['lounge', 'market', 'cafeteria'];
-  const skipMarket = visitor.lastLeisureKind === 'market';
-  const skipLounge = visitor.lastLeisureKind === 'lounge' || visitor.lastLeisureKind === 'recHall';
-  const preferenceOrder = baseOrder.filter((p) => {
-    if (p === 'market' && skipMarket) return false;
-    if (p === 'lounge' && skipLounge) return false;
-    return true;
-  });
-  // If filtering left nothing (only one room type built), fall back to the full
-  // order so the visitor still gets to leisure somewhere.
-  const tryOrder = preferenceOrder.length > 0 ? preferenceOrder : baseOrder;
+  // Order: primary preference first, then variety. Cantina/Observatory are
+  // bonus stops that any archetype can pull (loungers get the strongest pull).
+  const baseOrder: Array<'market' | 'lounge' | 'cantina' | 'observatory'> = (() => {
+    if (visitor.primaryPreference === 'market') return ['market', 'cantina', 'lounge', 'observatory'];
+    if (visitor.primaryPreference === 'lounge') {
+      return visitor.archetype === 'lounger'
+        ? ['observatory', 'lounge', 'cantina', 'market']
+        : ['lounge', 'cantina', 'observatory', 'market'];
+    }
+    return ['cantina', 'lounge', 'market', 'observatory'];
+  })();
+  const skipMap: Record<typeof baseOrder[number], boolean> = {
+    market: visitor.lastLeisureKind === 'market',
+    lounge: visitor.lastLeisureKind === 'lounge' || visitor.lastLeisureKind === 'recHall',
+    cantina: visitor.lastLeisureKind === 'cantina',
+    observatory: visitor.lastLeisureKind === 'observatory'
+  };
+  const filtered = baseOrder.filter((p) => !skipMap[p]);
+  const tryOrder = filtered.length > 0 ? filtered : baseOrder;
   for (const preference of tryOrder) {
-    const targets = preference === 'market' ? marketTargets : [...loungeTargets, ...recHallTargets];
+    let targets: number[];
+    switch (preference) {
+      case 'market': targets = marketTargets; break;
+      case 'cantina': targets = cantinaTargets; break;
+      case 'observatory': targets = observatoryTargets; break;
+      default: targets = [...loungeTargets, ...recHallTargets]; break;
+    }
     if (targets.length === 0) continue;
     const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
     if (path.length === 0) continue;
@@ -7373,12 +7483,30 @@ function updateVisitorLogic(
         state.modules[visitor.tileIndex] === ModuleType.GameStation ||
         state.modules[visitor.tileIndex] === ModuleType.RecUnit;
       const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
+      const atCantinaModule =
+        state.modules[visitor.tileIndex] === ModuleType.BarCounter ||
+        state.modules[visitor.tileIndex] === ModuleType.Tap ||
+        (state.rooms[visitor.tileIndex] === RoomType.Cantina &&
+          (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex));
+      const atObservatoryModule =
+        state.modules[visitor.tileIndex] === ModuleType.Telescope ||
+        (state.rooms[visitor.tileIndex] === RoomType.Observatory &&
+          (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex));
       const atHygieneService =
         state.rooms[visitor.tileIndex] === RoomType.Hygiene &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
-      if (atLoungeModule || atMarketModule || atHygieneService) {
+      if (atLoungeModule || atMarketModule || atCantinaModule || atObservatoryModule || atHygieneService) {
         visitor.state = VisitorState.Leisure;
-        visitorSuccessRatingBonus(state, atHygieneService ? 0.025 : 0.04, 'leisureService');
+        // Wonder bonus: Observatory contributes 2x rating boost vs Lounge.
+        // Cantina sits between (drinks land mid-way between social and wonder).
+        const ratingBonus = atObservatoryModule
+          ? 0.07
+          : atCantinaModule
+            ? 0.05
+            : atHygieneService
+              ? 0.025
+              : 0.04;
+        visitorSuccessRatingBonus(state, ratingBonus, 'leisureService');
         if (atMarketModule) {
           state.usageTotals.visitorLeisureEntries.market += 1;
         } else if (atHygieneService) {
@@ -7387,7 +7515,9 @@ function updateVisitorLogic(
           state.usageTotals.visitorLeisureEntries.lounge += 1;
         }
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
-        visitor.eatTimer = (atHygieneService ? 2.8 : baseDwell) + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
+        // Observatory: longer dwell (wonder). Cantina: shorter (drink + go).
+        const dwellMult = atObservatoryModule ? 1.45 : atCantinaModule ? 0.85 : 1;
+        visitor.eatTimer = (atHygieneService ? 2.8 : baseDwell * dwellMult) + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
         applyVisitorCompletedRouteExperience(state, visitor);
         visitor.reservedTargetTile = null;
         setVisitorPath(state, visitor, []);
@@ -7402,6 +7532,28 @@ function updateVisitorLogic(
         state.metrics.credits += vendSpend;
         state.metrics.creditsEarnedLifetime += vendSpend;
         state.usageTotals.creditsMarketGross += vendSpend;
+      }
+      // Cantina drinks: visitors in a Cantina (at the bar counter or anywhere
+      // in the room while in Leisure) generate a steady drinks revenue. Tap
+      // modules in the same cluster scale the rate.
+      if (state.rooms[visitor.tileIndex] === RoomType.Cantina) {
+        // Count taps in the cluster for a small throughput multiplier.
+        let tapBonus = 1;
+        for (const m of state.moduleInstances) {
+          if (m.type !== ModuleType.Tap) continue;
+          if (state.rooms[m.originTile] === RoomType.Cantina) {
+            // Same cluster check: cheap proximity (Manhattan within 8 tiles).
+            const ax = m.originTile % state.width;
+            const ay = Math.floor(m.originTile / state.width);
+            const vx = visitor.tileIndex % state.width;
+            const vy = Math.floor(visitor.tileIndex / state.width);
+            if (Math.abs(ax - vx) + Math.abs(ay - vy) <= 8) tapBonus += 0.18;
+          }
+        }
+        const drinkSpend = dt * 0.85 * tapBonus * clamp(visitor.spendMultiplier, 0.6, 1.7);
+        state.metrics.credits += drinkSpend;
+        state.metrics.creditsEarnedLifetime += drinkSpend;
+        state.usageTotals.creditsMarketGross += drinkSpend;
       }
       if (state.modules[visitor.tileIndex] === ModuleType.MarketStall) {
         const requestedGoods = MARKET_TRADE_GOOD_USE_PER_SEC * dt * clamp(visitor.spendMultiplier, 0.7, 1.8);
@@ -7442,6 +7594,8 @@ function updateVisitorLogic(
         else if (room === RoomType.Lounge) visitor.lastLeisureKind = 'lounge';
         else if (room === RoomType.RecHall) visitor.lastLeisureKind = 'recHall';
         else if (room === RoomType.Hygiene) visitor.lastLeisureKind = 'hygiene';
+        else if (room === RoomType.Cantina) visitor.lastLeisureKind = 'cantina';
+        else if (room === RoomType.Observatory) visitor.lastLeisureKind = 'observatory';
         if (visitor.leisureLegsRemaining > 0) visitor.leisureLegsRemaining -= 1;
 
         // Hungry visitors prefer to eat first if they haven't yet. Otherwise,
@@ -8109,7 +8263,7 @@ function updateResidentLogic(
     const localSuppression = incidentSuppressionAtTile(securityAuraByTile, resident.tileIndex);
     const crowdStress = clamp((localPopulation - 4) / 8, 0, 1.5);
     const incidentPressure = nearbyIncidentPressure(state, resident.tileIndex);
-    const socialRooms = new Set([RoomType.Lounge, RoomType.RecHall, RoomType.Market, RoomType.Cafeteria]);
+    const socialRooms = new Set([RoomType.Lounge, RoomType.RecHall, RoomType.Market, RoomType.Cafeteria, RoomType.Cantina, RoomType.Observatory]);
     const inSocialRoom = socialRooms.has(state.rooms[resident.tileIndex]);
     if (inSocialRoom && localPopulation >= 2) {
       resident.social = clamp(resident.social + dt * RESIDENT_SOCIAL_RECOVERY_PER_SEC * clamp(localPopulation / 5, 0.8, 1.6), 0, 100);
@@ -10357,6 +10511,8 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
       targetRoom === RoomType.Market ? 'market' :
       targetRoom === RoomType.Lounge ? 'lounge' :
       targetRoom === RoomType.RecHall ? 'rec hall' :
+      targetRoom === RoomType.Cantina ? 'cantina' :
+      targetRoom === RoomType.Observatory ? 'observatory' :
       targetRoom === RoomType.Hygiene ? 'hygiene' : 'leisure';
     const legSuffix = visitor.leisureLegsPlanned > 1
       ? ` · leg ${visitor.leisureLegsPlanned - visitor.leisureLegsRemaining + 1}/${visitor.leisureLegsPlanned}`
@@ -10377,6 +10533,8 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
       room === RoomType.Market ? 'browsing market stalls' :
       room === RoomType.Lounge ? 'relaxing in lounge' :
       room === RoomType.RecHall ? 'using rec hall' :
+      room === RoomType.Cantina ? 'enjoying drinks in cantina' :
+      room === RoomType.Observatory ? 'taking in the view' :
       'using leisure service';
     return {
       currentAction: verb,
@@ -10568,10 +10726,12 @@ export function getResidentInspectorById(state: StationState, residentId: number
 function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.resting) return 'rest';
   if (crew.toileting) return 'toilet';
+  if (crew.drinking) return 'drink';
   if (crew.cleaning) return 'clean';
   if (crew.leisure) return 'social';
   if (crew.activeJobId !== null) return 'logistics';
   if (crew.bladder <= CREW_BLADDER_TOILET_THRESHOLD) return 'toilet';
+  if (crew.thirst <= CREW_THIRST_DRINK_THRESHOLD) return 'drink';
   if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
   if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
   if (crew.assignedSystem !== null) return 'staff_post';
@@ -10646,6 +10806,18 @@ function crewInspectorAction(
       stateLabel: 'toilet'
     };
   }
+  if (crew.drinking) {
+    const atCantina = state.rooms[crew.tileIndex] === RoomType.Cantina;
+    const atFountain = state.modules[crew.tileIndex] === ModuleType.WaterFountain;
+    return {
+      currentAction:
+        atCantina ? 'drinking at the bar' :
+        atFountain ? 'sipping water' :
+        crew.path.length > 0 ? 'walking to drink' : 'looking for a drink',
+      actionReason: `thirst ${crew.thirst.toFixed(0)} (drink at <${CREW_THIRST_DRINK_THRESHOLD})`,
+      stateLabel: 'drink'
+    };
+  }
   if (crew.cleaning) {
     return {
       currentAction: 'cleaning up',
@@ -10704,9 +10876,11 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     energy: crew.energy,
     hygiene: crew.hygiene,
     bladder: crew.bladder,
+    thirst: crew.thirst,
     resting: crew.resting,
     cleaning: crew.cleaning,
     toileting: crew.toileting,
+    drinking: crew.drinking,
     leisure: crew.leisure,
     activeJobId: crew.activeJobId,
     carryingItemType: crew.carryingItemType,
