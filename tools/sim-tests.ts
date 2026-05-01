@@ -11,6 +11,8 @@ import {
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
+  planModuleConstruction,
+  planTileConstruction,
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockPurpose,
@@ -1364,6 +1366,73 @@ function testIntakeMaterialsMoveToStorage(): void {
     .reduce((sum, node) => sum + (node.items.rawMaterial ?? 0), 0);
   assertCondition(storageStock >= 30, `Storage racks should receive most raw materials from intake (storage ${storageStock.toFixed(1)}).`);
   assertCondition(intakeStock <= 5, `Intake pallets should drain into storage when storage has capacity (intake ${intakeStock.toFixed(1)}).`);
+}
+
+function testInteriorBlueprintConstructionCompletes(): void {
+  const state = createInitialState({ seed: 3022 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 6;
+  state.legacyMaterialStock = 80;
+  state.metrics.materials = 80;
+
+  const target = toIndex(20, 20, state.width);
+  const planned = planTileConstruction(state, target, TileType.Wall);
+  assertCondition(planned.ok, `Interior wall blueprint should be accepted (${planned.reason ?? 'no reason'}).`);
+  assertCondition(state.tiles[target] === TileType.Floor, 'Blueprint should not immediately mutate the tile.');
+  assertCondition(state.constructionSites.length === 1, 'Blueprint should create one construction site.');
+
+  runFor(state, 80);
+
+  assertCondition(state.tiles[target] === TileType.Wall, 'Crew should deliver materials and build the interior wall.');
+  assertCondition(state.constructionSites.length === 0, 'Completed construction site should be cleaned up.');
+}
+
+function testModuleBlueprintConstructionCompletes(): void {
+  const state = createInitialState({ seed: 3023 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Storage, 18, 18, 22, 20);
+  state.crew.total = 6;
+  state.legacyMaterialStock = 80;
+  state.metrics.materials = 80;
+
+  const target = toIndex(18, 19, state.width);
+  const planned = planModuleConstruction(state, target, ModuleType.StorageRack);
+  assertCondition(planned.ok, `Storage rack blueprint should be accepted (${planned.reason ?? 'no reason'}).`);
+  assertCondition(state.modules[target] === ModuleType.None, 'Blueprint should not immediately place the module.');
+
+  runFor(state, 90);
+
+  assertCondition(state.modules[target] === ModuleType.StorageRack, 'Crew should build the planned module.');
+}
+
+function testEvaBlueprintConstructionUsesAirlock(): void {
+  const state = createInitialState({ seed: 3024 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 6;
+  state.legacyMaterialStock = 100;
+  state.metrics.materials = 100;
+  const airlock = toIndex(44, 16, state.width);
+  setTile(state, airlock, TileType.Airlock);
+  const exterior = toIndex(45, 16, state.width);
+  const chainedExterior = toIndex(46, 16, state.width);
+
+  const planned = planTileConstruction(state, exterior, TileType.Floor);
+  assertCondition(planned.ok, `Exterior floor blueprint should be accepted when adjacent to hull (${planned.reason ?? 'no reason'}).`);
+  const chained = planTileConstruction(state, chainedExterior, TileType.Floor);
+  assertCondition(
+    chained.ok,
+    `Exterior blueprint should chain from another planned exterior tile (${chained.reason ?? 'no reason'}).`
+  );
+  assertCondition(state.constructionSites.every((site) => site.requiresEva), 'Exterior blueprints should require EVA.');
+
+  runFor(state, 120);
+
+  assertCondition(state.tiles[exterior] === TileType.Floor, 'Crew should build exterior floor via airlock EVA.');
+  assertCondition(state.tiles[chainedExterior] === TileType.Floor, 'Crew should build chained exterior floor via airlock EVA.');
+  assertCondition(state.constructionSites.length === 0, 'Completed EVA construction site should be cleaned up.');
 }
 
 function testInventoryOverlayToggleState(): void {
@@ -4191,6 +4260,9 @@ function run(): void {
   testMaterialsChainEndToEnd();
   testMarketVisitorsBuyFromStallsWhenBenchesExist();
   testIntakeMaterialsMoveToStorage();
+  testInteriorBlueprintConstructionCompletes();
+  testModuleBlueprintConstructionCompletes();
+  testEvaBlueprintConstructionUsesAirlock();
   testInventoryOverlayToggleState();
   testRoomInspectorInventoryBreakdown();
   testMarketBuyCapacityContext();

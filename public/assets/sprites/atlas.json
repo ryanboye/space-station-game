@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-05-01T05:05:08.290Z",
+  "version": "sprite-v1-2026-05-01T16:23:36.100Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -129,122 +129,128 @@
       "w": 64,
       "h": 64
     },
-    "tile.door.horizontal": {
+    "tile.airlock": {
       "x": 1622,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "tile.door.vertical": {
+    "tile.door.horizontal": {
       "x": 1690,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.cafeteria": {
+    "tile.door.vertical": {
       "x": 1758,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.kitchen": {
+    "room.cafeteria": {
       "x": 1826,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.workshop": {
+    "room.kitchen": {
       "x": 1894,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.clinic": {
+    "room.workshop": {
       "x": 1962,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.brig": {
+    "room.clinic": {
       "x": 2030,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.rec_hall": {
+    "room.brig": {
       "x": 2098,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.reactor": {
+    "room.rec_hall": {
       "x": 2166,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.security": {
+    "room.reactor": {
       "x": 2234,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.dorm": {
+    "room.security": {
       "x": 2302,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.hygiene": {
+    "room.dorm": {
       "x": 2370,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.hydroponics": {
+    "room.hygiene": {
       "x": 2438,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.life_support": {
+    "room.hydroponics": {
       "x": 2506,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.lounge": {
+    "room.life_support": {
       "x": 2574,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.market": {
+    "room.lounge": {
       "x": 2642,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.logistics_stock": {
+    "room.market": {
       "x": 2710,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.storage": {
+    "room.logistics_stock": {
       "x": 2778,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "module.none": {
+    "room.storage": {
       "x": 2846,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "module.wall_light": {
+    "module.none": {
       "x": 2914,
+      "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "module.wall_light": {
+      "x": 2982,
       "y": 2,
       "w": 64,
       "h": 32
@@ -663,38 +669,44 @@
       "w": 64,
       "h": 64
     },
-    "icon.tier1_unlock": {
+    "agent.crew.eva_suit": {
       "x": 2786,
       "y": 394,
       "w": 64,
       "h": 64
     },
-    "icon.tier2_unlock": {
+    "icon.tier1_unlock": {
       "x": 2854,
       "y": 394,
       "w": 64,
       "h": 64
     },
-    "icon.tier3_unlock": {
+    "icon.tier2_unlock": {
       "x": 2922,
       "y": 394,
       "w": 64,
       "h": 64
     },
-    "icon.tier4_unlock": {
+    "icon.tier3_unlock": {
       "x": 2990,
       "y": 394,
       "w": 64,
       "h": 64
     },
-    "icon.tier5_unlock": {
+    "icon.tier4_unlock": {
       "x": 2,
       "y": 526,
       "w": 64,
       "h": 64
     },
-    "icon.tier6_unlock": {
+    "icon.tier5_unlock": {
       "x": 70,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier6_unlock": {
+      "x": 138,
       "y": 526,
       "w": 64,
       "h": 64

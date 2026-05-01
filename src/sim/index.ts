@@ -37,6 +37,8 @@ export {
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
+  planModuleConstruction,
+  planTileConstruction,
   removeModuleAtTile,
   sellMaterials,
   sellRawFood,

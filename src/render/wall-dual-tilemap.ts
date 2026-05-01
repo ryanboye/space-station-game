@@ -26,7 +26,7 @@ export const WALL_DUAL_SPRITE_VARIANT_KEYS: Record<DualWallShape, string> = {
  * wall next to it. Treating doors as wall-like fixes that.
  */
 export function isWallLikeTileForDual(tile: TileType): boolean {
-  return tile === TileType.Wall || tile === TileType.Door;
+  return tile === TileType.Wall || tile === TileType.Door || tile === TileType.Airlock;
 }
 
 /**

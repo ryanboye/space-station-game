@@ -10,7 +10,8 @@ export const TILE_SPRITE_KEYS: Record<TileType, string> = {
   [TileType.Cafeteria]: 'tile.cafeteria',
   [TileType.Reactor]: 'tile.reactor',
   [TileType.Security]: 'tile.security',
-  [TileType.Door]: 'tile.door'
+  [TileType.Door]: 'tile.door',
+  [TileType.Airlock]: 'tile.airlock'
 };
 
 // Wall-variant → atlas-key map. `straight` is the canonical horizontal

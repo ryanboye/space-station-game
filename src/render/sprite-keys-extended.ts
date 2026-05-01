@@ -21,6 +21,8 @@ export const AGENT_SPRITE_VARIANTS = {
   ]
 } as const;
 
+export const AGENT_EVA_SUIT_SPRITE_KEY = 'agent.crew.eva_suit';
+
 export const AGENT_OVERLAY_SPRITE_KEYS = {
   distressed: 'overlay.agent.distressed',
   critical: 'overlay.agent.critical',

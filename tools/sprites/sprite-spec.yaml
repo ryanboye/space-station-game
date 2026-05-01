@@ -124,6 +124,10 @@ sprites:
       center door seam, edge-to-edge coverage, no frame, no margin, no border,
       readable at 18x18.
     rotation: 0
+  tile.airlock:
+    prompt: Top-down pixel art. space station. Style of rimworld. EVA airlock hatch tile with cyan pressure seal,
+      warning tabs, square top-down pressure chamber, edge-to-edge coverage, no text, readable at 18x18.
+    rotation: 0
   tile.door.horizontal:
     prompt: Top-down pixel art. space station. Style of rimworld. door tile HORIZONTAL orientation (east-west passage).
       Full-bleed square tile, edge-to-edge coverage, no frame, no margin, no
@@ -409,6 +413,10 @@ sprites:
   agent.crew.6:
     prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew sprite variant 6, utility uniform with tool belt,
       Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.
+    rotation: 0
+  agent.crew.eva_suit:
+    prompt: Top-down pixel art. space station. Style of rimworld. humanoid crew in white EVA suit with blue helmet visor,
+      compact backpack, full body centered, transparent background, strong silhouette, no text, readable at 18x18.
     rotation: 0
   overlay.agent.distressed:
     prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for distressed agent state,

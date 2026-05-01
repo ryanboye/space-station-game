@@ -40,6 +40,8 @@ import {
   isRoomUnlocked,
   isShipTypeUnlocked,
   hireCrew,
+  planModuleConstruction,
+  planTileConstruction,
   removeModuleAtTile,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
@@ -53,8 +55,6 @@ import {
   setRoomHousingPolicy,
   setZone,
   tick,
-  tryPlaceModule,
-  trySetTile,
   setTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
@@ -304,6 +304,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
+        <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
       </div>
@@ -2813,6 +2814,7 @@ const TOOLBAR_TILE_MAP: Record<string, TileType> = {
   wall: TileType.Wall,
   dock: TileType.Dock,
   door: TileType.Door,
+  airlock: TileType.Airlock,
   erase: TileType.Space,
 };
 const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
@@ -3804,8 +3806,11 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
 
   for (const idx of paintTiles) {
       if (currentTool.kind === 'tile') {
-        const changed = trySetTile(state, idx, currentTool.tile!);
-        if (!changed) continue;
+        const planned = planTileConstruction(state, idx, currentTool.tile!);
+        if (!planned.ok) {
+          toolLockMessage = planned.reason ?? '';
+          continue;
+        }
         if (currentTool.tile === TileType.Space) {
           setZone(state, idx, ZoneType.Public);
           setRoom(state, idx, RoomType.None);
@@ -3820,7 +3825,8 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
         if (currentTool.module === ModuleType.None) {
           removeModuleAtTile(state, idx);
         } else {
-          tryPlaceModule(state, currentTool.module!, idx, state.controls.moduleRotation);
+          const planned = planModuleConstruction(state, idx, currentTool.module!, state.controls.moduleRotation);
+          if (!planned.ok) toolLockMessage = planned.reason ?? '';
         }
       }
   }

@@ -17,7 +17,8 @@ export enum TileType {
   Cafeteria = 'cafeteria',
   Reactor = 'reactor',
   Security = 'security',
-  Door = 'door'
+  Door = 'door',
+  Airlock = 'airlock'
 }
 
 export enum ZoneType {
@@ -460,11 +461,13 @@ export interface CrewMember {
   retargetCountWindow: number;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
+  evaSuit: boolean;
+  evaOxygenSec: number;
   lastRouteExposure?: RouteExposure;
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish';
+export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -496,6 +499,29 @@ export interface TransportJob {
   // are unused for repair jobs but kept for shape compatibility.
   repairSystem?: MaintenanceSystem;
   repairProgress?: number;
+  constructionSiteId?: number;
+  constructionMode?: 'deliver' | 'build';
+}
+
+export type ConstructionKind = 'tile' | 'module';
+export type ConstructionState = 'planned' | 'delivering' | 'building' | 'blocked' | 'done';
+
+export interface ConstructionSite {
+  id: number;
+  kind: ConstructionKind;
+  tileIndex: number;
+  targetTile?: TileType;
+  targetModule?: ModuleType;
+  rotation?: ModuleRotation;
+  requiredMaterials: number;
+  deliveredMaterials: number;
+  buildProgress: number;
+  buildWorkRequired: number;
+  requiresEva: boolean;
+  assignedCrewId: number | null;
+  state: ConstructionState;
+  blockedReason: string | null;
+  createdAt: number;
 }
 
 export interface ItemNode {
@@ -1309,6 +1335,7 @@ export interface StationState {
   airQualityByTile: Float32Array;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
+  constructionSites: ConstructionSite[];
   itemNodes: ItemNode[];
   legacyMaterialStock: number;
   incidents: IncidentEntity[];
@@ -1337,6 +1364,7 @@ export interface StationState {
   lastResidentSpawnAt: number;
   moduleSpawnCounter: number;
   jobSpawnCounter: number;
+  constructionSiteSpawnCounter: number;
   incidentSpawnCounter: number;
   incidentHeat: number;
   lastPayrollAt: number;
@@ -1459,7 +1487,8 @@ export const WALKABLE_TILES = new Set<TileType>([
   TileType.Cafeteria,
   TileType.Reactor,
   TileType.Security,
-  TileType.Door
+  TileType.Door,
+  TileType.Airlock
 ]);
 
 export function toIndex(x: number, y: number, width: number): number {
@@ -1483,7 +1512,8 @@ export function isWalkable(tile: TileType): boolean {
 // computePressurization.
 export const PRESSURE_BARRIER_TILES = new Set<TileType>([
   TileType.Wall,
-  TileType.Door
+  TileType.Door,
+  TileType.Airlock
 ]);
 
 export function isPressureBarrier(tile: TileType): boolean {

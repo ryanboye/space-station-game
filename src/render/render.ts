@@ -44,6 +44,7 @@ import {
 } from './sprite-keys';
 import type { SpriteAtlas, SpriteFrame } from './sprite-atlas';
 import {
+  AGENT_EVA_SUIT_SPRITE_KEY,
   AGENT_SPRITE_VARIANTS,
   DOCK_OVERLAY_SPRITE_KEYS,
   DOCK_FACADE_ROTATION,
@@ -67,7 +68,8 @@ const tileColor: Record<TileType, string> = {
   [TileType.Cafeteria]: '#4ea66e',
   [TileType.Reactor]: '#b97d39',
   [TileType.Security]: '#bd4f4f',
-  [TileType.Door]: '#7d8faa'
+  [TileType.Door]: '#7d8faa',
+  [TileType.Airlock]: '#6fd8ff'
 };
 
 const roomOverlay: Record<RoomType, string> = {
@@ -277,6 +279,37 @@ function drawRepeatedSpriteFrame(
   return true;
 }
 
+function drawAirlockFallback(ctx: CanvasRenderingContext2D, px: number, py: number, rotationDeg = 0): boolean {
+  ctx.save();
+  ctx.translate(px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.5);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.translate(-TILE_SIZE * 0.5, -TILE_SIZE * 0.5);
+
+  const p = PX;
+  const panel = ctx.createLinearGradient(0, 0, 0, TILE_SIZE);
+  panel.addColorStop(0, '#31465b');
+  panel.addColorStop(1, '#172636');
+  ctx.fillStyle = panel;
+  ctx.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
+
+  ctx.fillStyle = '#0b1622';
+  ctx.fillRect(2 * p, 2 * p, 14 * p, 14 * p);
+  ctx.strokeStyle = '#79dcff';
+  ctx.lineWidth = Math.max(1, p);
+  ctx.strokeRect(3.5 * p, 3.5 * p, 11 * p, 11 * p);
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.strokeRect(5.5 * p, 5.5 * p, 7 * p, 7 * p);
+
+  ctx.fillStyle = '#ffd166';
+  ctx.fillRect(2 * p, 8 * p, 3 * p, 2 * p);
+  ctx.fillRect(13 * p, 8 * p, 3 * p, 2 * p);
+  ctx.fillStyle = '#54f0d2';
+  ctx.fillRect(8 * p, 2 * p, 2 * p, 3 * p);
+  ctx.fillRect(8 * p, 13 * p, 2 * p, 3 * p);
+  ctx.restore();
+  return true;
+}
+
 function drawTileSprite(
   state: StationState,
   tileIndex: number,
@@ -312,12 +345,26 @@ function drawTileSprite(
       ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Wall], px, py, TILE_SIZE, TILE_SIZE)
     );
   }
-  if (tileType === TileType.Door) {
-    if (state.controls.wallRenderMode === 'dual-tilemap') {
+  if (tileType === TileType.Door || tileType === TileType.Airlock) {
+    if (state.controls.wallRenderMode === 'dual-tilemap' && tileType === TileType.Door) {
       return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Floor], px, py, TILE_SIZE, TILE_SIZE);
     }
     const doorVariant = resolveDoorVariantForTile(state, tileIndex);
-    return (
+    if (tileType === TileType.Airlock) {
+      return (
+        drawSpriteByKey(
+          ctx,
+          spriteAtlas,
+          TILE_SPRITE_KEYS[TileType.Airlock],
+          px,
+          py,
+          TILE_SIZE,
+          TILE_SIZE,
+          doorVariant.rotation
+        ) || drawAirlockFallback(ctx, px, py, doorVariant.rotation)
+      );
+    }
+    const drewDoor = (
       drawSpriteByKey(
         ctx,
         spriteAtlas,
@@ -329,6 +376,7 @@ function drawTileSprite(
         doorVariant.rotation
       ) || drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Door], px, py, TILE_SIZE, TILE_SIZE)
     );
+    if (drewDoor) return true;
   }
   if (tileType === TileType.Floor && state.rooms[tileIndex] !== RoomType.None) {
     const roomKey = ROOM_SPRITE_KEYS[state.rooms[tileIndex]];
@@ -599,6 +647,31 @@ function drawTintedAgentSprite(
   const half = size * 0.5;
   ctx.drawImage(agentTintCanvas, 0, 0, fw, fh, cx - half, cy - half, size, size);
   return true;
+}
+
+function drawEvaSuitAgentFallback(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number): void {
+  const half = size * 0.5;
+  const x = cx - half;
+  const y = cy - half;
+  ctx.save();
+  ctx.fillStyle = '#dff7ff';
+  ctx.strokeStyle = '#5fd4ff';
+  ctx.lineWidth = Math.max(1, size * 0.07);
+  ctx.beginPath();
+  ctx.roundRect(x + size * 0.29, y + size * 0.2, size * 0.42, size * 0.58, size * 0.12);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#182d3f';
+  ctx.fillRect(x + size * 0.36, y + size * 0.28, size * 0.28, size * 0.16);
+  ctx.fillStyle = '#8be8ff';
+  ctx.fillRect(x + size * 0.4, y + size * 0.31, size * 0.2, size * 0.06);
+  ctx.fillStyle = '#7894a6';
+  ctx.fillRect(x + size * 0.2, y + size * 0.42, size * 0.13, size * 0.25);
+  ctx.fillRect(x + size * 0.67, y + size * 0.42, size * 0.13, size * 0.25);
+  ctx.fillStyle = '#ffcf62';
+  ctx.fillRect(x + size * 0.42, y + size * 0.76, size * 0.06, size * 0.12);
+  ctx.fillRect(x + size * 0.52, y + size * 0.76, size * 0.06, size * 0.12);
+  ctx.restore();
 }
 
 function pickAgentVariant(variants: readonly string[], agentId: number): string {
@@ -2097,6 +2170,35 @@ export function renderWorld(
     }
   }
 
+  for (const site of state.constructionSites) {
+    const p = fromIndex(site.tileIndex, state.width);
+    const px = p.x * TILE_SIZE;
+    const py = p.y * TILE_SIZE;
+    const delivered = site.requiredMaterials > 0 ? site.deliveredMaterials / site.requiredMaterials : 1;
+    const built = site.buildWorkRequired > 0 ? site.buildProgress / site.buildWorkRequired : 0;
+    const progress = Math.max(0, Math.min(1, site.state === 'building' ? built : delivered));
+    ctx.fillStyle = site.requiresEva ? 'rgba(111, 216, 255, 0.28)' : 'rgba(255, 207, 110, 0.24)';
+    ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    ctx.strokeStyle = site.state === 'blocked' ? '#ff7676' : site.requiresEva ? '#6fd8ff' : '#ffcf6e';
+    ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
+    ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), TILE_SIZE - Math.round(5 * PX), TILE_SIZE - Math.round(5 * PX));
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(7, 12, 18, 0.86)';
+    ctx.fillRect(px + Math.round(4 * PX), py + TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX), Math.round(4 * PX));
+    ctx.fillStyle = site.state === 'blocked' ? '#ff7676' : '#6edb8f';
+    ctx.fillRect(
+      px + Math.round(4 * PX),
+      py + TILE_SIZE - Math.round(8 * PX),
+      Math.round((TILE_SIZE - Math.round(8 * PX)) * progress),
+      Math.round(4 * PX)
+    );
+    ctx.fillStyle = '#e5f0ff';
+    ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD', px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
+  }
+
   if (hoveredTile !== null && hoveredTile >= 0 && hoveredTile < state.tiles.length) {
     const p = fromIndex(hoveredTile, state.width);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -2199,14 +2301,56 @@ export function renderWorld(
     const cx = (c.x + o.x) * TILE_SIZE;
     const cy = (c.y + o.y) * TILE_SIZE;
     const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, c.id);
+    const crewTint = c.evaSuit ? '#f1fbff' : '#7ec8ff';
+    const crewTintAlpha = c.evaSuit ? 0.5 : 0.2;
+    if (c.evaSuit) {
+      if (
+        useSprites &&
+        (drawTintedAgentSprite(
+          ctx,
+          spriteAtlas,
+          AGENT_EVA_SUIT_SPRITE_KEY,
+          cx,
+          cy,
+          TILE_SIZE * AGENT_SPRITE_SCALE,
+          '#dff7ff',
+          0.08
+        ) ||
+          drawTintedAgentSprite(
+            ctx,
+            spriteAtlas,
+            spriteKey,
+            cx,
+            cy,
+            TILE_SIZE * AGENT_SPRITE_SCALE,
+            crewTint,
+            crewTintAlpha
+          ))
+      ) {
+        const ringRadius = TILE_SIZE * AGENT_SPRITE_SCALE * 0.5;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = '#6fd8ff';
+        ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+        ctx.stroke();
+        continue;
+      }
+      drawEvaSuitAgentFallback(ctx, cx, cy, TILE_SIZE * AGENT_SPRITE_SCALE);
+      continue;
+    }
     if (useSprites && drawTintedAgentSprite(
       ctx, spriteAtlas, spriteKey, cx, cy,
-      TILE_SIZE * AGENT_SPRITE_SCALE, '#7ec8ff', 0.2
+      TILE_SIZE * AGENT_SPRITE_SCALE, crewTint, crewTintAlpha
     )) continue;
-    ctx.fillStyle = '#7ec8ff';
+    ctx.fillStyle = crewTint;
     ctx.beginPath();
     ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
     ctx.fill();
+    if (c.evaSuit) {
+      ctx.strokeStyle = '#6fd8ff';
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+      ctx.stroke();
+    }
   }
 
   for (const ship of state.arrivingShips) {

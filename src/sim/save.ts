@@ -60,6 +60,18 @@ export interface StationSnapshotV1 {
     originTile: number;
     rotation: ModuleRotation;
   }>;
+  constructionSites: Array<{
+    kind: 'tile' | 'module';
+    tileIndex: number;
+    targetTile?: TileType;
+    targetModule?: ModuleType;
+    rotation?: ModuleRotation;
+    requiredMaterials: number;
+    deliveredMaterials: number;
+    buildProgress: number;
+    buildWorkRequired: number;
+    requiresEva: boolean;
+  }>;
   dockConfigs: Array<{
     anchorTile: number;
     purpose: DockPurpose;
@@ -251,6 +263,21 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         rotation: module.rotation
       }))
       .sort((a, b) => a.originTile - b.originTile || a.type.localeCompare(b.type)),
+    constructionSites: state.constructionSites
+      .filter((site) => site.state !== 'done')
+      .map((site) => ({
+        kind: site.kind,
+        tileIndex: site.tileIndex,
+        targetTile: site.targetTile,
+        targetModule: site.targetModule,
+        rotation: site.rotation,
+        requiredMaterials: site.requiredMaterials,
+        deliveredMaterials: site.deliveredMaterials,
+        buildProgress: site.buildProgress,
+        buildWorkRequired: site.buildWorkRequired,
+        requiresEva: site.requiresEva
+      }))
+      .sort((a, b) => a.tileIndex - b.tileIndex),
     dockConfigs: state.docks
       .map((dock) => ({
         anchorTile: dock.anchorTile,
@@ -420,6 +447,46 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  const constructionSites: StationSnapshotV1['constructionSites'] = [];
+  if (Array.isArray(snapshotRaw.constructionSites)) {
+    for (let i = 0; i < snapshotRaw.constructionSites.length; i++) {
+      const entry = snapshotRaw.constructionSites[i];
+      if (!isRecord(entry)) {
+        warnings.push(`constructionSites[${i}] invalid; skipped.`);
+        continue;
+      }
+      const kind = entry.kind === 'module' ? 'module' : entry.kind === 'tile' ? 'tile' : null;
+      const tileIndex = Math.floor(asFiniteNumber(entry.tileIndex, -1));
+      if (!kind || tileIndex < 0 || tileIndex >= expectedLength) {
+        warnings.push(`constructionSites[${i}] has invalid kind/tile; skipped.`);
+        continue;
+      }
+      const targetTile = isOneOf(entry.targetTile, Object.values(TileType)) ? entry.targetTile : undefined;
+      const targetModule = isOneOf(entry.targetModule, Object.values(ModuleType)) ? entry.targetModule : undefined;
+      if (kind === 'tile' && targetTile === undefined) {
+        warnings.push(`constructionSites[${i}] missing target tile; skipped.`);
+        continue;
+      }
+      if (kind === 'module' && (targetModule === undefined || targetModule === ModuleType.None)) {
+        warnings.push(`constructionSites[${i}] missing target module; skipped.`);
+        continue;
+      }
+      const rawRotation = Math.round(asFiniteNumber(entry.rotation, 0));
+      constructionSites.push({
+        kind,
+        tileIndex,
+        targetTile,
+        targetModule,
+        rotation: rawRotation === 90 ? 90 : 0,
+        requiredMaterials: Math.max(0, asFiniteNumber(entry.requiredMaterials, 0)),
+        deliveredMaterials: Math.max(0, asFiniteNumber(entry.deliveredMaterials, 0)),
+        buildProgress: Math.max(0, asFiniteNumber(entry.buildProgress, 0)),
+        buildWorkRequired: Math.max(1, asFiniteNumber(entry.buildWorkRequired, 1)),
+        requiresEva: entry.requiresEva === true
+      });
+    }
+  }
+
   let credits = defaultState.metrics.credits;
   let waterStock = defaultState.metrics.waterStock;
   let airQuality = defaultState.metrics.airQuality;
@@ -545,6 +612,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     rooms,
     roomHousingPolicies,
     modules,
+    constructionSites,
     dockConfigs,
     resources: {
       credits,
@@ -755,6 +823,23 @@ export function hydrateStateFromSave(
       warnings.push(`Module ${index} (${module.type} @ ${module.originTile}) skipped: ${result.reason ?? 'invalid'}.`);
     }
   }
+  next.constructionSites = snapshot.constructionSites.map((site) => ({
+    id: next.constructionSiteSpawnCounter++,
+    kind: site.kind,
+    tileIndex: site.tileIndex,
+    targetTile: site.targetTile,
+    targetModule: site.targetModule,
+    rotation: site.rotation,
+    requiredMaterials: site.requiredMaterials,
+    deliveredMaterials: Math.min(site.requiredMaterials, site.deliveredMaterials),
+    buildProgress: Math.min(site.buildWorkRequired, site.buildProgress),
+    buildWorkRequired: site.buildWorkRequired,
+    requiresEva: site.requiresEva,
+    assignedCrewId: null,
+    state: site.deliveredMaterials >= site.requiredMaterials ? 'building' : 'planned',
+    blockedReason: null,
+    createdAt: next.now
+  }));
 
   next.controls.paused = true;
   tick(next, 0);

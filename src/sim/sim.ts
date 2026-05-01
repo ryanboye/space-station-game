@@ -26,6 +26,7 @@ import {
   type CrewIdleReason,
   type CrewDesire,
   type CrewInspector,
+  type ConstructionSite,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type CrewTaskCandidate,
@@ -144,7 +145,8 @@ const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Cafeteria]: 2,
   [TileType.Reactor]: 4,
   [TileType.Security]: 3,
-  [TileType.Door]: 2
+  [TileType.Door]: 2,
+  [TileType.Airlock]: 6
 };
 
 export const SHIP_MIN_DOCK_AREA: Record<ShipSize, number> = {
@@ -3067,7 +3069,9 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     assignedSystem: null,
     retargetCountWindow: 0,
     airExposureSec: 0,
-    healthState: 'healthy'
+    healthState: 'healthy',
+    evaSuit: false,
+    evaOxygenSec: 0
   };
 }
 
@@ -5593,6 +5597,7 @@ function isWorkshopToMarketTradeDelivery(state: StationState, job: StationState[
 }
 
 function logisticsJobPriority(state: StationState, job: StationState['jobs'][number]): number {
+  if (job.type === 'construct') return job.constructionMode === 'build' ? 78 : 70;
   if (isWorkshopToMarketTradeDelivery(state, job)) {
     return state.metrics.tradeCyclesCompletedLifetime < 1 ? 120 : 65;
   }
@@ -5736,6 +5741,365 @@ function consumeConstructionMaterials(state: StationState, amount: number): bool
   }
   state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
   return true;
+}
+
+const CONSTRUCTION_CARRY_AMOUNT = 8;
+const CONSTRUCTION_BUILD_RATE_PER_SEC = 6;
+const EVA_OXYGEN_MAX_SEC = 120;
+const EVA_LOW_OXYGEN_SEC = 18;
+
+function moduleConstructionCost(state: StationState, module: ModuleType, rotation: ModuleRotation): number {
+  const footprint = moduleFootprint(module, rotation);
+  const base = module === ModuleType.WallLight ? 2 : footprint.width * footprint.height * 3;
+  return Math.max(2, base);
+}
+
+function removeConstructionAtTile(state: StationState, tileIndex: number): void {
+  const removedIds = new Set(state.constructionSites.filter((site) => site.tileIndex === tileIndex).map((site) => site.id));
+  if (removedIds.size <= 0) return;
+  state.constructionSites = state.constructionSites.filter((site) => !removedIds.has(site.id));
+  for (const job of state.jobs) {
+    if (job.constructionSiteId === undefined || !removedIds.has(job.constructionSiteId)) continue;
+    job.state = 'expired';
+    job.completedAt = state.now;
+    if (job.assignedCrewId !== null) {
+      const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
+      if (crew) {
+        crew.activeJobId = null;
+        crew.carryingItemType = null;
+        crew.carryingAmount = 0;
+        crew.evaSuit = false;
+      }
+    }
+  }
+}
+
+function hasAdjacentBuildAnchor(state: StationState, tileIndex: number): boolean {
+  const p = fromIndex(tileIndex, state.width);
+  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const x = p.x + dx;
+    const y = p.y + dy;
+    if (!inBounds(x, y, state.width, state.height)) continue;
+    const next = toIndex(x, y, state.width);
+    if (state.tiles[next] !== TileType.Space) return true;
+    if (
+      state.constructionSites.some(
+        (site) => site.kind === 'tile' && site.tileIndex === next && site.state !== 'done' && site.targetTile !== TileType.Space
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function createConstructionSite(
+  state: StationState,
+  site: Omit<ConstructionSite, 'id' | 'assignedCrewId' | 'state' | 'blockedReason' | 'createdAt'>
+): ConstructionSite {
+  removeConstructionAtTile(state, site.tileIndex);
+  const next: ConstructionSite = {
+    ...site,
+    id: state.constructionSiteSpawnCounter++,
+    assignedCrewId: null,
+    state: 'planned',
+    blockedReason: null,
+    createdAt: state.now
+  };
+  state.constructionSites.push(next);
+  return next;
+}
+
+export function planTileConstruction(state: StationState, index: number, tile: TileType): { ok: boolean; reason?: string } {
+  if (index < 0 || index >= state.tiles.length) return { ok: false, reason: 'out of bounds' };
+  if (state.tiles[index] === tile) return { ok: true };
+  if (tile === TileType.Space) {
+    removeConstructionAtTile(state, index);
+    const changed = trySetTile(state, index, tile);
+    return changed ? { ok: true } : { ok: false, reason: 'cannot erase disconnected hull' };
+  }
+  if (tile === TileType.Dock) {
+    const dockCheck = validateDockPlacementWithNeighbors(state, index);
+    if (!dockCheck.valid) return { ok: false, reason: 'invalid dock placement' };
+  }
+  const requiresEva = state.tiles[index] === TileType.Space;
+  if (requiresEva && !hasAdjacentBuildAnchor(state, index)) {
+    return { ok: false, reason: 'must connect to hull or planned construction' };
+  }
+  const oldCost = tileDistanceBuildCost(state, index, state.tiles[index]);
+  const newCost = tileDistanceBuildCost(state, index, tile);
+  const requiredMaterials = Math.max(1, Math.ceil(Math.max(0, newCost - oldCost)));
+  createConstructionSite(state, {
+    kind: 'tile',
+    tileIndex: index,
+    targetTile: tile,
+    requiredMaterials,
+    deliveredMaterials: 0,
+    buildProgress: 0,
+    buildWorkRequired: Math.max(5, requiredMaterials * 2.2),
+    requiresEva
+  });
+  return { ok: true };
+}
+
+export function planModuleConstruction(
+  state: StationState,
+  index: number,
+  module: ModuleType,
+  rotation: ModuleRotation = 0
+): { ok: boolean; reason?: string } {
+  if (module === ModuleType.None) {
+    removeModuleAtTile(state, index);
+    removeConstructionAtTile(state, index);
+    return { ok: true };
+  }
+  const preview = validateModulePlacementForConstruction(state, module, index, rotation);
+  if (!preview.ok) return preview;
+  const appliedRotation = rotation === 90 && MODULE_DEFINITIONS[module]?.rotatable ? 90 : 0;
+  const requiredMaterials = Math.ceil(moduleConstructionCost(state, module, appliedRotation));
+  createConstructionSite(state, {
+    kind: 'module',
+    tileIndex: index,
+    targetModule: module,
+    rotation: appliedRotation,
+    requiredMaterials,
+    deliveredMaterials: 0,
+    buildProgress: 0,
+    buildWorkRequired: Math.max(6, requiredMaterials * 2.4),
+    requiresEva: false
+  });
+  return { ok: true };
+}
+
+function validateModulePlacementForConstruction(
+  state: StationState,
+  module: ModuleType,
+  originTile: number,
+  rotation: ModuleRotation
+): { ok: true } | { ok: false; reason: string } {
+  if (!isModuleUnlocked(state, module)) return { ok: false, reason: 'module locked by progression' };
+  const def = MODULE_DEFINITIONS[module];
+  if (!def) return { ok: false, reason: 'unknown module' };
+  const appliedRotation: ModuleRotation = rotation === 90 && def.rotatable ? 90 : 0;
+  const footprint = moduleFootprint(module, appliedRotation);
+  const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
+  if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
+  const roomAtOrigin = state.rooms[originTile];
+  const requiresWallMount = module === ModuleType.WallLight;
+  for (const tile of tiles) {
+    if (state.constructionSites.some((site) => site.tileIndex === tile && site.state !== 'done')) {
+      return { ok: false, reason: 'construction overlap' };
+    }
+    if (requiresWallMount) {
+      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+    } else if (!isWalkable(state.tiles[tile])) {
+      return { ok: false, reason: 'footprint blocked' };
+    }
+    if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
+    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) {
+      return { ok: false, reason: 'invalid room for module' };
+    }
+    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
+      return { ok: false, reason: 'footprint crosses room boundary' };
+    }
+  }
+  if (module === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
+    return { ok: false, reason: 'wall light requires top wall mount' };
+  }
+  const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
+  if (berthModuleReason) return { ok: false, reason: berthModuleReason };
+  return { ok: true };
+}
+
+function constructionMaterialSources(state: StationState): Array<{ tile: number; available: number; legacy: boolean }> {
+  const sources = materialInventoryTiles(state)
+    .map((tile) => ({ tile, available: itemStockAtNode(state, tile, 'rawMaterial'), legacy: false }))
+    .filter((source) => source.available > 0.05);
+  if (state.legacyMaterialStock > 0.05) {
+    const reachableCacheTile =
+      state.crewMembers.find((crew) => state.tiles[crew.tileIndex] !== TileType.Space)?.tileIndex ?? state.core.serviceTile;
+    sources.push({ tile: reachableCacheTile, available: state.legacyMaterialStock, legacy: true });
+  }
+  return sources.sort((a, b) => b.available - a.available);
+}
+
+function hasOpenConstructionJob(state: StationState, siteId: number): boolean {
+  return state.jobs.some(
+    (job) =>
+      job.constructionSiteId === siteId &&
+      job.state !== 'done' &&
+      job.state !== 'expired'
+  );
+}
+
+function enqueueConstructionJob(
+  state: StationState,
+  site: ConstructionSite,
+  mode: 'deliver' | 'build',
+  fromTile: number,
+  amount: number
+): void {
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'construct',
+    itemType: 'rawMaterial',
+    amount,
+    fromTile,
+    toTile: site.tileIndex,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + JOB_TTL_SEC * 2,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none',
+    stalledSince: undefined,
+    constructionSiteId: site.id,
+    constructionMode: mode,
+    repairProgress: 0
+  });
+  state.metrics.createdJobs += 1;
+}
+
+function createConstructionJobs(state: StationState): void {
+  for (const site of state.constructionSites) {
+    if (site.state === 'done') continue;
+    if (hasOpenConstructionJob(state, site.id)) continue;
+    site.assignedCrewId = null;
+    if (site.deliveredMaterials + 0.05 < site.requiredMaterials) {
+      const remaining = site.requiredMaterials - site.deliveredMaterials;
+      const sources = constructionMaterialSources(state);
+      if (sources.length <= 0) {
+        site.state = 'blocked';
+        site.blockedReason = 'no construction materials';
+        continue;
+      }
+      const source = sources[0];
+      site.state = 'planned';
+      site.blockedReason = null;
+      enqueueConstructionJob(state, site, 'deliver', source.tile, Math.min(CONSTRUCTION_CARRY_AMOUNT, remaining, source.available));
+    } else {
+      site.state = 'building';
+      site.blockedReason = null;
+      enqueueConstructionJob(state, site, 'build', site.tileIndex, 0);
+    }
+  }
+}
+
+function cleanupConstructionSites(state: StationState): void {
+  state.constructionSites = state.constructionSites.filter((site) => site.state !== 'done');
+}
+
+function activeAirlockTiles(state: StationState): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] === TileType.Airlock) out.push(i);
+  }
+  return out;
+}
+
+function findSpacePath(state: StationState, start: number, goal: number): number[] | null {
+  if (start === goal) return [];
+  const cameFrom = new Int32Array(state.width * state.height);
+  cameFrom.fill(-1);
+  const queue: number[] = [start];
+  const seen = new Set<number>([start]);
+  for (let head = 0; head < queue.length; head++) {
+    const current = queue[head];
+    const p = fromIndex(current, state.width);
+    const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const [dx, dy] of deltas) {
+      const x = p.x + dx;
+      const y = p.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const next = toIndex(x, y, state.width);
+      if (seen.has(next)) continue;
+      const allowed = next === goal || state.tiles[next] === TileType.Space || state.tiles[next] === TileType.Airlock;
+      if (!allowed) continue;
+      seen.add(next);
+      cameFrom[next] = current;
+      if (next === goal) {
+        const path: number[] = [];
+        let cursor = goal;
+        while (cameFrom[cursor] >= 0) {
+          path.push(cursor);
+          cursor = cameFrom[cursor];
+        }
+        path.reverse();
+        return path;
+      }
+      queue.push(next);
+    }
+  }
+  return null;
+}
+
+function adjacentWalkableTiles(state: StationState, tileIndex: number): number[] {
+  const p = fromIndex(tileIndex, state.width);
+  const out: number[] = [];
+  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const x = p.x + dx;
+    const y = p.y + dy;
+    if (!inBounds(x, y, state.width, state.height)) continue;
+    const next = toIndex(x, y, state.width);
+    if (isWalkable(state.tiles[next])) out.push(next);
+  }
+  return out;
+}
+
+function findConstructionPath(state: StationState, start: number, site: ConstructionSite): number[] | null {
+  if (site.requiresEva) {
+    let best: number[] | null = null;
+    for (const airlock of activeAirlockTiles(state)) {
+      const inside = findPath(state, start, airlock, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
+      if (!inside) continue;
+      const outside = findSpacePath(state, airlock, site.tileIndex);
+      if (!outside) continue;
+      const combined = [...inside, ...outside];
+      if (!best || combined.length < best.length) best = combined;
+    }
+    return best;
+  }
+  if (isWalkable(state.tiles[site.tileIndex])) {
+    return findPath(state, start, site.tileIndex, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
+  }
+  let best: number[] | null = null;
+  for (const target of adjacentWalkableTiles(state, site.tileIndex)) {
+    const path = findPath(state, start, target, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
+    if (!path) continue;
+    if (!best || path.length < best.length) best = path;
+  }
+  return best;
+}
+
+function crewAtConstructionSite(state: StationState, crew: CrewMember, site: ConstructionSite): boolean {
+  if (crew.tileIndex === site.tileIndex) return true;
+  if (site.requiresEva) return false;
+  return adjacentWalkableTiles(state, site.tileIndex).includes(crew.tileIndex);
+}
+
+function applyConstructionSite(state: StationState, site: ConstructionSite): boolean {
+  if (site.kind === 'tile' && site.targetTile !== undefined) {
+    setTile(state, site.tileIndex, site.targetTile);
+    if (site.targetTile === TileType.Space) {
+      setZone(state, site.tileIndex, ZoneType.Public);
+      setRoom(state, site.tileIndex, RoomType.None);
+    }
+    return true;
+  }
+  if (site.kind === 'module' && site.targetModule !== undefined) {
+    const result = tryPlaceModule(state, site.targetModule, site.tileIndex, site.rotation ?? 0);
+    if (!result.ok) {
+      site.state = 'blocked';
+      site.blockedReason = result.reason ?? 'module placement failed';
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 function enqueueTransportJob(
@@ -6301,7 +6665,20 @@ function assignJobsToIdleCrew(state: StationState): void {
     let bestScore = Number.NEGATIVE_INFINITY;
     for (const job of pendingJobs) {
       if (job.state !== 'pending') continue;
-      const path = findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
+      const site =
+        job.type === 'construct' && job.constructionSiteId !== undefined
+          ? state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId) ?? null
+          : null;
+      if (job.type === 'construct' && !site) continue;
+      if (site?.requiresEva && activeAirlockTiles(state).length <= 0) {
+        site.state = 'blocked';
+        site.blockedReason = 'no airlock for EVA';
+        continue;
+      }
+      const path =
+        job.type === 'construct' && job.constructionMode === 'build' && site
+          ? findConstructionPath(state, crew.tileIndex, site)
+          : findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
       if (!path) continue;
       const age = Math.max(0, state.now - job.createdAt);
       const score = logisticsJobPriority(state, job) * 100 + Math.min(30, age / 6) - path.length;
@@ -6329,6 +6706,13 @@ function assignJobsToIdleCrew(state: StationState): void {
     bestJob.assignedCrewId = crew.id;
     bestJob.lastProgressAt = state.now;
     markJobStall(state, bestJob, 'none');
+    if (bestJob.type === 'construct' && bestJob.constructionSiteId !== undefined) {
+      const site = state.constructionSites.find((candidate) => candidate.id === bestJob.constructionSiteId);
+      if (site) {
+        site.assignedCrewId = crew.id;
+        site.state = bestJob.constructionMode === 'build' ? 'building' : 'delivering';
+      }
+    }
     crew.activeJobId = bestJob.id;
     crew.cleaning = false;
     crew.cleanSessionActive = false;
@@ -6380,7 +6764,8 @@ function createJobCountsByType(): Record<JobType, JobStatusCounts> {
     pickup: createJobStatusCounts(),
     deliver: createJobStatusCounts(),
     repair: createJobStatusCounts(),
-    extinguish: createJobStatusCounts()
+    extinguish: createJobStatusCounts(),
+    construct: createJobStatusCounts()
   };
 }
 
@@ -6555,6 +6940,28 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
     if (!crew.drinking) {
       crew.thirst = clamp(crew.thirst - dt * CREW_THIRST_DECAY_PER_SEC, 0, 100);
+    }
+    if (crew.activeJobId === null && crew.evaSuit) {
+      if (state.tiles[crew.tileIndex] === TileType.Airlock || state.tiles[crew.tileIndex] !== TileType.Space) {
+        crew.evaSuit = false;
+        crew.evaOxygenSec = 0;
+        setCrewPath(state, crew, []);
+      } else {
+        crew.evaOxygenSec = Math.max(0, crew.evaOxygenSec - dt);
+        if (crew.path.length === 0) {
+          let bestReturn: number[] | null = null;
+          for (const airlock of activeAirlockTiles(state)) {
+            const path = findSpacePath(state, crew.tileIndex, airlock);
+            if (!path) continue;
+            if (!bestReturn || path.length < bestReturn.length) bestReturn = path;
+          }
+          setCrewPath(state, crew, bestReturn ?? []);
+        }
+        const moveResult = moveCrew(crew);
+        crew.idleReason = moveResult === 'blocked' ? 'idle_no_path' : 'idle_waiting_reassign';
+        if (moveResult === 'blocked') setCrewPath(state, crew, []);
+      }
+      continue;
     }
     if (crew.activeJobId !== null) {
       if (crew.resting) {
@@ -6920,7 +7327,151 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.activeJobId = null;
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
+        crew.evaSuit = false;
         setCrewPath(state, crew, []);
+      } else if (job.type === 'construct') {
+        const site =
+          job.constructionSiteId !== undefined
+            ? state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId) ?? null
+            : null;
+        if (!site || site.state === 'done') {
+          job.state = 'done';
+          job.completedAt = state.now;
+          crew.activeJobId = null;
+          crew.carryingItemType = null;
+          crew.carryingAmount = 0;
+          crew.evaSuit = false;
+          setCrewPath(state, crew, []);
+          continue;
+        }
+        const usingEva = site.requiresEva;
+        if (usingEva) {
+          crew.evaSuit = true;
+          if (crew.evaOxygenSec <= 0 || state.tiles[crew.tileIndex] === TileType.Airlock) {
+            crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
+          } else if (state.tiles[crew.tileIndex] === TileType.Space || crew.tileIndex === site.tileIndex) {
+            crew.evaOxygenSec = Math.max(0, crew.evaOxygenSec - dt);
+          }
+          if (crew.evaOxygenSec <= EVA_LOW_OXYGEN_SEC && crew.carryingAmount <= 0 && !crewAtConstructionSite(state, crew, site)) {
+            markJobStall(state, job, 'stalled_path_blocked');
+          }
+        } else if (state.tiles[crew.tileIndex] !== TileType.Space) {
+          crew.evaSuit = false;
+          crew.evaOxygenSec = 0;
+        }
+
+        if (job.constructionMode === 'deliver') {
+          if (crew.carryingAmount <= 0 && crew.tileIndex === job.fromTile) {
+            const nodeSupply = itemStockAtNode(state, job.fromTile, 'rawMaterial');
+            let pickup = Math.min(job.amount, nodeSupply);
+            if (pickup > 0.01) {
+              takeItemStockAtNode(state, job.fromTile, 'rawMaterial', pickup);
+            } else if (state.legacyMaterialStock > 0.01) {
+              pickup = Math.min(job.amount, state.legacyMaterialStock);
+              state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - pickup);
+              state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
+            }
+            if (pickup <= 0.01) {
+              site.state = 'blocked';
+              site.blockedReason = 'no construction materials';
+              markJobStall(state, job, 'stalled_no_supply');
+              job.state = 'pending';
+              job.assignedCrewId = null;
+              site.assignedCrewId = null;
+              crew.activeJobId = null;
+              setCrewPath(state, crew, []);
+            } else {
+              crew.carryingItemType = 'rawMaterial';
+              crew.carryingAmount = pickup;
+              job.pickedUpAmount = pickup;
+              job.state = 'in_progress';
+              job.lastProgressAt = state.now;
+              markJobStall(state, job, 'none');
+              setCrewPath(state, crew, []);
+            }
+          } else if (crew.carryingAmount > 0 && crewAtConstructionSite(state, crew, site)) {
+            site.deliveredMaterials = Math.min(site.requiredMaterials, site.deliveredMaterials + crew.carryingAmount);
+            crew.carryingAmount = 0;
+            crew.carryingItemType = null;
+            job.state = 'done';
+            job.completedAt = state.now;
+            job.lastProgressAt = state.now;
+            site.assignedCrewId = null;
+            site.state = site.deliveredMaterials >= site.requiredMaterials ? 'building' : 'planned';
+            markJobStall(state, job, 'none');
+            crew.activeJobId = null;
+            setCrewPath(state, crew, []);
+          } else {
+            const targetSite = crew.carryingAmount > 0;
+            const nextPath = targetSite
+              ? findConstructionPath(state, crew.tileIndex, site)
+              : findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
+            if (crew.path.length === 0) setCrewPath(state, crew, nextPath ?? []);
+            if (crew.path.length === 0) {
+              const reason = targetSite && site.requiresEva ? 'no EVA route' : targetSite ? 'stalled_unreachable_dropoff' : 'stalled_unreachable_source';
+              site.state = 'blocked';
+              site.blockedReason = reason;
+              markJobStall(state, job, targetSite ? 'stalled_unreachable_dropoff' : 'stalled_unreachable_source');
+            }
+            const moveResult = moveCrew(crew);
+            if (moveResult === 'moved') {
+              job.lastProgressAt = state.now;
+              markJobStall(state, job, 'none');
+              crew.blockedTicks = 0;
+            } else if (moveResult === 'blocked') {
+              crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+              markJobStall(state, job, 'stalled_path_blocked');
+              setCrewPath(state, crew, []);
+            }
+          }
+        } else {
+          if (!crewAtConstructionSite(state, crew, site)) {
+            if (crew.path.length === 0) {
+              const path = findConstructionPath(state, crew.tileIndex, site);
+              setCrewPath(state, crew, path ?? []);
+              if (crew.path.length === 0) {
+                site.state = 'blocked';
+                site.blockedReason = site.requiresEva ? 'no airlock EVA route' : 'no path to construction';
+                markJobStall(state, job, 'stalled_unreachable_source');
+              }
+            }
+            const moveResult = moveCrew(crew);
+            if (moveResult === 'moved') {
+              job.lastProgressAt = state.now;
+              markJobStall(state, job, 'none');
+              crew.blockedTicks = 0;
+            } else if (moveResult === 'blocked') {
+              crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+              markJobStall(state, job, 'stalled_path_blocked');
+              setCrewPath(state, crew, []);
+            }
+          } else {
+            site.state = 'building';
+            site.blockedReason = null;
+            job.state = 'in_progress';
+            const work = CONSTRUCTION_BUILD_RATE_PER_SEC * dt;
+            site.buildProgress = Math.min(site.buildWorkRequired, site.buildProgress + work);
+            job.repairProgress = site.buildProgress;
+            job.lastProgressAt = state.now;
+            if (site.buildProgress >= site.buildWorkRequired) {
+              if (applyConstructionSite(state, site)) {
+                site.state = 'done';
+                job.state = 'done';
+                job.completedAt = state.now;
+                markJobStall(state, job, 'none');
+                crew.activeJobId = null;
+                crew.carryingItemType = null;
+                crew.carryingAmount = 0;
+                if (!site.requiresEva) {
+                  crew.evaSuit = false;
+                  crew.evaOxygenSec = 0;
+                }
+                setCrewPath(state, crew, []);
+              }
+            }
+          }
+        }
+        continue;
       } else if (job.type === 'extinguish') {
         // Extinguish: walk to the burning tile (or an adjacent walkable tile if
         // the burning tile itself is blocked by intensity), stand and reduce
@@ -9778,6 +10329,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     pathOccupancyByTile: new Map(),
     jobs: [],
+    constructionSites: [],
     itemNodes: [],
     legacyMaterialStock: 420,
     incidents: [],
@@ -10143,6 +10695,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     lastResidentSpawnAt: -999,
     moduleSpawnCounter: 1,
     jobSpawnCounter: 1,
+    constructionSiteSpawnCounter: 1,
     incidentSpawnCounter: 1,
     incidentHeat: 0,
     lastPayrollAt: 0,
@@ -10398,6 +10951,10 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     ...job,
     fromTile: remapIndex(job.fromTile),
     toTile: remapIndex(job.toTile)
+  }));
+  state.constructionSites = state.constructionSites.map((site) => ({
+    ...site,
+    tileIndex: remapIndex(site.tileIndex)
   }));
   state.incidents = state.incidents.map((incident) => ({
     ...incident,
@@ -11615,6 +12172,7 @@ export function tick(state: StationState, frameDt: number): void {
   createFoodTransportJobs(state);
   createRawMaterialTransportJobs(state);
   createTradeGoodTransportJobs(state);
+  createConstructionJobs(state);
   assignCrewJobs(state);
   assignJobsToIdleCrew(state);
   requeueStalledJobs(state);
@@ -11637,6 +12195,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   maybeCreateTier3DispatchIncident(state, dt);
   updateIncidentPipeline(state, dt, occupancyByTile);
+  cleanupConstructionSites(state);
 
   refreshJobMetrics(state);
   ensureDerivedUpToDate(state);

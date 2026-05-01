@@ -18,7 +18,7 @@ export type DoorVariant = {
 };
 
 export function connectedWallLikeTile(tile: TileType): boolean {
-  return tile === TileType.Wall || tile === TileType.Door;
+  return tile === TileType.Wall || tile === TileType.Door || tile === TileType.Airlock;
 }
 
 function hasWallLikeNeighbor(state: StationState, x: number, y: number): boolean {
