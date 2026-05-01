@@ -52,8 +52,6 @@ export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
   [RoomType.Market]: 'room.market',
   [RoomType.LogisticsStock]: 'room.logistics_stock',
   [RoomType.Storage]: 'room.storage',
-  // Dock-migration v0: Berth has no atlas key yet — falls back to the
-  // letter renderer in render.ts (drawRoomLabelLayer + roomLetter).
   [RoomType.Berth]: 'room.berth',
   [RoomType.Cantina]: 'room.cantina',
   [RoomType.Observatory]: 'room.observatory'
@@ -79,8 +77,6 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.MarketStall]: 'module.market_stall',
   [ModuleType.IntakePallet]: 'module.intake_pallet',
   [ModuleType.StorageRack]: 'module.storage_rack',
-  // Dock-migration v0: capability modules — placeholder vector
-  // fallback (labeled rectangle). Atlas keys reserved for v1 art.
   [ModuleType.Gangway]: 'module.gangway',
   [ModuleType.CustomsCounter]: 'module.customs_counter',
   [ModuleType.CargoArm]: 'module.cargo_arm',

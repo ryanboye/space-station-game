@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-04-24T18:07:19.056Z",
+  "version": "sprite-v1-2026-05-01T05:05:08.290Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -351,261 +351,351 @@
       "w": 128,
       "h": 64
     },
-    "ship.tourist": {
+    "room.berth": {
       "x": 1990,
       "y": 262,
       "w": 64,
       "h": 64
     },
-    "ship.trader": {
+    "room.cantina": {
       "x": 2058,
       "y": 262,
       "w": 64,
       "h": 64
     },
-    "ship.industrial": {
+    "room.observatory": {
       "x": 2126,
       "y": 262,
       "w": 64,
       "h": 64
     },
-    "ship.military": {
+    "module.gangway": {
       "x": 2194,
       "y": 262,
       "w": 64,
       "h": 64
     },
-    "ship.colonist": {
+    "module.customs_counter": {
       "x": 2262,
       "y": 262,
       "w": 64,
       "h": 64
     },
-    "overlay.dock.facade.north.solo": {
+    "module.cargo_arm": {
       "x": 2330,
       "y": 262,
+      "w": 128,
+      "h": 128
+    },
+    "module.fire_extinguisher": {
+      "x": 2462,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.vent": {
+      "x": 2530,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.vending_machine": {
+      "x": 2598,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bench": {
+      "x": 2666,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.bar_counter": {
+      "x": 2798,
+      "y": 262,
+      "w": 128,
+      "h": 64
+    },
+    "module.tap": {
+      "x": 2930,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.telescope": {
+      "x": 2,
+      "y": 394,
+      "w": 128,
+      "h": 128
+    },
+    "module.water_fountain": {
+      "x": 134,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "module.plant": {
+      "x": 202,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "ship.tourist": {
+      "x": 270,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "ship.trader": {
+      "x": 338,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "ship.industrial": {
+      "x": 406,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "ship.military": {
+      "x": 474,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "ship.colonist": {
+      "x": 542,
+      "y": 394,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.dock.facade.north.solo": {
+      "x": 610,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.start": {
-      "x": 2398,
-      "y": 262,
+      "x": 678,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.middle": {
-      "x": 2466,
-      "y": 262,
+      "x": 746,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.end": {
-      "x": 2534,
-      "y": 262,
+      "x": 814,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.1": {
-      "x": 2602,
-      "y": 262,
+      "x": 882,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.2": {
-      "x": 2670,
-      "y": 262,
+      "x": 950,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.3": {
-      "x": 2738,
-      "y": 262,
+      "x": 1018,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.4": {
-      "x": 2806,
-      "y": 262,
+      "x": 1086,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.5": {
-      "x": 2874,
-      "y": 262,
+      "x": 1154,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.6": {
-      "x": 2942,
-      "y": 262,
+      "x": 1222,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.1": {
-      "x": 2,
+      "x": 1290,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.2": {
-      "x": 70,
+      "x": 1358,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.3": {
-      "x": 138,
+      "x": 1426,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.4": {
-      "x": 206,
+      "x": 1494,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.1": {
-      "x": 274,
+      "x": 1562,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.2": {
-      "x": 342,
+      "x": 1630,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.3": {
-      "x": 410,
+      "x": 1698,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.4": {
-      "x": 478,
+      "x": 1766,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.5": {
-      "x": 546,
+      "x": 1834,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.6": {
-      "x": 614,
+      "x": 1902,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.1": {
-      "x": 682,
+      "x": 1970,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.2": {
-      "x": 750,
+      "x": 2038,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.3": {
-      "x": 818,
+      "x": 2106,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.4": {
-      "x": 886,
+      "x": 2174,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.5": {
-      "x": 954,
+      "x": 2242,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.resident.6": {
-      "x": 1022,
+      "x": 2310,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.1": {
-      "x": 1090,
+      "x": 2378,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.2": {
-      "x": 1158,
+      "x": 2446,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.3": {
-      "x": 1226,
+      "x": 2514,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.4": {
-      "x": 1294,
+      "x": 2582,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.5": {
-      "x": 1362,
+      "x": 2650,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.crew.6": {
-      "x": 1430,
+      "x": 2718,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "icon.tier1_unlock": {
-      "x": 1498,
+      "x": 2786,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "icon.tier2_unlock": {
-      "x": 1566,
+      "x": 2854,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "icon.tier3_unlock": {
-      "x": 1634,
+      "x": 2922,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "icon.tier4_unlock": {
-      "x": 1702,
+      "x": 2990,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "icon.tier5_unlock": {
-      "x": 1770,
-      "y": 394,
+      "x": 2,
+      "y": 526,
       "w": 64,
       "h": 64
     },
     "icon.tier6_unlock": {
-      "x": 1838,
-      "y": 394,
+      "x": 70,
+      "y": 526,
       "w": 64,
       "h": 64
     }

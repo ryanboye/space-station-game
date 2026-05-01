@@ -1826,7 +1826,8 @@ function opsExtraText(): string {
   return `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Workshop ${state.ops.workshopActive}/${state.ops.workshopTotal} | ` +
     `Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
     `Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | ` +
-    `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
+    `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Cantina ${state.ops.cantinaActive}/${state.ops.cantinaTotal} | ` +
+    `Obs ${state.ops.observatoryActive}/${state.ops.observatoryTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
     `Brig ${state.ops.brigActive}/${state.ops.brigTotal} | RecHall ${state.ops.recHallActive}/${state.ops.recHallTotal}`;
 }
 
@@ -2008,6 +2009,8 @@ function refreshOpsModal(): void {
     { label: 'Hygiene', value: `${state.ops.hygieneActive}/${state.ops.hygieneTotal}` },
     { label: 'Lounge', value: `${state.ops.loungeActive}/${state.ops.loungeTotal}` },
     { label: 'Market', value: `${state.ops.marketActive}/${state.ops.marketTotal}` },
+    { label: 'Cantina', value: `${state.ops.cantinaActive}/${state.ops.cantinaTotal}` },
+    { label: 'Observatory', value: `${state.ops.observatoryActive}/${state.ops.observatoryTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
     { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
   ]);
@@ -2393,6 +2396,8 @@ function routeTileColor(roomType: RoomType): string {
     case RoomType.Lounge:
     case RoomType.Market:
     case RoomType.RecHall:
+    case RoomType.Cantina:
+    case RoomType.Observatory:
       return '#ff9d3a'; // social — +7 logistics cost
     case RoomType.Dorm:
     case RoomType.Hygiene:

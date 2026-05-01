@@ -183,6 +183,8 @@ function crewRoomCost(room: RoomType): number {
     case RoomType.Lounge:
     case RoomType.Market:
     case RoomType.RecHall:
+    case RoomType.Cantina:
+    case RoomType.Observatory:
       return 1.5;
     case RoomType.Dorm:
     case RoomType.Hygiene:
@@ -201,6 +203,8 @@ function logisticsRoomCost(room: RoomType): number {
     case RoomType.Lounge:
     case RoomType.Market:
     case RoomType.RecHall:
+    case RoomType.Cantina:
+    case RoomType.Observatory:
       return 7;
     case RoomType.Clinic:
       return 5;

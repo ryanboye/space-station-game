@@ -1149,8 +1149,8 @@ h2 {
 }
 
 #topbar {
-  display: grid;
-  grid-template-columns: 240px minmax(480px, 1fr) 160px 300px;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: stretch;
   padding: 0;
@@ -1174,6 +1174,7 @@ h2 {
 .station-brand {
   display: flex;
   align-items: center;
+  flex: 0 1 240px;
   gap: 8px;
   min-width: 0;
   overflow: hidden;
@@ -1212,6 +1213,7 @@ h2 {
 }
 
 .top-actions {
+  flex: 0 0 auto;
   flex-wrap: nowrap;
   justify-content: center;
   gap: 5px;
@@ -1230,12 +1232,15 @@ h2 {
 }
 
 .sim-controls {
+  flex: 1 1 286px;
   justify-content: flex-end;
 }
 
 .sim-clock {
   flex: 1 1 auto;
-  min-width: 126px;
+  min-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: #f3f6f9;
   font-size: 12px;
   font-weight: 700;
@@ -1247,7 +1252,9 @@ h2 {
   position: static;
   z-index: auto;
   display: grid;
-  grid-template-columns: repeat(8, minmax(62px, 1fr));
+  flex: 999 1 520px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  min-width: 360px;
   gap: 4px;
   padding: 5px;
   border-radius: 6px;

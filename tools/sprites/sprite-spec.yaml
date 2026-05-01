@@ -198,6 +198,20 @@ sprites:
     prompt: Top-down pixel art. space station. Style of rimworld. room overlay icon for storage. Subtle rack/box motif,
       transparent background, readable at 18x18.
     rotation: 0
+  room.berth:
+    prompt: Top-down pixel art. space station. Style of rimworld. full-bleed ship berth room floor tile. Docking clamps
+      and hatch motif, edge-to-edge coverage, no transparent border, readable at 18x18.
+    rotation: 0
+  room.cantina:
+    prompt: Top-down pixel art. space station. Style of rimworld. full-bleed dark cantina room floor tile. Dark metal floor,
+      subtle panel grid, very restrained warm bar accent, edge-to-edge coverage,
+      no transparent border, readable at 18x18.
+    rotation: 0
+  room.observatory:
+    prompt: Top-down pixel art. space station. Style of rimworld. full-bleed observatory room floor tile. Dark slate
+      star-viewing floor with subtle circular dome/window grid and tiny star points,
+      edge-to-edge coverage, no transparent border, readable at 18x18.
+    rotation: 0
   module.none:
     prompt: Transparent empty sprite with no object. Keep full transparency.
     rotation: 0
@@ -273,6 +287,56 @@ sprites:
   module.storage_rack:
     prompt: "Top-down pixel art station module sprite: storage rack. 2x1 footprint,
       transparent background, readable at 36x18."
+    rotation: 0
+  module.gangway:
+    prompt: "Top-down pixel art station module sprite: berth gangway hatch. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.customs_counter:
+    prompt: "Top-down pixel art station module sprite: small customs counter kiosk. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.cargo_arm:
+    prompt: "Top-down pixel art station module sprite: robotic cargo loading arm. 2x2
+      footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.fire_extinguisher:
+    prompt: "Top-down pixel art station module sprite: wall mounted fire extinguisher. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.vent:
+    prompt: "Top-down pixel art station module sprite: round floor air vent with cyan airflow. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.vending_machine:
+    prompt: "Top-down pixel art station module sprite: compact vending machine with lit product slots. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.bench:
+    prompt: "Top-down pixel art station module sprite: simple padded bench seat. 2x1
+      footprint, transparent background, readable at 36x18."
+    rotation: 0
+  module.bar_counter:
+    prompt: "Top-down pixel art station module sprite: cantina bar counter with bottle glow. 2x1
+      footprint, transparent background, readable at 36x18."
+    rotation: 0
+  module.tap:
+    prompt: "Top-down pixel art station module sprite: bar beer tap viewed from directly above,
+      compact drip tray with three short tap handles/nozzles. 1x1 footprint,
+      transparent background, readable at 18x18."
+    rotation: 0
+  module.telescope:
+    prompt: "Top-down pixel art station module sprite: chunky observatory telescope viewed from directly above.
+      Long pale diagonal optical tube with blue lens, central pedestal mount and tripod base.
+      2x2 footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.water_fountain:
+    prompt: "Top-down pixel art station module sprite: compact water fountain dispenser. 1x1
+      footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.plant:
+    prompt: "Top-down pixel art station module sprite: small hydroponic potted plant. 1x1
+      footprint, transparent background, readable at 18x18."
     rotation: 0
   agent.visitor.1:
     prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 1, casual civilian clothes,

@@ -463,7 +463,10 @@ function paintPathIntentTile(state: StationState, x: number, y: number, room: Ro
   return tile;
 }
 
-function setupPathIntentCorridorState(includePublicBypass = true): { state: StationState; start: number; goal: number } {
+function setupPathIntentCorridorState(
+  includePublicBypass = true,
+  bypassRoom: RoomType = RoomType.Cafeteria
+): { state: StationState; start: number; goal: number } {
   const state = createInitialState({ seed: 3091 });
   state.tiles.fill(TileType.Space);
   state.rooms.fill(RoomType.None);
@@ -488,7 +491,7 @@ function setupPathIntentCorridorState(includePublicBypass = true): { state: Stat
   if (includePublicBypass) {
     for (let y = 11; y <= 14; y++) paintPathIntentTile(state, 10, y);
     for (let x = 11; x <= 19; x++) {
-      const room = x >= 13 && x <= 17 ? RoomType.Cafeteria : RoomType.None;
+      const room = x >= 13 && x <= 17 ? bypassRoom : RoomType.None;
       paintPathIntentTile(state, x, 14, room);
     }
     for (let y = 11; y <= 14; y++) paintPathIntentTile(state, 20, y);
@@ -523,12 +526,43 @@ function testPathIntentLogisticsPrefersServiceCorridor(): void {
   assertCondition(!pathHasRoom(state, logisticsPath!, RoomType.Cafeteria), 'Logistics path should avoid the cafeteria bypass.');
 }
 
+function testPathIntentLogisticsAvoidsNewSocialRooms(): void {
+  const { state, start, goal } = setupPathIntentCorridorState(true, RoomType.Cantina);
+  const logisticsPath = findPath(state, start, goal, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
+  const visitorPath = findPath(state, start, goal, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
+
+  assertCondition(!!logisticsPath && !!visitorPath, 'Cantina bypass paths should resolve.');
+  assertCondition(pathHasRoom(state, visitorPath!, RoomType.Cantina), 'Visitor path should treat cantina as public social space.');
+  assertCondition(!pathHasRoom(state, logisticsPath!, RoomType.Cantina), 'Logistics path should avoid cantina public space.');
+}
+
 function testPathIntentVisitorServiceFallback(): void {
   const { state, start, goal } = setupPathIntentCorridorState(false);
   const visitorPath = findPath(state, start, goal, { allowRestricted: false, intent: 'visitor' }, state.pathOccupancyByTile);
 
   assertCondition(!!visitorPath, 'Visitor should still route through service space when it is the only path.');
   assertCondition(pathHasRoom(state, visitorPath!, RoomType.Storage), 'Visitor fallback path should cross storage instead of deadlocking.');
+}
+
+function testNewSocialRoomsActivateAndExposeTargets(): void {
+  const state = createInitialState({ seed: 3327 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  paintRoom(state, RoomType.Cantina, 26, 10, 29, 13);
+  paintRoom(state, RoomType.Observatory, 31, 10, 34, 13);
+  placeModuleOrThrow(state, ModuleType.BarCounter, 27, 11);
+  placeModuleOrThrow(state, ModuleType.Telescope, 32, 11);
+
+  tick(state, 0);
+
+  const cantina = getRoomInspectorAt(state, toIndex(26, 10, state.width));
+  const observatory = getRoomInspectorAt(state, toIndex(31, 10, state.width));
+  assertCondition(!!cantina && cantina.active, 'Cantina should activate with a bar counter.');
+  assertCondition(!!observatory && observatory.active, 'Observatory should activate with a telescope.');
+  assertCondition(state.ops.cantinaActive === 1, 'Cantina should be counted in room ops.');
+  assertCondition(state.ops.observatoryActive === 1, 'Observatory should be counted in room ops.');
+  assertCondition(cantina!.serviceNodeCount >= 1, 'Cantina should expose a service target.');
+  assertCondition(observatory!.serviceNodeCount >= 1, 'Observatory should expose a service target.');
 }
 
 function testPathCacheSeparatesIntent(): void {
@@ -1213,6 +1247,44 @@ function testServingStarvationQueue(): void {
   assertCondition(minRating < 70, 'Serving starvation should reduce rating over time.');
 }
 
+function testVisitorCafeteriaReservationSurvivesShortCrowdBlock(): void {
+  const state = createInitialState({ seed: 30051 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 23, 13);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 20, 11);
+  placeModuleOrThrow(state, ModuleType.Table, 18, 10);
+  placeModuleOrThrow(state, ModuleType.Table, 21, 12);
+  state.crew.total = 0;
+
+  const firstServing = toIndex(16, 11, state.width);
+  const secondServing = toIndex(20, 11, state.width);
+  spawnVisitor(state, 15, 11, 30100);
+  const visitor = state.visitors[0];
+  visitor.state = VisitorState.ToCafeteria;
+  visitor.carryingMeal = false;
+  visitor.reservedServingTile = firstServing;
+  visitor.reservedTargetTile = null;
+  visitor.path = [firstServing];
+
+  for (let i = 0; i < 4; i++) {
+    spawnVisitor(state, 16, 11, 30101 + i);
+    const blocker = state.visitors[state.visitors.length - 1];
+    blocker.state = VisitorState.Eating;
+    blocker.servedMeal = true;
+    blocker.eatTimer = 60;
+    blocker.path = [];
+  }
+
+  runFor(state, 1.25);
+
+  assertCondition(visitor.blockedTicks > 0, 'Visitor fixture should create a short crowd block.');
+  assertCondition(visitor.reservedServingTile === firstServing, 'Short crowd blocks should preserve the serving reservation.');
+  assertCondition(visitor.reservedServingTile !== secondServing, 'Visitor should not churn to a different serving station after a brief block.');
+  assertCondition(visitor.state === VisitorState.ToCafeteria, 'Short crowd blocks should not immediately demote visitors into queue churn.');
+}
+
 function testMaterialsChainEndToEnd(): void {
   const state = createInitialState({ seed: 3006 });
   buildHabitat(state);
@@ -1228,9 +1300,42 @@ function testMaterialsChainEndToEnd(): void {
   assertCondition(state.metrics.createdJobs > 0, 'Materials chain should create transport jobs.');
   assertCondition(state.metrics.completedJobs > 0, 'Materials chain should complete transport jobs.');
   assertCondition(state.metrics.marketTradeGoodStock > 0, 'Trade goods should reach market stalls.');
+  assertCondition(
+    state.metrics.tradeCyclesCompletedLifetime > 0,
+    'Workshop-to-market delivery should count as a completed trade cycle.'
+  );
 
   const sold = sellMaterials(state, 10, 5);
   assertCondition(sold, 'Selling materials should remove raw materials from logistics/storage inventory.');
+}
+
+function testMarketVisitorsBuyFromStallsWhenBenchesExist(): void {
+  const state = createInitialState({ seed: 3007 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupTradeChain(state);
+  placeModuleOrThrow(state, ModuleType.Bench, 23, 17);
+  state.crew.total = 12;
+  state.metrics.credits = 800;
+
+  const bought = buyMaterials(state, 0, 35);
+  assertCondition(bought, 'Buying materials should seed the trade chain.');
+  runFor(state, 150);
+  assertCondition(state.metrics.marketTradeGoodStock > 0, 'Fixture should stock the market stall before visitor shopping.');
+
+  spawnVisitor(state, 20, 17, 300701);
+  const visitor = state.visitors[0];
+  visitor.state = VisitorState.ToLeisure;
+  visitor.archetype = 'shopper';
+  visitor.primaryPreference = 'market';
+  visitor.servedMeal = true;
+  visitor.leisureLegsRemaining = 0;
+  visitor.leisureLegsPlanned = 1;
+
+  runFor(state, 16);
+
+  assertCondition(visitor.tileIndex === toIndex(21, 17, state.width), 'Market shopper should target the market stall, not a bench.');
+  assertCondition(state.usageTotals.tradeGoodsSold > 0, 'Market shopper should buy stocked trade goods.');
 }
 
 function testIntakeMaterialsMoveToStorage(): void {
@@ -3778,6 +3883,52 @@ function testClinicLowersDistressAndDeaths(): void {
   assertCondition(clinicExposure + 2 < noClinicExposure, 'Clinic should materially accelerate distress recovery.');
 }
 
+function testTier3ClinicGeneratesTreatablePatients(): void {
+  const state = createInitialState({ seed: 5120 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Clinic, 24, 12, 27, 14);
+  placeModuleOrThrow(state, ModuleType.MedBed, 24, 13);
+  spawnVisitor(state, 20, 13, 512001);
+  const visitor = state.visitors[0];
+  visitor.servedMeal = true;
+  visitor.patience = 0;
+  visitor.state = VisitorState.Leisure;
+  visitor.eatTimer = 999;
+
+  runFor(state, 90);
+
+  assertCondition(
+    state.metrics.actorsTreatedLifetime > 0,
+    'Tier 3 clinic should generate a patient and allow treatment progress.'
+  );
+}
+
+function testTier3SecurityGeneratesDispatchableIncidents(): void {
+  const state = createInitialState({ seed: 5121 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Security, 24, 12, 27, 14);
+  placeModuleOrThrow(state, ModuleType.Terminal, 24, 13);
+  state.crew.total = 12;
+  state.controls.crewPriorityWeights.security = 10;
+  spawnVisitor(state, 20, 13, 512101);
+  const visitor = state.visitors[0];
+  visitor.servedMeal = true;
+  visitor.patience = 0;
+  visitor.state = VisitorState.Leisure;
+  visitor.eatTimer = 999;
+
+  runFor(state, 120);
+
+  assertCondition(
+    state.metrics.incidentsResolvedLifetime > 0,
+    'Tier 3 security should generate and resolve a dispatchable incident.'
+  );
+}
+
 function testBrigReducesIncidentDuration(): void {
   const state = createInitialState({ seed: 5109 });
   buildHabitat(state);
@@ -3997,6 +4148,8 @@ function run(): void {
   testResidentWorkPhaseAffectsThroughput();
   testResidentRoutineFallbackWithoutWorkRooms();
   testClinicLowersDistressAndDeaths();
+  testTier3ClinicGeneratesTreatablePatients();
+  testTier3SecurityGeneratesDispatchableIncidents();
   testBrigReducesIncidentDuration();
   testSecurityPriorityStaffsBrig();
   testSaveV1MigratesToV2UnlockDefaults();
@@ -4010,7 +4163,9 @@ function run(): void {
   testWallLightRequiresAdjacentWall();
   testPathIntentVisitorAvoidsServiceCorridor();
   testPathIntentLogisticsPrefersServiceCorridor();
+  testPathIntentLogisticsAvoidsNewSocialRooms();
   testPathIntentVisitorServiceFallback();
+  testNewSocialRoomsActivateAndExposeTargets();
   testPathCacheSeparatesIntent();
   testRoutePressureDiagnosticsCountsAndConflicts();
   testVisitorRouteExposurePenalty();
@@ -4032,7 +4187,9 @@ function run(): void {
   testFoodJobsDoNotLetRawBacklogBlockMeals();
   testLowFoodAssignsFoodChainCrew();
   testServingStarvationQueue();
+  testVisitorCafeteriaReservationSurvivesShortCrowdBlock();
   testMaterialsChainEndToEnd();
+  testMarketVisitorsBuyFromStallsWhenBenchesExist();
   testIntakeMaterialsMoveToStorage();
   testInventoryOverlayToggleState();
   testRoomInspectorInventoryBreakdown();

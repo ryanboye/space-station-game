@@ -65,6 +65,7 @@ import {
   type RoutePressureDiagnostics,
   type RoutePressureDominant,
   type RoutePressureTileDiagnostic,
+  type RoomEnvironmentTraits,
   type RoomEnvironmentScore,
   type RoomEnvironmentTileDiagnostic,
   type ShipServiceTag,
@@ -163,6 +164,9 @@ const HIRE_COST = 14;
 const BLOCKED_REPATH_TICKS = 3;
 const BLOCKED_LOCAL_REROUTE_TICKS = 6;
 const BLOCKED_FULL_REROUTE_TICKS = 10;
+const VISITOR_BLOCKED_REPATH_TICKS = 8;
+const VISITOR_BLOCKED_QUEUE_REROUTE_TICKS = 18;
+const VISITOR_BLOCKED_FULL_REASSIGN_TICKS = 34;
 const MAX_RESERVATIONS_PER_TABLE = SERVICE_CAPACITY.tableReservationLimit;
 const MAX_PENDING_FOOD_JOBS = 10;
 const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
@@ -386,13 +390,15 @@ function shipServiceTagSatisfied(state: StationState, tag: ShipServiceTag): bool
   if (!isServiceTagUnlocked(state, tag)) return true;
   if (tag === 'cafeteria') return state.ops.cafeteriasActive > 0;
   if (tag === 'market') return state.ops.marketActive > 0;
-  if (tag === 'lounge') return state.ops.loungeActive > 0 || state.ops.recHallActive > 0;
+  if (tag === 'lounge') {
+    return state.ops.loungeActive > 0 || state.ops.recHallActive > 0 || state.ops.cantinaActive > 0 || state.ops.observatoryActive > 0;
+  }
   if (tag === 'workshop') return state.ops.workshopActive > 0;
   if (tag === 'security') return state.ops.securityActive > 0 || state.ops.brigActive > 0;
   if (tag === 'hygiene') return state.ops.hygieneActive > 0 || state.ops.clinicActive > 0;
   if (tag === 'housing') return hasPrivateHousingReady(state);
   if (tag === 'clinic') return state.ops.clinicActive > 0;
-  return state.ops.recHallActive > 0 || state.ops.loungeActive > 0;
+  return state.ops.recHallActive > 0 || state.ops.loungeActive > 0 || state.ops.cantinaActive > 0 || state.ops.observatoryActive > 0;
 }
 
 function shipServicesSatisfied(state: StationState, shipType: ShipType): boolean {
@@ -653,6 +659,8 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
   if (room === RoomType.Security) return [ModuleType.Terminal];
   if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation];
   if (room === RoomType.Market) return [ModuleType.MarketStall];
+  if (room === RoomType.Cantina) return [ModuleType.BarCounter];
+  if (room === RoomType.Observatory) return [ModuleType.Telescope];
   if (room === RoomType.LogisticsStock) return [ModuleType.IntakePallet];
   if (room === RoomType.Storage) return [ModuleType.StorageRack];
   return [];
@@ -673,6 +681,8 @@ const SERVICE_NODE_OVERLAY_ROOMS: RoomType[] = [
   RoomType.LifeSupport,
   RoomType.Lounge,
   RoomType.Market,
+  RoomType.Cantina,
+  RoomType.Observatory,
   RoomType.LogisticsStock,
   RoomType.Storage
 ];
@@ -708,7 +718,9 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   // calls roomModal.classList.remove('hidden'), so the modal opens but its
   // contents are stale — exactly the symptom BMO reported (modal visible,
   // type=none, cluster=0 tiles, all defaults).
-  RoomType.Berth
+  RoomType.Berth,
+  RoomType.Cantina,
+  RoomType.Observatory
 ];
 
 function createEmptyDerivedCache(): StationState['derived'] {
@@ -1606,7 +1618,9 @@ function routePressureRoomConflicts(
     room === RoomType.Cafeteria ||
     room === RoomType.Lounge ||
     room === RoomType.Market ||
-    room === RoomType.RecHall;
+    room === RoomType.RecHall ||
+    room === RoomType.Cantina ||
+    room === RoomType.Observatory;
   const residential = room === RoomType.Dorm || room === RoomType.Hygiene;
   const service =
     room === RoomType.Reactor ||
@@ -1642,7 +1656,9 @@ function routePressureReasons(
     room === RoomType.Cafeteria ||
     room === RoomType.Lounge ||
     room === RoomType.Market ||
-    room === RoomType.RecHall;
+    room === RoomType.RecHall ||
+    room === RoomType.Cantina ||
+    room === RoomType.Observatory;
   const residential = room === RoomType.Dorm || room === RoomType.Hygiene;
   const service =
     room === RoomType.Reactor ||
@@ -1669,7 +1685,15 @@ function routePressureReasons(
     if (crewCount > 0) reasons.push('crew route crossing housing/support room');
   }
   if (publicActors > 0 && backOfHouseActors > 0) reasons.push('mixed public and back-of-house traffic');
-  if (logisticsCount > 0 && (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market)) {
+  if (
+    logisticsCount > 0 &&
+    (room === RoomType.Cafeteria ||
+      room === RoomType.Lounge ||
+      room === RoomType.Market ||
+      room === RoomType.RecHall ||
+      room === RoomType.Cantina ||
+      room === RoomType.Observatory)
+  ) {
     reasons.push('hauling through visitor-facing space hurts station vibe');
   }
   if (visitorCount > 0 && (room === RoomType.Storage || room === RoomType.LogisticsStock || room === RoomType.Workshop)) {
@@ -2553,6 +2577,51 @@ function createIncident(
   return incident;
 }
 
+function maybeCreateTier3Patient(state: StationState, dt: number): void {
+  if (state.unlocks.tier < 3 || state.ops.clinicActive <= 0 || state.visitors.length <= 0) return;
+  if (state.visitors.some((visitor) => visitor.healthState !== 'healthy')) return;
+  const milestonePush = state.metrics.actorsTreatedLifetime < 1;
+  const chancePerSec = milestonePush ? 0.18 : 0.0025;
+  if (state.now < 20 || state.rng() > chancePerSec * Math.max(0, dt)) return;
+
+  const candidates = state.visitors.filter(
+    (visitor) =>
+      visitor.healthState === 'healthy' &&
+      visitor.state !== VisitorState.ToDock
+  );
+  if (candidates.length <= 0) return;
+  const visitor = candidates[randomInt(0, candidates.length - 1, state.rng)];
+  visitor.airExposureSec = Math.max(visitor.airExposureSec, AIR_DISTRESS_EXPOSURE_SEC + 4);
+  updateActorHealthFromExposure(state, visitor);
+  visitor.reservedServingTile = null;
+  visitor.reservedTargetTile = null;
+  visitor.carryingMeal = false;
+  setVisitorPath(state, visitor, []);
+  assignPathToClinic(state, visitor);
+}
+
+function maybeCreateTier3DispatchIncident(state: StationState, dt: number): void {
+  if (state.unlocks.tier < 3 || state.ops.securityActive <= 0) return;
+  if (state.incidents.some((incident) => isIncidentActive(incident))) return;
+  const milestonePush = state.metrics.incidentsResolvedLifetime < 1;
+  const chancePerSec = milestonePush ? 0.16 : 0.0035;
+  const heatBonus = clamp(state.incidentHeat / 30, 0, 0.02);
+  if (state.now < 20 || state.rng() > (chancePerSec + heatBonus) * Math.max(0, dt)) return;
+
+  const publicActors = [
+    ...state.visitors.map((visitor) => visitor.tileIndex),
+    ...state.residents.map((resident) => resident.tileIndex)
+  ].filter((tile) => state.zones[tile] === ZoneType.Public && isWalkable(state.tiles[tile]));
+  let tileIndex = publicActors.length > 0 ? publicActors[randomInt(0, publicActors.length - 1, state.rng)] : -1;
+  if (tileIndex < 0) {
+    const fallback = collectTiles(state, TileType.Floor).filter((tile) => state.zones[tile] === ZoneType.Public);
+    if (fallback.length <= 0) return;
+    tileIndex = fallback[randomInt(0, fallback.length - 1, state.rng)];
+  }
+  const localCrowd = nearbyPopulationCount(state, tileIndex, 2);
+  createIncident(state, 'trespass', tileIndex, clamp(0.65 + localCrowd * 0.08, 0.65, 1.35));
+}
+
 function pathCongestion(path: number[], occupancyByTile: Map<number, number>): number {
   if (path.length <= 0) return 0;
   let total = 0;
@@ -2577,7 +2646,14 @@ function scoreRouteExposure(state: StationState, path: number[]): RouteExposure 
     const room = state.rooms[tile];
     exposure.crowdCost += state.pathOccupancyByTile.get(tile) ?? 0;
     if (state.zones[tile] === ZoneType.Public) exposure.publicTiles += 1;
-    if (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market || room === RoomType.RecHall) {
+    if (
+      room === RoomType.Cafeteria ||
+      room === RoomType.Lounge ||
+      room === RoomType.Market ||
+      room === RoomType.RecHall ||
+      room === RoomType.Cantina ||
+      room === RoomType.Observatory
+    ) {
       exposure.socialTiles += 1;
       continue;
     }
@@ -2620,14 +2696,28 @@ function roomEnvironmentScoreAt(state: StationState, tileIndex: number, radius =
     for (let x = Math.max(0, origin.x - radius); x <= Math.min(state.width - 1, origin.x + radius); x++) {
       const dist = Math.abs(x - origin.x) + Math.abs(y - origin.y);
       if (dist > radius) continue;
-      const room = state.rooms[toIndex(x, y, state.width)];
-      if (room === RoomType.None) continue;
-      const traits = ROOM_ENVIRONMENT_TRAITS[room];
+      const sampleTile = toIndex(x, y, state.width);
+      const room = state.rooms[sampleTile];
+      const traits = room === RoomType.None ? emptyRoomEnvironmentScore() : ROOM_ENVIRONMENT_TRAITS[room];
+      const moduleAdjustment = moduleEnvironmentAdjustment(state.modules[sampleTile]);
+      if (
+        room === RoomType.None &&
+        moduleAdjustment.visitorStatus === 0 &&
+        moduleAdjustment.residentialComfort === 0 &&
+        moduleAdjustment.serviceNoise === 0 &&
+        moduleAdjustment.publicAppeal === 0
+      ) {
+        continue;
+      }
       const weight = 1 / (1 + dist);
       score.visitorStatus += traits.visitorStatus * weight;
       score.residentialComfort += traits.residentialComfort * weight;
       score.serviceNoise += traits.serviceNoise * weight;
       score.publicAppeal += traits.publicAppeal * weight;
+      score.visitorStatus += moduleAdjustment.visitorStatus * weight;
+      score.residentialComfort += moduleAdjustment.residentialComfort * weight;
+      score.serviceNoise += moduleAdjustment.serviceNoise * weight;
+      score.publicAppeal += moduleAdjustment.publicAppeal * weight;
       score.sampledTiles += 1;
       weightTotal += weight;
     }
@@ -2638,6 +2728,23 @@ function roomEnvironmentScoreAt(state: StationState, tileIndex: number, radius =
   score.serviceNoise /= weightTotal;
   score.publicAppeal /= weightTotal;
   return score;
+}
+
+function moduleEnvironmentAdjustment(module: ModuleType): RoomEnvironmentTraits {
+  switch (module) {
+    case ModuleType.Plant:
+      return { visitorStatus: 0.12, residentialComfort: 0.18, serviceNoise: -0.04, publicAppeal: 0.16 };
+    case ModuleType.Bench:
+      return { visitorStatus: 0.06, residentialComfort: 0.1, serviceNoise: 0, publicAppeal: 0.08 };
+    case ModuleType.VendingMachine:
+      return { visitorStatus: 0.04, residentialComfort: -0.02, serviceNoise: 0.08, publicAppeal: 0.1 };
+    case ModuleType.BarCounter:
+      return { visitorStatus: 0.08, residentialComfort: 0, serviceNoise: 0.08, publicAppeal: 0.12 };
+    case ModuleType.Telescope:
+      return { visitorStatus: 0.16, residentialComfort: 0.12, serviceNoise: 0, publicAppeal: 0.18 };
+    default:
+      return { visitorStatus: 0, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0 };
+  }
 }
 
 function visitorEnvironmentDiscomfort(environment: RoomEnvironmentScore): number {
@@ -2892,6 +2999,14 @@ function applyAirExposure(
     return { died: true };
   }
 
+  updateActorHealthFromExposure(state, actor);
+  return { died: false };
+}
+
+function updateActorHealthFromExposure(
+  state: StationState,
+  actor: { airExposureSec: number; healthState: 'healthy' | 'distressed' | 'critical' }
+): void {
   const priorHealthState = actor.healthState;
   actor.healthState =
     actor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
@@ -2899,13 +3014,9 @@ function applyAirExposure(
       : actor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
         ? 'distressed'
         : 'healthy';
-  // Proxy for `actorsTreatedLifetime` — increments on recovery-to-healthy
-  // from a worse state. Placeholder until Phase 5 wires explicit medical
-  // treatment events; keeps T5 predicate reachable in the meantime.
   if (priorHealthState !== 'healthy' && actor.healthState === 'healthy') {
     state.metrics.actorsTreatedLifetime += 1;
   }
-  return { died: false };
 }
 
 function registerBodyDeathAtTile(state: StationState, tileIndex: number, occupancyByTile: Map<number, number>): void {
@@ -3059,6 +3170,7 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     originShipId: ship?.id ?? null,
     airExposureSec: 0,
     healthState: 'healthy',
+    hygieneStopUsed: false,
     leisureLegsRemaining: 0,
     leisureLegsPlanned: 0,
     lastLeisureKind: null
@@ -3074,17 +3186,27 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
 
 function planVisitorLeisureLegs(state: StationState, archetype: VisitorArchetype): number {
   const roll = state.rng();
+  const availableKinds = [
+    activeModuleTargets(state, [ModuleType.MarketStall], [RoomType.Market]).length > 0,
+    activeModuleTargets(state, [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench], [RoomType.Lounge]).length > 0 ||
+      activeModuleTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]).length > 0,
+    activeModuleTargets(state, [ModuleType.BarCounter], [RoomType.Cantina]).length > 0,
+    activeModuleTargets(state, [ModuleType.Telescope], [RoomType.Observatory]).length > 0
+  ].filter(Boolean).length;
+  const cap = Math.max(0, Math.min(availableKinds, 3));
+  if (cap <= 0) return 0;
+  const clampLegs = (legs: number) => Math.min(cap, legs);
   switch (archetype) {
     case 'rusher':
-      return roll < 0.85 ? 0 : 1;
+      return roll < 0.9 ? 0 : clampLegs(1);
     case 'diner':
-      return roll < 0.55 ? 0 : roll < 0.92 ? 1 : 2;
+      return roll < 0.68 ? 0 : clampLegs(1);
     case 'shopper':
-      return roll < 0.18 ? 1 : roll < 0.78 ? 2 : 3;
+      return roll < 0.28 ? clampLegs(1) : roll < 0.9 ? clampLegs(2) : clampLegs(3);
     case 'lounger':
-      return roll < 0.1 ? 1 : roll < 0.62 ? 2 : 3;
+      return roll < 0.2 ? clampLegs(1) : roll < 0.86 ? clampLegs(2) : clampLegs(3);
     default:
-      return 1;
+      return clampLegs(1);
   }
 }
 
@@ -3877,6 +3999,8 @@ function assignCrewJobs(state: StationState): void {
   state.ops.lifeSupportTotal = roomClusters(state, RoomType.LifeSupport).length;
   state.ops.loungeTotal = roomClusters(state, RoomType.Lounge).length;
   state.ops.marketTotal = roomClusters(state, RoomType.Market).length;
+  state.ops.cantinaTotal = roomClusters(state, RoomType.Cantina).length;
+  state.ops.observatoryTotal = roomClusters(state, RoomType.Observatory).length;
   state.ops.logisticsStockTotal = roomClusters(state, RoomType.LogisticsStock).length;
   state.ops.storageTotal = roomClusters(state, RoomType.Storage).length;
 }
@@ -4149,6 +4273,8 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
   ).length;
   state.ops.loungeActive = operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, false, dt, updateDebounce).length;
   state.ops.marketActive = operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, false, dt, updateDebounce).length;
+  state.ops.cantinaActive = operationalClustersForRoom(state, RoomType.Cantina, 0, false, dt, updateDebounce).length;
+  state.ops.observatoryActive = operationalClustersForRoom(state, RoomType.Observatory, 0, false, dt, updateDebounce).length;
   state.ops.logisticsStockActive = operationalClustersForRoom(state, RoomType.LogisticsStock, 0, false, dt, updateDebounce).length;
   state.ops.storageActive = operationalClustersForRoom(state, RoomType.Storage, 0, false, dt, updateDebounce).length;
   state.ops.dormsActive = operationalClustersForRoom(state, RoomType.Dorm, 0, false, dt, updateDebounce).length;
@@ -4252,79 +4378,71 @@ function updateCriticalStaffTracking(state: StationState, dt: number): void {
   state.criticalStaffPrevUnmet = deficits;
 }
 
-function activeRoomTargets(state: StationState, room: RoomType): number[] {
+function operationalClustersForRoomSelection(state: StationState, room: RoomType): number[][] {
+  switch (room) {
+    case RoomType.Cafeteria:
+      return operationalClustersForRoom(state, room, CREW_PER_CAFETERIA, false);
+    case RoomType.Kitchen:
+      return operationalClustersForRoom(state, room, CREW_PER_KITCHEN, false);
+    case RoomType.Workshop:
+      return operationalClustersForRoom(state, room, CREW_PER_WORKSHOP, false);
+    case RoomType.Clinic:
+      return operationalClustersForRoom(state, room, CREW_PER_CLINIC, false);
+    case RoomType.Brig:
+      return operationalClustersForRoom(state, room, CREW_PER_BRIG, false);
+    case RoomType.RecHall:
+      return operationalClustersForRoom(state, room, CREW_PER_REC_HALL, false);
+    case RoomType.Reactor:
+      return operationalClustersForRoom(state, room, CREW_PER_REACTOR, false);
+    case RoomType.Security:
+      return operationalClustersForRoom(state, room, CREW_PER_SECURITY, false);
+    case RoomType.Hygiene:
+      return operationalClustersForRoom(state, room, CREW_PER_HYGIENE, false);
+    case RoomType.Hydroponics:
+      return operationalClustersForRoom(state, room, CREW_PER_HYDROPONICS, false);
+    case RoomType.LifeSupport:
+      return operationalClustersForRoom(state, room, CREW_PER_LIFE_SUPPORT, false);
+    case RoomType.Lounge:
+      return operationalClustersForRoom(state, room, CREW_PER_LOUNGE, false);
+    case RoomType.Market:
+      return operationalClustersForRoom(state, room, CREW_PER_MARKET, false);
+    case RoomType.Cantina:
+    case RoomType.Observatory:
+      return operationalClustersForRoom(state, room, 0, false);
+    case RoomType.LogisticsStock:
+    case RoomType.Storage:
+    case RoomType.Dorm:
+      return operationalClustersForRoom(state, room, 0, false);
+    default:
+      return [];
+  }
+}
+
+function activeRoomClusterTiles(state: StationState, room: RoomType): number[] {
   if (room !== RoomType.None && !isRoomUnlocked(state, room)) return [];
-  const flatten = (clusters: number[][]): number[] => clusters.flat();
-  const filterActiveServiceTargets = (targets: number[]): number[] => {
-    if (!roomRequiresServiceNode(room)) return targets;
-    const serviceTargets = new Set(collectServiceTargets(state, room));
-    return targets.filter((t) => serviceTargets.has(t));
-  };
-  if (room === RoomType.Cafeteria) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Cafeteria, CREW_PER_CAFETERIA, false))
-    );
+  return operationalClustersForRoomSelection(state, room).flat();
+}
+
+function activeRoomTargets(state: StationState, room: RoomType): number[] {
+  const targets = activeRoomClusterTiles(state, room);
+  if (targets.length === 0 || !roomRequiresServiceNode(room)) return targets;
+  const serviceTargets = new Set(collectServiceTargets(state, room));
+  return targets.filter((t) => serviceTargets.has(t));
+}
+
+function activeModuleTargets(state: StationState, modules: ModuleType[], rooms: RoomType[]): number[] {
+  const moduleSet = new Set(modules);
+  const activeTilesByRoom = new Map<RoomType, Set<number>>();
+  for (const room of rooms) activeTilesByRoom.set(room, new Set(activeRoomClusterTiles(state, room)));
+  const out: number[] = [];
+  for (const module of state.moduleInstances) {
+    if (!moduleSet.has(module.type)) continue;
+    const room = state.rooms[module.originTile];
+    if (!rooms.includes(room)) continue;
+    if (!activeTilesByRoom.get(room)?.has(module.originTile)) continue;
+    out.push(module.originTile);
   }
-  if (room === RoomType.Kitchen) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Kitchen, CREW_PER_KITCHEN, false))
-    );
-  }
-  if (room === RoomType.Workshop) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Workshop, CREW_PER_WORKSHOP, false))
-    );
-  }
-  if (room === RoomType.Clinic) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Clinic, CREW_PER_CLINIC, false))
-    );
-  }
-  if (room === RoomType.Brig) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Brig, CREW_PER_BRIG, false))
-    );
-  }
-  if (room === RoomType.RecHall) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.RecHall, CREW_PER_REC_HALL, false))
-    );
-  }
-  if (room === RoomType.Reactor) {
-    return flatten(operationalClustersForRoom(state, RoomType.Reactor, CREW_PER_REACTOR, false));
-  }
-  if (room === RoomType.Security) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Security, CREW_PER_SECURITY, false))
-    );
-  }
-  if (room === RoomType.Hygiene) {
-    return flatten(operationalClustersForRoom(state, RoomType.Hygiene, CREW_PER_HYGIENE, false));
-  }
-  if (room === RoomType.Hydroponics) {
-    return filterActiveServiceTargets(
-      flatten(operationalClustersForRoom(state, RoomType.Hydroponics, CREW_PER_HYDROPONICS, false))
-    );
-  }
-  if (room === RoomType.LifeSupport) {
-    return flatten(operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false));
-  }
-  if (room === RoomType.Lounge) {
-    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Lounge, CREW_PER_LOUNGE, false)));
-  }
-  if (room === RoomType.Market) {
-    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Market, CREW_PER_MARKET, false)));
-  }
-  if (room === RoomType.LogisticsStock) {
-    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.LogisticsStock, 0, false)));
-  }
-  if (room === RoomType.Storage) {
-    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Storage, 0, false)));
-  }
-  if (room === RoomType.Dorm) {
-    return filterActiveServiceTargets(flatten(operationalClustersForRoom(state, RoomType.Dorm, 0, false)));
-  }
-  return [];
+  return out.sort((a, b) => a - b);
 }
 
 function staffRequiredForRoom(room: RoomType): number {
@@ -4693,6 +4811,60 @@ function countReservedServiceTargets(state: StationState): Map<number, number> {
     counts.set(r.reservedTargetTile, (counts.get(r.reservedTargetTile) ?? 0) + 1);
   }
   return counts;
+}
+
+function leisureTargetCapacity(state: StationState, tile: number): number {
+  switch (state.modules[tile]) {
+    case ModuleType.Table:
+      return MAX_RESERVATIONS_PER_TABLE;
+    case ModuleType.GameStation:
+    case ModuleType.RecUnit:
+      return 3;
+    case ModuleType.Couch:
+    case ModuleType.Bench:
+    case ModuleType.Telescope:
+    case ModuleType.BarCounter:
+    case ModuleType.MarketStall:
+      return 2;
+    case ModuleType.VendingMachine:
+    case ModuleType.WaterFountain:
+    case ModuleType.Shower:
+    case ModuleType.Sink:
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+function chooseLeastLoadedPath(
+  state: StationState,
+  start: number,
+  targets: number[],
+  allowRestricted: boolean,
+  intent: PathIntent,
+  reservedCounts = countReservedServiceTargets(state)
+): { path: number[]; target: number } | null {
+  const visitTargets = targets.filter((target, index) => targets.indexOf(target) === index);
+  const scan = (
+    restricted: boolean,
+    current: { path: number[]; target: number; score: number } | null
+  ): { path: number[]; target: number; score: number } | null => {
+    let best = current;
+    for (const target of visitTargets) {
+      const path = findPath(state, start, target, { allowRestricted: restricted, intent }, state.pathOccupancyByTile);
+      if (!path) continue;
+      const reserved = reservedCounts.get(target) ?? 0;
+      const occupancy = state.pathOccupancyByTile.get(target) ?? 0;
+      const overCapacity = Math.max(0, reserved + occupancy - leisureTargetCapacity(state, target));
+      const score = path.length + reserved * 5 + occupancy * 3 + overCapacity * 18;
+      if (!best || score < best.score) best = { path, target, score };
+    }
+    return best;
+  };
+  let best = scan(allowRestricted, null);
+  if (!best && !allowRestricted) best = scan(true, best);
+  if (best === null) return null;
+  return { path: best.path, target: best.target };
 }
 
 function countReservedServingTargets(state: StationState): Map<number, number> {
@@ -5272,19 +5444,19 @@ function preferredHygieneTargets(state: StationState): number[] {
 
 function crewLeisureTargets(state: StationState): number[] {
   return [
-    ...activeRoomTargets(state, RoomType.Lounge),
-    ...activeRoomTargets(state, RoomType.RecHall),
-    ...activeRoomTargets(state, RoomType.Market),
-    ...activeRoomTargets(state, RoomType.Cafeteria),
-    ...activeRoomTargets(state, RoomType.Cantina),
-    ...activeRoomTargets(state, RoomType.Observatory)
+    ...activeModuleTargets(state, [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench], [RoomType.Lounge]),
+    ...activeModuleTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]),
+    ...activeModuleTargets(state, [ModuleType.MarketStall, ModuleType.Bench], [RoomType.Market]),
+    ...activeModuleTargets(state, [ModuleType.Table, ModuleType.Bench, ModuleType.VendingMachine], [RoomType.Cafeteria]),
+    ...activeModuleTargets(state, [ModuleType.BarCounter, ModuleType.Bench], [RoomType.Cantina]),
+    ...activeModuleTargets(state, [ModuleType.Telescope, ModuleType.Bench], [RoomType.Observatory])
   ];
 }
 
 // Targets for a thirst stop: prefer Cantina (faster relief) but fall back to
 // any tile with a WaterFountain module so a station without a bar still works.
 function crewDrinkTargets(state: StationState): number[] {
-  const cantinas = activeRoomTargets(state, RoomType.Cantina);
+  const cantinas = activeModuleTargets(state, [ModuleType.BarCounter], [RoomType.Cantina]);
   const fountainTiles: number[] = [];
   for (const m of state.moduleInstances) {
     if (m.type !== ModuleType.WaterFountain) continue;
@@ -5410,6 +5582,25 @@ function consumeTradeGoodsFromMarket(state: StationState, amount: number): numbe
     remaining -= taken;
   }
   return consumed;
+}
+
+function isWorkshopToMarketTradeDelivery(state: StationState, job: StationState['jobs'][number]): boolean {
+  return (
+    job.itemType === 'tradeGood' &&
+    state.rooms[job.fromTile] === RoomType.Workshop &&
+    state.rooms[job.toTile] === RoomType.Market
+  );
+}
+
+function logisticsJobPriority(state: StationState, job: StationState['jobs'][number]): number {
+  if (isWorkshopToMarketTradeDelivery(state, job)) {
+    return state.metrics.tradeCyclesCompletedLifetime < 1 ? 120 : 65;
+  }
+  if (job.itemType === 'meal') return 55;
+  if (job.itemType === 'rawMeal') return 45;
+  if (job.itemType === 'rawMaterial') return 35;
+  if (job.itemType === 'tradeGood') return 30;
+  return 20;
 }
 
 function itemNodeFreeCapacity(state: StationState, tileIndex: number): number {
@@ -5968,7 +6159,9 @@ function createTradeGoodTransportJobs(state: StationState): void {
   if (workshopTargets.length === 0 || marketTargets.length === 0) return;
   if (state.ops.workshopActive <= 0 || state.ops.marketActive <= 0) return;
   const liveMarketStock = sumItemStockForRoom(state, RoomType.Market, 'tradeGood');
-  if (liveMarketStock >= MARKET_TRADE_GOOD_TARGET_STOCK) return;
+  const incomingMarketStock = marketTargets.reduce((acc, tile) => acc + openJobAmountToTile(state, tile, 'tradeGood'), 0);
+  const plannedMarketStock = liveMarketStock + incomingMarketStock;
+  if (plannedMarketStock >= MARKET_TRADE_GOOD_TARGET_STOCK) return;
   const openTradeJobs = state.jobs.filter(
     (j) =>
       (j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress') &&
@@ -5977,7 +6170,7 @@ function createTradeGoodTransportJobs(state: StationState): void {
   if (openTradeJobs.length >= MAX_PENDING_TRADE_JOBS) return;
 
   const fromCandidates = workshopTargets
-    .map((tile) => ({ tile, stock: itemStockAtNode(state, tile, 'tradeGood') }))
+    .map((tile) => ({ tile, stock: itemStockAtNode(state, tile, 'tradeGood') - openJobAmountFromTile(state, tile, 'tradeGood') }))
     .filter((entry) => entry.stock > 0.25)
     .sort((a, b) => b.stock - a.stock);
   if (fromCandidates.length === 0) return;
@@ -5994,7 +6187,10 @@ function createTradeGoodTransportJobs(state: StationState): void {
     }
   }
   if (!Number.isFinite(bestDist)) return;
-  const amount = bestDist <= 8 ? 1.2 : 0.9;
+  const targetNeed = Math.max(0, MARKET_TRADE_GOOD_TARGET_STOCK - plannedMarketStock);
+  const targetSpace = itemNodeUnreservedCapacity(state, bestTo, 'tradeGood');
+  const amount = Math.min(bestDist <= 8 ? 1.2 : 0.9, fromCandidates[0].stock, targetNeed, targetSpace);
+  if (amount <= 0.05) return;
   enqueueTransportJob(state, 'deliver', 'tradeGood', amount, fromTile, bestTo);
 }
 
@@ -6102,13 +6298,15 @@ function assignJobsToIdleCrew(state: StationState): void {
     if (assignedNow >= dispatchSlots) break;
     let bestJob: (typeof pendingJobs)[number] | null = null;
     let bestPath: number[] | null = null;
-    let bestLen = Number.POSITIVE_INFINITY;
+    let bestScore = Number.NEGATIVE_INFINITY;
     for (const job of pendingJobs) {
       if (job.state !== 'pending') continue;
       const path = findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
       if (!path) continue;
-      if (path.length < bestLen) {
-        bestLen = path.length;
+      const age = Math.max(0, state.now - job.createdAt);
+      const score = logisticsJobPriority(state, job) * 100 + Math.min(30, age / 6) - path.length;
+      if (score > bestScore) {
+        bestScore = score;
         bestJob = job;
         bestPath = path;
       }
@@ -6612,7 +6810,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         const atCantina = state.rooms[crew.tileIndex] === RoomType.Cantina;
         if (!atFountain && !atCantina) {
           if (crew.path.length === 0) {
-            setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, drinkTargets, false, 'crew') ?? []);
+            setCrewPath(state, crew, chooseLeastLoadedPath(state, crew.tileIndex, drinkTargets, false, 'crew')?.path ?? []);
           }
           const moveResult = moveCrew(crew);
           if (moveResult === 'blocked') {
@@ -6689,7 +6887,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         clearCrewLeisure(crew);
       } else if (!targets.includes(crew.tileIndex)) {
         if (crew.path.length === 0) {
-          setCrewPath(state, crew, chooseNearestPath(state, crew.tileIndex, targets, false, 'crew') ?? []);
+          setCrewPath(state, crew, chooseLeastLoadedPath(state, crew.tileIndex, targets, false, 'crew')?.path ?? []);
         }
         const moveResult = moveCrew(crew);
         if (moveResult === 'blocked') {
@@ -6878,6 +7076,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               markJobStall(state, job, 'stalled_unreachable_dropoff');
               continue;
             }
+            if (isWorkshopToMarketTradeDelivery(state, job)) {
+              state.metrics.tradeCyclesCompletedLifetime += delivered;
+            }
             crew.carryingAmount = Math.max(0, crew.carryingAmount - delivered);
             if (crew.carryingAmount > 0) {
               markJobStall(state, job, 'stalled_unreachable_dropoff');
@@ -6999,6 +7200,38 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
   visitor.state = VisitorState.Queueing;
 }
 
+function repathVisitorToReservedCafeteriaTarget(state: StationState, visitor: Visitor): boolean {
+  if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
+    const path = findPath(
+      state,
+      visitor.tileIndex,
+      visitor.reservedServingTile,
+      { allowRestricted: false, intent: 'visitor' },
+      state.pathOccupancyByTile
+    );
+    if (path) {
+      setVisitorPath(state, visitor, path);
+      return true;
+    }
+  }
+
+  if (visitor.carryingMeal && visitor.reservedTargetTile !== null && visitor.tileIndex !== visitor.reservedTargetTile) {
+    const path = findPath(
+      state,
+      visitor.tileIndex,
+      visitor.reservedTargetTile,
+      { allowRestricted: false, intent: 'visitor' },
+      state.pathOccupancyByTile
+    );
+    if (path) {
+      setVisitorPath(state, visitor, path);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
   if (visitor.originShipId !== null) {
     const ship = state.arrivingShips.find((s) => s.id === visitor.originShipId) ?? null;
@@ -7112,11 +7345,12 @@ function visitorVisitAge(state: StationState, visitor: Visitor): number {
 
 function shouldSeekVisitorHygiene(state: StationState, visitor: Visitor): boolean {
   if (visitor.archetype === 'rusher') return false;
-  if (visitorVisitAge(state, visitor) < 18) return false;
+  if (visitor.hygieneStopUsed) return false;
+  if (visitorVisitAge(state, visitor) < 24) return false;
   const chanceByArchetype: Record<VisitorArchetype, number> = {
-    diner: 0.18,
-    shopper: 0.24,
-    lounger: 0.3,
+    diner: 0.08,
+    shopper: 0.12,
+    lounger: 0.16,
     rusher: 0
   };
   return state.rng() < chanceByArchetype[visitor.archetype];
@@ -7138,31 +7372,43 @@ function assignPathToVisitorHygiene(state: StationState, visitor: Visitor): bool
   setVisitorPath(state, visitor, best.path);
   visitor.reservedTargetTile = best.target;
   visitor.reservedServingTile = null;
+  visitor.hygieneStopUsed = true;
   visitor.state = VisitorState.ToLeisure;
   return visitor.path.length > 0 || visitor.tileIndex === best.target;
 }
 
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
-  const loungeTargets = activeRoomTargets(state, RoomType.Lounge);
-  const recHallTargets = activeRoomTargets(state, RoomType.RecHall);
-  const marketTargets = activeRoomTargets(state, RoomType.Market);
-  const cantinaTargets = activeRoomTargets(state, RoomType.Cantina);
-  const observatoryTargets = activeRoomTargets(state, RoomType.Observatory);
+  const loungeTargets = activeModuleTargets(
+    state,
+    [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench],
+    [RoomType.Lounge]
+  );
+  const recHallTargets = activeModuleTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]);
+  const marketTargets = activeModuleTargets(state, [ModuleType.MarketStall], [RoomType.Market]);
+  const cantinaTargets = activeModuleTargets(state, [ModuleType.BarCounter, ModuleType.Bench], [RoomType.Cantina]);
+  const observatoryTargets = activeModuleTargets(state, [ModuleType.Telescope, ModuleType.Bench], [RoomType.Observatory]);
+  const vendingTargets = activeModuleTargets(
+    state,
+    [ModuleType.VendingMachine],
+    [RoomType.Cafeteria, RoomType.Lounge, RoomType.Market, RoomType.RecHall]
+  );
   const allTargets = [
     ...loungeTargets,
     ...recHallTargets,
     ...marketTargets,
     ...cantinaTargets,
-    ...observatoryTargets
+    ...observatoryTargets,
+    ...vendingTargets
   ];
   if (shouldSeekVisitorHygiene(state, visitor) && assignPathToVisitorHygiene(state, visitor)) return true;
   if (allTargets.length === 0) return false;
 
   if (visitor.archetype === 'rusher') {
-    setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, allTargets, false) ?? []);
-    visitor.reservedTargetTile = visitor.path.length > 0 ? visitor.path[visitor.path.length - 1] : null;
+    const choice = chooseLeastLoadedPath(state, visitor.tileIndex, allTargets, false, 'visitor');
+    setVisitorPath(state, visitor, choice?.path ?? []);
+    visitor.reservedTargetTile = choice?.target ?? null;
     visitor.state = VisitorState.ToLeisure;
-    return visitor.path.length > 0;
+    return !!choice && (visitor.path.length > 0 || visitor.tileIndex === choice.target);
   }
 
   // For multi-leg trips, bias toward a room kind the visitor hasn't already
@@ -7170,20 +7416,21 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   // the route-pressure overlay across multiple destinations.
   // Order: primary preference first, then variety. Cantina/Observatory are
   // bonus stops that any archetype can pull (loungers get the strongest pull).
-  const baseOrder: Array<'market' | 'lounge' | 'cantina' | 'observatory'> = (() => {
-    if (visitor.primaryPreference === 'market') return ['market', 'cantina', 'lounge', 'observatory'];
+  const baseOrder: Array<'market' | 'lounge' | 'cantina' | 'observatory' | 'vending'> = (() => {
+    if (visitor.primaryPreference === 'market') return ['market', 'vending', 'cantina', 'lounge', 'observatory'];
     if (visitor.primaryPreference === 'lounge') {
       return visitor.archetype === 'lounger'
-        ? ['observatory', 'lounge', 'cantina', 'market']
-        : ['lounge', 'cantina', 'observatory', 'market'];
+        ? ['observatory', 'lounge', 'cantina', 'market', 'vending']
+        : ['lounge', 'cantina', 'observatory', 'market', 'vending'];
     }
-    return ['cantina', 'lounge', 'market', 'observatory'];
+    return ['cantina', 'lounge', 'market', 'vending', 'observatory'];
   })();
   const skipMap: Record<typeof baseOrder[number], boolean> = {
     market: visitor.lastLeisureKind === 'market',
     lounge: visitor.lastLeisureKind === 'lounge' || visitor.lastLeisureKind === 'recHall',
     cantina: visitor.lastLeisureKind === 'cantina',
-    observatory: visitor.lastLeisureKind === 'observatory'
+    observatory: visitor.lastLeisureKind === 'observatory',
+    vending: visitor.lastLeisureKind === 'vending'
   };
   const filtered = baseOrder.filter((p) => !skipMap[p]);
   const tryOrder = filtered.length > 0 ? filtered : baseOrder;
@@ -7193,13 +7440,14 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
       case 'market': targets = marketTargets; break;
       case 'cantina': targets = cantinaTargets; break;
       case 'observatory': targets = observatoryTargets; break;
+      case 'vending': targets = vendingTargets; break;
       default: targets = [...loungeTargets, ...recHallTargets]; break;
     }
     if (targets.length === 0) continue;
-    const path = chooseNearestPath(state, visitor.tileIndex, targets, false) ?? [];
-    if (path.length === 0) continue;
-    setVisitorPath(state, visitor, path);
-    visitor.reservedTargetTile = path[path.length - 1] ?? null;
+    const choice = chooseLeastLoadedPath(state, visitor.tileIndex, targets, false, 'visitor');
+    if (!choice || (choice.path.length === 0 && visitor.tileIndex !== choice.target)) continue;
+    setVisitorPath(state, visitor, choice.path);
+    visitor.reservedTargetTile = choice.target;
     visitor.state = VisitorState.ToLeisure;
     return true;
   }
@@ -7208,10 +7456,10 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
 
 function shouldLeisureAfterMeal(state: StationState, visitor: Visitor): boolean {
   const chanceByArchetype: Record<VisitorArchetype, number> = {
-    diner: 0.55,
-    shopper: 0.82,
-    lounger: 0.9,
-    rusher: 0.25
+    diner: 0.25,
+    shopper: 0.45,
+    lounger: 0.55,
+    rusher: 0.1
   };
   return state.rng() < chanceByArchetype[visitor.archetype];
 }
@@ -7255,6 +7503,18 @@ function assignPathToLeisure(state: StationState, visitor: Visitor): boolean {
   return true;
 }
 
+function assignPathToClinic(state: StationState, visitor: Visitor): boolean {
+  const targets = activeModuleTargets(state, [ModuleType.MedBed], [RoomType.Clinic]);
+  if (targets.length === 0) return false;
+  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, targets, false, 'visitor');
+  if (!choice || (choice.path.length === 0 && visitor.tileIndex !== choice.target)) return false;
+  setVisitorPath(state, visitor, choice.path);
+  visitor.reservedTargetTile = choice.target;
+  visitor.reservedServingTile = null;
+  visitor.state = VisitorState.ToLeisure;
+  return true;
+}
+
 function assignPathToTable(state: StationState, visitor: Visitor): boolean {
   const next = pickLeastLoadedCafeteriaPath(state, visitor.tileIndex);
   setVisitorPath(state, visitor, next.path);
@@ -7280,12 +7540,14 @@ function updateVisitorLogic(
 
     if (state.ops.clinicActive > 0 && state.rooms[visitor.tileIndex] === RoomType.Clinic) {
       visitor.airExposureSec = Math.max(0, visitor.airExposureSec - PROCESS_RATES.clinicDistressRecoveryPerSec * dt);
-      visitor.healthState =
-        visitor.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
-          ? 'critical'
-          : visitor.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
-            ? 'distressed'
-            : 'healthy';
+      updateActorHealthFromExposure(state, visitor);
+    } else if (
+      visitor.healthState !== 'healthy' &&
+      state.ops.clinicActive > 0 &&
+      visitor.state !== VisitorState.ToDock &&
+      visitor.path.length === 0
+    ) {
+      assignPathToClinic(state, visitor);
     }
 
     if (state.zones[visitor.tileIndex] === ZoneType.Restricted && !visitor.trespassed) {
@@ -7331,31 +7593,7 @@ function updateVisitorLogic(
         }
 
         if (visitor.path.length === 0) {
-          if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
-            setVisitorPath(
-              state,
-              visitor,
-              findPath(
-                state,
-                visitor.tileIndex,
-                visitor.reservedServingTile,
-                { allowRestricted: false, intent: 'visitor' },
-                state.pathOccupancyByTile
-              ) ?? []
-            );
-          } else if (visitor.carryingMeal && visitor.reservedTargetTile !== null && visitor.tileIndex !== visitor.reservedTargetTile) {
-            setVisitorPath(
-              state,
-              visitor,
-              findPath(
-                state,
-                visitor.tileIndex,
-                visitor.reservedTargetTile,
-                { allowRestricted: false, intent: 'visitor' },
-                state.pathOccupancyByTile
-              ) ?? []
-            );
-          }
+          repathVisitorToReservedCafeteriaTarget(state, visitor);
         }
         const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
         if (moveResult === 'blocked') {
@@ -7369,14 +7607,14 @@ function updateVisitorLogic(
           addVisitorPatience(state, visitor, hasAnyCafeteria ? dt * 0.35 : dt * 0.08);
         }
 
-        if (visitor.blockedTicks >= BLOCKED_REPATH_TICKS) {
-          assignPathToCafeteria(state, visitor);
+        if (visitor.blockedTicks === VISITOR_BLOCKED_REPATH_TICKS) {
+          repathVisitorToReservedCafeteriaTarget(state, visitor);
         }
-        if (visitor.blockedTicks >= BLOCKED_LOCAL_REROUTE_TICKS) {
+        if (!visitor.carryingMeal && visitor.blockedTicks === VISITOR_BLOCKED_QUEUE_REROUTE_TICKS) {
           setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex));
           visitor.state = VisitorState.Queueing;
         }
-        if (visitor.blockedTicks >= BLOCKED_FULL_REROUTE_TICKS) {
+        if (visitor.blockedTicks >= VISITOR_BLOCKED_FULL_REASSIGN_TICKS) {
           visitor.blockedTicks = 0;
           assignPathToCafeteria(state, visitor);
         }
@@ -7456,7 +7694,8 @@ function updateVisitorLogic(
         }
       }
     } else if (visitor.state === VisitorState.ToLeisure) {
-      if (visitor.path.length === 0) {
+      const waitingForClinicCare = visitor.healthState !== 'healthy' && state.rooms[visitor.tileIndex] === RoomType.Clinic;
+      if (visitor.path.length === 0 && !waitingForClinicCare) {
         if (!assignPathToLeisure(state, visitor)) {
           if (!visitor.servedMeal && state.ops.cafeteriasActive > 0) {
             visitor.state = VisitorState.ToCafeteria;
@@ -7481,8 +7720,10 @@ function updateVisitorLogic(
       const atLoungeModule =
         state.modules[visitor.tileIndex] === ModuleType.Couch ||
         state.modules[visitor.tileIndex] === ModuleType.GameStation ||
-        state.modules[visitor.tileIndex] === ModuleType.RecUnit;
+        state.modules[visitor.tileIndex] === ModuleType.RecUnit ||
+        state.modules[visitor.tileIndex] === ModuleType.Bench;
       const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
+      const atVendingModule = state.modules[visitor.tileIndex] === ModuleType.VendingMachine;
       const atCantinaModule =
         state.modules[visitor.tileIndex] === ModuleType.BarCounter ||
         state.modules[visitor.tileIndex] === ModuleType.Tap ||
@@ -7492,10 +7733,23 @@ function updateVisitorLogic(
         state.modules[visitor.tileIndex] === ModuleType.Telescope ||
         (state.rooms[visitor.tileIndex] === RoomType.Observatory &&
           (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex));
+      const atClinicModule =
+        visitor.healthState !== 'healthy' &&
+        (state.modules[visitor.tileIndex] === ModuleType.MedBed ||
+          (state.rooms[visitor.tileIndex] === RoomType.Clinic &&
+            (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex)));
       const atHygieneService =
         state.rooms[visitor.tileIndex] === RoomType.Hygiene &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
-      if (atLoungeModule || atMarketModule || atCantinaModule || atObservatoryModule || atHygieneService) {
+      if (
+        atLoungeModule ||
+        atMarketModule ||
+        atVendingModule ||
+        atCantinaModule ||
+        atObservatoryModule ||
+        atClinicModule ||
+        atHygieneService
+      ) {
         visitor.state = VisitorState.Leisure;
         // Wonder bonus: Observatory contributes 2x rating boost vs Lounge.
         // Cantina sits between (drinks land mid-way between social and wonder).
@@ -7503,21 +7757,38 @@ function updateVisitorLogic(
           ? 0.07
           : atCantinaModule
             ? 0.05
-            : atHygieneService
-              ? 0.025
-              : 0.04;
+            : atVendingModule
+              ? 0.035
+              : atClinicModule
+                ? 0.02
+                : atHygieneService
+                  ? 0.025
+                  : 0.04;
         visitorSuccessRatingBonus(state, ratingBonus, 'leisureService');
-        if (atMarketModule) {
+        if (atVendingModule) {
+          state.usageTotals.visitorLeisureEntries.vending += 1;
+        } else if (atMarketModule || state.rooms[visitor.tileIndex] === RoomType.Market) {
           state.usageTotals.visitorLeisureEntries.market += 1;
         } else if (atHygieneService) {
           state.usageTotals.hygiene += 1;
+          state.usageTotals.visitorLeisureEntries.hygiene += 1;
+        } else if (atCantinaModule) {
+          state.usageTotals.visitorLeisureEntries.cantina += 1;
+        } else if (atObservatoryModule) {
+          state.usageTotals.visitorLeisureEntries.observatory += 1;
+        } else if (atClinicModule) {
+          state.usageTotals.hygiene += 1;
+        } else if (state.rooms[visitor.tileIndex] === RoomType.RecHall) {
+          state.usageTotals.visitorLeisureEntries.recHall += 1;
         } else {
           state.usageTotals.visitorLeisureEntries.lounge += 1;
         }
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
         // Observatory: longer dwell (wonder). Cantina: shorter (drink + go).
         const dwellMult = atObservatoryModule ? 1.45 : atCantinaModule ? 0.85 : 1;
-        visitor.eatTimer = (atHygieneService ? 2.8 : baseDwell * dwellMult) + state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
+        visitor.eatTimer =
+          (atClinicModule ? 5.5 : atHygieneService ? 2.8 : baseDwell * dwellMult) +
+          state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
         applyVisitorCompletedRouteExperience(state, visitor);
         visitor.reservedTargetTile = null;
         setVisitorPath(state, visitor, []);
@@ -7555,6 +7826,10 @@ function updateVisitorLogic(
         state.metrics.creditsEarnedLifetime += drinkSpend;
         state.usageTotals.creditsMarketGross += drinkSpend;
       }
+      if (state.rooms[visitor.tileIndex] === RoomType.Clinic) {
+        visitor.airExposureSec = Math.max(0, visitor.airExposureSec - PROCESS_RATES.clinicDistressRecoveryPerSec * dt);
+        updateActorHealthFromExposure(state, visitor);
+      }
       if (state.modules[visitor.tileIndex] === ModuleType.MarketStall) {
         const requestedGoods = MARKET_TRADE_GOOD_USE_PER_SEC * dt * clamp(visitor.spendMultiplier, 0.7, 1.8);
         const consumedGoods = consumeTradeGoodsFromMarket(state, requestedGoods);
@@ -7562,11 +7837,6 @@ function updateVisitorLogic(
         if (consumedGoods > 0) {
           spendMultiplier = 1 + consumedGoods * 0.9;
           state.usageTotals.tradeGoodsSold += consumedGoods;
-          // Trade-cycle counter for the T3 unlock gate. One sale event
-          // here = one workshop→market cycle completed (the goods were
-          // produced at a workshop earlier and are now being consumed
-          // by a visitor). Lifetime-monotonic; increments per sale.
-          state.metrics.tradeCyclesCompletedLifetime += consumedGoods;
           marketTradeGoodsUsed += consumedGoods;
           visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
         } else {
@@ -7590,7 +7860,8 @@ function updateVisitorLogic(
       if (visitor.eatTimer <= 0) {
         // Record this stop's room kind so the next leg picks somewhere new.
         const room = state.rooms[visitor.tileIndex];
-        if (room === RoomType.Market) visitor.lastLeisureKind = 'market';
+        if (state.modules[visitor.tileIndex] === ModuleType.VendingMachine) visitor.lastLeisureKind = 'vending';
+        else if (room === RoomType.Market) visitor.lastLeisureKind = 'market';
         else if (room === RoomType.Lounge) visitor.lastLeisureKind = 'lounge';
         else if (room === RoomType.RecHall) visitor.lastLeisureKind = 'recHall';
         else if (room === RoomType.Hygiene) visitor.lastLeisureKind = 'hygiene';
@@ -8245,12 +8516,7 @@ function updateResidentLogic(
 
     if (state.ops.clinicActive > 0 && state.rooms[resident.tileIndex] === RoomType.Clinic) {
       resident.airExposureSec = Math.max(0, resident.airExposureSec - PROCESS_RATES.clinicDistressRecoveryPerSec * dt);
-      resident.healthState =
-        resident.airExposureSec >= AIR_CRITICAL_EXPOSURE_SEC
-          ? 'critical'
-          : resident.airExposureSec >= AIR_DISTRESS_EXPOSURE_SEC
-            ? 'distressed'
-            : 'healthy';
+      updateActorHealthFromExposure(state, resident);
       resident.stress = clamp(resident.stress - dt * 1.4, 0, 120);
       resident.safety = clamp(resident.safety + dt * 1.2, 0, 100);
     }
@@ -8865,7 +9131,9 @@ function computeMetrics(state: StationState): void {
     state.ops.hydroponicsActive * 1.1 +
     state.ops.lifeSupportActive * 1.4 +
     state.ops.loungeActive * 1.0 +
-    state.ops.marketActive * 1.1;
+    state.ops.marketActive * 1.1 +
+    state.ops.cantinaActive * 1.0 +
+    state.ops.observatoryActive * 0.9;
 
   const powerDeficit = Math.max(0, powerDemand - powerSupply);
   const powerPressure = powerDeficit * 1.9;
@@ -8916,7 +9184,9 @@ function computeMetrics(state: StationState): void {
     state.ops.lifeSupportActive * 10 +
     state.ops.dormsActive * 4 +
     state.ops.loungeActive * 7 +
-    state.ops.marketActive * 8;
+    state.ops.marketActive * 8 +
+    state.ops.cantinaActive * 7 +
+    state.ops.observatoryActive * 6;
 
   const loadPct = capacity > 0 ? (load / capacity) * 100 : 200;
 
@@ -9032,14 +9302,18 @@ function computeMetrics(state: StationState): void {
     RoomType.Cafeteria,
     RoomType.Lounge,
     RoomType.Market,
-    RoomType.RecHall
+    RoomType.RecHall,
+    RoomType.Cantina,
+    RoomType.Observatory
   ]);
   const residentEnvironment = averageRoomEnvironmentForRooms(state, [
     RoomType.Dorm,
     RoomType.Hygiene,
     RoomType.Cafeteria,
     RoomType.Lounge,
-    RoomType.RecHall
+    RoomType.RecHall,
+    RoomType.Cantina,
+    RoomType.Observatory
   ]);
   const dormEnvironment = averageRoomEnvironmentForRooms(state, [RoomType.Dorm]);
   state.metrics.visitorStatusAvg = visitorEnvironment.visitorStatus;
@@ -9181,12 +9455,22 @@ function computeMetrics(state: StationState): void {
     1,
     state.usageTotals.visitorLeisureEntries.cafeteria +
       state.usageTotals.visitorLeisureEntries.market +
-      state.usageTotals.visitorLeisureEntries.lounge
+      state.usageTotals.visitorLeisureEntries.lounge +
+      state.usageTotals.visitorLeisureEntries.recHall +
+      state.usageTotals.visitorLeisureEntries.cantina +
+      state.usageTotals.visitorLeisureEntries.observatory +
+      state.usageTotals.visitorLeisureEntries.hygiene +
+      state.usageTotals.visitorLeisureEntries.vending
   );
   state.metrics.visitorDestinationShares = {
     cafeteria: state.usageTotals.visitorLeisureEntries.cafeteria / destinationTotal,
     market: state.usageTotals.visitorLeisureEntries.market / destinationTotal,
-    lounge: state.usageTotals.visitorLeisureEntries.lounge / destinationTotal
+    lounge: state.usageTotals.visitorLeisureEntries.lounge / destinationTotal,
+    recHall: state.usageTotals.visitorLeisureEntries.recHall / destinationTotal,
+    cantina: state.usageTotals.visitorLeisureEntries.cantina / destinationTotal,
+    observatory: state.usageTotals.visitorLeisureEntries.observatory / destinationTotal,
+    hygiene: state.usageTotals.visitorLeisureEntries.hygiene / destinationTotal,
+    vending: state.usageTotals.visitorLeisureEntries.vending / destinationTotal
   };
   state.metrics.shipsByTypePerMin = {
     tourist: state.usageTotals.shipsByType.tourist / runMinutes,
@@ -9658,7 +9942,12 @@ export function createInitialState(options?: { seed?: number }): StationState {
       visitorDestinationShares: {
         cafeteria: 0,
         market: 0,
-        lounge: 0
+        lounge: 0,
+        recHall: 0,
+        cantina: 0,
+        observatory: 0,
+        hygiene: 0,
+        vending: 0
       },
       dormVisitsPerMin: 0,
       dormFailedAttemptsPerMin: 0,
@@ -9894,7 +10183,12 @@ export function createInitialState(options?: { seed?: number }): StationState {
       visitorLeisureEntries: {
         cafeteria: 0,
         market: 0,
-        lounge: 0
+        lounge: 0,
+        recHall: 0,
+        cantina: 0,
+        observatory: 0,
+        hygiene: 0,
+        vending: 0
       },
       ratingDelta: 0,
       ratingFromShipTimeout: 0,
@@ -9987,6 +10281,10 @@ export function createInitialState(options?: { seed?: number }): StationState {
       loungeActive: 0,
       marketTotal: 0,
       marketActive: 0,
+      cantinaTotal: 0,
+      cantinaActive: 0,
+      observatoryTotal: 0,
+      observatoryActive: 0,
       logisticsStockTotal: 0,
       logisticsStockActive: 0,
       storageTotal: 0,
@@ -11326,6 +11624,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateMaintenanceDebt(state, dt);
   updateFires(state, dt);
   updateResources(state, dt);
+  maybeCreateTier3Patient(state, dt);
 
   const occupancyByTile = buildOccupancyMap(state);
   state.pathOccupancyByTile = occupancyByTile;
@@ -11336,6 +11635,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
+  maybeCreateTier3DispatchIncident(state, dt);
   updateIncidentPipeline(state, dt, occupancyByTile);
 
   refreshJobMetrics(state);

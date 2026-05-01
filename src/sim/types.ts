@@ -240,13 +240,14 @@ export interface Visitor {
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
   lastRouteExposure?: RouteExposure;
+  hygieneStopUsed?: boolean;
   // Multi-leg leisure: long-stay archetypes (lounger, shopper) cycle through
   // 2-3 leisure stops (eat → market → lounge → exit, etc). Legs decrement on
   // each completed Leisure dwell; lastLeisureKind biases the next leg toward
   // a different room type so visitors don't loop the same lounge twice.
   leisureLegsRemaining: number;
   leisureLegsPlanned: number;
-  lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | null;
+  lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | 'vending' | null;
 }
 
 export enum ResidentState {
@@ -833,6 +834,11 @@ export interface Metrics {
     cafeteria: number;
     market: number;
     lounge: number;
+    recHall: number;
+    cantina: number;
+    observatory: number;
+    hygiene: number;
+    vending: number;
   };
   dormVisitsPerMin: number;
   dormFailedAttemptsPerMin: number;
@@ -1176,6 +1182,10 @@ export interface RoomOps {
   loungeActive: number;
   marketTotal: number;
   marketActive: number;
+  cantinaTotal: number;
+  cantinaActive: number;
+  observatoryTotal: number;
+  observatoryActive: number;
   logisticsStockTotal: number;
   logisticsStockActive: number;
   storageTotal: number;
@@ -1366,6 +1376,11 @@ export interface StationState {
       cafeteria: number;
       market: number;
       lounge: number;
+      recHall: number;
+      cantina: number;
+      observatory: number;
+      hygiene: number;
+      vending: number;
     };
     ratingDelta: number;
     ratingFromShipTimeout: number;
