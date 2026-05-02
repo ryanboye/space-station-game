@@ -125,8 +125,10 @@ sprites:
       readable at 18x18.
     rotation: 0
   tile.airlock:
-    prompt: Top-down pixel art. space station. Style of rimworld. EVA airlock hatch tile with cyan pressure seal,
-      warning tabs, square top-down pressure chamber, edge-to-edge coverage, no text, readable at 18x18.
+    prompt: Top-down pixel art. space station. Style of rimworld. top-view straight EVA airlock module, thick pale
+      white pressure chamber inside chunky grey mechanical frame, dark rubber gasket, cyan status lights,
+      yellow-black hazard side flanges, bolted technical plating, sealed hatch not an open hole, edge-to-edge
+      coverage, no text, readable at 18x18.
     rotation: 0
   tile.door.horizontal:
     prompt: Top-down pixel art. space station. Style of rimworld. door tile HORIZONTAL orientation (east-west passage).

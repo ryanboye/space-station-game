@@ -15,6 +15,7 @@ import { sigilForFaction } from './sim/system-map';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
+  cancelConstructionAtTile,
   canExpandDirection,
   clearBodies,
   createInitialState,
@@ -305,6 +306,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
+        <button class="tool-btn" data-tool-cancel-construction="1" title="Cancel build orders by dragging over blueprints"><span class="tool-key">·</span>Cancel Build</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
       </div>
@@ -2978,6 +2980,7 @@ function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'room') return `room:${tool.room}`;
   if (tool.kind === 'module') return `module:${tool.module}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
+  if (tool.kind === 'cancel-construction') return 'cancel-construction';
   return 'none';
 }
 
@@ -3018,6 +3021,7 @@ function wireToolbar(): void {
       const moduleKey = btn.dataset.toolModule;
       const rotateKey = btn.dataset.toolRotate;
       const deselectKey = btn.dataset.toolDeselect;
+      const cancelConstructionKey = btn.dataset.toolCancelConstruction;
       if (tileKey) {
         const tile = TOOLBAR_TILE_MAP[tileKey];
         if (tile !== undefined) {
@@ -3036,6 +3040,9 @@ function wireToolbar(): void {
       } else if (moduleKey) {
         const module = TOOLBAR_MODULE_MAP[moduleKey];
         if (module !== undefined) selectModuleTool(module);
+      } else if (cancelConstructionKey) {
+        currentTool = { kind: 'cancel-construction' };
+        toolLockMessage = '';
       } else if (btn.dataset.toolClearroom) {
         // Hotkey '0' equivalent — clears the paint onto a tile (room: None).
         selectRoomTool(RoomType.None);
@@ -3058,6 +3065,7 @@ function refreshToolbar(): void {
     const roomKey = btn.dataset.toolRoom;
     const moduleKey = btn.dataset.toolModule;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
+    const cancelConstructionKey = btn.dataset.toolCancelConstruction;
     let active = false;
     let locked = false;
     let lockedTitle = '';
@@ -3068,6 +3076,8 @@ function refreshToolbar(): void {
       active = z !== undefined && z === currentTool.zone;
     } else if (isDiagnosticOverlay(diagnosticOverlayKey)) {
       active = state.controls.diagnosticOverlay === diagnosticOverlayKey;
+    } else if (cancelConstructionKey) {
+      active = toolKind === 'cancel-construction';
     } else if (btn.dataset.toolClearroom) {
       active = toolKind === 'room' && currentTool.room === RoomType.None;
     } else if (roomKey) {
@@ -3828,6 +3838,8 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
           const planned = planModuleConstruction(state, idx, currentTool.module!, state.controls.moduleRotation);
           if (!planned.ok) toolLockMessage = planned.reason ?? '';
         }
+      } else if (currentTool.kind === 'cancel-construction') {
+        cancelConstructionAtTile(state, idx);
       }
   }
 }

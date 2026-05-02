@@ -1474,7 +1474,7 @@ export interface StationState {
 }
 
 export interface BuildTool {
-  kind: 'none' | 'tile' | 'zone' | 'room' | 'module';
+  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'cancel-construction';
   tile?: TileType;
   zone?: ZoneType;
   room?: RoomType;

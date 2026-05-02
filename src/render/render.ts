@@ -286,26 +286,49 @@ function drawAirlockFallback(ctx: CanvasRenderingContext2D, px: number, py: numb
   ctx.translate(-TILE_SIZE * 0.5, -TILE_SIZE * 0.5);
 
   const p = PX;
-  const panel = ctx.createLinearGradient(0, 0, 0, TILE_SIZE);
-  panel.addColorStop(0, '#31465b');
-  panel.addColorStop(1, '#172636');
-  ctx.fillStyle = panel;
-  ctx.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
+  ctx.fillStyle = '#243240';
+  ctx.fillRect(0, 1 * p, 18 * p, 16 * p);
+  ctx.fillStyle = '#344554';
+  ctx.fillRect(0, 3 * p, 18 * p, 12 * p);
+  ctx.fillStyle = '#1d2832';
+  ctx.fillRect(2 * p, 5 * p, 14 * p, 8 * p);
 
-  ctx.fillStyle = '#0b1622';
-  ctx.fillRect(2 * p, 2 * p, 14 * p, 14 * p);
-  ctx.strokeStyle = '#79dcff';
+  ctx.fillStyle = '#62717c';
+  ctx.fillRect(0, 6 * p, 3 * p, 7 * p);
+  ctx.fillRect(15 * p, 6 * p, 3 * p, 7 * p);
+  ctx.fillStyle = '#d59a24';
+  ctx.fillRect(0, 7 * p, 3 * p, 1 * p);
+  ctx.fillRect(0, 10 * p, 3 * p, 1 * p);
+  ctx.fillRect(15 * p, 7 * p, 3 * p, 1 * p);
+  ctx.fillRect(15 * p, 10 * p, 3 * p, 1 * p);
+
+  ctx.fillStyle = '#6d7e8a';
+  ctx.fillRect(3 * p, 4 * p, 12 * p, 10 * p);
+  ctx.fillStyle = '#2d3a45';
+  ctx.fillRect(4 * p, 5 * p, 10 * p, 8 * p);
+  ctx.fillStyle = '#dbe7ed';
+  ctx.fillRect(5 * p, 6 * p, 8 * p, 6 * p);
+  ctx.fillStyle = '#f3f8fa';
+  ctx.fillRect(5.5 * p, 6.5 * p, 7 * p, 5 * p);
+  ctx.fillStyle = '#b5c4ce';
+  ctx.fillRect(6 * p, 11 * p, 6 * p, 1 * p);
+
+  ctx.fillStyle = '#2a3a47';
+  ctx.fillRect(6 * p, 3 * p, 6 * p, 1 * p);
+  ctx.fillRect(6 * p, 14 * p, 6 * p, 1 * p);
+  ctx.fillStyle = '#79e0ff';
+  ctx.fillRect(7 * p, 3 * p, 4 * p, 1 * p);
+  ctx.fillRect(7 * p, 14 * p, 4 * p, 1 * p);
+  ctx.fillRect(4 * p, 8 * p, 1 * p, 2 * p);
+  ctx.fillRect(13 * p, 8 * p, 1 * p, 2 * p);
+
+  ctx.fillStyle = '#c2d0d8';
+  ctx.fillRect(8 * p, 6 * p, 1 * p, 6 * p);
+  ctx.fillStyle = '#8da2ae';
+  ctx.fillRect(9 * p, 6 * p, 1 * p, 6 * p);
+  ctx.strokeStyle = '#18222b';
   ctx.lineWidth = Math.max(1, p);
-  ctx.strokeRect(3.5 * p, 3.5 * p, 11 * p, 11 * p);
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-  ctx.strokeRect(5.5 * p, 5.5 * p, 7 * p, 7 * p);
-
-  ctx.fillStyle = '#ffd166';
-  ctx.fillRect(2 * p, 8 * p, 3 * p, 2 * p);
-  ctx.fillRect(13 * p, 8 * p, 3 * p, 2 * p);
-  ctx.fillStyle = '#54f0d2';
-  ctx.fillRect(8 * p, 2 * p, 2 * p, 3 * p);
-  ctx.fillRect(8 * p, 13 * p, 2 * p, 3 * p);
+  ctx.strokeRect(3.5 * p, 4.5 * p, 11 * p, 9 * p);
   ctx.restore();
   return true;
 }
@@ -519,11 +542,24 @@ function drawBerthTileTexture(ctx: CanvasRenderingContext2D, state: StationState
 
 function renderDoorLayer(ctx: CanvasRenderingContext2D, state: StationState, spriteAtlas: SpriteAtlas): void {
   for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] !== TileType.Door) continue;
+    if (state.tiles[i] !== TileType.Door && state.tiles[i] !== TileType.Airlock) continue;
     const { x, y } = fromIndex(i, state.width);
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const doorVariant = resolveDoorVariantForTile(state, i);
+    if (state.tiles[i] === TileType.Airlock) {
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        TILE_SPRITE_KEYS[TileType.Airlock],
+        px,
+        py,
+        TILE_SIZE,
+        TILE_SIZE,
+        doorVariant.rotation
+      ) || drawAirlockFallback(ctx, px, py, doorVariant.rotation);
+      continue;
+    }
     drawSpriteByKey(
       ctx,
       spriteAtlas,
@@ -2404,7 +2440,9 @@ export function renderWorld(
         ? `Tool: Zone ${currentTool.zone}`
         : currentTool.kind === 'room'
           ? `Tool: Room ${currentTool.room}`
-          : `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`;
+          : currentTool.kind === 'module'
+            ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
+            : 'Tool: Cancel Build';
 
   ctx.fillStyle = '#d3deed';
   ctx.font = `${Math.round(12 * PX)}px monospace`;

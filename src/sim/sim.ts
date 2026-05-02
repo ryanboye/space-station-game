@@ -2512,6 +2512,50 @@ function computePressurization(state: StationState): void {
     }
   }
 
+  const airlockExterior = new Array<boolean>(n).fill(false);
+  const exteriorQueue: number[] = [];
+  const pushExteriorIfOpen = (idx: number): void => {
+    if (idx < 0 || idx >= n) return;
+    if (airlockExterior[idx]) return;
+    if (!vacuumReachable[idx]) return;
+    if (isBarrierAt(idx)) return;
+    if (state.tiles[idx] !== TileType.Space && state.rooms[idx] !== RoomType.None) return;
+    airlockExterior[idx] = true;
+    exteriorQueue.push(idx);
+  };
+  for (let i = 0; i < n; i++) {
+    if (state.tiles[i] !== TileType.Airlock) continue;
+    const p = fromIndex(i, state.width);
+    const deltas = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+    for (const [dx, dy] of deltas) {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      pushExteriorIfOpen(toIndex(nx, ny, state.width));
+    }
+  }
+  for (let qi = 0; qi < exteriorQueue.length; qi++) {
+    const idx = exteriorQueue[qi];
+    const p = fromIndex(idx, state.width);
+    const deltas = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+    for (const [dx, dy] of deltas) {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      pushExteriorIfOpen(toIndex(nx, ny, state.width));
+    }
+  }
+
   let builtWalkable = 0;
   let leakingWalkable = 0;
   for (let i = 0; i < n; i++) {
@@ -2520,7 +2564,7 @@ function computePressurization(state: StationState): void {
     state.pressurized[i] = pressurized;
     if (isBuiltWalkable) {
       builtWalkable++;
-      if (!pressurized) leakingWalkable++;
+      if (!pressurized && !airlockExterior[i]) leakingWalkable++;
     }
   }
 
@@ -5748,30 +5792,100 @@ const CONSTRUCTION_BUILD_RATE_PER_SEC = 6;
 const EVA_OXYGEN_MAX_SEC = 120;
 const EVA_LOW_OXYGEN_SEC = 18;
 
+function isEvaTraversalTile(state: StationState, tileIndex: number): boolean {
+  const tile = state.tiles[tileIndex];
+  return tile === TileType.Space || tile === TileType.Airlock || (isWalkable(tile) && !state.pressurized[tileIndex]);
+}
+
+function shouldSuitUpFromAirlock(state: StationState, crew: CrewMember): boolean {
+  if (state.tiles[crew.tileIndex] !== TileType.Airlock) return false;
+  const nextTile = crew.path[0];
+  return nextTile !== undefined && nextTile >= 0 && isEvaTraversalTile(state, nextTile) && state.tiles[nextTile] !== TileType.Airlock;
+}
+
+function updateEvaSuitForRoute(state: StationState, crew: CrewMember, dt: number): void {
+  if (state.tiles[crew.tileIndex] === TileType.Airlock) {
+    if (shouldSuitUpFromAirlock(state, crew)) {
+      crew.evaSuit = true;
+      crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
+    } else {
+      crew.evaSuit = false;
+      crew.evaOxygenSec = 0;
+    }
+    return;
+  }
+
+  if (!isEvaTraversalTile(state, crew.tileIndex)) return;
+  if (!crew.evaSuit) {
+    crew.evaSuit = true;
+    crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
+  } else {
+    crew.evaOxygenSec = Math.max(0, crew.evaOxygenSec - dt);
+  }
+}
+
 function moduleConstructionCost(state: StationState, module: ModuleType, rotation: ModuleRotation): number {
   const footprint = moduleFootprint(module, rotation);
   const base = module === ModuleType.WallLight ? 2 : footprint.width * footprint.height * 3;
   return Math.max(2, base);
 }
 
-function removeConstructionAtTile(state: StationState, tileIndex: number): void {
-  const removedIds = new Set(state.constructionSites.filter((site) => site.tileIndex === tileIndex).map((site) => site.id));
-  if (removedIds.size <= 0) return;
+function refundConstructionMaterials(state: StationState, amount: number): void {
+  if (amount <= 0) return;
+  state.legacyMaterialStock += amount;
+  state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
+}
+
+function constructionSiteCoversTile(state: StationState, site: ConstructionSite, tileIndex: number): boolean {
+  if (site.tileIndex === tileIndex) return true;
+  if (site.kind !== 'module' || site.targetModule === undefined) return false;
+  const footprint = moduleFootprint(site.targetModule, site.rotation ?? 0);
+  return footprintTiles(state, site.tileIndex, footprint.width, footprint.height).includes(tileIndex);
+}
+
+function removeConstructionAtTile(state: StationState, tileIndex: number, refundMaterials = false): boolean {
+  const removedSites = state.constructionSites.filter((site) => constructionSiteCoversTile(state, site, tileIndex));
+  const removedIds = new Set(removedSites.map((site) => site.id));
+  if (removedIds.size <= 0) return false;
+  if (refundMaterials) {
+    refundConstructionMaterials(
+      state,
+      removedSites.reduce((sum, site) => sum + Math.max(0, site.deliveredMaterials), 0)
+    );
+  }
   state.constructionSites = state.constructionSites.filter((site) => !removedIds.has(site.id));
   for (const job of state.jobs) {
     if (job.constructionSiteId === undefined || !removedIds.has(job.constructionSiteId)) continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    const assignedCrewId = job.assignedCrewId;
+    job.expiredFromState = job.state;
     job.state = 'expired';
     job.completedAt = state.now;
-    if (job.assignedCrewId !== null) {
-      const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
+    job.assignedCrewId = null;
+    job.stallReason = 'none';
+    if (assignedCrewId !== null) {
+      const crew = state.crewMembers.find((c) => c.id === assignedCrewId);
       if (crew) {
+        if (refundMaterials && crew.carryingItemType === 'rawMaterial' && crew.carryingAmount > 0) {
+          refundConstructionMaterials(state, crew.carryingAmount);
+        }
         crew.activeJobId = null;
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
-        crew.evaSuit = false;
+        setCrewPath(state, crew, []);
+        if (state.tiles[crew.tileIndex] === TileType.Airlock || (state.pressurized[crew.tileIndex] && !isEvaTraversalTile(state, crew.tileIndex))) {
+          crew.evaSuit = false;
+          crew.evaOxygenSec = 0;
+        }
       }
     }
   }
+  return true;
+}
+
+export function cancelConstructionAtTile(state: StationState, tileIndex: number): boolean {
+  if (tileIndex < 0 || tileIndex >= state.tiles.length) return false;
+  return removeConstructionAtTile(state, tileIndex, true);
 }
 
 function hasAdjacentBuildAnchor(state: StationState, tileIndex: number): boolean {
@@ -6016,7 +6130,7 @@ function findSpacePath(state: StationState, start: number, goal: number): number
       if (!inBounds(x, y, state.width, state.height)) continue;
       const next = toIndex(x, y, state.width);
       if (seen.has(next)) continue;
-      const allowed = next === goal || state.tiles[next] === TileType.Space || state.tiles[next] === TileType.Airlock;
+      const allowed = next === goal || isEvaTraversalTile(state, next);
       if (!allowed) continue;
       seen.add(next);
       cameFrom[next] = current;
@@ -6052,6 +6166,9 @@ function adjacentWalkableTiles(state: StationState, tileIndex: number): number[]
 
 function findConstructionPath(state: StationState, start: number, site: ConstructionSite): number[] | null {
   if (site.requiresEva) {
+    if (isEvaTraversalTile(state, start) && state.tiles[start] !== TileType.Airlock) {
+      return findSpacePath(state, start, site.tileIndex);
+    }
     let best: number[] | null = null;
     for (const airlock of activeAirlockTiles(state)) {
       const inside = findPath(state, start, airlock, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
@@ -6895,7 +7012,8 @@ function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: 
   if (state.crewMembers.length <= 0) return;
   const keep: CrewMember[] = [];
   for (const crew of state.crewMembers) {
-    const exposure = applyAirExposure(state, crew, airQualityAt(state, crew.tileIndex), dt);
+    const suitAir = crew.evaSuit && crew.evaOxygenSec > 0 ? 100 : airQualityAt(state, crew.tileIndex);
+    const exposure = applyAirExposure(state, crew, suitAir, dt);
     if (exposure.died) {
       releaseCrewJobsOnDeath(state, crew.id);
       registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
@@ -6942,7 +7060,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       crew.thirst = clamp(crew.thirst - dt * CREW_THIRST_DECAY_PER_SEC, 0, 100);
     }
     if (crew.activeJobId === null && crew.evaSuit) {
-      if (state.tiles[crew.tileIndex] === TileType.Airlock || state.tiles[crew.tileIndex] !== TileType.Space) {
+      if (state.tiles[crew.tileIndex] === TileType.Airlock) {
         crew.evaSuit = false;
         crew.evaOxygenSec = 0;
         setCrewPath(state, crew, []);
@@ -6958,6 +7076,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           setCrewPath(state, crew, bestReturn ?? []);
         }
         const moveResult = moveCrew(crew);
+        if (state.tiles[crew.tileIndex] === TileType.Airlock) {
+          crew.evaSuit = false;
+          crew.evaOxygenSec = 0;
+          setCrewPath(state, crew, []);
+        }
         crew.idleReason = moveResult === 'blocked' ? 'idle_no_path' : 'idle_waiting_reassign';
         if (moveResult === 'blocked') setCrewPath(state, crew, []);
       }
@@ -7327,7 +7450,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.activeJobId = null;
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
-        crew.evaSuit = false;
         setCrewPath(state, crew, []);
       } else if (job.type === 'construct') {
         const site =
@@ -7340,22 +7462,16 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           crew.activeJobId = null;
           crew.carryingItemType = null;
           crew.carryingAmount = 0;
-          crew.evaSuit = false;
           setCrewPath(state, crew, []);
           continue;
         }
         const usingEva = site.requiresEva;
         if (usingEva) {
-          crew.evaSuit = true;
-          if (crew.evaOxygenSec <= 0 || state.tiles[crew.tileIndex] === TileType.Airlock) {
-            crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
-          } else if (state.tiles[crew.tileIndex] === TileType.Space || crew.tileIndex === site.tileIndex) {
-            crew.evaOxygenSec = Math.max(0, crew.evaOxygenSec - dt);
-          }
+          updateEvaSuitForRoute(state, crew, dt);
           if (crew.evaOxygenSec <= EVA_LOW_OXYGEN_SEC && crew.carryingAmount <= 0 && !crewAtConstructionSite(state, crew, site)) {
             markJobStall(state, job, 'stalled_path_blocked');
           }
-        } else if (state.tiles[crew.tileIndex] !== TileType.Space) {
+        } else if (state.tiles[crew.tileIndex] === TileType.Airlock) {
           crew.evaSuit = false;
           crew.evaOxygenSec = 0;
         }
@@ -7414,6 +7530,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               markJobStall(state, job, targetSite ? 'stalled_unreachable_dropoff' : 'stalled_unreachable_source');
             }
             const moveResult = moveCrew(crew);
+            if (usingEva) updateEvaSuitForRoute(state, crew, dt);
             if (moveResult === 'moved') {
               job.lastProgressAt = state.now;
               markJobStall(state, job, 'none');
@@ -7436,6 +7553,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               }
             }
             const moveResult = moveCrew(crew);
+            if (usingEva) updateEvaSuitForRoute(state, crew, dt);
             if (moveResult === 'moved') {
               job.lastProgressAt = state.now;
               markJobStall(state, job, 'none');

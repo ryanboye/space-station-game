@@ -2,6 +2,7 @@ import {
   buyMaterials,
   buyMaterialsDetailed,
   buyRawFood,
+  cancelConstructionAtTile,
   collectServiceNodeReachability,
   expandMap,
   createInitialState,
@@ -1407,6 +1408,75 @@ function testModuleBlueprintConstructionCompletes(): void {
   assertCondition(state.modules[target] === ModuleType.StorageRack, 'Crew should build the planned module.');
 }
 
+function testCancelBlueprintConstructionRemovesSiteAndJob(): void {
+  const state = createInitialState({ seed: 30231 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 6;
+  state.legacyMaterialStock = 80;
+  state.metrics.materials = 80;
+
+  const target = toIndex(20, 20, state.width);
+  const planned = planTileConstruction(state, target, TileType.Wall);
+  assertCondition(planned.ok, `Interior wall blueprint should be accepted (${planned.reason ?? 'no reason'}).`);
+  tick(state, 0.1);
+  const siteId = state.constructionSites[0]?.id;
+  assertCondition(siteId !== undefined, 'Blueprint should create a cancellable construction site.');
+  assertCondition(
+    state.jobs.some((job) => job.constructionSiteId === siteId && job.state !== 'done' && job.state !== 'expired'),
+    'Construction site should enqueue an open construction job.'
+  );
+
+  const cancelled = cancelConstructionAtTile(state, target);
+  assertCondition(cancelled, 'Cancel construction should report that a blueprint was removed.');
+  assertCondition(state.constructionSites.every((site) => site.id !== siteId), 'Cancelled blueprint should be removed from the site list.');
+  assertCondition(
+    state.jobs.every((job) => job.constructionSiteId !== siteId || job.state === 'expired'),
+    'Open construction jobs for the cancelled blueprint should expire.'
+  );
+  assertCondition(state.tiles[target] === TileType.Floor, 'Cancelling a blueprint should leave the existing tile unchanged.');
+}
+
+function testCancelBlueprintConstructionRefundsDeliveredMaterials(): void {
+  const state = createInitialState({ seed: 30232 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 6;
+  state.legacyMaterialStock = 20;
+  state.metrics.materials = 20;
+
+  const target = toIndex(20, 20, state.width);
+  const planned = planTileConstruction(state, target, TileType.Wall);
+  assertCondition(planned.ok, `Interior wall blueprint should be accepted (${planned.reason ?? 'no reason'}).`);
+  const site = state.constructionSites[0];
+  assertCondition(!!site, 'Blueprint should create a construction site before refund test.');
+  site.deliveredMaterials = 3;
+
+  const cancelled = cancelConstructionAtTile(state, target);
+  assertCondition(cancelled, 'Cancel construction should remove the blueprint before refunding materials.');
+  assertCondition(state.legacyMaterialStock >= 23, 'Delivered construction materials should be refunded on cancel.');
+  assertCondition(state.metrics.materials >= 23, 'Material HUD metric should include refunded construction materials.');
+}
+
+function testCancelModuleBlueprintFromFootprintTile(): void {
+  const state = createInitialState({ seed: 30233 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 20, 20, 24, 24);
+  state.legacyMaterialStock = 80;
+  state.metrics.materials = 80;
+
+  const origin = toIndex(20, 20, state.width);
+  const coveredTile = toIndex(21, 21, state.width);
+  const planned = planModuleConstruction(state, origin, ModuleType.Table);
+  assertCondition(planned.ok, `Table blueprint should be accepted (${planned.reason ?? 'no reason'}).`);
+
+  const cancelled = cancelConstructionAtTile(state, coveredTile);
+  assertCondition(cancelled, 'Cancel construction should remove a module blueprint from any footprint tile.');
+  assertCondition(state.constructionSites.length === 0, 'Module blueprint should be removed when cancelling a covered footprint tile.');
+  assertCondition(state.modules[origin] === ModuleType.None, 'Cancelling a module blueprint should not place the module.');
+}
+
 function testEvaBlueprintConstructionUsesAirlock(): void {
   const state = createInitialState({ seed: 3024 });
   buildHabitat(state);
@@ -1428,11 +1498,84 @@ function testEvaBlueprintConstructionUsesAirlock(): void {
   );
   assertCondition(state.constructionSites.every((site) => site.requiresEva), 'Exterior blueprints should require EVA.');
 
+  let assignedEvaCrew = null as StationState['crewMembers'][number] | null;
+  for (let i = 0; i < 80; i++) {
+    tick(state, 0.1);
+    assignedEvaCrew =
+      state.crewMembers.find((crew) => {
+        const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
+        return job?.type === 'construct' && job.constructionSiteId !== undefined;
+      }) ?? null;
+    if (
+      assignedEvaCrew &&
+      state.tiles[assignedEvaCrew.tileIndex] !== TileType.Airlock &&
+      state.pressurized[assignedEvaCrew.tileIndex]
+    ) {
+      break;
+    }
+  }
+  assertCondition(!!assignedEvaCrew, 'EVA construction should assign a crew member.');
+  assertCondition(!assignedEvaCrew!.evaSuit, 'EVA crew should not suit up while still inside the pressurized station.');
+
+  let sawAirlockSuitTransition = false;
+  for (let i = 0; i < 500; i++) {
+    tick(state, 0.1);
+    if (
+      state.crewMembers.some(
+        (crew) =>
+          crew.activeJobId !== null &&
+          state.jobs.find((job) => job.id === crew.activeJobId)?.type === 'construct' &&
+          state.tiles[crew.tileIndex] === TileType.Airlock &&
+          crew.evaSuit
+      )
+    ) {
+      sawAirlockSuitTransition = true;
+      break;
+    }
+  }
+  assertCondition(sawAirlockSuitTransition, 'EVA crew should put on the suit at the airlock before going outside.');
+
   runFor(state, 120);
 
   assertCondition(state.tiles[exterior] === TileType.Floor, 'Crew should build exterior floor via airlock EVA.');
   assertCondition(state.tiles[chainedExterior] === TileType.Floor, 'Crew should build chained exterior floor via airlock EVA.');
   assertCondition(state.constructionSites.length === 0, 'Completed EVA construction site should be cleaned up.');
+}
+
+function testAirlockSealsStationPressure(): void {
+  const state = createInitialState({ seed: 30241 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  state.visitors.length = 0;
+  const airlock = toIndex(44, 16, state.width);
+  setTile(state, airlock, TileType.Airlock);
+
+  tick(state, 0.1);
+
+  assertCondition(state.pressurized[toIndex(20, 20, state.width)], 'Interior should remain pressurized behind an airlock.');
+  assertCondition(state.metrics.leakingTiles === 0, 'Airlock in the hull should not count as a leak.');
+  assertCondition(state.metrics.pressurizationPct === 100, 'Airlock in the hull should keep pressure at 100%.');
+}
+
+function testAirlockExteriorPadDoesNotVentStation(): void {
+  const state = createInitialState({ seed: 30242 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  state.visitors.length = 0;
+  const airlock = toIndex(44, 16, state.width);
+  const exterior = toIndex(45, 16, state.width);
+  const exterior2 = toIndex(46, 16, state.width);
+  setTile(state, airlock, TileType.Airlock);
+  setTile(state, exterior, TileType.Floor);
+  setTile(state, exterior2, TileType.Floor);
+
+  tick(state, 0.1);
+
+  assertCondition(state.pressurized[toIndex(20, 20, state.width)], 'Interior should remain pressurized with an exterior EVA pad.');
+  assertCondition(!state.pressurized[exterior], 'Exterior EVA pad should remain unpressurized.');
+  assertCondition(!state.pressurized[exterior2], 'Chained exterior EVA pad should remain unpressurized.');
+  assertCondition(state.metrics.leakingTiles === 0, 'Exterior EVA pads beyond an airlock should not count as station leaks.');
+  assertCondition(state.metrics.pressurizationPct === 100, 'Exterior EVA pads beyond an airlock should not lower station pressurization.');
 }
 
 function testInventoryOverlayToggleState(): void {
@@ -4262,7 +4405,12 @@ function run(): void {
   testIntakeMaterialsMoveToStorage();
   testInteriorBlueprintConstructionCompletes();
   testModuleBlueprintConstructionCompletes();
+  testCancelBlueprintConstructionRemovesSiteAndJob();
+  testCancelBlueprintConstructionRefundsDeliveredMaterials();
+  testCancelModuleBlueprintFromFootprintTile();
   testEvaBlueprintConstructionUsesAirlock();
+  testAirlockSealsStationPressure();
+  testAirlockExteriorPadDoesNotVentStation();
   testInventoryOverlayToggleState();
   testRoomInspectorInventoryBreakdown();
   testMarketBuyCapacityContext();

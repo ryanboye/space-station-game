@@ -10,6 +10,7 @@
 export {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
+  cancelConstructionAtTile,
   canExpandDirection,
   clearBodies,
   createInitialState,
