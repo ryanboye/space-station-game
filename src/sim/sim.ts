@@ -595,6 +595,48 @@ function moduleFootprint(type: ModuleType, rotation: ModuleRotation): { width: n
   return { width: def.width, height: def.height };
 }
 
+function moduleMount(type: ModuleType): 'floor' | 'wall' {
+  return MODULE_DEFINITIONS[type]?.mount ?? 'floor';
+}
+
+function adjacentWalkableTiles(state: StationState, tileIndex: number): number[] {
+  const p = fromIndex(tileIndex, state.width);
+  const out: number[] = [];
+  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const x = p.x + dx;
+    const y = p.y + dy;
+    if (!inBounds(x, y, state.width, state.height)) continue;
+    const next = toIndex(x, y, state.width);
+    if (isWalkable(state.tiles[next])) out.push(next);
+  }
+  return out;
+}
+
+export function wallMountedModuleServiceTile(state: StationState, tileIndex: number): number | null {
+  if (tileIndex < 0 || tileIndex >= state.tiles.length) return null;
+  if (state.tiles[tileIndex] !== TileType.Wall) return null;
+  const candidates = adjacentWalkableTiles(state, tileIndex);
+  if (candidates.length <= 0) return null;
+  const pressurized = candidates.find((tile) => state.pressurized[tile]);
+  return pressurized ?? candidates[0];
+}
+
+export function resolveWallMountedModuleFacing(
+  state: StationState,
+  tileIndex: number
+): 'north' | 'east' | 'south' | 'west' | null {
+  const serviceTile = wallMountedModuleServiceTile(state, tileIndex);
+  if (serviceTile === null) return null;
+  const origin = fromIndex(tileIndex, state.width);
+  const service = fromIndex(serviceTile, state.width);
+  if (service.x < origin.x) return 'west';
+  if (service.x > origin.x) return 'east';
+  if (service.y < origin.y) return 'north';
+  if (service.y > origin.y) return 'south';
+  return null;
+}
+
 function footprintTiles(
   state: StationState,
   originTile: number,
@@ -1396,7 +1438,8 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
   // Second pass: extend the BFS from each powered vent.
   const ventOriginTiles: number[] = [];
   for (const m of state.moduleInstances) {
-    if (m.type === ModuleType.Vent) ventOriginTiles.push(m.originTile);
+    if (m.type !== ModuleType.Vent) continue;
+    ventOriginTiles.push(wallMountedModuleServiceTile(state, m.originTile) ?? m.originTile);
   }
   const sourceTiles = lsTiles.slice();
 
@@ -5999,27 +6042,29 @@ function validateModulePlacementForConstruction(
   const footprint = moduleFootprint(module, appliedRotation);
   const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
   if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
-  const roomAtOrigin = state.rooms[originTile];
-  const requiresWallMount = module === ModuleType.WallLight;
+  const requiresWallMount = moduleMount(module) === 'wall';
+  const serviceTile = requiresWallMount ? wallMountedModuleServiceTile(state, originTile) : originTile;
+  if (requiresWallMount && serviceTile === null) {
+    return { ok: false, reason: 'wall fixture requires adjacent floor' };
+  }
+  const roomAtOrigin = state.rooms[serviceTile ?? originTile];
   for (const tile of tiles) {
     if (state.constructionSites.some((site) => site.tileIndex === tile && site.state !== 'done')) {
       return { ok: false, reason: 'construction overlap' };
     }
     if (requiresWallMount) {
-      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall fixture requires wall tile' };
     } else if (!isWalkable(state.tiles[tile])) {
       return { ok: false, reason: 'footprint blocked' };
     }
     if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
-    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) {
+    const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
+    if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) {
       return { ok: false, reason: 'invalid room for module' };
     }
-    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
+    if (!requiresWallMount && def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
       return { ok: false, reason: 'footprint crosses room boundary' };
     }
-  }
-  if (module === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
-    return { ok: false, reason: 'wall light requires top wall mount' };
   }
   const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
   if (berthModuleReason) return { ok: false, reason: berthModuleReason };
@@ -6047,6 +6092,13 @@ function hasOpenConstructionJob(state: StationState, siteId: number): boolean {
   );
 }
 
+function constructionWorkTile(state: StationState, site: ConstructionSite): number {
+  if (site.kind === 'module' && site.targetModule !== undefined && moduleMount(site.targetModule) === 'wall') {
+    return wallMountedModuleServiceTile(state, site.tileIndex) ?? site.tileIndex;
+  }
+  return site.tileIndex;
+}
+
 function enqueueConstructionJob(
   state: StationState,
   site: ConstructionSite,
@@ -6060,7 +6112,7 @@ function enqueueConstructionJob(
     itemType: 'rawMaterial',
     amount,
     fromTile,
-    toTile: site.tileIndex,
+    toTile: constructionWorkTile(state, site),
     assignedCrewId: null,
     createdAt: state.now,
     expiresAt: state.now + JOB_TTL_SEC * 2,
@@ -6150,41 +6202,28 @@ function findSpacePath(state: StationState, start: number, goal: number): number
   return null;
 }
 
-function adjacentWalkableTiles(state: StationState, tileIndex: number): number[] {
-  const p = fromIndex(tileIndex, state.width);
-  const out: number[] = [];
-  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  for (const [dx, dy] of deltas) {
-    const x = p.x + dx;
-    const y = p.y + dy;
-    if (!inBounds(x, y, state.width, state.height)) continue;
-    const next = toIndex(x, y, state.width);
-    if (isWalkable(state.tiles[next])) out.push(next);
-  }
-  return out;
-}
-
 function findConstructionPath(state: StationState, start: number, site: ConstructionSite): number[] | null {
+  const workTile = constructionWorkTile(state, site);
   if (site.requiresEva) {
     if (isEvaTraversalTile(state, start) && state.tiles[start] !== TileType.Airlock) {
-      return findSpacePath(state, start, site.tileIndex);
+      return findSpacePath(state, start, workTile);
     }
     let best: number[] | null = null;
     for (const airlock of activeAirlockTiles(state)) {
       const inside = findPath(state, start, airlock, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
       if (!inside) continue;
-      const outside = findSpacePath(state, airlock, site.tileIndex);
+      const outside = findSpacePath(state, airlock, workTile);
       if (!outside) continue;
       const combined = [...inside, ...outside];
       if (!best || combined.length < best.length) best = combined;
     }
     return best;
   }
-  if (isWalkable(state.tiles[site.tileIndex])) {
-    return findPath(state, start, site.tileIndex, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
+  if (isWalkable(state.tiles[workTile])) {
+    return findPath(state, start, workTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
   }
   let best: number[] | null = null;
-  for (const target of adjacentWalkableTiles(state, site.tileIndex)) {
+  for (const target of adjacentWalkableTiles(state, workTile)) {
     const path = findPath(state, start, target, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
     if (!path) continue;
     if (!best || path.length < best.length) best = path;
@@ -6193,9 +6232,10 @@ function findConstructionPath(state: StationState, start: number, site: Construc
 }
 
 function crewAtConstructionSite(state: StationState, crew: CrewMember, site: ConstructionSite): boolean {
-  if (crew.tileIndex === site.tileIndex) return true;
+  const workTile = constructionWorkTile(state, site);
+  if (crew.tileIndex === workTile) return true;
   if (site.requiresEva) return false;
-  return adjacentWalkableTiles(state, site.tileIndex).includes(crew.tileIndex);
+  return adjacentWalkableTiles(state, workTile).includes(crew.tileIndex);
 }
 
 function applyConstructionSite(state: StationState, site: ConstructionSite): boolean {
@@ -6372,7 +6412,9 @@ function updateFires(state: StationState, dt: number): void {
   // Cache extinguisher tiles for radius check.
   const extinguisherTiles: number[] = [];
   for (const m of state.moduleInstances) {
-    if (m.type === ModuleType.FireExtinguisher) extinguisherTiles.push(m.originTile);
+    if (m.type === ModuleType.FireExtinguisher) {
+      extinguisherTiles.push(wallMountedModuleServiceTile(state, m.originTile) ?? m.originTile);
+    }
   }
 
   const survivors: typeof state.effects.fires = [];
@@ -11872,9 +11914,9 @@ export function tryPlaceModule(
   rotation: ModuleRotation = 0
 ): { ok: boolean; reason?: string } {
   const module = moduleType;
-  const requiresWallMount = module === ModuleType.WallLight;
+  const requiresWallMount = moduleMount(module) === 'wall';
   if (requiresWallMount) {
-    if (state.tiles[originTile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+    if (state.tiles[originTile] !== TileType.Wall) return { ok: false, reason: 'wall fixture requires wall tile' };
   } else if (!isWalkable(state.tiles[originTile])) {
     return { ok: false, reason: 'target not walkable' };
   }
@@ -11886,22 +11928,24 @@ export function tryPlaceModule(
   const footprint = moduleFootprint(module, appliedRotation);
   const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
   if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
-  if (module === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
-    return { ok: false, reason: 'wall light requires top wall mount' };
+  const serviceTile = requiresWallMount ? wallMountedModuleServiceTile(state, originTile) : originTile;
+  if (requiresWallMount && serviceTile === null) {
+    return { ok: false, reason: 'wall fixture requires adjacent floor' };
   }
 
-  const roomAtOrigin = state.rooms[originTile];
+  const roomAtOrigin = state.rooms[serviceTile ?? originTile];
   for (const tile of tiles) {
     if (requiresWallMount) {
-      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall light requires wall tile' };
+      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall fixture requires wall tile' };
     } else if (!isWalkable(state.tiles[tile])) {
       return { ok: false, reason: 'footprint blocked' };
     }
     if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
-    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) {
+    const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
+    if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) {
       return { ok: false, reason: 'invalid room for module' };
     }
-    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
+    if (!requiresWallMount && def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
       return { ok: false, reason: 'footprint crosses room boundary' };
     }
   }
@@ -11925,18 +11969,7 @@ export function resolveWallLightFacing(
   state: StationState,
   tileIndex: number
 ): 'north' | 'east' | 'south' | 'west' | null {
-  const p = fromIndex(tileIndex, state.width);
-  if (state.tiles[tileIndex] !== TileType.Wall) return null;
-  const belowY = p.y + 1;
-  const aboveY = p.y - 1;
-  if (!inBounds(p.x, belowY, state.width, state.height)) return null;
-  const below = toIndex(p.x, belowY, state.width);
-  if (!isWalkable(state.tiles[below])) return null;
-  if (inBounds(p.x, aboveY, state.width, state.height)) {
-    const above = toIndex(p.x, aboveY, state.width);
-    if (isWalkable(state.tiles[above])) return null;
-  }
-  return 'south';
+  return resolveWallMountedModuleFacing(state, tileIndex);
 }
 
 export function removeModuleAtTile(state: StationState, tileIndex: number): boolean {

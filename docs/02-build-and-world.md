@@ -1,6 +1,6 @@
 # Build &amp; World
 
-How the player shapes the station: tiles, zones, rooms, modules, expansion, materials. **There is no construction queue and no builder NPC — placement is instant.** Materials drain at place-time.
+How the player shapes the station: tiles, zones, rooms, modules, expansion, materials, construction jobs, and EVA work. Build orders create blueprints; crew haul materials and finish the work site.
 
 ## Layers
 
@@ -22,11 +22,14 @@ Plus a third independent layer:
 - `footprint` — `[w, h]`
 - `rotatable` — boolean
 - `allowedRooms` — RoomType[]
+- `mount` — optional; `wall` modules sit on Wall tiles and are serviced from an adjacent walkable tile
 - `itemNodeCapacity` — optional; if set, this module gets an `ItemNode` and can store items
 - `visitorCapacity` / `reservationCapacity` — Tables seat 3 diners with 4 reservation slots
 - `residentCapacity` — Bed = 2
 
 **Notable modules with item nodes:** Stove (rawMeal in, meal out), GrowStation (rawMeal out), ServingStation (meal in, visitors take), MarketStall (tradeGood in, visitors buy), IntakePallet (rawMaterial in), StorageRack (rawMaterial buffer), Workbench (no node — workshop produces from room-pooled rawMaterial).
+
+**Wall-mounted utility modules:** WallLight, Vent, and FireExtinguisher live on Wall tiles. They require an adjacent walkable service tile. The wall tile owns the module, but air projection, fire suppression, construction, and future repairs use the service side so crew do not try to stand inside the wall.
 
 ## Build flow (player-facing)
 
@@ -34,7 +37,9 @@ Plus a third independent layer:
 2. Tool selection is gated by tier. Locked rooms/modules show in the palette but tooltip-only; `selectRoomTool` / `selectModuleTool` (`main.ts:1147`/1156) check `isRoomUnlocked` / `isModuleUnlocked` and stash a `toolLockMessage`.
 3. Click-drag paints a rectangle. `applyRectPaint` (`main.ts:2925`) iterates the rect and calls into sim mutators.
 4. Hover shows a green/red preview (`render.ts:1562`).
-5. Materials are deducted at place-time (no queue, no NPC).
+5. Tile/module placement creates a `ConstructionSite`. Crew haul raw materials from storage/logistics or the bootstrap stockpile, then build at the site.
+6. Exterior tile builds require an airlock/EVA route. Crew suit up through the airlock and work outside.
+7. The Cancel Build tool removes blueprints by drag and refunds delivered materials.
 
 ## Sim mutators
 
@@ -44,9 +49,12 @@ All mutators bump version counters and clear caches. **All return false on failu
 |---|---|---|
 | `setTile` | `sim.ts:7700` | Direct tile write; clears occupancy/modules/room/body tiles/incidents on the cell. Bumps `topologyVersion`. Rebuilds dock entities if Dock-ness changes. |
 | `trySetTile` | `sim.ts:7735` | Gated `setTile`. Validates dock placement, requires path connectivity to core (`isConnectedToCore`), consumes `tileDistanceBuildCost(delta)`. |
+| `planTileConstruction` | `sim.ts` | Creates a tile construction blueprint instead of directly mutating the tile. Exterior tiles require hull/planned adjacency. |
+| `planModuleConstruction` | `sim.ts` | Creates a module construction blueprint after validating footprint/mount/room rules. |
+| `cancelConstructionAtTile` | `sim.ts` | Removes a matching blueprint or module footprint blueprint and refunds delivered materials. |
 | `setRoom` | `sim.ts:7763` | Only on walkable tiles. Gated by `isRoomUnlocked`. Auto-flips zone to Restricted on Dorm. |
 | `setRoomHousingPolicy` | `sim.ts:7785` | Per-cluster — affects all tiles of the same connected room. |
-| `tryPlaceModule` | `sim.ts:8061` | Tier-gated. Checks `MODULE_DEFINITIONS.allowedRooms`, footprint walkability, room boundary, no module overlap. Special-cases WallLight via `resolveWallLightFacing` (`sim.ts:8115`). |
+| `tryPlaceModule` | `sim.ts:8061` | Tier-gated. Checks `MODULE_DEFINITIONS.allowedRooms`, footprint walkability or wall mount, service tile, room boundary, no module overlap. |
 | `setModule` | `sim.ts:8139` | Fallback for scenarios — places a `legacyForced: true` 1×1 module ignoring footprint rules when `tryPlaceModule` would fail. **Don't tighten this without checking `scenarios.ts`.** |
 | `setZone` | `sim.ts:7757` | Public/Restricted paint. |
 | `expandMap` | `sim.ts:7553` | Buys 40 tiles in a direction (see Expansion below). |
@@ -116,7 +124,7 @@ There are two material accounting models running side-by-side:
 
 The HUD's "Materials" reading is the union of both: `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)` (`sim.ts:6270`). `consumeConstructionMaterials` (`sim.ts:4077`) drains from both buckets.
 
-**Cost per tile.** `MATERIAL_COST` (`sim.ts:107`–116) is the base material per tile-type, scaled by `BUILD_DISTANCE_MULTIPLIER * Manhattan(core, tile)` (`sim.ts:205`, applied in `tileDistanceBuildCost` `sim.ts:1723`). Far-away tiles cost more — this is the directional-docking + structural-expansion MVP from `build-contstrain-feature.md`.
+**Cost per tile.** `MATERIAL_COST` (`sim.ts:107`–116) is the base material per tile-type, scaled by `BUILD_DISTANCE_MULTIPLIER * Manhattan(core, tile)` (`sim.ts:205`, applied in `tileDistanceBuildCost` `sim.ts:1723`). Far-away tiles cost more. Construction consumes materials through delivery jobs instead of draining everything instantly.
 
 ## Map expansion
 
@@ -143,5 +151,5 @@ The strategic loop is *layout + flow*. The player decides where rooms go; hauler
 - `setRoom` silently fails on non-walkable tiles. If your scenario is missing a room paint, check whether the underlying tile is Floor.
 - `setModule` falls through to `legacyForced: true` 1×1 — scenarios depend on this. Tightening the fallback breaks scenario fixtures.
 - The HUD's "Materials" number is *not* `legacyMaterialStock` alone. Use `metrics.materials` (`sim.ts:6270`) when computing UI text.
-- WallLight needs the wall above the floor to face open space — `resolveWallLightFacing` (`sim.ts:8115`) is finicky.
+- Wall-mounted modules need a Wall tile plus an adjacent walkable service tile. If a wall fixture cannot be built, inspect/cancel the blueprint and check the service side.
 - Adding a new module: also update `MODULE_DEFINITIONS` (with `allowedRooms`), the relevant ROOM_DEFINITIONS' `requiredModules`, and the build palette in `main.ts`. Don't forget the unlock-tier mapping in `unlocks.ts:148` if the module is gated.

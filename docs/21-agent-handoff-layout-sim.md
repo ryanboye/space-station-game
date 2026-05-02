@@ -1,6 +1,6 @@
 # Agent Handoff - Layout Simulation Push
 
-Last updated: 2026-04-28
+Last updated: 2026-05-01
 
 Use this as the short handoff for the next agent team. Use `docs/15-current-roadmap.md` for the product map and `docs/20-station-layout-project-plans.md` for detailed packets.
 
@@ -10,50 +10,49 @@ Use this as the short handoff for the next agent team. Use `docs/15-current-road
 - Room environment scoring for visitor status, resident comfort, service noise, and adjacency penalties.
 - Utility maintenance debt for reactor/life-support output.
 - Life-support coverage diagnostics.
-- Diagnostic overlays and overlay keys/readouts.
-- Route-pressure overlay.
-- Route-pressure hover reasons and room-inspector route summaries.
+- Diagnostic overlays, overlay keys, hover/readouts, and route-pressure overlay.
 - Agent side inspector and selected-agent route visualization.
-- Crew rest pathing fix for crowded/stale dorm routes.
-- Visitor Hygiene comfort/toilet stop v0, surfaced in visitor inspector.
+- Expanded crew/visitor needs v0 with inspector readouts.
+- Local air, vent reach, fire, extinguish jobs, and repair jobs.
+- Construction blueprints, material delivery, build jobs, cancel-build drag tool, and EVA construction through airlocks.
+- Commit checkpoint: `f24109c Add EVA construction polish and cancel build tool`.
 
 ## Current Verification
 
-Recent checks passed:
+Before the current packet, recent checks passed:
 
 - `npm run test:sim`
 - `npm run build`
 
-Generated build artifacts were restored after verification.
+Run both again after any P0 wall-fixture or construction/EVA edits.
 
-## Open Work
+## Active Work
 
-### Best Next People/Layout Slice: P8B + P9
+### P0 - Construction/EVA Polish and Wall Fixtures
 
-- Broaden route-pressure reasons and convert room summaries into clearer player advice.
-- Continue expanded needs: explicit crew toilet pressure and visitor leisure/social follow-ups beyond the Hygiene v0. Crew leisure/social v0 now routes to Lounge, RecHall, Market, or Cafeteria.
-- Reuse current rooms first: Hygiene, Dorm, Cafeteria, Lounge, Market, RecHall.
-- Ensure every new need creates visible route/queue/inspector feedback.
+- Make vents, fire extinguishers, and wall lights true wall-mounted fixtures.
+- Require adjacent walkable service tiles for wall fixtures.
+- Path construction and repair work to the service tile, not the wall tile.
+- Keep airlocks sealed; do not let them behave like holes in the hull.
+- Make blocked construction sites inspectable and cancelable.
 
-### Best Parallel Utility Slice: P5B
+### P1 - Unified Needs and Service Queue Balance
 
-- Add local-air helper/storage.
-- Keep global air as station average/trend.
-- Use life-support coverage and disconnection to drive local air exposure.
-- Update air overlay and actor inspectors to agree with local air failures.
+- Crew and visitors now have more needs, but the systems should be unified.
+- Add shared provider/reservation/cooldown helpers so actors distribute instead of bunching.
+- Expose active need, target, reservation, and failure reason consistently.
 
-### Later Workforce Slice: P4B
+### P2 - Access and Route-Control Gameplay
 
-- Add minimal crew specialties.
-- Connect mechanics/operators/logistics/security to assignment scoring.
-- Make maintenance debt a visible repair/staffing loop.
+- Public/restricted zoning exists but needs stronger controls.
+- Route-pressure already shows conflicts; next step is giving the player clearer tools to fix them.
 
 ## Parallel Ownership
 
-- P8B owns route diagnostics/readouts/room route summaries.
-- P9 crew team owns remaining crew self-care target selection, especially explicit toilet queues and capacity rules.
-- P9 visitor team owns visitor auxiliary needs.
-- P5B owns local air and `applyAirExposure` behavior.
-- UI/docs/test team owns inspector copy, docs, and regression coverage.
+- Construction team owns build sites, EVA, airlocks, cancel tools, and construction inspectors.
+- Wall-fixture team owns module definitions, placement rules, service tiles, and utility fixture effects.
+- Needs team owns provider/reservation balance and anti-bunching logic.
+- Access team owns zoning/route controls and overlay/readout behavior.
+- UI/docs/test team owns inspector copy, docs, browser QA, and regression tests.
 
-Avoid overlapping rewrites of `updateCrewLogic`, visitor update logic, and `applyAirExposure`. Prefer small helper functions.
+Avoid overlapping rewrites of `updateCrewLogic`, visitor update logic, and construction job dispatch. Prefer small helper functions.

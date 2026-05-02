@@ -1,102 +1,61 @@
 # Current Roadmap
 
-Last updated: 2026-04-28
+Last updated: 2026-05-01
 
-This is the live product map. Older top-level planning ledgers were useful historically, but agents should treat this file plus `docs/20-station-layout-project-plans.md` and `docs/21-agent-handoff-layout-sim.md` as the current source of truth.
+This is the live product map. Treat this file plus `docs/20-station-layout-project-plans.md` and `docs/21-agent-handoff-layout-sim.md` as the current source of truth.
 
 ## Product Direction
 
-The game is a station-management sim about designing a living orbital station where layout creates operational pressure. The player should build rooms, berths, service corridors, housing, and utilities; then watch people, ships, air, food, maintenance, and route conflicts stress that design.
+The game is a station-management sim about designing a living orbital station where layout creates operational pressure. The player should build rooms, berths, service corridors, housing, utilities, and exterior structures; then watch people, ships, air, food, maintenance, fire, construction, and route conflicts stress that design.
 
-The current design priority is not adding more hidden complexity. New systems should be inspectable through overlays, room inspectors, agent inspectors, metrics, and path visualization.
+The rule for MVP is: no important hidden simulation without a player-facing surface. New systems should be visible through overlays, inspectors, build previews, job metrics, alerts, or agent routes.
 
 ## Done
 
-- Grid building, room painting, modules, zones, map expansion, save/load, and progression gates.
-- Berths with visitor/residential purpose split and berth capability modules.
-- Visitors, residents, and crew as separate actor classes with pathing and inspectors.
-- Food/logistics chain: hydroponics, kitchen, cafeteria, serving stations, item nodes, and transport jobs.
-- Resident conversion, resident home ships, private housing, taxes, satisfaction, stress, leave intent.
+- Core grid building, room painting, modules, zones, map expansion, save/load, and progression gates.
+- Berths, visitor/residential berth purpose, ship servicing, and dock/berth visualization.
+- Visitors, residents, and crew with pathing, inspectors, and selected-agent route lines.
+- Food/logistics chain: hydroponics, kitchen, cafeteria, serving stations, storage, item nodes, and transport jobs.
+- Resident conversion, home ships, housing, taxes, satisfaction, stress, and leave intent.
 - Room environment scoring: visitor status, resident comfort, service noise, utility/cargo/public adjacency.
-- Route intent and route consequences for visitors, residents, crew, logistics, and security.
-- Maintenance debt for reactor and life-support systems.
-- Life-support coverage diagnostics.
 - Diagnostic overlays and keys: air coverage, visitor status, resident comfort, service noise, maintenance, route pressure.
-- Agent side inspector and selected-agent route visualization.
-- Route-pressure conflict reasons in hover/readouts and room inspectors.
-- First expanded visitor need: longer-stay visitors can route to Hygiene as a comfort/toilet stop, visible in the agent inspector.
-- First expanded crew need: idle crew can route to Lounge, RecHall, Market, or Cafeteria for off-duty leisure/social recovery, visible in the agent inspector.
-- Crew bladder/toilet need with capacity-guarded Hygiene visits, surfaced as a third bar in the agent inspector.
-- Maintenance repair job loop: generalist crew clear reactor/life-support debt with a visible wrench badge, no specialty required.
-- Fire v0: sustained reactor/life-support debt ignites, fires spread to neighbors, damage modules ≥80 intensity, and are suppressed by the new FireExtinguisher module or by crew running an extinguish job.
-- Local air gameplay (P5B): per-tile air quality from life-support coverage drives actor exposure; sealed-off wings and burning rooms are now locally lethal. Air overlay reads tile-level quality.
-- Vent module: extends life-support reach into a remote wing through corridors.
-- Visitor leisure depth: long-stay archetypes plan and execute 1-3 leisure stops (eat → market browse → lounge → exit), biased toward variety. Inspector shows browsing/relaxing labels with leg progress.
-- VendingMachine + Bench leisure modules.
+- Expanded crew/visitor needs v0: hygiene/toilet/leisure/social/rest surfaces, with agent inspector readouts.
+- Repair jobs v0: generalist crew clear reactor/life-support maintenance debt.
+- Fire v0: utility debt can ignite, fires spread and damage modules, crew can extinguish, extinguishers suppress.
+- Local air v0: per-tile air quality from pressurization, life-support reach, vents, and fire exposure.
+- Construction v0: build blueprints consume materials, create haul/build jobs, can be canceled with refunds.
+- EVA construction v0: exterior builds route through airlocks and put crew into suits for vacuum work.
+- Sprite/UI polish for several new rooms/modules, plus route and construction debugging surfaces.
 
-## Partially Done
+## Active MVP Gaps
 
-- **Zoning/access.** Public/restricted exists, but it is still a blunt tool. It needs better design affordances for staff, service, visitor, and residential routing.
-- **Maintenance.** Debt affects output and staffing pressure, but there is no dedicated repair job/specialty loop yet.
-- **Life support.** Coverage is visible, but air exposure still needs a more local/spatial model.
-- **Needs.** Residents are the deepest. Visitors now have a first auxiliary Hygiene stop, and crew have a first off-duty leisure/social loop. Explicit toilet queues and richer visitor social behavior are still shallow.
-- **Security/incidents.** Trespass/fights/security aura exist, but crime, theft, patrols, and emergency response are still thin.
-- **Station identity.** The game can support trade hub/habitat/industrial/military directions, but those identities are not yet first-class scenarios or contracts.
+1. **Construction/EVA polish.** Airlocks need to behave and read like sealed technical structures, exterior construction needs clearer debug feedback, and failed/blocked builds must be easy to cancel or inspect.
+2. **Wall-mounted utility fixtures.** Vents, extinguishers, lights, future panels, pipes, ducts, and wiring should live on walls when that makes physical sense. Mechanics should repair wall fixtures and utilities through adjacent service tiles.
+3. **Access and route control.** Public/restricted exists, but the player still needs stronger tools to separate visitors, crew, residents, cargo, and hazardous routes.
+4. **Unified needs/service model.** Crew and visitors have expanded needs, but the provider/queue/balance model should be unified so bunching and task churn are easier to tune.
+5. **Janitor/sanitation loop.** Dirt, trash, bathrooms, showers, food areas, and public status need a lightweight cleaning job loop and visible room penalties.
+6. **Command/operations layer.** A cockpit or command center should make station operations feel owned: ship traffic, alerts, dispatch, sensors, contracts, and station policy should converge there.
+7. **Electrical/mechanical distribution.** Power, water, ducts, vents, panels, pumps, and maintenance should become spatial without becoming invisible busywork.
+8. **Incidents and patients.** Medical and dispatched incidents exist as goals, but event generation and resolution need enough pressure to make the advanced tier playable.
+9. **Station identity.** Trade hub, habitat, industrial, research, military/security, and medical directions should emerge from contracts, visitor mix, modules, and scoring.
 
-## Next Work
+## Current Priority Order
 
-### P8B - Route Conflict and Access Gameplay
-
-Goal: turn the route-pressure overlay into actionable layout gameplay.
-
-- Expand hover/readout reasons for more route-problem categories.
-- Broaden room-inspector route summaries into stronger player advice.
-- Make bad public/service/residential crossings affect rating, stress, morale, and work efficiency clearly.
-- Add better controls to solve problems: stronger zone behavior, staff/service route tools, or staff-only access rules.
-
-### P9 - Expanded Needs v0
-
-Goal: make people create believable demand for station services.
-
-- Crew: rest and hygiene already existed; first leisure/social recovery is now in place. Explicit toilet pressure still needs a dedicated pass.
-- Visitors: meals plus first optional toilet/hygiene stop; leisure/social needs still need expansion.
-- Residents: preserve existing routine, fold toilet into hygiene initially.
-- Reuse current rooms first: Dorm, Hygiene, Cafeteria, Lounge, Market, RecHall.
-- Surface everything in agent inspector, room inspector, metrics, and route-pressure overlay.
-
-### P5 - Local Air Gameplay (LANDED 2026-04-28)
-
-Local air now drives actor exposure per tile. Vent modules extend life-support
-reach. Fire ↔ air coupling lands as part of the same model. Future polish:
-breach mechanics that depressurize a tile or room.
-
-### P4B - Staff Specialization and Repair
-
-Goal: make crew feel like hired workers with roles instead of a single generalist pool.
-
-- Add mechanics/operators/security/logistics/cooks or a minimal subset.
-- Connect mechanics to maintenance debt and repair jobs.
-- Keep emergency overrides readable and testable.
-
-**Note (2026-04-28)**: hold this packet until other systems are working. The current generalist pool is helpful for balance — splitting crew into specialties prematurely makes shortages harder to reason about. Revisit after maintenance debt has a visible repair loop and at least one need (toilet) is fully wired.
-
-## Later
-
-- Berth approach clearance and larger ship approach geometry.
-- Piping/ducts/power/water distribution.
-- Fire, leaks, hull breach, compartment risk, evacuation-like behavior.
-- Crime/theft/gangs, brig workflow, patrols.
-- Resident businesses: cantinas, shops, mechanic stalls.
-- Regional/world map, contracts, factions, station identity bonuses.
+1. Finish **construction/EVA polish** and **wall-mounted fixture foundation** together. They are coupled: wall fixtures need reachable service tiles and exterior construction needs reliable airlock semantics.
+2. Stabilize **needs/service queue balance** so crew and visitors stop bunching or retargeting constantly.
+3. Expand **access/route controls** using the route-pressure overlay as the player-facing proof.
+4. Add **janitor/sanitation** as the next everyday station-life loop.
+5. Add **command center + electrical/mechanical v0** once the wall-fixture foundation is in place.
+6. Make **patients/incidents** reliably spawn and resolve.
 
 ## Agent Swarm Guidance
 
-Good parallel split:
+Good parallel splits:
 
-- Team A: P8B overlay/readout/room inspector route reasons.
-- Team B: P9 crew self-care needs and target selection.
-- Team C: P9 visitor auxiliary needs.
-- Team D: P5 local-air helpers and tests.
-- Team E: docs/tests/QA harness.
+- Team A: construction/EVA debugging, cancel tools, airlock behavior, construction inspectors.
+- Team B: wall-mounted fixture placement, service tiles, vent/extinguisher repair behavior.
+- Team C: unified needs/service provider helpers and anti-bunching balance.
+- Team D: access/route-control gameplay and overlay readouts.
+- Team E: docs/tests/QA harness and browser playtest notes.
 
-Do not let multiple teams rewrite the same actor update loop at once. Prefer narrow helper functions and focused tests in `tools/sim-tests.ts`.
+Avoid multiple teams rewriting the same actor update loop. Prefer narrow helper functions, explicit diagnostics, and focused tests in `tools/sim-tests.ts`.

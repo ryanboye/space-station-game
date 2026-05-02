@@ -355,8 +355,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
         <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
-        <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place Fire Extinguisher — passive sprinkler that suppresses nearby fires"><span class="tool-key">·</span>Fire Ext</button>
-        <button class="tool-btn" data-tool-module="vent" title="Place Vent — projects life-support air through a radius, even far from a Life Support room"><span class="tool-key">·</span>Vent</button>
+        <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place wall Fire Extinguisher — suppresses nearby fires from an adjacent service tile"><span class="tool-key">·</span>Fire Ext</button>
+        <button class="tool-btn" data-tool-module="vent" title="Place wall Vent — projects life-support air from an adjacent service tile"><span class="tool-key">·</span>Vent</button>
         <button class="tool-btn" data-tool-module="vending-machine" title="Place Vending Machine (T1+) — visitors in leisure spend extra credits on this tile"><span class="tool-key">·</span>Vending</button>
         <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — leisure seating in social rooms; small comfort bonus"><span class="tool-key">·</span>Bench</button>
         <button class="tool-btn" data-tool-module="bar-counter" title="Place Bar Counter (Cantina-only) — drink service anchor"><span class="tool-key">·</span>Bar</button>

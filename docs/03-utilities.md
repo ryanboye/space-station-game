@@ -1,6 +1,6 @@
 # Utilities — Pressurization, Air, Power, Water, Pathing
 
-The "connected" systems that propagate or flow across the grid. Pressurization is the only true flood-fill; air/power/water are global pools modulated by topology and tier rates.
+The "connected" systems that propagate or flow across the grid. Pressurization and local air are spatial; power and water are still mostly global pools modulated by active rooms, maintenance, and topology.
 
 ## Pressurization (vacuum / depressurize)
 
@@ -28,7 +28,7 @@ The depressurized tiles get a red wash overlay at `src/render/render.ts:1446`–
 
 Build a sealed shell of walls. Doors count as walls for pressure but are still walkable. Punch a hole and air bleeds out — visible as `pressurizationPct` dropping and red-tinted floor. Life-support modules pump air back when active.
 
-## Air (`metrics.airQuality`, 0–100%)
+## Air (`metrics.airQuality`, 0–100%) and local air
 
 Updated in `updateResources` (`sim.ts:6280`–6296):
 
@@ -44,13 +44,17 @@ Air quality below thresholds drives:
 
 Life-support output is now multiplied by maintenance health. Each life-support room cluster has a `MaintenanceDebt` entry; debt below 30 is harmless, debt above 30 lowers active air/water output, and severe debt appears in room warnings.
 
-Life-support coverage is also measured spatially. Active life-support source tiles run a multi-source BFS through walkable, pressurized tiles. The sim currently exposes this as diagnostics only:
+Life-support coverage is measured spatially. Active life-support source tiles run a multi-source BFS through walkable, pressurized tiles. Vent modules act as secondary air sources if their adjacent service tile is reachable from life support.
 
 - `lifeSupportCoveragePct`
 - `avgLifeSupportDistance`
 - `poorLifeSupportTiles`
 
-Rooms disconnected from active life support show an inspector warning. Actors still use global air quality for exposure; local-air gameplay is the next P5 step.
+Rooms disconnected from active life support show an inspector warning. Actors now use local tile air for exposure, so a sealed but disconnected wing can become dangerous even when the global HUD average looks acceptable.
+
+### Vents
+
+Vent modules are wall-mounted. The module sits on a Wall tile, but the adjacent walkable service tile is what projects air. This keeps vents visually/physically in the wall while still letting air coverage, construction, and future repairs operate from a reachable floor tile.
 
 ## Power
 
@@ -65,7 +69,7 @@ Rooms disconnected from active life support show an inspector warning. Actors st
 
 A power deficit doesn't kill rooms; it just thins their output.
 
-## Maintenance Debt
+## Maintenance Debt, Fire, and Wall Fixtures
 
 Reactor and life-support room clusters accumulate `MaintenanceDebt`. The debt key is `system:anchorTile`, where the anchor is the lowest tile index in the cluster. Built but idle clusters rise slowly; active reactor/life-support clusters rise faster, with extra pressure from power deficits or low air.
 
@@ -75,6 +79,8 @@ Crew assigned to the matching utility system and standing in that cluster reduce
 - `maintenanceDebtMax`
 - `maintenanceJobsOpen`
 - `maintenanceJobsResolvedPerMin`
+
+High reactor/life-support debt can ignite fires. Fires grow, spread, block/damage tiles, and create extinguish jobs. FireExtinguisher modules are wall-mounted and suppress fires from their adjacent service tile, which is the same pattern future mechanical/electrical fixtures should use.
 
 ## Water (`metrics.waterStock`, 0–260)
 
@@ -129,3 +135,4 @@ Manhattan heuristic (`path.ts:75`).
 - **Static-render cache key includes `wallRenderMode`** (`render.ts:1027`) — but pressurization is independent of render mode. Don't tie them.
 - `findPath` does **not** support diagonals.
 - Pressurization re-runs only when topology changes — placing a non-barrier tile won't invalidate the cache. That's fine because non-barriers can't change pressurization.
+- Wall-mounted utility modules should route effects and jobs through their adjacent service tile, not their wall tile.

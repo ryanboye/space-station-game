@@ -5,6 +5,7 @@ export type ModuleDefinition = {
   height: number;
   rotatable: boolean;
   allowedRooms: RoomType[] | null;
+  mount?: 'floor' | 'wall';
   itemNodeCapacity?: number;
   visitorCapacity?: number;
   residentCapacity?: number;
@@ -17,7 +18,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     width: 1,
     height: 1,
     rotatable: false,
-    allowedRooms: null
+    allowedRooms: null,
+    mount: 'wall'
   },
   [ModuleType.Bed]: {
     width: 2,
@@ -134,13 +136,15 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     width: 1,
     height: 1,
     rotatable: false,
-    allowedRooms: null
+    allowedRooms: null,
+    mount: 'wall'
   },
   [ModuleType.Vent]: {
     width: 1,
     height: 1,
     rotatable: false,
-    allowedRooms: null
+    allowedRooms: null,
+    mount: 'wall'
   },
   [ModuleType.VendingMachine]: {
     width: 1,

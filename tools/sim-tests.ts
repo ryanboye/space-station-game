@@ -1136,8 +1136,73 @@ function testWallLightRequiresAdjacentWall(): void {
   const invalid = tryPlaceModule(state, ModuleType.WallLight, toIndex(20, 20, state.width), 0);
   const valid = tryPlaceModule(state, ModuleType.WallLight, toIndex(5, 4, state.width), 0);
 
-  assertCondition(!invalid.ok, 'Wall light should fail when not mounted on a top wall tile.');
-  assertCondition(valid.ok, 'Wall light should place on a top wall tile above walkable interior.');
+  assertCondition(!invalid.ok, 'Wall light should fail when not mounted on a wall tile.');
+  assertCondition(valid.ok, 'Wall light should place on a wall tile adjacent to walkable interior.');
+}
+
+function testWallMountedVentRequiresWallAndProjectsAir(): void {
+  const state = createInitialState({ seed: 30036 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  placeCrewAtSystemAnchor(state, toIndex(9, 6, state.width), 'life-support');
+  tick(state, 0.25);
+
+  const targetX = 25;
+  const targetY = 5;
+  const before = getLifeSupportTileDiagnostic(state, targetX, targetY);
+  const invalid = tryPlaceModule(state, ModuleType.Vent, toIndex(20, 20, state.width), 0);
+  const valid = tryPlaceModule(state, ModuleType.Vent, toIndex(20, 4, state.width), 0);
+  tick(state, 0.25);
+  const after = getLifeSupportTileDiagnostic(state, targetX, targetY);
+
+  assertCondition(!invalid.ok, 'Vent should fail when placed on a floor tile.');
+  assertCondition(valid.ok, 'Vent should place on a wall tile adjacent to walkable interior.');
+  assertCondition(!!before && !!after, 'Vent coverage test should return diagnostics before and after placement.');
+  const beforeDistance = before?.distance ?? -1;
+  const afterDistance = after?.distance ?? -1;
+  assertCondition(
+    afterDistance >= 0 && (beforeDistance < 0 || afterDistance < beforeDistance),
+    `Wall vent should improve nearby air distance (before ${beforeDistance}, after ${afterDistance}).`
+  );
+}
+
+function testWallMountedFireExtinguisherRequiresWallAndSuppressesFire(): void {
+  const state = createInitialState({ seed: 30037 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  const invalid = tryPlaceModule(state, ModuleType.FireExtinguisher, toIndex(20, 20, state.width), 0);
+  const valid = tryPlaceModule(state, ModuleType.FireExtinguisher, toIndex(6, 4, state.width), 0);
+  const fireTile = toIndex(6, 6, state.width);
+  state.effects.fires.push({
+    anchorTile: fireTile,
+    system: 'reactor',
+    intensity: 40,
+    ignitedAt: state.now,
+    lastTick: state.now
+  });
+  tick(state, 1);
+  const fire = state.effects.fires.find((entry) => entry.anchorTile === fireTile);
+
+  assertCondition(!invalid.ok, 'Fire extinguisher should fail when placed on a floor tile.');
+  assertCondition(valid.ok, 'Fire extinguisher should place on a wall tile adjacent to walkable interior.');
+  assertCondition(!!fire, 'Fire should still exist after one suppression tick for measurement.');
+  assertCondition(fire!.intensity < 40, `Wall extinguisher should suppress nearby fire, got ${fire!.intensity.toFixed(1)}.`);
+}
+
+function testWallMountedModuleConstructionUsesServiceTile(): void {
+  const state = createInitialState({ seed: 30038 });
+  buildHabitat(state);
+  state.legacyMaterialStock = 50;
+  state.metrics.materials = 50;
+  const wallTile = toIndex(20, 4, state.width);
+  const serviceTile = toIndex(20, 5, state.width);
+  const planned = planModuleConstruction(state, wallTile, ModuleType.Vent, 0);
+  tick(state, 0.25);
+  const job = state.jobs.find((candidate) => candidate.type === 'construct' && candidate.constructionSiteId !== undefined);
+
+  assertCondition(planned.ok, `Wall-mounted vent blueprint should plan successfully: ${planned.reason ?? 'unknown'}`);
+  assertCondition(!!job, 'Wall-mounted vent blueprint should create a construction job.');
+  assertCondition(job!.toTile === serviceTile, 'Wall-mounted vent construction should target the adjacent service tile.');
 }
 
 function testFoodChainEndToEnd(): void {
@@ -4373,6 +4438,9 @@ function run(): void {
   testCafeteriaMissingServingStation();
   testBedFootprintRotation();
   testWallLightRequiresAdjacentWall();
+  testWallMountedVentRequiresWallAndProjectsAir();
+  testWallMountedFireExtinguisherRequiresWallAndSuppressesFire();
+  testWallMountedModuleConstructionUsesServiceTile();
   testPathIntentVisitorAvoidsServiceCorridor();
   testPathIntentLogisticsPrefersServiceCorridor();
   testPathIntentLogisticsAvoidsNewSocialRooms();

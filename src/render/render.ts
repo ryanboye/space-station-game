@@ -31,6 +31,7 @@ import {
   getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
   resolveWallLightFacing,
+  wallMountedModuleServiceTile,
   validateBerthModulePlacement,
   validateDockPlacement
 } from '../sim/sim';
@@ -1547,19 +1548,23 @@ function validateModulePreviewPlacement(
   const footprint = previewFootprint(moduleType, rotation);
   const tiles = previewTiles(state, originTile, footprint.width, footprint.height);
   if (!tiles) return { valid: false, tiles: [originTile] };
-  const roomAtOrigin = state.rooms[originTile];
+  const requiresWallMount = def.mount === 'wall';
+  const serviceTile = requiresWallMount ? wallMountedModuleServiceTile(state, originTile) : originTile;
+  if (requiresWallMount && serviceTile === null) return { valid: false, tiles };
+  const roomAtOrigin = state.rooms[serviceTile ?? originTile];
   for (const tile of tiles) {
-    if (moduleType === ModuleType.WallLight) {
+    if (requiresWallMount) {
       if (state.tiles[tile] !== TileType.Wall) return { valid: false, tiles };
     } else if (!isWalkable(state.tiles[tile])) {
       return { valid: false, tiles };
     }
     if (state.moduleOccupancyByTile[tile] !== null) return { valid: false, tiles };
-    if (def.allowedRooms && !def.allowedRooms.includes(state.rooms[tile])) return { valid: false, tiles };
-    if (def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
+    const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
+    if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) return { valid: false, tiles };
+    if (!requiresWallMount && def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
   }
   if (validateBerthModulePlacement(state, moduleType, tiles)) return { valid: false, tiles };
-  if (moduleType === ModuleType.WallLight && !resolveWallLightFacing(state, originTile)) {
+  if (requiresWallMount && !resolveWallLightFacing(state, originTile)) {
     return { valid: false, tiles };
   }
   return { valid: true, tiles };
