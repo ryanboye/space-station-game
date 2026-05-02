@@ -11,6 +11,7 @@ export type SpritePipeline = 'nano-banana';
 
 export enum TileType {
   Space = 'space',
+  Truss = 'truss',
   Floor = 'floor',
   Wall = 'wall',
   Dock = 'dock',
@@ -1355,6 +1356,7 @@ export interface StationState {
   derived: DerivedCache;
   rng: () => number;
   now: number;
+  // Legacy name: traffic uses this as the next sporadic arrival check time.
   lastCycleTime: number;
   cycleDuration: number;
   spawnCounter: number;

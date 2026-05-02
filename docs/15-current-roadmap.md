@@ -1,8 +1,8 @@
 # Current Roadmap
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
-This is the live product map. Treat this file plus `docs/20-station-layout-project-plans.md` and `docs/21-agent-handoff-layout-sim.md` as the current source of truth.
+This is the live product map. Treat this file plus `docs/20-station-layout-project-plans.md`, `docs/21-agent-handoff-layout-sim.md`, and `docs/22-simulation-next-phases.md` as the current source of truth.
 
 ## Product Direction
 
@@ -42,11 +42,22 @@ The rule for MVP is: no important hidden simulation without a player-facing surf
 ## Current Priority Order
 
 1. Finish **construction/EVA polish** and **wall-mounted fixture foundation** together. They are coupled: wall fixtures need reachable service tiles and exterior construction needs reliable airlock semantics.
-2. Stabilize **needs/service queue balance** so crew and visitors stop bunching or retargeting constantly.
-3. Expand **access/route controls** using the route-pressure overlay as the player-facing proof.
-4. Add **janitor/sanitation** as the next everyday station-life loop.
-5. Add **command center + electrical/mechanical v0** once the wall-fixture foundation is in place.
-6. Make **patients/incidents** reliably spawn and resolve.
+2. Build the **provider/reservation kernel** from `22-simulation-next-phases.md`. This should become the shared anti-bunching layer for visitors, residents, crew self-care, seats, service modules, and future jobs.
+3. Fix **batched logistics and stock rules** before adding more production pressure. Food/material movement should use buffer targets, source/target reservations, and batch sizing rather than one-unit trickle jobs.
+4. Convert passive production staffing into **visible work tasks**. Keep true staffed posts for Security/Brig/future Command, but make hydroponics, kitchen, workshop, utilities, cleaning, repair, and construction publish inspectable jobs.
+5. Expand **access/route controls** using the route-pressure overlay as the player-facing proof.
+6. Add **electrical/mechanical/water distribution v0** using layered coverage: forgiving hull service first, high-load panels/pumps/ducts for advanced rooms, clear overlays before strict networks.
+7. Add **janitor/sanitation** once provider reservations and job dispatch can support object/room cleaning cleanly.
+8. Add **command center + station map contracts** so operations, traffic, faction offers, sensors, and station identity converge.
+9. Make **patients/incidents** reliably spawn and resolve.
+
+## Research-Backed Architecture Bets
+
+- Use a central job board with bounded local bidding. Task allocation is a solved optimization family; for this dynamic sim, market/auction-style assignment with reservations is a better default than ad hoc target scans or full global optimization every tick.
+- Use utility scoring for desire selection and HTN-like task templates for reusable routines. Avoid one giant actor state machine and avoid full GOAP search for every ordinary visitor.
+- Use stockpile/resource-rule semantics for logistics: allowed items, min/desired/max targets, priority, reservations, and nearby buffers.
+- Use layered utility coverage before strict pipes: automatic low-load hull service, explicit high-load panels/pumps/ducts, then switches/valves/dampers once overlays are readable.
+- See `docs/22-simulation-next-phases.md` for sources and implementation guardrails.
 
 ## Agent Swarm Guidance
 

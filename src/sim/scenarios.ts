@@ -1040,9 +1040,9 @@ export function buildDormNoPermaStallScenario(): ScenarioSpec {
   };
 }
 
-export function buildCoreDistanceCostScalingScenario(): ScenarioSpec {
+export function buildFlatTileCostScenario(): ScenarioSpec {
   return {
-    name: 'core-distance-cost-scaling',
+    name: 'flat-tile-build-cost',
     seed: 1401,
     durationSec: 40,
     stepSec: 0.25,
@@ -1050,13 +1050,17 @@ export function buildCoreDistanceCostScalingScenario(): ScenarioSpec {
     setup: (state) => {
       buildBaseStation(state);
       state.controls.shipsPerCycle = 0;
-      // Smoke-run with core/distance rules active.
+      // Smoke-run the flat tile-cost path at near and far locations.
       const near = toIndex(Math.floor(state.width / 2) + 2, Math.floor(state.height / 2), state.width);
       const far = toIndex(34, 24, state.width);
       trySetTile(state, near, TileType.Floor);
       trySetTile(state, far, TileType.Floor);
     }
   };
+}
+
+export function buildCoreDistanceCostScalingScenario(): ScenarioSpec {
+  return buildFlatTileCostScenario();
 }
 
 export function buildVisitorFailureAffectsRatingScenario(): ScenarioSpec {

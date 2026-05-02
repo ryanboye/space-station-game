@@ -1,6 +1,6 @@
 # Docks &amp; Ships
 
-A *dock* is a contiguous run of `Dock` tiles on the outer hull facing one of four `SpaceLane`s (north/east/south/west). Docks have a purpose (`visitor` or `residential`), allowed ship types/sizes, and a single `occupiedByShipId`.
+A *dock* is a contiguous run of `Dock` tiles on the outer hull facing one of four `SpaceLane`s (north/east/south/west). Docks now represent small pod ports: each visitor pod carries 1-2 people, visually sits outside the hull, and connects to the dock with an umbilical. Berth rooms are the large-ship surface.
 
 ## Dock topology
 
@@ -38,22 +38,25 @@ Set with `normalizeTrafficWeights` (`sim.ts:248`). The biases come into play whe
 
 `ShipType` (`types.ts:313`): `tourist`, `trader`, `industrial`, `military`, `colonist`. Five types; `military` and `colonist` are T3-locked, `industrial` is T2-locked.
 
-`ShipSize` (`types.ts:333`): `small`, `medium`, `large`. Each requires a minimum dock area:
+`ShipSize` (`types.ts:333`): `small`, `medium`, `large`. Legacy Dock traffic always uses small pods, while Berth traffic uses the size class for manifest scale:
 
 - `SHIP_MIN_DOCK_AREA` (`sim.ts:118`) — per-size minimum.
-- Size also caps the visitor manifest count (`SHIP_BASE_PASSENGERS` `sim.ts:124`).
+- Dock pods use `DOCK_POD_PASSENGER_MIN/MAX` for 1-2 visitor pods.
+- Berth ships use `BERTH_BASE_PASSENGERS`; medium and large berths carry much larger visitor batches.
 
 ### Arrival lifecycle
 
 `ArrivingShip` (`types.ts:...`) — stages:
 
 1. `approach` — 2 s outside the hull.
-2. `docked` — visitors spawn (`generateShipManifest` `sim.ts:1376`); ship occupies the dock.
-3. `depart` — 2 s, then ship is removed from `state.arrivingShips`.
+2. `docked` — visitors spawn (`generateShipManifest` `sim.ts:1376`), remember `originShipId`, and the ship occupies the dock/berth until every origin visitor has boarded or otherwise resolved.
+3. `depart` — 2 s after the origin visitors are resolved, then ship is removed from `state.arrivingShips`.
 
 Dock-migration v0 also supports `spawnShipAtBerth`: `assignedDockId = null`, `assignedBerthAnchor` points at the Berth room anchor, and `bayTiles` are the Berth room tiles. Visitors return to those `bayTiles` and despawn/board from `RoomType.Berth` tiles.
 
-Berth rooms are ship pads, not sealed rooms. A valid traffic berth needs:
+Active ship rendering uses generated project-local sprites in `public/assets/ships/`. Small Dock pods render outside the hull with their docking collar aligned to the hatch. Berth ships render inside the Berth footprint so the room reads as an occupied ship bay, not an exterior parking point.
+
+Berth rooms are ship pads, not sealed rooms. Scheduler preference is berth-first: a capable berth attracts the largest ship it can accept before the sim falls back to dock pod traffic. A valid traffic berth needs:
 
 - One contiguous `RoomType.Berth` cluster. Size class comes from area: small 4+, medium 20+, large 42+.
 - At least one berth tile adjacent to `TileType.Space` or the map edge.
@@ -83,10 +86,12 @@ If no eligible dock is free at arrival time, the ship goes to `state.dockQueue` 
 
 ## Tunables
 
-- `SHIP_MIN_DOCK_AREA`, `SHIP_BASE_PASSENGERS` (`sim.ts:118` / 124).
+- `SHIP_MIN_DOCK_AREA` (`sim.ts`).
+- `BERTH_BASE_PASSENGERS`, `DOCK_POD_PASSENGER_MIN/MAX` (`sim.ts`).
+- `TRAFFIC_ARRIVAL_MIN_DELAY_SEC` / `TRAFFIC_ARRIVAL_MAX_DELAY_SEC` (`sim.ts`) bound the jittered one-ship arrival checks.
 - `DOCK_APPROACH_LENGTH = 4` (`sim.ts:206`).
 - `DOCK_QUEUE_MAX_TIME_SEC = 18`.
-- `state.controls.shipsPerCycle` (UI, cap 3).
+- `state.controls.shipsPerCycle` (UI cap 3, interpreted as traffic rate).
 - `state.controls.dockPlacementFacing` (UI, default `auto`).
 - `LaneProfile.trafficVolume` and `weights` per lane (`sim.ts:262`–283).
 - `SHIP_PROFILES` per ship type (`src/sim/content/ships.ts:3`) — manifest baselines.

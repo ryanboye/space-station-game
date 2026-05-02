@@ -4,6 +4,7 @@ import { ModuleType, RoomType, TileType, type ShipType } from '../sim/types';
 // Rendering currently falls back to marker/letter visuals when atlas assets are absent.
 export const TILE_SPRITE_KEYS: Record<TileType, string> = {
   [TileType.Space]: 'tile.space',
+  [TileType.Truss]: 'tile.truss',
   [TileType.Floor]: 'tile.floor',
   [TileType.Wall]: 'tile.wall',
   [TileType.Dock]: 'tile.dock',

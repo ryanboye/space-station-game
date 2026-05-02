@@ -9,8 +9,9 @@ If you're an agent picking up a task, read in this order:
 1. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
 2. **`15-current-roadmap.md`** — current product direction, what is done, what is partial, and what should be assigned next.
 3. **`20-station-layout-project-plans.md`** and **`21-agent-handoff-layout-sim.md`** if you are doing feature work from the current simulation/layout push.
-4. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
-5. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+4. **`22-simulation-next-phases.md`** if you are changing jobs, needs, logistics, utilities, station identity, or agent behavior.
+5. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
+6. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
 
 Every system doc follows the same shape:
 
@@ -41,6 +42,7 @@ Every system doc follows the same shape:
 | `15-current-roadmap.md` | Live product roadmap, MVP target, next work, swarm guidance |
 | `20-station-layout-project-plans.md` | Handoff specs for berth approach, route intent, utilities, expanded needs, compartments, and adjacency |
 | `21-agent-handoff-layout-sim.md` | Current handoff notes for the active layout/simulation push |
+| `22-simulation-next-phases.md` | Research-backed next phases for job assignment, living agents, logistics, utilities, sanitation, and system-map contracts |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions
@@ -49,7 +51,7 @@ Every system doc follows the same shape:
 - "Sim" = `src/sim/`. "Render" = `src/render/`. "UI" = `src/main.ts` (single file, no framework).
 - "Tile" is a coordinate `(x,y)` flattened as `index = y * width + x`.
 - "Tier" = unlock tier (T0 starter → T6 specialization).
-- "Cycle" = the 15-second ship-arrival rhythm. **There is no day/night gameplay** — the HUD's "Day N" string is a render-time fiction (`main.ts:1259`).
+- "Cycle" = the HUD's 15-second cosmetic time slice. Ship traffic now uses jittered arrival checks. **There is no day/night gameplay** — the HUD's "Day N" string is a render-time fiction (`main.ts:1259`).
 
 ## Updating these docs
 

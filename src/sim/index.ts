@@ -10,6 +10,7 @@
 export {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
+  buildStationExpansionOnTruss,
   cancelConstructionAtTile,
   canExpandDirection,
   clearBodies,

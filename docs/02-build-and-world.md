@@ -6,7 +6,7 @@ How the player shapes the station: tiles, zones, rooms, modules, expansion, mate
 
 The world is two layers stacked on the same grid:
 
-1. **Physical layer (`tiles[]`)** — what walks where. `TileType` (`src/sim/types.ts:12`): Space, Floor, Wall, Dock, Cafeteria, Reactor, Security, Door. Cafeteria/Reactor/Security are *floor skins* — they only change which tile sprite renders. They do not gate gameplay (rooms do).
+1. **Physical layer (`tiles[]`)** — what walks where. `TileType` (`src/sim/types.ts:12`): Space, Truss, Floor, Wall, Dock, Cafeteria, Reactor, Security, Door, Airlock. Cafeteria/Reactor/Security are *floor skins* — they only change which tile sprite renders. They do not gate gameplay (rooms do). Truss is exterior scaffold: not walkable for normal pathing, not pressurized, and not room-paintable.
 2. **Logical layer (`rooms[]`)** — what the tile is *for*. `RoomType` (`types.ts:32`, 16 entries): Cafeteria, Dorm, Hygiene, Kitchen, Workshop, Hydroponics, LifeSupport, Lounge, Market, Reactor, Security, LogisticsStock, Storage, Clinic, Brig, RecHall.
 
 Plus a third independent layer:
@@ -41,6 +41,16 @@ Plus a third independent layer:
 6. Exterior tile builds require an airlock/EVA route. Crew suit up through the airlock and work outside.
 7. The Cancel Build tool removes blueprints by drag and refunds delivered materials.
 
+### Truss expansion prototype
+
+The truss expansion loop is hidden behind the `?truss` URL flag while it is being playtested. With the flag enabled, the Structure palette adds a Truss tool:
+
+- Truss costs 1 material, charges that scaffold kit when the blueprint is placed, and skips the normal material-hauling phase. Crew still go outside for a quick EVA weld.
+- Truss counts as a structural build anchor, so scaffold can chain outward from the hull or from another planned truss.
+- Truss stays outside the pressure/room model. It is scaffold, not usable station floor.
+- Painting Floor over existing truss calls `buildStationExpansionOnTruss`, converting the selected scaffold into Floor and automatically adding a perimeter Wall shell plus one Door through the shared hull when needed.
+- The conversion uses discounted shell costs (`TRUSS_EXPANSION_FLOOR_COST` and `TRUSS_EXPANSION_PERIMETER_COST`) so the prototype tests whether expansion pressure can move from "can I afford every wall/floor tile up front?" to "can I stage scaffold, then fit out the shell?"
+
 ## Sim mutators
 
 All mutators bump version counters and clear caches. **All return false on failure rather than throwing.**
@@ -48,8 +58,9 @@ All mutators bump version counters and clear caches. **All return false on failu
 | Function | File:Line | What it does |
 |---|---|---|
 | `setTile` | `sim.ts:7700` | Direct tile write; clears occupancy/modules/room/body tiles/incidents on the cell. Bumps `topologyVersion`. Rebuilds dock entities if Dock-ness changes. |
-| `trySetTile` | `sim.ts:7735` | Gated `setTile`. Validates dock placement, requires path connectivity to core (`isConnectedToCore`), consumes `tileDistanceBuildCost(delta)`. |
+| `trySetTile` | `sim.ts:7735` | Gated `setTile`. Validates dock placement, requires path connectivity to core (`isConnectedToCore`), consumes the flat material-cost delta for the target tile type. |
 | `planTileConstruction` | `sim.ts` | Creates a tile construction blueprint instead of directly mutating the tile. Exterior tiles require hull/planned adjacency. |
+| `buildStationExpansionOnTruss` | `sim.ts` | Flagged prototype helper: turns selected Truss scaffold into Floor, auto-generates perimeter Wall/Door tiles, validates structural and walkable core connection, and consumes discounted shell materials. |
 | `planModuleConstruction` | `sim.ts` | Creates a module construction blueprint after validating footprint/mount/room rules. |
 | `cancelConstructionAtTile` | `sim.ts` | Removes a matching blueprint or module footprint blueprint and refunds delivered materials. |
 | `setRoom` | `sim.ts:7763` | Only on walkable tiles. Gated by `isRoomUnlocked`. Auto-flips zone to Restricted on Dorm. |
@@ -124,7 +135,7 @@ There are two material accounting models running side-by-side:
 
 The HUD's "Materials" reading is the union of both: `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)` (`sim.ts:6270`). `consumeConstructionMaterials` (`sim.ts:4077`) drains from both buckets.
 
-**Cost per tile.** `MATERIAL_COST` (`sim.ts:107`–116) is the base material per tile-type, scaled by `BUILD_DISTANCE_MULTIPLIER * Manhattan(core, tile)` (`sim.ts:205`, applied in `tileDistanceBuildCost` `sim.ts:1723`). Far-away tiles cost more. Construction consumes materials through delivery jobs instead of draining everything instantly.
+**Cost per tile.** `MATERIAL_COST` (`sim.ts:107`–116) is the flat material cost per tile type. Distance from the core no longer changes construction material cost. Construction consumes materials through delivery jobs instead of draining everything instantly.
 
 ## Map expansion
 
@@ -141,7 +152,7 @@ The strategic loop is *layout + flow*. The player decides where rooms go; hauler
 
 ## Tunables
 
-- `MATERIAL_COST`, `BUILD_DISTANCE_MULTIPLIER` (`sim.ts:107`, 205)
+- `MATERIAL_COST` (`sim.ts:107`)
 - `EXPANSION_COST_TIERS` (`sim.ts:219`)
 - `MODULE_DEFINITIONS` and `ROOM_DEFINITIONS` (`balance.ts:14`)
 - All `requiredModules` / `requiredAnyOf` / `activationChecks` per room

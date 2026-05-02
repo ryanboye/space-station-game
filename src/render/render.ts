@@ -63,6 +63,7 @@ const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile
 
 const tileColor: Record<TileType, string> = {
   [TileType.Space]: '#071019',
+  [TileType.Truss]: '#182635',
   [TileType.Floor]: '#273240',
   [TileType.Wall]: '#465569',
   [TileType.Dock]: '#3e8ec9',
@@ -72,6 +73,28 @@ const tileColor: Record<TileType, string> = {
   [TileType.Door]: '#7d8faa',
   [TileType.Airlock]: '#6fd8ff'
 };
+
+function drawTrussFallback(ctx: CanvasRenderingContext2D, px: number, py: number): boolean {
+  const p = PX;
+  ctx.fillStyle = tileColor[TileType.Space];
+  ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = 'rgba(98, 185, 210, 0.62)';
+  ctx.lineWidth = Math.max(1, Math.round(1.25 * p));
+  ctx.beginPath();
+  ctx.moveTo(px + 3 * p, py + 3 * p);
+  ctx.lineTo(px + 15 * p, py + 15 * p);
+  ctx.moveTo(px + 15 * p, py + 3 * p);
+  ctx.lineTo(px + 3 * p, py + 15 * p);
+  ctx.moveTo(px + 2 * p, py + 9 * p);
+  ctx.lineTo(px + 16 * p, py + 9 * p);
+  ctx.moveTo(px + 9 * p, py + 2 * p);
+  ctx.lineTo(px + 9 * p, py + 16 * p);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(189, 228, 234, 0.74)';
+  ctx.lineWidth = Math.max(1, Math.round(0.75 * p));
+  ctx.strokeRect(px + 3.5 * p, py + 3.5 * p, 11 * p, 11 * p);
+  return true;
+}
 
 const roomOverlay: Record<RoomType, string> = {
   [RoomType.None]: 'transparent',
@@ -176,6 +199,7 @@ const itemShortCode: Record<ItemType, string> = {
 };
 const RESIDENT_MARK_COLOR = '#35d98a';
 const SHIP_TRANSIT_VISUAL_SEC = 2;
+const SHIP_ASSET_VERSION = 'generated-ship-sheet-2026-05-02';
 const SERVICE_OVERLAY_CACHE_TTL_SEC = 0.2;
 
 type CachedLayer = {
@@ -198,6 +222,7 @@ type ServiceOverlayCache = {
 let staticLayerCache: CachedLayer | null = null;
 let decorativeLayerCache: CachedLayer | null = null;
 let diagnosticOverlayCache: CachedLayer | null = null;
+const shipImageCache = new Map<string, HTMLImageElement>();
 const serviceOverlayCache: ServiceOverlayCache = {
   key: '',
   builtAt: 0,
@@ -347,6 +372,9 @@ function drawTileSprite(
     const frame = spriteAtlas.getFrame(TILE_SPRITE_KEYS[TileType.Space]);
     if (!frame) return false;
     return drawRepeatedSpriteFrame(ctx, spriteAtlas, frame, px, py, TILE_SIZE, TILE_SIZE, px, py);
+  }
+  if (tileType === TileType.Truss) {
+    return drawSpriteByKey(ctx, spriteAtlas, TILE_SPRITE_KEYS[TileType.Truss], px, py, TILE_SIZE, TILE_SIZE) || drawTrussFallback(ctx, px, py);
   }
   if (tileType === TileType.Wall) {
     if (state.controls.wallRenderMode === 'dual-tilemap') {
@@ -915,6 +943,7 @@ type ShipPalette = {
   cockpit: string;
   engine: string;
 };
+type ShipSpriteKind = 'pod' | 'berth';
 
 const SHIP_SILHOUETTES: Record<ShipSize, ShipSilhouette[]> = {
   small: [
@@ -1229,6 +1258,10 @@ function resolveShipSilhouette(
   };
 }
 
+function isDockPodShip(ship: StationState['arrivingShips'][number]): boolean {
+  return ship.assignedDockId !== null && (ship.assignedBerthAnchor ?? null) === null;
+}
+
 function shipPalette(shipType: ShipType, docked: boolean): ShipPalette {
   if (shipType === 'trader') {
     return docked
@@ -1253,6 +1286,390 @@ function shipPalette(shipType: ShipType, docked: boolean): ShipPalette {
   return docked
     ? { hull: '#ffd447', cockpit: '#fff3b8', engine: '#ffe57f' }
     : { hull: '#ffea8a', cockpit: '#fff7cd', engine: '#fff1ad' };
+}
+
+function projectShipSpriteImage(kind: ShipSpriteKind, shipType: ShipType): HTMLImageElement | null {
+  const key = `${kind}:${shipType}`;
+  let image = shipImageCache.get(key);
+  if (!image) {
+    image = new Image();
+    image.src = `assets/ships/ship-${kind}-${shipType}.png?v=${SHIP_ASSET_VERSION}`;
+    shipImageCache.set(key, image);
+  }
+  return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
+}
+
+function drawRotatedImage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  center: { x: number; y: number },
+  width: number,
+  height: number,
+  angle: number
+): void {
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.translate(center.x, center.y);
+  ctx.rotate(angle);
+  ctx.drawImage(image, -width * 0.5, -height * 0.5, width, height);
+  ctx.restore();
+}
+
+function laneUnitVector(lane: SpaceLane): { x: number; y: number } {
+  if (lane === 'north') return { x: 0, y: -1 };
+  if (lane === 'south') return { x: 0, y: 1 };
+  if (lane === 'west') return { x: -1, y: 0 };
+  return { x: 1, y: 0 };
+}
+
+function laneAngleRad(lane: SpaceLane): number {
+  if (lane === 'north') return -Math.PI * 0.5;
+  if (lane === 'south') return Math.PI * 0.5;
+  if (lane === 'west') return Math.PI;
+  return 0;
+}
+
+function shipTransitOffset(ship: StationState['arrivingShips'][number]): number {
+  if (ship.stage !== 'approach' && ship.stage !== 'depart') return 0;
+  const t = Math.min(1, ship.stageTime / SHIP_TRANSIT_VISUAL_SEC);
+  return ship.stage === 'approach' ? 1 - t : t;
+}
+
+function bayTileBounds(state: StationState, bayTiles: number[]): { minX: number; maxX: number; minY: number; maxY: number } | null {
+  if (bayTiles.length <= 0) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const tile of bayTiles) {
+    const { x, y } = fromIndex(tile, state.width);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+function neighborInLane(tile: number, state: StationState, lane: SpaceLane): { x: number; y: number } {
+  const pos = fromIndex(tile, state.width);
+  const v = laneUnitVector(lane);
+  return { x: pos.x + v.x, y: pos.y + v.y };
+}
+
+function berthOpenTilesForLane(state: StationState, bayTiles: number[], lane: SpaceLane): number[] {
+  return bayTiles.filter((tile) => {
+    const n = neighborInLane(tile, state, lane);
+    if (!inBounds(n.x, n.y, state.width, state.height)) return true;
+    return state.tiles[n.y * state.width + n.x] === TileType.Space;
+  });
+}
+
+function pickBerthVisualLane(state: StationState, ship: StationState['arrivingShips'][number]): SpaceLane {
+  const lanes: SpaceLane[] = ['north', 'east', 'south', 'west'];
+  let bestLane = ship.lane;
+  let bestScore = -1;
+  for (const lane of lanes) {
+    const score = berthOpenTilesForLane(state, ship.bayTiles, lane).length;
+    if (score > bestScore || (score === bestScore && lane === ship.lane)) {
+      bestLane = lane;
+      bestScore = score;
+    }
+  }
+  return bestLane;
+}
+
+function averageTileCenterPx(state: StationState, tiles: number[]): { x: number; y: number } {
+  if (tiles.length <= 0) {
+    return { x: state.width * TILE_SIZE * 0.5, y: state.height * TILE_SIZE * 0.5 };
+  }
+  let sx = 0;
+  let sy = 0;
+  for (const tile of tiles) {
+    const p = fromIndex(tile, state.width);
+    sx += (p.x + 0.5) * TILE_SIZE;
+    sy += (p.y + 0.5) * TILE_SIZE;
+  }
+  return { x: sx / tiles.length, y: sy / tiles.length };
+}
+
+function berthDockingContact(
+  state: StationState,
+  ship: StationState['arrivingShips'][number]
+): { lane: SpaceLane; point: { x: number; y: number }; spanPx: number } {
+  const bounds = bayTileBounds(state, ship.bayTiles);
+  const lane = pickBerthVisualLane(state, ship);
+  const openTiles = berthOpenTilesForLane(state, ship.bayTiles, lane);
+  const center = averageTileCenterPx(state, openTiles.length > 0 ? openTiles : ship.bayTiles);
+  if (!bounds) return { lane, point: center, spanPx: TILE_SIZE * 3 };
+
+  if (lane === 'east') {
+    return {
+      lane,
+      point: { x: (bounds.maxX + 1) * TILE_SIZE, y: center.y },
+      spanPx: (bounds.maxY - bounds.minY + 1) * TILE_SIZE
+    };
+  }
+  if (lane === 'west') {
+    return {
+      lane,
+      point: { x: bounds.minX * TILE_SIZE, y: center.y },
+      spanPx: (bounds.maxY - bounds.minY + 1) * TILE_SIZE
+    };
+  }
+  if (lane === 'south') {
+    return {
+      lane,
+      point: { x: center.x, y: (bounds.maxY + 1) * TILE_SIZE },
+      spanPx: (bounds.maxX - bounds.minX + 1) * TILE_SIZE
+    };
+  }
+  return {
+    lane,
+    point: { x: center.x, y: bounds.minY * TILE_SIZE },
+    spanPx: (bounds.maxX - bounds.minX + 1) * TILE_SIZE
+  };
+}
+
+function dockHatchContact(
+  state: StationState,
+  ship: StationState['arrivingShips'][number]
+): { lane: SpaceLane; point: { x: number; y: number } } {
+  const dock = ship.assignedDockId === null ? null : state.docks.find((entry) => entry.id === ship.assignedDockId) ?? null;
+  if (!dock) {
+    return {
+      lane: ship.lane,
+      point: { x: ship.bayCenterX * TILE_SIZE, y: ship.bayCenterY * TILE_SIZE }
+    };
+  }
+  const bounds = bayTileBounds(state, dock.tiles);
+  const center = averageTileCenterPx(state, dock.tiles);
+  if (!bounds) return { lane: dock.facing, point: center };
+  if (dock.facing === 'east') return { lane: dock.facing, point: { x: (bounds.maxX + 1) * TILE_SIZE, y: center.y } };
+  if (dock.facing === 'west') return { lane: dock.facing, point: { x: bounds.minX * TILE_SIZE, y: center.y } };
+  if (dock.facing === 'south') return { lane: dock.facing, point: { x: center.x, y: (bounds.maxY + 1) * TILE_SIZE } };
+  return { lane: dock.facing, point: { x: center.x, y: bounds.minY * TILE_SIZE } };
+}
+
+function drawDockingCollar(ctx: CanvasRenderingContext2D, point: { x: number; y: number }, accent: string, radius: number): void {
+  ctx.save();
+  ctx.fillStyle = 'rgba(7, 17, 29, 0.96)';
+  ctx.strokeStyle = 'rgba(206, 226, 240, 0.95)';
+  ctx.lineWidth = Math.max(1, radius * 0.22);
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, radius * 0.12);
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius * 0.62, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function capsulePath(ctx: CanvasRenderingContext2D, length: number, width: number): void {
+  const halfL = length * 0.5;
+  const halfW = width * 0.5;
+  const r = Math.min(halfW, halfL);
+  ctx.beginPath();
+  ctx.moveTo(-halfL + r, -halfW);
+  ctx.lineTo(halfL - r, -halfW);
+  ctx.quadraticCurveTo(halfL, -halfW, halfL, 0);
+  ctx.quadraticCurveTo(halfL, halfW, halfL - r, halfW);
+  ctx.lineTo(-halfL + r, halfW);
+  ctx.quadraticCurveTo(-halfL, halfW, -halfL, 0);
+  ctx.quadraticCurveTo(-halfL, -halfW, -halfL + r, -halfW);
+  ctx.closePath();
+}
+
+function drawPodHull(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  lane: SpaceLane,
+  length: number,
+  width: number,
+  palette: ShipPalette,
+  docked: boolean
+): void {
+  const angle = laneAngleRad(lane);
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(angle);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+  capsulePath(ctx, length, width);
+  ctx.translate(0, TILE_SIZE * 0.08);
+  ctx.fill();
+  ctx.translate(0, -TILE_SIZE * 0.08);
+  ctx.fillStyle = docked ? palette.hull : 'rgba(185, 213, 235, 0.9)';
+  ctx.strokeStyle = 'rgba(232, 245, 255, 0.92)';
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+  capsulePath(ctx, length, width);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = palette.cockpit;
+  ctx.fillRect(length * 0.12, -width * 0.23, length * 0.23, width * 0.46);
+  ctx.fillStyle = palette.engine;
+  ctx.fillRect(-length * 0.42, -width * 0.18, length * 0.13, width * 0.36);
+  ctx.strokeStyle = 'rgba(8, 18, 30, 0.55)';
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.035);
+  for (let x = -length * 0.18; x <= length * 0.18; x += length * 0.18) {
+    ctx.beginPath();
+    ctx.moveTo(x, -width * 0.36);
+    ctx.lineTo(x, width * 0.36);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawBerthShipHull(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  angle: number,
+  length: number,
+  width: number,
+  palette: ShipPalette,
+  shipType: ShipType,
+  docked: boolean
+): void {
+  ctx.save();
+  ctx.translate(center.x, center.y + TILE_SIZE * 0.12);
+  ctx.rotate(angle);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.26)';
+  capsulePath(ctx, length, width);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(angle);
+  const hullFill = docked ? palette.hull : 'rgba(190, 216, 238, 0.92)';
+  ctx.fillStyle = hullFill;
+  ctx.strokeStyle = 'rgba(235, 248, 255, 0.95)';
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.07);
+  capsulePath(ctx, length, width);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(10, 24, 38, 0.24)';
+  ctx.fillRect(-length * 0.38, -width * 0.18, length * 0.76, width * 0.36);
+  ctx.fillStyle = palette.cockpit;
+  ctx.fillRect(length * 0.24, -width * 0.25, length * 0.18, width * 0.5);
+  ctx.fillStyle = palette.engine;
+  ctx.fillRect(-length * 0.44, -width * 0.28, length * 0.12, width * 0.2);
+  ctx.fillRect(-length * 0.44, width * 0.08, length * 0.12, width * 0.2);
+
+  ctx.strokeStyle = 'rgba(8, 18, 30, 0.42)';
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+  const stripeCount = shipType === 'industrial' ? 7 : shipType === 'military' ? 5 : 6;
+  for (let i = 1; i < stripeCount; i++) {
+    const x = -length * 0.36 + (length * 0.72 * i) / stripeCount;
+    ctx.beginPath();
+    ctx.moveTo(x, -width * 0.34);
+    ctx.lineTo(x, width * 0.34);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(235, 250, 255, 0.8)';
+  const windowCount = shipType === 'tourist' || shipType === 'colonist' ? 9 : 5;
+  for (let i = 0; i < windowCount; i++) {
+    const x = -length * 0.24 + (length * 0.48 * i) / Math.max(1, windowCount - 1);
+    ctx.fillRect(x - TILE_SIZE * 0.055, -width * 0.07, TILE_SIZE * 0.11, TILE_SIZE * 0.11);
+  }
+  ctx.restore();
+}
+
+function drawDockedPodShip(ctx: CanvasRenderingContext2D, state: StationState, ship: StationState['arrivingShips'][number]): void {
+  const contact = dockHatchContact(state, ship);
+  const outward = laneUnitVector(contact.lane);
+  const palette = shipPalette(ship.shipType, ship.stage === 'docked');
+  const sprite = projectShipSpriteImage('pod', ship.shipType);
+  const length = TILE_SIZE * 2.35;
+  const width = sprite ? length / Math.max(1, sprite.naturalWidth / sprite.naturalHeight) : TILE_SIZE * 1.08;
+  const transit = shipTransitOffset(ship);
+  const center = {
+    x: contact.point.x + outward.x * (length * 0.44 + transit * TILE_SIZE * 2.1),
+    y: contact.point.y + outward.y * (length * 0.44 + transit * TILE_SIZE * 2.1)
+  };
+
+  if (ship.stage === 'docked') {
+    drawDockingCollar(ctx, contact.point, palette.engine, Math.max(3, TILE_SIZE * 0.18));
+  }
+  if (sprite) {
+    drawRotatedImage(ctx, sprite, center, length, width, laneAngleRad(contact.lane));
+  } else {
+    drawPodHull(ctx, center, contact.lane, length, width, palette, ship.stage === 'docked');
+  }
+}
+
+function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState, ship: StationState['arrivingShips'][number]): void {
+  const bounds = bayTileBounds(state, ship.bayTiles);
+  if (!bounds) return;
+  const bayRect = {
+    x: bounds.minX * TILE_SIZE,
+    y: bounds.minY * TILE_SIZE,
+    w: (bounds.maxX - bounds.minX + 1) * TILE_SIZE,
+    h: (bounds.maxY - bounds.minY + 1) * TILE_SIZE
+  };
+  const palette = shipPalette(ship.shipType, ship.stage === 'docked');
+  const sprite = projectShipSpriteImage('berth', ship.shipType);
+  const transit = shipTransitOffset(ship);
+  const inset = Math.max(2, TILE_SIZE * 0.08);
+  const targetW = Math.max(TILE_SIZE, bayRect.w - inset * 2);
+  const targetH = Math.max(TILE_SIZE, bayRect.h - inset * 2);
+  const bayIsWide = targetW > targetH * 1.18;
+  const angle = bayIsWide ? Math.PI * 0.5 : 0;
+  const imageAspect = sprite
+    ? sprite.naturalWidth / Math.max(1, sprite.naturalHeight)
+    : ship.size === 'large' ? 0.62 : ship.size === 'medium' ? 0.68 : 0.78;
+  const fitAspect = bayIsWide ? 1 / imageAspect : imageAspect;
+  let drawW = targetW;
+  let drawH = drawW / fitAspect;
+  if (drawH > targetH) {
+    drawH = targetH;
+    drawW = drawH * fitAspect;
+  }
+  // Make the bay read as occupied, even when the generated sprite has a lot
+  // of transparent padding around its docking collar.
+  if (!bayIsWide && drawH < targetH * 0.92) {
+    const grow = Math.min(targetH / drawH, 1.12);
+    drawH *= grow;
+    drawW *= grow;
+  } else if (bayIsWide && drawW < targetW * 0.92) {
+    const grow = Math.min(targetW / drawW, 1.12);
+    drawH *= grow;
+    drawW *= grow;
+  }
+  const visualLane = pickBerthVisualLane(state, ship);
+  const outward = laneUnitVector(visualLane);
+  const center = {
+    x: bayRect.x + bayRect.w * 0.5 + outward.x * transit * TILE_SIZE * 1.6,
+    y: bayRect.y + bayRect.h * 0.5 + outward.y * transit * TILE_SIZE * 1.6
+  };
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(bayRect.x + inset * 0.4, bayRect.y + inset * 0.4, bayRect.w - inset * 0.8, bayRect.h - inset * 0.8);
+  ctx.clip();
+  if (sprite) {
+    drawRotatedImage(ctx, sprite, center, drawW, drawH, angle);
+  } else {
+    drawBerthShipHull(
+      ctx,
+      center,
+      angle,
+      bayIsWide ? drawW : drawH,
+      bayIsWide ? drawH : drawW,
+      palette,
+      ship.shipType,
+      ship.stage === 'docked'
+    );
+  }
+  ctx.restore();
+
+  const contact = berthDockingContact(state, ship);
+  if (ship.stage === 'docked') drawDockingCollar(ctx, contact.point, palette.engine, Math.max(3, TILE_SIZE * 0.16));
 }
 
 function drawShipSilhouetteCells(
@@ -1372,7 +1789,7 @@ function ensureStaticLayer(
     if (state.rooms[i] === RoomType.Berth && state.tiles[i] !== TileType.Space) {
       drawBerthTileTexture(ctx, state, i, px, py);
     }
-    if (state.controls.showZones && state.tiles[i] !== TileType.Space) {
+    if (state.controls.showZones && state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Truss) {
       if (state.zones[i] === ZoneType.Restricted) {
         ctx.fillStyle = 'rgba(255, 90, 90, 0.25)';
       } else {
@@ -2119,7 +2536,7 @@ export function renderWorld(
     // on demo-station because doors aren't pressure barriers in the current
     // sim model). 0.08 keeps the diagnostic signal without dominating the
     // aesthetic.
-    if (state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall && !state.pressurized[i]) {
+    if (isWalkable(state.tiles[i]) && !state.pressurized[i]) {
       ctx.fillStyle = 'rgba(160, 40, 40, 0.08)';
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
     }
@@ -2264,6 +2681,21 @@ export function renderWorld(
     }
   }
 
+  if (
+    currentTool.kind === 'tile' &&
+    currentTool.tile === TileType.Floor &&
+    hoveredTile !== null &&
+    state.tiles[hoveredTile] === TileType.Truss
+  ) {
+    const p = fromIndex(hoveredTile, state.width);
+    ctx.fillStyle = 'rgba(110, 219, 143, 0.34)';
+    ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    ctx.strokeStyle = 'rgba(110, 219, 143, 0.95)';
+    ctx.lineWidth = Math.max(1, Math.round(1.25 * PX));
+    ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+    ctx.lineWidth = 1;
+  }
+
   if (currentTool.kind === 'module' && hoveredTile !== null && currentTool.module) {
     const preview = validateModulePreviewPlacement(
       state,
@@ -2395,37 +2827,23 @@ export function renderWorld(
   }
 
   for (const ship of state.arrivingShips) {
-    const silhouette = resolveShipSilhouette(ship.id, ship.shipType, ship.size, ship.lane);
-    const dockX = ship.bayCenterX - silhouette.bounds.width * 0.5;
-    const dockY = ship.bayCenterY - silhouette.bounds.height * 0.5;
-
-    let posX = dockX;
-    let posY = dockY;
-    // Dock-migration v0: berth-bound ships snap to the centroid (no
-    // approach/depart slide) since the berth interior is inside the
-    // hull — sliding from off-screen into the interior would visually
-    // pass through walls. v1 will animate via a dedicated airlock.
     const isBerthBound = (ship.assignedBerthAnchor ?? null) !== null;
-    if (!isBerthBound && (ship.stage === 'approach' || ship.stage === 'depart')) {
-      const t = Math.min(1, ship.stageTime / SHIP_TRANSIT_VISUAL_SEC);
-      const lane = ship.lane;
-      const off = ship.stage === 'approach' ? 1 - t : t;
-      const travelDepth =
-        (lane === 'north' || lane === 'south' ? silhouette.bounds.height : silhouette.bounds.width) + 1.5;
-      if (lane === 'north') posY = dockY - off * travelDepth;
-      if (lane === 'south') posY = dockY + off * travelDepth;
-      if (lane === 'east') posX = dockX + off * travelDepth;
-      if (lane === 'west') posX = dockX - off * travelDepth;
+    if (isBerthBound) {
+      drawDockedBerthShip(ctx, state, ship);
+      continue;
     }
-    if (useSprites) {
-      const shipKey = SHIP_SPRITE_KEYS[ship.shipType];
-      const spriteW = silhouette.bounds.width * TILE_SIZE;
-      const spriteH = silhouette.bounds.height * TILE_SIZE;
-      const drewSprite = drawSpriteByKey(ctx, spriteAtlas, shipKey, posX * TILE_SIZE, posY * TILE_SIZE, spriteW, spriteH);
-      if (drewSprite) continue;
+    if (isDockPodShip(ship)) {
+      drawDockedPodShip(ctx, state, ship);
+      continue;
     }
+    const silhouette = resolveShipSilhouette(ship.id, ship.shipType, ship.size, ship.lane);
+    const cellSize = TILE_SIZE * 0.9;
+    const spriteW = silhouette.bounds.width * cellSize;
+    const spriteH = silhouette.bounds.height * cellSize;
+    const posX = ship.bayCenterX * TILE_SIZE - spriteW * 0.5;
+    const posY = ship.bayCenterY * TILE_SIZE - spriteH * 0.5;
     const palette = shipPalette(ship.shipType, ship.stage === 'docked');
-    drawShipSilhouetteCells(ctx, silhouette, posX * TILE_SIZE, posY * TILE_SIZE, TILE_SIZE, palette, 2);
+    drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
   }
 
   drawQueuedShips(ctx, state, spriteAtlas, useSprites);

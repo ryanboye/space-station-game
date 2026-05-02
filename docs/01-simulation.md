@@ -86,7 +86,7 @@ Visitor-facing rooms near service/cargo/critical systems create a small `environ
 
 - 60×40 grid (default).
 - 10×10 floor box at `(25,14)` to `(34,23)` with walls.
-- 3×3 reactor "core" at the geometric center `(coreX=30, coreY=20)`.
+- Open central floor at the geometric center `(coreX=30, coreY=20)`, with a small reactor alcove on the west side of the starter hull.
 - Starting resources: `credits=60`, `materials=420`, `airQuality=75`, `mealStock=20`, `rawFoodStock=40`.
 
 `main.ts:659` then auto-paints a 2-tile starter dock at `(35,17)`–`(35,18)` so the player has somewhere for first ships to dock.
@@ -95,7 +95,7 @@ Visitor-facing rooms near service/cargo/critical systems create a small `environ
 
 - `CYCLE_DURATION = 15` seconds (`sim.ts:81`).
 - `state.now` advances every tick by `dt` (sim seconds).
-- A "cycle" is a unit of ship-arrival rhythm — `scheduleCycleArrivals` (`sim.ts:3548`) tries `controls.shipsPerCycle` arrivals every cycle.
+- Ship traffic is sporadic: `updateTrafficArrivalSchedule` uses `controls.shipsPerCycle` as a 0-3 traffic-rate knob, then jitters the next single arrival check instead of spawning fixed waves.
 - The HUD shows "Day N | Cycle X | MM:SS" but **Day = floor(cycleIndex / 8)** is purely cosmetic — there are no day-based rules in the sim. Don't add gameplay that assumes day boundaries (`main.ts:1259`).
 
 ## Scenarios

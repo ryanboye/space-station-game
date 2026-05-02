@@ -15,6 +15,7 @@ import { sigilForFaction } from './sim/system-map';
 import {
   buyMaterialsDetailed,
   buyRawFoodDetailed,
+  buildStationExpansionOnTruss,
   cancelConstructionAtTile,
   canExpandDirection,
   clearBodies,
@@ -57,6 +58,8 @@ import {
   setZone,
   tick,
   setTile,
+  tryPlaceModule,
+  trySetTile,
   getCrewPriorityPresetWeights,
   validateDockPlacement
 } from './sim';
@@ -91,6 +94,12 @@ import {
   type RouteExposure,
   type UnlockTier
 } from './sim/types';
+
+// Temporary playtest valve: construction/EVA remains implemented, but the
+// primary build tools place immediately so other station systems can be tested
+// without early expansion bottlenecking on haul/build jobs.
+const INSTANT_BUILD_PLAYTEST = true;
+const TRUSS_EXPANSION_EXPERIMENT = new URLSearchParams(window.location.search).has('truss');
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root not found');
@@ -197,7 +206,7 @@ app.innerHTML = `
           <button id="edit-priorities" class="secondary-command">Priorities</button>
         </div>
         <div class="traffic-controls">
-          <div class="row compact list-row"><span>Ships / cycle</span><span class="value" id="ships-label">1</span></div>
+          <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
           <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
           <small id="traffic-status" class="traffic-status">Paused</small>
         </div>
@@ -301,7 +310,8 @@ app.innerHTML = `
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="structure">
         <span class="tool-row-label">Structure</span>
-        <button class="tool-btn" data-tool-tile="floor" title="Floor (1)"><span class="tool-key">1</span>Floor</button>
+        <button class="tool-btn" data-tool-tile="floor" title="${TRUSS_EXPANSION_EXPERIMENT ? 'Floor (1) - paint over truss to seal a pressurized expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
+        ${TRUSS_EXPANSION_EXPERIMENT ? '<button class="tool-btn" data-tool-tile="truss" title="Truss - fast EVA scaffold. Paint Floor over it to seal the station expansion."><span class="tool-key">.</span>Truss</button>' : ''}
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
@@ -1567,7 +1577,7 @@ function hasVisitorDock(): boolean {
 function hasEligibleVisitorDock(): boolean {
   if (state.metrics.visitorBerthsTotal > 0) return true;
   return state.docks.some((dock) => {
-    if (dock.purpose !== 'visitor' || dock.allowedShipSizes.length === 0) return false;
+    if (dock.purpose !== 'visitor' || !dock.allowedShipSizes.includes('small')) return false;
     return VISITOR_TRAFFIC_TYPES.some(
       (shipType) => dock.allowedShipTypes.includes(shipType) && isShipTypeUnlocked(state, shipType)
     );
@@ -1600,12 +1610,11 @@ function refreshTrafficStatus(): void {
     return;
   }
   if (activeTransientShips > 0 || state.pendingSpawns.length > 0) {
-    setTrafficStatus(`${activeTransientShips} ship${activeTransientShips === 1 ? '' : 's'} active`, 'ok');
+    setTrafficStatus(`${activeTransientShips} ship${activeTransientShips === 1 ? '' : 's'} docked/arriving`, 'ok');
     return;
   }
-  const elapsed = Math.max(0, state.now - state.lastCycleTime);
-  const seconds = Math.max(1, Math.ceil(state.cycleDuration - elapsed));
-  setTrafficStatus(`Next wave in ${seconds}s`, 'ok');
+  const seconds = Math.max(1, Math.ceil(state.lastCycleTime - state.now));
+  setTrafficStatus(`Next arrival check in ${seconds}s`, 'ok');
 }
 
 type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';
@@ -2813,6 +2822,7 @@ installLegendProgressionHandlers();
 // toolbar is additive, not replacing.
 const TOOLBAR_TILE_MAP: Record<string, TileType> = {
   floor: TileType.Floor,
+  truss: TileType.Truss,
   wall: TileType.Wall,
   dock: TileType.Dock,
   door: TileType.Door,
@@ -3804,6 +3814,16 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
   }
 
   if (currentTool.kind === 'tile') {
+    if (
+      TRUSS_EXPANSION_EXPERIMENT &&
+      currentTool.tile === TileType.Floor &&
+      paintTiles.some((idx) => state.tiles[idx] === TileType.Truss)
+    ) {
+      const built = buildStationExpansionOnTruss(state, paintTiles);
+      if (!built.ok) toolLockMessage = built.reason ?? 'cannot build station expansion';
+      return;
+    }
+
     const core = fromIndex(state.core.serviceTile, state.width);
     paintTiles.sort((left, right) => {
       const aTile = fromIndex(left, state.width);
@@ -3816,6 +3836,20 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
 
   for (const idx of paintTiles) {
       if (currentTool.kind === 'tile') {
+        const forceConstruction = TRUSS_EXPANSION_EXPERIMENT && currentTool.tile === TileType.Truss;
+        if (INSTANT_BUILD_PLAYTEST && !forceConstruction) {
+          const changed = trySetTile(state, idx, currentTool.tile!);
+          if (!changed) {
+            toolLockMessage = currentTool.tile === TileType.Dock ? 'invalid dock placement' : 'cannot place tile';
+            continue;
+          }
+          cancelConstructionAtTile(state, idx);
+          if (currentTool.tile === TileType.Space) {
+            setZone(state, idx, ZoneType.Public);
+            setRoom(state, idx, RoomType.None);
+          }
+          continue;
+        }
         const planned = planTileConstruction(state, idx, currentTool.tile!);
         if (!planned.ok) {
           toolLockMessage = planned.reason ?? '';
@@ -3835,6 +3869,12 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
         if (currentTool.module === ModuleType.None) {
           removeModuleAtTile(state, idx);
         } else {
+          if (INSTANT_BUILD_PLAYTEST) {
+            cancelConstructionAtTile(state, idx);
+            const placed = tryPlaceModule(state, currentTool.module!, idx, state.controls.moduleRotation);
+            if (!placed.ok) toolLockMessage = placed.reason ?? '';
+            continue;
+          }
           const planned = planModuleConstruction(state, idx, currentTool.module!, state.controls.moduleRotation);
           if (!planned.ok) toolLockMessage = planned.reason ?? '';
         }
@@ -4281,7 +4321,9 @@ function handleExpandDirection(direction: CardinalDirection): void {
 }
 
 shipsInput.addEventListener('input', () => {
-  state.controls.shipsPerCycle = clamp(parseInt(shipsInput.value, 10), 0, 3);
+  const nextRate = clamp(parseInt(shipsInput.value, 10), 0, 3);
+  if (nextRate !== state.controls.shipsPerCycle) state.lastCycleTime = 0;
+  state.controls.shipsPerCycle = nextRate;
   shipsLabel.textContent = String(state.controls.shipsPerCycle);
 });
 

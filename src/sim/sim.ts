@@ -101,6 +101,8 @@ import {
 const BASE_CAPACITY = 30;
 const CYCLE_DURATION = 15;
 const MAX_SHIPS_PER_CYCLE = 3;
+const TRAFFIC_ARRIVAL_MIN_DELAY_SEC = 3.5;
+const TRAFFIC_ARRIVAL_MAX_DELAY_SEC = 28;
 const MAX_OCCUPANTS_PER_TILE = 4;
 
 const CREW_PER_CAFETERIA = 1;
@@ -122,7 +124,6 @@ const POWER_PER_REACTOR = 22;
 const SHIP_APPROACH_TIME = TASK_TIMINGS.shipApproachSec;
 const SHIP_DOCKED_TIME = TASK_TIMINGS.shipDockedPassengerSpawnSec;
 const SHIP_DEPART_TIME = TASK_TIMINGS.shipDepartSec;
-const SHIP_MAX_DOCKED_TIME = TASK_TIMINGS.shipMaxDockedSec;
 const MAX_DINERS_PER_CAF_TILE = SERVICE_CAPACITY.tableMaxDiners;
 const VISITOR_ROUTE_EXPOSURE_RATING_PENALTY = 0.012;
 const RESIDENT_BAD_ROUTE_STRESS = 0.28;
@@ -139,6 +140,7 @@ const MAINTENANCE_STAFF_REPAIR_PER_MIN = 4.5;
 
 const MATERIAL_COST: Record<TileType, number> = {
   [TileType.Space]: 0,
+  [TileType.Truss]: 1,
   [TileType.Floor]: 2,
   [TileType.Wall]: 3,
   [TileType.Dock]: 10,
@@ -155,11 +157,13 @@ export const SHIP_MIN_DOCK_AREA: Record<ShipSize, number> = {
   large: 7
 };
 
-const SHIP_BASE_PASSENGERS: Record<ShipSize, number> = {
+const BERTH_BASE_PASSENGERS: Record<ShipSize, number> = {
   small: 6,
-  medium: 11,
-  large: 17
+  medium: 18,
+  large: 34
 };
+const DOCK_POD_PASSENGER_MIN = 1;
+const DOCK_POD_PASSENGER_MAX = 2;
 const PAYROLL_PERIOD = 30;
 const PAYROLL_PER_CREW = 0.32;
 const HIRE_COST = 14;
@@ -182,6 +186,8 @@ const AIR_BLOCKED_WARNING_DELAY_SEC = 8;
 const DORM_SEEK_ENERGY_THRESHOLD = 55;
 const BODY_CLEAR_BATCH = 4;
 const BODY_CLEAR_MATERIAL_COST = 6;
+const TRUSS_EXPANSION_FLOOR_COST = 1;
+const TRUSS_EXPANSION_PERIMETER_COST = 1;
 const RESIDENT_CONVERSION_BASE_CHANCE = 0.03;
 const RESIDENT_TAX_PERIOD = 24;
 const RESIDENT_TAX_PER_HEAD = 0.42;
@@ -254,7 +260,6 @@ const FOOD_CHAIN_TARGET_KITCHEN_RAW = 40;
 const FOOD_CHAIN_MEAL_HORIZON_SEC = 45;
 const ROOM_DEACTIVATE_GRACE_SEC = 2.5;
 const VISITOR_PREFERENCE_JITTER = 0.22;
-const BUILD_DISTANCE_MULTIPLIER = 0.04;
 const DOCK_APPROACH_LENGTH = 4;
 const DOCK_QUEUE_MAX_TIME_SEC = TASK_TIMINGS.dockQueueMaxSec;
 const VISITOR_MIN_STAY_SEC = TASK_TIMINGS.visitorMinStaySec;
@@ -1972,6 +1977,19 @@ function preferredShipSize(rng: () => number): ShipSize {
   return 'large';
 }
 
+function dockPodPassengerCount(rng: () => number): number {
+  const spread = DOCK_POD_PASSENGER_MAX - DOCK_POD_PASSENGER_MIN + 1;
+  return DOCK_POD_PASSENGER_MIN + Math.floor(rng() * spread);
+}
+
+function berthPassengerCount(size: ShipSize, rng: () => number): number {
+  return Math.round(BERTH_BASE_PASSENGERS[size] * (0.85 + rng() * 0.5));
+}
+
+function minimumBoardingForPassengers(passengersTotal: number): number {
+  return Math.min(passengersTotal, Math.max(1, Math.round(passengersTotal * 0.25)));
+}
+
 type ManifestDemand = { cafeteria: number; market: number; lounge: number };
 
 type ArchetypeProfile = {
@@ -2439,13 +2457,8 @@ function isConnectedToCore(state: StationState, proposedTiles: TileType[]): bool
   return true;
 }
 
-function tileDistanceBuildCost(state: StationState, index: number, tile: TileType): number {
-  if (tile === TileType.Space) return 0;
-  const base = MATERIAL_COST[tile];
-  const p = fromIndex(index, state.width);
-  const c = fromIndex(state.core.serviceTile, state.width);
-  const dist = Math.abs(p.x - c.x) + Math.abs(p.y - c.y);
-  return base + dist * BUILD_DISTANCE_MULTIPLIER;
+function tileBuildCost(tile: TileType): number {
+  return MATERIAL_COST[tile];
 }
 
 function hasAdjacentDoor(state: StationState, tile: number): boolean {
@@ -2602,7 +2615,7 @@ function computePressurization(state: StationState): void {
   let builtWalkable = 0;
   let leakingWalkable = 0;
   for (let i = 0; i < n; i++) {
-    const isBuiltWalkable = state.tiles[i] !== TileType.Space && state.tiles[i] !== TileType.Wall;
+    const isBuiltWalkable = isWalkable(state.tiles[i]);
     const pressurized = isBuiltWalkable && !vacuumReachable[i];
     state.pressurized[i] = pressurized;
     if (isBuiltWalkable) {
@@ -5081,132 +5094,154 @@ function dinersOnTile(state: StationState, tileIndex: number): number {
   return count;
 }
 
-function scheduleCycleArrivals(state: StationState): void {
-  const ships = clamp(state.controls.shipsPerCycle, 0, MAX_SHIPS_PER_CYCLE);
-  // Refresh "no-capability" hint each cycle. Stays empty unless we
-  // actually queue a ship below for capability reasons.
+function nextTrafficArrivalDelay(state: StationState): number {
+  const intensity = clamp(state.controls.shipsPerCycle, 0, MAX_SHIPS_PER_CYCLE);
+  if (intensity <= 0) return Number.POSITIVE_INFINITY;
+  const averageDelay = state.cycleDuration / intensity;
+  const jitter = 0.55 + state.rng() * 1.35;
+  return clamp(averageDelay * jitter, TRAFFIC_ARRIVAL_MIN_DELAY_SEC, TRAFFIC_ARRIVAL_MAX_DELAY_SEC);
+}
+
+function scheduleNextTrafficArrival(state: StationState): void {
+  const delay = nextTrafficArrivalDelay(state);
+  state.lastCycleTime = Number.isFinite(delay) ? state.now + delay : state.now;
+}
+
+function scheduleSporadicArrival(state: StationState): void {
+  // Refresh "no-capability" hint on each traffic check. Stays empty unless
+  // we actually queue a ship below for capability reasons.
   state.metrics.shipsQueuedNoCapabilityCount = 0;
   state.metrics.shipsQueuedNoCapabilityHint = '';
   // Berth-only stations are valid in v0: if a Berth exists, we still
   // schedule arrivals even when there are no legacy Docks.
   const hasAnyBerth = roomClusters(state, RoomType.Berth).length > 0;
-  for (let s = 0; s < ships; s++) {
-    if (state.docks.length === 0 && !hasAnyBerth) continue;
-    const lanesWithDocks = LANES.filter((lane) => state.docks.some((d) => d.lane === lane && d.purpose === 'visitor'));
-    // If no docks but berths exist: roll a lane purely from traffic so
-    // the approach/depart animation still works (lanes are cosmetic
-    // for berth-bound ships in v0).
-    if (lanesWithDocks.length === 0 && !hasAnyBerth) continue;
-    const lanePool = lanesWithDocks.length > 0 ? lanesWithDocks : LANES;
-    const weightedLaneTotal = lanePool.reduce((acc, lane) => acc + state.laneProfiles[lane].trafficVolume, 0);
-    let laneRoll = state.rng() * Math.max(0.0001, weightedLaneTotal);
-    let lane = lanePool[0];
-    for (const candidateLane of lanePool) {
-      laneRoll -= state.laneProfiles[candidateLane].trafficVolume;
-      if (laneRoll <= 0) {
-        lane = candidateLane;
-        break;
-      }
+  if (state.docks.length === 0 && !hasAnyBerth) return;
+  const lanesWithDocks = LANES.filter((lane) => state.docks.some((d) => d.lane === lane && d.purpose === 'visitor'));
+  // If no docks but berths exist: roll a lane purely from traffic so
+  // the approach/depart animation still works (lanes are cosmetic
+  // for berth-bound ships in v0).
+  if (lanesWithDocks.length === 0 && !hasAnyBerth) return;
+  const lanePool = lanesWithDocks.length > 0 ? lanesWithDocks : LANES;
+  const weightedLaneTotal = lanePool.reduce((acc, lane) => acc + state.laneProfiles[lane].trafficVolume, 0);
+  let laneRoll = state.rng() * Math.max(0.0001, weightedLaneTotal);
+  let lane = lanePool[0];
+  for (const candidateLane of lanePool) {
+    laneRoll -= state.laneProfiles[candidateLane].trafficVolume;
+    if (laneRoll <= 0) {
+      lane = candidateLane;
+      break;
     }
+  }
 
-    const laneDocks = state.docks.filter((d) => d.lane === lane && d.purpose === 'visitor');
-    const availableTypes = new Set<ShipType>();
-    for (const dock of laneDocks) {
-      for (const type of dock.allowedShipTypes) {
-        if (!isShipTypeUnlocked(state, type)) continue;
-        availableTypes.add(type);
-      }
+  const laneDocks = state.docks.filter((d) => d.lane === lane && d.purpose === 'visitor');
+  const availableTypes = new Set<ShipType>();
+  for (const dock of laneDocks) {
+    for (const type of dock.allowedShipTypes) {
+      if (!isShipTypeUnlocked(state, type)) continue;
+      availableTypes.add(type);
     }
-    // Berth-only path: if no legacy dock is on this lane but berths
-    // exist anywhere, allow all unlocked ship types as candidates so
-    // the cycle still spawns. v1 will give berths their own lane bias.
-    if (availableTypes.size === 0 && hasAnyBerth) {
-      for (const type of ['tourist', 'trader', 'industrial', 'military', 'colonist'] as ShipType[]) {
-        if (isShipTypeUnlocked(state, type)) availableTypes.add(type);
-      }
+  }
+  // Berths are the large-traffic surface. If any berth exists, include
+  // all unlocked ship types in the candidate pool so capability modules
+  // can attract richer traffic than the tiny legacy dock pods.
+  if (hasAnyBerth) {
+    for (const type of ['tourist', 'trader', 'industrial', 'military', 'colonist'] as ShipType[]) {
+      if (isShipTypeUnlocked(state, type)) availableTypes.add(type);
     }
-    if (availableTypes.size === 0) {
-      // No configured types on this lane; skip attempt without rating penalty.
-      continue;
-    }
+  }
+  if (availableTypes.size === 0) {
+    // No configured types on this lane; skip attempt without rating penalty.
+    return;
+  }
 
-    const weights = state.laneProfiles[lane].weights;
-    const candidates = [...availableTypes];
-    const candidateWeightTotal = Math.max(
-      0.0001,
-      candidates.reduce((acc, type) => acc + Math.max(0.0001, weights[type]), 0)
-    );
-    let cursor = state.rng() * candidateWeightTotal;
-    let shipType: ShipType = candidates[0];
-    for (const type of candidates) {
-      cursor -= Math.max(0.0001, weights[type]);
-      if (cursor <= 0) {
-        shipType = type;
-        break;
-      }
+  const weights = state.laneProfiles[lane].weights;
+  const candidates = [...availableTypes];
+  const candidateWeightTotal = Math.max(
+    0.0001,
+    candidates.reduce((acc, type) => acc + Math.max(0.0001, weights[type]), 0)
+  );
+  let cursor = state.rng() * candidateWeightTotal;
+  let shipType: ShipType = candidates[0];
+  for (const type of candidates) {
+    cursor -= Math.max(0.0001, weights[type]);
+    if (cursor <= 0) {
+      shipType = type;
+      break;
     }
+  }
 
-    const preferred = preferredShipSize(state.rng);
-    const sizeOrder: ShipSize[] =
-      preferred === 'large' ? ['large', 'medium', 'small'] : preferred === 'medium' ? ['medium', 'small', 'large'] : ['small', 'medium', 'large'];
-    const allBerths = listBerthCandidates(state);
-    let sizeWanted: ShipSize | null = null;
-    for (const size of sizeOrder) {
-      const hasCompatibleDock = laneDocks.some(
-        (d) =>
-          d.allowedShipTypes.includes(shipType) &&
-          d.allowedShipSizes.includes(size) &&
-          shipSizeForBay(d.area, size) !== null
-      );
-      // Dock-migration v0: a berth that fits this size class also
-      // counts as "compatible" for size selection — capability-check
-      // happens later via `pickBerthForShip`.
-      const hasCompatibleBerth = allBerths.some((b) => shipSizeFitsBerth(size, b.size));
-      if (hasCompatibleDock || hasCompatibleBerth) {
-        sizeWanted = size;
-        break;
-      }
-    }
-    if (!sizeWanted) continue;
+  // Try berths first, largest to smallest. Legacy Dock tiles now represent
+  // tiny 1-2 person pods; medium/large traffic belongs to Berth rooms.
+  let berthMatch: { berth: BerthCandidate; size: ShipSize } | null = null;
+  for (const size of ['large', 'medium', 'small'] as ShipSize[]) {
+    const berth = pickBerthForShip(state, shipType, size);
+    if (!berth) continue;
+    berthMatch = { berth, size };
+    break;
+  }
+  if (berthMatch) {
+    spawnShipAtBerth(state, lane, shipType, berthMatch.berth, undefined, berthMatch.size);
+    return;
+  }
 
-    // Try berth first (dock-migration v0): if a Berth room with the
-    // required capabilities is free and big enough, ships dock there.
-    const berth = pickBerthForShip(state, shipType, sizeWanted);
-    if (berth) {
-      spawnShipAtBerth(state, lane, shipType, berth, undefined, sizeWanted);
-      continue;
+  const eligibleDocks = laneDocks.filter(
+    (d) =>
+      d.allowedShipTypes.includes(shipType) &&
+      d.allowedShipSizes.includes('small') &&
+      shipSizeForBay(d.area, 'small') !== null
+  );
+  if (eligibleDocks.length === 0) {
+    // No legacy dock match; surface a capability hint if a berth
+    // was the closest fit but lacked the right modules.
+    const hint =
+      describeMissingCapabilities(state, shipType, 'large') ??
+      describeMissingCapabilities(state, shipType, 'medium') ??
+      describeMissingCapabilities(state, shipType, 'small');
+    if (hint) {
+      state.metrics.shipsQueuedNoCapabilityCount += 1;
+      state.metrics.shipsQueuedNoCapabilityHint = hint;
     }
+    return;
+  }
+  const freeDock = eligibleDocks.find((d) => d.occupiedByShipId === null);
+  if (!freeDock) {
+    const queueEntry: DockQueueEntry = {
+      shipId: state.shipSpawnCounter++,
+      lane,
+      shipType,
+      size: 'small',
+      queuedAt: state.now,
+      timeoutAt: state.now + DOCK_QUEUE_MAX_TIME_SEC
+    };
+    state.dockQueue.push(queueEntry);
+    return;
+  }
+  spawnShipAtDock(state, lane, shipType, freeDock.id, undefined, 'small');
+}
 
-    const eligibleDocks = laneDocks.filter(
-      (d) =>
-        d.allowedShipTypes.includes(shipType) &&
-        d.allowedShipSizes.includes(sizeWanted) &&
-        shipSizeForBay(d.area, sizeWanted) !== null
-    );
-    if (eligibleDocks.length === 0) {
-      // No legacy dock match; surface a capability hint if a berth
-      // was the closest fit but lacked the right modules.
-      const hint = describeMissingCapabilities(state, shipType, sizeWanted);
-      if (hint) {
-        state.metrics.shipsQueuedNoCapabilityCount += 1;
-        state.metrics.shipsQueuedNoCapabilityHint = hint;
-      }
-      continue;
-    }
-    const freeDock = eligibleDocks.find((d) => d.occupiedByShipId === null);
-    if (!freeDock) {
-      const queueEntry: DockQueueEntry = {
-        shipId: state.shipSpawnCounter++,
-        lane,
-        shipType,
-        size: sizeWanted,
-        queuedAt: state.now,
-        timeoutAt: state.now + DOCK_QUEUE_MAX_TIME_SEC
-      };
-      state.dockQueue.push(queueEntry);
-      continue;
-    }
-    spawnShipAtDock(state, lane, shipType, freeDock.id, undefined, sizeWanted);
+function updateTrafficArrivalSchedule(state: StationState): void {
+  const intensity = clamp(state.controls.shipsPerCycle, 0, MAX_SHIPS_PER_CYCLE);
+  if (intensity <= 0) {
+    state.lastCycleTime = state.now;
+    return;
+  }
+
+  if (
+    state.lastCycleTime <= 0 ||
+    !Number.isFinite(state.lastCycleTime) ||
+    state.lastCycleTime < state.now - state.cycleDuration
+  ) {
+    scheduleNextTrafficArrival(state);
+  }
+
+  let attempts = 0;
+  while (state.now >= state.lastCycleTime && attempts < MAX_SHIPS_PER_CYCLE) {
+    scheduleSporadicArrival(state);
+    state.lastCycleTime += nextTrafficArrivalDelay(state);
+    attempts++;
+  }
+  if (state.now >= state.lastCycleTime) {
+    scheduleNextTrafficArrival(state);
   }
 }
 
@@ -5221,6 +5256,23 @@ function updateSpawns(state: StationState): void {
     }
   }
   state.pendingSpawns = keep;
+}
+
+function originShipForVisitor(state: StationState, visitor: Visitor): ArrivingShip | null {
+  if (visitor.originShipId === null) return null;
+  return state.arrivingShips.find((ship) => ship.id === visitor.originShipId) ?? null;
+}
+
+function activeVisitorsForShip(state: StationState, shipId: number): number {
+  let count = 0;
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId === shipId) count++;
+  }
+  return count;
+}
+
+function transientShipVisitorsResolved(state: StationState, ship: ArrivingShip): boolean {
+  return ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) <= 0;
 }
 
 function updateArrivingShips(state: StationState, dt: number): void {
@@ -5278,18 +5330,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.passengersSpawned++;
         ship.spawnCarry -= 1;
       }
-      if (
-        ship.passengersSpawned >= ship.passengersTotal &&
-        ship.passengersBoarded >= ship.minimumBoarding
-      ) {
-        ship.stage = 'depart';
-        ship.stageTime = 0;
-      }
-      const noVisitorsLeft = state.visitors.length === 0;
-      if (
-        ship.stageTime >= SHIP_MAX_DOCKED_TIME &&
-        (ship.passengersSpawned >= ship.passengersTotal || noVisitorsLeft)
-      ) {
+      if (transientShipVisitorsResolved(state, ship)) {
         ship.stage = 'depart';
         ship.stageTime = 0;
       }
@@ -5337,11 +5378,12 @@ function tryBoardVisitorOriginShipAtTile(
   dockTile: number
 ): { boarded: boolean; ship: ArrivingShip | null } {
   if (visitor.originShipId !== null) {
-    const byId = state.arrivingShips.find((ship) => ship.id === visitor.originShipId) ?? null;
+    const byId = originShipForVisitor(state, visitor);
     if (byId && byId.stage === 'docked' && byId.bayTiles.includes(dockTile)) {
       if (byId.kind === 'transient') byId.passengersBoarded++;
       return { boarded: true, ship: byId };
     }
+    if (byId) return { boarded: false, ship: byId };
   }
   for (const ship of state.arrivingShips) {
     if (ship.stage !== 'docked') continue;
@@ -5368,9 +5410,9 @@ function spawnShipAtDock(
 ): void {
   const dock = state.docks.find((d) => d.id === dockId);
   if (!dock) return;
-  const sizeWanted = forcedSize ?? preferredShipSize(state.rng);
-  const size = shipSizeForBay(dock.area, sizeWanted) ?? 'small';
-  const passengersTotal = Math.round(SHIP_BASE_PASSENGERS[size] * (0.78 + state.rng() * 0.7));
+  const size: ShipSize = 'small';
+  if (forcedSize && forcedSize !== 'small') return;
+  const passengersTotal = dockPodPassengerCount(state.rng);
   const manifest = generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
   dock.occupiedByShipId = shipId;
@@ -5397,10 +5439,10 @@ function spawnShipAtDock(
     queueState: forcedShipId ? 'queued' : 'none',
     stage: 'approach',
     stageTime: 0,
-    passengersTotal: Math.max(2, passengersTotal),
+    passengersTotal,
     passengersSpawned: 0,
     passengersBoarded: 0,
-    minimumBoarding: Math.max(2, Math.round(Math.max(2, passengersTotal) * 0.25)),
+    minimumBoarding: minimumBoardingForPassengers(passengersTotal),
     spawnCarry: 0,
     dockedAt: 0,
     residentIds: [],
@@ -5431,7 +5473,7 @@ function spawnShipAtBerth(
     if (shipSizeFitsBerth('medium', berth.size)) size = 'medium';
     else size = 'small';
   }
-  const passengersTotal = Math.round(SHIP_BASE_PASSENGERS[size] * (0.78 + state.rng() * 0.7));
+  const passengersTotal = berthPassengerCount(size, state.rng);
   const manifest = generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
   const center = berth.tiles
@@ -5457,10 +5499,10 @@ function spawnShipAtBerth(
     queueState: forcedShipId ? 'queued' : 'none',
     stage: 'approach',
     stageTime: 0,
-    passengersTotal: Math.max(2, passengersTotal),
+    passengersTotal,
     passengersSpawned: 0,
     passengersBoarded: 0,
-    minimumBoarding: Math.max(2, Math.round(Math.max(2, passengersTotal) * 0.25)),
+    minimumBoarding: minimumBoardingForPassengers(passengersTotal),
     spawnCarry: 0,
     dockedAt: 0,
     residentIds: [],
@@ -5504,7 +5546,11 @@ function moveAlongPath(
 
   if (dist <= step || dist < 0.001) {
     const occupied = occupancyByTile.get(nextTile) ?? 0;
-    if (occupied >= MAX_OCCUPANTS_PER_TILE) return 'blocked';
+    // Crowds should influence route choice and diagnostics, but should not
+    // become hard physics. A hard occupancy cap made busy doors/service rooms
+    // turn into permanent deadlocks as agents kept retrying the same blocked
+    // step. True blockers still come from topology, zoning, and temporary
+    // tile effects in the pathfinder.
     occupancyByTile.set(actor.tileIndex, Math.max(0, (occupancyByTile.get(actor.tileIndex) ?? 1) - 1));
     occupancyByTile.set(nextTile, occupied + 1);
     actor.x = target.x;
@@ -5832,12 +5878,14 @@ function consumeConstructionMaterials(state: StationState, amount: number): bool
 
 const CONSTRUCTION_CARRY_AMOUNT = 8;
 const CONSTRUCTION_BUILD_RATE_PER_SEC = 6;
-const EVA_OXYGEN_MAX_SEC = 120;
+const EVA_OXYGEN_MAX_SEC = 240;
 const EVA_LOW_OXYGEN_SEC = 18;
+const TRUSS_CONSTRUCTION_MATERIAL_COST = 1;
+const TRUSS_CONSTRUCTION_WORK_REQUIRED = 0.8;
 
 function isEvaTraversalTile(state: StationState, tileIndex: number): boolean {
   const tile = state.tiles[tileIndex];
-  return tile === TileType.Space || tile === TileType.Airlock || (isWalkable(tile) && !state.pressurized[tileIndex]);
+  return tile === TileType.Space || tile === TileType.Truss || tile === TileType.Airlock || (isWalkable(tile) && !state.pressurized[tileIndex]);
 }
 
 function shouldSuitUpFromAirlock(state: StationState, crew: CrewMember): boolean {
@@ -5971,6 +6019,9 @@ function createConstructionSite(
 export function planTileConstruction(state: StationState, index: number, tile: TileType): { ok: boolean; reason?: string } {
   if (index < 0 || index >= state.tiles.length) return { ok: false, reason: 'out of bounds' };
   if (state.tiles[index] === tile) return { ok: true };
+  if (tile === TileType.Truss && state.tiles[index] !== TileType.Space) {
+    return { ok: false, reason: 'truss must be built in space' };
+  }
   if (tile === TileType.Space) {
     removeConstructionAtTile(state, index);
     const changed = trySetTile(state, index, tile);
@@ -5980,12 +6031,28 @@ export function planTileConstruction(state: StationState, index: number, tile: T
     const dockCheck = validateDockPlacementWithNeighbors(state, index);
     if (!dockCheck.valid) return { ok: false, reason: 'invalid dock placement' };
   }
-  const requiresEva = state.tiles[index] === TileType.Space;
+  const requiresEva = state.tiles[index] === TileType.Space || state.tiles[index] === TileType.Truss || tile === TileType.Truss;
   if (requiresEva && !hasAdjacentBuildAnchor(state, index)) {
     return { ok: false, reason: 'must connect to hull or planned construction' };
   }
-  const oldCost = tileDistanceBuildCost(state, index, state.tiles[index]);
-  const newCost = tileDistanceBuildCost(state, index, tile);
+  if (tile === TileType.Truss) {
+    if (!consumeConstructionMaterials(state, TRUSS_CONSTRUCTION_MATERIAL_COST)) {
+      return { ok: false, reason: 'no construction materials' };
+    }
+    createConstructionSite(state, {
+      kind: 'tile',
+      tileIndex: index,
+      targetTile: tile,
+      requiredMaterials: TRUSS_CONSTRUCTION_MATERIAL_COST,
+      deliveredMaterials: TRUSS_CONSTRUCTION_MATERIAL_COST,
+      buildProgress: 0,
+      buildWorkRequired: TRUSS_CONSTRUCTION_WORK_REQUIRED,
+      requiresEva: true
+    });
+    return { ok: true };
+  }
+  const oldCost = tileBuildCost(state.tiles[index]);
+  const newCost = tileBuildCost(tile);
   const requiredMaterials = Math.max(1, Math.ceil(Math.max(0, newCost - oldCost)));
   createConstructionSite(state, {
     kind: 'tile',
@@ -6778,8 +6845,21 @@ function assignJobsToIdleCrew(state: StationState): void {
   state.metrics.logisticsPressure = logisticsPressure;
   if (dispatchSlots <= 0) return;
 
+  const hygieneAvailable = preferredHygieneTargets(state).length > 0;
+  const drinkAvailable = crewDrinkTargets(state).length > 0;
+  const hasProtectedSelfCare = (crew: CrewMember): boolean =>
+    crew.cleaning ||
+    crew.toileting ||
+    crew.drinking ||
+    crew.leisure ||
+    crew.energy < CREW_REST_ENERGY_THRESHOLD ||
+    (hygieneAvailable && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) ||
+    (hygieneAvailable && crew.bladder < CREW_BLADDER_TOILET_THRESHOLD) ||
+    (drinkAvailable && crew.thirst < CREW_THIRST_DRINK_THRESHOLD);
+
   const candidates = state.crewMembers
     .filter((crew) => !crew.resting && crew.activeJobId === null)
+    .filter((crew) => !hasProtectedSelfCare(crew))
     .filter((crew) => {
       if (crew.role === 'idle') return true;
       if (crew.energy <= CREW_REST_ENERGY_THRESHOLD + 8) return false;
@@ -6899,7 +6979,9 @@ function expireJobs(state: StationState): void {
         crew.activeJobId = null;
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
+        setCrewPath(state, crew, []);
       }
+      job.assignedCrewId = null;
     }
   }
 }
@@ -6932,8 +7014,30 @@ function requeueStalledJobs(state: StationState): void {
   for (const job of state.jobs) {
     if (job.state !== 'assigned' && job.state !== 'in_progress') continue;
     if (state.now - job.lastProgressAt < JOB_STALE_SEC) continue;
+    if (job.assignedCrewId !== null) {
+      const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
+      if (crew && crew.activeJobId === job.id) {
+        if (crew.carryingItemType !== null && crew.carryingAmount > 0) {
+          const returned = addItemStockAtNode(state, job.fromTile, crew.carryingItemType, crew.carryingAmount);
+          const leftover = Math.max(0, crew.carryingAmount - returned);
+          if (crew.carryingItemType === 'rawMaterial' && leftover > 0) {
+            state.legacyMaterialStock += leftover;
+            state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
+          }
+        }
+        crew.activeJobId = null;
+        crew.carryingItemType = null;
+        crew.carryingAmount = 0;
+        setCrewPath(state, crew, []);
+      }
+    }
+    if (job.type === 'construct' && job.constructionSiteId !== undefined) {
+      const site = state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId);
+      if (site) site.assignedCrewId = null;
+    }
     job.state = 'pending';
     job.assignedCrewId = null;
+    job.pickedUpAmount = 0;
     job.expiresAt = state.now + JOB_TTL_SEC;
     job.lastProgressAt = state.now;
     markJobStall(state, job, 'none');
@@ -8608,8 +8712,9 @@ function updateVisitorLogic(
           }
         }
         const boarded = boardedResult.boarded;
+        const originShipPresent = originShipForVisitor(state, visitor) !== null;
         const canExitNormally =
-          state.now - state.lastCycleTime > state.cycleDuration * 0.2 &&
+          !originShipPresent &&
           state.now - visitor.spawnedAt >= VISITOR_MIN_STAY_SEC;
         if (boarded || canExitNormally) {
           visitorSuccessRatingBonus(state, visitor.servedMeal ? 0.03 : 0.015, 'successfulExit');
@@ -8646,12 +8751,23 @@ function updateVisitorLogic(
       // (a ship docked at a Berth has no underlying Dock tile type).
       const onExitTile = isVisitorExitTile(state, visitor.tileIndex);
       if (onExitTile) {
-        state.recentExitTimes.push(state.now);
-        occupancyByTile.set(
-          visitor.tileIndex,
-          Math.max(0, (occupancyByTile.get(visitor.tileIndex) ?? 1) - 1)
-        );
-        continue;
+        const boardedResult = tryBoardVisitorOriginShipAtTile(state, visitor, visitor.tileIndex);
+        if (boardedResult.boarded) {
+          state.recentExitTimes.push(state.now);
+          occupancyByTile.set(
+            visitor.tileIndex,
+            Math.max(0, (occupancyByTile.get(visitor.tileIndex) ?? 1) - 1)
+          );
+          continue;
+        }
+        if (originShipForVisitor(state, visitor) === null) {
+          state.recentExitTimes.push(state.now);
+          occupancyByTile.set(
+            visitor.tileIndex,
+            Math.max(0, (occupancyByTile.get(visitor.tileIndex) ?? 1) - 1)
+          );
+          continue;
+        }
       }
       addVisitorFailurePenalty(state, 0.12, 'dockTimeout');
       visitor.patience = 20;
@@ -10448,21 +10564,29 @@ export function createInitialState(options?: { seed?: number }): StationState {
     tiles[toIndex(x, starterWallMaxY, GRID_WIDTH)] = TileType.Wall;
   }
 
-  const frameTiles: number[] = [];
-  for (let y = coreY - 1; y <= coreY + 1; y++) {
-    for (let x = coreX - 1; x <= coreX + 1; x++) {
+  const reactorWallMinX = starterWallMinX - 4;
+  const reactorWallMaxX = starterWallMinX;
+  const reactorWallMinY = coreY - 2;
+  const reactorWallMaxY = coreY + 2;
+  for (let y = reactorWallMinY; y <= reactorWallMaxY; y++) {
+    tiles[toIndex(reactorWallMinX, y, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(reactorWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let x = reactorWallMinX; x <= reactorWallMaxX; x++) {
+    tiles[toIndex(x, reactorWallMinY, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(x, reactorWallMaxY, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let y = reactorWallMinY + 1; y < reactorWallMaxY; y++) {
+    for (let x = reactorWallMinX + 1; x < reactorWallMaxX; x++) {
       const idx = toIndex(x, y, GRID_WIDTH);
-      if (x === coreX && y === coreY) {
-        tiles[idx] = TileType.Floor;
-        rooms[idx] = RoomType.Reactor;
-      } else if (x === coreX || y === coreY) {
-        tiles[idx] = TileType.Door;
-      } else {
-        tiles[idx] = TileType.Wall;
-      }
-      frameTiles.push(idx);
+      tiles[idx] = TileType.Reactor;
+      rooms[idx] = RoomType.Reactor;
     }
   }
+  const reactorDoor = toIndex(reactorWallMaxX, coreY, GRID_WIDTH);
+  tiles[reactorDoor] = TileType.Door;
+  rooms[reactorDoor] = RoomType.Reactor;
+  const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
 
   return {
@@ -11220,15 +11344,154 @@ export function setTile(state: StationState, index: number, tile: TileType): voi
   }
 }
 
+function eachCardinalNeighbor(state: StationState, index: number, visit: (neighbor: number) => void): void {
+  const p = fromIndex(index, state.width);
+  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (!inBounds(nx, ny, state.width, state.height)) continue;
+    visit(toIndex(nx, ny, state.width));
+  }
+}
+
+function wallTouchesWalkableOutsideExpansion(state: StationState, wallIndex: number, expansionFloors: Set<number>): boolean {
+  let touchesWalkable = false;
+  eachCardinalNeighbor(state, wallIndex, (neighbor) => {
+    if (expansionFloors.has(neighbor)) return;
+    if (isWalkable(state.tiles[neighbor])) touchesWalkable = true;
+  });
+  return touchesWalkable;
+}
+
+function pickTrussExpansionDoor(state: StationState, candidates: Set<number>): number | null {
+  let best: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  const core = fromIndex(state.core.serviceTile, state.width);
+  for (const candidate of candidates) {
+    const p = fromIndex(candidate, state.width);
+    const distance = Math.abs(p.x - core.x) + Math.abs(p.y - core.y);
+    if (distance < bestDistance || (distance === bestDistance && (best === null || candidate < best))) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function proposedWalkableExpansionConnectsToCore(state: StationState, proposedTiles: TileType[], expansionFloors: Set<number>): boolean {
+  if (!isWalkable(proposedTiles[state.core.serviceTile])) return false;
+  const visited = new Uint8Array(proposedTiles.length);
+  const queue: number[] = [state.core.serviceTile];
+  visited[state.core.serviceTile] = 1;
+  let reachedExpansionFloors = 0;
+
+  for (let q = 0; q < queue.length; q++) {
+    const index = queue[q];
+    if (expansionFloors.has(index)) {
+      reachedExpansionFloors++;
+      if (reachedExpansionFloors >= expansionFloors.size) return true;
+    }
+    eachCardinalNeighbor(state, index, (neighbor) => {
+      if (visited[neighbor]) return;
+      if (!isWalkable(proposedTiles[neighbor])) return;
+      visited[neighbor] = 1;
+      queue.push(neighbor);
+    });
+  }
+
+  return reachedExpansionFloors >= expansionFloors.size;
+}
+
+export function buildStationExpansionOnTruss(
+  state: StationState,
+  indices: number[]
+): { ok: boolean; reason?: string; changedTiles?: number; requiredMaterials?: number } {
+  const expansionFloors = new Set<number>();
+  for (const index of indices) {
+    if (index < 0 || index >= state.tiles.length) continue;
+    if (state.tiles[index] === TileType.Truss) expansionFloors.add(index);
+  }
+  if (expansionFloors.size <= 0) return { ok: false, reason: 'requires truss scaffold' };
+
+  const proposedTiles = state.tiles.slice();
+  const changes = new Map<number, TileType>();
+  const doorCandidates = new Set<number>();
+  const markTile = (index: number, tile: TileType): void => {
+    changes.set(index, tile);
+    proposedTiles[index] = tile;
+  };
+
+  for (const index of expansionFloors) {
+    markTile(index, TileType.Floor);
+  }
+
+  for (const index of expansionFloors) {
+    eachCardinalNeighbor(state, index, (neighbor) => {
+      if (expansionFloors.has(neighbor)) return;
+      const tile = proposedTiles[neighbor];
+      if (tile === TileType.Space || tile === TileType.Truss) {
+        if (!changes.has(neighbor)) markTile(neighbor, TileType.Wall);
+      } else if (tile === TileType.Wall && wallTouchesWalkableOutsideExpansion(state, neighbor, expansionFloors)) {
+        doorCandidates.add(neighbor);
+      }
+    });
+  }
+
+  if (!proposedWalkableExpansionConnectsToCore(state, proposedTiles, expansionFloors)) {
+    const door = pickTrussExpansionDoor(state, doorCandidates);
+    if (door !== null) markTile(door, TileType.Door);
+  }
+
+  if (!isConnectedToCore(state, proposedTiles)) return { ok: false, reason: 'disconnected expansion' };
+  if (!proposedWalkableExpansionConnectsToCore(state, proposedTiles, expansionFloors)) {
+    return { ok: false, reason: 'needs walkable hull connection' };
+  }
+
+  let requiredMaterials = 0;
+  for (const [index, tile] of changes) {
+    const oldTile = state.tiles[index];
+    if (oldTile === tile) continue;
+    if (tile === TileType.Floor && oldTile === TileType.Truss) {
+      requiredMaterials += TRUSS_EXPANSION_FLOOR_COST;
+    } else if (tile === TileType.Wall || tile === TileType.Door) {
+      requiredMaterials += TRUSS_EXPANSION_PERIMETER_COST;
+    } else {
+      requiredMaterials += Math.max(0, tileBuildCost(tile) - tileBuildCost(oldTile));
+    }
+  }
+
+  if (!consumeConstructionMaterials(state, requiredMaterials)) {
+    return { ok: false, reason: 'no construction materials', requiredMaterials };
+  }
+
+  for (const [index, tile] of changes) {
+    removeConstructionAtTile(state, index, true);
+    setTile(state, index, tile);
+    state.zones[index] = ZoneType.Public;
+    state.rooms[index] = RoomType.None;
+    state.roomHousingPolicies[index] = defaultHousingPolicyForRoom(RoomType.None);
+  }
+  bumpRoomVersion(state);
+  bumpTopologyVersion(state);
+
+  return {
+    ok: true,
+    changedTiles: changes.size,
+    requiredMaterials
+  };
+}
+
 export function trySetTile(state: StationState, index: number, tile: TileType): boolean {
   const old = state.tiles[index];
   if (old === tile) return true;
+  if (tile === TileType.Truss && old !== TileType.Space) return false;
   if (tile === TileType.Dock) {
     const dockCheck = validateDockPlacementWithNeighbors(state, index);
     if (!dockCheck.valid) return false;
   }
-  const oldCost = tileDistanceBuildCost(state, index, old);
-  const newCost = tileDistanceBuildCost(state, index, tile);
+  const oldCost = tileBuildCost(old);
+  const newCost = tileBuildCost(tile);
   const delta = Math.max(0, newCost - oldCost);
   const proposedTiles = state.tiles.slice();
   proposedTiles[index] = tile;
@@ -12310,10 +12573,7 @@ export function tick(state: StationState, frameDt: number): void {
   const dt = frameDt * state.controls.simSpeed;
   state.now += dt;
 
-  while (state.now - state.lastCycleTime >= state.cycleDuration) {
-    state.lastCycleTime += state.cycleDuration;
-    scheduleCycleArrivals(state);
-  }
+  updateTrafficArrivalSchedule(state);
 
   updateSpawns(state);
   updateArrivingShips(state, dt);

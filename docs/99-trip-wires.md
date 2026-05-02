@@ -25,7 +25,7 @@ Each item links to where the rule originates. Don't change the underlying behavi
 - **`state` is mutated in place.** `applyHydratedState` (`main.ts:4154`) does `Object.assign(state, nextState)`. Never replace the outer reference.
 - **Pause still calls `computeMetrics` / `updateUnlockProgress` / `refreshJobMetrics`** so HUD numbers update. But it skips `updateResources` and the agent-update calls. Don't put cleanup work inside `updateResources` if you want it to run while paused.
 - **`updateUnlockProgress` advances multiple tiers in one tick** (`sim.ts:368`–377). Don't write UI assuming one flash per tick.
-- **The "Day N | Cycle X" HUD string is render-time fiction** (`main.ts:1259`). The sim has no day concept. `state.cycleDuration = 15s` is a ship-arrival cadence only. Don't add gameplay that depends on day boundaries.
+- **The "Day N | Cycle X" HUD string is render-time fiction** (`main.ts:1259`). The sim has no day concept. `state.cycleDuration = 15s` now only supports the cosmetic HUD slice and traffic-rate math; arrivals are jittered checks, not fixed waves. Don't add gameplay that depends on day boundaries.
 - **`controls.spritePipeline` is a single-element union** (`'nano-banana'`). Adding a new pipeline requires the type, the manifest router (`sprite-atlas.ts:138`), and any save migration.
 
 ## Build / world / mutators

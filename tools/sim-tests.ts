@@ -2,6 +2,7 @@ import {
   buyMaterials,
   buyMaterialsDetailed,
   buyRawFood,
+  buildStationExpansionOnTruss,
   cancelConstructionAtTile,
   collectServiceNodeReachability,
   expandMap,
@@ -421,6 +422,110 @@ function setupCoreRooms(state: StationState): void {
   // Critical support rooms so pressure/air remains sane during longer runs.
   paintRoom(state, RoomType.Reactor, 6, 6, 7, 7);
   paintRoom(state, RoomType.LifeSupport, 9, 6, 11, 7);
+}
+
+function testStarterCoreIsOpenWithSideReactor(): void {
+  const state = createInitialState({ seed: 1337 });
+  const core = fromIndex(state.core.centerTile, state.width);
+
+  for (let y = core.y - 1; y <= core.y + 1; y++) {
+    for (let x = core.x - 1; x <= core.x + 1; x++) {
+      const idx = toIndex(x, y, state.width);
+      assertCondition(state.tiles[idx] === TileType.Floor, 'Starter core should be open floor, not the old 3x3 reactor frame.');
+      assertCondition(state.rooms[idx] === RoomType.None, 'Starter core should not be painted as reactor space.');
+    }
+  }
+
+  const reactorTiles = state.rooms
+    .map((room, idx) => (room === RoomType.Reactor ? idx : -1))
+    .filter((idx) => idx >= 0);
+  assertCondition(reactorTiles.length > 0, 'Starter station should still include an off-center reactor alcove.');
+  assertCondition(
+    reactorTiles.every((idx) => fromIndex(idx, state.width).x < core.x),
+    'Starter reactor alcove should sit west of the central core.'
+  );
+}
+
+function testTileBuildCostDoesNotScaleWithDistance(): void {
+  const state = createInitialState({ seed: 1338 });
+  const core = fromIndex(state.core.centerTile, state.width);
+  const near = toIndex(core.x + 6, core.y, state.width);
+  const farAnchor = toIndex(state.width - 4, state.height - 4, state.width);
+  const far = toIndex(state.width - 3, state.height - 4, state.width);
+
+  setTile(state, farAnchor, TileType.Wall);
+  assertCondition(planTileConstruction(state, near, TileType.Floor).ok, 'Expected near floor blueprint to be valid.');
+  assertCondition(planTileConstruction(state, far, TileType.Floor).ok, 'Expected far floor blueprint to be valid.');
+
+  const nearRequired = state.constructionSites.find((site) => site.tileIndex === near)?.requiredMaterials;
+  const farRequired = state.constructionSites.find((site) => site.tileIndex === far)?.requiredMaterials;
+
+  assertCondition(
+    nearRequired === farRequired,
+    `Tile build cost should be flat by distance, required near=${nearRequired}, far=${farRequired}.`
+  );
+}
+
+function testTrussBuildRequiresEvaAndCanChain(): void {
+  const state = createInitialState({ seed: 1339 });
+  const core = fromIndex(state.core.centerTile, state.width);
+  const first = toIndex(core.x + 6, core.y, state.width);
+  const second = toIndex(core.x + 7, core.y, state.width);
+  const startingMaterials = state.metrics.materials;
+
+  const planned = planTileConstruction(state, first, TileType.Truss);
+  assertCondition(planned.ok, `Truss blueprint should be accepted next to the hull (${planned.reason ?? 'no reason'}).`);
+  const chained = planTileConstruction(state, second, TileType.Truss);
+  assertCondition(chained.ok, `Truss blueprint should chain from planned scaffold (${chained.reason ?? 'no reason'}).`);
+
+  const firstSite = state.constructionSites.find((site) => site.tileIndex === first);
+  const secondSite = state.constructionSites.find((site) => site.tileIndex === second);
+  assertCondition(firstSite?.targetTile === TileType.Truss, 'First scaffold blueprint should target truss.');
+  assertCondition(secondSite?.targetTile === TileType.Truss, 'Chained scaffold blueprint should target truss.');
+  assertCondition(firstSite?.requiresEva === true && secondSite?.requiresEva === true, 'Truss construction should require EVA.');
+  assertCondition(firstSite?.requiredMaterials === 1, 'Truss construction should use the cheap scaffold material cost.');
+  assertCondition(firstSite?.deliveredMaterials === 1, 'Truss construction should skip material hauling after charging the scaffold kit.');
+  assertCondition((firstSite?.buildWorkRequired ?? 99) <= 1, 'Truss construction should be a quick EVA weld, not a long build.');
+  assertCondition(state.metrics.materials === startingMaterials - 2, 'Planning two truss tiles should charge two scaffold kits up front.');
+}
+
+function testTrussExpansionConvertsScaffoldIntoPressurizedShell(): void {
+  const state = createInitialState({ seed: 1340 });
+  const core = fromIndex(state.core.centerTile, state.width);
+  const patch = [
+    toIndex(core.x + 6, core.y, state.width),
+    toIndex(core.x + 7, core.y, state.width),
+    toIndex(core.x + 6, core.y + 1, state.width),
+    toIndex(core.x + 7, core.y + 1, state.width)
+  ];
+  for (const index of patch) setTile(state, index, TileType.Truss);
+  state.legacyMaterialStock = 11;
+  state.metrics.materials = 11;
+
+  const built = buildStationExpansionOnTruss(state, patch);
+  assertCondition(built.ok, `Truss expansion should convert scaffold into a sealed room shell (${built.reason ?? 'no reason'}).`);
+  assertCondition(built.requiredMaterials === 11, `Truss shell conversion should use discounted scaffold costs (${built.requiredMaterials}).`);
+
+  for (const index of patch) {
+    assertCondition(state.tiles[index] === TileType.Floor, 'Truss expansion should convert selected scaffold into floor.');
+    assertCondition(state.rooms[index] === RoomType.None, 'Fresh expansion floor should not inherit a room paint.');
+  }
+
+  const doorTiles = [toIndex(core.x + 5, core.y, state.width), toIndex(core.x + 5, core.y + 1, state.width)];
+  assertCondition(
+    doorTiles.filter((index) => state.tiles[index] === TileType.Door).length === 1,
+    'Truss expansion should punch one door through the shared hull wall.'
+  );
+  assertCondition(state.tiles[toIndex(core.x + 8, core.y, state.width)] === TileType.Wall, 'Expansion should add an outer east wall.');
+  assertCondition(state.tiles[toIndex(core.x + 6, core.y - 1, state.width)] === TileType.Wall, 'Expansion should add an outer north wall.');
+  assertCondition(state.tiles[toIndex(core.x + 7, core.y + 2, state.width)] === TileType.Wall, 'Expansion should add an outer south wall.');
+
+  tick(state, 0.1);
+  for (const index of patch) {
+    assertCondition(state.pressurized[index], 'Converted truss expansion should become pressurized.');
+  }
+  assertCondition(state.metrics.leakingTiles === 0, 'Converted truss expansion should not create a pressure leak.');
+  assertCondition(state.metrics.materials === 0, 'Conversion should consume exactly the discounted shell materials.');
 }
 
 function setupFoodChain(state: StationState): void {
@@ -1328,6 +1433,11 @@ function testVisitorCafeteriaReservationSurvivesShortCrowdBlock(): void {
 
   const firstServing = toIndex(16, 11, state.width);
   const secondServing = toIndex(20, 11, state.width);
+  tick(state, 0);
+  const firstServingNode = state.itemNodes.find((node) => node.tileIndex === firstServing);
+  assertCondition(!!firstServingNode, 'Crowd fixture should expose an item node at the first serving station.');
+  firstServingNode!.items.meal = 4;
+  state.metrics.mealStock = 4;
   spawnVisitor(state, 15, 11, 30100);
   const visitor = state.visitors[0];
   visitor.state = VisitorState.ToCafeteria;
@@ -1347,10 +1457,13 @@ function testVisitorCafeteriaReservationSurvivesShortCrowdBlock(): void {
 
   runFor(state, 1.25);
 
-  assertCondition(visitor.blockedTicks > 0, 'Visitor fixture should create a short crowd block.');
-  assertCondition(visitor.reservedServingTile === firstServing, 'Short crowd blocks should preserve the serving reservation.');
-  assertCondition(visitor.reservedServingTile !== secondServing, 'Visitor should not churn to a different serving station after a brief block.');
-  assertCondition(visitor.state === VisitorState.ToCafeteria, 'Short crowd blocks should not immediately demote visitors into queue churn.');
+  assertCondition(visitor.blockedTicks === 0, 'Crowded service tiles should not physically block visitor movement.');
+  assertCondition(
+    visitor.reservedServingTile === firstServing || visitor.reservedServingTile === null,
+    'Crowded service tiles should keep the original serving reservation until it is fulfilled.'
+  );
+  const stateAfterCrowdBlock = String(visitor.state);
+  assertCondition(stateAfterCrowdBlock !== VisitorState.Queueing, 'Crowded service tiles should not immediately demote visitors into queue churn.');
 }
 
 function testMaterialsChainEndToEnd(): void {
@@ -2000,7 +2113,7 @@ function testActiveLogisticsCrewDoNotRestBeforeCompletingJobs(): void {
 
   const crew = state.crewMembers[0];
   assertCondition(!!crew, 'Crew pool should create a worker.');
-  const job = {
+  const job: StationState['jobs'][number] = {
     id: state.jobSpawnCounter++,
     type: 'deliver' as const,
     itemType: 'rawMeal' as const,
@@ -2033,6 +2146,95 @@ function testActiveLogisticsCrewDoNotRestBeforeCompletingJobs(): void {
   assertCondition(state.metrics.crewIdleAvailable === 0, 'Active logistics crew should not count as available idle.');
   assertCondition(state.metrics.crewSelfCare === 0, 'Active logistics crew should not count as self-care.');
   assertCondition(state.jobs[0].state !== 'expired', 'Active logistics job should not expire because crew entered self-care.');
+}
+
+function testStaleRequeuedJobReleasesCrewAssignment(): void {
+  const state = createInitialState({ seed: 301021 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.crew.total = 1;
+  tick(state, 0.25);
+
+  const crew = state.crewMembers[0];
+  const job = {
+    id: state.jobSpawnCounter++,
+    type: 'deliver' as const,
+    itemType: 'rawMaterial' as const,
+    amount: 1,
+    fromTile: toIndex(8, 8, state.width),
+    toTile: toIndex(10, 8, state.width),
+    assignedCrewId: crew.id,
+    createdAt: state.now - 20,
+    expiresAt: state.now + 60,
+    state: 'assigned' as const,
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now - 20,
+    stallReason: 'stalled_path_blocked' as const
+  };
+  state.jobs.push(job);
+  crew.activeJobId = job.id;
+  crew.path = [job.fromTile];
+
+  tick(state, 0.25);
+
+  const requeued = state.jobs.find((candidate) => candidate.id === job.id);
+  assertCondition(requeued?.state === 'pending', 'Stale assigned job should be requeued.');
+  assertCondition(requeued?.assignedCrewId === null, 'Requeued stale job should clear assigned crew id.');
+  assertCondition(crew.activeJobId === null, 'Crew should be released when its stale job is requeued.');
+  assertCondition(
+    getCrewInspectorById(state, crew.id)?.actionReason.includes(`job #${job.id}`) === false,
+    'Crew inspector should not keep reporting a requeued stale job as active.'
+  );
+}
+
+function testSelfCareCrewNotStolenByLogisticsDispatch(): void {
+  const state = createInitialState({ seed: 301022 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Hygiene, 12, 10, 15, 12);
+  placeModuleOrThrow(state, ModuleType.Shower, 12, 11);
+  placeModuleOrThrow(state, ModuleType.Sink, 14, 11);
+  state.crew.total = 1;
+  tick(state, 0.25);
+
+  const crew = state.crewMembers[0];
+  crew.activeJobId = null;
+  crew.resting = false;
+  crew.cleaning = false;
+  crew.toileting = false;
+  crew.drinking = false;
+  crew.leisure = false;
+  crew.energy = 80;
+  crew.hygiene = 80;
+  crew.bladder = 0;
+  crew.thirst = 80;
+  crew.role = 'idle';
+  crew.assignedSystem = null;
+  crew.targetTile = null;
+  crew.path = [];
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'deliver',
+    itemType: 'rawMaterial',
+    amount: 1,
+    fromTile: toIndex(8, 8, state.width),
+    toTile: toIndex(10, 8, state.width),
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + 60,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none'
+  });
+
+  tick(state, 0.25);
+
+  assertCondition(crew.activeJobId === null, 'Crew with urgent self-care should not be stolen by logistics dispatch.');
+  assertCondition(crew.toileting, 'Crew with empty bladder should start a hygiene/toilet trip.');
+  assertCondition(state.jobs[state.jobs.length - 1].state === 'pending', 'Logistics job should remain pending while crew handles urgent self-care.');
 }
 
 function testCrewRestAvoidsOverloadedDormTarget(): void {
@@ -2105,6 +2307,64 @@ function testVisitorBerthsAcceptTrafficResidentialDoNot(): void {
   assertCondition(visitorDock.purpose === 'visitor', 'Visitor berth purpose should remain visitor.');
 }
 
+function testLegacyDockTrafficUsesTinyPods(): void {
+  const state = createInitialState({ seed: 301601 });
+  buildHabitat(state);
+  const dockId = placeEastHullDock(state, 8, 9);
+  state.controls.shipsPerCycle = 2;
+
+  runFor(state, 17);
+
+  const dockShips = state.arrivingShips.filter((ship) => ship.assignedDockId === dockId);
+  assertCondition(dockShips.length > 0, 'Legacy visitor dock should receive small pod traffic.');
+  for (const ship of dockShips) {
+    assertCondition(ship.size === 'small', 'Legacy dock traffic should always use small pod visuals.');
+    assertCondition(ship.passengersTotal >= 1 && ship.passengersTotal <= 2, `Dock pods should carry 1-2 visitors, got ${ship.passengersTotal}.`);
+    assertCondition((ship.assignedBerthAnchor ?? null) === null, 'Legacy dock pod should not be berth-bound.');
+  }
+}
+
+function testSporadicTrafficSchedulesNextCheck(): void {
+  const state = createInitialState({ seed: 301603 });
+  buildHabitat(state);
+  placeEastHullDock(state, 8, 9);
+  state.controls.shipsPerCycle = 2;
+
+  runFor(state, 0.25);
+
+  assertCondition(state.lastCycleTime > state.now, 'Sporadic traffic should schedule the next arrival check in the future.');
+  assertCondition(
+    state.lastCycleTime < state.cycleDuration,
+    'Traffic rate 2 should not wait for the old full-cycle wave boundary.'
+  );
+}
+
+function testBerthTrafficUsesLargeShipPassengerScale(): void {
+  const state = createInitialState({ seed: 301602 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  state.controls.shipsPerCycle = 1;
+  for (let y = 8; y <= 13; y++) {
+    for (let x = 43; x <= 49; x++) {
+      const tile = toIndex(x, y, state.width);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+    }
+  }
+  placeModuleOrThrow(state, ModuleType.Gangway, 49, 11);
+  placeModuleOrThrow(state, ModuleType.CustomsCounter, 43, 11);
+  placeModuleOrThrow(state, ModuleType.CargoArm, 48, 8);
+
+  runFor(state, 40);
+
+  const berthShip = state.arrivingShips.find((ship) => (ship.assignedBerthAnchor ?? null) !== null);
+  assertCondition(!!berthShip, 'Open equipped berth should receive berth-bound traffic.');
+  if (!berthShip) return;
+  assertCondition(berthShip.size === 'large', `Large berth should attract large ships before pod traffic, got ${berthShip.size}.`);
+  assertCondition(berthShip.passengersTotal >= 28, `Large berth ship should carry many visitors, got ${berthShip.passengersTotal}.`);
+  assertCondition(berthShip.assignedDockId === null, 'Berth ship should not occupy a legacy dock.');
+}
+
 function testBerthVisitorsBoardAndDespawnOnReturn(): void {
   const state = createInitialState({ seed: 30161 });
   buildHabitat(state);
@@ -2128,6 +2388,55 @@ function testBerthVisitorsBoardAndDespawnOnReturn(): void {
   assertCondition(state.recentExitTimes.length > 0, 'Berth visitor exit should count as a recent exit.');
 }
 
+function testTransientShipPersistsUntilOriginVisitorBoards(): void {
+  const state = createInitialState({ seed: 301604 });
+  buildHabitat(state);
+  state.controls.shipsPerCycle = 0;
+  const dockId = placeEastHullDock(state, 8, 9);
+  const dockTile = dockByIdOrThrow(state, dockId).tiles[0];
+  const ship = createDockedTransientShip(state, dockId, 92001);
+  spawnReturningVisitor(state, toIndex(20, 20, state.width), 92002, ship.id);
+
+  runFor(state, 3);
+
+  assertCondition(state.arrivingShips.some((entry) => entry.id === ship.id && entry.stage === 'docked'), 'Origin ship should stay docked while its visitor is still aboard the station.');
+
+  const visitor = state.visitors.find((entry) => entry.id === 92002);
+  assertCondition(!!visitor, 'Setup visitor should still be active before returning to the origin ship.');
+  if (!visitor) return;
+  const center = fromIndex(dockTile, state.width);
+  visitor.tileIndex = dockTile;
+  visitor.x = center.x + 0.5;
+  visitor.y = center.y + 0.5;
+  visitor.path = [];
+  visitor.state = VisitorState.ToDock;
+
+  runFor(state, 0.5);
+  assertCondition(!state.visitors.some((entry) => entry.id === visitor.id), 'Visitor should board and leave through the origin ship.');
+  assertCondition(ship.passengersBoarded === 1, 'Origin ship should count the returning visitor.');
+
+  runFor(state, 2.5);
+  assertCondition(!state.arrivingShips.some((entry) => entry.id === ship.id), 'Origin ship should depart after all origin visitors resolve.');
+}
+
+function testOriginVisitorDoesNotBoardWrongDockedShip(): void {
+  const state = createInitialState({ seed: 301605 });
+  buildHabitat(state);
+  state.controls.shipsPerCycle = 0;
+  const originDockId = placeEastHullDock(state, 8, 9);
+  const wrongDockId = placeEastHullDock(state, 18, 19);
+  const originShip = createDockedTransientShip(state, originDockId, 93001);
+  const wrongShip = createDockedTransientShip(state, wrongDockId, 93002);
+  wrongShip.passengersTotal = 2;
+  const wrongDockTile = dockByIdOrThrow(state, wrongDockId).tiles[0];
+  spawnReturningVisitor(state, wrongDockTile, 93003, originShip.id);
+
+  runFor(state, 0.05, 0.05);
+
+  assertCondition(state.visitors.some((entry) => entry.id === 93003), 'Origin-tied visitor should not disappear through the wrong dock.');
+  assertCondition(wrongShip.passengersBoarded === 0, 'Wrong docked ship should not board an origin-tied visitor.');
+}
+
 function testBerthTrafficRequiresSpaceExposure(): void {
   const state = createInitialState({ seed: 30162 });
   buildHabitat(state);
@@ -2141,7 +2450,7 @@ function testBerthTrafficRequiresSpaceExposure(): void {
     }
   }
 
-  runFor(state, 20);
+  runFor(state, 40);
 
   assertCondition(state.arrivingShips.length === 0, 'Internal berth should not receive ships.');
   assertCondition(
@@ -2168,7 +2477,7 @@ function testOpenBerthReceivesScheduledTraffic(): void {
   placeModuleOrThrow(state, ModuleType.CustomsCounter, 44, 11);
   placeModuleOrThrow(state, ModuleType.CargoArm, 47, 9);
 
-  runFor(state, 20);
+  runFor(state, 40);
 
   assertCondition(
     state.arrivingShips.some((ship) => ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined),
@@ -4401,6 +4710,10 @@ function testDualWallVariantTruthTable(): void {
 }
 
 function run(): void {
+  testStarterCoreIsOpenWithSideReactor();
+  testTileBuildCostDoesNotScaleWithDistance();
+  testTrussBuildRequiresEvaAndCanChain();
+  testTrussExpansionConvertsScaffoldIntoPressurizedShell();
   testUnlockTier0StartsConstrained();
   testTier0StarterDepotMaterialCapacity();
   testUnlockTier1TriggersAfterStability();
@@ -4493,9 +4806,16 @@ function run(): void {
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
   testActiveLogisticsCrewDoNotRestBeforeCompletingJobs();
+  testStaleRequeuedJobReleasesCrewAssignment();
+  testSelfCareCrewNotStolenByLogisticsDispatch();
   testCrewRestAvoidsOverloadedDormTarget();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
+  testLegacyDockTrafficUsesTinyPods();
+  testSporadicTrafficSchedulesNextCheck();
+  testBerthTrafficUsesLargeShipPassengerScale();
   testBerthVisitorsBoardAndDespawnOnReturn();
+  testTransientShipPersistsUntilOriginVisitorBoards();
+  testOriginVisitorDoesNotBoardWrongDockedShip();
   testBerthTrafficRequiresSpaceExposure();
   testOpenBerthReceivesScheduledTraffic();
   testBerthSupportModulePlacementRules();

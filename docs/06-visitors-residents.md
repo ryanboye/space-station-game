@@ -16,11 +16,11 @@ Service can be skipped depending on archetype.
 
 ### Arrival pipeline
 
-1. Every cycle (`CYCLE_DURATION = 15 s`), `scheduleCycleArrivals` (`sim.ts:3548`) tries `controls.shipsPerCycle` arrivals (cap 3, `sim.ts:82`).
+1. `updateTrafficArrivalSchedule` rolls one sporadic arrival check at a time; `controls.shipsPerCycle` is now a 0-3 traffic-rate knob rather than a fixed wave size.
 2. Pick a lane weighted by `state.laneProfiles[lane].trafficVolume` (`sim.ts:262`–283).
 3. Pick a ship type weighted by `laneProfiles[lane].weights[type]`. Type must be `isShipTypeUnlocked` (`sim.ts:348`) — `industrial` requires T2, `military`/`colonist` T3.
 4. Pick a size via `preferredShipSize` (`sim.ts:1249`), find an eligible dock (allowedShipTypes ∩ allowedShipSizes ∩ dock area large enough). If none: queue at `state.dockQueue` with `DOCK_QUEUE_MAX_TIME_SEC = 18 s` timeout.
-5. `spawnShipAtDock` / `spawnShipAtBerth` creates an `ArrivingShip`. Stages: `approach` (2 s) → `docked` (visitors spawn) → `depart` (2 s).
+5. `spawnShipAtDock` / `spawnShipAtBerth` creates an `ArrivingShip`. Stages: `approach` (2 s) → `docked` (visitors spawn and remain tied to `originShipId`) → `depart` (2 s after all origin visitors resolve).
 6. Manifest: `generateShipManifest` (`sim.ts:1376`) blends `SHIP_PROFILES[shipType].manifestBaseline` (`src/sim/content/ships.ts:3`) with the archetype mix.
 
 ### Archetypes
@@ -64,7 +64,7 @@ Visitors are mood-tinted dots (`visitorMoodColor` `render.ts:1271`) or the `agen
 
 ### Tunables
 
-- `controls.shipsPerCycle` — UI slider, top toolbar (cap 3).
+- `controls.shipsPerCycle` — UI traffic-rate slider, top toolbar (cap 3).
 - `controls.taxRate` — UI slider, 0–0.5.
 - `TASK_TIMINGS.visitorEat*` and `visitorLeisure*` (`balance.ts`).
 - `MAX_DINERS_PER_CAF_TILE` = `SERVICE_CAPACITY.tableMaxDiners` (`sim.ts:105` / `balance.ts:240`).

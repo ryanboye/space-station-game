@@ -1,4 +1,4 @@
-import { RoomType, TILE_SIZE, TileType, fromIndex, type StationState } from '../sim/types';
+import { RoomType, TILE_SIZE, TileType, fromIndex, isWalkable, type StationState } from '../sim/types';
 
 const PX = TILE_SIZE / 18;
 
@@ -37,7 +37,7 @@ type RoomComponent = {
 function isLabelTile(state: StationState, index: number, room: RoomType): boolean {
   if (state.rooms[index] !== room) return false;
   const tile = state.tiles[index];
-  return tile !== TileType.Space && tile !== TileType.Wall && tile !== TileType.Door && tile !== TileType.Airlock;
+  return isWalkable(tile) && tile !== TileType.Door && tile !== TileType.Airlock;
 }
 
 function collectRoomComponents(state: StationState): RoomComponent[] {
