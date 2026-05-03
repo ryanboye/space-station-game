@@ -707,6 +707,24 @@ export interface DockConfigView {
   maxSizeByArea: ShipSize;
 }
 
+// Dock-migration v0 follow-up: per-berth player-set filters that ride
+// alongside the capability-tag system. Capabilities (gangway / customs
+// / cargo) gate whether a ship CAN dock. These filters let the player
+// further restrict which ship types and sizes they want to accept at a
+// specific berth — semantic parity with `DockEntity.allowedShipTypes`
+// / `allowedShipSizes` so the berth-room UI can offer the same knobs.
+//
+// Keyed by anchorTile (lowest tile index in the cluster). Orphaned
+// entries — anchor tile no longer leads a Berth cluster — are pruned
+// when room clusters recompute. Missing entries default to "all
+// allowed" (matches dock default), so existing berths placed before
+// this slot existed keep accepting traffic.
+export interface BerthConfig {
+  anchorTile: number;
+  allowedShipTypes: ShipType[];
+  allowedShipSizes: ShipSize[];
+}
+
 export interface LaneProfile {
   trafficVolume: number;
   weights: Record<ShipType, number>;
@@ -1423,6 +1441,12 @@ export interface StationState {
   moduleOccupancyByTile: Array<number | null>;
   core: CoreState;
   docks: DockEntity[];
+  // Dock-migration v0 follow-up: per-berth player-set filters. See
+  // BerthConfig docs above for the keying + orphan-pruning model. Empty
+  // on legacy saves and on stations that have never opened the berth
+  // config UI — `pickBerthForShip` falls back to "all allowed" in that
+  // case.
+  berthConfigs: BerthConfig[];
   // Procedurally generated star system (MVP). Null only on legacy saves
   // that pre-date this feature and didn't get re-rolled at hydrate time;
   // generateLaneProfiles falls back to legacy RNG behavior in that case.

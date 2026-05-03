@@ -32,6 +32,7 @@ import {
   type CrewTaskCandidate,
   type CrewPriorityWeights,
   type CriticalCapacityTargets,
+  type BerthConfig,
   type DockEntity,
   type DockPurpose,
   type DockQueueEntry,
@@ -1092,6 +1093,11 @@ function ensureRoomClustersCache(state: StationState): void {
   state.derived.cacheVersions.roomClustersVersion = version;
   state.derived.cacheVersions.activeRoomTilesVersion = '';
   state.derived.cacheVersions.diagnosticsVersion = '';
+  // Drop berth-config rows whose anchor tile is no longer the lowest
+  // tile of a Berth cluster (cluster split / merged / repainted).
+  // Cheap — O(berthConfigs × valid anchors) on cluster-version bumps
+  // only, which are already rare.
+  pruneOrphanedBerthConfigs(state);
 }
 
 function ensureServiceTargetsCache(state: StationState): void {
@@ -3638,7 +3644,19 @@ function pickBerthForShip(
     .filter((b) => b.occupiedByShipId === null)
     .filter((b) => shipSizeFitsBerth(shipSize, b.size))
     .filter((b) => b.spaceExposed)
-    .filter((b) => isCapabilitySuperset(b.capabilities, required));
+    .filter((b) => isCapabilitySuperset(b.capabilities, required))
+    // Per-berth player allowlist (dock-modal parity follow-up): a
+    // berth with no config row defaults to "all allowed" (legacy
+    // behavior preserved). With a config row, the player's filters
+    // gate ship type + size on top of the capability check above.
+    .filter((b) => {
+      const cfg = findBerthConfigByAnchor(state, b.anchorTile);
+      if (!cfg) return true;
+      return (
+        cfg.allowedShipTypes.includes(shipType) &&
+        cfg.allowedShipSizes.includes(shipSize)
+      );
+    });
   if (candidates.length === 0) return null;
   // Pick the smallest-fit berth (cheapest by area), tiebreak on lower anchor index.
   candidates.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile);
@@ -3663,6 +3681,24 @@ export interface BerthInspector {
   acceptedShipTypes: ShipType[];
   rejectedShipTypes: Array<{ shipType: ShipType; missing: CapabilityTag[] }>;
   occupiedByShipId: number | null;
+  // Dock-migration v0 follow-up: the player's per-berth allowlists
+  // (parity with DockEntity.allowedShipTypes / allowedShipSizes).
+  // Populated from `state.berthConfigs` if a row exists for this
+  // anchor; otherwise reflects the default ("all allowed") so the UI
+  // can show the player what the current filters look like without
+  // forcing the config row to materialize until they change something.
+  allowedShipTypes: ShipType[];
+  allowedShipSizes: ShipSize[];
+  // Derived (info-only, not stored): the lane this berth opens onto,
+  // computed from the cluster's exterior space-tile boundary. Returns
+  // the lane with the most adjacent space tiles, or null if the berth
+  // has no exterior boundary (fully enclosed — won't accept ships
+  // anyway, but the UI shows that explicitly).
+  derivedFacing: SpaceLane | null;
+  // Hard-coded for v0: berths are always 'visitor'. v1 may add
+  // residential berths for crew-shuttle traffic, at which point this
+  // becomes a stored field. UI shows it info-only with the v0 caveat.
+  purpose: DockPurpose;
 }
 
 export function getBerthInspectorAt(state: StationState, tileIndex: number): BerthInspector | null {
@@ -3692,6 +3728,13 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
       break;
     }
   }
+  const cfg = findBerthConfigByAnchor(state, cluster[0]);
+  const allowedShipTypes = cfg
+    ? [...cfg.allowedShipTypes]
+    : [...ALL_SHIP_TYPES_FOR_BERTH];
+  const allowedShipSizes = cfg
+    ? [...cfg.allowedShipSizes]
+    : [...ALL_SHIP_SIZES_FOR_BERTH];
   return {
     anchorTile,
     clusterTiles: cluster,
@@ -3700,8 +3743,53 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     capabilities,
     acceptedShipTypes: accepted,
     rejectedShipTypes: rejected,
-    occupiedByShipId
+    occupiedByShipId,
+    allowedShipTypes,
+    allowedShipSizes,
+    derivedFacing: deriveBerthFacing(state, cluster),
+    purpose: 'visitor'
   };
+}
+
+/**
+ * Look at the cluster's exterior boundary and pick the cardinal
+ * direction with the most adjacent Space tiles — that's the side
+ * ships approach from. Returns null if the berth has no exterior
+ * Space boundary (fully sealed inside the station — won't actually
+ * accept traffic but the UI shows it explicitly).
+ */
+function deriveBerthFacing(state: StationState, cluster: number[]): SpaceLane | null {
+  const counts: Record<SpaceLane, number> = { north: 0, east: 0, south: 0, west: 0 };
+  const clusterSet = new Set(cluster);
+  for (const tile of cluster) {
+    const p = fromIndex(tile, state.width);
+    const probes: Array<{ lane: SpaceLane; nx: number; ny: number }> = [
+      { lane: 'north', nx: p.x, ny: p.y - 1 },
+      { lane: 'east', nx: p.x + 1, ny: p.y },
+      { lane: 'south', nx: p.x, ny: p.y + 1 },
+      { lane: 'west', nx: p.x - 1, ny: p.y }
+    ];
+    for (const { lane, nx, ny } of probes) {
+      // Out-of-bounds counts as space — cluster is on the station edge
+      // facing that lane.
+      if (!inBounds(nx, ny, state.width, state.height)) {
+        counts[lane] += 1;
+        continue;
+      }
+      const ni = toIndex(nx, ny, state.width);
+      if (clusterSet.has(ni)) continue;
+      if (state.tiles[ni] === TileType.Space) counts[lane] += 1;
+    }
+  }
+  let best: SpaceLane | null = null;
+  let bestCount = 0;
+  for (const lane of ['north', 'east', 'south', 'west'] as SpaceLane[]) {
+    if (counts[lane] > bestCount) {
+      best = lane;
+      bestCount = counts[lane];
+    }
+  }
+  return best;
 }
 
 function describeMissingCapabilities(
@@ -11768,6 +11856,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       frameTiles
     },
     docks: [],
+    berthConfigs: [],
     system,
     seedAtCreation: seed,
     laneProfiles,
@@ -12755,18 +12844,27 @@ export function getUnlockTier(state: StationState): UnlockTier {
 }
 
 // ─── Food-chain stall diagnostic (BMO T2 hunt 2026-04-27) ────────────────
-// Dump everything you'd want to know about why hydroponics→kitchen
-// rawMeal isn't moving despite hydro producing. Returns a structured
-// diagnostic; intended use from the playtest harness or devtools:
+// Dump everything you'd want to know about why food isn't moving through
+// the chain. Returns a structured diagnostic; intended use from the
+// playtest harness or devtools:
 //   const d = (window).__sim.diagnoseFoodChain(state);
 //   console.table(d.summary);
+//   console.table(d.paths);     // ← grow → stove leg (raw meal hauling)
+//   console.table(d.mealPaths); // ← stove → serving leg (cooked meal hauling, seb 2026-04-28)
 //
-// Covers the failure modes BMO listed:
-//   1. job created? (counts pending/assigned/in-progress rawMeal jobs)
-//   2. path exists? (runs findPath between every grow→stove pair)
-//   3. crew dispatchable? (logisticsDispatchSlots + idle/non-idle counts)
-//   4. cache fresh? (compares cache version keys against current state)
-//   5. modules reachable? (collectServiceTargets returns)
+// Covers two stall legs:
+//   LEG 1 (grow → stove): rawMeal hauling. Hydro produces but kitchen empty.
+//     - jobs?  openRawJobCount
+//     - paths? `paths` (grow × stove) — pathLen:null = corridor missing
+//   LEG 2 (stove → serving): cooked-meal hauling. Kitchen produces but
+//     serving line empty / visitors starve.
+//     - jobs?  openMealJobCount
+//     - paths? `mealPaths` (stove × serving) — pathLen:null = K→C blocked
+//
+// Plus standard diagnostics:
+//   - crew dispatchable? (logisticsDispatchSlots + idle/non-idle counts)
+//   - modules reachable? (collectServiceTargets returns)
+//   - visitor flow stats (hungry / queueing / eating / leaving)
 export function diagnoseFoodChain(state: StationState): {
   summary: Record<string, number | string>;
   jobs: Array<{
@@ -12783,6 +12881,7 @@ export function diagnoseFoodChain(state: StationState): {
     stallReason?: string;
   }>;
   paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
+  mealPaths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }>;
   crewByRole: Record<string, number>;
   crewDetail: Array<{
     id: number;
@@ -12800,8 +12899,17 @@ export function diagnoseFoodChain(state: StationState): {
 } {
   const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
   const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  // ── BMO follow-up 2026-04-28 (seb): stove→serving path probe.
+  // The original `paths` covers the rawMeal leg (grow → stove). The next
+  // leg in the food chain is cooked-meal hauling: stove → serving station
+  // in the Cafeteria. If THAT leg is path-blocked, kitchen accumulates
+  // meals but visitors starve at the serving line. Same probe shape so
+  // the harness can `console.table(d.mealPaths)` identically to d.paths.
+  const servingTargets = collectServiceTargets(state, RoomType.Cafeteria);
   const rawJobs = state.jobs.filter((j) => j.itemType === 'rawMeal');
   const openRawJobs = rawJobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
+  const mealJobs = state.jobs.filter((j) => j.itemType === 'meal');
+  const openMealJobs = mealJobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
 
   // Path probe — every grow source × every stove dest
   const paths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
@@ -12812,6 +12920,24 @@ export function diagnoseFoodChain(state: StationState): {
         paths.push({ from, to, pathLen: null, reason: 'no path (corridor missing or all blocked)' });
       } else {
         paths.push({ from, to, pathLen: p.length });
+      }
+    }
+  }
+
+  // mealPaths probe — every stove source × every serving dest. Mirrors the
+  // grow→stove probe above so the harness can diagnose the second food-leg
+  // failure mode the same way: `pathLen: null` for every pair → corridor
+  // missing between Kitchen and Cafeteria. Keeps the probe O(stoves * servings)
+  // — typical layouts cap each at ~3-4, so worst case ~16 findPath calls
+  // (well within the same envelope as the original probe).
+  const mealPaths: Array<{ from: number; to: number; pathLen: number | null; reason?: string }> = [];
+  for (const from of stoveTargets) {
+    for (const to of servingTargets) {
+      const p = findPath(state, from, to, false);
+      if (p === null) {
+        mealPaths.push({ from, to, pathLen: null, reason: 'no path (kitchen→cafeteria corridor missing or all blocked)' });
+      } else {
+        mealPaths.push({ from, to, pathLen: p.length });
       }
     }
   }
@@ -12832,16 +12958,24 @@ export function diagnoseFoodChain(state: StationState): {
   const summary: Record<string, number | string> = {
     growTargetCount: growTargets.length,
     stoveTargetCount: stoveTargets.length,
+    servingTargetCount: servingTargets.length,
     rawMealAtGrowTotal: growTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
     rawMealAtStoveTotal: stoveTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'rawMeal'), 0),
+    mealAtStoveTotal: stoveTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'meal'), 0),
+    mealAtServingTotal: servingTargets.reduce((a, t) => a + itemStockAtNode(state, t, 'meal'), 0),
     metric_rawFoodStock: state.metrics.rawFoodStock,
     metric_kitchenRawBuffer: state.metrics.kitchenRawBuffer,
     metric_mealStock: state.metrics.mealStock,
     rawJobCount: rawJobs.length,
     openRawJobCount: openRawJobs.length,
+    mealJobCount: mealJobs.length,
+    openMealJobCount: openMealJobs.length,
     pathProbe_pairs: paths.length,
     pathProbe_unreachable: paths.filter((p) => p.pathLen === null).length,
     pathProbe_minLen: paths.filter((p) => p.pathLen !== null).reduce((m, p) => Math.min(m, p.pathLen as number), Infinity),
+    mealPathProbe_pairs: mealPaths.length,
+    mealPathProbe_unreachable: mealPaths.filter((p) => p.pathLen === null).length,
+    mealPathProbe_minLen: mealPaths.filter((p) => p.pathLen !== null).reduce((m, p) => Math.min(m, p.pathLen as number), Infinity),
     logisticsDispatchSlots: state.metrics.logisticsDispatchSlots,
     logisticsPressure: Number(state.metrics.logisticsPressure?.toFixed(3) ?? 0),
     crewTotal: state.crewMembers.length,
@@ -12886,24 +13020,31 @@ export function diagnoseFoodChain(state: StationState): {
     healthState: c.healthState,
   }));
 
-  const jobsDetail = openRawJobs.map((j) => ({
-    id: j.id,
-    itemType: j.itemType,
-    from: j.fromTile,
-    to: j.toTile,
-    state: j.state,
-    assignedTo: j.assignedCrewId,
-    amount: j.amount,
-    pickedUpAmount: j.pickedUpAmount,
-    ageSec: Number((state.now - j.createdAt).toFixed(1)),
-    sinceProgressSec: Number((state.now - j.lastProgressAt).toFixed(1)),
-    stallReason: j.stallReason,
-  }));
+  // Surface BOTH legs in the jobs detail so console.table(d.jobs) shows
+  // rawMeal AND meal jobs together — easier to spot which leg is stuck
+  // than splitting them across two arrays. The itemType column carries
+  // the leg identity. Sorted by createdAt so oldest stalls come first.
+  const jobsDetail = [...openRawJobs, ...openMealJobs]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((j) => ({
+      id: j.id,
+      itemType: j.itemType,
+      from: j.fromTile,
+      to: j.toTile,
+      state: j.state,
+      assignedTo: j.assignedCrewId,
+      amount: j.amount,
+      pickedUpAmount: j.pickedUpAmount,
+      ageSec: Number((state.now - j.createdAt).toFixed(1)),
+      sinceProgressSec: Number((state.now - j.lastProgressAt).toFixed(1)),
+      stallReason: j.stallReason,
+    }));
 
   return {
     summary,
     jobs: jobsDetail,
     paths,
+    mealPaths,
     crewByRole,
     crewDetail,
   };
@@ -13876,6 +14017,103 @@ export function setDockAllowedShipSize(state: StationState, dockId: number, size
   if (next.size === 0) next.add('small');
   dock.allowedShipSizes = shipSizesUpTo(dock.maxSizeByArea).filter((s) => next.has(s));
   bumpDockVersion(state);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Dock-migration v0 follow-up: per-berth player-set filters (parity
+// with setDockAllowedShipType / setDockAllowedShipSize for the
+// berth-room config UI). Capability tags continue to gate which ship
+// types CAN dock; these filters let the player further restrict the
+// allowlist on a per-berth basis. Storage lives in
+// `state.berthConfigs` keyed by berth-cluster anchor tile (lowest
+// tile index in the cluster). Orphaned entries — anchor no longer
+// leads a Berth cluster — are pruned in ensureRoomClustersCache.
+// ────────────────────────────────────────────────────────────────────
+
+const ALL_SHIP_TYPES_FOR_BERTH: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+const ALL_SHIP_SIZES_FOR_BERTH: ShipSize[] = ['small', 'medium', 'large'];
+
+function findBerthConfigByAnchor(state: StationState, anchorTile: number): BerthConfig | undefined {
+  return state.berthConfigs.find((c) => c.anchorTile === anchorTile);
+}
+
+function makeDefaultBerthConfig(anchorTile: number): BerthConfig {
+  return {
+    anchorTile,
+    allowedShipTypes: [...ALL_SHIP_TYPES_FOR_BERTH],
+    allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH]
+  };
+}
+
+/**
+ * Look up (or create) the BerthConfig for a berth cluster anchor.
+ * Caller is responsible for passing a valid anchor (lowest tile index
+ * inside an existing Berth cluster) — invalid anchors get a config
+ * row that the orphan-prune pass will sweep on the next room-cluster
+ * recompute, so the worst case is one wasted entry.
+ */
+export function ensureBerthConfig(state: StationState, anchorTile: number): BerthConfig {
+  let cfg = findBerthConfigByAnchor(state, anchorTile);
+  if (!cfg) {
+    cfg = makeDefaultBerthConfig(anchorTile);
+    state.berthConfigs.push(cfg);
+  }
+  return cfg;
+}
+
+/**
+ * Remove BerthConfig entries whose anchor is no longer the lowest
+ * tile of a Berth cluster. Called from ensureRoomClustersCache after
+ * the cluster cache has been rebuilt — guarantees the room-version
+ * key has just rolled, so we know the anchor set is fresh.
+ */
+function pruneOrphanedBerthConfigs(state: StationState): void {
+  if (state.berthConfigs.length === 0) return;
+  const validAnchors = new Set<number>();
+  const berthClusters = state.derived.roomClustersByRoom.get(RoomType.Berth) ?? [];
+  for (const cluster of berthClusters) {
+    if (cluster.length === 0) continue;
+    const anchor = cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]);
+    validAnchors.add(anchor);
+  }
+  state.berthConfigs = state.berthConfigs.filter((c) => validAnchors.has(c.anchorTile));
+}
+
+export function setBerthAllowedShipType(
+  state: StationState,
+  anchorTile: number,
+  shipType: ShipType,
+  allowed: boolean
+): void {
+  // Capability check: if the player toggles a type the berth's modules
+  // can't actually accept, we still record the choice — the capability
+  // filter in pickBerthForShip is the hard gate, this is the soft one.
+  // Tier-locked types still need to be unlocked first (mirrors dock).
+  if (allowed && !isShipTypeUnlocked(state, shipType)) return;
+  const cfg = ensureBerthConfig(state, anchorTile);
+  const next = new Set(cfg.allowedShipTypes);
+  if (allowed) next.add(shipType);
+  else next.delete(shipType);
+  // Mirror dock invariant: never leave the allowlist empty — a berth
+  // with zero allowed types is a dead berth that confuses traffic
+  // logic. Default fallback is 'tourist' (the always-unlocked type).
+  if (next.size === 0) next.add('tourist');
+  cfg.allowedShipTypes = ALL_SHIP_TYPES_FOR_BERTH.filter((t) => next.has(t));
+}
+
+export function setBerthAllowedShipSize(
+  state: StationState,
+  anchorTile: number,
+  size: ShipSize,
+  allowed: boolean
+): void {
+  const cfg = ensureBerthConfig(state, anchorTile);
+  const next = new Set(cfg.allowedShipSizes);
+  if (allowed) next.add(size);
+  else next.delete(size);
+  // Mirror dock invariant: never leave the size-allowlist empty.
+  if (next.size === 0) next.add('small');
+  cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
 }
 
 export function validateDockPlacement(

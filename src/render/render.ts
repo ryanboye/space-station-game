@@ -1868,6 +1868,18 @@ function ensureStaticLayer(
       ctx.textBaseline = 'middle';
       ctx.fillText(roomLetter[roomType], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.53);
     }
+    // Cold-start fallback (sprites-ON only): when a Floor tile carries
+    // RoomType.Reactor but its TileType is still plain Floor (the demo
+    // /cold-start-prototype path stamps room metadata before tile types
+    // resolve to Reactor sprites), paint a subtle reactor wash so the
+    // cluster reads even when the glow pass is toggled off. TileType
+    // .Reactor tiles already get their own sprite + glow — only the
+    // metadata-only case needs the wash. Alpha kept low so we don't
+    // re-create the "everything red" complaint awfml flagged in PR #84.
+    if (useSprites && tileType === TileType.Floor && roomType === RoomType.Reactor) {
+      ctx.fillStyle = 'rgba(185, 125, 57, 0.20)';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    }
     if (i === state.core.serviceTile) {
       ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
       ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));

@@ -1,5 +1,7 @@
 import {
   createInitialState,
+  setBerthAllowedShipSize,
+  setBerthAllowedShipType,
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockFacing,
@@ -76,6 +78,13 @@ export interface StationSnapshotV1 {
     anchorTile: number;
     purpose: DockPurpose;
     facing: SpaceLane;
+    allowedShipTypes: ShipType[];
+    allowedShipSizes: ShipSize[];
+  }>;
+  // Optional on the wire — older saves predate this slot. Empty array
+  // on missing → existing berth-cluster picks default-all on load.
+  berthConfigs?: Array<{
+    anchorTile: number;
     allowedShipTypes: ShipType[];
     allowedShipSizes: ShipSize[];
   }>;
@@ -290,6 +299,13 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         allowedShipSizes: [...dock.allowedShipSizes]
       }))
       .sort((a, b) => a.anchorTile - b.anchorTile),
+    berthConfigs: state.berthConfigs
+      .map((cfg) => ({
+        anchorTile: cfg.anchorTile,
+        allowedShipTypes: [...cfg.allowedShipTypes],
+        allowedShipSizes: [...cfg.allowedShipSizes]
+      }))
+      .sort((a, b) => a.anchorTile - b.anchorTile),
     resources: {
       credits: state.metrics.credits,
       waterStock: state.metrics.waterStock,
@@ -493,6 +509,38 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  // Optional in legacy saves — empty/missing array is fine; the runtime
+  // defaults the per-berth allowlist to "all allowed" when no row
+  // exists for an anchor.
+  const berthConfigs: NonNullable<StationSnapshotV1['berthConfigs']> = [];
+  if (Array.isArray(snapshotRaw.berthConfigs)) {
+    for (let i = 0; i < snapshotRaw.berthConfigs.length; i++) {
+      const entry = snapshotRaw.berthConfigs[i];
+      if (!isRecord(entry)) {
+        warnings.push(`berthConfigs[${i}] invalid; skipped.`);
+        continue;
+      }
+      const anchorTile = Math.floor(asFiniteNumber(entry.anchorTile, -1));
+      if (anchorTile < 0 || anchorTile >= expectedLength) {
+        warnings.push(`berthConfigs[${i}] has out-of-range anchorTile; skipped.`);
+        continue;
+      }
+      const allowedShipTypes = Array.isArray(entry.allowedShipTypes)
+        ? entry.allowedShipTypes.filter((type): type is ShipType => isOneOf(type, SHIP_TYPES))
+        : [];
+      const allowedShipSizes = Array.isArray(entry.allowedShipSizes)
+        ? entry.allowedShipSizes.filter((size): size is ShipSize => isOneOf(size, SHIP_SIZES))
+        : [];
+      berthConfigs.push({
+        anchorTile,
+        allowedShipTypes:
+          allowedShipTypes.length > 0 ? [...new Set(allowedShipTypes)] : ['tourist'],
+        allowedShipSizes:
+          allowedShipSizes.length > 0 ? [...new Set(allowedShipSizes)] : ['small']
+      });
+    }
+  }
+
   let credits = defaultState.metrics.credits;
   let waterStock = defaultState.metrics.waterStock;
   let airQuality = defaultState.metrics.airQuality;
@@ -628,6 +676,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     modules,
     constructionSites,
     dockConfigs,
+    berthConfigs,
     resources: {
       credits,
       waterStock,
@@ -878,6 +927,49 @@ export function hydrateStateFromSave(
     }
     for (const shipSize of SHIP_SIZES) {
       setDockAllowedShipSize(next, dock.id, shipSize, dockConfig.allowedShipSizes.includes(shipSize));
+    }
+  }
+
+  // Apply per-berth allowlists. The Berth-room clusters were rebuilt
+  // by the tick(next, 0) call above when `next.rooms` got populated;
+  // this is the first chance to validate the persisted anchors against
+  // a fresh cluster layout. An anchor that's no longer the lowest tile
+  // of a Berth cluster gets dropped with a warning so save authors can
+  // catch silent geometry drift on hand-edited saves.
+  if (snapshot.berthConfigs && snapshot.berthConfigs.length > 0) {
+    const validBerthAnchors = new Set<number>();
+    for (let i = 0; i < next.rooms.length; i++) {
+      if (next.rooms[i] !== RoomType.Berth) continue;
+      // First-pass: anchor candidate is the cluster's lowest tile,
+      // which we don't have direct access to here without rebuilding
+      // clusters. Use the runtime helper instead — ensureBerthConfig
+      // accepts any Berth-tile index and resolves to the cluster's
+      // anchor at lookup-time on the next pickBerthForShip call.
+      validBerthAnchors.add(i);
+    }
+    for (const [index, berthConfig] of snapshot.berthConfigs.entries()) {
+      if (!validBerthAnchors.has(berthConfig.anchorTile)) {
+        warnings.push(
+          `Berth config ${index} (anchor ${berthConfig.anchorTile}) skipped: no matching berth tile.`
+        );
+        continue;
+      }
+      for (const shipType of SHIP_TYPES) {
+        setBerthAllowedShipType(
+          next,
+          berthConfig.anchorTile,
+          shipType,
+          berthConfig.allowedShipTypes.includes(shipType)
+        );
+      }
+      for (const shipSize of SHIP_SIZES) {
+        setBerthAllowedShipSize(
+          next,
+          berthConfig.anchorTile,
+          shipSize,
+          berthConfig.allowedShipSizes.includes(shipSize)
+        );
+      }
     }
   }
 

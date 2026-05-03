@@ -52,6 +52,8 @@ import {
   setDockPurpose,
   setDockAllowedShipType,
   setDockAllowedShipSize,
+  setBerthAllowedShipType,
+  setBerthAllowedShipSize,
   sellMaterials,
   sellRawFood,
   setRoom,
@@ -692,6 +694,22 @@ app.innerHTML = `
       </select>
       <small id="room-modal-housing">Housing: n/a</small>
       <small id="room-modal-berth">Berth: n/a</small>
+      <div id="room-modal-berth-config" class="hidden">
+        <div class="section-title" style="margin-top:10px;">Berth Config</div>
+        <div class="row compact list-row"><span>Purpose</span><span class="value" id="room-modal-berth-purpose">Visitor</span></div>
+        <div class="row compact list-row"><span>Facing</span><span class="value" id="room-modal-berth-facing">auto</span></div>
+        <small id="room-modal-berth-config-note">Berths route by capability tags + the player allowlist below. Purpose is fixed to <em>Visitor</em> in v0; facing is derived from the cluster's exterior opening.</small>
+        <div class="section-title" style="margin-top:10px;">Allowed Ship Types</div>
+        <label><input type="checkbox" id="room-modal-berth-tourist" checked /> Tourist</label>
+        <label><input type="checkbox" id="room-modal-berth-trader" /> Trader</label>
+        <label><input type="checkbox" id="room-modal-berth-industrial" /> Industrial</label>
+        <label><input type="checkbox" id="room-modal-berth-military" /> Military (Tier 3)</label>
+        <label><input type="checkbox" id="room-modal-berth-colonist" /> Colonist (Tier 3)</label>
+        <div class="section-title" style="margin-top:10px;">Allowed Ship Sizes</div>
+        <label><input type="checkbox" id="room-modal-berth-small" checked /> Small</label>
+        <label><input type="checkbox" id="room-modal-berth-medium" checked /> Medium</label>
+        <label><input type="checkbox" id="room-modal-berth-large" checked /> Large</label>
+      </div>
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
       <small id="room-modal-hints">Hints: none</small>
@@ -1254,6 +1272,17 @@ const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reas
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
 const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
 const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
+const roomModalBerthConfigEl = document.querySelector<HTMLDivElement>('#room-modal-berth-config')!;
+const roomModalBerthPurposeEl = document.querySelector<HTMLElement>('#room-modal-berth-purpose')!;
+const roomModalBerthFacingEl = document.querySelector<HTMLElement>('#room-modal-berth-facing')!;
+const roomModalBerthTouristCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-tourist')!;
+const roomModalBerthTraderCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-trader')!;
+const roomModalBerthIndustrialCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-industrial')!;
+const roomModalBerthMilitaryCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-military')!;
+const roomModalBerthColonistCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-colonist')!;
+const roomModalBerthSmallCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-small')!;
+const roomModalBerthMediumCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-medium')!;
+const roomModalBerthLargeCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-large')!;
 const agentModal = document.querySelector<HTMLDivElement>('#agent-modal')!;
 const closeAgentBtn = document.querySelector<HTMLButtonElement>('#close-agent')!;
 const agentSidePanel = document.querySelector<HTMLElement>('#agent-side-panel')!;
@@ -2867,6 +2896,10 @@ let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
 let roomClipboard: RoomClipboard | null = null;
 let selectedDockId: number | null = null;
 let selectedRoomTile: number | null = null;
+// Anchor tile of the currently-inspected berth cluster (for the
+// berth-config controls inside room-modal). Null when the room
+// inspector isn't pointed at a Berth tile.
+let selectedBerthAnchor: number | null = null;
 let selectedAgent: SelectedAgent | null = null;
 let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
@@ -3840,13 +3873,46 @@ function refreshRoomModal(): void {
         `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles) | ${exposure}${occ} | capabilities: ${caps} | accepts: ${accepts}` +
         (rejects ? ` | rejects: ${rejects}` : '');
       roomModalBerthEl.style.color = berth.spaceExposed && berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
+      // Dock-modal parity: per-berth allowlists (allowed ship types +
+      // sizes) on top of the capability-tag gate. Purpose + facing are
+      // info-only (purpose hardcoded 'visitor' in v0; facing derived
+      // from cluster opening) — see BerthInspector docs in sim.ts.
+      selectedBerthAnchor = berth.anchorTile;
+      roomModalBerthConfigEl.classList.remove('hidden');
+      roomModalBerthPurposeEl.textContent = berth.purpose === 'visitor' ? 'Visitor' : 'Residential';
+      roomModalBerthFacingEl.textContent = berth.derivedFacing
+        ? berth.derivedFacing[0].toUpperCase() + berth.derivedFacing.slice(1)
+        : 'sealed (no exterior opening)';
+      const berthTypes = new Set(berth.allowedShipTypes);
+      roomModalBerthTouristCheckbox.checked = berthTypes.has('tourist');
+      roomModalBerthTraderCheckbox.checked = berthTypes.has('trader');
+      roomModalBerthIndustrialCheckbox.checked = berthTypes.has('industrial');
+      roomModalBerthMilitaryCheckbox.checked = berthTypes.has('military');
+      roomModalBerthColonistCheckbox.checked = berthTypes.has('colonist');
+      roomModalBerthIndustrialCheckbox.disabled = !isShipTypeUnlocked(state, 'industrial');
+      roomModalBerthMilitaryCheckbox.disabled = !isShipTypeUnlocked(state, 'military');
+      roomModalBerthColonistCheckbox.disabled = !isShipTypeUnlocked(state, 'colonist');
+      const berthSizes = new Set(berth.allowedShipSizes);
+      roomModalBerthSmallCheckbox.checked = berthSizes.has('small');
+      roomModalBerthMediumCheckbox.checked = berthSizes.has('medium');
+      roomModalBerthLargeCheckbox.checked = berthSizes.has('large');
+      // Cap size checkboxes against the cluster's max-size class — a
+      // 4-tile berth is 'small', so 'medium' and 'large' aren't
+      // physically reachable at this cluster size and the checkbox
+      // disables to mirror the dock-modal max-size gating.
+      roomModalBerthMediumCheckbox.disabled = berth.size === 'small';
+      roomModalBerthLargeCheckbox.disabled = berth.size !== 'large';
     } else {
       roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
       roomModalBerthEl.style.color = '#ff7676';
+      selectedBerthAnchor = null;
+      roomModalBerthConfigEl.classList.add('hidden');
     }
   } else {
     roomModalBerthEl.textContent = 'Berth: n/a';
     roomModalBerthEl.style.color = '#8ea2bd';
+    selectedBerthAnchor = null;
+    roomModalBerthConfigEl.classList.add('hidden');
   }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
   roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;
@@ -5111,6 +5177,7 @@ wireModal({
   closeBtn: closeRoomBtn,
   beforeClose: () => {
     selectedRoomTile = null;
+    selectedBerthAnchor = null;
   }
 });
 wireModal({
@@ -5185,6 +5252,40 @@ for (const [checkbox, shipSize] of DOCK_MODAL_SHIP_SIZE_CHECKBOXES) {
     if (selectedDockId === null) return;
     setDockAllowedShipSize(state, selectedDockId, shipSize, checkbox.checked);
     refreshDockModal();
+  });
+}
+
+// Berth-config controls inside the room-modal. Same wiring shape as
+// the dock-modal block above — the player allowlists are stored
+// per-berth in `state.berthConfigs` keyed by anchor tile, and each
+// toggle pipes through to the sim setter that mirrors the dock one.
+// Purpose + facing are info-only display in v0 (see room-modal HTML
+// for the rationale + linked BerthInspector docs in sim.ts).
+const ROOM_MODAL_BERTH_SHIP_TYPE_CHECKBOXES: Array<[HTMLInputElement, ShipType]> = [
+  [roomModalBerthTouristCheckbox, 'tourist'],
+  [roomModalBerthTraderCheckbox, 'trader'],
+  [roomModalBerthIndustrialCheckbox, 'industrial'],
+  [roomModalBerthMilitaryCheckbox, 'military'],
+  [roomModalBerthColonistCheckbox, 'colonist']
+];
+for (const [checkbox, shipType] of ROOM_MODAL_BERTH_SHIP_TYPE_CHECKBOXES) {
+  checkbox.addEventListener('change', () => {
+    if (selectedBerthAnchor === null) return;
+    setBerthAllowedShipType(state, selectedBerthAnchor, shipType, checkbox.checked);
+    refreshRoomModal();
+  });
+}
+
+const ROOM_MODAL_BERTH_SHIP_SIZE_CHECKBOXES: Array<[HTMLInputElement, ShipSize]> = [
+  [roomModalBerthSmallCheckbox, 'small'],
+  [roomModalBerthMediumCheckbox, 'medium'],
+  [roomModalBerthLargeCheckbox, 'large']
+];
+for (const [checkbox, shipSize] of ROOM_MODAL_BERTH_SHIP_SIZE_CHECKBOXES) {
+  checkbox.addEventListener('change', () => {
+    if (selectedBerthAnchor === null) return;
+    setBerthAllowedShipSize(state, selectedBerthAnchor, shipSize, checkbox.checked);
+    refreshRoomModal();
   });
 }
 

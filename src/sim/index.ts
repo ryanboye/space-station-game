@@ -45,6 +45,8 @@ export {
   removeModuleAtTile,
   sellMaterials,
   sellRawFood,
+  setBerthAllowedShipSize,
+  setBerthAllowedShipType,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
   setDockAllowedShipSize,
