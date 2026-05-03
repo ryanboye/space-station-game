@@ -42,9 +42,10 @@ docs/                  ← you are here
 
 Product strategy now lives in `docs/` with the rest of the knowledge base:
 
-- `docs/15-current-roadmap.md` — live roadmap, MVP target, next work, swarm guidance.
-- `docs/20-station-layout-project-plans.md` — implementation-ready project packets.
-- `docs/21-agent-handoff-layout-sim.md` — current handoff notes for the active layout/simulation push.
+- `docs/15-current-roadmap.md` — roadmap index and shared product direction.
+- `docs/16-roadmap-part-1-living-actors-jobs.md` — Part 1: reservations, providers, logistics, job board, roles, residents.
+- `docs/17-roadmap-part-2-utilities-hazards-sanitation.md` — Part 2: access, districts, utilities, hazards, maintenance, sanitation.
+- `docs/18-roadmap-part-3-command-map-contracts.md` — Part 3: command center, system map, contracts, station identity, incidents.
 - `VISION_DRAFT.md` — short vision statement, intentionally not an implementation checklist.
 - `PRODUCT_PLAN.md` and `IMPLEMENTATION_PHASES.md` — retired pointers kept so old links do not mislead agents.
 - `README.md` — quickstart, GH Pages setup, save sharing.

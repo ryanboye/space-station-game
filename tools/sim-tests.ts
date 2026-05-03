@@ -15,6 +15,7 @@ import {
   isShipTypeUnlocked,
   planModuleConstruction,
   planTileConstruction,
+  quoteMaterialImportCost,
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockPurpose,
@@ -29,12 +30,16 @@ import {
   getVisitorInspectorById,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
+  reservationsForOwner,
   sellMaterials,
   setRoom,
   setTile,
   SHIP_MIN_DOCK_AREA,
   tick,
-  tryPlaceModule
+  tryCreateReservation,
+  tryPlaceModule,
+  tryPlaceModuleWithCredits,
+  trySetTileWithCredits
 } from '../src/sim/sim';
 import {
   captureSnapshot,
@@ -85,6 +90,7 @@ function buildHabitat(state: StationState): void {
   state.moduleInstances = [];
   state.moduleOccupancyByTile.fill(null);
   state.jobs.length = 0;
+  state.reservations.length = 0;
   state.itemNodes.length = 0;
   state.visitors.length = 0;
   state.residents.length = 0;
@@ -466,6 +472,43 @@ function testTileBuildCostDoesNotScaleWithDistance(): void {
   );
 }
 
+function testCreditBuildDoesNotConsumeSuppliesOrNeedIntake(): void {
+  const state = createInitialState({ seed: 13381 });
+  state.metrics.credits = 50;
+  state.legacyMaterialStock = 12;
+  state.metrics.materials = 12;
+
+  const core = fromIndex(state.core.centerTile, state.width);
+  const floorTile = toIndex(core.x + 6, core.y, state.width);
+  const creditsBeforeFloor = state.metrics.credits;
+  const suppliesBeforeFloor = state.metrics.materials;
+  const floor = trySetTileWithCredits(state, floorTile, TileType.Floor);
+  assertCondition(floor.ok, `Credits-first floor placement should succeed (${floor.ok ? 'ok' : floor.reason}).`);
+  assertCondition(state.metrics.credits === creditsBeforeFloor - floor.cost, 'Credits-first floor placement should spend credits.');
+  assertCondition(state.metrics.materials === suppliesBeforeFloor, 'Credits-first floor placement should not consume supplies.');
+
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+  const moduleTile = toIndex(18, 10, state.width);
+  const creditsBeforeModule = state.metrics.credits;
+  const suppliesBeforeModule = state.metrics.materials;
+  const table = tryPlaceModuleWithCredits(state, ModuleType.Table, moduleTile);
+  assertCondition(table.ok, `Credits-first module placement should succeed (${table.ok ? 'ok' : table.reason}).`);
+  assertCondition(state.metrics.credits === creditsBeforeModule - table.cost, 'Credits-first module placement should spend credits.');
+  assertCondition(state.metrics.materials === suppliesBeforeModule, 'Credits-first module placement should not consume supplies.');
+}
+
+function testCreditBuildBlocksOnCredits(): void {
+  const state = createInitialState({ seed: 13382 });
+  state.metrics.credits = 0;
+  const core = fromIndex(state.core.centerTile, state.width);
+  const result = trySetTileWithCredits(state, toIndex(core.x + 6, core.y, state.width), TileType.Floor);
+  assertCondition(!result.ok, 'Credits-first build should block when credits are insufficient.');
+  if (result.ok) throw new Error('Expected insufficient-credit build failure.');
+  assertCondition(result.reason.includes('credits'), 'Insufficient-credit build failure should mention credits.');
+}
+
 function testTrussBuildRequiresEvaAndCanChain(): void {
   const state = createInitialState({ seed: 1339 });
   const core = fromIndex(state.core.centerTile, state.width);
@@ -537,6 +580,38 @@ function setupFoodChain(state: StationState): void {
   placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
   placeModuleOrThrow(state, ModuleType.Table, 18, 10);
   placeModuleOrThrow(state, ModuleType.Table, 18, 12);
+}
+
+function testHydroponicsSuppliesBoostOutputButAreNotRequired(): void {
+  const empty = createInitialState({ seed: 13401 });
+  buildHabitat(empty);
+  setupCoreRooms(empty);
+  setupFoodChain(empty);
+  empty.controls.materialAutoImportEnabled = false;
+  empty.legacyMaterialStock = 0;
+  empty.metrics.materials = 0;
+  tick(empty, 0.25);
+
+  const stocked = createInitialState({ seed: 13402 });
+  buildHabitat(stocked);
+  setupCoreRooms(stocked);
+  setupFoodChain(stocked);
+  stocked.controls.materialAutoImportEnabled = false;
+  stocked.legacyMaterialStock = 0;
+  stocked.metrics.materials = 0;
+  tick(stocked, 0);
+  const growTile = toIndex(6, 11, stocked.width);
+  const growNode = stocked.itemNodes.find((node) => node.tileIndex === growTile);
+  assertCondition(!!growNode, 'Grow station should expose a local inventory node.');
+  growNode!.items.rawMaterial = 1;
+  tick(stocked, 0.25);
+
+  assertCondition(empty.metrics.rawFoodProdRate > 0, 'Hydroponics should still produce reduced raw meals without supplies.');
+  assertCondition(
+    stocked.metrics.rawFoodProdRate > empty.metrics.rawFoodProdRate,
+    `Stocked hydroponics should out-produce empty hydroponics (${stocked.metrics.rawFoodProdRate} vs ${empty.metrics.rawFoodProdRate}).`
+  );
+  assertCondition((growNode!.items.rawMaterial ?? 0) < 1, 'Stocked hydroponics should consume a small amount of supplies.');
 }
 
 function setupTradeChain(state: StationState): void {
@@ -1036,6 +1111,41 @@ function testCrewAtUtilityReducesMaintenanceDebt(): void {
   assertCondition(debt!.debt < 50, 'Crew standing at a utility post should reduce maintenance debt.');
 }
 
+function testRepairSuppliesImproveMaintenanceRepairSpeed(): void {
+  const makeRepairState = (seed: number, supplies: number): { state: StationState; anchor: number } => {
+    const state = createInitialState({ seed });
+    buildHabitat(state);
+    setupCoreRooms(state);
+    state.controls.materialAutoImportEnabled = false;
+    state.legacyMaterialStock = supplies;
+    state.metrics.materials = supplies;
+    state.crew.total = 1;
+    runFor(state, 0.25);
+    const anchor = toIndex(6, 6, state.width);
+    state.maintenanceDebts = [{
+      key: `reactor:${anchor}`,
+      system: 'reactor',
+      anchorTile: anchor,
+      debt: 80,
+      lastServicedAt: 0
+    }];
+    return { state, anchor };
+  };
+
+  const empty = makeRepairState(31051, 0);
+  const stocked = makeRepairState(31052, 4);
+
+  runFor(empty.state, 12);
+  runFor(stocked.state, 12);
+
+  const emptyDebt = empty.state.maintenanceDebts.find((entry) => entry.anchorTile === empty.anchor)?.debt ?? 0;
+  const stockedDebt = stocked.state.maintenanceDebts.find((entry) => entry.anchorTile === stocked.anchor)?.debt ?? 0;
+  assertCondition(
+    stockedDebt < emptyDebt,
+    `Repair supplies should make maintenance repair faster (${stockedDebt.toFixed(1)} vs ${emptyDebt.toFixed(1)} debt).`
+  );
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -1317,9 +1427,17 @@ function testFoodChainEndToEnd(): void {
   setupFoodChain(state);
   state.crew.total = 14;
   state.metrics.credits = 500;
+  tick(state, 0);
 
   // Seed optional starter raw meal to accelerate first serving cycle.
   buyRawFood(state, 0, 20);
+  const growNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Hydroponics);
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  if (growNode && stoveNode) {
+    growNode.items.rawMeal = Math.max(growNode.items.rawMeal ?? 0, 16);
+    stoveNode.items.rawMeal = 0;
+    stoveNode.items.meal = 0;
+  }
   spawnVisitor(state, 15, 11, 1);
 
   runFor(state, 120);
@@ -1373,7 +1491,176 @@ function testFoodJobsDoNotLetRawBacklogBlockMeals(): void {
   );
 }
 
-function testLowFoodAssignsFoodChainCrew(): void {
+function testReservationKernelCapacityAndExpiry(): void {
+  const state = createInitialState({ seed: 31600 });
+  buildHabitat(state);
+  const tile = toIndex(10, 10, state.width);
+  const first = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: 1,
+    kind: 'provider-slot',
+    targetTile: tile,
+    targetId: `vending:${tile}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 1
+  });
+  const second = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: 2,
+    kind: 'provider-slot',
+    targetTile: tile,
+    targetId: `vending:${tile}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 1
+  });
+  assertCondition(first.ok, 'First single-capacity provider reservation should succeed.');
+  assertCondition(!second.ok, 'Second single-capacity provider reservation should be rejected.');
+  assertCondition(reservationsForOwner(state, 'visitor', 1).length === 1, 'Reservation should be visible by owner.');
+
+  runFor(state, 1.5, 0.25);
+  const third = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: 3,
+    kind: 'provider-slot',
+    targetTile: tile,
+    targetId: `vending:${tile}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 1
+  });
+  assertCondition(third.ok, 'Expired reservation should release provider capacity.');
+  assertCondition(state.metrics.expiredReservations > 0, 'Expired reservations should be counted in metrics.');
+}
+
+function testReservationKernelPreventsItemOverReserve(): void {
+  const state = createInitialState({ seed: 31601 });
+  buildHabitat(state);
+  const tile = toIndex(11, 11, state.width);
+  const first = tryCreateReservation(state, {
+    ownerKind: 'job',
+    ownerId: 1,
+    kind: 'source-item',
+    targetTile: tile,
+    targetId: `item:${tile}`,
+    itemType: 'rawMeal',
+    amount: 4,
+    capacity: 5,
+    ttlSec: 30
+  });
+  const second = tryCreateReservation(state, {
+    ownerKind: 'job',
+    ownerId: 2,
+    kind: 'source-item',
+    targetTile: tile,
+    targetId: `item:${tile}`,
+    itemType: 'rawMeal',
+    amount: 2,
+    capacity: 5,
+    ttlSec: 30
+  });
+  assertCondition(first.ok, 'First source-item reservation should fit available stock.');
+  assertCondition(!second.ok, 'Second source-item reservation should not over-reserve the same item stock.');
+}
+
+function testFoodLogisticsCreatesBatchesAndCapacityReservations(): void {
+  const state = createInitialState({ seed: 31602 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  tick(state, 0);
+  const growNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Hydroponics);
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  assertCondition(!!growNode && !!stoveNode, 'Batch fixture should expose hydro and kitchen nodes.');
+  if (!growNode || !stoveNode) return;
+  growNode.items.rawMeal = 24;
+  stoveNode.items.rawMeal = 0;
+  state.jobs.length = 0;
+  state.reservations.length = 0;
+
+  tick(state, 0.25);
+
+  const rawJobs = state.jobs.filter((job) => job.itemType === 'rawMeal' && job.type === 'deliver');
+  assertCondition(rawJobs.some((job) => job.amount > 1.5), 'Food logistics should create batch rawMeal deliveries, not one-unit trickle jobs.');
+  assertCondition(
+    state.reservations.some((reservation) => reservation.kind === 'target-capacity' && reservation.itemType === 'rawMeal' && reservation.targetTile === stoveNode.tileIndex),
+    'Food logistics should reserve target capacity for kitchen rawMeal batches.'
+  );
+}
+
+function testCookBatchJobConsumesRawAndProducesMeals(): void {
+  const state = createInitialState({ seed: 31603 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 8;
+  tick(state, 0);
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  assertCondition(!!stoveNode, 'Cook fixture should expose a stove item node.');
+  if (!stoveNode) return;
+  stoveNode.items.rawMeal = 10;
+  stoveNode.items.meal = 0;
+  state.jobs.length = 0;
+  state.reservations.length = 0;
+
+  runFor(state, 20, 0.25);
+
+  assertCondition(
+    state.jobs.some((job) => job.type === 'cook' && job.state === 'done'),
+    'Cook batch should complete as a visible job.'
+  );
+  assertCondition((stoveNode.items.rawMeal ?? 0) < 10, 'Cook batch should consume rawMeal from the stove node.');
+  const mealStockAfterCook = state.itemNodes.reduce((sum, node) => sum + (node.items.meal ?? 0), 0);
+  assertCondition(mealStockAfterCook > 0, 'Cook batch should produce meals into the food chain.');
+  assertCondition(state.metrics.jobCountsByType.cook.done > 0, 'Job board metrics should count completed cook jobs.');
+}
+
+function testUrgentFoodJobsInterruptCrewNeedTravel(): void {
+  const state = createInitialState({ seed: 31604 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 4;
+  runFor(state, 0.25);
+  tick(state, 0);
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  assertCondition(!!stoveNode, 'Urgent food fixture should expose a stove item node.');
+  if (!stoveNode) return;
+  stoveNode.items.rawMeal = 10;
+  stoveNode.items.meal = 0;
+  state.jobs.length = 0;
+  state.reservations.length = 0;
+  state.metrics.mealStock = 0;
+  state.metrics.kitchenRawBuffer = 10;
+  for (const crew of state.crewMembers) {
+    crew.energy = 90;
+    crew.hygiene = 20;
+    crew.bladder = 0;
+    crew.thirst = 0;
+    crew.toileting = true;
+    crew.toiletSessionActive = false;
+    crew.drinking = false;
+    crew.drinkSessionActive = false;
+    crew.cleaning = false;
+    crew.cleanSessionActive = false;
+    crew.activeJobId = null;
+    crew.path = [];
+  }
+
+  tick(state, 0.25);
+
+  assertCondition(
+    state.jobs.some((job) => job.type === 'cook' && (job.state === 'assigned' || job.state === 'in_progress' || job.state === 'done')),
+    'Urgent cook jobs should interrupt crew walking toward needs before visitors starve.'
+  );
+  assertCondition(
+    state.crewMembers.some((crew) => crew.activeJobId !== null || state.jobs.some((job) => job.assignedCrewId === crew.id && job.type === 'cook')),
+    'At least one crew member should be dispatched to urgent food work.'
+  );
+}
+
+function testLowFoodUsesJobBoardInsteadOfRoomPosts(): void {
   const state = createInitialState({ seed: 3006 });
   buildHabitat(state);
   setupCoreRooms(state);
@@ -1383,15 +1670,15 @@ function testLowFoodAssignsFoodChainCrew(): void {
 
   runFor(state, 0.5);
 
-  assertCondition(
-    state.metrics.requiredCriticalStaff.hydroponics >= 1,
-    'Low food should request hydroponics staffing.'
-  );
-  assertCondition(state.metrics.requiredCriticalStaff.kitchen >= 1, 'Low food should request kitchen staffing.');
-  assertCondition(state.metrics.requiredCriticalStaff.cafeteria >= 1, 'Low food should request cafeteria staffing.');
-  assertCondition(state.metrics.assignedCriticalStaff.hydroponics >= 1, 'Low food should assign crew to hydroponics.');
-  assertCondition(state.metrics.assignedCriticalStaff.kitchen >= 1, 'Low food should assign crew to kitchen.');
-  assertCondition(state.metrics.assignedCriticalStaff.cafeteria >= 1, 'Low food should assign crew to cafeteria.');
+  assertCondition(state.metrics.requiredCriticalStaff.hydroponics === 0, 'Low food should not request hydroponics room posts.');
+  assertCondition(state.metrics.requiredCriticalStaff.kitchen === 0, 'Low food should not request kitchen room posts.');
+  assertCondition(state.metrics.requiredCriticalStaff.cafeteria === 0, 'Low food should not request cafeteria room posts.');
+  assertCondition(state.metrics.assignedCriticalStaff.hydroponics === 0, 'Low food should not park crew in hydroponics.');
+  assertCondition(state.metrics.assignedCriticalStaff.kitchen === 0, 'Low food should not park crew in kitchen.');
+  assertCondition(state.metrics.assignedCriticalStaff.cafeteria === 0, 'Low food should not park crew in cafeteria.');
+  assertCondition(state.ops.hydroponicsActive > 0, 'Low food should leave hydroponics active without passive room posts.');
+  assertCondition(state.ops.kitchenActive > 0, 'Low food should leave kitchen active without passive room posts.');
+  assertCondition(state.ops.cafeteriasActive > 0, 'Low food should leave cafeteria active without passive room posts.');
 }
 
 function testServingStarvationQueue(): void {
@@ -1490,6 +1777,65 @@ function testMaterialsChainEndToEnd(): void {
   assertCondition(sold, 'Selling materials should remove raw materials from logistics/storage inventory.');
 }
 
+function testWorkshopPullsSuppliesBeforeStorageBulkFill(): void {
+  const state = createInitialState({ seed: 30061 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 19);
+  paintRoom(state, RoomType.Storage, 10, 16, 17, 20);
+  paintRoom(state, RoomType.Workshop, 20, 16, 25, 18);
+  paintRoom(state, RoomType.Market, 28, 16, 33, 18);
+  placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 10, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 12, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 14, 17);
+  placeModuleOrThrow(state, ModuleType.StorageRack, 16, 17);
+  placeModuleOrThrow(state, ModuleType.Workbench, 20, 17);
+  placeModuleOrThrow(state, ModuleType.Workbench, 23, 17);
+  placeModuleOrThrow(state, ModuleType.MarketStall, 28, 17);
+  placeModuleOrThrow(state, ModuleType.MarketStall, 31, 17);
+  state.crew.total = 16;
+  state.metrics.credits = 800;
+
+  assertCondition(buyMaterials(state, 0, 40), 'Buying supplies should fill the intake pallet.');
+  runFor(state, 80);
+
+  const workshopRaw = [toIndex(20, 17, state.width), toIndex(23, 17, state.width)].reduce(
+    (acc, tile) => acc + (state.itemNodes.find((node) => node.tileIndex === tile)?.items.rawMaterial ?? 0),
+    0
+  );
+  assertCondition(
+    workshopRaw > 0 || state.metrics.workshopTradeGoodProdRate > 0 || state.metrics.marketTradeGoodStock > 0,
+    'Workshop should receive production supplies before storage racks finish bulk-filling.'
+  );
+  assertCondition(
+    state.metrics.marketTradeGoodStock > 0 || state.metrics.tradeCyclesCompletedLifetime > 0,
+    'Workshop-to-market chain should start moving trade goods under storage bulk pressure.'
+  );
+}
+
+function testWorkshopCanRunWithoutStorageRoom(): void {
+  const state = createInitialState({ seed: 30062 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 19);
+  paintRoom(state, RoomType.Workshop, 12, 16, 17, 18);
+  paintRoom(state, RoomType.Market, 20, 16, 25, 18);
+  placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
+  placeModuleOrThrow(state, ModuleType.Workbench, 12, 17);
+  placeModuleOrThrow(state, ModuleType.Workbench, 15, 17);
+  placeModuleOrThrow(state, ModuleType.MarketStall, 20, 17);
+  placeModuleOrThrow(state, ModuleType.MarketStall, 23, 17);
+  state.crew.total = 12;
+  state.metrics.credits = 800;
+
+  assertCondition(buyMaterials(state, 0, 40), 'Buying supplies should fill intake without storage.');
+  runFor(state, 100);
+
+  assertCondition(state.metrics.workshopTradeGoodProdRate > 0, 'Workshop should produce goods from intake-fed supplies without a storage room.');
+  assertCondition(state.metrics.marketTradeGoodStock > 0, 'Market should receive trade goods without requiring storage as an intermediate room.');
+}
+
 function testMarketVisitorsBuyFromStallsWhenBenchesExist(): void {
   const state = createInitialState({ seed: 3007 });
   buildHabitat(state);
@@ -1523,6 +1869,7 @@ function testIntakeMaterialsMoveToStorage(): void {
   const state = createInitialState({ seed: 3021 });
   buildHabitat(state);
   setupCoreRooms(state);
+  state.controls.materialAutoImportEnabled = false;
   paintRoom(state, RoomType.LogisticsStock, 6, 16, 8, 18);
   paintRoom(state, RoomType.Storage, 10, 16, 13, 18);
   placeModuleOrThrow(state, ModuleType.IntakePallet, 6, 17);
@@ -1535,7 +1882,7 @@ function testIntakeMaterialsMoveToStorage(): void {
 
   const bought = buyMaterials(state, 0, 35);
   assertCondition(bought, 'Buying materials should deposit raw materials into intake pallets.');
-  runFor(state, 180);
+  runFor(state, 240);
 
   const intakeStock = state.itemNodes
     .filter((node) => state.rooms[node.tileIndex] === RoomType.LogisticsStock)
@@ -1543,8 +1890,8 @@ function testIntakeMaterialsMoveToStorage(): void {
   const storageStock = state.itemNodes
     .filter((node) => state.rooms[node.tileIndex] === RoomType.Storage)
     .reduce((sum, node) => sum + (node.items.rawMaterial ?? 0), 0);
-  assertCondition(storageStock >= 30, `Storage racks should receive most raw materials from intake (storage ${storageStock.toFixed(1)}).`);
-  assertCondition(intakeStock <= 5, `Intake pallets should drain into storage when storage has capacity (intake ${intakeStock.toFixed(1)}).`);
+  assertCondition(storageStock >= 28, `Storage racks should receive most raw materials from intake (storage ${storageStock.toFixed(1)}).`);
+  assertCondition(intakeStock <= 7, `Intake pallets should drain into storage when storage has capacity (intake ${intakeStock.toFixed(1)}).`);
 }
 
 function testInteriorBlueprintConstructionCompletes(): void {
@@ -1800,15 +2147,14 @@ function testMarketBuyCapacityContext(): void {
   buildHabitat(state);
   setupCoreRooms(state);
   setupTradeChain(state);
-  const result = buyMaterialsDetailed(state, 0, 80);
-  assertCondition(!result.ok, 'Buying 80 materials should fail with a single intake pallet.');
-  if (result.ok) {
-    throw new Error('Expected capacity failure result payload.');
-  }
-  assertCondition(result.reason === 'insufficient_storage_capacity', 'Failure reason should report insufficient capacity.');
-  assertCondition(result.requiredAmount === 80, 'Failure result should include required amount.');
-  assertCondition(result.freeCapacity >= 0 && result.freeCapacity < 80, 'Failure result should include free capacity context.');
-  assertCondition(result.targetNodeCount >= 1, 'Failure result should include target node count.');
+  const quotedCost = quoteMaterialImportCost(state, 80);
+  const result = buyMaterialsDetailed(state, quotedCost, 80);
+  assertCondition(result.ok, 'Buying 80 supplies should partially fill available intake capacity.');
+  assertCondition(result.added > 0 && result.added < 80, 'Partial buy should report added supplies below requested amount.');
+  assertCondition(result.creditCost > 0 && result.creditCost < quotedCost, 'Partial buy should scale its credit cost down.');
+  assertCondition(result.requiredAmount === 80, 'Partial buy result should include required amount.');
+  assertCondition(result.freeCapacity >= 0 && result.freeCapacity < 80, 'Partial buy should include free capacity context.');
+  assertCondition(result.targetNodeCount >= 1, 'Partial buy should include target node count.');
 }
 
 function testMarketBuyMissingIntakeContext(): void {
@@ -1823,6 +2169,29 @@ function testMarketBuyMissingIntakeContext(): void {
   assertCondition(result.reason === 'no_logistics_stock', 'Failure reason should report missing logistics stock.');
   assertCondition(result.targetNodeCount === 0, 'Missing-intake result should report zero target nodes.');
   assertCondition(result.freeCapacity === 0, 'Missing-intake result should report zero free capacity.');
+}
+
+function testAutoSupplyImportBuysTowardTarget(): void {
+  const state = createInitialState({ seed: 30141 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupStarterDepot(state);
+  state.legacyMaterialStock = 0;
+  state.metrics.materials = 0;
+  state.metrics.credits = 100;
+  state.controls.materialAutoImportEnabled = true;
+  state.controls.materialTargetStock = 30;
+  state.controls.materialImportBatchSize = 25;
+
+  runFor(state, 10.25);
+
+  assertCondition(state.metrics.materials > 0, 'Auto import should buy supplies when below target.');
+  assertCondition(state.metrics.materials <= 30, 'Auto import should not buy past the target.');
+  assertCondition(state.metrics.credits < 100, 'Auto import should spend credits.');
+  assertCondition(
+    state.metrics.materialAutoImportStatus.startsWith('imported') || state.metrics.materialAutoImportStatus === 'target met',
+    `Auto import should report an actionable status, got ${state.metrics.materialAutoImportStatus}.`
+  );
 }
 
 function testFoodChainInspectorClarity(): void {
@@ -2583,7 +2952,30 @@ function testConversionCreatesResidentHomeShip(): void {
   assertCondition(state.usageTotals.residentConversionSuccesses === 1, 'Successful conversion should count one success.');
 }
 
-function testResidentDepartureFreesHomeShipBerth(): void {
+function testFreeHousingAndResidentialBerthAttractMoveIn(): void {
+  const state = createInitialState({ seed: 30195 });
+  buildHabitat(state);
+  state.crew.total = 0;
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  setupPrivateResidentHousing(state);
+  state.rng = () => 0;
+
+  runFor(state, 21);
+
+  assertCondition(state.residents.length === 1, 'Free private housing and residential berth should attract a resident move-in.');
+  const resident = state.residents[0];
+  const dock = dockByIdOrThrow(state, residentialDockId);
+  const homeShip = state.arrivingShips.find((ship) => ship.id === resident.homeShipId) ?? null;
+  assertCondition(!!homeShip, 'Move-in should create a resident home ship.');
+  assertCondition(homeShip!.kind === 'resident_home', 'Move-in ship should be a resident_home.');
+  assertCondition(homeShip!.stage === 'docked', 'Move-in ship should remain docked.');
+  assertCondition(dock.occupiedByShipId === homeShip!.id, 'Residential berth should be claimed by the resident home ship.');
+  assertCondition(resident.homeDockId === residentialDockId, 'Moved-in resident should track their residential berth.');
+  assertCondition(state.usageTotals.residentConversionSuccesses === 1, 'Move-in should count as one resident acquisition success.');
+}
+
+function testResidentLeaveIntentDoesNotDespawnResident(): void {
   const state = createInitialState({ seed: 3020 });
   buildHabitat(state);
   state.crew.total = 0;
@@ -2609,21 +3001,23 @@ function testResidentDepartureFreesHomeShipBerth(): void {
   resident.y = center.y + 0.5;
 
   runFor(state, 1);
-  assertCondition(state.residents.length === 0, 'Resident should depart once reaching home dock tile.');
-  const shipAfterResidentExit = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
-  assertCondition(!!shipAfterResidentExit, 'Resident home ship should still exist during departure stage.');
+  assertCondition(state.residents.length === 1, 'Resident should stay in the station even after high leave intent.');
+  const residentAfterReset = state.residents[0];
+  assertCondition(residentAfterReset.state !== ResidentState.ToHomeShip, 'Legacy return-home state should reset instead of despawning.');
+  const shipAfterResidentReset = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
+  assertCondition(!!shipAfterResidentReset, 'Resident home ship should remain while the resident lives in the station.');
   assertCondition(
-    shipAfterResidentExit!.residentIds.length === 0 && shipAfterResidentExit!.stage === 'depart',
-    'Resident home ship should enter depart stage when no linked residents remain.'
+    shipAfterResidentReset!.residentIds.includes(residentAfterReset.id) && shipAfterResidentReset!.stage === 'docked',
+    'Resident home ship should stay docked and keep its resident link.'
   );
   runFor(state, 8);
-  const shipAfterDepart = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
-  assertCondition(shipAfterDepart === null, 'Resident home ship should leave simulation after depart stage completes.');
+  const shipAfterWait = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
+  assertCondition(shipAfterWait !== null, 'Resident home ship should not leave just because leave intent was high.');
   assertCondition(
-    dockByIdOrThrow(state, residentialDockId).occupiedByShipId === null,
-    'Residential berth occupancy should be freed after home ship departure.'
+    dockByIdOrThrow(state, residentialDockId).occupiedByShipId === ship.id,
+    'Residential berth occupancy should remain claimed by the resident home ship.'
   );
-  assertCondition(state.usageTotals.residentDepartures === 1, 'Resident departure counter should increment.');
+  assertCondition(state.usageTotals.residentDepartures === 0, 'Resident departure counter should not increment.');
 }
 
 function testMapExpansionCostProgressionAndDirectionLock(): void {
@@ -2858,6 +3252,9 @@ function testSaveRoundtripLayoutAndResources(): void {
   state.crew.total = 17;
   state.controls.shipsPerCycle = 2;
   state.controls.taxRate = 0.31;
+  state.controls.materialAutoImportEnabled = false;
+  state.controls.materialTargetStock = 155;
+  state.controls.materialImportBatchSize = 35;
   state.metrics.credits = 321;
   state.metrics.waterStock = 88;
   state.metrics.airQuality = 67;
@@ -2898,6 +3295,9 @@ function testSaveRoundtripLayoutAndResources(): void {
   assertCondition(loaded.crew.total === 17, 'Crew total should be restored from save.');
   assertCondition(loaded.controls.shipsPerCycle === 2, 'Ship-per-cycle control should be restored from save.');
   assertCondition(Math.abs(loaded.controls.taxRate - 0.31) < 0.001, 'Tax rate should be restored from save.');
+  assertCondition(loaded.controls.materialAutoImportEnabled === false, 'Supply auto-import toggle should be restored from save.');
+  assertCondition(loaded.controls.materialTargetStock === 155, 'Supply target should be restored from save.');
+  assertCondition(loaded.controls.materialImportBatchSize === 35, 'Supply import batch size should be restored from save.');
 }
 
 function testSaveLoadRegeneratesRuntimeEntities(): void {
@@ -3184,8 +3584,8 @@ function testResidentInspectorThresholdsAndPurity(): void {
   assertCondition(!!returnInspector, 'Resident inspector should resolve after leaveIntent mutation.');
   if (!returnInspector) return;
   assertCondition(
-    returnInspector.desire === 'return_home_ship',
-    'Resident desire should switch to return_home_ship when leave intent crosses trigger.'
+    returnInspector.desire === 'sleep',
+    'Resident desire should continue to prioritize station needs when leave intent crosses trigger.'
   );
   assertCondition(beforeReturn === afterReturn, 'Resident inspector getter should remain non-mutating after desire switch.');
 }
@@ -3630,14 +4030,13 @@ function testTier0StarterDepotMaterialCapacity(): void {
   setUnlockTierForTest(starter, 0);
   setupStarterDepot(starter);
   const small = buyMaterialsDetailed(starter, 0, 25);
-  assertCondition(small.ok, 'Tier 0 starter depot should receive +25 materials.');
+  assertCondition(small.ok, 'Tier 0 starter depot should receive +25 supplies.');
 
   const bulk = buyMaterialsDetailed(starter, 0, 80);
-  assertCondition(!bulk.ok, 'Tier 0 single intake pallet should not receive +80 materials.');
-  if (bulk.ok) throw new Error('Expected starter depot capacity failure.');
-  assertCondition(bulk.reason === 'insufficient_storage_capacity', 'Starter depot bulk buy should fail on capacity.');
+  assertCondition(bulk.ok, 'Tier 0 single intake pallet should allow a partial bulk supply buy.');
+  assertCondition(bulk.added > 0 && bulk.added < 80, 'Starter depot bulk buy should add only available intake capacity.');
   assertCondition(bulk.targetNodeCount === 1, 'Starter depot bulk buy should report the single intake node.');
-  assertCondition(bulk.freeCapacity < 80, 'Starter depot bulk buy should report insufficient free capacity.');
+  assertCondition(bulk.freeCapacity < 80, 'Starter depot bulk buy should report constrained free capacity.');
 }
 
 function testUnlockTier1TriggersAfterStability(): void {
@@ -4531,7 +4930,7 @@ function testBrigReducesIncidentDuration(): void {
   );
 }
 
-function testSecurityPriorityStaffsBrig(): void {
+function testBrigActiveWithoutStandingPosts(): void {
   const state = createInitialState({ seed: 5119 });
   buildHabitat(state);
   setUnlockTierForTest(state, 3);
@@ -4544,8 +4943,8 @@ function testSecurityPriorityStaffsBrig(): void {
   const brigStaff = state.crewMembers.filter(
     (crew) => crew.assignedSystem === 'security' && crew.targetTile !== null && state.rooms[crew.targetTile] === RoomType.Brig
   );
-  assertCondition(brigStaff.length > 0, 'Security priority should assign staff to Brig posts.');
-  assertCondition(state.ops.brigActive > 0, 'Staffed Brig should become active.');
+  assertCondition(brigStaff.length === 0, 'Security priority should not park staff at Brig posts.');
+  assertCondition(state.ops.brigActive > 0, 'Brig should become active from layout and modules.');
 }
 
 function testSaveV1MigratesToV2UnlockDefaults(): void {
@@ -4712,8 +5111,11 @@ function testDualWallVariantTruthTable(): void {
 function run(): void {
   testStarterCoreIsOpenWithSideReactor();
   testTileBuildCostDoesNotScaleWithDistance();
+  testCreditBuildDoesNotConsumeSuppliesOrNeedIntake();
+  testCreditBuildBlocksOnCredits();
   testTrussBuildRequiresEvaAndCanChain();
   testTrussExpansionConvertsScaffoldIntoPressurizedShell();
+  testHydroponicsSuppliesBoostOutputButAreNotRequired();
   testUnlockTier0StartsConstrained();
   testTier0StarterDepotMaterialCapacity();
   testUnlockTier1TriggersAfterStability();
@@ -4741,7 +5143,7 @@ function run(): void {
   testTier3ClinicGeneratesTreatablePatients();
   testTier3SecurityGeneratesDispatchableIncidents();
   testBrigReducesIncidentDuration();
-  testSecurityPriorityStaffsBrig();
+  testBrigActiveWithoutStandingPosts();
   testSaveV1MigratesToV2UnlockDefaults();
   test20MinuteComplexityCurveReadable();
   testTier0VisitorDockSchedulesTraffic();
@@ -4770,6 +5172,7 @@ function run(): void {
   testMaintenanceDebtReducesReactorPower();
   testMaintenanceDebtReducesLifeSupportAir();
   testCrewAtUtilityReducesMaintenanceDebt();
+  testRepairSuppliesImproveMaintenanceRepairSpeed();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
@@ -4778,10 +5181,17 @@ function run(): void {
   testVisitorAuxiliaryHygieneNeedIsInspectable();
   testFoodChainEndToEnd();
   testFoodJobsDoNotLetRawBacklogBlockMeals();
-  testLowFoodAssignsFoodChainCrew();
+  testReservationKernelCapacityAndExpiry();
+  testReservationKernelPreventsItemOverReserve();
+  testFoodLogisticsCreatesBatchesAndCapacityReservations();
+  testCookBatchJobConsumesRawAndProducesMeals();
+  testUrgentFoodJobsInterruptCrewNeedTravel();
+  testLowFoodUsesJobBoardInsteadOfRoomPosts();
   testServingStarvationQueue();
   testVisitorCafeteriaReservationSurvivesShortCrowdBlock();
   testMaterialsChainEndToEnd();
+  testWorkshopPullsSuppliesBeforeStorageBulkFill();
+  testWorkshopCanRunWithoutStorageRoom();
   testMarketVisitorsBuyFromStallsWhenBenchesExist();
   testIntakeMaterialsMoveToStorage();
   testInteriorBlueprintConstructionCompletes();
@@ -4796,6 +5206,7 @@ function run(): void {
   testRoomInspectorInventoryBreakdown();
   testMarketBuyCapacityContext();
   testMarketBuyMissingIntakeContext();
+  testAutoSupplyImportBuysTowardTarget();
   testFoodChainInspectorClarity();
   testServiceNodeUnreachableWarning();
   testLoungeModuleGating();
@@ -4822,7 +5233,8 @@ function run(): void {
   testConversionBlockedWithoutResidentialBerth();
   testConversionBlockedWithoutPrivateHousing();
   testConversionCreatesResidentHomeShip();
-  testResidentDepartureFreesHomeShipBerth();
+  testFreeHousingAndResidentialBerthAttractMoveIn();
+  testResidentLeaveIntentDoesNotDespawnResident();
   testMapExpansionCostProgressionAndDirectionLock();
   testMapExpansionCreditGatingNoMutation();
   testMapExpansionNorthRemapsRuntimeReferences();

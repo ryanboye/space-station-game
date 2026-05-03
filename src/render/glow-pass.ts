@@ -28,6 +28,13 @@ type GlowCachedLayer = {
   key: string;
 };
 
+export type GlowRenderViewport = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 let glowLayerCache: GlowCachedLayer | null = null;
 
 export function invalidateGlowCache(): void {
@@ -145,7 +152,8 @@ export function renderGlowPass(
   state: StationState,
   widthPx: number,
   heightPx: number,
-  useSprites: boolean
+  useSprites: boolean,
+  viewport: GlowRenderViewport | null = null
 ): void {
   if (!state.controls.showGlow) return;
 
@@ -168,7 +176,21 @@ export function renderGlowPass(
     paintEmitters(lctx, state, useSprites);
   }
 
-  ctx.drawImage(layer.canvas, 0, 0);
+  if (viewport) {
+    ctx.drawImage(
+      layer.canvas,
+      viewport.x,
+      viewport.y,
+      viewport.width,
+      viewport.height,
+      viewport.x,
+      viewport.y,
+      viewport.width,
+      viewport.height
+    );
+  } else {
+    ctx.drawImage(layer.canvas, 0, 0);
+  }
 }
 
 function paintEmitters(

@@ -32,6 +32,7 @@ export type PathIntent = 'visitor' | 'resident' | 'crew' | 'logistics' | 'securi
 export interface PathOptions {
   allowRestricted: boolean;
   intent: PathIntent;
+  routeSeed?: number;
 }
 
 export interface RouteExposure {
@@ -468,7 +469,7 @@ export interface CrewMember {
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct';
+export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -500,8 +501,86 @@ export interface TransportJob {
   // are unused for repair jobs but kept for shape compatibility.
   repairSystem?: MaintenanceSystem;
   repairProgress?: number;
+  repairSupplyChecked?: boolean;
+  repairSuppliesUsed?: number;
   constructionSiteId?: number;
   constructionMode?: 'deliver' | 'build';
+  workProgress?: number;
+  workRequired?: number;
+  blockedReason?: string | null;
+}
+
+export type ReservationOwnerKind = 'visitor' | 'resident' | 'crew' | 'job' | 'room' | 'system';
+export type ReservationKind =
+  | 'provider-slot'
+  | 'service-tile'
+  | 'seat-use-slot'
+  | 'source-item'
+  | 'target-capacity'
+  | 'actor-job';
+export type ReservationReleaseReason = 'completed' | 'failed' | 'expired' | 'replaced' | 'cleared';
+
+export interface Reservation {
+  id: number;
+  ownerKind: ReservationOwnerKind;
+  ownerId: number | string;
+  kind: ReservationKind;
+  targetTile: number | null;
+  targetId: string | null;
+  itemType: ItemType | null;
+  amount: number;
+  capacity: number;
+  createdAt: number;
+  expiresAt: number;
+  releaseReason: ReservationReleaseReason | null;
+}
+
+export type ProviderKind =
+  | 'meal-pickup'
+  | 'seat'
+  | 'vending'
+  | 'leisure'
+  | 'market'
+  | 'drink'
+  | 'hygiene'
+  | 'stove-work'
+  | 'grow-work'
+  | 'workshop-work';
+export type ProviderStatus = 'available' | 'reserved' | 'in_use' | 'blocked';
+
+export interface ProviderSummary {
+  id: string;
+  kind: ProviderKind;
+  module: ModuleType;
+  room: RoomType;
+  tileIndex: number;
+  capacity: number;
+  reserved: number;
+  users: number;
+  queued: number;
+  status: ProviderStatus;
+  blockedReason: string | null;
+}
+
+export interface StockTargetSummary {
+  tileIndex: number;
+  itemType: ItemType;
+  current: number;
+  incoming: number;
+  desired: number;
+  max: number;
+  priority: number;
+  blockedReason: string | null;
+}
+
+export interface JobBoardSummary {
+  open: number;
+  assigned: number;
+  blocked: number;
+  stale: number;
+  averageAgeSec: number;
+  averageBatchSize: number;
+  labels: string[];
 }
 
 export type ConstructionKind = 'tile' | 'module';
@@ -715,6 +794,9 @@ export interface IncidentEntity {
 }
 
 export interface Metrics {
+  frameMs: number;
+  rafJankMs: number;
+  rafDroppedFrames: number;
   tickMs: number;
   renderMs: number;
   pathMs: number;
@@ -755,6 +837,9 @@ export interface Metrics {
   pressurizationPct: number;
   leakingTiles: number;
   materials: number;
+  materialAutoImportStatus: string;
+  materialAutoImportLastAdded: number;
+  materialAutoImportCreditCost: number;
   credits: number;
   rawFoodProdRate: number;
   mealPrepRate: number;
@@ -814,6 +899,14 @@ export interface Metrics {
   expiredJobsByContext: Record<JobExpiryContext, number>;
   jobCountsByItem: Record<ItemType, JobStatusCounts>;
   jobCountsByType: Record<JobType, JobStatusCounts>;
+  activeReservations: number;
+  reservationFailures: number;
+  expiredReservations: number;
+  reservationsByKind: Record<ReservationKind, number>;
+  logisticsAverageBatchSize: number;
+  logisticsJobMilesPerMin: number;
+  logisticsBlockedReason: string;
+  jobBoard: JobBoardSummary;
   deathsTotal: number;
   recentDeaths: number;
   distressedResidents: number;
@@ -925,6 +1018,9 @@ export interface Metrics {
   residentTaxCollectedTotal: number;
   residentConversionAttempts: number;
   residentConversionSuccesses: number;
+  residentConversionLastResult: string;
+  residentConversionLastChancePct: number;
+  residentConversionLastShip: string;
   residentDepartures: number;
   residentSatisfactionAvg: number;
   topRoomWarnings: string[];
@@ -1079,6 +1175,10 @@ export interface RoomInspector {
     highPatienceWaiting: number;
     pressure: 'low' | 'medium' | 'high';
   };
+  providers?: ProviderSummary[];
+  stockTargets?: StockTargetSummary[];
+  openJobs?: string[];
+  topBlockedReason?: string | null;
 }
 
 export interface HousingInspector {
@@ -1114,6 +1214,9 @@ export interface AgentInspectorBase {
   localAir: number;
   /** Cumulative low-oxygen exposure in seconds; compared against thresholds for distress/critical/death. */
   airExposureSec: number;
+  reservationSummary: string;
+  providerTarget: string | null;
+  blockedReason: string | null;
 }
 
 export interface VisitorInspector extends AgentInspectorBase {
@@ -1301,6 +1404,9 @@ export interface Controls {
   taxRate: number;
   dockPlacementFacing: SpaceLane;
   moduleRotation: ModuleRotation;
+  materialAutoImportEnabled: boolean;
+  materialTargetStock: number;
+  materialImportBatchSize: number;
   crewPriorityPreset: CrewPriorityPreset;
   crewPriorityWeights: CrewPriorityWeights;
 }
@@ -1336,6 +1442,7 @@ export interface StationState {
   airQualityByTile: Float32Array;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
+  reservations: Reservation[];
   constructionSites: ConstructionSite[];
   itemNodes: ItemNode[];
   legacyMaterialStock: number;
@@ -1366,6 +1473,7 @@ export interface StationState {
   lastResidentSpawnAt: number;
   moduleSpawnCounter: number;
   jobSpawnCounter: number;
+  reservationSpawnCounter: number;
   constructionSiteSpawnCounter: number;
   incidentSpawnCounter: number;
   incidentHeat: number;
@@ -1435,6 +1543,9 @@ export interface StationState {
     residentTaxesCollected: number;
     residentConversionAttempts: number;
     residentConversionSuccesses: number;
+    residentConversionLastResult: string;
+    residentConversionLastChancePct: number;
+    residentConversionLastShip: string;
     residentDepartures: number;
     ratingFromResidentDeparture: number;
     ratingFromResidentRetention: number;
@@ -1475,12 +1586,37 @@ export interface StationState {
   unlocks: UnlockState;
 }
 
+export interface BuildStampCellPreview {
+  dx: number;
+  dy: number;
+  tile: TileType;
+  room: RoomType;
+  zone: ZoneType;
+}
+
+export interface BuildStampModulePreview {
+  dx: number;
+  dy: number;
+  type: ModuleType;
+  rotation: ModuleRotation;
+  tileOffsets: Array<{ dx: number; dy: number }>;
+}
+
+export interface BuildStampPreview {
+  width: number;
+  height: number;
+  cells: BuildStampCellPreview[];
+  modules: BuildStampModulePreview[];
+  label: string;
+}
+
 export interface BuildTool {
-  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'cancel-construction';
+  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'copy-room' | 'paste-room' | 'cancel-construction';
   tile?: TileType;
   zone?: ZoneType;
   room?: RoomType;
   module?: ModuleType;
+  pasteStamp?: BuildStampPreview;
 }
 
 export const WALKABLE_TILES = new Set<TileType>([

@@ -32,7 +32,7 @@ Each item links to where the rule originates. Don't change the underlying behavi
 
 - **`setRoom` silently fails on non-walkable tiles.** If your scenario is missing a room paint, check whether the underlying tile is Floor.
 - **`setModule` falls through to a `legacyForced: true` 1×1 module** when `tryPlaceModule` would fail (`sim.ts:8152`–8161). Scenarios depend on this. Tightening the fallback breaks fixtures.
-- **HUD "Materials" is `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)`** (`sim.ts:6270`). Use `metrics.materials` for UI text — don't read `legacyMaterialStock` directly.
+- **HUD "Supplies" is `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)`**. Use `metrics.materials` for UI text — don't read `legacyMaterialStock` directly.
 - **WallLight needs the wall above the floor to face open space** — `resolveWallLightFacing` (`sim.ts:8115`) is finicky.
 - **Adding a new module:** also update `MODULE_DEFINITIONS` (with `allowedRooms`), the relevant ROOM_DEFINITIONS' `requiredModules`, the build palette in `main.ts`, and the unlock-tier mapping (`unlocks.ts:148`) if gated.
 

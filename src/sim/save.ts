@@ -95,6 +95,9 @@ export interface StationSnapshotV1 {
   controls: {
     shipsPerCycle: number;
     taxRate: number;
+    materialAutoImportEnabled?: boolean;
+    materialTargetStock?: number;
+    materialImportBatchSize?: number;
   };
   unlocks: {
     tier: UnlockTier;
@@ -299,7 +302,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     inventoryByTile,
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
-      taxRate: state.controls.taxRate
+      taxRate: state.controls.taxRate,
+      materialAutoImportEnabled: state.controls.materialAutoImportEnabled,
+      materialTargetStock: state.controls.materialTargetStock,
+      materialImportBatchSize: state.controls.materialImportBatchSize
     },
     unlocks: {
       tier: state.unlocks.tier,
@@ -538,9 +544,17 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
 
   let shipsPerCycle = defaultState.controls.shipsPerCycle;
   let taxRate = defaultState.controls.taxRate;
+  let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
+  let materialTargetStock = defaultState.controls.materialTargetStock;
+  let materialImportBatchSize = defaultState.controls.materialImportBatchSize;
   if (isRecord(snapshotRaw.controls)) {
     shipsPerCycle = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.shipsPerCycle, shipsPerCycle)), 0, 3);
     taxRate = clamp(asFiniteNumber(snapshotRaw.controls.taxRate, taxRate), 0, 0.5);
+    if (typeof snapshotRaw.controls.materialAutoImportEnabled === 'boolean') {
+      materialAutoImportEnabled = snapshotRaw.controls.materialAutoImportEnabled;
+    }
+    materialTargetStock = clamp(asFiniteNumber(snapshotRaw.controls.materialTargetStock, materialTargetStock), 0, 500);
+    materialImportBatchSize = clamp(asFiniteNumber(snapshotRaw.controls.materialImportBatchSize, materialImportBatchSize), 1, 160);
   } else {
     warnings.push('controls missing; defaulted.');
   }
@@ -626,7 +640,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     inventoryByTile,
     controls: {
       shipsPerCycle,
-      taxRate
+      taxRate,
+      materialAutoImportEnabled,
+      materialTargetStock,
+      materialImportBatchSize
     },
     unlocks: {
       tier: unlockTier,
@@ -727,6 +744,7 @@ function clearTransientState(state: StationState): void {
   state.arrivingShips.length = 0;
   state.pendingSpawns.length = 0;
   state.jobs.length = 0;
+  state.reservations.length = 0;
   state.dockQueue.length = 0;
   state.pathOccupancyByTile = new Map();
   state.bodyTiles.length = 0;
@@ -917,6 +935,9 @@ export function hydrateStateFromSave(
 
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);
+  next.controls.materialAutoImportEnabled = snapshot.controls.materialAutoImportEnabled ?? next.controls.materialAutoImportEnabled;
+  next.controls.materialTargetStock = clamp(snapshot.controls.materialTargetStock ?? next.controls.materialTargetStock, 0, 500);
+  next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);

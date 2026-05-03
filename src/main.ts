@@ -1,5 +1,5 @@
 import './styles.css';
-import { renderWorld } from './render/render';
+import { renderWorld, type RenderViewport } from './render/render';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
 import {
@@ -44,6 +44,7 @@ import {
   hireCrew,
   planModuleConstruction,
   planTileConstruction,
+  quoteMaterialImportCost,
   removeModuleAtTile,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
@@ -58,8 +59,8 @@ import {
   setZone,
   tick,
   setTile,
-  tryPlaceModule,
-  trySetTile,
+  tryPlaceModuleWithCredits,
+  trySetTileWithCredits,
   getCrewPriorityPresetWeights,
   validateDockPlacement
 } from './sim';
@@ -73,6 +74,7 @@ import {
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type DiagnosticOverlay,
+  type DockPurpose,
   type SpaceLane,
   type ShipSize,
   type ShipType,
@@ -80,6 +82,7 @@ import {
   type ItemType,
   type JobStallReason,
   type JobStatusCounts,
+  type ModuleRotation,
   type StationState,
   ModuleType,
   RoomType,
@@ -120,9 +123,10 @@ app.innerHTML = `
       <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
       <span class="hud-item"><span class="hud-label">Food</span><span class="hud-value" id="hud-food">--</span></span>
+      <span class="hud-item"><span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span></span>
       <span class="hud-item"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
       <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
-      <span class="hud-item"><span class="hud-label">Materials</span><span class="hud-value" id="hud-materials">--</span></span>
+      <span class="hud-item"><span class="hud-label">Supplies</span><span class="hud-value" id="hud-materials">--</span></span>
     </div>
     <div class="top-actions">
       <button id="open-save-modal" class="topbar-btn utility-icon" aria-label="Save / Load" title="Save / Load">
@@ -181,10 +185,9 @@ app.innerHTML = `
     </div>
   </div>
   <div id="game-wrap">
+    <canvas id="game"></canvas>
     <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
-    <div id="game-stage">
-      <canvas id="game"></canvas>
-    </div>
+    <div id="game-stage"></div>
     <div class="floating-stack left-stack" aria-label="Station tasks">
       <details class="hud-card task-card overlay-card" open>
         <summary class="hud-card-title">Tasks</summary>
@@ -197,6 +200,13 @@ app.innerHTML = `
         <div id="diagnostic-key-rows" class="diagnostic-key-rows"></div>
       </section>
     </div>
+    <section id="agent-side-panel" class="side-inspector side-agent-panel floating-agent-panel hidden" aria-live="polite">
+      <div class="side-inspector-head">
+        <h3 id="agent-side-title">Agent Inspector</h3>
+        <button id="close-agent-side" class="mini-action-btn">Close</button>
+      </div>
+      <div id="agent-side-body" class="side-inspector-body">No agent selected.</div>
+    </section>
     <div id="bottom-dock">
       <section class="dock-card command-card">
         <div class="hud-card-title">Command</div>
@@ -226,23 +236,26 @@ app.innerHTML = `
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Work 0 | Idle 0 | Log 0 | Rest 0 | Block 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
         <div class="row compact list-row"><span>Systems</span><span class="value" id="ops">Caf 0/0 | Food K0/0 H0/0 | LS 0/0 | R 0/0</span></div>
+        <div class="row compact list-row"><span>Residents</span><span class="value" id="ops-residents">0 | waiting</span></div>
         <div class="row compact list-row"><span>Jobs</span><span class="value" id="jobs">P0 A0 X0 D0 | none</span></div>
-        <small id="critical-staffing-line">Critical staffing: R 0/0/0 | LS 0/0/0 | HY 0/0/0 | KI 0/0/0 | CF 0/0/0</small>
+        <small id="critical-staffing-line">Room ops: module/path/pressure checks active; crew posts disabled</small>
       </section>
       <section class="dock-card event-card">
-        <div class="hud-card-title">Event Log</div>
+        <div class="hud-card-title">Station Health</div>
+        <div class="row compact list-row"><span>Rating</span><span class="value" id="health-rating">70</span></div>
+        <small id="resident-conversion-summary">Residents: waiting for eligible visitor exit</small>
         <small id="room-warnings">Room warnings: none</small>
         <small id="visitor-feelings">Visitor feelings: none</small>
+        <small id="rating-reasons">Rating drivers: none</small>
         <small id="morale-reasons">Crew morale drivers: none</small>
-        <small id="rating-reasons">Station rating drivers: none</small>
       </section>
       <section class="dock-card diagnostics-card">
         <div class="hud-card-title">Alerts</div>
         <div id="alert-list" class="alert-list is-clear">No active alerts</div>
-        <button id="clear-bodies" class="alert-action">Clear Bodies (-6 materials)</button>
+        <button id="clear-bodies" class="alert-action">Clear Bodies (-6 supplies)</button>
         <details class="mini-collapse">
           <summary>Diagnostics</summary>
-        <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Materials 0 | Credits 0</span></div>
+        <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Supplies 0 | Credits 0</span></div>
         <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
         <div class="row compact list-row"><span>Power</span><span class="value" id="power">0 / 0</span></div>
         <div class="row compact list-row"><span>Morale</span><span class="value" id="morale">0</span></div>
@@ -267,14 +280,15 @@ app.innerHTML = `
         <small id="archetype-strip">Visitors: Diner 0 | Shopper 0 | Lounger 0 | Rusher 0</small>
         <small id="ship-type-strip">Ships/min: Tour 0.0 | Trade 0.0 | Ind 0.0 | Mil 0.0 | Col 0.0</small>
         <small id="lane-queues">Lane queues N/E/S/W: 0/0/0/0</small>
-        <small id="walk-stats">Visitor walk avg: 0.0</small>
+        <small id="walk-stats">Visitor route avg: 0.0</small>
+        <small id="perf-stats">Perf: tick 0.0ms | render 0.0ms | path 0.0ms</small>
         <small id="berth-summary">Berths: visitor 0/0 | resident 0/0 | resident ships 0</small>
         <small id="resident-loop-summary">Resident loop: convert 0/0 | departures 0 | tax +0.0/min</small>
         <small id="rating-insight-trend">Trend: +0.0/min (stable)</small>
-        <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0 | routes 0.0</small>
+        <small id="rating-insight-rate">Penalty/min: timeout 0.0 | no dock 0.0 | service 0.0 | route length 0.0 | bad routes 0.0</small>
         <small id="rating-insight-bonus">Bonus/min: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service">Service/min: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
-        <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | walk 0.0 | routes 0.0</small>
+        <small id="rating-insight-total">Total penalty: timeout 0.0 | no dock 0.0 | service 0.0 | route length 0.0 | bad routes 0.0</small>
         <small id="rating-insight-bonus-total">Total bonus: meals 0.0 | leisure 0.0 | exits 0.0 | residents 0.0</small>
         <small id="rating-insight-service-total">Service total: no path 0.0 | missing services 0.0 | patience bail 0.0 | dock timeout 0.0 | trespass 0.0</small>
         <small id="rating-insight-events">Events: skipped docks 0 | queue timeouts 0 | service fails/min 0.0</small>
@@ -294,13 +308,6 @@ app.innerHTML = `
   </div>
   <aside id="panel">
     <h2>Build Palette</h2>
-    <section id="agent-side-panel" class="side-inspector side-agent-panel hidden" aria-live="polite">
-      <div class="side-inspector-head">
-        <h3 id="agent-side-title">Agent Inspector</h3>
-        <button id="close-agent-side" class="mini-action-btn">Close</button>
-      </div>
-      <div id="agent-side-body" class="side-inspector-body">No agent selected.</div>
-    </section>
     <div class="palette-tabs" aria-label="Build palette categories">
       <button class="palette-tab active" data-palette-target="structure">Build</button>
       <button class="palette-tab" data-palette-target="rooms">Rooms</button>
@@ -310,6 +317,8 @@ app.innerHTML = `
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="structure">
         <span class="tool-row-label">Structure</span>
+        <button class="tool-btn" data-tool-room-copy="1" title="Copy station stamp — drag over floors, walls, rooms, and furniture"><span class="tool-key">⧉</span>Copy</button>
+        <button class="tool-btn" data-tool-room-paste="1" title="Paste copied station stamp — tiles, room settings, zones, docks, and fresh furniture"><span class="tool-key">▣</span>Paste</button>
         <button class="tool-btn" data-tool-tile="floor" title="${TRUSS_EXPANSION_EXPERIMENT ? 'Floor (1) - paint over truss to seal a pressurized expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
         ${TRUSS_EXPANSION_EXPERIMENT ? '<button class="tool-btn" data-tool-tile="truss" title="Truss - fast EVA scaffold. Paint Floor over it to seal the station expansion."><span class="tool-key">.</span>Truss</button>' : ''}
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
@@ -445,13 +454,17 @@ app.innerHTML = `
         <button id="fire-crew">Fire -1 Crew (+5c)</button>
       </div>
       <div class="button-row">
-        <button id="buy-small">Buy +25 Materials (20c)</button>
-        <button id="sell-small">Sell -25 Materials (+10c)</button>
+        <button id="buy-small">Buy +25 Supplies (20c)</button>
+        <button id="sell-small">Sell -25 Supplies (+10c)</button>
       </div>
       <div class="button-row">
-        <button id="buy-large">Buy +80 Materials (55c)</button>
-        <button id="sell-large">Sell -80 Materials (+28c)</button>
+        <button id="buy-large">Buy +80 Supplies (55c)</button>
+        <button id="sell-large">Sell -80 Supplies (+28c)</button>
       </div>
+      <div class="row compact list-row"><span>Auto Supplies</span><span class="value"><label><input id="material-auto-import" type="checkbox" /> Enabled</label></span></div>
+      <div class="row compact list-row"><span>Supply Target</span><span class="value"><input id="material-target-stock" type="number" min="0" max="500" step="5" value="120" /></span></div>
+      <div class="row compact list-row"><span>Import Batch</span><span class="value"><input id="material-import-batch" type="number" min="1" max="160" step="1" value="25" /></span></div>
+      <small id="material-import-status" class="market-status">Auto import: target met</small>
       <div class="button-row">
         <button id="buy-food-small">Buy +20 Raw Food (12c)</button>
         <button id="sell-food-small">Sell -20 Raw Food (+6c)</button>
@@ -567,8 +580,8 @@ app.innerHTML = `
           <small id="ops-modal-crew-why" class="ops-note">Crew: no blockers</small>
           <div id="ops-modal-shifts" class="metric-list" data-metric-title="Rest">Rest shifts</div>
           <div id="ops-modal-crew-needs" class="metric-list" data-metric-title="Needs">Crew needs</div>
-          <div id="ops-modal-staffing" class="metric-list" data-metric-title="Staffing">Critical staffing</div>
-          <div id="ops-modal-duty-transit" class="metric-list" data-metric-title="Transit">Duty transit</div>
+          <div id="ops-modal-staffing" class="metric-list" data-metric-title="Room Ops">Room operations</div>
+          <div id="ops-modal-duty-transit" class="metric-list" data-metric-title="Dispatch">Job dispatch</div>
         </section>
         <section class="ops-modal-section ops-tab-panel active" data-ops-panel="jobs">
           <div class="section-title">Jobs</div>
@@ -608,6 +621,7 @@ app.innerHTML = `
           </div>
           <div id="ops-modal-demand" class="metric-list" data-metric-title="Demand">Demand</div>
           <div id="ops-modal-archetypes" class="metric-list" data-metric-title="Visitor Mix">Visitors</div>
+          <div id="ops-modal-resident-conversion" class="metric-list" data-metric-title="Resident Conversion">Resident conversion</div>
           <div id="ops-modal-resident-needs" class="metric-list" data-metric-title="Residents">Resident needs</div>
           <div id="ops-modal-ships" class="metric-list" data-metric-title="Ships / Min">Ships</div>
           <div id="ops-modal-walk" class="metric-list" data-metric-title="Movement">Walk</div>
@@ -730,7 +744,7 @@ const canvasEl = document.querySelector<HTMLCanvasElement>('#game');
 if (!canvasEl) throw new Error('Canvas not found');
 const canvas: HTMLCanvasElement = canvasEl;
 
-const ctxMaybe = canvas.getContext('2d');
+const ctxMaybe = canvas.getContext('2d', { alpha: false, desynchronized: true });
 if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
@@ -799,12 +813,13 @@ let mapOffsetX = 0;
 let mapOffsetY = 0;
 
 function applyCanvasSize(): void {
-  const worldWidthPx = state.width * TILE_SIZE;
-  const worldHeightPx = state.height * TILE_SIZE;
-  canvas.width = worldWidthPx;
-  canvas.height = worldHeightPx;
-  canvas.style.width = `${Math.round(worldWidthPx * zoom)}px`;
-  canvas.style.height = `${Math.round(worldHeightPx * zoom)}px`;
+  const dpr = window.devicePixelRatio || 1;
+  const viewportWidth = Math.max(1, Math.ceil(gameWrap.clientWidth));
+  const viewportHeight = Math.max(1, Math.ceil(gameWrap.clientHeight));
+  canvas.width = Math.ceil(viewportWidth * dpr);
+  canvas.height = Math.ceil(viewportHeight * dpr);
+  canvas.style.width = `${viewportWidth}px`;
+  canvas.style.height = `${viewportHeight}px`;
 }
 applyCanvasSize();
 
@@ -1042,9 +1057,12 @@ const visitorFeelingsEl = document.querySelector<HTMLElement>('#visitor-feelings
 const crewEl = document.querySelector<HTMLSpanElement>('#crew')!;
 const opsTrafficEl = document.querySelector<HTMLSpanElement>('#ops-traffic')!;
 const opsEl = document.querySelector<HTMLSpanElement>('#ops')!;
+const opsResidentsEl = document.querySelector<HTMLSpanElement>('#ops-residents')!;
 const opsExtraEl = document.querySelector<HTMLElement>('#ops-extra')!;
 const moraleReasonsEl = document.querySelector<HTMLElement>('#morale-reasons')!;
 const ratingReasonsEl = document.querySelector<HTMLElement>('#rating-reasons')!;
+const healthRatingEl = document.querySelector<HTMLElement>('#health-rating')!;
+const residentConversionSummaryEl = document.querySelector<HTMLElement>('#resident-conversion-summary')!;
 const crewBreakdownEl = document.querySelector<HTMLElement>('#crew-breakdown')!;
 const crewShiftsEl = document.querySelector<HTMLElement>('#crew-shifts')!;
 const crewLockoutsEl = document.querySelector<HTMLElement>('#crew-lockouts')!;
@@ -1056,6 +1074,7 @@ const tradeStatusEl = document.querySelector<HTMLElement>('#trade-status')!;
 const demandStripEl = document.querySelector<HTMLElement>('#demand-strip')!;
 const archetypeStripEl = document.querySelector<HTMLElement>('#archetype-strip')!;
 const shipTypeStripEl = document.querySelector<HTMLElement>('#ship-type-strip')!;
+const perfStatsEl = document.querySelector<HTMLElement>('#perf-stats')!;
 const questBarEl = document.querySelector<HTMLElement>('#quest-bar')!;
 const openProgressionModalBtn = document.querySelector<HTMLButtonElement>('#open-progression-modal')!;
 const progressionModal = document.querySelector<HTMLDivElement>('#progression-modal')!;
@@ -1100,6 +1119,10 @@ const sellFoodSmallBtn = document.querySelector<HTMLButtonElement>('#sell-food-s
 const sellFoodLargeBtn = document.querySelector<HTMLButtonElement>('#sell-food-large')!;
 const marketCrewEl = document.querySelector<HTMLSpanElement>('#market-crew')!;
 const marketRateEl = document.querySelector<HTMLSpanElement>('#market-rate')!;
+const materialAutoImportInput = document.querySelector<HTMLInputElement>('#material-auto-import')!;
+const materialTargetStockInput = document.querySelector<HTMLInputElement>('#material-target-stock')!;
+const materialImportBatchInput = document.querySelector<HTMLInputElement>('#material-import-batch')!;
+const materialImportStatusEl = document.querySelector<HTMLElement>('#material-import-status')!;
 const openSaveModalBtn = document.querySelector<HTMLButtonElement>('#open-save-modal')!;
 const cameraResetBtn = document.querySelector<HTMLButtonElement>('#camera-reset')!;
 const saveModal = document.querySelector<HTMLDivElement>('#save-modal')!;
@@ -1160,6 +1183,7 @@ const opsModalTrafficEl = document.querySelector<HTMLElement>('#ops-modal-traffi
 const opsModalBerthsEl = document.querySelector<HTMLElement>('#ops-modal-berths')!;
 const opsModalDemandEl = document.querySelector<HTMLElement>('#ops-modal-demand')!;
 const opsModalArchetypesEl = document.querySelector<HTMLElement>('#ops-modal-archetypes')!;
+const opsModalResidentConversionEl = document.querySelector<HTMLElement>('#ops-modal-resident-conversion')!;
 const opsModalResidentNeedsEl = document.querySelector<HTMLElement>('#ops-modal-resident-needs')!;
 const opsModalShipsEl = document.querySelector<HTMLElement>('#ops-modal-ships')!;
 const opsModalWalkEl = document.querySelector<HTMLElement>('#ops-modal-walk')!;
@@ -1257,6 +1281,7 @@ const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
 const hudMaterialsEl = document.querySelector<HTMLElement>('#hud-materials')!;
 const hudWaterEl = document.querySelector<HTMLElement>('#hud-water')!;
 const hudFoodEl = document.querySelector<HTMLElement>('#hud-food')!;
+const hudRatingEl = document.querySelector<HTMLElement>('#hud-rating')!;
 const hudMoraleEl = document.querySelector<HTMLElement>('#hud-morale')!;
 const hudClockEl = document.querySelector<HTMLElement>('#hud-clock')!;
 const alertListEl = document.querySelector<HTMLElement>('#alert-list')!;
@@ -1357,7 +1382,7 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
     citizenNeeds: ['Core survival loop: hunger, rest, hygiene'],
     visitorNeeds: ['Visitors can be served by the starting cafeteria while guest services are locked'],
     ships: ['Tourist', 'Trader'],
-    systems: ['Baseline staffing, food chain, pressure management, and starter material intake']
+    systems: ['Room operations, food chain, pressure management, and starter supply intake']
   },
   1: {
     name: 'Guest Services',
@@ -1370,7 +1395,7 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
   },
   2: {
     name: 'Production Logistics',
-    theme: 'Scale material storage and convert raw materials into trade goods.',
+    theme: 'Scale supply storage and convert supplies into trade goods.',
     buildings: ['Workshop', 'Storage'],
     citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
     visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
@@ -1465,6 +1490,21 @@ function selectModuleTool(module: ModuleType): void {
   toolLockMessage = '';
 }
 
+function selectRoomCopyTool(): void {
+  currentTool = { kind: 'copy-room' };
+  toolLockMessage = 'Drag over station tiles to copy a stamp.';
+}
+
+function selectRoomPasteTool(): void {
+  if (!roomClipboard) {
+    currentTool = { kind: 'paste-room' };
+    toolLockMessage = 'Copy a station stamp first.';
+    return;
+  }
+  currentTool = { kind: 'paste-room', pasteStamp: roomClipboard };
+  toolLockMessage = `Paste ${roomClipboard.label}`;
+}
+
 /**
  * Extract the display name from a legend item's rendered text. Parses
  * things like "Cafeteria (C) C" → "Cafeteria". Avoids adding a separate
@@ -1520,7 +1560,7 @@ function refreshUnlockLegendAndHotkeys(): void {
 /**
  * Refresh the persistent top-of-canvas HUD status strip.
  *
- * Shows Power / Oxygen / Credits / Crew / Materials — the high-frequency
+ * Shows Power / Oxygen / Credits / Crew / Supplies — the high-frequency
  * status numbers that should always remain visible.
  * awfml wanted at-a-glance without cracking the sidebar (Starlight-Station
  * dashboard vibe). Pulled from the same state surfaces the sidebar panels
@@ -1532,7 +1572,7 @@ function refreshUnlockLegendAndHotkeys(): void {
  *   - Oxygen: `airQuality` (0-100 life-support %, the sim's "oxygen").
  *   - Credits: `state.metrics.credits` (integer station bank).
  *   - Crew: `state.crew.total` (hired head-count).
- *   - Materials: `state.metrics.materials` (construction fuel).
+ *   - Supplies: `state.metrics.materials` (operational rawMaterial stock).
  *
  * Uses simple red/yellow/green thresholds matching the existing sidebar
  * treatments so the HUD reads the same at a glance.
@@ -1555,6 +1595,8 @@ function refreshHudStatus(): void {
   hudMaterialsEl.textContent = String(Math.round(state.metrics.materials));
   hudWaterEl.textContent = String(Math.round(state.metrics.waterStock));
   hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
+  hudRatingEl.textContent = String(Math.round(state.metrics.stationRating));
+  hudRatingEl.style.color = ratingToneColor();
   hudMoraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
   hudMoraleEl.style.color =
     state.metrics.morale > 65 ? 'var(--ok)' : state.metrics.morale > 40 ? 'var(--warn)' : 'var(--danger)';
@@ -1701,7 +1743,7 @@ const JOB_STALL_LABELS: Record<JobStallReason, string> = {
 const ITEM_LABELS: Record<ItemType, string> = {
   rawMeal: 'Raw food',
   meal: 'Meals',
-  rawMaterial: 'Materials',
+  rawMaterial: 'Supplies',
   tradeGood: 'Trade goods',
   body: 'Bodies'
 };
@@ -1770,6 +1812,47 @@ function ratingWhyText(): string {
   return `Station rating drivers: ${drivers.join('; ') || 'none'}`;
 }
 
+function ratingToneColor(): string {
+  return state.metrics.stationRating > 70 ? 'var(--ok)' : state.metrics.stationRating > 40 ? 'var(--warn)' : 'var(--danger)';
+}
+
+function ratingSummaryText(): string {
+  const trend = state.metrics.stationRatingTrendPerMin;
+  return `${Math.round(state.metrics.stationRating)} (${trend >= 0 ? '+' : ''}${trend.toFixed(1)}/min)`;
+}
+
+function residentConversionTone(): 'default' | 'warn' | 'danger' | 'ok' {
+  if (state.metrics.residentsCount > 0 || state.metrics.residentConversionLastResult === 'converted') return 'ok';
+  if (state.metrics.residentPrivateBedsTotal <= 0 || state.metrics.residentBerthsTotal <= 0) return 'danger';
+  if (state.metrics.residentConversionLastResult.startsWith('blocked:')) return 'warn';
+  if (state.metrics.residentConversionAttempts > 0 && state.metrics.residentConversionSuccesses <= 0) return 'warn';
+  return 'default';
+}
+
+function residentConversionStatusText(compact = false): string {
+  const result = state.metrics.residentConversionLastResult || 'waiting for eligible visitor exit';
+  const chance =
+    state.metrics.residentConversionLastChancePct > 0
+      ? ` | last chance ${state.metrics.residentConversionLastChancePct.toFixed(1)}%`
+      : '';
+  const ship =
+    state.metrics.residentConversionLastShip && state.metrics.residentConversionLastShip !== 'none'
+      ? ` | last ship ${state.metrics.residentConversionLastShip}`
+      : '';
+  const setup =
+    `beds ${state.metrics.residentPrivateBedsTotal} | berth ${state.metrics.residentBerthsTotal} | rating ${Math.round(state.metrics.stationRating)}`;
+  if (compact) {
+    return `${state.metrics.residentsCount} | ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${result}`;
+  }
+  if (state.metrics.residentPrivateBedsTotal <= 0) {
+    return `Residents blocked: no private resident beds | ${setup}`;
+  }
+  if (state.metrics.residentBerthsTotal <= 0) {
+    return `Residents blocked: no residential berth | ${setup}`;
+  }
+  return `Residents ${state.metrics.residentsCount} | convert ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${result}${chance}${ship} | ${setup}`;
+}
+
 function crewOpsSummaryText(compact = false): string {
   const logisticsLabel = compact ? 'Log' : 'Logistics';
   const restingLabel = compact ? 'Rest' : 'Resting';
@@ -1794,11 +1877,9 @@ function jobsSummaryText(): string {
 }
 
 function criticalStaffingText(): string {
-  return `Critical staffing R ${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor} | ` +
-    `LS ${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport} | ` +
-    `HY ${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics} | ` +
-    `KI ${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen} | ` +
-    `CF ${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}`;
+  return `Room ops Caf ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | ` +
+    `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Hydro ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
+    `LS ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Reactor ${state.ops.reactorsActive}/${state.ops.reactorsTotal}`;
 }
 
 function idleReasonsText(): string {
@@ -1872,7 +1953,6 @@ function tradeStatusText(): string {
 
 function foodChainHintText(): string {
   const foodBlocked =
-    state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:')) ??
     state.metrics.topRoomWarnings.find((w) => w.startsWith('food chain blocked:'));
   return `Food chain: ${foodBlocked ?? 'stable'}`;
 }
@@ -1898,7 +1978,7 @@ function refreshOpsModal(): void {
         button.textContent = `Food ${Math.round(state.metrics.mealStock)}`;
         break;
       case 'traffic':
-        button.textContent = `Traffic ${state.metrics.visitorsCount}`;
+        button.textContent = `Traffic ${state.metrics.visitorsCount}/${state.metrics.residentsCount}`;
         break;
     }
   }
@@ -1924,18 +2004,18 @@ function refreshOpsModal(): void {
     { label: 'Hygiene Driver', value: state.metrics.crewMoraleDrivers.find((d) => d.startsWith('hygiene'))?.replace('hygiene ', '') ?? '0.0' },
   ]);
   setMetricList(opsModalStaffingEl, [
-    { label: 'Reactor', value: `${state.metrics.activeCriticalStaff.reactor}/${state.metrics.assignedCriticalStaff.reactor}/${state.metrics.requiredCriticalStaff.reactor}` },
-    { label: 'Life Support', value: `${state.metrics.activeCriticalStaff.lifeSupport}/${state.metrics.assignedCriticalStaff.lifeSupport}/${state.metrics.requiredCriticalStaff.lifeSupport}` },
-    { label: 'Hydro', value: `${state.metrics.activeCriticalStaff.hydroponics}/${state.metrics.assignedCriticalStaff.hydroponics}/${state.metrics.requiredCriticalStaff.hydroponics}` },
-    { label: 'Kitchen', value: `${state.metrics.activeCriticalStaff.kitchen}/${state.metrics.assignedCriticalStaff.kitchen}/${state.metrics.requiredCriticalStaff.kitchen}` },
-    { label: 'Cafeteria', value: `${state.metrics.activeCriticalStaff.cafeteria}/${state.metrics.assignedCriticalStaff.cafeteria}/${state.metrics.requiredCriticalStaff.cafeteria}` },
+    { label: 'Reactor', value: `${state.ops.reactorsActive}/${state.ops.reactorsTotal}` },
+    { label: 'Life Support', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
+    { label: 'Hydro', value: `${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal}` },
+    { label: 'Kitchen', value: `${state.ops.kitchenActive}/${state.ops.kitchenTotal}` },
+    { label: 'Cafeteria', value: `${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal}` },
   ]);
   setMetricList(opsModalDutyTransitEl, [
-    { label: 'Reactor', value: state.metrics.staffInTransitBySystem.reactor },
-    { label: 'Life Support', value: state.metrics.staffInTransitBySystem.lifeSupport },
-    { label: 'Hydro', value: state.metrics.staffInTransitBySystem.hydroponics },
-    { label: 'Kitchen', value: state.metrics.staffInTransitBySystem.kitchen },
-    { label: 'Cafeteria', value: state.metrics.staffInTransitBySystem.cafeteria },
+    { label: 'Dispatch Slots', value: state.metrics.logisticsDispatchSlots },
+    { label: 'Pressure', value: state.metrics.logisticsPressure.toFixed(2) },
+    { label: 'On Jobs', value: state.metrics.crewOnLogisticsJobs },
+    { label: 'Pending', value: state.metrics.pendingJobs },
+    { label: 'Top Backlog', value: state.metrics.topBacklogType },
   ]);
   setMetricList(opsModalJobsEl, [
     { label: 'Pending', value: state.metrics.pendingJobs, tone: state.metrics.pendingJobs > 20 ? 'warn' : 'default' },
@@ -1943,10 +2023,12 @@ function refreshOpsModal(): void {
     { label: 'Expired', value: state.metrics.expiredJobs, tone: state.metrics.expiredJobs > 0 ? 'danger' : 'default' },
     { label: 'Done', value: state.metrics.completedJobs },
     { label: 'Backlog', value: state.metrics.topBacklogType },
+    { label: 'Reservations', value: state.metrics.activeReservations, tone: state.metrics.reservationFailures > 0 ? 'warn' : 'default' },
   ]);
   setDetailList(opsModalPendingWorkEl, [
     { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'pending') },
     { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'pending') },
+    { label: 'Cook jobs', value: statusBreakdownText(state.metrics.jobCountsByType.cook, 'pending') },
     { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'pending') },
     { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'pending') },
     { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'pending') },
@@ -1957,6 +2039,8 @@ function refreshOpsModal(): void {
     { label: 'Avg Age', value: `${state.metrics.avgJobAgeSec.toFixed(1)}s` },
     { label: 'Oldest', value: `${state.metrics.oldestPendingJobAgeSec.toFixed(1)}s`, tone: state.metrics.oldestPendingJobAgeSec > 30 ? 'warn' : 'default' },
     { label: 'Delivery', value: `${state.metrics.deliveryLatencySec.toFixed(1)}s` },
+    { label: 'Batch', value: state.metrics.logisticsAverageBatchSize.toFixed(1) },
+    { label: 'Blocked', value: state.metrics.logisticsBlockedReason, tone: state.metrics.logisticsBlockedReason === 'none' ? 'default' : 'warn' },
   ]);
   setMetricList(opsModalStallsEl, [
     { label: 'Path', value: state.metrics.stalledJobsByReason.stalled_path_blocked, tone: state.metrics.stalledJobsByReason.stalled_path_blocked > 0 ? 'warn' : 'default' },
@@ -1974,6 +2058,7 @@ function refreshOpsModal(): void {
   setDetailList(opsModalExpiredWorkEl, [
     { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'expired'), tone: state.metrics.jobCountsByType.deliver.expired > 0 ? 'warn' : 'default' },
     { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'expired'), tone: state.metrics.jobCountsByType.pickup.expired > 0 ? 'warn' : 'default' },
+    { label: 'Cook jobs', value: statusBreakdownText(state.metrics.jobCountsByType.cook, 'expired'), tone: state.metrics.jobCountsByType.cook.expired > 0 ? 'warn' : 'default' },
     { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'expired') },
     { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'expired') },
     { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'expired') },
@@ -1991,6 +2076,7 @@ function refreshOpsModal(): void {
     { label: 'Drops', value: `${state.metrics.criticalStaffDropsPerMin.toFixed(1)}/m`, tone: state.metrics.criticalStaffDropsPerMin > 0 ? 'warn' : 'default' },
     { label: 'Slots', value: state.metrics.logisticsDispatchSlots },
     { label: 'Pressure', value: `${(state.metrics.logisticsPressure * 100).toFixed(0)}%`, tone: state.metrics.logisticsPressure > 0.85 ? 'warn' : 'default' },
+    { label: 'Res Fail', value: state.metrics.reservationFailures, tone: state.metrics.reservationFailures > 0 ? 'warn' : 'default' },
   ]);
   opsModalJobWhyEl.textContent = jobWhyText();
   setMetricList(opsModalRoomHealthEl, [
@@ -2087,6 +2173,16 @@ function refreshOpsModal(): void {
     { label: 'Lounger', value: state.metrics.visitorsByArchetype.lounger },
     { label: 'Rusher', value: state.metrics.visitorsByArchetype.rusher },
   ]);
+  setMetricList(opsModalResidentConversionEl, [
+    { label: 'Residents', value: state.metrics.residentsCount, tone: state.metrics.residentsCount > 0 ? 'ok' : 'default' },
+    { label: 'Attempts', value: `${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts}`, tone: state.metrics.residentConversionAttempts > 0 && state.metrics.residentConversionSuccesses <= 0 ? 'warn' : 'default' },
+    { label: 'Last', value: state.metrics.residentConversionLastResult || 'waiting' },
+    { label: 'Chance', value: state.metrics.residentConversionLastChancePct > 0 ? `${state.metrics.residentConversionLastChancePct.toFixed(1)}%` : 'n/a', tone: state.metrics.residentConversionLastChancePct > 0 && state.metrics.residentConversionLastChancePct < 3 ? 'warn' : 'default' },
+    { label: 'Last Ship', value: state.metrics.residentConversionLastShip || 'none' },
+    { label: 'Private Beds', value: state.metrics.residentPrivateBedsTotal, tone: state.metrics.residentPrivateBedsTotal <= 0 ? 'danger' : 'ok' },
+    { label: 'Residential Berths', value: state.metrics.residentBerthsTotal, tone: state.metrics.residentBerthsTotal <= 0 ? 'danger' : 'ok' },
+    { label: 'Rating', value: Math.round(state.metrics.stationRating), tone: state.metrics.stationRating < 40 ? 'danger' : state.metrics.stationRating < 70 ? 'warn' : 'ok' },
+  ]);
   setMetricList(opsModalResidentNeedsEl, [
     { label: 'Residents', value: state.metrics.residentsCount },
     { label: 'Hunger', value: `${state.metrics.residentHungerAvg.toFixed(0)}%`, tone: state.metrics.residentHungerAvg > 0 && state.metrics.residentHungerAvg < 45 ? 'warn' : 'default' },
@@ -2112,7 +2208,7 @@ function refreshOpsModal(): void {
     { label: 'Queue Timeout', value: `${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.queueTimeout > 0 ? 'danger' : 'default' },
     { label: 'No Dock', value: `${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.noEligibleDock > 0 ? 'warn' : 'default' },
     { label: 'Service Fail', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
-    { label: 'Long Walks', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
+    { label: 'Long Routes', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
     { label: 'Bad Routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
     { label: 'Environment', value: `${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.environment > 0 ? 'warn' : 'default' },
   ]);
@@ -2155,8 +2251,6 @@ function refreshAlertPanel(): void {
   if (state.metrics.shipsQueuedNoCapabilityCount > 0 && state.metrics.shipsQueuedNoCapabilityHint) {
     alerts.push({ tone: 'warn', text: state.metrics.shipsQueuedNoCapabilityHint });
   }
-  const criticalWarning = state.metrics.topRoomWarnings.find((w) => w.startsWith('critical staffing:'));
-  if (criticalWarning) alerts.push({ tone: 'warn', text: criticalWarning.replace('critical staffing: ', 'Staffing: ') });
   if (alerts.length === 0) {
     alertListEl.textContent = 'No active alerts';
     alertListEl.classList.add('is-clear');
@@ -2235,7 +2329,7 @@ function formatCrewSelectionHtml(crewId: number): string {
           : inspector.leisure
             ? 'Leisure'
             : inspector.role;
-  const systemLabel = inspector.assignedSystem ?? inspector.lastSystem ?? 'unassigned';
+  const workLabel = inspector.activeJobId !== null ? `job #${inspector.activeJobId}` : inspector.currentAction;
 
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
   const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
@@ -2245,7 +2339,7 @@ function formatCrewSelectionHtml(crewId: number): string {
   const parts: string[] = [];
   parts.push(`<div class="agent-card__head">
     <span class="agent-card__title">Crew #${inspector.id}</span>
-    <span class="agent-card__role">${escapeHtml(roleLabel)} · ${escapeHtml(systemLabel)}</span>
+    <span class="agent-card__role">${escapeHtml(roleLabel)} · ${escapeHtml(workLabel)}</span>
   </div>`);
   parts.push(`<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`);
   if (inspector.actionReason) {
@@ -2275,6 +2369,10 @@ function formatCrewSelectionHtml(crewId: number): string {
     }
   } else if (inspector.idleReason !== 'idle_available') {
     parts.push(`<div class="agent-card__idle">Idle: ${escapeHtml(inspector.idleReason.replace('idle_', ''))}</div>`);
+  }
+  parts.push(`<div class="agent-card__route">Target ${escapeHtml(inspector.providerTarget ?? 'none')} · reservation ${escapeHtml(inspector.reservationSummary)}</div>`);
+  if (inspector.blockedReason) {
+    parts.push(`<div class="agent-card__warn">Blocked: ${escapeHtml(inspector.blockedReason)}</div>`);
   }
 
   if (crew?.lastRouteExposure && crew.lastRouteExposure.distance > 0 && inspector.activeJobId !== null) {
@@ -2307,11 +2405,14 @@ function formatVisitorInspectorHtml(visitorId: number): string {
       <span>State</span><strong>${escapeHtml(inspector.state)}</strong>
       <span>Desire</span><strong>${escapeHtml(inspector.desire)}</strong>
       <span>Target</span><strong>${escapeHtml(formatTileLabel(inspector.targetTile))}</strong>
+      <span>Provider</span><strong>${escapeHtml(inspector.providerTarget ?? 'none')}</strong>
+      <span>Reservation</span><strong>${escapeHtml(inspector.reservationSummary)}</strong>
       <span>Path</span><strong>${inspector.pathLength} steps</strong>
       <span>Health</span><strong style="color:${healthColor(inspector.healthState)}">${escapeHtml(inspector.healthState)}</strong>
       <span>Patience</span><strong>${inspector.patience.toFixed(1)}</strong>
     </div>`,
-    `<div class="agent-card__route">Meal ${inspector.servedMeal ? 'served' : 'not served'} · carrying ${inspector.carryingMeal ? 'yes' : 'no'} · serving ${escapeHtml(formatTileLabel(inspector.reservedServingTile))}</div>`
+    `<div class="agent-card__route">Meal ${inspector.servedMeal ? 'served' : 'not served'} · carrying ${inspector.carryingMeal ? 'yes' : 'no'} · serving ${escapeHtml(formatTileLabel(inspector.reservedServingTile))}</div>`,
+    inspector.blockedReason ? `<div class="agent-card__warn">Blocked: ${escapeHtml(inspector.blockedReason)}</div>` : ''
   ].join('');
 }
 
@@ -2331,11 +2432,14 @@ function formatResidentInspectorHtml(residentId: number): string {
     `<div class="side-inspector-grid">
       <span>Desire</span><strong>${escapeHtml(inspector.desire)}</strong>
       <span>Target</span><strong>${escapeHtml(formatTileLabel(inspector.targetTile))}</strong>
+      <span>Provider</span><strong>${escapeHtml(inspector.providerTarget ?? 'none')}</strong>
+      <span>Reservation</span><strong>${escapeHtml(inspector.reservationSummary)}</strong>
       <span>Path</span><strong>${inspector.pathLength} steps</strong>
       <span>Stress</span><strong>${inspector.stress.toFixed(1)}</strong>
       <span>Satisfaction</span><strong>${inspector.satisfaction.toFixed(1)}</strong>
       <span>Leave</span><strong>${inspector.leaveIntent.toFixed(1)}</strong>
-    </div>`
+    </div>`,
+    inspector.blockedReason ? `<div class="agent-card__warn">Blocked: ${escapeHtml(inspector.blockedReason)}</div>` : ''
   ].join('');
 }
 
@@ -2378,7 +2482,10 @@ function refreshSelectionSummary(): void {
         : 'Selected resident is no longer available.';
       return;
     }
-    selectionSummaryEl.innerHTML = formatCrewSelectionHtml(selectedAgent.id);
+    const inspector = getCrewInspectorById(state, selectedAgent.id);
+    selectionSummaryEl.textContent = inspector
+      ? `Crew #${inspector.id}: ${inspector.state} | ${inspector.currentAction} | ${inspector.healthState}`
+      : 'Selected crew is no longer available.';
     return;
   }
   if (selectedDockId !== null) {
@@ -2724,8 +2831,40 @@ type SaveStore = {
 };
 
 type SelectedAgent = { kind: 'visitor' | 'resident' | 'crew'; id: number };
+type RoomStampCell = {
+  dx: number;
+  dy: number;
+  tile: TileType;
+  room: RoomType;
+  zone: ZoneType;
+  housingPolicy: HousingPolicy;
+};
+type RoomStampModule = {
+  dx: number;
+  dy: number;
+  type: ModuleType;
+  rotation: ModuleRotation;
+  tileOffsets: Array<{ dx: number; dy: number }>;
+};
+type RoomStampDock = {
+  dx: number;
+  dy: number;
+  purpose: DockPurpose;
+  facing: SpaceLane;
+  allowedShipTypes: ShipType[];
+  allowedShipSizes: ShipSize[];
+};
+type RoomClipboard = {
+  width: number;
+  height: number;
+  cells: RoomStampCell[];
+  modules: RoomStampModule[];
+  docks: RoomStampDock[];
+  label: string;
+};
 
 let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
+let roomClipboard: RoomClipboard | null = null;
 let selectedDockId: number | null = null;
 let selectedRoomTile: number | null = null;
 let selectedAgent: SelectedAgent | null = null;
@@ -2756,9 +2895,9 @@ function updateMarketRates(): void {
 
   market.hireCost = Math.max(8, Math.round(14 * buyMultiplier));
   market.fireRefund = Math.max(1, Math.round(market.hireCost * 0.4));
-  market.buyMat25Cost = Math.max(8, Math.round(18 * buyMultiplier));
+  market.buyMat25Cost = quoteMaterialImportCost(state, 25);
   market.sellMat25Gain = Math.max(3, Math.round(20 * sellMultiplier));
-  market.buyMat80Cost = Math.max(20, Math.round(50 * buyMultiplier));
+  market.buyMat80Cost = quoteMaterialImportCost(state, 80);
   market.sellMat80Gain = Math.max(8, Math.round(55 * sellMultiplier));
   market.buyFood20Cost = Math.max(6, Math.round(11 * buyMultiplier));
   market.sellFood20Gain = Math.max(2, Math.round(12 * sellMultiplier));
@@ -2769,15 +2908,23 @@ function updateMarketRates(): void {
 function refreshMarketUi(): void {
   hireCrewBtn.textContent = `Hire +1 Crew (${market.hireCost}c)`;
   fireCrewBtn.textContent = `Fire -1 Crew (+${market.fireRefund}c)`;
-  buySmallBtn.textContent = `Buy +25 Materials (${market.buyMat25Cost}c)`;
-  sellSmallBtn.textContent = `Sell -25 Materials (+${market.sellMat25Gain}c)`;
-  buyLargeBtn.textContent = `Buy +80 Materials (${market.buyMat80Cost}c)`;
-  sellLargeBtn.textContent = `Sell -80 Materials (+${market.sellMat80Gain}c)`;
+  buySmallBtn.textContent = `Buy +25 Supplies (${market.buyMat25Cost}c)`;
+  sellSmallBtn.textContent = `Sell -25 Supplies (+${market.sellMat25Gain}c)`;
+  buyLargeBtn.textContent = `Buy +80 Supplies (${market.buyMat80Cost}c)`;
+  sellLargeBtn.textContent = `Sell -80 Supplies (+${market.sellMat80Gain}c)`;
   buyFoodSmallBtn.textContent = `Buy +20 Raw Food (${market.buyFood20Cost}c)`;
   sellFoodSmallBtn.textContent = `Sell -20 Raw Food (+${market.sellFood20Gain}c)`;
   buyFoodLargeBtn.textContent = `Buy +60 Raw Food (${market.buyFood60Cost}c)`;
   sellFoodLargeBtn.textContent = `Sell -60 Raw Food (+${market.sellFood60Gain}c)`;
   marketCrewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
+  materialAutoImportInput.checked = state.controls.materialAutoImportEnabled;
+  materialTargetStockInput.value = String(Math.round(state.controls.materialTargetStock));
+  materialImportBatchInput.value = String(Math.round(state.controls.materialImportBatchSize));
+  materialImportStatusEl.textContent = `Auto import: ${state.metrics.materialAutoImportStatus} | ` +
+    `${Math.round(state.metrics.materials)}/${Math.round(state.controls.materialTargetStock)} supplies` +
+    (state.metrics.materialAutoImportLastAdded > 0
+      ? ` | last +${state.metrics.materialAutoImportLastAdded.toFixed(1)} for ${state.metrics.materialAutoImportCreditCost}c`
+      : '');
 
   const spread = market.buyMat25Cost - market.sellMat25Gain;
   marketRateEl.textContent = spread <= 8 ? 'Favorable' : spread <= 12 ? 'Normal' : 'Tight';
@@ -2787,12 +2934,16 @@ function materialBuyStatusText(
   result: ReturnType<typeof buyMaterialsDetailed>,
   amount: number
 ): string {
-  if (result.ok) return `Purchased +${amount} materials`;
+  if (result.ok) {
+    return result.added < amount
+      ? `Purchased +${result.added.toFixed(1)} supplies (intake full)`
+      : `Purchased +${amount} supplies`;
+  }
   if (result.reason === 'insufficient_credits') return 'Not enough credits';
   if (result.reason === 'no_logistics_stock') {
-    return 'Build Logistics Stock + Intake Pallet to receive materials';
+    return 'Build Logistics Stock + Intake Pallet to receive supplies';
   }
-  return `Need ${result.requiredAmount.toFixed(1)} free intake capacity; add Intake Pallets`;
+  return 'Intake full; add pallets or let haulers move supplies into storage';
 }
 
 function refreshPriorityUi(): void {
@@ -2979,6 +3130,7 @@ function refreshModulePaletteSprites(): void {
 }
 
 function toolPaletteSection(tool: BuildTool): PaletteSection {
+  if (tool.kind === 'copy-room' || tool.kind === 'paste-room') return 'structure';
   if (tool.kind === 'room') return 'rooms';
   if (tool.kind === 'module') return 'modules';
   if (tool.kind === 'zone') return 'overlays';
@@ -2988,6 +3140,8 @@ function toolPaletteSection(tool: BuildTool): PaletteSection {
 function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'tile') return `tile:${tool.tile}`;
   if (tool.kind === 'room') return `room:${tool.room}`;
+  if (tool.kind === 'copy-room') return 'copy-room';
+  if (tool.kind === 'paste-room') return 'paste-room';
   if (tool.kind === 'module') return `module:${tool.module}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
   if (tool.kind === 'cancel-construction') return 'cancel-construction';
@@ -3028,6 +3182,8 @@ function wireToolbar(): void {
       const tileKey = btn.dataset.toolTile;
       const zoneKey = btn.dataset.toolZone;
       const roomKey = btn.dataset.toolRoom;
+      const roomCopyKey = btn.dataset.toolRoomCopy;
+      const roomPasteKey = btn.dataset.toolRoomPaste;
       const moduleKey = btn.dataset.toolModule;
       const rotateKey = btn.dataset.toolRotate;
       const deselectKey = btn.dataset.toolDeselect;
@@ -3047,6 +3203,10 @@ function wireToolbar(): void {
       } else if (roomKey) {
         const room = TOOLBAR_ROOM_MAP[roomKey];
         if (room !== undefined) selectRoomTool(room);
+      } else if (roomCopyKey) {
+        selectRoomCopyTool();
+      } else if (roomPasteKey) {
+        selectRoomPasteTool();
       } else if (moduleKey) {
         const module = TOOLBAR_MODULE_MAP[moduleKey];
         if (module !== undefined) selectModuleTool(module);
@@ -3073,6 +3233,8 @@ function refreshToolbar(): void {
     const tileKey = btn.dataset.toolTile;
     const zoneKey = btn.dataset.toolZone;
     const roomKey = btn.dataset.toolRoom;
+    const roomCopyKey = btn.dataset.toolRoomCopy;
+    const roomPasteKey = btn.dataset.toolRoomPaste;
     const moduleKey = btn.dataset.toolModule;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
     const cancelConstructionKey = btn.dataset.toolCancelConstruction;
@@ -3090,6 +3252,16 @@ function refreshToolbar(): void {
       active = toolKind === 'cancel-construction';
     } else if (btn.dataset.toolClearroom) {
       active = toolKind === 'room' && currentTool.room === RoomType.None;
+    } else if (roomCopyKey) {
+      active = toolKind === 'copy-room';
+    } else if (roomPasteKey) {
+      active = toolKind === 'paste-room';
+      if (!roomClipboard) {
+        locked = true;
+        lockedTitle = 'Copy a station stamp first.';
+      } else {
+        btn.title = `Paste ${roomClipboard.label} — tiles, room settings, zones, docks, and fresh furniture`;
+      }
     } else if (roomKey) {
       const room = TOOLBAR_ROOM_MAP[roomKey];
       if (room !== undefined) {
@@ -3138,37 +3310,71 @@ function clampViewportScroll(): void {
 }
 
 function updateStageLayout(): void {
-  const mapDisplayWidth = canvas.clientWidth;
-  const mapDisplayHeight = canvas.clientHeight;
+  const mapDisplayWidth = state.width * TILE_SIZE * zoom;
+  const mapDisplayHeight = state.height * TILE_SIZE * zoom;
   const padX = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientWidth * 1.4));
   const padY = Math.max(PAN_PADDING_MIN, Math.round(gameWrap.clientHeight * 1.4));
   mapOffsetX = padX;
   mapOffsetY = padY;
   gameStage.style.width = `${Math.round(mapDisplayWidth + padX * 2)}px`;
   gameStage.style.height = `${Math.round(mapDisplayHeight + padY * 2)}px`;
-  canvas.style.left = `${mapOffsetX}px`;
-  canvas.style.top = `${mapOffsetY}px`;
+  syncViewportCanvasPosition();
+}
+
+function mapContentOffsetX(): number {
+  return gameStage.offsetLeft + mapOffsetX;
+}
+
+function mapContentOffsetY(): number {
+  return gameStage.offsetTop + mapOffsetY;
+}
+
+function syncViewportCanvasPosition(): void {
+  canvas.style.left = `${Math.round(gameWrap.scrollLeft)}px`;
+  canvas.style.top = `${Math.round(gameWrap.scrollTop)}px`;
 }
 
 function getViewportCenterWorldPx(): { x: number; y: number } {
   return {
-    x: (gameWrap.scrollLeft + gameWrap.clientWidth * 0.5 - mapOffsetX) / zoom,
-    y: (gameWrap.scrollTop + gameWrap.clientHeight * 0.5 - mapOffsetY) / zoom
+    x: (gameWrap.scrollLeft + gameWrap.clientWidth * 0.5 - mapContentOffsetX()) / zoom,
+    y: (gameWrap.scrollTop + gameWrap.clientHeight * 0.5 - mapContentOffsetY()) / zoom
   };
 }
 
+function getRenderViewport(): RenderViewport {
+  const marginPx = 0;
+  return {
+    x: (gameWrap.scrollLeft - mapContentOffsetX()) / zoom - marginPx,
+    y: (gameWrap.scrollTop - mapContentOffsetY()) / zoom - marginPx,
+    width: gameWrap.clientWidth / zoom + marginPx * 2,
+    height: gameWrap.clientHeight / zoom + marginPx * 2
+  };
+}
+
+function prepareViewportRender(viewport: RenderViewport): void {
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.max(1, Math.ceil(gameWrap.clientWidth * dpr));
+  const targetHeight = Math.max(1, Math.ceil(gameWrap.clientHeight * dpr));
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    canvas.style.width = `${Math.ceil(gameWrap.clientWidth)}px`;
+    canvas.style.height = `${Math.ceil(gameWrap.clientHeight)}px`;
+  }
+  syncViewportCanvasPosition();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(zoom * dpr, 0, 0, zoom * dpr, -viewport.x * zoom * dpr, -viewport.y * zoom * dpr);
+}
+
 function centerViewportOnWorldPx(worldX: number, worldY: number): void {
-  gameWrap.scrollLeft = mapOffsetX + worldX * zoom - gameWrap.clientWidth * 0.5;
-  gameWrap.scrollTop = mapOffsetY + worldY * zoom - gameWrap.clientHeight * 0.5;
+  gameWrap.scrollLeft = mapContentOffsetX() + worldX * zoom - gameWrap.clientWidth * 0.5;
+  gameWrap.scrollTop = mapContentOffsetY() + worldY * zoom - gameWrap.clientHeight * 0.5;
   clampViewportScroll();
 }
 
 function centerViewportOnMapCenter(): void {
-  const mapCenterX = canvas.clientWidth * 0.5;
-  const mapCenterY = canvas.clientHeight * 0.5;
-  gameWrap.scrollLeft = mapOffsetX + mapCenterX - gameWrap.clientWidth * 0.5;
-  gameWrap.scrollTop = mapOffsetY + mapCenterY - gameWrap.clientHeight * 0.5;
-  clampViewportScroll();
+  centerViewportOnWorldPx(state.width * TILE_SIZE * 0.5, state.height * TILE_SIZE * 0.5);
 }
 
 function getStationBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
@@ -3215,13 +3421,13 @@ function fitStationToViewport(): void {
 function setZoomAtViewportPoint(nextZoom: number, viewportX: number, viewportY: number): void {
   const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
   if (Math.abs(clampedZoom - zoom) < 0.0001) return;
-  const worldX = (gameWrap.scrollLeft + viewportX - mapOffsetX) / zoom;
-  const worldY = (gameWrap.scrollTop + viewportY - mapOffsetY) / zoom;
+  const worldX = (gameWrap.scrollLeft + viewportX - mapContentOffsetX()) / zoom;
+  const worldY = (gameWrap.scrollTop + viewportY - mapContentOffsetY()) / zoom;
   zoom = clampedZoom;
   applyCanvasSize();
   updateStageLayout();
-  gameWrap.scrollLeft = mapOffsetX + worldX * zoom - viewportX;
-  gameWrap.scrollTop = mapOffsetY + worldY * zoom - viewportY;
+  gameWrap.scrollLeft = mapContentOffsetX() + worldX * zoom - viewportX;
+  gameWrap.scrollTop = mapContentOffsetY() + worldY * zoom - viewportY;
   clampViewportScroll();
 }
 
@@ -3561,7 +3767,21 @@ function refreshRoomModal(): void {
     roomModalInventoryEl.textContent = 'Inventory: n/a';
     roomModalInventoryEl.style.color = '#8ea2bd';
   }
-  roomModalFlowEl.textContent = `Flow: ${inspector.flowHints?.join(' | ') || 'n/a'}`;
+  const providerText = inspector.providers && inspector.providers.length > 0
+    ? inspector.providers
+        .slice(0, 5)
+        .map((provider) => `${provider.kind} ${provider.status} ${provider.users}/${provider.reserved}/${provider.capacity}${provider.blockedReason ? ` ${provider.blockedReason}` : ''}`)
+        .join(' | ')
+    : 'none';
+  const stockTargetText = inspector.stockTargets && inspector.stockTargets.length > 0
+    ? inspector.stockTargets
+        .slice(0, 4)
+        .map((target) => `${target.itemType} ${target.current.toFixed(1)}+${target.incoming.toFixed(1)}/${target.desired}`)
+        .join(' | ')
+    : 'none';
+  const openJobsText = inspector.openJobs && inspector.openJobs.length > 0 ? inspector.openJobs.join(' | ') : 'none';
+  roomModalFlowEl.textContent =
+    `Flow: ${inspector.flowHints?.join(' | ') || 'n/a'} | Providers: ${providerText} | Stock: ${stockTargetText} | Jobs: ${openJobsText}`;
   if (inspector.routePressure && inspector.routePressure.pressuredTiles > 0) {
     const routeReasons = inspector.routePressure.reasons.length > 0
       ? ` | ${inspector.routePressure.reasons.join(' | ')}`
@@ -3634,25 +3854,22 @@ function refreshRoomModal(): void {
 }
 
 function toTileCoords(clientX: number, clientY: number): { x: number; y: number } | null {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
-  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
-  const canvasX = (clientX - rect.left) * scaleX;
-  const canvasY = (clientY - rect.top) * scaleY;
-  const x = Math.floor(canvasX / TILE_SIZE);
-  const y = Math.floor(canvasY / TILE_SIZE);
+  const world = toWorldCoords(clientX, clientY);
+  if (!world) return null;
+  const x = Math.floor(world.x);
+  const y = Math.floor(world.y);
   if (!inBounds(x, y, state.width, state.height)) return null;
   return { x, y };
 }
 
 function toWorldCoords(clientX: number, clientY: number): { x: number; y: number } | null {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
-  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
-  const canvasX = (clientX - rect.left) * scaleX;
-  const canvasY = (clientY - rect.top) * scaleY;
-  const worldX = canvasX / TILE_SIZE;
-  const worldY = canvasY / TILE_SIZE;
+  const rect = gameWrap.getBoundingClientRect();
+  const viewportX = clientX - rect.left;
+  const viewportY = clientY - rect.top;
+  const worldPxX = (gameWrap.scrollLeft + viewportX - mapContentOffsetX()) / zoom;
+  const worldPxY = (gameWrap.scrollTop + viewportY - mapContentOffsetY()) / zoom;
+  const worldX = worldPxX / TILE_SIZE;
+  const worldY = worldPxY / TILE_SIZE;
   const tileX = Math.floor(worldX);
   const tileY = Math.floor(worldY);
   if (!inBounds(tileX, tileY, state.width, state.height)) return null;
@@ -3755,7 +3972,7 @@ function refreshAgentModal(): boolean {
     agentVisitorDetailsEl.textContent = 'Visitor: n/a';
     agentResidentDetailsEl.textContent = 'Resident: n/a';
     agentCrewDetailsEl.textContent =
-      `Crew: role ${inspector.role} | system ${inspector.assignedSystem ?? 'none'} | last ${inspector.lastSystem ?? 'none'} | ` +
+      `Crew: role ${inspector.role} | action ${inspector.currentAction} | ` +
       `energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | resting ${inspector.resting ? 'yes' : 'no'} | ` +
       `cleaning ${inspector.cleaning ? 'yes' : 'no'} | leisure ${inspector.leisure ? 'yes' : 'no'} | job ${inspector.activeJobId ?? 'none'} | ` +
       `carrying ${inspector.carryingItemType ?? 'none'} ${inspector.carryingAmount.toFixed(1)} | idle ${inspector.idleReason}`;
@@ -3793,6 +4010,209 @@ function isTextInputTarget(target: EventTarget | null): boolean {
   return el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
+function roomStampLabel(stamp: RoomClipboard): string {
+  const rooms = Array.from(new Set(stamp.cells.map((cell) => cell.room).filter((room) => room !== RoomType.None)));
+  const builtCells = stamp.cells.filter((cell) => cell.tile !== TileType.Space).length;
+  const roomText = rooms.length === 0
+    ? `${builtCells} tiles`
+    : rooms.length === 1
+      ? friendlyName(rooms[0])
+      : `${rooms.length} rooms`;
+  const moduleText = stamp.modules.length === 1 ? '1 module' : `${stamp.modules.length} modules`;
+  const dockText = stamp.docks.length > 0 ? `, ${stamp.docks.length} dock config${stamp.docks.length === 1 ? '' : 's'}` : '';
+  return `${roomText} ${stamp.width}x${stamp.height} + ${moduleText}${dockText}`;
+}
+
+function copyRoomStamp(minX: number, minY: number, maxX: number, maxY: number): void {
+  const cells: RoomStampCell[] = [];
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const idx = toIndex(x, y, state.width);
+      cells.push({
+        dx: x - minX,
+        dy: y - minY,
+        tile: state.tiles[idx],
+        room: state.rooms[idx],
+        zone: state.zones[idx],
+        housingPolicy: state.roomHousingPolicies[idx]
+      });
+    }
+  }
+
+  const modules: RoomStampModule[] = [];
+  for (const module of state.moduleInstances) {
+    const origin = fromIndex(module.originTile, state.width);
+    if (origin.x < minX || origin.x > maxX || origin.y < minY || origin.y > maxY) continue;
+    modules.push({
+      dx: origin.x - minX,
+      dy: origin.y - minY,
+      type: module.type,
+      rotation: module.rotation,
+      tileOffsets: module.tiles.map((tile) => {
+        const pos = fromIndex(tile, state.width);
+        return { dx: pos.x - minX, dy: pos.y - minY };
+      })
+    });
+  }
+
+  const docks: RoomStampDock[] = [];
+  for (const dock of state.docks) {
+    const anchor = fromIndex(dock.anchorTile, state.width);
+    if (anchor.x < minX || anchor.x > maxX || anchor.y < minY || anchor.y > maxY) continue;
+    docks.push({
+      dx: anchor.x - minX,
+      dy: anchor.y - minY,
+      purpose: dock.purpose,
+      facing: dock.facing,
+      allowedShipTypes: [...dock.allowedShipTypes],
+      allowedShipSizes: [...dock.allowedShipSizes]
+    });
+  }
+
+  if (cells.every((cell) => cell.tile === TileType.Space) && modules.length === 0) {
+    toolLockMessage = 'Nothing to copy here.';
+    return;
+  }
+
+  const stamp: RoomClipboard = {
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+    cells,
+    modules,
+    docks,
+    label: ''
+  };
+  stamp.label = roomStampLabel(stamp);
+  roomClipboard = stamp;
+  currentTool = { kind: 'paste-room', pasteStamp: stamp };
+  lastPaletteToolKey = '';
+  refreshToolbar();
+  toolLockMessage = `Copied ${stamp.label}. Click a target tile to paste.`;
+}
+
+function pasteRoomStampAt(originX: number, originY: number): void {
+  if (!roomClipboard) {
+    toolLockMessage = 'Copy a station stamp first.';
+    return;
+  }
+
+  const allShipTypes: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+  const allShipSizes: ShipSize[] = ['small', 'medium', 'large'];
+  const core = fromIndex(state.core.serviceTile, state.width);
+  const stampCells = [...roomClipboard.cells].sort((left, right) => {
+    const leftX = originX + left.dx;
+    const leftY = originY + left.dy;
+    const rightX = originX + right.dx;
+    const rightY = originY + right.dy;
+    const leftDist = Math.abs(leftX - core.x) + Math.abs(leftY - core.y);
+    const rightDist = Math.abs(rightX - core.x) + Math.abs(rightY - core.y);
+    return leftDist - rightDist;
+  });
+  let builtTiles = 0;
+  let paintedCells = 0;
+  let placedModules = 0;
+  let skippedCells = 0;
+  let firstFailure = '';
+
+  for (const cell of stampCells) {
+    if (cell.tile === TileType.Space) continue;
+    const x = originX + cell.dx;
+    const y = originY + cell.dy;
+    if (!inBounds(x, y, state.width, state.height)) {
+      skippedCells++;
+      continue;
+    }
+    const idx = toIndex(x, y, state.width);
+    if (state.tiles[idx] === cell.tile) continue;
+    removeModuleAtTile(state, idx);
+    const changed = trySetTileWithCredits(state, idx, cell.tile);
+    if (changed.ok) {
+      builtTiles++;
+      cancelConstructionAtTile(state, idx);
+    } else {
+      firstFailure ||= changed.reason;
+      skippedCells++;
+    }
+  }
+
+  for (const cell of stampCells) {
+    if (cell.tile === TileType.Space) continue;
+    const x = originX + cell.dx;
+    const y = originY + cell.dy;
+    if (!inBounds(x, y, state.width, state.height)) {
+      skippedCells++;
+      continue;
+    }
+    const idx = toIndex(x, y, state.width);
+    if (state.tiles[idx] === TileType.Space) {
+      skippedCells++;
+      continue;
+    }
+    if (cell.room !== RoomType.None && !isRoomUnlocked(state, cell.room)) {
+      firstFailure ||= roomLockedMessage(cell.room);
+      skippedCells++;
+      continue;
+    }
+    setRoom(state, idx, cell.room);
+    setZone(state, idx, cell.zone);
+    setRoomHousingPolicy(state, idx, cell.housingPolicy);
+    paintedCells++;
+  }
+
+  for (const dockConfig of roomClipboard.docks) {
+    const x = originX + dockConfig.dx;
+    const y = originY + dockConfig.dy;
+    if (!inBounds(x, y, state.width, state.height)) {
+      firstFailure ||= 'dock config runs off map';
+      continue;
+    }
+    const dock = getDockByTile(state, toIndex(x, y, state.width));
+    if (!dock) {
+      firstFailure ||= 'dock config had no pasted dock';
+      continue;
+    }
+    setDockPurpose(state, dock.id, dockConfig.purpose);
+    const facingResult = setDockFacing(state, dock.id, dockConfig.facing);
+    if (!facingResult.ok) firstFailure ||= facingResult.reason ?? 'dock facing invalid';
+    for (const shipType of allShipTypes) {
+      setDockAllowedShipType(state, dock.id, shipType, dockConfig.allowedShipTypes.includes(shipType));
+    }
+    for (const shipSize of allShipSizes) {
+      setDockAllowedShipSize(state, dock.id, shipSize, dockConfig.allowedShipSizes.includes(shipSize));
+    }
+  }
+
+  for (const module of roomClipboard.modules) {
+    if (module.type !== ModuleType.None && !isModuleUnlocked(state, module.type)) {
+      firstFailure ||= moduleLockedMessage(module.type);
+      continue;
+    }
+    const x = originX + module.dx;
+    const y = originY + module.dy;
+    if (!inBounds(x, y, state.width, state.height)) {
+      firstFailure ||= 'stamp runs off map';
+      continue;
+    }
+    for (const offset of module.tileOffsets) {
+      const tileX = originX + offset.dx;
+      const tileY = originY + offset.dy;
+      if (inBounds(tileX, tileY, state.width, state.height)) {
+        removeModuleAtTile(state, toIndex(tileX, tileY, state.width));
+      }
+    }
+    const placed = tryPlaceModuleWithCredits(state, module.type, toIndex(x, y, state.width), module.rotation);
+    if (placed.ok) {
+      placedModules++;
+    } else {
+      firstFailure ||= placed.reason ?? 'module placement failed';
+    }
+  }
+
+  const skippedText = skippedCells > 0 ? `, skipped ${skippedCells} cells` : '';
+  const failureText = firstFailure ? ` (${firstFailure})` : '';
+  toolLockMessage = `Pasted ${builtTiles} tiles, ${paintedCells} settings, and ${placedModules}/${roomClipboard.modules.length} modules${skippedText}${failureText}.`;
+}
+
 function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }): void {
   if (currentTool.kind === 'room' && currentTool.room && currentTool.room !== RoomType.None && !isRoomUnlocked(state, currentTool.room)) {
     toolLockMessage = roomLockedMessage(currentTool.room);
@@ -3806,6 +4226,16 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
   const maxX = Math.max(a.x, b.x);
   const minY = Math.min(a.y, b.y);
   const maxY = Math.max(a.y, b.y);
+
+  if (currentTool.kind === 'copy-room') {
+    copyRoomStamp(minX, minY, maxX, maxY);
+    return;
+  }
+  if (currentTool.kind === 'paste-room') {
+    pasteRoomStampAt(minX, minY);
+    return;
+  }
+
   const paintTiles: number[] = [];
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
@@ -3838,9 +4268,9 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       if (currentTool.kind === 'tile') {
         const forceConstruction = TRUSS_EXPANSION_EXPERIMENT && currentTool.tile === TileType.Truss;
         if (INSTANT_BUILD_PLAYTEST && !forceConstruction) {
-          const changed = trySetTile(state, idx, currentTool.tile!);
-          if (!changed) {
-            toolLockMessage = currentTool.tile === TileType.Dock ? 'invalid dock placement' : 'cannot place tile';
+          const changed = trySetTileWithCredits(state, idx, currentTool.tile!);
+          if (!changed.ok) {
+            toolLockMessage = changed.reason;
             continue;
           }
           cancelConstructionAtTile(state, idx);
@@ -3871,7 +4301,7 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
         } else {
           if (INSTANT_BUILD_PLAYTEST) {
             cancelConstructionAtTile(state, idx);
-            const placed = tryPlaceModule(state, currentTool.module!, idx, state.controls.moduleRotation);
+            const placed = tryPlaceModuleWithCredits(state, currentTool.module!, idx, state.controls.moduleRotation);
             if (!placed.ok) toolLockMessage = placed.reason ?? '';
             continue;
           }
@@ -3953,6 +4383,7 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('resize', () => {
   const center = getViewportCenterWorldPx();
+  applyCanvasSize();
   updateStageLayout();
   centerViewportOnWorldPx(center.x, center.y);
 });
@@ -4970,12 +5401,26 @@ fireCrewBtn.addEventListener('click', () => {
 
 sellSmallBtn.addEventListener('click', () => {
   const ok = sellMaterials(state, 25, market.sellMat25Gain);
-  marketNoteEl.textContent = ok ? `Sold -25 materials (+${market.sellMat25Gain}c)` : 'Not enough materials';
+  marketNoteEl.textContent = ok ? `Sold -25 supplies (+${market.sellMat25Gain}c)` : 'Not enough supplies';
 });
 
 sellLargeBtn.addEventListener('click', () => {
   const ok = sellMaterials(state, 80, market.sellMat80Gain);
-  marketNoteEl.textContent = ok ? `Sold -80 materials (+${market.sellMat80Gain}c)` : 'Not enough materials';
+  marketNoteEl.textContent = ok ? `Sold -80 supplies (+${market.sellMat80Gain}c)` : 'Not enough supplies';
+});
+
+materialAutoImportInput.addEventListener('change', () => {
+  state.controls.materialAutoImportEnabled = materialAutoImportInput.checked;
+});
+
+materialTargetStockInput.addEventListener('change', () => {
+  state.controls.materialTargetStock = clamp(Number(materialTargetStockInput.value) || 0, 0, 500);
+  materialTargetStockInput.value = String(Math.round(state.controls.materialTargetStock));
+});
+
+materialImportBatchInput.addEventListener('change', () => {
+  state.controls.materialImportBatchSize = clamp(Number(materialImportBatchInput.value) || 1, 1, 160);
+  materialImportBatchInput.value = String(Math.round(state.controls.materialImportBatchSize));
 });
 
 buyFoodSmallBtn.addEventListener('click', () => {
@@ -5017,13 +5462,15 @@ clearBodiesBtn.addEventListener('click', () => {
   } else if (state.metrics.bodyCount <= 0) {
     marketNoteEl.textContent = 'No bodies to clear';
   } else {
-    marketNoteEl.textContent = 'Need 6 materials to clear bodies';
+    marketNoteEl.textContent = 'Need 6 supplies to clear bodies';
   }
 });
 
 let lastTime = performance.now();
 const UI_REFRESH_INTERVAL_MS = 125;
 const HOVER_DIAGNOSTIC_REFRESH_INTERVAL_MS = 250;
+const TARGET_FRAME_MS = 1000 / 60;
+const MAX_FRAME_DT_SEC = 1 / 30;
 let nextUiRefreshAt = 0;
 let nextHoverDiagnosticRefreshAt = 0;
 let lastHoverDiagnosticTile: number | null = null;
@@ -5051,8 +5498,12 @@ function refreshSpriteStatus(): void {
   }
 }
 function frame(now: number): void {
-  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  const frameMs = now - lastTime;
+  const dt = Math.min(frameMs / 1000, MAX_FRAME_DT_SEC);
   lastTime = now;
+  state.metrics.frameMs = frameMs;
+  state.metrics.rafJankMs = Math.max(0, frameMs - TARGET_FRAME_MS);
+  state.metrics.rafDroppedFrames = Math.max(0, Math.round(frameMs / TARGET_FRAME_MS) - 1);
 
   // Tag autosave-dirty whenever the sim advances OR the player acted
   // since the last tick. Simpler than wiring every mutation site; a tick
@@ -5062,17 +5513,12 @@ function frame(now: number): void {
   if (dt > 0) markDirty();
 
   tick(state, dt);
+  const renderViewport = getRenderViewport();
+  prepareViewportRender(renderViewport);
   const renderStart = performance.now();
-  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
+  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
   drawSelectedAgentRoute(ctx);
   state.metrics.renderMs = performance.now() - renderStart;
-  // Toolbar reflects active tool (any kind) and locked state (room+module
-  // per current unlock tier). Called every frame — ~40 DOM attribute
-  // toggles, cheap.
-  refreshToolbar();
-  refreshSpriteStatus();
-  refreshDiagnosticReadout();
-  refreshDiagnosticKey();
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;
@@ -5100,6 +5546,10 @@ function frame(now: number): void {
   if (shouldRefreshUi) {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
 
+  refreshToolbar();
+  refreshSpriteStatus();
+  refreshDiagnosticReadout();
+  refreshDiagnosticKey();
   refreshHudStatus();
   refreshTrafficStatus();
   refreshAlertPanel();
@@ -5108,14 +5558,18 @@ function frame(now: number): void {
   refreshDevTierOverlay();
   visitorsEl.textContent = String(state.metrics.visitorsCount);
   moraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
-  stationRatingEl.textContent = `${Math.round(state.metrics.stationRating)} (${state.metrics.stationRatingTrendPerMin >= 0 ? '+' : ''}${state.metrics.stationRatingTrendPerMin.toFixed(1)}/min)`;
+  stationRatingEl.textContent = ratingSummaryText();
+  healthRatingEl.textContent = ratingSummaryText();
   moraleEl.style.color =
     state.metrics.morale > 65 ? '#6edb8f' : state.metrics.morale > 40 ? '#ffcf6e' : '#ff7676';
-  stationRatingEl.style.color =
-    state.metrics.stationRating > 70 ? '#6edb8f' : state.metrics.stationRating > 40 ? '#ffcf6e' : '#ff7676';
+  stationRatingEl.style.color = ratingToneColor();
+  healthRatingEl.style.color = ratingToneColor();
   visitorFeelingsEl.textContent = `Visitor feelings: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
   moraleReasonsEl.textContent = `Crew morale drivers: ${state.metrics.crewMoraleDrivers.join(' | ') || 'none'}`;
-  ratingReasonsEl.textContent = `Station rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
+  ratingReasonsEl.textContent = `Rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
+  residentConversionSummaryEl.textContent = residentConversionStatusText();
+  residentConversionSummaryEl.style.color =
+    residentConversionTone() === 'ok' ? '#6edb8f' : residentConversionTone() === 'danger' ? '#ff7676' : residentConversionTone() === 'warn' ? '#ffcf6e' : '#8ea2bd';
   crewEl.textContent = crewOpsSummaryText(true);
   opsTrafficEl.textContent = trafficOpsSummaryText();
   crewBreakdownEl.textContent = `Crew: work ${state.metrics.crewAssignedWorking} | idle ${state.metrics.crewIdleAvailable} | resting ${state.metrics.crewResting} | logistics ${state.metrics.crewOnLogisticsJobs} | blocked ${state.metrics.crewBlockedNoPath}`;
@@ -5123,6 +5577,7 @@ function frame(now: number): void {
   crewLockoutsEl.textContent = `Emergency lockouts prevented: ${state.metrics.crewPingPongPreventions}`;
   criticalStaffingLineEl.textContent = criticalStaffingText();
   opsEl.textContent = coreOpsSummaryText();
+  opsResidentsEl.textContent = residentConversionStatusText(true);
   opsExtraEl.textContent = opsExtraText();
   kitchenStatusEl.textContent = kitchenStatusText();
   tradeStatusEl.textContent = tradeStatusText();
@@ -5142,7 +5597,7 @@ function frame(now: number): void {
   resourcesEl.style.color = state.metrics.airQuality < 35 ? '#ff7676' : '#d6deeb';
   pressureEl.textContent = `${Math.round(state.metrics.pressurizationPct)}% sealed | ${state.metrics.leakingTiles} leaking tiles`;
   pressureEl.style.color = state.metrics.pressurizationPct > 85 ? '#6edb8f' : state.metrics.pressurizationPct > 60 ? '#ffcf6e' : '#ff7676';
-  economyEl.textContent = `Materials ${Math.round(state.metrics.materials)} | Credits ${Math.round(state.metrics.credits)}`;
+  economyEl.textContent = `Supplies ${Math.round(state.metrics.materials)} | Credits ${Math.round(state.metrics.credits)}`;
   economyFlowEl.textContent = `Credits/min: +${state.metrics.creditsGrossPerMin.toFixed(1)} gross | -${state.metrics.creditsPayrollPerMin.toFixed(1)} payroll | net ${state.metrics.creditsNetPerMin >= 0 ? '+' : ''}${state.metrics.creditsNetPerMin.toFixed(1)}`;
   jobsEl.textContent = jobsSummaryText();
   idleReasonsEl.textContent = idleReasonsText();
@@ -5190,7 +5645,13 @@ function frame(now: number): void {
   bayUtilizationEl.textContent = `${Math.round(state.metrics.bayUtilizationPct)}%`;
   exitsPerMinEl.textContent = String(state.metrics.exitsPerMin);
   laneQueuesEl.textContent = `Lane queues N/E/S/W: ${state.metrics.dockQueueLengthByLane.north}/${state.metrics.dockQueueLengthByLane.east}/${state.metrics.dockQueueLengthByLane.south}/${state.metrics.dockQueueLengthByLane.west}`;
-  walkStatsEl.textContent = `Visitor walk avg: ${state.metrics.avgVisitorWalkDistance.toFixed(1)} | skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | queue timeouts ${state.metrics.shipsTimedOutInQueue}`;
+  walkStatsEl.textContent = `Visitor route avg: ${state.metrics.avgVisitorWalkDistance.toFixed(1)} | skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | queue timeouts ${state.metrics.shipsTimedOutInQueue}`;
+  const frameBudgetMs = state.metrics.tickMs + state.metrics.renderMs;
+  perfStatsEl.textContent =
+    `Perf: rAF ${state.metrics.frameMs.toFixed(1)}ms (drop ${state.metrics.rafDroppedFrames}) | ` +
+    `sim ${state.metrics.tickMs.toFixed(1)}ms | render ${state.metrics.renderMs.toFixed(1)}ms | ` +
+    `path ${state.metrics.pathMs.toFixed(1)}ms/${state.metrics.pathCallsPerTick} | work ${frameBudgetMs.toFixed(1)}ms`;
+  perfStatsEl.style.color = state.metrics.rafDroppedFrames > 0 || frameBudgetMs > TARGET_FRAME_MS ? '#ffcf6e' : '#8ea2bd';
   berthSummaryEl.textContent =
     `Berths: visitor ${state.metrics.visitorBerthsOccupied}/${state.metrics.visitorBerthsTotal} | ` +
     `resident ${state.metrics.residentBerthsOccupied}/${state.metrics.residentBerthsTotal} | ` +
@@ -5206,8 +5667,8 @@ function frame(now: number): void {
     `Penalty/min: timeout ${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(2)} | ` +
     `no dock ${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(2)} | ` +
     `service ${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(2)} | ` +
-    `walk ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)} | ` +
-    `routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)} | ` +
+    `route length ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)} | ` +
+    `bad routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)} | ` +
     `env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(2)}`;
   ratingInsightBonusEl.textContent =
     `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
@@ -5232,8 +5693,8 @@ function frame(now: number): void {
     `Total penalty: timeout ${state.metrics.stationRatingPenaltyTotal.queueTimeout.toFixed(1)} | ` +
     `no dock ${state.metrics.stationRatingPenaltyTotal.noEligibleDock.toFixed(1)} | ` +
     `service ${state.metrics.stationRatingPenaltyTotal.serviceFailure.toFixed(1)} | ` +
-    `walk ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)} | ` +
-    `routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)} | ` +
+    `route length ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)} | ` +
+    `bad routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)} | ` +
     `env ${state.metrics.stationRatingPenaltyTotal.environment.toFixed(1)}`;
   ratingInsightBonusTotalEl.textContent =
     `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
@@ -5477,7 +5938,9 @@ window.__harnessPauseAndFlush = () => {
   // Pause the sim and force a synchronous render pass so screenshots
   // are taken against a stable, non-animated frame.
   state.controls.paused = true;
-  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas);
+  const renderViewport = getRenderViewport();
+  prepareViewportRender(renderViewport);
+  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
 };
 
 window.__harnessAdvanceSim = (seconds: number, step = 0.25) => {

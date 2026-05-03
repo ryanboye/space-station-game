@@ -16,8 +16,8 @@
 
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
-import type { StationState, UnlockId, UnlockTier } from './types';
-import { setTile, setRoom, setModule } from './sim';
+import type { ItemType, StationState, UnlockId, UnlockTier } from './types';
+import { buyMaterials, buyRawFood, setTile, setRoom, setModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -153,53 +153,104 @@ function paintFloorTile(state: StationState, x: number, y: number, t: TileType):
   setTile(state, y * GRID_WIDTH + x, t);
 }
 
+function seedItemNodeStock(state: StationState, x: number, y: number, itemType: ItemType, amount: number): number {
+  const tileIndex = y * GRID_WIDTH + x;
+  const node = state.itemNodes.find((entry) => entry.tileIndex === tileIndex);
+  if (!node || amount <= 0) return 0;
+  const used = Object.values(node.items).reduce((sum, value) => sum + (value ?? 0), 0);
+  const added = Math.min(amount, Math.max(0, node.capacity - used));
+  if (added <= 0) return 0;
+  node.items[itemType] = (node.items[itemType] ?? 0) + added;
+  return added;
+}
+
 function applyDemoStationOverlay(state: StationState): void {
-  // Wipe a 52×32 canvas so the starter's tiny central room doesn't conflict.
-  for (let y = 4; y < 36; y++) {
-    for (let x = 4; x < 56; x++) {
+  // Wipe a larger canvas so the starter's tiny central room doesn't conflict.
+  for (let y = 3; y < 48; y++) {
+    for (let x = 3; x < 80; x++) {
       const idx = y * GRID_WIDTH + x;
       setTile(state, idx, TileType.Space);
+      setRoom(state, idx, RoomType.None);
     }
   }
 
-  // Top row: 5 rooms at y=6-14
+  // Sealed outer hull. Older demo-station only painted rooms and left
+  // corridor floor open to space, which made it useless for simulation
+  // playtests because oxygen instantly collapsed.
+  for (let y = 5; y < 44; y++) {
+    for (let x = 4; x < 77; x++) {
+      const idx = y * GRID_WIDTH + x;
+      const edge = x === 4 || x === 76 || y === 5 || y === 43;
+      setTile(state, idx, edge ? TileType.Wall : TileType.Floor);
+      setRoom(state, idx, RoomType.None);
+    }
+  }
+
+  // Main service/social band.
   paintRoom(state, 5, 6, 15, 15, RoomType.Dorm, 'south');
   paintRoom(state, 15, 6, 25, 15, RoomType.Cafeteria, 'south');
-  paintRoom(state, 25, 6, 35, 15, RoomType.Hydroponics, 'south');
-  paintRoom(state, 35, 6, 45, 15, RoomType.Clinic, 'south');
-  paintRoom(state, 45, 6, 55, 15, RoomType.Workshop, 'south');
+  paintRoom(state, 25, 6, 34, 15, RoomType.Kitchen, 'south');
+  paintRoom(state, 34, 6, 44, 15, RoomType.Hydroponics, 'south');
+  paintRoom(state, 44, 6, 54, 15, RoomType.Clinic, 'south');
+  paintRoom(state, 54, 6, 64, 15, RoomType.Workshop, 'south');
+  paintRoom(state, 64, 6, 75, 15, RoomType.Storage, 'south');
 
-  // Central corridor y=15-18
-  for (let y = 15; y < 19; y++) {
-    for (let x = 5; x < 55; x++) {
+  // Central public/service concourse.
+  for (let y = 15; y < 20; y++) {
+    for (let x = 5; x < 76; x++) {
       setTile(state, y * GRID_WIDTH + x, TileType.Floor);
+      setRoom(state, y * GRID_WIDTH + x, RoomType.None);
     }
   }
 
-  // Bottom row: 5 rooms at y=19-28
-  paintRoom(state, 5, 19, 15, 28, RoomType.Market, 'north');
-  paintRoom(state, 15, 19, 25, 28, RoomType.Reactor, 'north');
-  paintRoom(state, 25, 19, 35, 28, RoomType.Security, 'north');
-  paintRoom(state, 35, 19, 45, 28, RoomType.Hygiene, 'north');
-  paintRoom(state, 45, 19, 55, 28, RoomType.RecHall, 'north');
+  // Bottom public/civic/utility band.
+  paintRoom(state, 5, 20, 15, 29, RoomType.Market, 'north');
+  paintRoom(state, 15, 20, 25, 29, RoomType.Lounge, 'north');
+  paintRoom(state, 25, 20, 35, 29, RoomType.Cantina, 'north');
+  paintRoom(state, 35, 20, 45, 29, RoomType.Observatory, 'north');
+  paintRoom(state, 45, 20, 55, 29, RoomType.RecHall, 'north');
+  paintRoom(state, 55, 20, 65, 29, RoomType.Hygiene, 'north');
+  paintRoom(state, 65, 20, 75, 29, RoomType.Security, 'north');
+
+  // Back-of-house / arrival band.
+  paintRoom(state, 5, 31, 16, 42, RoomType.Reactor, 'north');
+  paintRoom(state, 16, 31, 27, 42, RoomType.LifeSupport, 'north');
+  paintRoom(state, 27, 31, 38, 42, RoomType.LogisticsStock, 'north');
+  paintRoom(state, 38, 31, 49, 42, RoomType.Brig, 'north');
+  paintRoom(state, 68, 31, 76, 37, RoomType.Berth, 'west');
+  paintRoom(state, 68, 37, 76, 43, RoomType.Berth, 'west');
+
+  // Arrival corridor behind the exterior berths.
+  for (let y = 31; y < 42; y++) {
+    for (let x = 49; x < 68; x++) {
+      const idx = y * GRID_WIDTH + x;
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, RoomType.None);
+    }
+  }
 
   // Room-specific floor variants
   for (let y = 7; y < 14; y++) for (let x = 16; x < 24; x++) {
     paintFloorTile(state, x, y, TileType.Cafeteria);
     setRoom(state, y * GRID_WIDTH + x, RoomType.Cafeteria);
   }
-  for (let y = 20; y < 27; y++) for (let x = 16; x < 24; x++) {
+  for (let y = 32; y < 41; y++) for (let x = 6; x < 15; x++) {
     paintFloorTile(state, x, y, TileType.Reactor);
     setRoom(state, y * GRID_WIDTH + x, RoomType.Reactor);
   }
-  for (let y = 20; y < 27; y++) for (let x = 26; x < 34; x++) {
+  for (let y = 21; y < 28; y++) for (let x = 66; x < 74; x++) {
     paintFloorTile(state, x, y, TileType.Security);
     setRoom(state, y * GRID_WIDTH + x, RoomType.Security);
   }
 
-  // Dock pair on east side
-  paintFloorTile(state, 55, 20, TileType.Dock);
-  paintFloorTile(state, 55, 21, TileType.Dock);
+  // Berths need an exposed room edge. The corridor doors seal station air
+  // behind them while the east edge remains open to ship traffic.
+  for (const y of [32, 33, 34, 35, 38, 39, 40, 41]) {
+    paintFloorTile(state, 75, y, TileType.Floor);
+    setRoom(state, y * GRID_WIDTH + 75, RoomType.Berth);
+    setTile(state, y * GRID_WIDTH + 76, TileType.Space);
+    setRoom(state, y * GRID_WIDTH + 76, RoomType.None);
+  }
 
   // ---- modules ----
   // Dorm
@@ -207,47 +258,112 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 9, 8, ModuleType.Bed);
   placeMod(state, 11, 8, ModuleType.Bed);
   placeMod(state, 13, 8, ModuleType.Bed);
-  placeMod(state, 7, 12, ModuleType.WallLight);
+  placeMod(state, 7, 12, ModuleType.Bed);
+  placeMod(state, 10, 12, ModuleType.Plant);
   // Cafeteria
-  placeMod(state, 17, 8, ModuleType.Table);
+  placeMod(state, 16, 8, ModuleType.Table);
   placeMod(state, 19, 8, ModuleType.Table);
-  placeMod(state, 21, 8, ModuleType.ServingStation);
-  placeMod(state, 17, 12, ModuleType.Stove);
-  placeMod(state, 19, 12, ModuleType.WallLight);
+  placeMod(state, 22, 8, ModuleType.Table);
+  placeMod(state, 16, 11, ModuleType.Table);
+  placeMod(state, 19, 11, ModuleType.Table);
+  placeMod(state, 22, 11, ModuleType.Table);
+  placeMod(state, 16, 13, ModuleType.ServingStation);
+  placeMod(state, 19, 13, ModuleType.ServingStation);
+  placeMod(state, 22, 13, ModuleType.VendingMachine);
+  // Kitchen
+  placeMod(state, 27, 8, ModuleType.Stove);
+  placeMod(state, 30, 8, ModuleType.Stove);
+  placeMod(state, 27, 10, ModuleType.Stove);
+  placeMod(state, 30, 10, ModuleType.Stove);
+  placeMod(state, 27, 12, ModuleType.WaterFountain);
   // Hydroponics
-  placeMod(state, 27, 9, ModuleType.GrowStation);
-  placeMod(state, 30, 9, ModuleType.GrowStation);
-  placeMod(state, 27, 12, ModuleType.GrowStation);
+  placeMod(state, 36, 8, ModuleType.GrowStation);
+  placeMod(state, 39, 8, ModuleType.GrowStation);
+  placeMod(state, 41, 8, ModuleType.GrowStation);
+  placeMod(state, 36, 12, ModuleType.GrowStation);
+  placeMod(state, 39, 12, ModuleType.GrowStation);
   // Clinic
-  placeMod(state, 37, 9, ModuleType.MedBed);
-  placeMod(state, 40, 9, ModuleType.Terminal);
-  placeMod(state, 37, 12, ModuleType.Sink);
+  placeMod(state, 46, 9, ModuleType.MedBed);
+  placeMod(state, 49, 9, ModuleType.MedBed);
+  placeMod(state, 46, 12, ModuleType.Sink);
   // Workshop
-  placeMod(state, 47, 9, ModuleType.Workbench);
-  placeMod(state, 49, 9, ModuleType.StorageRack);
-  placeMod(state, 47, 12, ModuleType.IntakePallet);
+  placeMod(state, 56, 9, ModuleType.Workbench);
+  placeMod(state, 59, 9, ModuleType.Workbench);
+  placeMod(state, 56, 12, ModuleType.Plant);
+  // Storage
+  placeMod(state, 66, 8, ModuleType.StorageRack);
+  placeMod(state, 69, 8, ModuleType.StorageRack);
+  placeMod(state, 72, 8, ModuleType.StorageRack);
+  placeMod(state, 66, 12, ModuleType.StorageRack);
+  placeMod(state, 69, 12, ModuleType.StorageRack);
   // Market
-  placeMod(state, 7, 21, ModuleType.MarketStall);
-  placeMod(state, 9, 21, ModuleType.MarketStall);
-  placeMod(state, 11, 21, ModuleType.Terminal);
-  // Reactor
-  placeMod(state, 17, 21, ModuleType.WallLight);
-  placeMod(state, 22, 21, ModuleType.WallLight);
-  placeMod(state, 17, 25, ModuleType.WallLight);
-  placeMod(state, 22, 25, ModuleType.WallLight);
-  // Security
-  placeMod(state, 27, 21, ModuleType.CellConsole);
-  placeMod(state, 30, 21, ModuleType.Terminal);
-  placeMod(state, 27, 25, ModuleType.Couch);
-  // Hygiene
-  placeMod(state, 37, 21, ModuleType.Shower);
-  placeMod(state, 39, 21, ModuleType.Shower);
-  placeMod(state, 37, 25, ModuleType.Sink);
+  placeMod(state, 7, 22, ModuleType.MarketStall);
+  placeMod(state, 10, 22, ModuleType.MarketStall);
+  placeMod(state, 7, 26, ModuleType.VendingMachine);
+  placeMod(state, 10, 26, ModuleType.Bench);
+  // Lounge
+  placeMod(state, 17, 22, ModuleType.Couch);
+  placeMod(state, 20, 22, ModuleType.GameStation);
+  placeMod(state, 17, 26, ModuleType.Bench);
+  // Cantina
+  placeMod(state, 27, 22, ModuleType.BarCounter);
+  placeMod(state, 30, 22, ModuleType.Tap);
+  placeMod(state, 27, 26, ModuleType.Bench);
+  placeMod(state, 30, 26, ModuleType.Bench);
+  // Observatory
+  placeMod(state, 37, 22, ModuleType.Telescope);
+  placeMod(state, 40, 26, ModuleType.Bench);
   // RecHall
-  placeMod(state, 47, 21, ModuleType.Couch);
-  placeMod(state, 49, 21, ModuleType.Couch);
-  placeMod(state, 47, 25, ModuleType.GameStation);
-  placeMod(state, 49, 25, ModuleType.RecUnit);
+  placeMod(state, 47, 22, ModuleType.RecUnit);
+  placeMod(state, 50, 22, ModuleType.Bench);
+  placeMod(state, 47, 26, ModuleType.VendingMachine);
+  // Hygiene
+  placeMod(state, 57, 22, ModuleType.Shower);
+  placeMod(state, 59, 22, ModuleType.Shower);
+  placeMod(state, 57, 26, ModuleType.Sink);
+  placeMod(state, 60, 26, ModuleType.WaterFountain);
+  // Security
+  placeMod(state, 67, 22, ModuleType.Terminal);
+  placeMod(state, 70, 22, ModuleType.Terminal);
+  placeMod(state, 67, 26, ModuleType.Plant);
+  // Reactor
+  placeMod(state, 7, 33, ModuleType.WaterFountain);
+  placeMod(state, 15, 33, ModuleType.FireExtinguisher);
+  // Life support
+  placeMod(state, 16, 33, ModuleType.Vent);
+  placeMod(state, 26, 33, ModuleType.Vent);
+  placeMod(state, 20, 38, ModuleType.WaterFountain);
+  // Logistics stock
+  placeMod(state, 29, 34, ModuleType.IntakePallet);
+  placeMod(state, 33, 34, ModuleType.IntakePallet);
+  // Brig
+  placeMod(state, 40, 34, ModuleType.CellConsole);
+  placeMod(state, 43, 34, ModuleType.CellConsole);
+  // Berths
+  placeMod(state, 75, 33, ModuleType.Gangway);
+  placeMod(state, 69, 33, ModuleType.CustomsCounter);
+  placeMod(state, 73, 32, ModuleType.CargoArm);
+  placeMod(state, 75, 40, ModuleType.Gangway);
+  placeMod(state, 69, 40, ModuleType.CustomsCounter);
+  placeMod(state, 73, 38, ModuleType.CargoArm);
+
+  // Demo starts with enough inventory for the Part 1 living-actors/job loop.
+  state.crew.total = 18;
+  state.metrics.credits = 5000;
+  state.legacyMaterialStock = 500;
+  state.metrics.materials = 500;
+  state.metrics.waterStock = 180;
+  state.metrics.airQuality = 95;
+  state.controls.shipsPerCycle = 3;
+  buyRawFood(state, 0, 90);
+  buyMaterials(state, 0, 120);
+
+  const seededMeals =
+    seedItemNodeStock(state, 16, 13, 'meal', 24) +
+    seedItemNodeStock(state, 19, 13, 'meal', 24) +
+    seedItemNodeStock(state, 27, 8, 'meal', 12) +
+    seedItemNodeStock(state, 30, 8, 'meal', 12);
+  state.metrics.mealStock = seededMeals;
 }
 
 /** Apply a named scenario to a fresh state. Returns true if the name

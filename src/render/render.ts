@@ -13,6 +13,7 @@ import {
   ZoneType,
   inBounds,
   fromIndex,
+  toIndex,
   isWalkable,
   type ItemType,
   type BuildTool,
@@ -57,7 +58,7 @@ import { renderDualWallLayer } from './wall-dual-tilemap';
 import { renderWallDetailLayer } from './wall-detail-layer';
 import { renderRoomLabelLayer } from './room-label-layer';
 import { renderDoorDockDetailLayer } from './door-dock-detail-layer';
-import { renderGlowPass } from './glow-pass';
+import { renderGlowPass, type GlowRenderViewport } from './glow-pass';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
 
@@ -208,6 +209,8 @@ type CachedLayer = {
   key: string;
 };
 
+export type RenderViewport = GlowRenderViewport;
+
 type ServiceOverlayCache = {
   key: string;
   builtAt: number;
@@ -253,6 +256,59 @@ function ensureCachedLayer(existing: CachedLayer | null, widthPx: number, height
     return { canvas, ctx, key: '' };
   }
   return existing;
+}
+
+function normalizeViewport(viewport: RenderViewport | null | undefined, widthPx: number, heightPx: number): RenderViewport | null {
+  if (!viewport) return null;
+  const x = Math.max(0, Math.min(widthPx, Math.floor(viewport.x)));
+  const y = Math.max(0, Math.min(heightPx, Math.floor(viewport.y)));
+  const maxX = Math.max(x, Math.min(widthPx, Math.ceil(viewport.x + viewport.width)));
+  const maxY = Math.max(y, Math.min(heightPx, Math.ceil(viewport.y + viewport.height)));
+  const width = maxX - x;
+  const height = maxY - y;
+  return width > 0 && height > 0 ? { x, y, width, height } : null;
+}
+
+function drawCachedLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: HTMLCanvasElement,
+  viewport: RenderViewport | null
+): void {
+  if (!viewport) {
+    ctx.drawImage(layer, 0, 0);
+    return;
+  }
+  ctx.drawImage(
+    layer,
+    viewport.x,
+    viewport.y,
+    viewport.width,
+    viewport.height,
+    viewport.x,
+    viewport.y,
+    viewport.width,
+    viewport.height
+  );
+}
+
+function tileRangeForViewport(
+  viewport: RenderViewport | null,
+  state: StationState
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  if (!viewport) {
+    return { minX: 0, maxX: state.width - 1, minY: 0, maxY: state.height - 1 };
+  }
+  const minX = Math.max(0, Math.floor(viewport.x / TILE_SIZE) - 1);
+  const minY = Math.max(0, Math.floor(viewport.y / TILE_SIZE) - 1);
+  const maxX = Math.min(state.width - 1, Math.ceil((viewport.x + viewport.width) / TILE_SIZE) + 1);
+  const maxY = Math.min(state.height - 1, Math.ceil((viewport.y + viewport.height) / TILE_SIZE) + 1);
+  return { minX, maxX, minY, maxY };
+}
+
+function tileInRange(tileIndex: number, state: StationState, range: { minX: number; maxX: number; minY: number; maxY: number }): boolean {
+  const x = tileIndex % state.width;
+  const y = Math.floor(tileIndex / state.width);
+  return x >= range.minX && x <= range.maxX && y >= range.minY && y <= range.maxY;
 }
 
 function drawRepeatedSpriteFrame(
@@ -2469,29 +2525,144 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, spr
   }
 }
 
+function drawPasteStampGhost(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  currentTool: BuildTool,
+  hoveredTile: number | null,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const stamp = currentTool.kind === 'paste-room' ? currentTool.pasteStamp : null;
+  if (!stamp || hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return;
+
+  const origin = fromIndex(hoveredTile, state.width);
+  const targetInBounds = (dx: number, dy: number): boolean =>
+    inBounds(origin.x + dx, origin.y + dy, state.width, state.height);
+  const targetTile = (dx: number, dy: number): number =>
+    toIndex(origin.x + dx, origin.y + dy, state.width);
+  const targetVisible = (dx: number, dy: number): boolean => {
+    const x = origin.x + dx;
+    const y = origin.y + dy;
+    return x >= visibleTiles.minX && x <= visibleTiles.maxX && y >= visibleTiles.minY && y <= visibleTiles.maxY;
+  };
+  let hasInvalidCell = false;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  for (const cell of stamp.cells) {
+    if (cell.tile === TileType.Space) continue;
+    if (!targetInBounds(cell.dx, cell.dy)) {
+      hasInvalidCell = true;
+      continue;
+    }
+    if (!targetVisible(cell.dx, cell.dy)) continue;
+    const px = (origin.x + cell.dx) * TILE_SIZE;
+    const py = (origin.y + cell.dy) * TILE_SIZE;
+    ctx.globalAlpha = 0.56;
+    ctx.fillStyle = tileColor[cell.tile];
+    ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    if (cell.room !== RoomType.None) {
+      ctx.globalAlpha = 0.68;
+      ctx.fillStyle = roomOverlay[cell.room];
+      ctx.fillRect(px + Math.round(3 * PX), py + Math.round(3 * PX), TILE_SIZE - Math.round(6 * PX), TILE_SIZE - Math.round(6 * PX));
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = '#f0f6ff';
+      ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(roomLetter[cell.room], px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.5);
+    }
+    ctx.globalAlpha = 1;
+    const replacingBuiltTile = state.tiles[targetTile(cell.dx, cell.dy)] !== TileType.Space;
+    ctx.strokeStyle = replacingBuiltTile ? 'rgba(255, 207, 110, 0.72)' : 'rgba(110, 219, 143, 0.76)';
+    ctx.strokeRect(px + 1.5, py + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+  }
+
+  ctx.globalAlpha = 1;
+  for (const module of stamp.modules) {
+    let moduleInvalid = false;
+    for (const offset of module.tileOffsets) {
+      if (!targetInBounds(offset.dx, offset.dy)) {
+        moduleInvalid = true;
+        hasInvalidCell = true;
+      }
+      if (!targetVisible(offset.dx, offset.dy) || !targetInBounds(offset.dx, offset.dy)) continue;
+      const px = (origin.x + offset.dx) * TILE_SIZE;
+      const py = (origin.y + offset.dy) * TILE_SIZE;
+      ctx.fillStyle = moduleInvalid ? 'rgba(255, 118, 118, 0.3)' : 'rgba(210, 228, 250, 0.34)';
+      ctx.fillRect(px + Math.round(4 * PX), py + Math.round(4 * PX), TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX));
+      ctx.strokeStyle = moduleInvalid ? 'rgba(255, 118, 118, 0.9)' : 'rgba(230, 242, 255, 0.78)';
+      ctx.strokeRect(px + Math.round(4.5 * PX), py + Math.round(4.5 * PX), TILE_SIZE - Math.round(9 * PX), TILE_SIZE - Math.round(9 * PX));
+    }
+    if (targetInBounds(module.dx, module.dy) && targetVisible(module.dx, module.dy)) {
+      const px = (origin.x + module.dx) * TILE_SIZE;
+      const py = (origin.y + module.dy) * TILE_SIZE;
+      ctx.fillStyle = moduleInvalid ? '#ffd1d1' : '#f4fbff';
+      ctx.font = `bold ${Math.round(10 * PX)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(moduleLetter[module.type] ?? '?', px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.5);
+    }
+  }
+
+  const previewX = origin.x * TILE_SIZE;
+  const previewY = origin.y * TILE_SIZE;
+  const previewW = stamp.width * TILE_SIZE;
+  const previewH = stamp.height * TILE_SIZE;
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = hasInvalidCell ? 'rgba(255, 118, 118, 0.95)' : 'rgba(110, 219, 143, 0.95)';
+  ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+  ctx.setLineDash([Math.round(5 * PX), Math.round(3 * PX)]);
+  ctx.strokeRect(previewX + 1.5, previewY + 1.5, previewW - 3, previewH - 3);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(7, 14, 22, 0.84)';
+  const label = `${stamp.width}x${stamp.height} stamp`;
+  ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
+  const labelW = Math.max(Math.round(70 * PX), ctx.measureText(label).width + Math.round(8 * PX));
+  ctx.fillRect(previewX, previewY - Math.round(15 * PX), labelW, Math.round(13 * PX));
+  ctx.fillStyle = hasInvalidCell ? '#ffbaba' : '#d9ffe6';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, previewX + Math.round(4 * PX), previewY - Math.round(8.5 * PX));
+  ctx.restore();
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
   currentTool: BuildTool,
   hoveredTile: number | null = null,
-  spriteAtlas: SpriteAtlas
+  spriteAtlas: SpriteAtlas,
+  viewportInput: RenderViewport | null = null
 ): void {
   const widthPx = state.width * TILE_SIZE;
   const heightPx = state.height * TILE_SIZE;
   const useSprites = spritesEnabled(state, spriteAtlas);
+  const viewport = normalizeViewport(viewportInput, widthPx, heightPx);
+  const visibleTiles = tileRangeForViewport(viewport, state);
 
+  ctx.save();
+  if (viewport) {
+    ctx.beginPath();
+    ctx.rect(viewport.x, viewport.y, viewport.width, viewport.height);
+    ctx.clip();
+  }
   ctx.fillStyle = '#061018';
-  ctx.fillRect(0, 0, widthPx, heightPx);
+  if (viewport) {
+    ctx.fillRect(viewport.x, viewport.y, viewport.width, viewport.height);
+  } else {
+    ctx.fillRect(0, 0, widthPx, heightPx);
+  }
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
-  ctx.drawImage(staticLayer.canvas, 0, 0);
-  ctx.drawImage(decorativeLayer.canvas, 0, 0);
+  drawCachedLayer(ctx, staticLayer.canvas, viewport);
+  drawCachedLayer(ctx, decorativeLayer.canvas, viewport);
   // Glow pass paints after the sprite layers (additive blend). Gated on
   // state.controls.showGlow; cache key includes dynamic signatures (med-bed
   // occupancy, kitchen-active) so frame cost is ~0 when nothing changes.
-  renderGlowPass(ctx, state, widthPx, heightPx, useSprites);
+  renderGlowPass(ctx, state, widthPx, heightPx, useSprites, viewport);
   const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx);
-  if (diagnosticLayer) ctx.drawImage(diagnosticLayer.canvas, 0, 0);
+  if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);
@@ -2509,8 +2680,9 @@ export function renderWorld(
     bodyCountByTile.set(tile, (bodyCountByTile.get(tile) ?? 0) + 1);
   }
 
-  for (let i = 0; i < state.tiles.length; i++) {
-    const { x, y } = fromIndex(i, state.width);
+  for (let y = visibleTiles.minY; y <= visibleTiles.maxY; y++) {
+    for (let x = visibleTiles.minX; x <= visibleTiles.maxX; x++) {
+    const i = y * state.width + x;
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const roomType = state.rooms[i];
@@ -2575,8 +2747,10 @@ export function renderWorld(
       }
     }
   }
+  }
 
   for (const module of state.moduleInstances) {
+    if (!module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
     const origin = fromIndex(module.originTile, state.width);
     const px = origin.x * TILE_SIZE;
     const py = origin.y * TILE_SIZE;
@@ -2629,6 +2803,7 @@ export function renderWorld(
   }
 
   for (const site of state.constructionSites) {
+    if (!tileInRange(site.tileIndex, state, visibleTiles)) continue;
     const p = fromIndex(site.tileIndex, state.width);
     const px = p.x * TILE_SIZE;
     const py = p.y * TILE_SIZE;
@@ -2675,6 +2850,7 @@ export function renderWorld(
   if (currentTool.kind === 'tile' && currentTool.tile === TileType.Dock && hoveredTile !== null) {
     const preview = validateDockPlacement(state, hoveredTile);
     for (const ti of preview.approachTiles) {
+      if (!tileInRange(ti, state, visibleTiles)) continue;
       const p = fromIndex(ti, state.width);
       ctx.fillStyle = preview.valid ? 'rgba(110,219,143,0.22)' : 'rgba(255,118,118,0.22)';
       ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
@@ -2704,6 +2880,7 @@ export function renderWorld(
       state.controls.moduleRotation
     );
     for (const ti of preview.tiles) {
+      if (!tileInRange(ti, state, visibleTiles)) continue;
       const p = fromIndex(ti, state.width);
       ctx.fillStyle = preview.valid ? 'rgba(110,219,143,0.28)' : 'rgba(255,118,118,0.32)';
       ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
@@ -2712,8 +2889,17 @@ export function renderWorld(
     }
   }
 
+  drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
+
+  const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
+    x >= visibleTiles.minX - marginTiles &&
+    x <= visibleTiles.maxX + marginTiles &&
+    y >= visibleTiles.minY - marginTiles &&
+    y <= visibleTiles.maxY + marginTiles;
+
   for (let vi = 0; vi < state.visitors.length; vi++) {
     const v = state.visitors[vi];
+    if (!actorInVisibleRange(v.x, v.y)) continue;
     const o = agentOffset(v.id);
     const cx = (v.x + o.x) * TILE_SIZE;
     const cy = (v.y + o.y) * TILE_SIZE;
@@ -2730,6 +2916,7 @@ export function renderWorld(
   }
 
   for (const r of state.residents) {
+    if (!actorInVisibleRange(r.x, r.y)) continue;
     const o = agentOffset(r.id);
     const cx = (r.x + o.x) * TILE_SIZE;
     const cy = (r.y + o.y) * TILE_SIZE;
@@ -2770,6 +2957,7 @@ export function renderWorld(
   }
 
   for (const c of state.crewMembers) {
+    if (!actorInVisibleRange(c.x, c.y)) continue;
     const o = agentOffset(c.id);
     const cx = (c.x + o.x) * TILE_SIZE;
     const cy = (c.y + o.y) * TILE_SIZE;
@@ -2827,6 +3015,7 @@ export function renderWorld(
   }
 
   for (const ship of state.arrivingShips) {
+    if (!actorInVisibleRange(ship.bayCenterX, ship.bayCenterY, 12)) continue;
     const isBerthBound = (ship.assignedBerthAnchor ?? null) !== null;
     if (isBerthBound) {
       drawDockedBerthShip(ctx, state, ship);
@@ -2863,6 +3052,10 @@ export function renderWorld(
         ? `Tool: Zone ${currentTool.zone}`
         : currentTool.kind === 'room'
           ? `Tool: Room ${currentTool.room}`
+          : currentTool.kind === 'copy-room'
+            ? 'Tool: Copy Station'
+            : currentTool.kind === 'paste-room'
+              ? 'Tool: Paste Station'
           : currentTool.kind === 'module'
             ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
             : 'Tool: Cancel Build';
@@ -2911,6 +3104,7 @@ export function renderWorld(
   // rendered (no toggle) — fires are an emergency state the player must see.
   if (state.effects.fires.length > 0) {
     for (const fire of state.effects.fires) {
+      if (!tileInRange(fire.anchorTile, state, visibleTiles)) continue;
       const tx = fire.anchorTile % state.width;
       const ty = Math.floor(fire.anchorTile / state.width);
       const px = tx * TILE_SIZE;
@@ -2945,6 +3139,7 @@ export function renderWorld(
   for (const job of state.jobs) {
     if (job.type !== 'repair') continue;
     if (job.state === 'done' || job.state === 'expired') continue;
+    if (!tileInRange(job.fromTile, state, visibleTiles)) continue;
     const tx = job.fromTile % state.width;
     const ty = Math.floor(job.fromTile / state.width);
     const cx = (tx + 0.5) * TILE_SIZE;
@@ -2973,4 +3168,5 @@ export function renderWorld(
     ctx.stroke();
     ctx.restore();
   }
+  ctx.restore();
 }

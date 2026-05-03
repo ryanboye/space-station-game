@@ -41,6 +41,7 @@ export {
   isShipTypeUnlocked,
   planModuleConstruction,
   planTileConstruction,
+  quoteMaterialImportCost,
   removeModuleAtTile,
   sellMaterials,
   sellRawFood,
@@ -56,6 +57,8 @@ export {
   setZone,
   tick,
   tryPlaceModule,
+  tryPlaceModuleWithCredits,
   trySetTile,
+  trySetTileWithCredits,
   validateDockPlacement
 } from './sim';

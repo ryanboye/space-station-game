@@ -71,12 +71,12 @@ The HUD's bar of numbers maps to four storage models:
 | Air | Global pool | `metrics.airQuality` |
 | Power | Computed each tick | `metrics.powerSupply` / `powerDemand` (no stockpile) |
 | Water | Global pool | `metrics.waterStock` |
-| Materials | Hybrid | `legacyMaterialStock` + per-room rawMaterial item stocks |
+| Supplies | Hybrid | `legacyMaterialStock` + per-room rawMaterial item stocks |
 | Credits | Global pool | `metrics.credits` |
 | Food (rawMeal/meal) | Per-module item nodes | Stove, GrowStation, ServingStation |
 | Trade goods | Per-module item nodes | Workshop output, Market input |
 
-Air/Power/Water are covered in `03-utilities.md`. Materials and credits are in `02-build-and-world.md` and `10-economy-rating.md`. Food and trade goods are this doc.
+Air/Power/Water are covered in `03-utilities.md`. Supplies and credits are in `02-build-and-world.md` and `10-economy-rating.md`. Food and trade goods are this doc.
 
 ### Food chain in detail
 
@@ -86,12 +86,14 @@ Air/Power/Water are covered in `03-utilities.md`. Materials and credits are in `
 
 `kitchenRawBuffer` is a synthetic metric that sums rawMeal at *stove* nodes only (`sim.ts:6253`). It's how the alerts UI knows kitchens are starving.
 
-### Material chain
+### Supply chain
 
-1. **IntakePallet** receives rawMaterial (currently from `legacyMaterialStock` migration, `sim.ts:6256`–6269).
-2. **Storage** holds the buffer.
+1. **IntakePallet** receives imported supplies (`rawMaterial` internally), either from manual buys or 10-second auto-import batches.
+2. **Storage** holds the buffer and clears intake capacity for future imports.
 3. **Workshop** converts at `0.85` rawMaterial → 1 tradeGood (`balance.ts:248`–249).
 4. **Market** sells tradeGoods to visitors at `marketTradeGoodUsePerVisitorPerSec = 0.32 * spendMultiplier` (`balance.ts:250`).
+
+Hydroponics also receives a small local supply buffer. Stocked grow stations run at full output and consume supplies slowly; empty grow stations continue at reduced output.
 
 ## Player framing
 
@@ -109,7 +111,7 @@ There are no haulers as a separate role — *every crew member* hauls when not o
 
 ## Trip-wires
 
-- "Materials" displayed in HUD is `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)` (`sim.ts:6270`). Adding a new material storage requires updating that union.
+- "Supplies" displayed in HUD is `legacyMaterialStock + sumRoomTradeGoods('rawMaterial', LogisticsStock+Storage)`. Adding a new supply storage requires updating that union.
 - The `kitchenRawBuffer` metric is *stove-only*. Don't compute it elsewhere by walking all rawMeal item nodes — that double-counts the GrowStation buffer.
 - Item-node capacity is set by `MODULE_DEFINITIONS`. Changing a module's `itemNodeCapacity` will clamp items at save-load time — old saves emit warnings.
 - All three job creators run every tick; their caps are independent. Don't try to share a global cap without rewriting `assignJobsToIdleCrew`.

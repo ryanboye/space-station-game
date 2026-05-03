@@ -17,7 +17,7 @@ There is **no supply-side market simulation**. Prices are hardcoded buy/sell sca
 | Visitor exit pay (after eating) | `mealExitPayout` `sim.ts:5025` |
 | Market spend (visitor-driven) | `marketSpendPerSec` `sim.ts:5020` × spendMultiplier × marketHelperMultiplier × tax-aware factor |
 | Resident tax | `applyResidentTaxes` `sim.ts:6357` — `RESIDENT_TAX_PER_HEAD = 0.42` per `RESIDENT_TAX_PERIOD = 24 s` (`sim.ts:149`–150) |
-| Manual sell-materials | `sellMaterials` `sim.ts:8340` |
+| Manual sell-supplies | `sellMaterials` |
 | Manual sell-raw-food | `sellRawFood` `sim.ts:8356` |
 
 ### Costs
@@ -26,15 +26,17 @@ There is **no supply-side market simulation**. Prices are hardcoded buy/sell sca
 |---|---|
 | Crew payroll | `applyCrewPayroll` `sim.ts:6340` — `PAYROLL_PER_CREW = 0.32` per `PAYROLL_PERIOD = 30 s` (`sim.ts:129`–130) |
 | Hire | `HIRE_COST = 14` |
+| Normal construction | Credits-first tile/module placement |
 | Map expansion | `EXPANSION_COST_TIERS = [2000, 4000, 6000, 8000]` (`sim.ts:219`) |
-| Manual buy-materials | `buyMaterialsDetailed` `sim.ts:8187` |
+| Manual buy-supplies | `buyMaterialsDetailed` |
+| Auto-import supplies | `controls.materialAutoImportEnabled`, target stock, and batch size |
 | Manual buy-raw-food | `buyRawFoodDetailed` `sim.ts:8259` |
-| Bodies clearance | 6 materials per batch of 4 (`clearBodies`) |
-| Construction materials | `consumeConstructionMaterials` `sim.ts:4077` |
+| Bodies clearance | 6 supplies per batch of 4 (`clearBodies`) |
+| Prototype construction supplies | `consumeConstructionMaterials` for blueprint/truss/EVA paths |
 
 ### HUD
 
-- `economyEl` shows `Materials | Credits` (`main.ts:...`).
+- `economyEl` shows `Supplies | Credits` (`main.ts:...`).
 - `economyFlowEl` shows `Credits/min: gross | payroll | net` (`main.ts:3979`–3980), backed by `metrics.creditsGrossPerMin`, `creditsPayrollPerMin`, `creditsNetPerMin`.
 
 ### Tax control

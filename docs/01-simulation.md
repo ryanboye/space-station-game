@@ -87,7 +87,7 @@ Visitor-facing rooms near service/cargo/critical systems create a small `environ
 - 60×40 grid (default).
 - 10×10 floor box at `(25,14)` to `(34,23)` with walls.
 - Open central floor at the geometric center `(coreX=30, coreY=20)`, with a small reactor alcove on the west side of the starter hull.
-- Starting resources: `credits=60`, `materials=420`, `airQuality=75`, `mealStock=20`, `rawFoodStock=40`.
+- Starting resources: `credits=260`, `supplies=100` (`rawMaterial` internally), `airQuality=75`, `mealStock=20`, `rawFoodStock=40`.
 
 `main.ts:659` then auto-paints a 2-tile starter dock at `(35,17)`–`(35,18)` so the player has somewhere for first ships to dock.
 
@@ -114,7 +114,7 @@ Two unrelated concepts share the word "scenario":
 
 ## Player framing
 
-Pause freezes gameplay but not HUD calculation. There is no separate "build phase" — placement is instant, no construction queue, no builder NPC. Materials drain at place-time. `1×/2×/4×` speed multiplies `dt`; pause is `simSpeed=0` plus the early-return at step 9.
+Pause freezes gameplay but not HUD calculation. There is no separate "build phase" — primary build tools place instantly and spend credits directly. Supplies (`rawMaterial` internally) support operations such as trade goods, hydroponics assist, repairs, and body cleanup. `1×/2×/4×` speed multiplies `dt`; pause is `simSpeed=0` plus the early-return at step 9.
 
 ## Trip-wires
 

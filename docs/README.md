@@ -7,11 +7,10 @@ This directory is a **map of how the game works** — for human contributors and
 If you're an agent picking up a task, read in this order:
 
 1. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
-2. **`15-current-roadmap.md`** — current product direction, what is done, what is partial, and what should be assigned next.
-3. **`20-station-layout-project-plans.md`** and **`21-agent-handoff-layout-sim.md`** if you are doing feature work from the current simulation/layout push.
-4. **`22-simulation-next-phases.md`** if you are changing jobs, needs, logistics, utilities, station identity, or agent behavior.
-5. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
-6. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+2. **`15-current-roadmap.md`** — the roadmap index and shared product direction.
+3. **`16/17/18-roadmap-part-*.md`** — the active `/goal` checklists split into living actors/jobs, utilities/sanitation, and command/map/contracts.
+4. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
+5. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
 
 Every system doc follows the same shape:
 
@@ -27,7 +26,7 @@ Every system doc follows the same shape:
 |---|---|
 | `00-overview.md` | Repo map, core concepts, tick flow, state shape |
 | `01-simulation.md` | Tick loop, derived caches, scenarios + cold-start |
-| `02-build-and-world.md` | Tiles, rooms, modules, zones, expansion, materials |
+| `02-build-and-world.md` | Tiles, rooms, modules, zones, expansion, supplies |
 | `03-utilities.md` | Pressurization, air, power, water, pathing |
 | `04-logistics.md` | Item nodes, transport jobs, resource flow |
 | `05-crew.md` | Crew posts, rest, priority presets, hauling |
@@ -39,10 +38,10 @@ Every system doc follows the same shape:
 | `11-render.md` | Render pipeline, wall systems, glow, sprite atlas |
 | `12-ui.md` | `main.ts` DOM driver, hotkeys, URL flags, harness hooks, save/load |
 | `13-pipelines.md` | Sprite tools, harness, sim-tests, deployment, CI, repo config |
-| `15-current-roadmap.md` | Live product roadmap, MVP target, next work, swarm guidance |
-| `20-station-layout-project-plans.md` | Handoff specs for berth approach, route intent, utilities, expanded needs, compartments, and adjacency |
-| `21-agent-handoff-layout-sim.md` | Current handoff notes for the active layout/simulation push |
-| `22-simulation-next-phases.md` | Research-backed next phases for job assignment, living agents, logistics, utilities, sanitation, and system-map contracts |
+| `15-current-roadmap.md` | Roadmap index and shared product direction |
+| `16-roadmap-part-1-living-actors-jobs.md` | Part 1: reservations, providers, logistics, job board, roles, residents |
+| `17-roadmap-part-2-utilities-hazards-sanitation.md` | Part 2: access, districts, utilities, hazards, maintenance, sanitation |
+| `18-roadmap-part-3-command-map-contracts.md` | Part 3: command center, system map, contracts, station identity, incidents |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions

@@ -80,6 +80,18 @@ function heuristic(a: number, b: number, width: number): number {
   return Math.abs(ax - bx) + Math.abs(ay - by);
 }
 
+function deterministicUnit(seed: number, salt: number): number {
+  const value = Math.sin(seed * 12.9898 + salt * 78.233) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function routeVariationCost(tile: number, options: PathOptions): number {
+  if (options.routeSeed === undefined) return 0;
+  if (options.intent === 'logistics' || options.intent === 'security') return 0;
+  const amplitude = options.intent === 'visitor' ? 0.12 : options.intent === 'resident' ? 0.09 : 0.06;
+  return deterministicUnit(tile + options.routeSeed * 97, 19) * amplitude;
+}
+
 function rebuildPath(cameFrom: Int32Array, goal: number): number[] {
   const out: number[] = [];
   let current = goal;
@@ -273,7 +285,7 @@ export function findPath(
       if (closed[next]) continue;
       const occupancyPenalty = occupancyPenaltyForIntent(options, occupancyByTile?.get(next) ?? 0);
       const routeCost = routeIntentTileCost(state, next, goal, options);
-      const tentativeG = currentG + 1 + occupancyPenalty + routeCost;
+      const tentativeG = currentG + 1 + occupancyPenalty + routeCost + routeVariationCost(next, options);
       if (tentativeG >= gScore[next]) continue;
       cameFrom[next] = current;
       gScore[next] = tentativeG;
