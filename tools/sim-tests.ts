@@ -1281,6 +1281,27 @@ function testEntropyMaintenanceScenarioActivatesMechanicalPath(): void {
   assertCondition(state.controls.diagnosticOverlay === 'maintenance', 'Maintenance scenario should open the maintenance overlay.');
 }
 
+function testOldSaveExteriorMaintenanceStartsFromEmptyDebt(): void {
+  const state = createInitialState({ seed: 91206 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  state.maintenanceDebts = [];
+  state.controls.paused = false;
+  state.controls.simSpeed = 4;
+
+  tick(state, 60);
+
+  assertCondition(state.maintenanceDebts.length > 0, 'Loaded saves without 19-2 debt entries should discover maintenance targets.');
+  assertCondition(
+    state.metrics.maintenanceDebtMax > 1,
+    `Loaded saves should show visible early maintenance drift, got max ${state.metrics.maintenanceDebtMax.toFixed(1)}%.`
+  );
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt > 1),
+    'Loaded saves should begin accumulating exterior debris maintenance debt.'
+  );
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -5734,6 +5755,7 @@ function run(): void {
   testExteriorRepairBlocksWithoutAirlock();
   testEvaRepairReducesExteriorMaintenanceDebt();
   testEntropyMaintenanceScenarioActivatesMechanicalPath();
+  testOldSaveExteriorMaintenanceStartsFromEmptyDebt();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();

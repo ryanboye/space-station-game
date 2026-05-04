@@ -268,6 +268,7 @@ app.innerHTML = `
         </div>
         <div class="row compact list-row"><span>Rating</span><span class="value" id="health-rating">70</span></div>
         <small id="room-warnings">Room warnings: none</small>
+        <small id="maintenance-status">Maintenance: tracking 0 targets | max 0% | avg 0% | open 0</small>
         <small id="resident-conversion-summary" class="hidden"></small>
         <small id="visitor-feelings" class="hidden"></small>
         <small id="rating-reasons" class="hidden"></small>
@@ -1209,6 +1210,7 @@ const stallReasonsEl = document.querySelector<HTMLElement>('#stall-reasons')!;
 const crewRetargetsEl = document.querySelector<HTMLElement>('#crew-retargets')!;
 const foodChainHintEl = document.querySelector<HTMLElement>('#food-chain-hint')!;
 const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
+const maintenanceStatusEl = document.querySelector<HTMLElement>('#maintenance-status')!;
 const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
@@ -2003,6 +2005,17 @@ function ratingToneColor(): string {
 function ratingSummaryText(): string {
   const trend = state.metrics.stationRatingTrendPerMin;
   return `${Math.round(state.metrics.stationRating)} (${trend >= 0 ? '+' : ''}${trend.toFixed(1)}/min)`;
+}
+
+function maintenanceStatusText(): string {
+  return `Maintenance: tracking ${state.maintenanceDebts.length} targets | max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | avg ${state.metrics.maintenanceDebtAvg.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
+}
+
+function maintenanceStatusToneColor(): string {
+  if (state.metrics.maintenanceDebtMax >= 60) return 'var(--danger)';
+  if (state.metrics.maintenanceJobsOpen > 0 || state.metrics.maintenanceDebtMax >= 20) return 'var(--warn)';
+  if (state.maintenanceDebts.length > 0) return 'var(--ok)';
+  return '#8ea2bd';
 }
 
 function residentConversionTone(): 'default' | 'warn' | 'danger' | 'ok' {
@@ -6219,6 +6232,8 @@ function frame(now: number): void {
     state.metrics.morale > 65 ? '#6edb8f' : state.metrics.morale > 40 ? '#ffcf6e' : '#ff7676';
   stationRatingEl.style.color = ratingToneColor();
   healthRatingEl.style.color = ratingToneColor();
+  maintenanceStatusEl.textContent = maintenanceStatusText();
+  maintenanceStatusEl.style.color = maintenanceStatusToneColor();
   visitorFeelingsEl.textContent = `Visitor feelings: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
   moraleReasonsEl.textContent = `Crew morale drivers: ${state.metrics.crewMoraleDrivers.join(' | ') || 'none'}`;
   ratingReasonsEl.textContent = `Rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
