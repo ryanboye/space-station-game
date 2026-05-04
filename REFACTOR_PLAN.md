@@ -26,8 +26,9 @@ For each extraction:
 ## Current Status
 
 - Planning docs created.
-- `src/sim/sim.ts` has not been edited for this planning pass.
-- Current `sim.ts` size: 15,535 lines.
+- 2026-05-04: extracted `createInitialState` → `src/sim/initial-state.ts` (-703 lines).
+- 2026-05-04: extracted visitor/resident/crew inspectors → `src/sim/actor-inspectors.ts` (-463 lines).
+- Current `sim.ts` size: **14,372 lines** (down from 15,535).
 - Existing unrelated untracked sprite archives are present under `tools/sprites/archive/`; they are outside this refactor.
 
 ## Safest First Extraction
