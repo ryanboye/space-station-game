@@ -282,6 +282,12 @@ function clampRender(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+const DEBRIS_PARALLAX_LAYERS = [
+  { scale: 0.58, alpha: 0.46, amplitude: 8, period: 96, rotation: 3 },
+  { scale: 0.88, alpha: 0.72, amplitude: 18, period: 68, rotation: 7 },
+  { scale: 1.22, alpha: 0.95, amplitude: 34, period: 46, rotation: 12 }
+] as const;
+
 function drawDebrisFallback(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -292,6 +298,7 @@ function drawDebrisFallback(
 ): void {
   ctx.save();
   ctx.globalAlpha = alpha;
+  const rotation = renderHash01(Math.floor(x + y), 3, 4) * Math.PI;
   if (tone === 'spark') {
     ctx.fillStyle = '#ffeaa6';
     ctx.beginPath();
@@ -310,13 +317,15 @@ function drawDebrisFallback(
     return;
   }
   const color = tone === 'metal' ? '#9ba6ae' : tone === 'ice' ? '#9ee6ff' : tone === 'planet' ? '#9b856f' : '#7d7468';
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.ellipse(x, y, size * 0.4, size * 0.28, renderHash01(Math.floor(x + y), 3, 4) * Math.PI, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, size * 0.4, size * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
   ctx.beginPath();
-  ctx.arc(x + size * 0.08, y + size * 0.04, size * 0.12, 0, Math.PI * 2);
+  ctx.arc(size * 0.08, size * 0.04, size * 0.12, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -332,19 +341,28 @@ function renderDebrisBackdrop(
   const worldH = state.height * TILE_SIZE;
   const spriteCount = 180;
   for (let i = 0; i < spriteCount; i++) {
-    const x = renderHash01(state.seedAtCreation, i, 1) * worldW;
-    const y = renderHash01(state.seedAtCreation, i, 2) * worldH;
-    if (viewport && (x < viewport.x - 180 || x > viewport.x + viewport.width + 180 || y < viewport.y - 180 || y > viewport.y + viewport.height + 180)) {
+    const layer = DEBRIS_PARALLAX_LAYERS[Math.floor(renderHash01(state.seedAtCreation, i, 0) * DEBRIS_PARALLAX_LAYERS.length)];
+    const baseX = renderHash01(state.seedAtCreation, i, 1) * worldW;
+    const baseY = renderHash01(state.seedAtCreation, i, 2) * worldH;
+    const baseTileX = clampRender(Math.floor(baseX / TILE_SIZE), 0, state.width - 1);
+    const baseTileY = clampRender(Math.floor(baseY / TILE_SIZE), 0, state.height - 1);
+    const baseTile = toIndex(baseTileX, baseTileY, state.width);
+    if (state.tiles[baseTile] !== TileType.Space && state.tiles[baseTile] !== TileType.Truss) continue;
+    const debris = mapConditionSamplesAt(state, baseTile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
+    const keep = renderHash01(state.seedAtCreation, i, 3) < 0.18 + debris * 0.82;
+    if (!keep) continue;
+    const phase = renderHash01(state.seedAtCreation, i, 4) * Math.PI * 2;
+    const orbit = (state.now / layer.period) * Math.PI * 2 + phase;
+    const sway = (state.now / (layer.period * 1.7)) * Math.PI * 2 + phase * 0.61;
+    const x = baseX + Math.cos(orbit) * layer.amplitude * (0.6 + debris * 0.8);
+    const y = baseY + Math.sin(sway) * layer.amplitude * (0.45 + debris * 0.55);
+    if (viewport && (x < viewport.x - 190 || x > viewport.x + viewport.width + 190 || y < viewport.y - 190 || y > viewport.y + viewport.height + 190)) {
       continue;
     }
     const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
     const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
     const tile = toIndex(tileX, tileY, state.width);
     if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
-    const debris = mapConditionSamplesAt(state, tile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
-    const keep = renderHash01(state.seedAtCreation, i, 3) < 0.18 + debris * 0.82;
-    if (!keep) continue;
-    const drift = ((state.now * (0.5 + debris) * 0.08 + renderHash01(state.seedAtCreation, i, 4) * 100) % 20) - 10;
     const variant = renderHash01(state.seedAtCreation, i, 5);
     const spriteKey =
       i % 23 === 0
@@ -355,11 +373,12 @@ function renderDebrisBackdrop(
             ? SPACE_BACKDROP_SPRITE_KEYS[2]
             : SPACE_BACKDROP_SPRITE_KEYS[3];
     const baseSize = spriteKey.includes('planet') ? 150 : spriteKey.includes('cluster') ? 96 : 42;
-    const size = baseSize * (0.82 + renderHash01(state.seedAtCreation, i, 6) * 0.7);
-    const alpha = clampRender(0.2 + debris * 0.38, 0.18, spriteKey.includes('planet') ? 0.48 : 0.72);
-    const dx = x + drift - size * 0.5;
-    const dy = y - drift * 0.35 - size * 0.5;
-    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, 0, alpha)) continue;
+    const size = baseSize * layer.scale * (0.82 + renderHash01(state.seedAtCreation, i, 6) * 0.7);
+    const alpha = clampRender((0.18 + debris * 0.38) * layer.alpha, 0.14, spriteKey.includes('planet') ? 0.5 : 0.78);
+    const rotation = Math.sin(orbit * 0.43 + phase) * layer.rotation + state.now * (0.12 + layer.rotation * 0.012) * (variant > 0.5 ? 1 : -1);
+    const dx = x - size * 0.5;
+    const dy = y - size * 0.5;
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, rotation, alpha)) continue;
     drawDebrisFallback(
       ctx,
       dx + size * 0.5,
@@ -376,10 +395,18 @@ function renderDebrisBackdrop(
     const pos = fromIndex(target, state.width);
     const debris = mapConditionSamplesAt(state, target).find((sample) => sample.kind === 'debris-risk')?.value ?? 0.55;
     for (let j = 0; j < 3; j++) {
+      const layer = DEBRIS_PARALLAX_LAYERS[j];
       const angle = renderHash01(state.seedAtCreation + target, j, 11) * Math.PI * 2;
+      const orbit = state.now / (layer.period * 0.9) + angle;
       const distance = TILE_SIZE * (2.4 + j * 1.2 + renderHash01(state.seedAtCreation + target, j, 12));
-      const x = (pos.x + 0.5) * TILE_SIZE + Math.cos(angle) * distance;
-      const y = (pos.y + 0.5) * TILE_SIZE + Math.sin(angle) * distance;
+      const x =
+        (pos.x + 0.5) * TILE_SIZE +
+        Math.cos(angle) * distance +
+        Math.cos(orbit) * layer.amplitude * 0.5;
+      const y =
+        (pos.y + 0.5) * TILE_SIZE +
+        Math.sin(angle) * distance +
+        Math.sin(orbit * 1.37) * layer.amplitude * 0.42;
       if (viewport && (x < viewport.x - 80 || x > viewport.x + viewport.width + 80 || y < viewport.y - 80 || y > viewport.y + viewport.height + 80)) {
         continue;
       }
@@ -388,9 +415,10 @@ function renderDebrisBackdrop(
       const tile = toIndex(tileX, tileY, state.width);
       if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
       const key = j === 0 ? SPACE_BACKDROP_SPRITE_KEYS[1] : j === 1 ? SPACE_BACKDROP_SPRITE_KEYS[2] : SPACE_BACKDROP_SPRITE_KEYS[3];
-      const size = TILE_SIZE * (1.1 + debris * 1.1 + j * 0.18);
-      const alpha = clampRender(0.38 + debris * 0.34, 0.36, 0.78);
-      if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) continue;
+      const size = TILE_SIZE * layer.scale * (1.1 + debris * 1.1 + j * 0.18);
+      const alpha = clampRender((0.38 + debris * 0.34) * layer.alpha, 0.28, 0.78);
+      const rotation = Math.sin(orbit) * layer.rotation + state.now * 0.28 * (j % 2 === 0 ? 1 : -1);
+      if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
       drawDebrisFallback(ctx, x, y, size, j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock', alpha);
     }
   }
