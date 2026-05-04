@@ -15,13 +15,18 @@ This map is a current-orientation document for incremental simulation refactors.
 | `src/sim/save.ts` | Save schema, migration, hydration. Imports mutators from `sim.ts` to rebuild runtime state from snapshots. |
 | `src/sim/scenarios.ts` | Deterministic fixture builders for the Node sim tests. Imports public and internal sim helpers from `sim.ts`. |
 | `src/sim/cold-start-scenarios.ts` | URL scenario overlays for local demos and visual harnesses. |
+| `src/sim/initial-state.ts` | `createInitialState` — deterministic factory for a fresh `StationState`. Re-exported via `sim.ts`. Extracted 2026-05-04. |
+| `src/sim/actor-inspectors.ts` | Visitor / resident / crew inspector derivations (`get{Visitor,Resident,Crew}InspectorById`) plus their private helpers. Pure read-only. Re-exported via `sim.ts`. Extracted 2026-05-04. |
+| `src/sim/expansion.ts` | `expandMap` + `getNextExpansionCost` + `canExpandDirection` + ExpandMapResult/FailureReason types. Re-exported via `sim.ts`. Extracted 2026-05-04. |
+| `src/sim/construction.ts` | Construction-site planning + EVA helpers (suit-up, oxygen, airlock detection, build jobs, applyConstructionSite). Public surface (cancel/plan-tile/plan-module) re-exported via `sim.ts`; internal helpers (createConstructionJobs, applyConstructionSite, etc.) imported back into sim.ts for use in tick + crew logic. Extracted 2026-05-04. |
+| `src/sim/dock-controls.ts` | Public dock + berth control APIs (setDockX / setBerthX / getDockByTile / validateDockPlacement / ensureBerthConfig + per-anchor berth-config storage helpers + pruneOrphanedBerthConfigs). Re-exported via `sim.ts`. Extracted 2026-05-04. |
 | `src/sim/content/` | Static content for residents, command progression, ships, unlocks, and tooltips. |
 | `tools/sim-tests.ts` | Main deterministic simulation test runner. Imports many direct exports from `src/sim/sim.ts`. |
 | `tools/sim-perf.ts` | Simulation perf harness. |
 
 ## Current `sim.ts` Responsibilities
 
-`src/sim/sim.ts` is 15,535 lines and currently acts as the orchestration layer plus many subsystem implementations.
+`src/sim/sim.ts` is 13,646 lines (down from 15,535 after the 2026-05-04 extractions: createInitialState, actor inspectors, expansion, construction + EVA, dock + berth controls — total **−1,889 lines / ~12.2%**) and currently acts as the orchestration layer plus many subsystem implementations.
 
 | Lines | Area | Notes |
 | --- | --- | --- |

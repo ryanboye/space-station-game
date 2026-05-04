@@ -123,9 +123,31 @@ import {
   type StationState,
   type Visitor
 } from './types';
+import {
+  CONSTRUCTION_BUILD_RATE_PER_SEC,
+  EVA_LOW_OXYGEN_SEC,
+  activeAirlockTiles,
+  applyConstructionSite,
+  cleanupConstructionSites,
+  createConstructionJobs,
+  crewAtConstructionSite,
+  findConstructionPath,
+  findSpacePath,
+  moduleConstructionCostForDefinition,
+  removeConstructionAtTile,
+  updateEvaSuitForRoute,
+  validateModulePlacementForConstruction
+} from './construction';
+import {
+  ALL_SHIP_SIZES_FOR_BERTH,
+  ALL_SHIP_TYPES_FOR_BERTH,
+  findBerthConfigByAnchor,
+  getDockByTile,
+  pruneOrphanedBerthConfigs
+} from './dock-controls';
 
 const BASE_CAPACITY = 30;
-const CYCLE_DURATION = 15;
+export const CYCLE_DURATION = 15;
 const MAX_SHIPS_PER_CYCLE = 3;
 const TRAFFIC_ARRIVAL_MIN_DELAY_SEC = 3.5;
 const TRAFFIC_ARRIVAL_MAX_DELAY_SEC = 28;
@@ -172,8 +194,8 @@ const SANITATION_JOB_PATCH_RADIUS = 2;
 const SANITATION_MAX_OPEN_JOBS = 14;
 const SANITATION_VISITOR_RATING_PENALTY_PER_SEC = 0.0014;
 const SANITATION_RESIDENT_STRESS_PER_SEC = 0.018;
-const STARTING_CREDITS = 260;
-const STARTING_SUPPLIES = 100;
+export const STARTING_CREDITS = 260;
+export const STARTING_SUPPLIES = 100;
 const MATERIAL_IMPORT_CADENCE_SEC = 10;
 const MATERIAL_IMPORT_UNIT_BASE_COST = 0.72;
 const HYDROPONICS_SUPPLY_PER_RAW_MEAL = 0.02;
@@ -218,7 +240,7 @@ const VISITOR_BLOCKED_QUEUE_REROUTE_TICKS = 18;
 const VISITOR_BLOCKED_FULL_REASSIGN_TICKS = 34;
 const MAX_RESERVATIONS_PER_TABLE = SERVICE_CAPACITY.tableReservationLimit;
 const MAX_PENDING_FOOD_JOBS = 10;
-const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
+export const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
 const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const JOB_BOARD_CADENCE_SEC = 0.35;
 const AIR_DISTRESS_THRESHOLD = 15;
@@ -227,7 +249,7 @@ const AIR_DISTRESS_EXPOSURE_SEC = 18;
 const AIR_CRITICAL_EXPOSURE_SEC = 38;
 const AIR_DEATH_EXPOSURE_SEC = 62;
 const AIR_BLOCKED_WARNING_DELAY_SEC = 8;
-const DORM_SEEK_ENERGY_THRESHOLD = 55;
+export const DORM_SEEK_ENERGY_THRESHOLD = 55;
 const BODY_CLEAR_BATCH = 4;
 const BODY_CLEAR_MATERIAL_COST = 6;
 const TRUSS_EXPANSION_FLOOR_COST = 1;
@@ -262,7 +284,7 @@ const RESIDENT_SOCIAL_DECAY_PER_SEC = 0.95;
 const RESIDENT_SOCIAL_RECOVERY_PER_SEC = 2.6;
 const RESIDENT_SAFETY_DECAY_PER_SEC = 1.1;
 const RESIDENT_SAFETY_RECOVERY_PER_SEC = 1.8;
-const CREW_REST_ENERGY_THRESHOLD = 42;
+export const CREW_REST_ENERGY_THRESHOLD = 42;
 const CREW_REST_EXIT_ENERGY_THRESHOLD = 86;
 const CREW_REST_CRITICAL_ENERGY_THRESHOLD = 18;
 const CREW_REST_EMERGENCY_WAKE_MIN_ENERGY = 30;
@@ -273,18 +295,18 @@ const CREW_SHIFT_BUCKET_COUNT = 3;
 const CREW_SHIFT_WINDOW_SEC = 10;
 const CREW_MAX_RESTING_RATIO = 0.35;
 const CREW_EMERGENCY_WAKE_RATIO = 0.15;
-const CREW_CLEAN_HYGIENE_THRESHOLD = 38;
+export const CREW_CLEAN_HYGIENE_THRESHOLD = 38;
 // Bladder is a short-cycle need (~3x faster decay than energy). Crew seek a
 // Hygiene tile at the threshold; visit is brief (5-7 sec dwell), then they
 // return to whatever they were doing. Mirrors the visitor toilet v0 pattern.
-const CREW_BLADDER_TOILET_THRESHOLD = 25;
+export const CREW_BLADDER_TOILET_THRESHOLD = 25;
 const CREW_BLADDER_DECAY_PER_SEC = 1.25;
 const CREW_BLADDER_RELIEF_PER_SEC = 22;
 const CREW_BLADDER_EXIT_THRESHOLD = 88;
 const CREW_TOILET_MAX_PER_TILE = 1;
 // Thirst: short-cycle drink need. Slower decay than bladder so crew typically
 // only need a sip a few times per shift. Cantina or WaterFountain refills.
-const CREW_THIRST_DRINK_THRESHOLD = 32;
+export const CREW_THIRST_DRINK_THRESHOLD = 32;
 const CREW_THIRST_DECAY_PER_SEC = 0.85;
 const CREW_THIRST_RELIEF_CANTINA_PER_SEC = 28;
 const CREW_THIRST_RELIEF_FOUNTAIN_PER_SEC = 18;
@@ -320,7 +342,7 @@ const VISITOR_PREFERENCE_JITTER = 0.22;
 const DOCK_APPROACH_LENGTH = 4;
 const DOCK_QUEUE_MAX_TIME_SEC = TASK_TIMINGS.dockQueueMaxSec;
 const VISITOR_MIN_STAY_SEC = TASK_TIMINGS.visitorMinStaySec;
-const STATION_RATING_START = 70;
+export const STATION_RATING_START = 70;
 const VISITOR_COMFORT_WALK_THRESHOLD = 30;
 const VISITOR_WALK_PENALTY_RATE = 0.006;
 const VISITOR_WALK_PENALTY_MAX_PER_TRIP = 0.1;
@@ -330,8 +352,8 @@ const AIR_SAFETY_BUFFER = 0.24;
 const ASSIGNMENT_PREEMPT_MULTIPLIER = 1.25;
 const ASSIGNMENT_PREEMPT_DELTA = 2;
 const ASSIGNMENT_PATH_COST_WEIGHT = 0.14;
-const EXPANSION_STEP_TILES = 40;
-const EXPANSION_COST_TIERS = [2000, 4000, 6000, 8000] as const;
+export const EXPANSION_STEP_TILES = 40;
+export const EXPANSION_COST_TIERS = [2000, 4000, 6000, 8000] as const;
 const PATH_CACHE_TTL_SEC = 0.45;
 const PATH_CACHE_MAX_ENTRIES = 1200;
 
@@ -367,7 +389,7 @@ const RESERVATION_KINDS: ReservationKind[] = [
   'actor-job'
 ];
 
-function laneFromFacing(facing: SpaceLane): SpaceLane {
+export function laneFromFacing(facing: SpaceLane): SpaceLane {
   return facing;
 }
 
@@ -392,7 +414,7 @@ function normalizeTrafficWeights(weights: Record<ShipType, number>): Record<Ship
   };
 }
 
-function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfile> {
+export function generateLaneProfiles(state: StationState): Record<SpaceLane, LaneProfile> {
   const profiles = {} as Record<SpaceLane, LaneProfile>;
   // System-map driven path (MVP): derive lane weights from the dominant
   // factions' shipBias tables. Legacy fallback (system null/undefined)
@@ -688,7 +710,7 @@ function collectRoomTilesByPolicy(state: StationState, room: RoomType, policies:
   return out;
 }
 
-function moduleFootprint(type: ModuleType, rotation: ModuleRotation): { width: number; height: number } {
+export function moduleFootprint(type: ModuleType, rotation: ModuleRotation): { width: number; height: number } {
   const def = MODULE_DEFINITIONS[type];
   if (!def) return { width: 1, height: 1 };
   if (rotation === 90 && def.rotatable) {
@@ -697,11 +719,11 @@ function moduleFootprint(type: ModuleType, rotation: ModuleRotation): { width: n
   return { width: def.width, height: def.height };
 }
 
-function moduleMount(type: ModuleType): 'floor' | 'wall' {
+export function moduleMount(type: ModuleType): 'floor' | 'wall' {
   return MODULE_DEFINITIONS[type]?.mount ?? 'floor';
 }
 
-function adjacentWalkableTiles(state: StationState, tileIndex: number): number[] {
+export function adjacentWalkableTiles(state: StationState, tileIndex: number): number[] {
   const p = fromIndex(tileIndex, state.width);
   const out: number[] = [];
   const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -739,7 +761,7 @@ export function resolveWallMountedModuleFacing(
   return null;
 }
 
-function footprintTiles(
+export function footprintTiles(
   state: StationState,
   originTile: number,
   width: number,
@@ -885,7 +907,7 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   RoomType.Observatory
 ];
 
-function createEmptyDerivedCache(): StationState['derived'] {
+export function createEmptyDerivedCache(): StationState['derived'] {
   return {
     serviceTargetsByRoom: new Map(),
     queueTargets: [],
@@ -1016,7 +1038,7 @@ export function findPath(
   return path;
 }
 
-function bumpTopologyVersion(state: StationState): void {
+export function bumpTopologyVersion(state: StationState): void {
   state.topologyVersion += 1;
   state.roomVersion += 1;
   state.moduleVersion += 1;
@@ -1056,7 +1078,7 @@ function bumpModuleVersion(state: StationState): void {
   state.derived.cacheVersions.itemNodeByTileModuleVersion = -1;
 }
 
-function bumpDockVersion(state: StationState): void {
+export function bumpDockVersion(state: StationState): void {
   state.dockVersion += 1;
   state.derived.cacheVersions.dockByTileDockVersion = -1;
   state.derived.cacheVersions.serviceReachabilityVersion = '';
@@ -1096,7 +1118,7 @@ function diagnosticsVersionKey(state: StationState): string {
   return `${state.now}:${state.roomVersion}:${state.moduleVersion}:${state.topologyVersion}`;
 }
 
-function ensureRoomClustersCache(state: StationState): void {
+export function ensureRoomClustersCache(state: StationState): void {
   const version = roomClusterVersionKey(state);
   if (state.derived.cacheVersions.roomClustersVersion === version) return;
   state.derived.roomClustersByRoom.clear();
@@ -1369,7 +1391,7 @@ function ensureDockEntitiesUpToDate(state: StationState): void {
   state.derived.cacheVersions.dockEntitiesTopologyVersion = state.topologyVersion;
 }
 
-function ensureDockByTileCache(state: StationState): void {
+export function ensureDockByTileCache(state: StationState): void {
   if (state.derived.cacheVersions.dockByTileDockVersion === state.dockVersion) return;
   state.derived.dockByTile.clear();
   for (const dock of state.docks) {
@@ -1506,7 +1528,7 @@ function roomMatchesCrewSystem(system: CrewPrioritySystem, room: RoomType): bool
   return room === systemRoomType(system);
 }
 
-function maintenanceKey(system: MaintenanceSystem, anchorTile: number): string {
+export function maintenanceKey(system: MaintenanceSystem, anchorTile: number): string {
   return `${system}:${anchorTile}`;
 }
 
@@ -2400,7 +2422,7 @@ const ARCHETYPE_PROFILES: Record<VisitorArchetype, ArchetypeProfile> = {
   }
 };
 
-const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-chain' | 'economy', CrewPriorityWeights> = {
+export const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-chain' | 'economy', CrewPriorityWeights> = {
   balanced: {
     'life-support': 9,
     reactor: 9,
@@ -2451,7 +2473,7 @@ const CREW_PRIORITY_PRESET_WEIGHTS: Record<'balanced' | 'life-support' | 'food-c
   }
 };
 
-function cloneCrewPriorityWeights(weights: CrewPriorityWeights): CrewPriorityWeights {
+export function cloneCrewPriorityWeights(weights: CrewPriorityWeights): CrewPriorityWeights {
   return {
     'life-support': weights['life-support'],
     reactor: weights.reactor,
@@ -2649,7 +2671,7 @@ function maxShipSizeForArea(area: number): ShipSize {
   return 'small';
 }
 
-function shipSizesUpTo(maxSize: ShipSize): ShipSize[] {
+export function shipSizesUpTo(maxSize: ShipSize): ShipSize[] {
   if (maxSize === 'small') return ['small'];
   if (maxSize === 'medium') return ['small', 'medium'];
   return ['small', 'medium', 'large'];
@@ -2713,7 +2735,7 @@ function adjacentDockTiles(state: StationState, seed: number): number[] {
   return cluster;
 }
 
-function validateDockPlacementAt(state: StationState, tileIndex: number, facing: SpaceLane): DockPlacementValidation {
+export function validateDockPlacementAt(state: StationState, tileIndex: number, facing: SpaceLane): DockPlacementValidation {
   if (state.tiles[tileIndex] === TileType.Space) {
     return { valid: false, reason: 'dock requires built hull tile', approachTiles: [] };
   }
@@ -2766,7 +2788,7 @@ function chooseDockFacingForPlacement(state: StationState, tileIndex: number): S
   return null;
 }
 
-function validateDockPlacementWithNeighbors(state: StationState, tileIndex: number, facing?: SpaceLane): DockPlacementValidation {
+export function validateDockPlacementWithNeighbors(state: StationState, tileIndex: number, facing?: SpaceLane): DockPlacementValidation {
   const resolvedFacing = facing ?? chooseDockFacingForPlacement(state, tileIndex);
   if (!resolvedFacing) {
     return { valid: false, reason: 'no outward approach lane', approachTiles: [] };
@@ -2831,7 +2853,7 @@ function isConnectedToCore(state: StationState, proposedTiles: TileType[]): bool
   return true;
 }
 
-function tileBuildCost(tile: TileType): number {
+export function tileBuildCost(tile: TileType): number {
   return MATERIAL_COST[tile];
 }
 
@@ -3024,7 +3046,7 @@ function isIncidentActive(incident: IncidentEntity): boolean {
   return incident.stage !== 'resolved' && incident.stage !== 'failed';
 }
 
-function residentConfrontationActive(state: StationState, resident: Resident): boolean {
+export function residentConfrontationActive(state: StationState, resident: Resident): boolean {
   const incidentId = resident.activeIncidentId ?? null;
   if (incidentId === null) return (resident.confrontationUntil ?? 0) > state.now;
   const incident = state.incidents.find((entry) => entry.id === incidentId);
@@ -3312,7 +3334,7 @@ function setResidentPath(state: StationState, resident: Resident, path: number[]
   resident.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
 }
 
-function setCrewPath(state: StationState, crew: CrewMember, path: number[]): void {
+export function setCrewPath(state: StationState, crew: CrewMember, path: number[]): void {
   crew.path = path;
   crew.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
 }
@@ -3409,7 +3431,7 @@ function activeFightIncidentForResident(state: StationState, residentId: number)
 
 // Read the local air quality at a tile. Falls back to the global metric if the
 // local map hasn't been computed yet (older saves, freshly expanded tiles).
-function airQualityAt(state: StationState, tileIndex: number): number {
+export function airQualityAt(state: StationState, tileIndex: number): number {
   if (tileIndex < 0 || tileIndex >= state.airQualityByTile.length) return state.metrics.airQuality;
   const local = state.airQualityByTile[tileIndex];
   if (Number.isNaN(local) || local <= -1) return state.metrics.airQuality;
@@ -3856,7 +3878,7 @@ function ensureResidentPopulation(_state: StationState): void {
   // a seam for future population-cap enforcement.
 }
 
-function rebuildDockEntities(state: StationState): void {
+export function rebuildDockEntities(state: StationState): void {
   const byAnyTile = new Map<number, DockEntity>();
   const next: DockEntity[] = [];
   for (const dock of state.docks) {
@@ -4055,7 +4077,7 @@ function isCapabilitySuperset(have: CapabilityTag[], required: CapabilityTag[]):
  * Returns null if no berth matches — caller then falls back to legacy
  * Dock-tile pathing in `pickDockForShip`. v0 doesn't break old saves.
  */
-function pickBerthForShip(
+export function pickBerthForShip(
   state: StationState,
   shipType: ShipType,
   shipSize: ShipSize
@@ -6624,7 +6646,7 @@ function totalItemsInNode(node: StationState['itemNodes'][number]): number {
   return ITEM_TYPES.reduce((acc, itemType) => acc + (node.items[itemType] ?? 0), 0);
 }
 
-function itemStockAtNode(
+export function itemStockAtNode(
   state: StationState,
   tileIndex: number,
   itemType: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'
@@ -6857,13 +6879,13 @@ function takeItemAcrossTargets(
   return removed;
 }
 
-function materialInventoryTiles(state: StationState): number[] {
+export function materialInventoryTiles(state: StationState): number[] {
   const logisticsTargets = collectServiceTargets(state, RoomType.LogisticsStock);
   const storageTargets = collectServiceTargets(state, RoomType.Storage);
   return [...new Set([...storageTargets, ...logisticsTargets])];
 }
 
-function materialInventoryTotal(state: StationState): number {
+export function materialInventoryTotal(state: StationState): number {
   return materialInventoryTiles(state).reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMaterial'), 0);
 }
 
@@ -6889,7 +6911,7 @@ function consumeOperationalSupplies(state: StationState, amount: number): number
   return removed;
 }
 
-function consumeConstructionMaterials(state: StationState, amount: number): boolean {
+export function consumeConstructionMaterials(state: StationState, amount: number): boolean {
   if (amount <= 0) return true;
   const inventoryTiles = materialInventoryTiles(state);
   if (inventoryTiles.length === 0) {
@@ -6914,459 +6936,28 @@ function consumeConstructionMaterials(state: StationState, amount: number): bool
   return true;
 }
 
-const CONSTRUCTION_CARRY_AMOUNT = 8;
-const CONSTRUCTION_BUILD_RATE_PER_SEC = 6;
-const EVA_OXYGEN_MAX_SEC = 240;
-const EVA_LOW_OXYGEN_SEC = 18;
-const TRUSS_CONSTRUCTION_MATERIAL_COST = 1;
-const TRUSS_CONSTRUCTION_WORK_REQUIRED = 0.8;
-
-function isEvaTraversalTile(state: StationState, tileIndex: number): boolean {
-  const tile = state.tiles[tileIndex];
-  return tile === TileType.Space || tile === TileType.Truss || tile === TileType.Airlock || (isWalkable(tile) && !state.pressurized[tileIndex]);
-}
-
-function shouldSuitUpFromAirlock(state: StationState, crew: CrewMember): boolean {
-  if (state.tiles[crew.tileIndex] !== TileType.Airlock) return false;
-  const nextTile = crew.path[0];
-  return nextTile !== undefined && nextTile >= 0 && isEvaTraversalTile(state, nextTile) && state.tiles[nextTile] !== TileType.Airlock;
-}
-
-function updateEvaSuitForRoute(state: StationState, crew: CrewMember, dt: number): void {
-  if (state.tiles[crew.tileIndex] === TileType.Airlock) {
-    if (shouldSuitUpFromAirlock(state, crew)) {
-      crew.evaSuit = true;
-      crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
-    } else {
-      crew.evaSuit = false;
-      crew.evaOxygenSec = 0;
-    }
-    return;
-  }
-
-  if (!isEvaTraversalTile(state, crew.tileIndex)) return;
-  if (!crew.evaSuit) {
-    crew.evaSuit = true;
-    crew.evaOxygenSec = EVA_OXYGEN_MAX_SEC;
-  } else {
-    crew.evaOxygenSec = Math.max(0, crew.evaOxygenSec - dt);
-  }
-}
-
-function moduleConstructionCostForDefinition(module: ModuleType, rotation: ModuleRotation): number {
-  const footprint = moduleFootprint(module, rotation);
-  const base = module === ModuleType.WallLight ? 2 : footprint.width * footprint.height * 3;
-  return Math.max(2, base);
-}
-
-function moduleConstructionCost(state: StationState, module: ModuleType, rotation: ModuleRotation): number {
-  return moduleConstructionCostForDefinition(module, rotation);
-}
-
-function refundConstructionMaterials(state: StationState, amount: number): void {
-  if (amount <= 0) return;
-  state.legacyMaterialStock += amount;
-  state.metrics.materials = Math.max(0, state.legacyMaterialStock + materialInventoryTotal(state));
-}
-
-function constructionSiteCoversTile(state: StationState, site: ConstructionSite, tileIndex: number): boolean {
-  if (site.tileIndex === tileIndex) return true;
-  if (site.kind !== 'module' || site.targetModule === undefined) return false;
-  const footprint = moduleFootprint(site.targetModule, site.rotation ?? 0);
-  return footprintTiles(state, site.tileIndex, footprint.width, footprint.height).includes(tileIndex);
-}
-
-function removeConstructionAtTile(state: StationState, tileIndex: number, refundMaterials = false): boolean {
-  const removedSites = state.constructionSites.filter((site) => constructionSiteCoversTile(state, site, tileIndex));
-  const removedIds = new Set(removedSites.map((site) => site.id));
-  if (removedIds.size <= 0) return false;
-  if (refundMaterials) {
-    refundConstructionMaterials(
-      state,
-      removedSites.reduce((sum, site) => sum + Math.max(0, site.deliveredMaterials), 0)
-    );
-  }
-  state.constructionSites = state.constructionSites.filter((site) => !removedIds.has(site.id));
-  for (const job of state.jobs) {
-    if (job.constructionSiteId === undefined || !removedIds.has(job.constructionSiteId)) continue;
-    if (job.state === 'done' || job.state === 'expired') continue;
-    const assignedCrewId = job.assignedCrewId;
-    job.expiredFromState = job.state;
-    job.state = 'expired';
-    job.completedAt = state.now;
-    job.assignedCrewId = null;
-    job.stallReason = 'none';
-    if (assignedCrewId !== null) {
-      const crew = state.crewMembers.find((c) => c.id === assignedCrewId);
-      if (crew) {
-        if (refundMaterials && crew.carryingItemType === 'rawMaterial' && crew.carryingAmount > 0) {
-          refundConstructionMaterials(state, crew.carryingAmount);
-        }
-        crew.activeJobId = null;
-        crew.carryingItemType = null;
-        crew.carryingAmount = 0;
-        setCrewPath(state, crew, []);
-        if (state.tiles[crew.tileIndex] === TileType.Airlock || (state.pressurized[crew.tileIndex] && !isEvaTraversalTile(state, crew.tileIndex))) {
-          crew.evaSuit = false;
-          crew.evaOxygenSec = 0;
-        }
-      }
-    }
-  }
-  return true;
-}
-
-export function cancelConstructionAtTile(state: StationState, tileIndex: number): boolean {
-  if (tileIndex < 0 || tileIndex >= state.tiles.length) return false;
-  return removeConstructionAtTile(state, tileIndex, true);
-}
-
-function hasAdjacentBuildAnchor(state: StationState, tileIndex: number): boolean {
-  const p = fromIndex(tileIndex, state.width);
-  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  for (const [dx, dy] of deltas) {
-    const x = p.x + dx;
-    const y = p.y + dy;
-    if (!inBounds(x, y, state.width, state.height)) continue;
-    const next = toIndex(x, y, state.width);
-    if (state.tiles[next] !== TileType.Space) return true;
-    if (
-      state.constructionSites.some(
-        (site) => site.kind === 'tile' && site.tileIndex === next && site.state !== 'done' && site.targetTile !== TileType.Space
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function createConstructionSite(
-  state: StationState,
-  site: Omit<ConstructionSite, 'id' | 'assignedCrewId' | 'state' | 'blockedReason' | 'createdAt'>
-): ConstructionSite {
-  removeConstructionAtTile(state, site.tileIndex);
-  const next: ConstructionSite = {
-    ...site,
-    id: state.constructionSiteSpawnCounter++,
-    assignedCrewId: null,
-    state: 'planned',
-    blockedReason: null,
-    createdAt: state.now
-  };
-  state.constructionSites.push(next);
-  return next;
-}
-
-export function planTileConstruction(state: StationState, index: number, tile: TileType): { ok: boolean; reason?: string } {
-  if (index < 0 || index >= state.tiles.length) return { ok: false, reason: 'out of bounds' };
-  if (state.tiles[index] === tile) return { ok: true };
-  if (tile === TileType.Truss && state.tiles[index] !== TileType.Space) {
-    return { ok: false, reason: 'truss must be built in space' };
-  }
-  if (tile === TileType.Space) {
-    removeConstructionAtTile(state, index);
-    const changed = trySetTile(state, index, tile);
-    return changed ? { ok: true } : { ok: false, reason: 'cannot erase disconnected hull' };
-  }
-  if (tile === TileType.Dock) {
-    const dockCheck = validateDockPlacementWithNeighbors(state, index);
-    if (!dockCheck.valid) return { ok: false, reason: 'invalid dock placement' };
-  }
-  const requiresEva = state.tiles[index] === TileType.Space || state.tiles[index] === TileType.Truss || tile === TileType.Truss;
-  if (requiresEva && !hasAdjacentBuildAnchor(state, index)) {
-    return { ok: false, reason: 'must connect to hull or planned construction' };
-  }
-  if (tile === TileType.Truss) {
-    if (!consumeConstructionMaterials(state, TRUSS_CONSTRUCTION_MATERIAL_COST)) {
-      return { ok: false, reason: 'no construction materials' };
-    }
-    createConstructionSite(state, {
-      kind: 'tile',
-      tileIndex: index,
-      targetTile: tile,
-      requiredMaterials: TRUSS_CONSTRUCTION_MATERIAL_COST,
-      deliveredMaterials: TRUSS_CONSTRUCTION_MATERIAL_COST,
-      buildProgress: 0,
-      buildWorkRequired: TRUSS_CONSTRUCTION_WORK_REQUIRED,
-      requiresEva: true
-    });
-    return { ok: true };
-  }
-  const oldCost = tileBuildCost(state.tiles[index]);
-  const newCost = tileBuildCost(tile);
-  const requiredMaterials = Math.max(1, Math.ceil(Math.max(0, newCost - oldCost)));
-  createConstructionSite(state, {
-    kind: 'tile',
-    tileIndex: index,
-    targetTile: tile,
-    requiredMaterials,
-    deliveredMaterials: 0,
-    buildProgress: 0,
-    buildWorkRequired: Math.max(5, requiredMaterials * 2.2),
-    requiresEva
-  });
-  return { ok: true };
-}
-
-export function planModuleConstruction(
-  state: StationState,
-  index: number,
-  module: ModuleType,
-  rotation: ModuleRotation = 0
-): { ok: boolean; reason?: string } {
-  if (module === ModuleType.None) {
-    removeModuleAtTile(state, index);
-    removeConstructionAtTile(state, index);
-    return { ok: true };
-  }
-  const preview = validateModulePlacementForConstruction(state, module, index, rotation);
-  if (!preview.ok) return preview;
-  const appliedRotation = rotation === 90 && MODULE_DEFINITIONS[module]?.rotatable ? 90 : 0;
-  const requiredMaterials = Math.ceil(moduleConstructionCost(state, module, appliedRotation));
-  createConstructionSite(state, {
-    kind: 'module',
-    tileIndex: index,
-    targetModule: module,
-    rotation: appliedRotation,
-    requiredMaterials,
-    deliveredMaterials: 0,
-    buildProgress: 0,
-    buildWorkRequired: Math.max(6, requiredMaterials * 2.4),
-    requiresEva: false
-  });
-  return { ok: true };
-}
-
-function validateModulePlacementForConstruction(
-  state: StationState,
-  module: ModuleType,
-  originTile: number,
-  rotation: ModuleRotation
-): { ok: true } | { ok: false; reason: string } {
-  if (!isModuleUnlocked(state, module)) return { ok: false, reason: 'module locked by progression' };
-  const def = MODULE_DEFINITIONS[module];
-  if (!def) return { ok: false, reason: 'unknown module' };
-  const appliedRotation: ModuleRotation = rotation === 90 && def.rotatable ? 90 : 0;
-  const footprint = moduleFootprint(module, appliedRotation);
-  const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
-  if (tiles.length <= 0) return { ok: false, reason: 'out of bounds' };
-  const requiresWallMount = moduleMount(module) === 'wall';
-  const serviceTile = requiresWallMount ? wallMountedModuleServiceTile(state, originTile) : originTile;
-  if (requiresWallMount && serviceTile === null) {
-    return { ok: false, reason: 'wall fixture requires adjacent floor' };
-  }
-  const roomAtOrigin = state.rooms[serviceTile ?? originTile];
-  for (const tile of tiles) {
-    if (state.constructionSites.some((site) => site.tileIndex === tile && site.state !== 'done')) {
-      return { ok: false, reason: 'construction overlap' };
-    }
-    if (requiresWallMount) {
-      if (state.tiles[tile] !== TileType.Wall) return { ok: false, reason: 'wall fixture requires wall tile' };
-    } else if (!isWalkable(state.tiles[tile])) {
-      return { ok: false, reason: 'footprint blocked' };
-    }
-    if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
-    const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
-    if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) {
-      return { ok: false, reason: 'invalid room for module' };
-    }
-    if (!requiresWallMount && def.allowedRooms && state.rooms[tile] !== roomAtOrigin) {
-      return { ok: false, reason: 'footprint crosses room boundary' };
-    }
-  }
-  const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
-  if (berthModuleReason) return { ok: false, reason: berthModuleReason };
-  return { ok: true };
-}
-
-function constructionMaterialSources(state: StationState): Array<{ tile: number; available: number; legacy: boolean }> {
-  const sources = materialInventoryTiles(state)
-    .map((tile) => ({ tile, available: itemStockAtNode(state, tile, 'rawMaterial'), legacy: false }))
-    .filter((source) => source.available > 0.05);
-  if (state.legacyMaterialStock > 0.05) {
-    const reachableCacheTile =
-      state.crewMembers.find((crew) => state.tiles[crew.tileIndex] !== TileType.Space)?.tileIndex ?? state.core.serviceTile;
-    sources.push({ tile: reachableCacheTile, available: state.legacyMaterialStock, legacy: true });
-  }
-  return sources.sort((a, b) => b.available - a.available);
-}
-
-function hasOpenConstructionJob(state: StationState, siteId: number): boolean {
-  return state.jobs.some(
-    (job) =>
-      job.constructionSiteId === siteId &&
-      job.state !== 'done' &&
-      job.state !== 'expired'
-  );
-}
-
-function constructionWorkTile(state: StationState, site: ConstructionSite): number {
-  if (site.kind === 'module' && site.targetModule !== undefined && moduleMount(site.targetModule) === 'wall') {
-    return wallMountedModuleServiceTile(state, site.tileIndex) ?? site.tileIndex;
-  }
-  return site.tileIndex;
-}
-
-function enqueueConstructionJob(
-  state: StationState,
-  site: ConstructionSite,
-  mode: 'deliver' | 'build',
-  fromTile: number,
-  amount: number
-): void {
-  state.jobs.push({
-    id: state.jobSpawnCounter++,
-    type: 'construct',
-    itemType: 'rawMaterial',
-    amount,
-    fromTile,
-    toTile: constructionWorkTile(state, site),
-    assignedCrewId: null,
-    createdAt: state.now,
-    expiresAt: state.now + JOB_TTL_SEC * 2,
-    state: 'pending',
-    pickedUpAmount: 0,
-    completedAt: null,
-    lastProgressAt: state.now,
-    stallReason: 'none',
-    stalledSince: undefined,
-    constructionSiteId: site.id,
-    constructionMode: mode,
-    repairProgress: 0
-  });
-  state.metrics.createdJobs += 1;
-}
-
-function createConstructionJobs(state: StationState): void {
-  for (const site of state.constructionSites) {
-    if (site.state === 'done') continue;
-    if (hasOpenConstructionJob(state, site.id)) continue;
-    site.assignedCrewId = null;
-    if (site.deliveredMaterials + 0.05 < site.requiredMaterials) {
-      const remaining = site.requiredMaterials - site.deliveredMaterials;
-      const sources = constructionMaterialSources(state);
-      if (sources.length <= 0) {
-        site.state = 'blocked';
-        site.blockedReason = 'no construction materials';
-        continue;
-      }
-      const source = sources[0];
-      site.state = 'planned';
-      site.blockedReason = null;
-      enqueueConstructionJob(state, site, 'deliver', source.tile, Math.min(CONSTRUCTION_CARRY_AMOUNT, remaining, source.available));
-    } else {
-      site.state = 'building';
-      site.blockedReason = null;
-      enqueueConstructionJob(state, site, 'build', site.tileIndex, 0);
-    }
-  }
-}
-
-function cleanupConstructionSites(state: StationState): void {
-  state.constructionSites = state.constructionSites.filter((site) => site.state !== 'done');
-}
-
-function activeAirlockTiles(state: StationState): number[] {
-  const out: number[] = [];
-  for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] === TileType.Airlock) out.push(i);
-  }
-  return out;
-}
-
-function findSpacePath(state: StationState, start: number, goal: number): number[] | null {
-  if (start === goal) return [];
-  const cameFrom = new Int32Array(state.width * state.height);
-  cameFrom.fill(-1);
-  const queue: number[] = [start];
-  const seen = new Set<number>([start]);
-  for (let head = 0; head < queue.length; head++) {
-    const current = queue[head];
-    const p = fromIndex(current, state.width);
-    const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-    for (const [dx, dy] of deltas) {
-      const x = p.x + dx;
-      const y = p.y + dy;
-      if (!inBounds(x, y, state.width, state.height)) continue;
-      const next = toIndex(x, y, state.width);
-      if (seen.has(next)) continue;
-      const allowed = next === goal || isEvaTraversalTile(state, next);
-      if (!allowed) continue;
-      seen.add(next);
-      cameFrom[next] = current;
-      if (next === goal) {
-        const path: number[] = [];
-        let cursor = goal;
-        while (cameFrom[cursor] >= 0) {
-          path.push(cursor);
-          cursor = cameFrom[cursor];
-        }
-        path.reverse();
-        return path;
-      }
-      queue.push(next);
-    }
-  }
-  return null;
-}
-
-function findConstructionPath(state: StationState, start: number, site: ConstructionSite): number[] | null {
-  const workTile = constructionWorkTile(state, site);
-  if (site.requiresEva) {
-    if (isEvaTraversalTile(state, start) && state.tiles[start] !== TileType.Airlock) {
-      return findSpacePath(state, start, workTile);
-    }
-    let best: number[] | null = null;
-    for (const airlock of activeAirlockTiles(state)) {
-      const inside = findPath(state, start, airlock, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
-      if (!inside) continue;
-      const outside = findSpacePath(state, airlock, workTile);
-      if (!outside) continue;
-      const combined = [...inside, ...outside];
-      if (!best || combined.length < best.length) best = combined;
-    }
-    return best;
-  }
-  if (isWalkable(state.tiles[workTile])) {
-    return findPath(state, start, workTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
-  }
-  let best: number[] | null = null;
-  for (const target of adjacentWalkableTiles(state, workTile)) {
-    const path = findPath(state, start, target, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile);
-    if (!path) continue;
-    if (!best || path.length < best.length) best = path;
-  }
-  return best;
-}
-
-function crewAtConstructionSite(state: StationState, crew: CrewMember, site: ConstructionSite): boolean {
-  const workTile = constructionWorkTile(state, site);
-  if (crew.tileIndex === workTile) return true;
-  if (site.requiresEva) return false;
-  return adjacentWalkableTiles(state, workTile).includes(crew.tileIndex);
-}
-
-function applyConstructionSite(state: StationState, site: ConstructionSite): boolean {
-  if (site.kind === 'tile' && site.targetTile !== undefined) {
-    setTile(state, site.tileIndex, site.targetTile);
-    if (site.targetTile === TileType.Space) {
-      setZone(state, site.tileIndex, ZoneType.Public);
-      setRoom(state, site.tileIndex, RoomType.None);
-    }
-    return true;
-  }
-  if (site.kind === 'module' && site.targetModule !== undefined) {
-    const result = tryPlaceModule(state, site.targetModule, site.tileIndex, site.rotation ?? 0);
-    if (!result.ok) {
-      site.state = 'blocked';
-      site.blockedReason = result.reason ?? 'module placement failed';
-      return false;
-    }
-    return true;
-  }
-  return false;
-}
+// Construction + EVA helpers moved to ./construction. Re-exported here
+// so existing call sites (cancelConstructionAtTile / planTileConstruction
+// / planModuleConstruction publicly; createConstructionJobs / applyConstructionSite
+// / etc. internally from tick + crew) keep working unchanged.
+export {
+  activeAirlockTiles,
+  applyConstructionSite,
+  cancelConstructionAtTile,
+  cleanupConstructionSites,
+  createConstructionJobs,
+  crewAtConstructionSite,
+  findConstructionPath,
+  findSpacePath,
+  isEvaTraversalTile,
+  moduleConstructionCostForDefinition,
+  planModuleConstruction,
+  planTileConstruction,
+  removeConstructionAtTile,
+  shouldSuitUpFromAirlock,
+  updateEvaSuitForRoute,
+  validateModulePlacementForConstruction
+} from './construction';
 
 function enqueueTransportJob(
   state: StationState,
@@ -7836,7 +7427,7 @@ function markJobStall(state: StationState, job: StationState['jobs'][number], re
   }
 }
 
-function createReservationCounts(): Record<ReservationKind, number> {
+export function createReservationCounts(): Record<ReservationKind, number> {
   return {
     'provider-slot': 0,
     'service-tile': 0,
@@ -8010,7 +7601,7 @@ function releaseClosedJobReservations(state: StationState): void {
   }
 }
 
-function actorReservationSummary(state: StationState, ownerKind: ReservationOwnerKind, ownerId: number | string): string {
+export function actorReservationSummary(state: StationState, ownerKind: ReservationOwnerKind, ownerId: number | string): string {
   const reservations = reservationsForOwner(state, ownerKind, ownerId);
   if (reservations.length === 0) return 'none';
   return reservations
@@ -8023,7 +7614,7 @@ function actorReservationSummary(state: StationState, ownerKind: ReservationOwne
     .join(' | ');
 }
 
-function providerTargetLabelFromTile(state: StationState, tile: number | null): string | null {
+export function providerTargetLabelFromTile(state: StationState, tile: number | null): string | null {
   if (tile === null) return null;
   const module = state.modules[tile];
   if (module !== ModuleType.None) return `${module} tile ${tile}`;
@@ -8888,7 +8479,7 @@ function createWorkLaneMetrics(): WorkLaneMetrics {
   };
 }
 
-function createWorkforceLaneMetrics(): Record<CrewWorkLane, WorkLaneMetrics> {
+export function createWorkforceLaneMetrics(): Record<CrewWorkLane, WorkLaneMetrics> {
   return {
     food: createWorkLaneMetrics(),
     sanitation: createWorkLaneMetrics(),
@@ -8899,7 +8490,7 @@ function createWorkforceLaneMetrics(): Record<CrewWorkLane, WorkLaneMetrics> {
   };
 }
 
-function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
+export function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
   return {
     rawMeal: createJobStatusCounts(),
     meal: createJobStatusCounts(),
@@ -8909,7 +8500,7 @@ function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
   };
 }
 
-function createJobCountsByType(): Record<JobType, JobStatusCounts> {
+export function createJobCountsByType(): Record<JobType, JobStatusCounts> {
   return {
     pickup: createJobStatusCounts(),
     deliver: createJobStatusCounts(),
@@ -10338,7 +9929,7 @@ function registerVisitorServiceFailure(state: StationState, amount: number): voi
   addVisitorFailurePenalty(state, Math.min(0.12, amount * 0.03), 'noLeisurePath');
 }
 
-function visitorVisitAge(state: StationState, visitor: Visitor): number {
+export function visitorVisitAge(state: StationState, visitor: Visitor): number {
   return Math.max(0, state.now - visitor.spawnedAt);
 }
 
@@ -12862,899 +12453,20 @@ function expireEffects(state: StationState): void {
   }
 }
 
-export function createInitialState(options?: { seed?: number }): StationState {
-  const seed = options?.seed ?? 1337;
-  const rng = makeRng(seed);
-  // Roll the system map from a sub-seed so it doesn't deplete the
-  // primary rng (which scenario builders + manifest gen rely on).
-  const system = generateSystemMap(seed);
-  const tiles = new Array<TileType>(GRID_WIDTH * GRID_HEIGHT).fill(TileType.Space);
-  const zones = new Array<ZoneType>(GRID_WIDTH * GRID_HEIGHT).fill(ZoneType.Public);
-  const rooms = new Array<RoomType>(GRID_WIDTH * GRID_HEIGHT).fill(RoomType.None);
-  const roomHousingPolicies = new Array<HousingPolicy>(GRID_WIDTH * GRID_HEIGHT).fill('visitor');
-  const modules = new Array<ModuleType>(GRID_WIDTH * GRID_HEIGHT).fill(ModuleType.None);
-  const moduleOccupancyByTile = new Array<number | null>(GRID_WIDTH * GRID_HEIGHT).fill(null);
-  const moduleInstances: ModuleInstance[] = [];
-  let initialModuleSpawnCounter = 1;
-  const addStarterModule = (type: ModuleType, x: number, y: number, rotation: ModuleRotation = 0): void => {
-    const def = MODULE_DEFINITIONS[type];
-    const width = rotation === 90 ? def.height : def.width;
-    const height = rotation === 90 ? def.width : def.height;
-    const originTile = toIndex(x, y, GRID_WIDTH);
-    const instance: ModuleInstance = {
-      id: initialModuleSpawnCounter++,
-      type,
-      originTile,
-      rotation,
-      width,
-      height,
-      tiles: []
-    };
-    for (let yy = y; yy < y + height; yy++) {
-      for (let xx = x; xx < x + width; xx++) {
-        const idx = toIndex(xx, yy, GRID_WIDTH);
-        modules[idx] = type;
-        moduleOccupancyByTile[idx] = instance.id;
-        instance.tiles.push(idx);
-      }
-    }
-    moduleInstances.push(instance);
-  };
-  const coreX = Math.floor(GRID_WIDTH / 2);
-  const coreY = Math.floor(GRID_HEIGHT / 2);
-  const starterFloorMinX = coreX - 5;
-  const starterFloorMaxX = coreX + 4;
-  const starterFloorMinY = coreY - 6;
-  const starterFloorMaxY = coreY + 3;
-  const starterWallMinX = starterFloorMinX - 1;
-  const starterWallMaxX = starterFloorMaxX + 1;
-  const starterWallMinY = starterFloorMinY - 1;
-  const starterWallMaxY = starterFloorMaxY + 1;
+// createInitialState moved to ./initial-state. Re-exported here so all
+// existing call sites (save.ts, scenarios.ts, sim-tests.ts, sim-perf.ts,
+// main.ts via the index barrel, etc.) continue to import it from sim.
+export { createInitialState } from './initial-state';
 
-  for (let y = starterFloorMinY; y <= starterFloorMaxY; y++) {
-    for (let x = starterFloorMinX; x <= starterFloorMaxX; x++) {
-      tiles[toIndex(x, y, GRID_WIDTH)] = TileType.Floor;
-    }
-  }
-  for (let y = starterWallMinY; y <= starterWallMaxY; y++) {
-    tiles[toIndex(starterWallMinX, y, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(starterWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let x = starterWallMinX; x <= starterWallMaxX; x++) {
-    tiles[toIndex(x, starterWallMinY, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, starterWallMaxY, GRID_WIDTH)] = TileType.Wall;
-  }
-
-  const reactorWallMinX = starterWallMinX - 4;
-  const reactorWallMaxX = starterWallMinX;
-  const reactorWallMinY = coreY - 2;
-  const reactorWallMaxY = coreY + 2;
-  for (let y = reactorWallMinY; y <= reactorWallMaxY; y++) {
-    tiles[toIndex(reactorWallMinX, y, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(reactorWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let x = reactorWallMinX; x <= reactorWallMaxX; x++) {
-    tiles[toIndex(x, reactorWallMinY, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, reactorWallMaxY, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let y = reactorWallMinY + 1; y < reactorWallMaxY; y++) {
-    for (let x = reactorWallMinX + 1; x < reactorWallMaxX; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      tiles[idx] = TileType.Reactor;
-      rooms[idx] = RoomType.Reactor;
-    }
-  }
-  const reactorDoor = toIndex(reactorWallMaxX, coreY, GRID_WIDTH);
-  tiles[reactorDoor] = TileType.Door;
-  rooms[reactorDoor] = RoomType.Reactor;
-
-  for (let y = starterFloorMinY; y <= starterFloorMinY + 2; y++) {
-    for (let x = starterFloorMinX; x <= starterFloorMinX + 5; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      rooms[idx] = RoomType.Bridge;
-      roomHousingPolicies[idx] = 'crew';
-    }
-  }
-  addStarterModule(ModuleType.CaptainConsole, starterFloorMinX + 1, starterFloorMinY, 0);
-
-  const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
-  const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
-
-  return {
-    width: GRID_WIDTH,
-    height: GRID_HEIGHT,
-    tiles,
-    zones,
-    rooms,
-    roomHousingPolicies,
-    modules,
-    moduleInstances,
-    moduleOccupancyByTile,
-    core: {
-      centerTile: toIndex(coreX, coreY, GRID_WIDTH),
-      serviceTile: toIndex(coreX, coreY, GRID_WIDTH),
-      frameTiles
-    },
-    docks: [],
-    berthConfigs: [],
-    system,
-    seedAtCreation: seed,
-    laneProfiles,
-    dockQueue: [],
-    pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
-    airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
-    dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
-    dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
-    mapConditionVersion: MAP_CONDITION_VERSION,
-    pathOccupancyByTile: new Map(),
-    jobs: [],
-    reservations: [],
-    constructionSites: [],
-    itemNodes: [],
-    legacyMaterialStock: STARTING_SUPPLIES,
-    incidents: [],
-    visitors: [],
-    residents: [],
-    crewMembers: [],
-    command: {
-      selectedSpecialty: null,
-      completedSpecialties: [],
-      specialtyProgress: createInitialSpecialtyProgress(),
-      officers: {},
-      bridgeStaffing: {
-        captainConsoleStaffed: false,
-        activeTerminalStaff: 0,
-        requiredTerminalStaff: 1
-      }
-    },
-    maintenanceDebts: [],
-    arrivingShips: [],
-    pendingSpawns: [],
-    metrics: {
-      frameMs: 0,
-      rafJankMs: 0,
-      rafDroppedFrames: 0,
-      tickMs: 0,
-      renderMs: 0,
-      pathMs: 0,
-      pathCallsPerTick: 0,
-      derivedRecomputeMs: 0,
-      visitorsCount: 0,
-      residentsCount: 0,
-      incidentsTotal: 0,
-      incidentsOpen: 0,
-      incidentsResolved: 0,
-      incidentsFailed: 0,
-      securityDispatches: 0,
-      securityResponseAvgSec: 0,
-      residentConfrontations: 0,
-      securityCoveragePct: 0,
-      incidentSuppressionAvg: 1,
-      immediateDefuseRate: 0,
-      escalatedFightRate: 0,
-      residentSocialAvg: 0,
-      residentSafetyAvg: 0,
-      residentHungerAvg: 0,
-      residentEnergyAvg: 0,
-      residentHygieneAvg: 0,
-      load: 0,
-      capacity: 0,
-      loadPct: 0,
-      powerSupply: 0,
-      powerDemand: 0,
-      morale: 80,
-      stationRating: STATION_RATING_START,
-      stationRatingTrendPerMin: 0,
-      unlockTier: 0,
-      rawFoodStock: 40,
-      mealStock: 20,
-      kitchenRawBuffer: 0,
-      waterStock: 70,
-      airQuality: 75,
-      pressurizationPct: 0,
-      leakingTiles: 0,
-      materials: STARTING_SUPPLIES,
-      materialAutoImportStatus: 'target met',
-      materialAutoImportLastAdded: 0,
-      materialAutoImportCreditCost: 0,
-      credits: STARTING_CREDITS,
-      rawFoodProdRate: 0,
-      mealPrepRate: 0,
-      kitchenMealProdRate: 0,
-      workshopTradeGoodProdRate: 0,
-      marketTradeGoodUseRate: 0,
-      marketTradeGoodStock: 0,
-      mealUseRate: 0,
-      dockedShips: 0,
-      visitorBerthsTotal: 0,
-      visitorBerthsOccupied: 0,
-      residentBerthsTotal: 0,
-      residentBerthsOccupied: 0,
-      residentShipsDocked: 0,
-      residentPrivateBedsTotal: 0,
-      averageDockTime: 0,
-      bayUtilizationPct: 0,
-      exitsPerMin: 0,
-      shipsSkippedNoEligibleDock: 0,
-      shipsTimedOutInQueue: 0,
-      shipsQueuedNoCapabilityCount: 0,
-      shipsQueuedNoCapabilityHint: '',
-      dockQueueLengthByLane: { north: 0, east: 0, south: 0, west: 0 },
-      avgVisitorWalkDistance: 0,
-      dockZonesTotal: 0,
-      shipDemandCafeteriaPct: 42,
-      shipDemandMarketPct: 36,
-      shipDemandLoungePct: 22,
-      visitorsByArchetype: {
-        diner: 0,
-        shopper: 0,
-        lounger: 0,
-        rusher: 0
-      },
-      mealsServedTotal: 0,
-      creditsEarnedLifetime: 0,
-      archetypesServedLifetime: 0,
-      tradeCyclesCompletedLifetime: 0,
-      incidentsResolvedLifetime: 0,
-      actorsTreatedLifetime: 0,
-      residentsConvertedLifetime: 0,
-      cafeteriaNonNodeSeatedCount: 0,
-      maxBlockedTicksObserved: 0,
-      pendingJobs: 0,
-      assignedJobs: 0,
-      expiredJobs: 0,
-      completedJobs: 0,
-      createdJobs: 0,
-      avgJobAgeSec: 0,
-      deliveryLatencySec: 0,
-      topBacklogType: 'none',
-      oldestPendingJobAgeSec: 0,
-      stalledJobs: 0,
-      expiredJobsByReason: {
-        none: 0,
-        stalled_path_blocked: 0,
-        stalled_unreachable_source: 0,
-        stalled_unreachable_dropoff: 0,
-        stalled_no_supply: 0
-      },
-      expiredJobsByContext: {
-        queued: 0,
-        assigned: 0,
-        carrying: 0,
-        unknown: 0
-      },
-      jobCountsByItem: createJobCountsByItem(),
-      jobCountsByType: createJobCountsByType(),
-      activeReservations: 0,
-      reservationFailures: 0,
-      expiredReservations: 0,
-      reservationsByKind: createReservationCounts(),
-      logisticsAverageBatchSize: 0,
-      logisticsJobMilesPerMin: 0,
-      logisticsBlockedReason: 'none',
-      jobBoard: {
-        open: 0,
-        assigned: 0,
-        blocked: 0,
-        stale: 0,
-        averageAgeSec: 0,
-        averageBatchSize: 0,
-        labels: []
-      },
-      deathsTotal: 0,
-      recentDeaths: 0,
-      distressedResidents: 0,
-      criticalResidents: 0,
-      bodyCount: 0,
-      bodyVisibleCount: 0,
-      bodiesClearedTotal: 0,
-      lifeSupportPotentialAirPerSec: 0,
-      lifeSupportActiveAirPerSec: 0,
-      airTrendPerSec: 0,
-      airBlockedLowAirSec: 0,
-      airBlockedWarningActive: false,
-      lifeSupportInactiveReasons: [],
-      dormSleepingResidents: 0,
-      toDormResidents: 0,
-      hygieneCleaningResidents: 0,
-      cafeteriaQueueingCount: 0,
-      cafeteriaEatingCount: 0,
-      hydroponicsStaffed: 0,
-      hydroponicsActiveGrowNodes: 0,
-      lifeSupportActiveNodes: 0,
-      crewAssignedWorking: 0,
-      crewIdleAvailable: 0,
-      crewResting: 0,
-      crewCleaning: 0,
-      crewSelfCare: 0,
-      crewAvgEnergy: 100,
-      crewAvgHygiene: 100,
-      crewOnLogisticsJobs: 0,
-      crewBlockedNoPath: 0,
-      crewRestCap: 0,
-      crewRestingNow: 0,
-      crewEmergencyWakeBudget: 0,
-      crewWokenForAir: 0,
-      crewPingPongPreventions: 0,
-      creditsGrossPerMin: 0,
-      creditsPayrollPerMin: 0,
-      creditsNetPerMin: 0,
-      tradeGoodsSoldPerMin: 0,
-      marketStockoutsPerMin: 0,
-      crewRetargetsPerMin: 0,
-      criticalStaffDropsPerMin: 0,
-      visitorServiceFailuresPerMin: 0,
-      visitorDestinationShares: {
-        cafeteria: 0,
-        market: 0,
-        lounge: 0,
-        recHall: 0,
-        cantina: 0,
-        observatory: 0,
-        hygiene: 0,
-        vending: 0
-      },
-      dormVisitsPerMin: 0,
-      dormFailedAttemptsPerMin: 0,
-      hygieneUsesPerMin: 0,
-      mealsConsumedPerMin: 0,
-      failedNeedAttemptsHunger: 0,
-      failedNeedAttemptsEnergy: 0,
-      failedNeedAttemptsHygiene: 0,
-      idleCrewByReason: {
-        idle_available: 0,
-        idle_no_jobs: 0,
-        idle_resting: 0,
-        idle_no_path: 0,
-        idle_waiting_reassign: 0
-      },
-      workforceLanes: createWorkforceLaneMetrics(),
-      workforceBorrowedCrew: 0,
-      workforceHighestPressureLane: null,
-      stalledJobsByReason: {
-        none: 0,
-        stalled_path_blocked: 0,
-        stalled_unreachable_source: 0,
-        stalled_unreachable_dropoff: 0,
-        stalled_no_supply: 0
-      },
-      crewMoraleDrivers: [],
-      stationRatingDrivers: ['none'],
-      stationRatingPenaltyPerMin: {
-        queueTimeout: 0,
-        noEligibleDock: 0,
-        serviceFailure: 0,
-        longWalks: 0,
-        routeExposure: 0,
-        environment: 0
-      },
-      stationRatingPenaltyTotal: {
-        queueTimeout: 0,
-        noEligibleDock: 0,
-        serviceFailure: 0,
-        longWalks: 0,
-        routeExposure: 0,
-        environment: 0
-      },
-      stationRatingBonusPerMin: {
-        mealService: 0,
-        leisureService: 0,
-        successfulExit: 0,
-        residentRetention: 0
-      },
-      stationRatingBonusTotal: {
-        mealService: 0,
-        leisureService: 0,
-        successfulExit: 0,
-        residentRetention: 0
-      },
-      stationRatingServiceFailureByReasonPerMin: {
-        noLeisurePath: 0,
-        shipServicesMissing: 0,
-        patienceBail: 0,
-        dockTimeout: 0,
-        trespass: 0
-      },
-      stationRatingServiceFailureByReasonTotal: {
-        noLeisurePath: 0,
-        shipServicesMissing: 0,
-        patienceBail: 0,
-        dockTimeout: 0,
-        trespass: 0
-      },
-      shipsByTypePerMin: {
-        tourist: 0,
-        trader: 0,
-        industrial: 0,
-        military: 0,
-        colonist: 0
-      },
-      residentTaxPerMin: 0,
-      residentTaxCollectedTotal: 0,
-      residentConversionAttempts: 0,
-      residentConversionSuccesses: 0,
-      residentConversionLastResult: 'waiting for eligible visitor exit',
-      residentConversionLastChancePct: 0,
-      residentConversionLastShip: 'none',
-      residentDepartures: 0,
-      residentSatisfactionAvg: 0,
-      topRoomWarnings: [],
-      roomWarningsCount: 0,
-      visitorServiceExposurePenaltyPerMin: 0,
-      residentBadRouteStressPerMin: 0,
-      crewPublicInterferencePerMin: 0,
-      visitorStatusAvg: 0,
-      residentComfortAvg: 0,
-      serviceNoiseNearDorms: 0,
-      visitorEnvironmentPenaltyPerMin: 0,
-      residentEnvironmentStressPerMin: 0,
-      maintenanceDebtAvg: 0,
-      maintenanceDebtMax: 0,
-      maintenanceJobsOpen: 0,
-      maintenanceJobsResolvedPerMin: 0,
-      sanitationAvg: 0,
-      sanitationMax: 0,
-      dirtyTiles: 0,
-      filthyTiles: 0,
-      sanitationJobsOpen: 0,
-      sanitationJobsCompletedPerMin: 0,
-      sanitationPenaltyPerMin: 0,
-      sanitationPenaltyTotal: 0,
-      sanitationTopSource: 'none',
-      lifeSupportCoveragePct: 100,
-      avgLifeSupportDistance: 0,
-      poorLifeSupportTiles: 0,
-      serviceNodesTotal: 0,
-      serviceNodesUnreachable: 0,
-      criticalUnstaffedSec: {
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0
-      },
-      requiredCriticalStaff: {
-        reactor: 0,
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0,
-        cafeteria: 0
-      },
-      assignedCriticalStaff: {
-        reactor: 0,
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0,
-        cafeteria: 0
-      },
-      activeCriticalStaff: {
-        reactor: 0,
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0,
-        cafeteria: 0
-      },
-      criticalShortfallSec: {
-        reactor: 0,
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0,
-        cafeteria: 0
-      },
-      logisticsDispatchSlots: 0,
-      logisticsPressure: 0,
-      staffInTransitBySystem: {
-        reactor: 0,
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0,
-        cafeteria: 0
-      }
-    },
-    controls: {
-      paused: true,
-      simSpeed: 1,
-      shipsPerCycle: 1,
-      diagnosticOverlay: 'none',
-      showZones: true,
-      showServiceNodes: false,
-      showInventoryOverlay: false,
-      showGlow: true,
-      spriteMode: 'sprites',
-      wallRenderMode: 'dual-tilemap',
-      showSpriteFallback: false,
-      spritePipeline: 'nano-banana',
-      taxRate: 0.2,
-      dockPlacementFacing: 'north',
-      moduleRotation: 0,
-      materialAutoImportEnabled: true,
-      materialTargetStock: 120,
-      materialImportBatchSize: 25,
-      crewPriorityPreset: 'balanced',
-      crewPriorityWeights: cloneCrewPriorityWeights(CREW_PRIORITY_PRESET_WEIGHTS.balanced)
-    },
-    mapExpansion: {
-      purchased: {
-        north: false,
-        east: false,
-        south: false,
-        west: false
-      },
-      purchasesMade: 0
-    },
-    unlocks: createInitialUnlockState(),
-    effects: {
-      cafeteriaStallUntil: 0,
-      brownoutUntil: 0,
-      securityDelayUntil: 0,
-      blockedUntilByTile: new Map(),
-      trespassCooldownUntilByTile: new Map(),
-      securityAuraByTile: new Map(),
-      fires: []
-    },
-    topologyVersion: 0,
-    roomVersion: 0,
-    moduleVersion: 0,
-    dockVersion: 0,
-    derived: createEmptyDerivedCache(),
-    rng,
-    now: 0,
-    lastCycleTime: 0,
-    cycleDuration: CYCLE_DURATION,
-    spawnCounter: 1,
-    shipSpawnCounter: 1,
-    crewSpawnCounter: 1,
-    residentSpawnCounter: 1,
-    lastResidentSpawnAt: -999,
-    moduleSpawnCounter: initialModuleSpawnCounter,
-    jobSpawnCounter: 1,
-    reservationSpawnCounter: 1,
-    constructionSiteSpawnCounter: 1,
-    incidentSpawnCounter: 1,
-    incidentHeat: 0,
-    lastPayrollAt: 0,
-    lastResidentTaxAt: 0,
-    recentExitTimes: [],
-    dockedTimeTotal: 0,
-    dockedShipsCompleted: 0,
-    bodyTiles: [],
-    recentDeathTimes: [],
-    clusterActivationState: new Map(),
-    criticalStaffPrevUnmet: {
-      reactor: false,
-      lifeSupport: false,
-      hydroponics: false,
-      kitchen: false,
-      cafeteria: false
-    },
-    usageTotals: {
-      dorm: 0,
-      hygiene: 0,
-      meals: 0,
-      crewRetargets: 0,
-      visitorServiceFailures: 0,
-      creditsMarketGross: 0,
-      creditsTradeGoodsGross: 0,
-      creditsMealPayoutGross: 0,
-      payrollPaid: 0,
-      tradeGoodsSold: 0,
-      marketStockouts: 0,
-      archetypesEverSeen: { diner: false, shopper: false, lounger: false, rusher: false },
-      shipsByType: {
-        tourist: 0,
-        trader: 0,
-        industrial: 0,
-        military: 0,
-        colonist: 0
-      },
-      visitorLeisureEntries: {
-        cafeteria: 0,
-        market: 0,
-        lounge: 0,
-        recHall: 0,
-        cantina: 0,
-        observatory: 0,
-        hygiene: 0,
-        vending: 0
-      },
-      ratingDelta: 0,
-      ratingFromShipTimeout: 0,
-      ratingFromShipSkip: 0,
-      ratingFromVisitorFailure: 0,
-      ratingFromWalkDissatisfaction: 0,
-      ratingFromRouteExposure: 0,
-      ratingFromEnvironment: 0,
-      ratingFromVisitorFailureByReason: {
-        noLeisurePath: 0,
-        shipServicesMissing: 0,
-        patienceBail: 0,
-        dockTimeout: 0,
-        trespass: 0
-      },
-      ratingFromVisitorSuccessByReason: {
-        mealService: 0,
-        leisureService: 0,
-        successfulExit: 0,
-        residentRetention: 0
-      },
-      residentTaxesCollected: 0,
-      residentConversionAttempts: 0,
-      residentConversionSuccesses: 0,
-      residentConversionLastResult: 'waiting for eligible visitor exit',
-      residentConversionLastChancePct: 0,
-      residentConversionLastShip: 'none',
-      residentDepartures: 0,
-      ratingFromResidentDeparture: 0,
-      ratingFromResidentRetention: 0,
-      visitorWalkDistance: 0,
-      visitorWalkTrips: 0,
-      visitorServiceExposurePenalty: 0,
-      residentBadRouteStress: 0,
-      crewPublicInterference: 0,
-      visitorEnvironmentPenalty: 0,
-      residentEnvironmentStress: 0,
-      maintenanceJobsResolved: 0,
-      sanitationJobsResolved: 0,
-      ratingFromSanitation: 0,
-      residentSanitationStress: 0,
-      criticalStaffDrops: 0,
-      securityDispatches: 0,
-      securityResolved: 0,
-      securityResponseSecTotal: 0,
-      securityFightInterventions: 0,
-      securityImmediateDefuses: 0,
-      securityEscalatedFights: 0,
-      incidentsFailed: 0,
-      residentConfrontations: 0,
-      incidentSuppressionSampleCount: 0,
-      incidentSuppressionSampleSum: 0,
-      criticalUnstaffedSec: {
-        lifeSupport: 0,
-        hydroponics: 0,
-        kitchen: 0
-      }
-    },
-    failedNeedAttempts: {
-      hunger: 0,
-      energy: 0,
-      hygiene: 0,
-      dorm: 0
-    },
-    crew: {
-      total: totalStaffCount(createInitialStaffRoleCounts()),
-      assigned: 0,
-      free: totalStaffCount(createInitialStaffRoleCounts()),
-      roleCounts: createInitialStaffRoleCounts()
-    },
-    ops: {
-      bridgeTotal: 0,
-      bridgeActive: 0,
-      cafeteriasTotal: 0,
-      cafeteriasActive: 0,
-      kitchenTotal: 0,
-      kitchenActive: 0,
-      clinicTotal: 0,
-      clinicActive: 0,
-      brigTotal: 0,
-      brigActive: 0,
-      recHallTotal: 0,
-      recHallActive: 0,
-      securityTotal: 0,
-      securityActive: 0,
-      reactorsTotal: 0,
-      reactorsActive: 0,
-      dormsTotal: 0,
-      dormsActive: 0,
-      hygieneTotal: 0,
-      hygieneActive: 0,
-      hydroponicsTotal: 0,
-      hydroponicsActive: 0,
-      lifeSupportTotal: 0,
-      lifeSupportActive: 0,
-      workshopTotal: 0,
-      workshopActive: 0,
-      loungeTotal: 0,
-      loungeActive: 0,
-      marketTotal: 0,
-      marketActive: 0,
-      cantinaTotal: 0,
-      cantinaActive: 0,
-      observatoryTotal: 0,
-      observatoryActive: 0,
-      logisticsStockTotal: 0,
-      logisticsStockActive: 0,
-      storageTotal: 0,
-      storageActive: 0
-    }
-  };
-}
-
-export type ExpandMapFailureReason =
-  | 'already_expanded_direction'
-  | 'insufficient_credits';
-
-export type ExpandMapResult =
-  | { ok: true; direction: CardinalDirection; cost: number; width: number; height: number }
-  | { ok: false; direction: CardinalDirection; cost: number; reason: ExpandMapFailureReason };
-
-export function getNextExpansionCost(state: StationState): number {
-  const tier = Math.min(state.mapExpansion.purchasesMade, EXPANSION_COST_TIERS.length - 1);
-  return EXPANSION_COST_TIERS[tier];
-}
-
-export function canExpandDirection(state: StationState, direction: CardinalDirection): boolean {
-  return !state.mapExpansion.purchased[direction];
-}
-
-export function expandMap(state: StationState, direction: CardinalDirection): ExpandMapResult {
-  const cost = getNextExpansionCost(state);
-  if (!canExpandDirection(state, direction)) {
-    return { ok: false, direction, cost, reason: 'already_expanded_direction' };
-  }
-  if (state.metrics.credits < cost) {
-    return { ok: false, direction, cost, reason: 'insufficient_credits' };
-  }
-
-  const oldWidth = state.width;
-  const oldHeight = state.height;
-  const shiftX = direction === 'west' ? EXPANSION_STEP_TILES : 0;
-  const shiftY = direction === 'north' ? EXPANSION_STEP_TILES : 0;
-  const newWidth = oldWidth + (direction === 'west' || direction === 'east' ? EXPANSION_STEP_TILES : 0);
-  const newHeight = oldHeight + (direction === 'north' || direction === 'south' ? EXPANSION_STEP_TILES : 0);
-
-  const remapIndex = (index: number): number => {
-    const p = fromIndex(index, oldWidth);
-    return toIndex(p.x + shiftX, p.y + shiftY, newWidth);
-  };
-  const remapOptionalIndex = (index: number | null): number | null => (index === null ? null : remapIndex(index));
-  const remapIndexMap = (source: Map<number, number>): Map<number, number> => {
-    const out = new Map<number, number>();
-    for (const [idx, value] of source.entries()) {
-      out.set(remapIndex(idx), value);
-    }
-    return out;
-  };
-
-  const tiles = new Array<TileType>(newWidth * newHeight).fill(TileType.Space);
-  const zones = new Array<ZoneType>(newWidth * newHeight).fill(ZoneType.Public);
-  const rooms = new Array<RoomType>(newWidth * newHeight).fill(RoomType.None);
-  const roomHousingPolicies = new Array<HousingPolicy>(newWidth * newHeight).fill('visitor');
-  const modules = new Array<ModuleType>(newWidth * newHeight).fill(ModuleType.None);
-  const moduleOccupancyByTile = new Array<number | null>(newWidth * newHeight).fill(null);
-  const pressurized = new Array<boolean>(newWidth * newHeight).fill(false);
-  const airQualityByTile = new Float32Array(newWidth * newHeight).fill(100);
-  const dirtByTile = new Float32Array(newWidth * newHeight);
-  const dirtSourceByTile = new Uint8Array(newWidth * newHeight);
-
-  for (let y = 0; y < oldHeight; y++) {
-    for (let x = 0; x < oldWidth; x++) {
-      const oldIndex = toIndex(x, y, oldWidth);
-      const newIndex = toIndex(x + shiftX, y + shiftY, newWidth);
-      tiles[newIndex] = state.tiles[oldIndex];
-      zones[newIndex] = state.zones[oldIndex];
-      rooms[newIndex] = state.rooms[oldIndex];
-      roomHousingPolicies[newIndex] = state.roomHousingPolicies[oldIndex];
-      modules[newIndex] = state.modules[oldIndex];
-      moduleOccupancyByTile[newIndex] = state.moduleOccupancyByTile[oldIndex];
-      pressurized[newIndex] = state.pressurized[oldIndex];
-      airQualityByTile[newIndex] = state.airQualityByTile[oldIndex];
-      dirtByTile[newIndex] = state.dirtByTile[oldIndex];
-      dirtSourceByTile[newIndex] = state.dirtSourceByTile[oldIndex];
-    }
-  }
-
-  state.metrics.credits -= cost;
-  state.width = newWidth;
-  state.height = newHeight;
-  state.tiles = tiles;
-  state.zones = zones;
-  state.rooms = rooms;
-  state.roomHousingPolicies = roomHousingPolicies;
-  state.modules = modules;
-  state.moduleOccupancyByTile = moduleOccupancyByTile;
-  state.pressurized = pressurized;
-  state.airQualityByTile = airQualityByTile;
-  state.dirtByTile = dirtByTile;
-  state.dirtSourceByTile = dirtSourceByTile;
-
-  state.core.centerTile = remapIndex(state.core.centerTile);
-  state.core.serviceTile = remapIndex(state.core.serviceTile);
-  state.core.frameTiles = state.core.frameTiles.map(remapIndex);
-
-  state.moduleInstances = state.moduleInstances.map((module) => ({
-    ...module,
-    originTile: remapIndex(module.originTile),
-    tiles: module.tiles.map(remapIndex)
-  }));
-  state.docks = state.docks.map((dock) => ({
-    ...dock,
-    tiles: dock.tiles.map(remapIndex),
-    anchorTile: remapIndex(dock.anchorTile),
-    approachTiles: dock.approachTiles.map(remapIndex)
-  }));
-  state.itemNodes = state.itemNodes.map((node) => ({
-    ...node,
-    tileIndex: remapIndex(node.tileIndex)
-  }));
-  state.jobs = state.jobs.map((job) => ({
-    ...job,
-    fromTile: remapIndex(job.fromTile),
-    toTile: remapIndex(job.toTile)
-  }));
-  state.reservations = state.reservations.map((reservation) => ({
-    ...reservation,
-    targetTile: remapOptionalIndex(reservation.targetTile)
-  }));
-  state.constructionSites = state.constructionSites.map((site) => ({
-    ...site,
-    tileIndex: remapIndex(site.tileIndex)
-  }));
-  state.incidents = state.incidents.map((incident) => ({
-    ...incident,
-    tileIndex: remapIndex(incident.tileIndex)
-  }));
-  state.visitors = state.visitors.map((visitor) => ({
-    ...visitor,
-    x: visitor.x + shiftX,
-    y: visitor.y + shiftY,
-    tileIndex: remapIndex(visitor.tileIndex),
-    path: visitor.path.map(remapIndex),
-    reservedServingTile: remapOptionalIndex(visitor.reservedServingTile),
-    reservedTargetTile: remapOptionalIndex(visitor.reservedTargetTile)
-  }));
-  state.residents = state.residents.map((resident) => ({
-    ...resident,
-    x: resident.x + shiftX,
-    y: resident.y + shiftY,
-    tileIndex: remapIndex(resident.tileIndex),
-    path: resident.path.map(remapIndex),
-    reservedTargetTile: remapOptionalIndex(resident.reservedTargetTile)
-  }));
-  state.crewMembers = state.crewMembers.map((crew) => ({
-    ...crew,
-    x: crew.x + shiftX,
-    y: crew.y + shiftY,
-    tileIndex: remapIndex(crew.tileIndex),
-    path: crew.path.map(remapIndex),
-    targetTile: remapOptionalIndex(crew.targetTile)
-  }));
-  state.maintenanceDebts = state.maintenanceDebts.map((debt) => {
-    const anchorTile = remapIndex(debt.anchorTile);
-    return {
-      ...debt,
-      anchorTile,
-      key: maintenanceKey(debt.system, anchorTile)
-    };
-  });
-  state.arrivingShips = state.arrivingShips.map((ship) => ({
-    ...ship,
-    bayTiles: ship.bayTiles.map(remapIndex),
-    bayCenterX: ship.bayCenterX + shiftX,
-    bayCenterY: ship.bayCenterY + shiftY
-  }));
-  state.pendingSpawns = state.pendingSpawns.map((spawn) => ({
-    ...spawn,
-    dockIndex: remapIndex(spawn.dockIndex)
-  }));
-  state.bodyTiles = state.bodyTiles.map(remapIndex);
-  state.pathOccupancyByTile = remapIndexMap(state.pathOccupancyByTile);
-  state.effects.blockedUntilByTile = remapIndexMap(state.effects.blockedUntilByTile);
-  state.effects.trespassCooldownUntilByTile = remapIndexMap(state.effects.trespassCooldownUntilByTile);
-  state.effects.securityAuraByTile = remapIndexMap(state.effects.securityAuraByTile);
-  state.clusterActivationState = new Map();
-
-  state.mapExpansion.purchased[direction] = true;
-  state.mapExpansion.purchasesMade += 1;
-
-  bumpTopologyVersion(state);
-  rebuildDockEntities(state);
-
-  return {
-    ok: true,
-    direction,
-    cost,
-    width: state.width,
-    height: state.height
-  };
-}
+// expandMap + expansion helpers moved to ./expansion. Re-exported
+// here so existing call sites keep working.
+export {
+  type ExpandMapFailureReason,
+  type ExpandMapResult,
+  getNextExpansionCost,
+  canExpandDirection,
+  expandMap
+} from './expansion';
 
 export function setTile(state: StationState, index: number, tile: TileType): void {
   const previousTile = state.tiles[index];
@@ -14249,470 +12961,14 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   };
 }
 
-function visitorInspectorDesire(state: StationState, visitor: Visitor): VisitorDesire {
-  if (visitor.state === VisitorState.ToDock) return 'exit_station';
-  if (!visitor.servedMeal || visitor.carryingMeal || visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing) {
-    return 'eat';
-  }
-  if (visitor.state === VisitorState.ToLeisure || visitor.state === VisitorState.Leisure) {
-    return visitorLeisureNeedLabel(state, visitor);
-  }
-  return visitor.servedMeal ? 'exit_station' : 'eat';
-}
-
-function visitorLeisureNeedLabel(state: StationState, visitor: Visitor): VisitorDesire {
-  const target = visitor.reservedTargetTile ?? visitor.tileIndex;
-  if (target >= 0 && target < state.rooms.length && state.rooms[target] === RoomType.Hygiene) return 'toilet';
-  if (visitor.state === VisitorState.ToLeisure || visitor.state === VisitorState.Leisure) return 'leisure';
-  return visitor.servedMeal ? 'exit_station' : 'eat';
-}
-
-function visitorInspectorTargetTile(visitor: Visitor): number | null {
-  if (!visitor.carryingMeal && visitor.reservedServingTile !== null) return visitor.reservedServingTile;
-  if (visitor.reservedTargetTile !== null) return visitor.reservedTargetTile;
-  if (visitor.path.length > 0) return visitor.path[visitor.path.length - 1];
-  return null;
-}
-
-function visitorInspectorAction(state: StationState, visitor: Visitor): { currentAction: string; actionReason: string } {
-  if (visitor.state === VisitorState.ToCafeteria) {
-    if (!visitor.carryingMeal) {
-      return {
-        currentAction: 'heading to serving station',
-        actionReason:
-          visitor.reservedServingTile !== null
-            ? `meal pickup reserved at tile ${visitor.reservedServingTile}`
-            : 'seeking meal service'
-      };
-    }
-    return {
-      currentAction: 'heading to table',
-      actionReason:
-        visitor.reservedTargetTile !== null
-          ? `table reserved at tile ${visitor.reservedTargetTile}`
-          : 'carrying a meal and searching for a seat'
-    };
-  }
-  if (visitor.state === VisitorState.Queueing) {
-    return {
-      currentAction: 'waiting in cafeteria queue',
-      actionReason: visitor.reservedServingTile !== null ? 'waiting for stock at reserved serving node' : 'no meal stock available yet'
-    };
-  }
-  if (visitor.state === VisitorState.Eating) {
-    return {
-      currentAction: 'eating',
-      actionReason: `meal timer ${visitor.eatTimer.toFixed(1)}s remaining`
-    };
-  }
-  if (visitor.state === VisitorState.ToLeisure) {
-    const need = visitorLeisureNeedLabel(state, visitor);
-    const target = visitor.reservedTargetTile ?? -1;
-    const targetRoom = target >= 0 && target < state.rooms.length ? state.rooms[target] : RoomType.None;
-    const destLabel =
-      targetRoom === RoomType.Market ? 'market' :
-      targetRoom === RoomType.Lounge ? 'lounge' :
-      targetRoom === RoomType.RecHall ? 'rec hall' :
-      targetRoom === RoomType.Cantina ? 'cantina' :
-      targetRoom === RoomType.Observatory ? 'observatory' :
-      targetRoom === RoomType.Hygiene ? 'hygiene' : 'leisure';
-    const legSuffix = visitor.leisureLegsPlanned > 1
-      ? ` · leg ${visitor.leisureLegsPlanned - visitor.leisureLegsRemaining + 1}/${visitor.leisureLegsPlanned}`
-      : '';
-    return {
-      currentAction: need === 'toilet' ? 'walking to hygiene' : `walking to ${destLabel}`,
-      actionReason:
-        need === 'toilet'
-          ? `comfort stop after ${visitorVisitAge(state, visitor).toFixed(0)}s visit`
-          : `${visitor.archetype} on ${visitor.primaryPreference} circuit${legSuffix}`
-    };
-  }
-  if (visitor.state === VisitorState.Leisure) {
-    const need = visitorLeisureNeedLabel(state, visitor);
-    const room = state.rooms[visitor.tileIndex];
-    const verb =
-      need === 'toilet' ? 'using hygiene service' :
-      room === RoomType.Market ? 'browsing market stalls' :
-      room === RoomType.Lounge ? 'relaxing in lounge' :
-      room === RoomType.RecHall ? 'using rec hall' :
-      room === RoomType.Cantina ? 'enjoying drinks in cantina' :
-      room === RoomType.Observatory ? 'taking in the view' :
-      'using leisure service';
-    return {
-      currentAction: verb,
-      actionReason: `${need === 'toilet' ? 'comfort' : 'leisure'} timer ${visitor.eatTimer.toFixed(1)}s remaining${visitor.leisureLegsRemaining > 0 ? ` · ${visitor.leisureLegsRemaining} more stop${visitor.leisureLegsRemaining === 1 ? '' : 's'} planned` : ''}`
-    };
-  }
-  return {
-    currentAction: 'heading to dock',
-    actionReason: visitor.servedMeal ? 'visit complete, exiting station' : `patience pressure ${visitor.patience.toFixed(1)}`
-  };
-}
-
-export function getVisitorInspectorById(state: StationState, visitorId: number): VisitorInspector | null {
-  const visitor = state.visitors.find((v) => v.id === visitorId);
-  if (!visitor) return null;
-  const targetTile = visitorInspectorTargetTile(visitor);
-  const action = visitorInspectorAction(state, visitor);
-  return {
-    id: visitor.id,
-    kind: 'visitor',
-    state: visitor.state,
-    tileIndex: visitor.tileIndex,
-    x: visitor.x,
-    y: visitor.y,
-    healthState: visitor.healthState,
-    blockedTicks: visitor.blockedTicks,
-    pathLength: visitor.path.length,
-    targetTile,
-    currentAction: action.currentAction,
-    actionReason: action.actionReason,
-    localAir: airQualityAt(state, visitor.tileIndex),
-    airExposureSec: visitor.airExposureSec,
-    reservationSummary: actorReservationSummary(state, 'visitor', visitor.id),
-    providerTarget: providerTargetLabelFromTile(state, targetTile),
-    blockedReason: visitor.blockedTicks > 4 ? 'path blocked or provider congested' : null,
-    archetype: visitor.archetype,
-    primaryPreference: visitor.primaryPreference,
-    patience: visitor.patience,
-    servedMeal: visitor.servedMeal,
-    carryingMeal: visitor.carryingMeal,
-    reservedServingTile: visitor.reservedServingTile,
-    reservedTargetTile: visitor.reservedTargetTile,
-    desire: visitorInspectorDesire(state, visitor)
-  };
-}
-
-function residentInspectorTargetTile(resident: Resident): number | null {
-  if (resident.reservedTargetTile !== null) return resident.reservedTargetTile;
-  if (resident.path.length > 0) return resident.path[resident.path.length - 1];
-  return null;
-}
-
-function residentInspectorDominantNeed(resident: Resident): ResidentDominantNeed {
-  const deficits: Array<{ key: ResidentDominantNeed; value: number }> = [
-    { key: 'hunger', value: 100 - resident.hunger },
-    { key: 'energy', value: 100 - resident.energy },
-    { key: 'hygiene', value: 100 - resident.hygiene }
-  ];
-  deficits.sort((a, b) => b.value - a.value);
-  return deficits[0].value < 10 ? 'none' : deficits[0].key;
-}
-
-function residentInspectorDesire(resident: Resident): ResidentDesire {
-  if (resident.safety < 35) return 'seek_safety';
-  if (resident.energy < DORM_SEEK_ENERGY_THRESHOLD) return 'sleep';
-  if (resident.hygiene < 45) return 'hygiene';
-  if (resident.hunger < 55) return 'eat';
-  if (resident.routinePhase === 'socialize' && resident.social < 65) return 'socialize';
-  return 'wander';
-}
-
-function residentInspectorAction(
-  resident: Resident,
-  desire: ResidentDesire
-): { currentAction: string; actionReason: string } {
-  if ((resident.activeIncidentId ?? null) !== null) {
-    return {
-      currentAction: 'in confrontation',
-      actionReason: `incident ${resident.activeIncidentId} awaiting security response`
-    };
-  }
-  if (resident.state === ResidentState.ToCafeteria) {
-    return {
-      currentAction: 'walking to cafeteria',
-      actionReason: `hunger ${resident.hunger.toFixed(1)} under eat threshold 55`
-    };
-  }
-  if (resident.state === ResidentState.Eating) {
-    return {
-      currentAction: 'eating',
-      actionReason: `meal timer ${resident.actionTimer.toFixed(1)}s remaining`
-    };
-  }
-  if (resident.state === ResidentState.ToDorm) {
-    return {
-      currentAction: 'walking to dorm',
-      actionReason: `energy ${resident.energy.toFixed(1)} under rest threshold ${DORM_SEEK_ENERGY_THRESHOLD}`
-    };
-  }
-  if (resident.state === ResidentState.Sleeping) {
-    return {
-      currentAction: 'sleeping',
-      actionReason: `rest timer ${resident.actionTimer.toFixed(1)}s remaining`
-    };
-  }
-  if (resident.state === ResidentState.ToHygiene) {
-    return {
-      currentAction: 'walking to hygiene',
-      actionReason: `hygiene ${resident.hygiene.toFixed(1)} under clean threshold 45`
-    };
-  }
-  if (resident.state === ResidentState.Cleaning) {
-    return {
-      currentAction: 'cleaning',
-      actionReason: `clean timer ${resident.actionTimer.toFixed(1)}s remaining`
-    };
-  }
-  if (resident.state === ResidentState.ToLeisure) {
-    return {
-      currentAction: 'walking to social space',
-      actionReason: `routine ${resident.routinePhase} with social ${resident.social.toFixed(1)}`
-    };
-  }
-  if (resident.state === ResidentState.Leisure) {
-    return {
-      currentAction: 'socializing',
-      actionReason: `social timer ${resident.actionTimer.toFixed(1)}s remaining`
-    };
-  }
-  if (resident.state === ResidentState.ToSecurity) {
-    return {
-      currentAction: 'seeking safer area',
-      actionReason: `safety ${resident.safety.toFixed(1)} below comfort threshold`
-    };
-  }
-  if (resident.state === ResidentState.ToHomeShip) {
-    return {
-      currentAction: 'settling back into station life',
-      actionReason: 'legacy return-home state will reset on the next simulation tick'
-    };
-  }
-  return {
-    currentAction: resident.path.length > 0 ? 'wandering' : 'idle',
-    actionReason: desire === 'wander' ? 'all immediate needs are above trigger thresholds' : `next desire is ${desire}`
-  };
-}
-
-export function getResidentInspectorById(state: StationState, residentId: number): ResidentInspector | null {
-  const resident = state.residents.find((r) => r.id === residentId);
-  if (!resident) return null;
-  const desire = residentInspectorDesire(resident);
-  const action = residentInspectorAction(resident, desire);
-  const agitation = resident.agitation ?? 0;
-  const inConfrontation = residentConfrontationActive(state, resident);
-  return {
-    id: resident.id,
-    kind: 'resident',
-    state: resident.state,
-    tileIndex: resident.tileIndex,
-    x: resident.x,
-    y: resident.y,
-    healthState: resident.healthState,
-    blockedTicks: resident.blockedTicks,
-    pathLength: resident.path.length,
-    targetTile: residentInspectorTargetTile(resident),
-    currentAction: action.currentAction,
-    actionReason: action.actionReason,
-    localAir: airQualityAt(state, resident.tileIndex),
-    airExposureSec: resident.airExposureSec,
-    reservationSummary: actorReservationSummary(state, 'resident', resident.id),
-    providerTarget: providerTargetLabelFromTile(state, residentInspectorTargetTile(resident)),
-    blockedReason: resident.blockedTicks > 4 ? 'path blocked or provider congested' : null,
-    hunger: resident.hunger,
-    energy: resident.energy,
-    hygiene: resident.hygiene,
-    stress: resident.stress,
-    social: resident.social,
-    safety: resident.safety,
-    routinePhase: resident.routinePhase,
-    role: resident.role,
-    agitation,
-    inConfrontation,
-    satisfaction: resident.satisfaction,
-    leaveIntent: resident.leaveIntent,
-    homeDockId: resident.homeDockId,
-    homeShipId: resident.homeShipId,
-    housingUnitId: resident.housingUnitId,
-    bedModuleId: resident.bedModuleId,
-    dominantNeed: residentInspectorDominantNeed(resident),
-    desire
-  };
-}
-
-function crewInspectorDesire(crew: CrewMember): CrewDesire {
-  if (crew.resting) return 'rest';
-  if (crew.toileting) return 'toilet';
-  if (crew.drinking) return 'drink';
-  if (crew.cleaning) return 'clean';
-  if (crew.leisure) return 'social';
-  if (crew.activeJobId !== null) return 'logistics';
-  if (crew.bladder <= CREW_BLADDER_TOILET_THRESHOLD) return 'toilet';
-  if (crew.thirst <= CREW_THIRST_DRINK_THRESHOLD) return 'drink';
-  if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
-  if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
-  return 'idle';
-}
-
-function crewInspectorTargetTile(state: StationState, crew: CrewMember): number | null {
-  if (crew.activeJobId !== null) {
-    const job = state.jobs.find((j) => j.id === crew.activeJobId);
-    if (job) return crew.carryingItemType !== null || job.state === 'in_progress' ? job.toTile : job.fromTile;
-  }
-  if (crew.targetTile !== null) return crew.targetTile;
-  if (crew.path.length > 0) return crew.path[crew.path.length - 1];
-  return null;
-}
-
-function crewInspectorAction(
-  state: StationState,
-  crew: CrewMember,
-  desire: CrewDesire
-): { currentAction: string; actionReason: string; stateLabel: string } {
-  if (crew.activeJobId !== null) {
-    const job = state.jobs.find((j) => j.id === crew.activeJobId);
-    if (job) {
-      if (job.type === 'cook') {
-        const at = crew.tileIndex === job.fromTile;
-        const progress = job.workProgress ?? 0;
-        const required = job.workRequired ?? job.amount;
-        const stall = job.blockedReason ?? (job.stallReason && job.stallReason !== 'none' ? job.stallReason : '');
-        return {
-          currentAction: at ? 'cooking meal batch' : 'walking to stove',
-          actionReason: `job #${job.id} ${job.state} | batch ${job.amount.toFixed(1)} | ${progress.toFixed(1)}/${required.toFixed(1)}${stall ? ` | ${stall}` : ''}`,
-          stateLabel: 'cooking'
-        };
-      }
-      if (job.type === 'repair') {
-        const at = crew.tileIndex === job.fromTile;
-        const sys = job.repairSystem ?? 'system';
-        const stall = job.blockedReason
-          ? ` | ${job.blockedReason}`
-          : job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
-        return {
-          currentAction: at ? `repairing ${sys}` : `walking to repair ${sys}`,
-          actionReason: `job #${job.id} ${job.state} | progress ${(job.repairProgress ?? 0).toFixed(1)}/${job.amount.toFixed(1)}${stall}`,
-          stateLabel: 'repair'
-        };
-      }
-      if (job.type === 'extinguish') {
-        const fire = state.effects.fires.find((f) => f.anchorTile === job.fromTile);
-        const inProgress = job.state === 'in_progress';
-        return {
-          currentAction: inProgress ? 'extinguishing fire' : 'rushing to fire',
-          actionReason: fire
-            ? `fire at ${job.fromTile} | intensity ${fire.intensity.toFixed(0)}`
-            : `fire job #${job.id} ${job.state}`,
-          stateLabel: 'firefighting'
-        };
-      }
-      if (job.type === 'sanitize') {
-        const at = crew.tileIndex === job.fromTile;
-        const dirt = state.dirtByTile[job.fromTile] ?? 0;
-        const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
-        return {
-          currentAction: at ? 'sanitizing room' : 'walking to sanitation job',
-          actionReason: `job #${job.id} ${job.state} | dirt ${dirt.toFixed(0)}% | source ${job.sanitationSource ?? 'mixed'}${stall}`,
-          stateLabel: 'sanitation'
-        };
-      }
-      const carrying = crew.carryingItemType !== null || job.pickedUpAmount > 0;
-      const currentAction = carrying ? `delivering ${job.itemType}` : `walking to ${job.itemType} pickup`;
-      const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
-      return {
-        currentAction,
-        actionReason: `job #${job.id} ${job.state} | ${job.fromTile}->${job.toTile} | ${job.pickedUpAmount.toFixed(1)}/${job.amount.toFixed(1)}${stall}`,
-        stateLabel: 'logistics'
-      };
-    }
-    return {
-      currentAction: 'logistics assignment missing',
-      actionReason: `active job #${crew.activeJobId} no longer exists`,
-      stateLabel: 'logistics'
-    };
-  }
-  if (crew.resting) {
-    return {
-      currentAction: 'resting',
-      actionReason: `energy ${crew.energy.toFixed(1)} recovering before returning to duty`,
-      stateLabel: 'resting'
-    };
-  }
-  if (crew.toileting) {
-    return {
-      currentAction: crew.path.length > 0 ? 'walking to hygiene' : 'using restroom',
-      actionReason: `bladder ${crew.bladder.toFixed(0)} (toilet at <${CREW_BLADDER_TOILET_THRESHOLD})`,
-      stateLabel: 'toilet'
-    };
-  }
-  if (crew.drinking) {
-    const atCantina = state.rooms[crew.tileIndex] === RoomType.Cantina;
-    const atFountain = state.modules[crew.tileIndex] === ModuleType.WaterFountain;
-    return {
-      currentAction:
-        atCantina ? 'drinking at the bar' :
-        atFountain ? 'sipping water' :
-        crew.path.length > 0 ? 'walking to drink' : 'looking for a drink',
-      actionReason: `thirst ${crew.thirst.toFixed(0)} (drink at <${CREW_THIRST_DRINK_THRESHOLD})`,
-      stateLabel: 'drink'
-    };
-  }
-  if (crew.cleaning) {
-    return {
-      currentAction: 'cleaning up',
-      actionReason: `hygiene ${crew.hygiene.toFixed(1)} below comfort threshold`,
-      stateLabel: 'cleaning'
-    };
-  }
-  if (crew.leisure) {
-    return {
-      currentAction: crew.path.length > 0 ? 'walking to social space' : 'taking leisure time',
-      actionReason: crew.leisureSessionActive
-        ? `off-duty recovery ${Math.max(0, crew.leisureUntil - state.now).toFixed(1)}s remaining`
-        : 'off-duty social recovery before returning to work',
-      stateLabel: 'leisure'
-    };
-  }
-  return {
-    currentAction: crew.path.length > 0 ? 'walking' : 'idle',
-    actionReason: desire === 'idle' ? crew.idleReason : `next desire is ${desire}`,
-    stateLabel: 'idle'
-  };
-}
-
-export function getCrewInspectorById(state: StationState, crewId: number): CrewInspector | null {
-  const crew = state.crewMembers.find((c) => c.id === crewId);
-  if (!crew) return null;
-  const desire = crewInspectorDesire(crew);
-  const action = crewInspectorAction(state, crew, desire);
-  return {
-    id: crew.id,
-    kind: 'crew',
-    state: action.stateLabel,
-    tileIndex: crew.tileIndex,
-    x: crew.x,
-    y: crew.y,
-    healthState: crew.healthState,
-    blockedTicks: crew.blockedTicks,
-    pathLength: crew.path.length,
-    targetTile: crewInspectorTargetTile(state, crew),
-    currentAction: action.currentAction,
-    actionReason: action.actionReason,
-    localAir: airQualityAt(state, crew.tileIndex),
-    airExposureSec: crew.airExposureSec,
-    reservationSummary: actorReservationSummary(state, 'crew', crew.id),
-    providerTarget: providerTargetLabelFromTile(state, crewInspectorTargetTile(state, crew)),
-    blockedReason: crew.blockedTicks > 4 ? crew.idleReason : null,
-    role: crew.role,
-    staffRole: crew.staffRole,
-    assignedSystem: crew.assignedSystem,
-    lastSystem: crew.lastSystem,
-    energy: crew.energy,
-    hygiene: crew.hygiene,
-    bladder: crew.bladder,
-    thirst: crew.thirst,
-    resting: crew.resting,
-    cleaning: crew.cleaning,
-    toileting: crew.toileting,
-    drinking: crew.drinking,
-    leisure: crew.leisure,
-    activeJobId: crew.activeJobId,
-    carryingItemType: crew.carryingItemType,
-    carryingAmount: crew.carryingAmount,
-    idleReason: crew.idleReason,
-    desire
-  };
-}
+// actor-inspector functions moved to ./actor-inspectors. Re-exported
+// here so render/main.ts and any other consumers keep working without
+// import-site rewrites.
+export {
+  getVisitorInspectorById,
+  getResidentInspectorById,
+  getCrewInspectorById
+} from './actor-inspectors';
 
 export function tryPlaceModule(
   state: StationState,
@@ -15277,166 +13533,21 @@ export function setCrewPriorityWeight(state: StationState, system: CrewPriorityS
   state.controls.crewPriorityWeights[system] = clamp(Math.round(weight), 1, 10);
 }
 
-export function setDockPlacementFacing(state: StationState, facing: SpaceLane): void {
-  state.controls.dockPlacementFacing = facing;
-}
-
-export function getDockByTile(state: StationState, tileIndex: number): DockEntity | null {
-  ensureDockByTileCache(state);
-  return state.derived.dockByTile.get(tileIndex) ?? null;
-}
-
-export function setDockPurpose(state: StationState, dockId: number, purpose: DockPurpose): void {
-  const dock = state.docks.find((d) => d.id === dockId);
-  if (!dock) return;
-  if (dock.purpose === purpose) return;
-  dock.purpose = purpose;
-  if (purpose === 'residential') {
-    state.dockQueue = state.dockQueue.filter((entry) => entry.lane !== dock.lane);
-  }
-  bumpDockVersion(state);
-}
-
-export function setDockFacing(state: StationState, dockId: number, facing: SpaceLane): { ok: boolean; reason?: string } {
-  const dock = state.docks.find((d) => d.id === dockId);
-  if (!dock) return { ok: false, reason: 'dock not found' };
-  const check = validateDockPlacementAt(state, dock.anchorTile, facing);
-  if (!check.valid) return { ok: false, reason: check.reason };
-  dock.facing = facing;
-  dock.lane = laneFromFacing(facing);
-  dock.approachTiles = check.approachTiles;
-  bumpDockVersion(state);
-  return { ok: true };
-}
-
-export function setDockAllowedShipType(state: StationState, dockId: number, shipType: ShipType, allowed: boolean): void {
-  const dock = state.docks.find((d) => d.id === dockId);
-  if (!dock) return;
-  if (allowed && !isShipTypeUnlocked(state, shipType)) return;
-  const next = new Set(dock.allowedShipTypes);
-  if (allowed) next.add(shipType);
-  else next.delete(shipType);
-  if (next.size === 0) next.add('tourist');
-  dock.allowedShipTypes = [...next];
-  bumpDockVersion(state);
-}
-
-export function setDockAllowedShipSize(state: StationState, dockId: number, size: ShipSize, allowed: boolean): void {
-  const dock = state.docks.find((d) => d.id === dockId);
-  if (!dock) return;
-  if (!shipSizesUpTo(dock.maxSizeByArea).includes(size)) return;
-  const next = new Set(dock.allowedShipSizes);
-  if (allowed) next.add(size);
-  else next.delete(size);
-  if (next.size === 0) next.add('small');
-  dock.allowedShipSizes = shipSizesUpTo(dock.maxSizeByArea).filter((s) => next.has(s));
-  bumpDockVersion(state);
-}
-
-// ────────────────────────────────────────────────────────────────────
-// Dock-migration v0 follow-up: per-berth player-set filters (parity
-// with setDockAllowedShipType / setDockAllowedShipSize for the
-// berth-room config UI). Capability tags continue to gate which ship
-// types CAN dock; these filters let the player further restrict the
-// allowlist on a per-berth basis. Storage lives in
-// `state.berthConfigs` keyed by berth-cluster anchor tile (lowest
-// tile index in the cluster). Orphaned entries — anchor no longer
-// leads a Berth cluster — are pruned in ensureRoomClustersCache.
-// ────────────────────────────────────────────────────────────────────
-
-const ALL_SHIP_TYPES_FOR_BERTH: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
-const ALL_SHIP_SIZES_FOR_BERTH: ShipSize[] = ['small', 'medium', 'large'];
-
-function findBerthConfigByAnchor(state: StationState, anchorTile: number): BerthConfig | undefined {
-  return state.berthConfigs.find((c) => c.anchorTile === anchorTile);
-}
-
-function makeDefaultBerthConfig(anchorTile: number): BerthConfig {
-  return {
-    anchorTile,
-    allowedShipTypes: [...ALL_SHIP_TYPES_FOR_BERTH],
-    allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH]
-  };
-}
-
-/**
- * Look up (or create) the BerthConfig for a berth cluster anchor.
- * Caller is responsible for passing a valid anchor (lowest tile index
- * inside an existing Berth cluster) — invalid anchors get a config
- * row that the orphan-prune pass will sweep on the next room-cluster
- * recompute, so the worst case is one wasted entry.
- */
-export function ensureBerthConfig(state: StationState, anchorTile: number): BerthConfig {
-  let cfg = findBerthConfigByAnchor(state, anchorTile);
-  if (!cfg) {
-    cfg = makeDefaultBerthConfig(anchorTile);
-    state.berthConfigs.push(cfg);
-  }
-  return cfg;
-}
-
-/**
- * Remove BerthConfig entries whose anchor is no longer the lowest
- * tile of a Berth cluster. Called from ensureRoomClustersCache after
- * the cluster cache has been rebuilt — guarantees the room-version
- * key has just rolled, so we know the anchor set is fresh.
- */
-function pruneOrphanedBerthConfigs(state: StationState): void {
-  if (state.berthConfigs.length === 0) return;
-  const validAnchors = new Set<number>();
-  const berthClusters = state.derived.roomClustersByRoom.get(RoomType.Berth) ?? [];
-  for (const cluster of berthClusters) {
-    if (cluster.length === 0) continue;
-    const anchor = cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]);
-    validAnchors.add(anchor);
-  }
-  state.berthConfigs = state.berthConfigs.filter((c) => validAnchors.has(c.anchorTile));
-}
-
-export function setBerthAllowedShipType(
-  state: StationState,
-  anchorTile: number,
-  shipType: ShipType,
-  allowed: boolean
-): void {
-  // Capability check: if the player toggles a type the berth's modules
-  // can't actually accept, we still record the choice — the capability
-  // filter in pickBerthForShip is the hard gate, this is the soft one.
-  // Tier-locked types still need to be unlocked first (mirrors dock).
-  if (allowed && !isShipTypeUnlocked(state, shipType)) return;
-  const cfg = ensureBerthConfig(state, anchorTile);
-  const next = new Set(cfg.allowedShipTypes);
-  if (allowed) next.add(shipType);
-  else next.delete(shipType);
-  // Mirror dock invariant: never leave the allowlist empty — a berth
-  // with zero allowed types is a dead berth that confuses traffic
-  // logic. Default fallback is 'tourist' (the always-unlocked type).
-  if (next.size === 0) next.add('tourist');
-  cfg.allowedShipTypes = ALL_SHIP_TYPES_FOR_BERTH.filter((t) => next.has(t));
-}
-
-export function setBerthAllowedShipSize(
-  state: StationState,
-  anchorTile: number,
-  size: ShipSize,
-  allowed: boolean
-): void {
-  const cfg = ensureBerthConfig(state, anchorTile);
-  const next = new Set(cfg.allowedShipSizes);
-  if (allowed) next.add(size);
-  else next.delete(size);
-  // Mirror dock invariant: never leave the size-allowlist empty.
-  if (next.size === 0) next.add('small');
-  cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
-}
-
-export function validateDockPlacement(
-  state: StationState,
-  tileIndex: number,
-  facing?: SpaceLane
-): { valid: boolean; reason: string; approachTiles: number[] } {
-  return validateDockPlacementWithNeighbors(state, tileIndex, facing);
-}
+// Dock + berth control APIs moved to ./dock-controls. Re-exported
+// here so the public surface (main.ts, save.ts, render/, etc.) keeps
+// working unchanged.
+export {
+  ensureBerthConfig,
+  getDockByTile,
+  setBerthAllowedShipSize,
+  setBerthAllowedShipType,
+  setDockAllowedShipSize,
+  setDockAllowedShipType,
+  setDockFacing,
+  setDockPlacementFacing,
+  setDockPurpose,
+  validateDockPlacement
+} from './dock-controls';
 
 export function tick(state: StationState, frameDt: number): void {
   const tickStarted = perfNowMs();
