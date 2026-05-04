@@ -19,7 +19,8 @@ import {
   STAFF_ROLE_DEFINITIONS,
   STAFF_ROLES,
   SURFACED_STAFF_ROLES,
-  isSpecialtyPhaseAvailable
+  isSpecialtyPhaseAvailable,
+  specialtyForUnlockedModule
 } from './sim/content/command';
 import { sigilForFaction } from './sim/system-map';
 import {
@@ -100,6 +101,7 @@ import {
   type JobStatusCounts,
   type ModuleRotation,
   type StationState,
+  type StaffDepartment,
   type StaffRole,
   type SpecialtyId,
   ModuleType,
@@ -266,6 +268,7 @@ app.innerHTML = `
         </div>
         <div class="row compact list-row"><span>Rating</span><span class="value" id="health-rating">70</span></div>
         <small id="room-warnings">Room warnings: none</small>
+        <small id="maintenance-status">Maintenance: tracking 0 targets | max 0% | avg 0% | open 0</small>
         <small id="resident-conversion-summary" class="hidden"></small>
         <small id="visitor-feelings" class="hidden"></small>
         <small id="rating-reasons" class="hidden"></small>
@@ -747,6 +750,13 @@ app.innerHTML = `
       <small id="room-modal-reasons">Inactive reasons: none</small>
       <small id="room-modal-warnings">Warnings: none</small>
       <small id="room-modal-hints">Hints: none</small>
+      <div id="room-modal-sanitation" class="hidden">
+        <div class="section-title" style="margin-top:10px;">Sanitation</div>
+        <div class="row compact list-row"><span>Average dirt</span><span class="value" id="room-modal-sanitation-avg">0</span></div>
+        <div class="row compact list-row"><span>Source</span><span class="value" id="room-modal-sanitation-source">none</span></div>
+        <small id="room-modal-sanitation-effect">Effect: clean.</small>
+        <small id="room-modal-sanitation-fix">Fix: nothing needed.</small>
+      </div>
     </div>
   </div>
   <div id="system-map-modal" class="modal hidden">
@@ -967,20 +977,25 @@ function diagnosticReadoutText(): string {
   }
   if (overlay === 'maintenance') {
     const globalLine = `Maintenance: max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
-    if (hoveredTile === null) return `${globalLine}\nHover reactor or life-support tiles for output loss.`;
+    if (hoveredTile === null) return `${globalLine}\nHover hull, dock, berth, module, reactor, or life-support tiles for source/effect/fix.`;
     const p = fromIndex(hoveredTile, state.width);
     const diagnostic = getMaintenanceTileDiagnostic(state, p.x, p.y);
-    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no system debt here.`;
-    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}%; output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%.`;
+    if (!diagnostic) {
+      const debris = mapConditionSamplesAt(state, hoveredTile).find((sample) => sample.kind === 'debris-risk');
+      return `${globalLine}\n${diagnosticHoverPrefix()}: no maintenance wear here${debris ? `; ${debris.label} ${(debris.value * 100).toFixed(0)}%` : ''}.`;
+    }
+    const repair = diagnostic.exterior ? 'EVA repair' : 'interior repair';
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.label} ${diagnostic.debt.toFixed(0)}% | ${diagnostic.source} | ${diagnostic.effect} | ${repair}.`;
   }
   if (overlay === 'sanitation') {
+    const departmentLine = `Sanitation Department: ${departmentStatusText('sanitation')}`;
     const globalLine = `Sanitation: avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | filthy ${state.metrics.filthyTiles} | open ${state.metrics.sanitationJobsOpen}`;
-    if (hoveredTile === null) return `${globalLine}\nHover a pressurized floor tile for dirt source, effect, and cleanup state.`;
+    if (hoveredTile === null) return `${globalLine}\n${departmentLine}\nHover a pressurized floor tile for dirt source, effect, and cleanup state.`;
     const p = fromIndex(hoveredTile, state.width);
     const diagnostic = getSanitationTileDiagnostic(state, p.x, p.y);
-    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no sanitation sample here.`;
+    if (!diagnostic) return `${globalLine}\n${departmentLine}\n${diagnosticHoverPrefix()}: no sanitation sample here.`;
     const effect = diagnostic.effectSummary === 'none' ? 'no active penalty' : diagnostic.effectSummary;
-    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.severity} ${diagnostic.dirt.toFixed(0)}%, source ${diagnostic.dominantSource}; ${effect}.`;
+    return `${globalLine}\n${departmentLine}\n${diagnosticHoverPrefix()}: ${diagnostic.severity} ${diagnostic.dirt.toFixed(0)}%, source ${diagnostic.dominantSource}; ${effect}.`;
   }
   if (overlay === 'map-conditions') {
     const globalLine = `Map seed: ${state.seedAtCreation} | conditions v${state.mapConditionVersion}`;
@@ -1075,15 +1090,16 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
         title: 'Maintenance',
         stats: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open jobs ${state.metrics.maintenanceJobsOpen}`,
         rows: [
-          { color: '#6edb8f', label: 'Healthy reactor/life-support system' },
+          { color: '#6edb8f', label: 'Healthy station system or hull target' },
           { color: '#ffd65c', label: 'Moderate debt, maintenance should visit' },
-          { color: '#ee4f4f', label: 'Serious debt reducing system output' }
+          { color: '#ee4f4f', label: 'Serious wear causing degradation or EVA urgency' },
+          { color: '#d072ff', label: 'Debris-risk space that accelerates exterior wear' }
         ]
       };
     case 'sanitation':
       return {
         title: 'Sanitation',
-        stats: `avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | filthy ${state.metrics.filthyTiles} | open jobs ${state.metrics.sanitationJobsOpen}`,
+        stats: `dept ${departmentStatusText('sanitation')} | avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | open jobs ${state.metrics.sanitationJobsOpen}`,
         rows: [
           { color: '#6edb8f', label: 'Clean or recently serviced room' },
           { color: '#ffd65c', label: 'Lived-in grime, watch high-traffic routes' },
@@ -1194,6 +1210,7 @@ const stallReasonsEl = document.querySelector<HTMLElement>('#stall-reasons')!;
 const crewRetargetsEl = document.querySelector<HTMLElement>('#crew-retargets')!;
 const foodChainHintEl = document.querySelector<HTMLElement>('#food-chain-hint')!;
 const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
+const maintenanceStatusEl = document.querySelector<HTMLElement>('#maintenance-status')!;
 const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
@@ -1353,6 +1370,11 @@ const roomModalHousingEl = document.querySelector<HTMLElement>('#room-modal-hous
 const roomModalReasonsEl = document.querySelector<HTMLElement>('#room-modal-reasons')!;
 const roomModalWarningsEl = document.querySelector<HTMLElement>('#room-modal-warnings')!;
 const roomModalHintsEl = document.querySelector<HTMLElement>('#room-modal-hints')!;
+const roomModalSanitationEl = document.querySelector<HTMLDivElement>('#room-modal-sanitation')!;
+const roomModalSanitationAvgEl = document.querySelector<HTMLElement>('#room-modal-sanitation-avg')!;
+const roomModalSanitationSourceEl = document.querySelector<HTMLElement>('#room-modal-sanitation-source')!;
+const roomModalSanitationEffectEl = document.querySelector<HTMLElement>('#room-modal-sanitation-effect')!;
+const roomModalSanitationFixEl = document.querySelector<HTMLElement>('#room-modal-sanitation-fix')!;
 const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
 const roomModalBerthConfigEl = document.querySelector<HTMLDivElement>('#room-modal-berth-config')!;
 const roomModalBerthPurposeEl = document.querySelector<HTMLElement>('#room-modal-berth-purpose')!;
@@ -1582,12 +1604,50 @@ function friendlyName(value: string): string {
     .join(' ');
 }
 
+function departmentLabel(department: StaffDepartment): string {
+  return friendlyName(department);
+}
+
+function departmentInactiveReasonLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'specialty-not-completed':
+      return 'specialty incomplete';
+    case 'no-officer':
+      return 'officer missing';
+    case 'no-bridge':
+      return 'Bridge inactive';
+    case 'no-terminal':
+      return 'terminal missing';
+    case 'unreachable':
+      return 'officer unreachable';
+    default:
+      return 'inactive';
+  }
+}
+
+function departmentStatusText(department: StaffDepartment): string {
+  const row = state.command.departments?.[department];
+  if (!row) return 'not configured';
+  return row.active ? 'active' : departmentInactiveReasonLabel(row.inactiveReason);
+}
+
+function departmentTone(department: StaffDepartment): 'default' | 'ok' | 'warn' | 'danger' {
+  const row = state.command.departments?.[department];
+  if (!row) return 'default';
+  if (row.active) return 'ok';
+  return row.inactiveReason === 'specialty-not-completed' ? 'default' : 'warn';
+}
+
 function roomLockedMessage(room: RoomType): string {
   const tier = ROOM_UNLOCK_TIER[room];
   return `${friendlyName(room)} locked until Tier ${tier}. ${unlockRequirementText(tier)}`;
 }
 
 function moduleLockedMessage(module: ModuleType): string {
+  const specialty = specialtyForUnlockedModule(module);
+  if (specialty && !state.command.completedSpecialties.includes(specialty.id)) {
+    return `${friendlyName(module)} belongs to the ${departmentLabel(specialty.department)} Department. Complete ${specialty.label} to build it.`;
+  }
   const tier = MODULE_UNLOCK_TIER[module];
   return `${friendlyName(module)} locked until Tier ${tier}. ${unlockRequirementText(tier)}`;
 }
@@ -1947,6 +2007,17 @@ function ratingSummaryText(): string {
   return `${Math.round(state.metrics.stationRating)} (${trend >= 0 ? '+' : ''}${trend.toFixed(1)}/min)`;
 }
 
+function maintenanceStatusText(): string {
+  return `Maintenance: tracking ${state.maintenanceDebts.length} targets | max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | avg ${state.metrics.maintenanceDebtAvg.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
+}
+
+function maintenanceStatusToneColor(): string {
+  if (state.metrics.maintenanceDebtMax >= 60) return 'var(--danger)';
+  if (state.metrics.maintenanceJobsOpen > 0 || state.metrics.maintenanceDebtMax >= 20) return 'var(--warn)';
+  if (state.maintenanceDebts.length > 0) return 'var(--ok)';
+  return '#8ea2bd';
+}
+
 function residentConversionTone(): 'default' | 'warn' | 'danger' | 'ok' {
   if (state.metrics.residentsCount > 0 || state.metrics.residentConversionLastResult === 'converted') return 'ok';
   if (state.metrics.residentPrivateBedsTotal <= 0 || state.metrics.residentBerthsTotal <= 0) return 'danger';
@@ -2262,7 +2333,10 @@ function refreshOpsModal(): void {
     { label: 'Observatory', value: `${state.ops.observatoryActive}/${state.ops.observatoryTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
     { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
+    { label: 'Mechanical Dept', value: departmentStatusText('mechanical'), tone: departmentTone('mechanical') },
     { label: 'Sanitation', value: `${state.metrics.sanitationAvg.toFixed(1)}% avg / ${state.metrics.sanitationMax.toFixed(0)}% max / ${state.metrics.sanitationJobsOpen} open`, tone: state.metrics.sanitationJobsOpen > 0 ? 'warn' : 'default' },
+    { label: 'Sanitation Dept', value: departmentStatusText('sanitation'), tone: departmentTone('sanitation') },
+    { label: 'Drift Jobs', value: `clean ${state.metrics.sanitationJobsOpen} / repair ${state.metrics.maintenanceJobsOpen}`, tone: state.metrics.sanitationJobsOpen + state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalLifeSupportEl, [
     { label: 'Active', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
@@ -3224,7 +3298,7 @@ function refreshCrewPanel(): void {
   const completed = new Set(state.command.completedSpecialties);
   const active = state.command.selectedSpecialty;
   crewCommandSummaryEl.textContent =
-    `Bridge ${state.ops.bridgeActive}/${state.ops.bridgeTotal} | captain ${roleCount('captain') > 0 ? 'assigned' : 'missing'}`;
+    `Bridge ${state.ops.bridgeActive}/${state.ops.bridgeTotal} | captain ${roleCount('captain') > 0 ? 'assigned' : 'missing'} | sanitation ${departmentStatusText('sanitation')}`;
   crewSpecialtySummaryEl.textContent = active
     ? `${specialtyLabel(active)} ${Math.round((state.command.specialtyProgress[active]?.progress ?? 0) * 100)}% in Progress`
     : 'Use Progress to unlock more roles';
@@ -3719,6 +3793,9 @@ function refreshToolbar(): void {
       active = z !== undefined && z === currentTool.zone;
     } else if (isDiagnosticOverlay(diagnosticOverlayKey)) {
       active = state.controls.diagnosticOverlay === diagnosticOverlayKey;
+      if (diagnosticOverlayKey === 'sanitation') {
+        btn.title = `Sanitation Department: ${departmentStatusText('sanitation')}`;
+      }
     } else if (cancelConstructionKey) {
       active = toolKind === 'cancel-construction';
     } else if (btn.dataset.toolClearroom) {
@@ -4364,6 +4441,17 @@ function refreshRoomModal(): void {
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
   roomModalWarningsEl.textContent = `Warnings: ${inspector.warnings.join(', ') || 'none'}`;
   roomModalHintsEl.textContent = `Hints: ${inspector.hints.join(' | ') || 'none'}`;
+  const sanitation = inspector.sanitation;
+  if (sanitation && sanitation.averageDirt >= 1) {
+    roomModalSanitationEl.classList.remove('hidden');
+    roomModalSanitationAvgEl.textContent = `${sanitation.averageDirt.toFixed(1)} (max ${sanitation.maxDirt.toFixed(1)})`;
+    roomModalSanitationSourceEl.textContent =
+      sanitation.dominantSource === 'none' ? 'none' : sanitation.dominantSource;
+    roomModalSanitationEffectEl.textContent = `Effect: ${sanitation.effectSummary}`;
+    roomModalSanitationFixEl.textContent = `Fix: ${sanitation.suggestedFix}`;
+  } else {
+    roomModalSanitationEl.classList.add('hidden');
+  }
 }
 
 function toTileCoords(clientX: number, clientY: number): { x: number; y: number } | null {
@@ -6144,6 +6232,8 @@ function frame(now: number): void {
     state.metrics.morale > 65 ? '#6edb8f' : state.metrics.morale > 40 ? '#ffcf6e' : '#ff7676';
   stationRatingEl.style.color = ratingToneColor();
   healthRatingEl.style.color = ratingToneColor();
+  maintenanceStatusEl.textContent = maintenanceStatusText();
+  maintenanceStatusEl.style.color = maintenanceStatusToneColor();
   visitorFeelingsEl.textContent = `Visitor feelings: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
   moraleReasonsEl.textContent = `Crew morale drivers: ${state.metrics.crewMoraleDrivers.join(' | ') || 'none'}`;
   ratingReasonsEl.textContent = `Rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;

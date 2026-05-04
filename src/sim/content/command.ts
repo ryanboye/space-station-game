@@ -1,4 +1,12 @@
-import { ModuleType, type SpecialtyId, type SpecialtyProgress, type StaffDepartment, type StaffRole, type StaffRoleCounts } from '../types';
+import {
+  ModuleType,
+  type DepartmentRuntime,
+  type SpecialtyId,
+  type SpecialtyProgress,
+  type StaffDepartment,
+  type StaffRole,
+  type StaffRoleCounts
+} from '../types';
 
 export type StaffRoleDefinition = {
   id: StaffRole;
@@ -81,6 +89,21 @@ export const STAFF_ROLES: StaffRole[] = [
   'eva-engineer',
   'flight-controller',
   'docking-officer'
+];
+
+export const ALL_DEPARTMENTS: StaffDepartment[] = [
+  'command',
+  'sanitation',
+  'security',
+  'mechanical',
+  'industrial',
+  'navigation',
+  'communications',
+  'medical',
+  'logistics',
+  'food',
+  'eva',
+  'general'
 ];
 
 export const OFFICER_ROLES: StaffRole[] = [
@@ -311,6 +334,31 @@ export const SPECIALTY_DEFINITIONS: SpecialtyDefinition[] = [
 export const SPECIALTY_BY_ID: Record<SpecialtyId, SpecialtyDefinition> = Object.fromEntries(
   SPECIALTY_DEFINITIONS.map((def) => [def.id, def])
 ) as Record<SpecialtyId, SpecialtyDefinition>;
+
+export function createInitialDepartments(): Record<StaffDepartment, DepartmentRuntime> {
+  const out = {} as Record<StaffDepartment, DepartmentRuntime>;
+  for (const dept of ALL_DEPARTMENTS) {
+    out[dept] = {
+      active: false,
+      inactiveReason: 'specialty-not-completed',
+      officerRole: null,
+      terminal: null,
+      specialty: null
+    };
+  }
+  out.command = {
+    active: false,
+    inactiveReason: 'no-officer',
+    officerRole: 'captain',
+    terminal: ModuleType.CaptainConsole,
+    specialty: null
+  };
+  return out;
+}
+
+export function specialtyForUnlockedModule(module: ModuleType): SpecialtyDefinition | null {
+  return SPECIALTY_DEFINITIONS.find((def) => def.unlocksModules.includes(module)) ?? null;
+}
 
 export const SPECIALTY_BRANCH_PHASE: Record<SpecialtyId, number> = {
   'sanitation-program': 0,

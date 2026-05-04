@@ -175,10 +175,20 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   }));
   state.maintenanceDebts = state.maintenanceDebts.map((debt) => {
     const anchorTile = remapIndex(debt.anchorTile);
+    const targetTile = debt.targetTile !== undefined ? remapIndex(debt.targetTile) : anchorTile;
+    const domain = debt.domain ?? (debt.system ? 'utility' : 'module');
+    const key =
+      domain === 'utility' && debt.system
+        ? maintenanceKey(debt.system, anchorTile)
+        : debt.moduleId !== undefined
+          ? `${domain}:module:${debt.moduleId}`
+          : `${domain}:${anchorTile}`;
     return {
       ...debt,
       anchorTile,
-      key: maintenanceKey(debt.system, anchorTile)
+      targetTile,
+      domain,
+      key
     };
   });
   state.arrivingShips = state.arrivingShips.map((ship) => ({

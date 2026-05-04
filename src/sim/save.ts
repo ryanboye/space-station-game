@@ -13,6 +13,8 @@ import {
   type DockPurpose,
   type HousingPolicy,
   type ItemType,
+  type MaintenanceDomain,
+  type MaintenanceSource,
   type SpecialtyId,
   type SpecialtyProgress,
   type StaffRole,
@@ -35,6 +37,7 @@ import {
   SPECIALTY_DEFINITIONS,
   STAFF_ROLES,
   createEmptyStaffRoleCounts,
+  createInitialDepartments,
   createInitialSpecialtyProgress,
   totalStaffCount
 } from './content/command';
@@ -46,6 +49,8 @@ const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', '
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
+const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
+const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction'];
 const SPECIALTY_IDS = SPECIALTY_DEFINITIONS.map((def) => def.id);
 // Derived from UNLOCK_DEFINITIONS so adding a 7th tier doesn't require
 // hand-editing two parallel tables. UNLOCK_DEFINITIONS is tier-ordered
@@ -148,6 +153,25 @@ export interface StationSnapshotV1 {
   sanitation?: {
     dirtByTile: number[];
     dirtSourceByTile: number[];
+  };
+  maintenance?: {
+    debts: Array<{
+      key: string;
+      system?: 'reactor' | 'life-support';
+      domain?: MaintenanceDomain;
+      source?: MaintenanceSource;
+      anchorTile: number;
+      targetTile?: number;
+      room?: RoomType;
+      moduleId?: number;
+      exterior?: boolean;
+      label?: string;
+      effect?: string;
+      debt: number;
+      lastServicedAt: number;
+      lastImpactAt?: number;
+      ignitionRiskSince?: number;
+    }>;
   };
 }
 
@@ -382,6 +406,27 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     sanitation: {
       dirtByTile: Array.from(state.dirtByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
       dirtSourceByTile: Array.from(state.dirtSourceByTile)
+    },
+    maintenance: {
+      debts: state.maintenanceDebts
+        .filter((entry) => entry.debt > 0.05)
+        .map((entry) => ({
+          key: entry.key,
+          system: entry.system,
+          domain: entry.domain,
+          source: entry.source,
+          anchorTile: entry.anchorTile,
+          targetTile: entry.targetTile,
+          room: entry.room,
+          moduleId: entry.moduleId,
+          exterior: entry.exterior,
+          label: entry.label,
+          effect: entry.effect,
+          debt: Math.round(clamp(entry.debt, 0, 100) * 10) / 10,
+          lastServicedAt: entry.lastServicedAt,
+          lastImpactAt: entry.lastImpactAt,
+          ignitionRiskSince: entry.ignitionRiskSince
+        }))
     }
   };
 }
@@ -784,6 +829,54 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
+  const maintenanceDebts: NonNullable<StationSnapshotV1['maintenance']>['debts'] = [];
+  if (maintenanceRaw && Array.isArray(maintenanceRaw.debts)) {
+    for (let i = 0; i < maintenanceRaw.debts.length; i++) {
+      const entry = maintenanceRaw.debts[i];
+      if (!isRecord(entry)) {
+        warnings.push(`maintenance.debts[${i}] invalid; skipped.`);
+        continue;
+      }
+      const anchorTile = Math.floor(asFiniteNumber(entry.anchorTile, -1));
+      const targetTile = Math.floor(asFiniteNumber(entry.targetTile, anchorTile));
+      if (anchorTile < 0 || anchorTile >= expectedLength || targetTile < 0 || targetTile >= expectedLength) {
+        warnings.push(`maintenance.debts[${i}] has out-of-range tile; skipped.`);
+        continue;
+      }
+      const system = isOneOf(entry.system, ['reactor', 'life-support'] as const) ? entry.system : undefined;
+      const domain = isOneOf(entry.domain, MAINTENANCE_DOMAINS) ? entry.domain : system ? 'utility' : 'module';
+      const source = isOneOf(entry.source, MAINTENANCE_SOURCES) ? entry.source : system ? 'idle' : 'high-load';
+      const key =
+        typeof entry.key === 'string' && entry.key.length > 0
+          ? entry.key
+          : domain === 'utility' && system
+            ? `${system}:${anchorTile}`
+            : `${domain}:${anchorTile}`;
+      const room = isOneOf(entry.room, Object.values(RoomType)) ? entry.room : undefined;
+      maintenanceDebts.push({
+        key,
+        system,
+        domain,
+        source,
+        anchorTile,
+        targetTile,
+        room,
+        moduleId: typeof entry.moduleId === 'number' && Number.isFinite(entry.moduleId) ? Math.floor(entry.moduleId) : undefined,
+        exterior: entry.exterior === true,
+        label: typeof entry.label === 'string' ? entry.label : undefined,
+        effect: typeof entry.effect === 'string' ? entry.effect : undefined,
+        debt: clamp(asFiniteNumber(entry.debt, 0), 0, 100),
+        lastServicedAt: Math.max(0, asFiniteNumber(entry.lastServicedAt, 0)),
+        lastImpactAt: typeof entry.lastImpactAt === 'number' && Number.isFinite(entry.lastImpactAt) ? Math.max(0, entry.lastImpactAt) : undefined,
+        ignitionRiskSince:
+          typeof entry.ignitionRiskSince === 'number' && Number.isFinite(entry.ignitionRiskSince)
+            ? Math.max(0, entry.ignitionRiskSince)
+            : undefined
+      });
+    }
+  }
+
   return {
     width,
     height,
@@ -823,6 +916,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     sanitation: {
       dirtByTile,
       dirtSourceByTile
+    },
+    maintenance: {
+      debts: maintenanceDebts
     }
   };
 }
@@ -998,6 +1094,13 @@ export function hydrateStateFromSave(
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
   next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
   next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
+  next.maintenanceDebts = (snapshot.maintenance?.debts ?? []).map((entry) => ({
+    ...entry,
+    domain: entry.domain ?? (entry.system ? 'utility' : 'module'),
+    source: entry.source ?? (entry.system ? 'idle' : 'high-load'),
+    targetTile: entry.targetTile ?? entry.anchorTile,
+    exterior: entry.exterior ?? false
+  }));
   const hydratedTier = normalizeUnlockTier(snapshot.unlocks.tier);
   // v1→v2 migration: pre-v2 saves used the old id strings (tier1_stability,
   // tier2_logistics, tier3_civic). Those won't match the new UNLOCK_IDS,
@@ -1163,7 +1266,8 @@ export function hydrateStateFromSave(
         captainConsoleStaffed: false,
         activeTerminalStaff: 0,
         requiredTerminalStaff: 1
-      }
+      },
+      departments: createInitialDepartments()
     };
   }
 

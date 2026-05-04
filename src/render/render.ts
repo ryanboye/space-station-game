@@ -52,8 +52,14 @@ import {
   AGENT_SPRITE_VARIANTS,
   DOCK_OVERLAY_SPRITE_KEYS,
   DOCK_FACADE_ROTATION,
+  FX_SPRITE_KEYS,
   FLOOR_GRIME_SPRITE_KEYS,
   FLOOR_WEAR_SPRITE_KEYS,
+  HULL_WEAR_SPRITE_KEYS,
+  IMPACT_DEBRIS_SPRITE_KEYS,
+  SPACE_BACKDROP_SPRITE_KEYS,
+  SPACE_DEBRIS_SPRITE_KEYS,
+  SPACE_MASSIVE_PLANET_SPRITE_KEYS,
   STAFF_ROLE_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
@@ -268,6 +274,326 @@ function spritesEnabled(state: StationState, spriteAtlas: SpriteAtlas): boolean 
 function positiveMod(value: number, modulus: number): number {
   const remainder = value % modulus;
   return remainder < 0 ? remainder + modulus : remainder;
+}
+
+function renderHash01(seed: number, index: number, salt: number): number {
+  const n = Math.sin((seed * 0.013 + index * 91.17 + salt * 37.31) * 12.9898) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function clampRender(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function pickSpriteKey<T extends readonly string[]>(keys: T, seed: number, index: number, salt: number): T[number] {
+  return keys[Math.floor(renderHash01(seed, index, salt) * keys.length) % keys.length];
+}
+
+const DEBRIS_PARALLAX_LAYERS = [
+  { scale: 0.58, alpha: 0.46, amplitude: 8, period: 96, rotation: 3 },
+  { scale: 0.88, alpha: 0.72, amplitude: 18, period: 68, rotation: 7 },
+  { scale: 1.22, alpha: 0.95, amplitude: 34, period: 46, rotation: 12 }
+] as const;
+
+function drawDebrisFallback(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  tone: 'planet' | 'rock' | 'metal' | 'ice' | 'spark',
+  alpha: number
+): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const rotation = renderHash01(Math.floor(x + y), 3, 4) * Math.PI;
+  if (tone === 'spark') {
+    ctx.fillStyle = '#ffeaa6';
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ff8a30';
+    ctx.lineWidth = Math.max(1, size * 0.04);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * size * 0.12, y + Math.sin(a) * size * 0.12);
+      ctx.lineTo(x + Math.cos(a) * size * 0.38, y + Math.sin(a) * size * 0.38);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  const color = tone === 'metal' ? '#9ba6ae' : tone === 'ice' ? '#9ee6ff' : tone === 'planet' ? '#9b856f' : '#7d7468';
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size * 0.4, size * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.arc(size * 0.08, size * 0.04, size * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function clipToVisibleSpaceTiles(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  ctx.beginPath();
+  for (let y = visibleTiles.minY; y <= visibleTiles.maxY; y++) {
+    for (let x = visibleTiles.minX; x <= visibleTiles.maxX; x++) {
+      const tile = toIndex(x, y, state.width);
+      const kind = state.tiles[tile];
+      if (kind !== TileType.Space && kind !== TileType.Truss) continue;
+      ctx.rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+  }
+  ctx.clip();
+}
+
+function renderMassivePlanetBackdrop(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  const planetView = viewport ?? { x: 0, y: 0, width: worldW, height: worldH };
+  const key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
+  const x = planetView.x + planetView.width * 0.18;
+  const y = planetView.y + planetView.height * 0.94;
+  const size = Math.max(planetView.width, planetView.height) * 1.18;
+  const alpha = 0.46;
+  if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
+  drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
+}
+
+function renderDebrisBackdrop(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  const spriteCount = 520;
+  for (let i = 0; i < spriteCount; i++) {
+    const layer = DEBRIS_PARALLAX_LAYERS[Math.floor(renderHash01(state.seedAtCreation, i, 0) * DEBRIS_PARALLAX_LAYERS.length)];
+    const baseX = renderHash01(state.seedAtCreation, i, 1) * worldW;
+    const baseY = renderHash01(state.seedAtCreation, i, 2) * worldH;
+    const baseTileX = clampRender(Math.floor(baseX / TILE_SIZE), 0, state.width - 1);
+    const baseTileY = clampRender(Math.floor(baseY / TILE_SIZE), 0, state.height - 1);
+    const baseTile = toIndex(baseTileX, baseTileY, state.width);
+    if (state.tiles[baseTile] !== TileType.Space && state.tiles[baseTile] !== TileType.Truss) continue;
+    const debris = mapConditionSamplesAt(state, baseTile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
+    const keep = renderHash01(state.seedAtCreation, i, 3) < clampRender(0.04 + debris * 1.05, 0.05, 0.98);
+    if (!keep) continue;
+    const phase = renderHash01(state.seedAtCreation, i, 4) * Math.PI * 2;
+    const orbit = (state.now / layer.period) * Math.PI * 2 + phase;
+    const sway = (state.now / (layer.period * 1.7)) * Math.PI * 2 + phase * 0.61;
+    const x = baseX + Math.cos(orbit) * layer.amplitude * (0.6 + debris * 0.8);
+    const y = baseY + Math.sin(sway) * layer.amplitude * (0.45 + debris * 0.55);
+    if (viewport && (x < viewport.x - 190 || x > viewport.x + viewport.width + 190 || y < viewport.y - 190 || y > viewport.y + viewport.height + 190)) {
+      continue;
+    }
+    const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
+    const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
+    const tile = toIndex(tileX, tileY, state.width);
+    if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
+    const variant = renderHash01(state.seedAtCreation, i, 5);
+    const spriteKey =
+      variant > 0.72
+        ? pickSpriteKey(SPACE_BACKDROP_SPRITE_KEYS, state.seedAtCreation, i, 19)
+        : pickSpriteKey(SPACE_DEBRIS_SPRITE_KEYS, state.seedAtCreation, i, 20);
+    const baseSize = 24 + renderHash01(state.seedAtCreation, i, 21) * 34;
+    const size = baseSize * layer.scale * (0.82 + renderHash01(state.seedAtCreation, i, 6) * 0.7);
+    const alpha = clampRender((0.16 + debris * 0.44) * layer.alpha, 0.12, 0.82);
+    const rotation = Math.sin(orbit * 0.43 + phase) * layer.rotation + state.now * (0.12 + layer.rotation * 0.012) * (variant > 0.5 ? 1 : -1);
+    const dx = x - size * 0.5;
+    const dy = y - size * 0.5;
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, rotation, alpha)) continue;
+    drawDebrisFallback(
+      ctx,
+      dx + size * 0.5,
+      dy + size * 0.5,
+      size,
+      spriteKey.includes('metal') ? 'metal' : spriteKey.includes('ice') ? 'ice' : 'rock',
+      alpha
+    );
+  }
+
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || debt.debt < 25) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const pos = fromIndex(target, state.width);
+    const debris = mapConditionSamplesAt(state, target).find((sample) => sample.kind === 'debris-risk')?.value ?? 0.55;
+    for (let j = 0; j < 8; j++) {
+      const layer = DEBRIS_PARALLAX_LAYERS[j % DEBRIS_PARALLAX_LAYERS.length];
+      const angle = renderHash01(state.seedAtCreation + target, j, 11) * Math.PI * 2;
+      const orbit = state.now / (layer.period * 0.9) + angle;
+      const distance = TILE_SIZE * (2.2 + j * 0.72 + renderHash01(state.seedAtCreation + target, j, 12) * 1.6);
+      const x =
+        (pos.x + 0.5) * TILE_SIZE +
+        Math.cos(angle) * distance +
+        Math.cos(orbit) * layer.amplitude * 0.5;
+      const y =
+        (pos.y + 0.5) * TILE_SIZE +
+        Math.sin(angle) * distance +
+        Math.sin(orbit * 1.37) * layer.amplitude * 0.42;
+      if (viewport && (x < viewport.x - 80 || x > viewport.x + viewport.width + 80 || y < viewport.y - 80 || y > viewport.y + viewport.height + 80)) {
+        continue;
+      }
+      const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
+      const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
+      const tile = toIndex(tileX, tileY, state.width);
+      if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
+      const key = pickSpriteKey(SPACE_DEBRIS_SPRITE_KEYS, state.seedAtCreation + target, j, 31);
+      const size = TILE_SIZE * layer.scale * (0.78 + debris * 0.9 + renderHash01(state.seedAtCreation + target, j, 32) * 0.72);
+      const alpha = clampRender((0.3 + debris * 0.42) * layer.alpha, 0.22, 0.78);
+      const rotation = Math.sin(orbit) * layer.rotation + state.now * 0.28 * (j % 2 === 0 ? 1 : -1);
+      if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
+      drawDebrisFallback(ctx, x, y, size, j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock', alpha);
+    }
+  }
+}
+
+function exteriorImpactPoint(state: StationState, targetTile: number): { x: number; y: number; sx: number; sy: number } {
+  const target = fromIndex(targetTile, state.width);
+  let bestNeighbor = targetTile;
+  let bestRisk = -1;
+  for (const delta of [
+    { dx: 0, dy: -1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }
+  ]) {
+    const nx = target.x + delta.dx;
+    const ny = target.y + delta.dy;
+    if (!inBounds(nx, ny, state.width, state.height)) continue;
+    const neighbor = toIndex(nx, ny, state.width);
+    const kind = state.tiles[neighbor];
+    if (kind !== TileType.Space && kind !== TileType.Truss) continue;
+    const risk = mapConditionSamplesAt(state, neighbor).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
+    if (risk > bestRisk) {
+      bestRisk = risk;
+      bestNeighbor = neighbor;
+    }
+  }
+  const space = fromIndex(bestNeighbor, state.width);
+  const impactX = (target.x + 0.5) * TILE_SIZE;
+  const impactY = (target.y + 0.5) * TILE_SIZE;
+  const sourceX = bestNeighbor === targetTile ? impactX - TILE_SIZE * 1.6 : (space.x + 0.5) * TILE_SIZE;
+  const sourceY = bestNeighbor === targetTile ? impactY - TILE_SIZE * 1.2 : (space.y + 0.5) * TILE_SIZE;
+  return { x: impactX, y: impactY, sx: sourceX, sy: sourceY };
+}
+
+function renderMaintenanceImpacts(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || debt.debt < 28) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const risk = mapConditionSamplesAt(state, target).find((sample) => sample.kind === 'debris-risk')?.value ?? 0.55;
+    const period = clampRender(2.8 - risk * 1.35 - debt.debt / 180, 1.25, 2.9);
+    const phase = renderHash01(state.seedAtCreation + target, 5, 17) * period;
+    const periodicAge = positiveMod(state.now + phase, period);
+    const recordedAge = debt.lastImpactAt ? state.now - debt.lastImpactAt : Number.POSITIVE_INFINITY;
+    const age = recordedAge >= 0 && recordedAge < periodicAge ? recordedAge : periodicAge;
+    if (age < 0 || age > 0.72) continue;
+    const impact = exteriorImpactPoint(state, target);
+    const cx = impact.x;
+    const cy = impact.y;
+    if (viewport && (cx < viewport.x - 80 || cx > viewport.x + viewport.width + 80 || cy < viewport.y - 80 || cy > viewport.y + viewport.height + 80)) continue;
+    const t = age / 0.72;
+    const size = TILE_SIZE * (1.75 - t * 0.42);
+    const alpha = clampRender((1 - t) * (0.72 + risk * 0.34), 0, 0.96);
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.82;
+    ctx.strokeStyle = '#ffcf62';
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.08 * (1 - t * 0.45));
+    ctx.beginPath();
+    ctx.moveTo(impact.sx, impact.sy);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 105, 72, 0.78)';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.beginPath();
+    ctx.moveTo((impact.sx + cx) * 0.5, (impact.sy + cy) * 0.5);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.restore();
+    const projectileEase = 1 - Math.pow(1 - t, 2.2);
+    const projectileX = impact.sx + (cx - impact.sx) * projectileEase;
+    const projectileY = impact.sy + (cy - impact.sy) * projectileEase;
+    const projectileKey = pickSpriteKey(IMPACT_DEBRIS_SPRITE_KEYS, state.seedAtCreation + target, 7, 43);
+    const projectileSize = TILE_SIZE * clampRender(0.62 + risk * 0.45 + debt.debt / 220, 0.6, 1.35);
+    const projectileAngle = (Math.atan2(cy - impact.sy, cx - impact.sx) * 180) / Math.PI + 45;
+    if (
+      useSprites &&
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        projectileKey,
+        projectileX - projectileSize * 0.5,
+        projectileY - projectileSize * 0.5,
+        projectileSize,
+        projectileSize,
+        projectileAngle,
+        alpha
+      )
+    ) {
+      // Sprite handled.
+    } else {
+      drawDebrisFallback(ctx, projectileX, projectileY, projectileSize, projectileKey.includes('ice') ? 'ice' : projectileKey.includes('metal') ? 'metal' : 'rock', alpha);
+    }
+    if (t < 0.42) continue;
+    const sparkT = (t - 0.42) / 0.58;
+    const sparkSize = size * (1 - sparkT * 0.36);
+    const sparkAlpha = alpha * (1 - sparkT * 0.7);
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, FX_SPRITE_KEYS.repairSpark, cx - sparkSize * 0.5, cy - sparkSize * 0.5, sparkSize, sparkSize, 0, sparkAlpha)) continue;
+    drawDebrisFallback(ctx, cx, cy, sparkSize, 'spark', sparkAlpha);
+  }
+}
+
+function renderHullWearOverlays(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || debt.debt < 35) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const pos = fromIndex(target, state.width);
+    const x = pos.x * TILE_SIZE;
+    const y = pos.y * TILE_SIZE;
+    if (viewport && (x + TILE_SIZE < viewport.x || x > viewport.x + viewport.width || y + TILE_SIZE < viewport.y || y > viewport.y + viewport.height)) continue;
+    const key = HULL_WEAR_SPRITE_KEYS[positiveMod(debt.anchorTile + Math.floor(debt.debt / 20), HULL_WEAR_SPRITE_KEYS.length)];
+    const alpha = clampRender((debt.debt - 25) / 75, 0.18, 0.62);
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x, y, TILE_SIZE, TILE_SIZE, 0, alpha)) continue;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#1b171c';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(x + TILE_SIZE * 0.22, y + TILE_SIZE * 0.35);
+    ctx.lineTo(x + TILE_SIZE * 0.72, y + TILE_SIZE * 0.2);
+    ctx.moveTo(x + TILE_SIZE * 0.34, y + TILE_SIZE * 0.68);
+    ctx.lineTo(x + TILE_SIZE * 0.76, y + TILE_SIZE * 0.52);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function ensureCachedLayer(existing: CachedLayer | null, widthPx: number, heightPx: number): CachedLayer {
@@ -1891,10 +2217,13 @@ function ensureStaticLayer(
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const tileType = state.tiles[i];
-    const drewTileSprite = useSprites && drawTileSprite(state, i, tileType, ctx, spriteAtlas, px, py);
+    const isOpenSpace = tileType === TileType.Space;
+    const drewTileSprite = !isOpenSpace && useSprites && drawTileSprite(state, i, tileType, ctx, spriteAtlas, px, py);
     if (!drewTileSprite) {
-      ctx.fillStyle = tileColor[tileType];
-      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      if (!isOpenSpace) {
+        ctx.fillStyle = tileColor[tileType];
+        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      }
     }
     if (state.rooms[i] === RoomType.Berth && state.tiles[i] !== TileType.Space) {
       drawBerthTileTexture(ctx, state, i, px, py);
@@ -1951,7 +2280,7 @@ function ensureStaticLayer(
         ctx.fillText(label, px + Math.round(4.5 * PX), py + Math.round(4.5 * PX));
       }
     }
-    if (!drewTileSprite) {
+    if (!drewTileSprite && !isOpenSpace) {
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
       ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
     }
@@ -2292,7 +2621,14 @@ function environmentDiagnosticColor(state: StationState, tileIndex: number, over
 function maintenanceDiagnosticColor(state: StationState, tileIndex: number): string | null {
   const pos = fromIndex(tileIndex, state.width);
   const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
-  if (!diagnostic) return null;
+  if (!diagnostic) {
+    const tile = state.tiles[tileIndex];
+    if (tile === TileType.Space || tile === TileType.Truss) {
+      const debris = mapConditionSamplesAt(state, tileIndex).find((s) => s.kind === 'debris-risk')?.value ?? 0;
+      if (debris >= 0.58) return mixRgba([176, 124, 255], [238, 79, 79], Math.min(1, (debris - 0.58) / 0.42), 0.08 + debris * 0.08);
+    }
+    return null;
+  }
   if (diagnostic.debt <= 0) return rgba(110, 219, 143, 0.1);
   if (diagnostic.debt < 35) return rgba(110, 219, 143, 0.14);
   if (diagnostic.debt < 65) return rgba(255, 214, 92, 0.26);
@@ -2464,7 +2800,7 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
       return {
         title: 'Maintenance',
         line: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`,
-        scale: 'green healthy | red output loss',
+        scale: 'green healthy | yellow worn | red degraded | purple debris lane',
         color: '#ffbc52'
       };
     case 'route-pressure': {
@@ -2498,8 +2834,15 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
   }
   if (overlay === 'maintenance') {
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
-    if (!diagnostic) return `hover ${pos.x},${pos.y}: no reactor/life-support maintenance debt`;
-    return `hover ${pos.x},${pos.y}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}% | output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%`;
+    if (!diagnostic) {
+      const debris = mapConditionSamplesAt(state, hoveredTile).find((s) => s.kind === 'debris-risk');
+      if (debris && debris.value >= 0.42) {
+        return `hover ${pos.x},${pos.y}: ${debris.label} ${(debris.value * 100).toFixed(0)}% | future exterior repair pressure`;
+      }
+      return `hover ${pos.x},${pos.y}: no maintenance wear`;
+    }
+    const route = diagnostic.exterior ? 'EVA repair' : 'interior repair';
+    return `hover ${pos.x},${pos.y}: ${diagnostic.label} ${diagnostic.debt.toFixed(0)}% | ${diagnostic.source} | ${route} | ${diagnostic.effect}`;
   }
   if (overlay === 'map-conditions') {
     const samples = mapConditionSamplesAt(state, hoveredTile);
@@ -2889,6 +3232,7 @@ export function renderWorld(
   } else {
     ctx.fillRect(0, 0, widthPx, heightPx);
   }
+  renderMassivePlanetBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   drawCachedLayer(ctx, staticLayer.canvas, viewport);
@@ -2899,6 +3243,12 @@ export function renderWorld(
   renderGlowPass(ctx, state, widthPx, heightPx, useSprites, viewport);
   const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx);
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
+  ctx.save();
+  clipToVisibleSpaceTiles(ctx, state, visibleTiles);
+  renderDebrisBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
+  ctx.restore();
+  renderHullWearOverlays(ctx, state, spriteAtlas, useSprites, viewport);
+  renderMaintenanceImpacts(ctx, state, spriteAtlas, useSprites, viewport);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);

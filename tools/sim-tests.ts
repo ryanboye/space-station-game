@@ -1184,6 +1184,124 @@ function testRepairJobClearsDebtBelowRequeueThreshold(): void {
   assertCondition(state.usageTotals.maintenanceJobsResolved > 0, 'Completed repair should increment maintenance resolution counters.');
 }
 
+function placeHabitatAirlocks(state: StationState): void {
+  const points: Array<[number, number]> = [
+    [44, 17],
+    [4, 17],
+    [24, 4],
+    [24, 30]
+  ];
+  for (const [x, y] of points) {
+    const idx = toIndex(x, y, state.width);
+    setTile(state, idx, TileType.Airlock);
+    setRoom(state, idx, RoomType.None);
+  }
+}
+
+function firstHullMaintenanceDebt(state: StationState) {
+  return state.maintenanceDebts.find((debt) => debt.domain === 'hull');
+}
+
+function testDebrisRiskDrivesExteriorMaintenanceWear(): void {
+  const state = createInitialState({ seed: 91202 });
+  buildHabitat(state);
+  runFor(state, 240);
+
+  const hullDebts = state.maintenanceDebts
+    .filter((debt) => debt.domain === 'hull')
+    .map((debt) => ({ debt, risk: mapConditionAt(state, 'debris-risk', debt.anchorTile) }))
+    .sort((a, b) => a.risk - b.risk);
+  assertCondition(hullDebts.length >= 2, 'Exterior hull maintenance should discover multiple coalesced hull targets.');
+  const sheltered = hullDebts[0];
+  const exposed = hullDebts[hullDebts.length - 1];
+  assertCondition(
+    exposed.debt.debt > sheltered.debt.debt + 1,
+    `High debris hull should wear faster (${exposed.debt.debt.toFixed(1)} vs ${sheltered.debt.debt.toFixed(1)}).`
+  );
+}
+
+function testExteriorRepairBlocksWithoutAirlock(): void {
+  const state = createInitialState({ seed: 91203 });
+  buildHabitat(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 8;
+  state.metrics.materials = 8;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 82;
+  runFor(state, 18);
+
+  const job = state.jobs.find((candidate) => candidate.type === 'repair' && candidate.repairTargetKey === debt!.key);
+  assertCondition(!!job, 'Exterior hull debt should create a repair job.');
+  assertCondition(job!.repairExterior === true, 'Exterior hull repair should be marked as EVA work.');
+  assertCondition(
+    job!.blockedReason === 'no airlock for EVA repair' || job!.blockedReason === 'no airlock EVA route',
+    `Exterior repair without an airlock should explain the block, got ${job!.blockedReason ?? 'none'}.`
+  );
+}
+
+function testEvaRepairReducesExteriorMaintenanceDebt(): void {
+  const state = createInitialState({ seed: 91204 });
+  buildHabitat(state);
+  placeHabitatAirlocks(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 12;
+  state.metrics.materials = 12;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 84;
+  const startingDebt = debt!.debt;
+  runFor(state, 90);
+
+  const currentDebt = state.maintenanceDebts.find((entry) => entry.key === debt!.key)?.debt ?? 100;
+  const finishedRepair = state.jobs.some((job) => job.type === 'repair' && job.repairTargetKey === debt!.key && job.state === 'done');
+  assertCondition(currentDebt < startingDebt - 20, `EVA repair should reduce exterior debt (${currentDebt.toFixed(1)} from ${startingDebt}).`);
+  assertCondition(finishedRepair || currentDebt < 30, 'Exterior repair should either finish or clear below the warning band.');
+}
+
+function testEntropyMaintenanceScenarioActivatesMechanicalPath(): void {
+  const state = createInitialState({ seed: 91205 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  runFor(state, 1);
+
+  assertCondition(
+    state.command.completedSpecialties.includes('mechanical-maintenance'),
+    'Maintenance scenario should complete the mechanical-maintenance specialty.'
+  );
+  assertCondition(state.command.departments.mechanical.active, 'Maintenance scenario should activate the Mechanical Department.');
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt >= 45),
+    'Maintenance scenario should seed exterior maintenance pressure.'
+  );
+  assertCondition(state.controls.diagnosticOverlay === 'maintenance', 'Maintenance scenario should open the maintenance overlay.');
+}
+
+function testOldSaveExteriorMaintenanceStartsFromEmptyDebt(): void {
+  const state = createInitialState({ seed: 91206 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  state.maintenanceDebts = [];
+  state.controls.paused = false;
+  state.controls.simSpeed = 4;
+
+  tick(state, 60);
+
+  assertCondition(state.maintenanceDebts.length > 0, 'Loaded saves without 19-2 debt entries should discover maintenance targets.');
+  assertCondition(
+    state.metrics.maintenanceDebtMax > 1,
+    `Loaded saves should show visible early maintenance drift, got max ${state.metrics.maintenanceDebtMax.toFixed(1)}%.`
+  );
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt > 1),
+    'Loaded saves should begin accumulating exterior debris maintenance debt.'
+  );
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -2574,6 +2692,22 @@ function testDemoStationRoomsPressurized(): void {
   }
 }
 
+function testEntropySanitationScenarioFixture(): void {
+  const state = createInitialState({ seed: 5019 });
+  const applied = applyColdStartScenario(state, 'entropy-sanitation');
+  assertCondition(applied, 'entropy-sanitation fixture should exist in COLD_START_SCENARIOS.');
+
+  runFor(state, 1);
+
+  assertCondition(state.controls.diagnosticOverlay === 'sanitation', 'Entropy sanitation fixture should open on the sanitation overlay.');
+  assertCondition(state.metrics.dirtyTiles > 0, 'Entropy sanitation fixture should seed visible dirty tiles.');
+  assertCondition(state.metrics.sanitationJobsOpen > 0, 'Entropy sanitation fixture should create cleaning pressure.');
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Entropy sanitation fixture should start with an active Sanitation Department (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+}
+
 function testDoorsArePressureBarriers(): void {
   // Sealed room + one door must pressurize — doors are airlocks, not leaks.
   const state = createInitialState({ seed: 9001 });
@@ -3664,6 +3798,11 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   runFor(state, 4, 0.5);
   assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
   assertCondition(hireStaffRole(state, 'janitor'), 'Janitor should be hireable after sanitation specialty completion.');
+  state.metrics.credits = 500;
+  assertCondition(
+    selectSpecialty(state, 'security-command'),
+    'Completing the sanitation specialty should reopen the next branch choice.'
+  );
   const payload = serializeSave('command-roundtrip', state, 'sim-tests');
   const parsed = parseAndMigrateSave(payload);
   assertCondition(parsed.ok, 'Command save should parse.');
@@ -3673,6 +3812,68 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   assertCondition(
     loaded.command.completedSpecialties.includes('sanitation-program'),
     'Completed command specialties should roundtrip.'
+  );
+}
+
+function testDepartmentRuntimeActivationRule(): void {
+  const state = createInitialState({ seed: 43101 });
+  state.metrics.credits = 800;
+  tick(state, 0);
+
+  assertCondition(
+    state.command.departments.sanitation.active === false,
+    'Sanitation department should be inactive at cold start.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'specialty-not-completed',
+    'Initial sanitation inactive reason should point to missing specialty.'
+  );
+  assertCondition(
+    !isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should be department-owned before the sanitation branch completes.'
+  );
+
+  assertCondition(hireStaffRole(state, 'captain'), 'Captain should be hireable.');
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.command.active === true,
+    `Command department should be active with a hired, reachable captain (reason: ${state.command.departments.command.inactiveReason}).`
+  );
+
+  assertCondition(selectSpecialty(state, 'sanitation-program'), 'Sanitation specialty should be selectable.');
+  state.command.specialtyProgress['sanitation-program'].progress = 0.99;
+  state.controls.paused = false;
+  runFor(state, 3, 0.5);
+  assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
+  tick(state, 0);
+  assertCondition(
+    state.command.completedSpecialties.includes('sanitation-program'),
+    'Sanitation specialty should be completed before activation can proceed.'
+  );
+  assertCondition(
+    isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should unlock from department branch completion rather than old tier copy.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'no-terminal',
+    `Without a SanitationTerminal in the active Bridge, inactive reason should be no-terminal (got ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  const placed = tryPlaceModule(state, ModuleType.SanitationTerminal, toIndex(49, 34, state.width));
+  assertCondition(placed.ok, `Sanitation terminal should place in the active Bridge (${placed.reason ?? 'unknown'}).`);
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Sanitation department should activate with officer, active Bridge, terminal, and reachability (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  setTile(state, toIndex(50, 36, state.width), TileType.Floor);
+  tick(state, 0);
+  assertCondition(state.ops.bridgeActive === 0, 'Removing the starter Bridge door should make the Bridge operationally inactive.');
+  assertCondition(
+    state.command.departments.sanitation.active === false &&
+      state.command.departments.sanitation.inactiveReason === 'no-bridge',
+    `Sanitation department should not stay active when the Bridge is inactive (reason: ${state.command.departments.sanitation.inactiveReason}).`
   );
 }
 
@@ -5550,6 +5751,11 @@ function run(): void {
   testCrewAtUtilityReducesMaintenanceDebt();
   testRepairSuppliesImproveMaintenanceRepairSpeed();
   testRepairJobClearsDebtBelowRequeueThreshold();
+  testDebrisRiskDrivesExteriorMaintenanceWear();
+  testExteriorRepairBlocksWithoutAirlock();
+  testEvaRepairReducesExteriorMaintenanceDebt();
+  testEntropyMaintenanceScenarioActivatesMechanicalPath();
+  testOldSaveExteriorMaintenanceStartsFromEmptyDebt();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
@@ -5595,6 +5801,7 @@ function run(): void {
   testActivationChecksPreserved();
   testDoorsArePressureBarriers();
   testDemoStationRoomsPressurized();
+  testEntropySanitationScenarioFixture();
   testReactorInspectorReportsRealPressurizationPct();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
@@ -5627,6 +5834,7 @@ function run(): void {
   testSaveRoundtripLayoutAndResources();
   testStarterBridgeCaptainAndSpecialtyResearch();
   testSpecialtyUnlocksRoleHiringAndSaveRoundtrip();
+  testDepartmentRuntimeActivationRule();
   testSaveLoadRegeneratesRuntimeEntities();
   testSaveLoadBestEffortMigration();
   testSaveRoundtripLifetimeCountersSurvive();
