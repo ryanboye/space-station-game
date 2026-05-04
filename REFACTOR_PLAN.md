@@ -28,7 +28,10 @@ For each extraction:
 - Planning docs created.
 - 2026-05-04: extracted `createInitialState` → `src/sim/initial-state.ts` (-703 lines).
 - 2026-05-04: extracted visitor/resident/crew inspectors → `src/sim/actor-inspectors.ts` (-463 lines).
-- Current `sim.ts` size: **14,372 lines** (down from 15,535).
+- 2026-05-04: extracted `expandMap` cluster → `src/sim/expansion.ts` (-180 lines net).
+- 2026-05-04: extracted construction + EVA cluster → `src/sim/construction.ts` (-408 lines net).
+- 2026-05-04: extracted dock + berth controls → `src/sim/dock-controls.ts` (-138 lines net).
+- Current `sim.ts` size: **13,646 lines** (down from 15,535 — **−1,889 / ~12.2%**).
 - Existing unrelated untracked sprite archives are present under `tools/sprites/archive/`; they are outside this refactor.
 
 ## Safest First Extraction
