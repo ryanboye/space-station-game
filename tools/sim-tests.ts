@@ -1184,6 +1184,103 @@ function testRepairJobClearsDebtBelowRequeueThreshold(): void {
   assertCondition(state.usageTotals.maintenanceJobsResolved > 0, 'Completed repair should increment maintenance resolution counters.');
 }
 
+function placeHabitatAirlocks(state: StationState): void {
+  const points: Array<[number, number]> = [
+    [44, 17],
+    [4, 17],
+    [24, 4],
+    [24, 30]
+  ];
+  for (const [x, y] of points) {
+    const idx = toIndex(x, y, state.width);
+    setTile(state, idx, TileType.Airlock);
+    setRoom(state, idx, RoomType.None);
+  }
+}
+
+function firstHullMaintenanceDebt(state: StationState) {
+  return state.maintenanceDebts.find((debt) => debt.domain === 'hull');
+}
+
+function testDebrisRiskDrivesExteriorMaintenanceWear(): void {
+  const state = createInitialState({ seed: 91202 });
+  buildHabitat(state);
+  runFor(state, 240);
+
+  const hullDebts = state.maintenanceDebts
+    .filter((debt) => debt.domain === 'hull')
+    .map((debt) => ({ debt, risk: mapConditionAt(state, 'debris-risk', debt.anchorTile) }))
+    .sort((a, b) => a.risk - b.risk);
+  assertCondition(hullDebts.length >= 2, 'Exterior hull maintenance should discover multiple coalesced hull targets.');
+  const sheltered = hullDebts[0];
+  const exposed = hullDebts[hullDebts.length - 1];
+  assertCondition(
+    exposed.debt.debt > sheltered.debt.debt + 1,
+    `High debris hull should wear faster (${exposed.debt.debt.toFixed(1)} vs ${sheltered.debt.debt.toFixed(1)}).`
+  );
+}
+
+function testExteriorRepairBlocksWithoutAirlock(): void {
+  const state = createInitialState({ seed: 91203 });
+  buildHabitat(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 8;
+  state.metrics.materials = 8;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 82;
+  runFor(state, 18);
+
+  const job = state.jobs.find((candidate) => candidate.type === 'repair' && candidate.repairTargetKey === debt!.key);
+  assertCondition(!!job, 'Exterior hull debt should create a repair job.');
+  assertCondition(job!.repairExterior === true, 'Exterior hull repair should be marked as EVA work.');
+  assertCondition(
+    job!.blockedReason === 'no airlock for EVA repair' || job!.blockedReason === 'no airlock EVA route',
+    `Exterior repair without an airlock should explain the block, got ${job!.blockedReason ?? 'none'}.`
+  );
+}
+
+function testEvaRepairReducesExteriorMaintenanceDebt(): void {
+  const state = createInitialState({ seed: 91204 });
+  buildHabitat(state);
+  placeHabitatAirlocks(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 12;
+  state.metrics.materials = 12;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 84;
+  const startingDebt = debt!.debt;
+  runFor(state, 90);
+
+  const currentDebt = state.maintenanceDebts.find((entry) => entry.key === debt!.key)?.debt ?? 100;
+  const finishedRepair = state.jobs.some((job) => job.type === 'repair' && job.repairTargetKey === debt!.key && job.state === 'done');
+  assertCondition(currentDebt < startingDebt - 20, `EVA repair should reduce exterior debt (${currentDebt.toFixed(1)} from ${startingDebt}).`);
+  assertCondition(finishedRepair || currentDebt < 30, 'Exterior repair should either finish or clear below the warning band.');
+}
+
+function testEntropyMaintenanceScenarioActivatesMechanicalPath(): void {
+  const state = createInitialState({ seed: 91205 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  runFor(state, 1);
+
+  assertCondition(
+    state.command.completedSpecialties.includes('mechanical-maintenance'),
+    'Maintenance scenario should complete the mechanical-maintenance specialty.'
+  );
+  assertCondition(state.command.departments.mechanical.active, 'Maintenance scenario should activate the Mechanical Department.');
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt >= 45),
+    'Maintenance scenario should seed exterior maintenance pressure.'
+  );
+  assertCondition(state.controls.diagnosticOverlay === 'maintenance', 'Maintenance scenario should open the maintenance overlay.');
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -5633,6 +5730,10 @@ function run(): void {
   testCrewAtUtilityReducesMaintenanceDebt();
   testRepairSuppliesImproveMaintenanceRepairSpeed();
   testRepairJobClearsDebtBelowRequeueThreshold();
+  testDebrisRiskDrivesExteriorMaintenanceWear();
+  testExteriorRepairBlocksWithoutAirlock();
+  testEvaRepairReducesExteriorMaintenanceDebt();
+  testEntropyMaintenanceScenarioActivatesMechanicalPath();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();

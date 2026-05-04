@@ -13,7 +13,7 @@ Status: shared spine active. The sanitation portion is implemented; keep this op
 - [x] Station Ops drift rows for sanitation/maintenance job pressure.
 - [x] Save/load migration rules for sanitation live arrays.
 - [x] `?scenario=entropy-sanitation` cold-start fixture.
-- [ ] `?scenario=entropy-maintenance`.
+- [x] `?scenario=entropy-maintenance`.
 - [ ] `?scenario=entropy-thermal`.
 - [ ] `?scenario=entropy-combined`.
 

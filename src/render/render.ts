@@ -52,8 +52,11 @@ import {
   AGENT_SPRITE_VARIANTS,
   DOCK_OVERLAY_SPRITE_KEYS,
   DOCK_FACADE_ROTATION,
+  FX_SPRITE_KEYS,
   FLOOR_GRIME_SPRITE_KEYS,
   FLOOR_WEAR_SPRITE_KEYS,
+  HULL_WEAR_SPRITE_KEYS,
+  SPACE_BACKDROP_SPRITE_KEYS,
   STAFF_ROLE_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
@@ -268,6 +271,158 @@ function spritesEnabled(state: StationState, spriteAtlas: SpriteAtlas): boolean 
 function positiveMod(value: number, modulus: number): number {
   const remainder = value % modulus;
   return remainder < 0 ? remainder + modulus : remainder;
+}
+
+function renderHash01(seed: number, index: number, salt: number): number {
+  const n = Math.sin((seed * 0.013 + index * 91.17 + salt * 37.31) * 12.9898) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function clampRender(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function drawDebrisFallback(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  tone: 'planet' | 'rock' | 'metal' | 'ice' | 'spark',
+  alpha: number
+): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (tone === 'spark') {
+    ctx.fillStyle = '#ffeaa6';
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ff8a30';
+    ctx.lineWidth = Math.max(1, size * 0.04);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * size * 0.12, y + Math.sin(a) * size * 0.12);
+      ctx.lineTo(x + Math.cos(a) * size * 0.38, y + Math.sin(a) * size * 0.38);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  const color = tone === 'metal' ? '#9ba6ae' : tone === 'ice' ? '#9ee6ff' : tone === 'planet' ? '#9b856f' : '#7d7468';
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(x, y, size * 0.4, size * 0.28, renderHash01(Math.floor(x + y), 3, 4) * Math.PI, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.arc(x + size * 0.08, y + size * 0.04, size * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function renderDebrisBackdrop(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  const spriteCount = 70;
+  for (let i = 0; i < spriteCount; i++) {
+    const x = renderHash01(state.seedAtCreation, i, 1) * worldW;
+    const y = renderHash01(state.seedAtCreation, i, 2) * worldH;
+    if (viewport && (x < viewport.x - 180 || x > viewport.x + viewport.width + 180 || y < viewport.y - 180 || y > viewport.y + viewport.height + 180)) {
+      continue;
+    }
+    const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
+    const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
+    const tile = toIndex(tileX, tileY, state.width);
+    const debris = mapConditionSamplesAt(state, tile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
+    const keep = renderHash01(state.seedAtCreation, i, 3) < 0.12 + debris * 0.78;
+    if (!keep) continue;
+    const drift = ((state.now * (0.5 + debris) * 0.08 + renderHash01(state.seedAtCreation, i, 4) * 100) % 20) - 10;
+    const variant = renderHash01(state.seedAtCreation, i, 5);
+    const spriteKey =
+      i % 23 === 0
+        ? SPACE_BACKDROP_SPRITE_KEYS[0]
+        : variant > 0.62
+          ? SPACE_BACKDROP_SPRITE_KEYS[1]
+          : variant > 0.31
+            ? SPACE_BACKDROP_SPRITE_KEYS[2]
+            : SPACE_BACKDROP_SPRITE_KEYS[3];
+    const baseSize = spriteKey.includes('planet') ? 130 : spriteKey.includes('cluster') ? 82 : 34;
+    const size = baseSize * (0.75 + renderHash01(state.seedAtCreation, i, 6) * 0.65);
+    const alpha = clampRender(0.13 + debris * 0.28, 0.12, spriteKey.includes('planet') ? 0.38 : 0.48);
+    const dx = x + drift - size * 0.5;
+    const dy = y - drift * 0.35 - size * 0.5;
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, 0, alpha)) continue;
+    drawDebrisFallback(
+      ctx,
+      dx + size * 0.5,
+      dy + size * 0.5,
+      size,
+      spriteKey.includes('planet') ? 'planet' : spriteKey.includes('metal') ? 'metal' : spriteKey.includes('ice') ? 'ice' : 'rock',
+      alpha
+    );
+  }
+}
+
+function renderMaintenanceImpacts(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || !debt.lastImpactAt) continue;
+    const age = state.now - debt.lastImpactAt;
+    if (age < 0 || age > 0.85) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const pos = fromIndex(target, state.width);
+    const cx = pos.x * TILE_SIZE + TILE_SIZE * 0.5;
+    const cy = pos.y * TILE_SIZE + TILE_SIZE * 0.5;
+    if (viewport && (cx < viewport.x - 80 || cx > viewport.x + viewport.width + 80 || cy < viewport.y - 80 || cy > viewport.y + viewport.height + 80)) continue;
+    const t = age / 0.85;
+    const size = TILE_SIZE * (1.3 - t * 0.35);
+    const alpha = (1 - t) * 0.86;
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, FX_SPRITE_KEYS.repairSpark, cx - size * 0.5, cy - size * 0.5, size, size, 0, alpha)) continue;
+    drawDebrisFallback(ctx, cx, cy, size, 'spark', alpha);
+  }
+}
+
+function renderHullWearOverlays(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  viewport: RenderViewport | null
+): void {
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || debt.debt < 35) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const pos = fromIndex(target, state.width);
+    const x = pos.x * TILE_SIZE;
+    const y = pos.y * TILE_SIZE;
+    if (viewport && (x + TILE_SIZE < viewport.x || x > viewport.x + viewport.width || y + TILE_SIZE < viewport.y || y > viewport.y + viewport.height)) continue;
+    const key = HULL_WEAR_SPRITE_KEYS[positiveMod(debt.anchorTile + Math.floor(debt.debt / 20), HULL_WEAR_SPRITE_KEYS.length)];
+    const alpha = clampRender((debt.debt - 25) / 75, 0.18, 0.62);
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x, y, TILE_SIZE, TILE_SIZE, 0, alpha)) continue;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#1b171c';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(x + TILE_SIZE * 0.22, y + TILE_SIZE * 0.35);
+    ctx.lineTo(x + TILE_SIZE * 0.72, y + TILE_SIZE * 0.2);
+    ctx.moveTo(x + TILE_SIZE * 0.34, y + TILE_SIZE * 0.68);
+    ctx.lineTo(x + TILE_SIZE * 0.76, y + TILE_SIZE * 0.52);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function ensureCachedLayer(existing: CachedLayer | null, widthPx: number, heightPx: number): CachedLayer {
@@ -2292,7 +2447,14 @@ function environmentDiagnosticColor(state: StationState, tileIndex: number, over
 function maintenanceDiagnosticColor(state: StationState, tileIndex: number): string | null {
   const pos = fromIndex(tileIndex, state.width);
   const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
-  if (!diagnostic) return null;
+  if (!diagnostic) {
+    const tile = state.tiles[tileIndex];
+    if (tile === TileType.Space || tile === TileType.Truss) {
+      const debris = mapConditionSamplesAt(state, tileIndex).find((s) => s.kind === 'debris-risk')?.value ?? 0;
+      if (debris >= 0.58) return mixRgba([176, 124, 255], [238, 79, 79], Math.min(1, (debris - 0.58) / 0.42), 0.08 + debris * 0.08);
+    }
+    return null;
+  }
   if (diagnostic.debt <= 0) return rgba(110, 219, 143, 0.1);
   if (diagnostic.debt < 35) return rgba(110, 219, 143, 0.14);
   if (diagnostic.debt < 65) return rgba(255, 214, 92, 0.26);
@@ -2464,7 +2626,7 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
       return {
         title: 'Maintenance',
         line: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`,
-        scale: 'green healthy | red output loss',
+        scale: 'green healthy | yellow worn | red degraded | purple debris lane',
         color: '#ffbc52'
       };
     case 'route-pressure': {
@@ -2498,8 +2660,15 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
   }
   if (overlay === 'maintenance') {
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
-    if (!diagnostic) return `hover ${pos.x},${pos.y}: no reactor/life-support maintenance debt`;
-    return `hover ${pos.x},${pos.y}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}% | output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%`;
+    if (!diagnostic) {
+      const debris = mapConditionSamplesAt(state, hoveredTile).find((s) => s.kind === 'debris-risk');
+      if (debris && debris.value >= 0.42) {
+        return `hover ${pos.x},${pos.y}: ${debris.label} ${(debris.value * 100).toFixed(0)}% | future exterior repair pressure`;
+      }
+      return `hover ${pos.x},${pos.y}: no maintenance wear`;
+    }
+    const route = diagnostic.exterior ? 'EVA repair' : 'interior repair';
+    return `hover ${pos.x},${pos.y}: ${diagnostic.label} ${diagnostic.debt.toFixed(0)}% | ${diagnostic.source} | ${route} | ${diagnostic.effect}`;
   }
   if (overlay === 'map-conditions') {
     const samples = mapConditionSamplesAt(state, hoveredTile);
@@ -2889,6 +3058,7 @@ export function renderWorld(
   } else {
     ctx.fillRect(0, 0, widthPx, heightPx);
   }
+  renderDebrisBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   drawCachedLayer(ctx, staticLayer.canvas, viewport);
@@ -2899,6 +3069,8 @@ export function renderWorld(
   renderGlowPass(ctx, state, widthPx, heightPx, useSprites, viewport);
   const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx);
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
+  renderHullWearOverlays(ctx, state, spriteAtlas, useSprites, viewport);
+  renderMaintenanceImpacts(ctx, state, spriteAtlas, useSprites, viewport);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);

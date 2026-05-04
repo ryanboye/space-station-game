@@ -976,11 +976,15 @@ function diagnosticReadoutText(): string {
   }
   if (overlay === 'maintenance') {
     const globalLine = `Maintenance: max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
-    if (hoveredTile === null) return `${globalLine}\nHover reactor or life-support tiles for output loss.`;
+    if (hoveredTile === null) return `${globalLine}\nHover hull, dock, berth, module, reactor, or life-support tiles for source/effect/fix.`;
     const p = fromIndex(hoveredTile, state.width);
     const diagnostic = getMaintenanceTileDiagnostic(state, p.x, p.y);
-    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no system debt here.`;
-    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}%; output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%.`;
+    if (!diagnostic) {
+      const debris = mapConditionSamplesAt(state, hoveredTile).find((sample) => sample.kind === 'debris-risk');
+      return `${globalLine}\n${diagnosticHoverPrefix()}: no maintenance wear here${debris ? `; ${debris.label} ${(debris.value * 100).toFixed(0)}%` : ''}.`;
+    }
+    const repair = diagnostic.exterior ? 'EVA repair' : 'interior repair';
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.label} ${diagnostic.debt.toFixed(0)}% | ${diagnostic.source} | ${diagnostic.effect} | ${repair}.`;
   }
   if (overlay === 'sanitation') {
     const departmentLine = `Sanitation Department: ${departmentStatusText('sanitation')}`;
@@ -1085,9 +1089,10 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
         title: 'Maintenance',
         stats: `max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open jobs ${state.metrics.maintenanceJobsOpen}`,
         rows: [
-          { color: '#6edb8f', label: 'Healthy reactor/life-support system' },
+          { color: '#6edb8f', label: 'Healthy station system or hull target' },
           { color: '#ffd65c', label: 'Moderate debt, maintenance should visit' },
-          { color: '#ee4f4f', label: 'Serious debt reducing system output' }
+          { color: '#ee4f4f', label: 'Serious wear causing degradation or EVA urgency' },
+          { color: '#d072ff', label: 'Debris-risk space that accelerates exterior wear' }
         ]
       };
     case 'sanitation':
@@ -2315,6 +2320,7 @@ function refreshOpsModal(): void {
     { label: 'Observatory', value: `${state.ops.observatoryActive}/${state.ops.observatoryTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
     { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
+    { label: 'Mechanical Dept', value: departmentStatusText('mechanical'), tone: departmentTone('mechanical') },
     { label: 'Sanitation', value: `${state.metrics.sanitationAvg.toFixed(1)}% avg / ${state.metrics.sanitationMax.toFixed(0)}% max / ${state.metrics.sanitationJobsOpen} open`, tone: state.metrics.sanitationJobsOpen > 0 ? 'warn' : 'default' },
     { label: 'Sanitation Dept', value: departmentStatusText('sanitation'), tone: departmentTone('sanitation') },
     { label: 'Drift Jobs', value: `clean ${state.metrics.sanitationJobsOpen} / repair ${state.metrics.maintenanceJobsOpen}`, tone: state.metrics.sanitationJobsOpen + state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },

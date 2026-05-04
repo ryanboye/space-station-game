@@ -17,7 +17,7 @@
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
-import type { ItemType, StationState, UnlockId, UnlockTier } from './types';
+import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
 import { buyMaterials, buyRawFood, setTile, setRoom, setModule } from './sim';
 
 type Scenario = (state: StationState) => void;
@@ -37,7 +37,7 @@ function unlockThrough(state: StationState, targetTier: UnlockTier): void {
   }
 }
 
-function completeSpecialtyForScenario(state: StationState, id: 'sanitation-program'): void {
+function completeSpecialtyForScenario(state: StationState, id: SpecialtyId): void {
   state.command.selectedSpecialty = null;
   if (!state.command.completedSpecialties.includes(id)) state.command.completedSpecialties.push(id);
   state.command.specialtyProgress[id] = {
@@ -61,6 +61,21 @@ function setScenarioCrew(state: StationState): void {
   state.crew.assigned = 0;
   state.command.officers.captain = true;
   state.command.officers['sanitation-officer'] = true;
+}
+
+function setMaintenanceScenarioCrew(state: StationState): void {
+  const counts = createEmptyStaffRoleCounts();
+  counts.captain = 1;
+  counts['mechanic-officer'] = 1;
+  counts.technician = 2;
+  counts.engineer = 1;
+  counts.assistant = 5;
+  state.crew.roleCounts = counts;
+  state.crew.total = totalStaffCount(counts);
+  state.crew.free = state.crew.total;
+  state.crew.assigned = 0;
+  state.command.officers.captain = true;
+  state.command.officers['mechanic-officer'] = true;
 }
 
 function seedRoomDirt(state: StationState, room: RoomType, sourceCode: number, base: number): void {
@@ -150,6 +165,50 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.simSpeed = 1;
     s.controls.diagnosticOverlay = 'sanitation';
     s.controls.shipsPerCycle = 0;
+    s.controls.materialAutoImportEnabled = false;
+  },
+
+  // Entropy slice 19-2: debris-exposed berth and hull maintenance with
+  // a Mechanical Department path, airlock, supplies, and maintenance overlay.
+  'entropy-maintenance': (s) => {
+    unlockThrough(s, 3);
+    s.metrics.credits = 1800;
+    s.metrics.materials = 500;
+    s.legacyMaterialStock = 500;
+    completeSpecialtyForScenario(s, 'mechanical-maintenance');
+    setMaintenanceScenarioCrew(s);
+    applyDemoStationOverlay(s);
+    paintRoom(s, 49, 31, 61, 38, RoomType.Bridge, 'north');
+    placeMod(s, 51, 33, ModuleType.CaptainConsole);
+    placeMod(s, 55, 33, ModuleType.MechanicalTerminal);
+    placeMod(s, 58, 33, ModuleType.ResearchTerminal);
+    paintFloorTile(s, 76, 30, TileType.Airlock);
+    setRoom(s, 30 * GRID_WIDTH + 76, RoomType.None);
+    paintFloorTile(s, 75, 30, TileType.Floor);
+    setRoom(s, 30 * GRID_WIDTH + 75, RoomType.None);
+    for (const debt of [
+      { key: `berth:${32 * GRID_WIDTH + 68}`, anchorTile: 32 * GRID_WIDTH + 68, targetTile: 33 * GRID_WIDTH + 75, domain: 'berth' as const, label: 'berth perimeter' },
+      { key: `hull:${31 * GRID_WIDTH + 76}`, anchorTile: 31 * GRID_WIDTH + 76, targetTile: 31 * GRID_WIDTH + 76, domain: 'hull' as const, label: 'exterior hull' },
+      { key: `module:${8 * GRID_WIDTH + 27}`, anchorTile: 8 * GRID_WIDTH + 27, targetTile: 8 * GRID_WIDTH + 27, domain: 'module' as const, label: 'kitchen stove' }
+    ]) {
+      s.maintenanceDebts.push({
+        key: debt.key,
+        domain: debt.domain,
+        source: debt.domain === 'module' ? 'high-load' : 'debris',
+        anchorTile: debt.anchorTile,
+        targetTile: debt.targetTile,
+        exterior: debt.domain !== 'module',
+        label: debt.label,
+        effect: debt.domain === 'module' ? 'meal prep slowed at high wear' : 'EVA repair pressure',
+        debt: 58,
+        lastServicedAt: s.now
+      });
+    }
+    buyMaterials(s, 0, 160);
+    s.controls.paused = false;
+    s.controls.simSpeed = 1;
+    s.controls.diagnosticOverlay = 'maintenance';
+    s.controls.shipsPerCycle = 2;
     s.controls.materialAutoImportEnabled = false;
   },
 

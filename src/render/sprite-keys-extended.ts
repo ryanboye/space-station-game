@@ -61,8 +61,21 @@ export const FX_SPRITE_KEYS = {
   blockedPath: 'fx.blocked_path',
   lowOxygen: 'fx.low_oxygen',
   incidentFight: 'fx.incident_fight',
-  incidentTrespass: 'fx.incident_trespass'
+  incidentTrespass: 'fx.incident_trespass',
+  repairSpark: 'fx.repair.spark'
 } as const;
+
+export const SPACE_BACKDROP_SPRITE_KEYS = [
+  'space.planet.rocky.1',
+  'space.asteroid.cluster.1',
+  'space.debris.metal.1',
+  'space.debris.ice.1'
+] as const;
+
+export const HULL_WEAR_SPRITE_KEYS = [
+  'overlay.wall.hull_wear.1',
+  'overlay.wall.hull_wear.2'
+] as const;
 
 // Dock facade is 4 canonical sprites (authored in NORTH orientation).
 // East/south/west render-time-rotated from the same set. seb's review pass

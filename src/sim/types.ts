@@ -441,12 +441,30 @@ export type CrewPrioritySystem =
 export type CrewPriorityWeights = Record<CrewPrioritySystem, number>;
 export type CrewTaskKind = 'critical_post' | 'post' | 'logistics';
 export type MaintenanceSystem = 'reactor' | 'life-support';
+export type MaintenanceDomain = 'utility' | 'module' | 'hull' | 'dock' | 'berth' | 'door' | 'vent';
+export type MaintenanceSource =
+  | 'idle'
+  | 'high-load'
+  | 'debris'
+  | 'traffic'
+  | 'heat'
+  | 'fire-aftermath'
+  | 'construction';
 export interface MaintenanceDebt {
   key: string;
-  system: MaintenanceSystem;
+  system?: MaintenanceSystem;
+  domain?: MaintenanceDomain;
+  source?: MaintenanceSource;
   anchorTile: number;
+  targetTile?: number;
+  room?: RoomType;
+  moduleId?: number;
+  exterior?: boolean;
+  label?: string;
+  effect?: string;
   debt: number;
   lastServicedAt: number;
+  lastImpactAt?: number;
   // Time when debt first crossed the fire-ignition threshold. Reset to 0 when
   // debt drops back under the threshold. Used to require a grace window before
   // a sustained spike actually catches fire.
@@ -481,10 +499,18 @@ export interface RoomEnvironmentTileDiagnostic extends RoomEnvironmentScore {
 }
 
 export interface MaintenanceTileDiagnostic {
-  system: MaintenanceSystem;
+  system?: MaintenanceSystem;
+  domain: MaintenanceDomain;
+  source: MaintenanceSource;
   anchorTile: number;
+  targetTile: number;
+  exterior: boolean;
+  label: string;
+  effect: string;
+  fix: string;
   debt: number;
   outputMultiplier: number;
+  debrisRisk: number;
 }
 
 export type RoutePressureDominant = 'visitor' | 'resident' | 'crew' | 'logistics' | null;
@@ -675,6 +701,11 @@ export interface TransportJob {
   // anchor), stand and reduce maintenance debt for that cluster. Item fields
   // are unused for repair jobs but kept for shape compatibility.
   repairSystem?: MaintenanceSystem;
+  repairTargetKey?: string;
+  repairTargetLabel?: string;
+  repairDomain?: MaintenanceDomain;
+  repairSource?: MaintenanceSource;
+  repairExterior?: boolean;
   repairProgress?: number;
   repairSupplyChecked?: boolean;
   repairSuppliesUsed?: number;

@@ -364,7 +364,7 @@ function crewInspectorAction(
       }
       if (job.type === 'repair') {
         const at = crew.tileIndex === job.fromTile;
-        const sys = job.repairSystem ?? 'system';
+        const sys = job.repairTargetLabel ?? job.repairSystem ?? 'maintenance target';
         const stall = job.blockedReason
           ? ` | ${job.blockedReason}`
           : job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';

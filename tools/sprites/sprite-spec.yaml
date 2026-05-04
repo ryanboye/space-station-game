@@ -737,6 +737,69 @@ sprites:
     offsetY: -16
     blendMode: normal
     alpha: 1
+  space.planet.rocky.1:
+    prompt: Distant rocky planet sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 256
+    frameHeight: 256
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.42
+  space.asteroid.cluster.1:
+    prompt: Distant asteroid cluster sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 256
+    frameHeight: 256
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.52
+  space.debris.metal.1:
+    prompt: Small metal debris shard sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 128
+    frameHeight: 128
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.55
+  space.debris.ice.1:
+    prompt: Small icy meteorite debris sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 128
+    frameHeight: 128
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.5
+  fx.repair.spark:
+    prompt: Pixel art hull impact spark/puff effect. Transparent background.
+    rotation: 0
+    frameWidth: 128
+    frameHeight: 128
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.88
+  overlay.wall.hull_wear.1:
+    prompt: Sparse pixel-art scraped metal scratch decal for exterior station hull wall. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: multiply
+    alpha: 0.48
+  overlay.wall.hull_wear.2:
+    prompt: Sparse pixel-art pitted micro-crater decal for exterior station hull wall. Transparent background.
+    rotation: 0
+    frameWidth: 64
+    frameHeight: 64
+    offsetX: 0
+    offsetY: 0
+    blendMode: multiply
+    alpha: 0.52
   icon.tier1_unlock:
     prompt: Top-down pixel art icon. Style of rimworld. Tier 1 unlock icon for "Sustenance" — a single bowl or plate with steam rising. Simple iconographic composition, centered, warm food tones (amber/orange). Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "food / meal".
     rotation: 0

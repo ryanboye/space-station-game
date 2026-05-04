@@ -87,6 +87,8 @@ import {
   type ReservationOwnerKind,
   type StockTargetSummary,
   type MaintenanceTileDiagnostic,
+  type MaintenanceDomain,
+  type MaintenanceSource,
   type MaintenanceSystem,
   type ResidentRole,
   type RouteExposure,
@@ -137,6 +139,7 @@ import {
   crewAtConstructionSite,
   findConstructionPath,
   findSpacePath,
+  isEvaTraversalTile,
   moduleConstructionCostForDefinition,
   removeConstructionAtTile,
   updateEvaSuitForRoute,
@@ -189,6 +192,14 @@ const MAINTENANCE_IDLE_RISE_PER_MIN = 0.16;
 const MAINTENANCE_REACTOR_RISE_PER_MIN = 0.6;
 const MAINTENANCE_LIFE_SUPPORT_RISE_PER_MIN = 0.8;
 const MAINTENANCE_STAFF_REPAIR_PER_MIN = 4.5;
+const MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN = 0.08;
+const MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN = 1.75;
+const MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN = 0.34;
+const MAINTENANCE_MODULE_IDLE_RISE_PER_MIN = 0.06;
+const MAINTENANCE_MODULE_LOAD_RISE_PER_MIN = 0.72;
+const MAINTENANCE_DOOR_TRAFFIC_RISE_PER_MIN = 0.22;
+const MAINTENANCE_MAX_OPEN_REPAIR_JOBS = 12;
+const MAINTENANCE_MAX_OPEN_EXTERIOR_JOBS = 5;
 const SANITATION_DIRTY_THRESHOLD = 32;
 const SANITATION_FILTHY_THRESHOLD = 68;
 const SANITATION_JOB_SPAWN_THRESHOLD = 36;
@@ -1540,12 +1551,97 @@ export function maintenanceKey(system: MaintenanceSystem, anchorTile: number): s
   return `${system}:${anchorTile}`;
 }
 
+function maintenanceTargetKey(
+  domain: MaintenanceDomain,
+  anchorTile: number,
+  system?: MaintenanceSystem
+): string {
+  if (domain === 'utility' && system) return maintenanceKey(system, anchorTile);
+  return `${domain}:${anchorTile}`;
+}
+
 function maintenanceRoom(system: MaintenanceSystem): RoomType {
   return system === 'reactor' ? RoomType.Reactor : RoomType.LifeSupport;
 }
 
 function clusterAnchor(cluster: number[]): number {
   return cluster.reduce((best, tile) => (tile < best ? tile : best), cluster[0]);
+}
+
+function maintenanceDebtDomain(debt: { domain?: MaintenanceDomain; system?: MaintenanceSystem }): MaintenanceDomain {
+  if (debt.domain) return debt.domain;
+  return debt.system ? 'utility' : 'module';
+}
+
+function maintenanceDebtSource(debt: { source?: MaintenanceSource; system?: MaintenanceSystem }): MaintenanceSource {
+  if (debt.source) return debt.source;
+  return debt.system ? 'idle' : 'high-load';
+}
+
+function maintenanceDebtTargetTile(debt: { targetTile?: number; anchorTile: number }): number {
+  return debt.targetTile ?? debt.anchorTile;
+}
+
+function normalizeMaintenanceDebt(debt: StationState['maintenanceDebts'][number]): StationState['maintenanceDebts'][number] {
+  const domain = maintenanceDebtDomain(debt);
+  const targetTile = maintenanceDebtTargetTile(debt);
+  const key = maintenanceTargetKey(domain, debt.anchorTile, debt.system);
+  if (debt.key !== key) debt.key = key;
+  debt.domain = domain;
+  debt.source = maintenanceDebtSource(debt);
+  debt.targetTile = targetTile;
+  debt.exterior = debt.exterior ?? (domain === 'hull' || domain === 'dock' || domain === 'berth');
+  if (!debt.label) debt.label = maintenanceLabelForDebt(debt);
+  if (!debt.effect) debt.effect = maintenanceEffectForDebt(debt);
+  return debt;
+}
+
+function maintenanceLabelForDebt(debt: {
+  domain?: MaintenanceDomain;
+  system?: MaintenanceSystem;
+  room?: RoomType;
+  label?: string;
+}): string {
+  if (debt.label) return debt.label;
+  if (debt.system === 'reactor') return 'reactor utility';
+  if (debt.system === 'life-support') return 'life support utility';
+  const domain = maintenanceDebtDomain(debt);
+  if (domain === 'hull') return 'exterior hull';
+  if (domain === 'dock') return 'dock hull';
+  if (domain === 'berth') return 'berth perimeter';
+  if (domain === 'door') return 'busy door';
+  if (domain === 'vent') return 'life-support vent';
+  if (debt.room === RoomType.Kitchen) return 'kitchen fixture';
+  if (debt.room === RoomType.Workshop) return 'workshop fixture';
+  if (debt.room === RoomType.Hydroponics) return 'hydroponics fixture';
+  return 'module fixture';
+}
+
+function maintenanceEffectForDebt(debt: {
+  domain?: MaintenanceDomain;
+  system?: MaintenanceSystem;
+  room?: RoomType;
+  effect?: string;
+}): string {
+  if (debt.effect) return debt.effect;
+  if (debt.system === 'reactor' || debt.system === 'life-support') return 'utility output reduced at high wear';
+  const domain = maintenanceDebtDomain(debt);
+  if (domain === 'hull') return 'EVA repair pressure';
+  if (domain === 'dock' || domain === 'berth') return 'ship service slowed at high wear';
+  if (debt.room === RoomType.Kitchen) return 'meal prep slowed at high wear';
+  if (debt.room === RoomType.Workshop) return 'workshop output slowed at high wear';
+  if (debt.room === RoomType.Hydroponics) return 'crop output slowed at high wear';
+  if (domain === 'vent') return 'air distribution risk';
+  return 'work speed reduced at high wear';
+}
+
+function maintenanceFixForDebt(debt: StationState['maintenanceDebts'][number]): string {
+  const domain = maintenanceDebtDomain(debt);
+  if (debt.exterior || domain === 'hull' || domain === 'dock' || domain === 'berth') {
+    return 'EVA repair via reachable airlock; active Mechanical improves response';
+  }
+  if (domain === 'utility') return 'repair job or assigned crew at utility post';
+  return 'interior repair job; reduce load or add redundancy';
 }
 
 function maintenanceDebtFor(state: StationState, system: MaintenanceSystem, anchorTile: number): number {
@@ -1937,6 +2033,27 @@ export function getMaintenanceTileDiagnostic(
 ): MaintenanceTileDiagnostic | null {
   if (!inBounds(x, y, state.width, state.height)) return null;
   const tileIndex = toIndex(x, y, state.width);
+  for (const debt of state.maintenanceDebts) normalizeMaintenanceDebt(debt);
+  const directDebt = state.maintenanceDebts
+    .filter((debt) => debt.anchorTile === tileIndex || maintenanceDebtTargetTile(debt) === tileIndex)
+    .sort((a, b) => b.debt - a.debt)[0];
+  if (directDebt) {
+    const domain = maintenanceDebtDomain(directDebt);
+    return {
+      system: directDebt.system,
+      domain,
+      source: maintenanceDebtSource(directDebt),
+      anchorTile: directDebt.anchorTile,
+      targetTile: maintenanceDebtTargetTile(directDebt),
+      exterior: directDebt.exterior === true,
+      label: directDebt.label ?? maintenanceLabelForDebt(directDebt),
+      effect: directDebt.effect ?? maintenanceEffectForDebt(directDebt),
+      fix: maintenanceFixForDebt(directDebt),
+      debt: directDebt.debt,
+      outputMultiplier: directDebt.system ? maintenanceOutputMultiplierFromDebt(directDebt.debt) : 1,
+      debrisRisk: mapConditionAt(state, 'debris-risk', tileIndex)
+    };
+  }
   const room = state.rooms[tileIndex];
   if (room !== RoomType.Reactor && room !== RoomType.LifeSupport) return null;
   ensureRoomClustersCache(state);
@@ -1946,9 +2063,17 @@ export function getMaintenanceTileDiagnostic(
   const debt = maintenanceDebtFor(state, system, clusterMeta.anchor);
   return {
     system,
+    domain: 'utility',
+    source: debt > 0 ? 'high-load' : 'idle',
     anchorTile: clusterMeta.anchor,
+    targetTile: clusterMeta.anchor,
+    exterior: false,
+    label: maintenanceLabelForDebt({ system }),
+    effect: maintenanceEffectForDebt({ system }),
+    fix: 'repair job or assigned crew at utility post',
     debt,
-    outputMultiplier: maintenanceOutputMultiplierFromDebt(debt)
+    outputMultiplier: maintenanceOutputMultiplierFromDebt(debt),
+    debrisRisk: mapConditionAt(state, 'debris-risk', tileIndex)
   };
 }
 
@@ -5188,9 +5313,296 @@ function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebou
   state.ops.dormsActive = operationalClustersForRoom(state, RoomType.Dorm, 0, false, dt, updateDebounce).length;
 }
 
+type MaintenanceEnsureTarget = {
+  key: string;
+  domain: MaintenanceDomain;
+  source: MaintenanceSource;
+  anchorTile: number;
+  targetTile: number;
+  debt?: number;
+  system?: MaintenanceSystem;
+  room?: RoomType;
+  moduleId?: number;
+  exterior: boolean;
+  label: string;
+  effect: string;
+};
+
+type EnsureMaintenanceDebt = (target: MaintenanceEnsureTarget) => StationState['maintenanceDebts'][number];
+
+type ExteriorMaintenanceCandidate = {
+  domain: Extract<MaintenanceDomain, 'hull' | 'dock' | 'berth'>;
+  anchorTile: number;
+  targetTile: number;
+  risk: number;
+  traffic: number;
+  label: string;
+  effect: string;
+};
+
+function neighborTiles(state: StationState, tileIndex: number): number[] {
+  const p = fromIndex(tileIndex, state.width);
+  const out: number[] = [];
+  const deltas: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const x = p.x + dx;
+    const y = p.y + dy;
+    if (!inBounds(x, y, state.width, state.height)) continue;
+    out.push(toIndex(x, y, state.width));
+  }
+  return out;
+}
+
+function exteriorNeighborTiles(state: StationState, tileIndex: number): number[] {
+  return neighborTiles(state, tileIndex).filter((tile) => {
+    const kind = state.tiles[tile];
+    return kind === TileType.Space || kind === TileType.Truss || (isWalkable(kind) && !state.pressurized[tile]);
+  });
+}
+
+function exteriorRepairWorkTile(state: StationState, targetTile: number): number {
+  const exterior = exteriorNeighborTiles(state, targetTile).find((tile) => isEvaTraversalTile(state, tile));
+  return exterior ?? targetTile;
+}
+
+function openRepairJobsForDomain(state: StationState, domain: MaintenanceDomain | null): number {
+  return state.jobs.filter((job) => {
+    if (job.type !== 'repair') return false;
+    if (job.state === 'done' || job.state === 'expired') return false;
+    if (domain !== null && job.repairDomain !== domain) return false;
+    return true;
+  }).length;
+}
+
+function shouldEnqueueRepairJob(state: StationState, debt: StationState['maintenanceDebts'][number]): boolean {
+  normalizeMaintenanceDebt(debt);
+  if (debt.debt < REPAIR_JOB_DEBT_THRESHOLD) return false;
+  if (hasOpenRepairJobForDebt(state, debt)) return false;
+  if (openRepairJobsForDomain(state, null) >= MAINTENANCE_MAX_OPEN_REPAIR_JOBS) return false;
+  if (debt.exterior && openRepairJobsForDomain(state, maintenanceDebtDomain(debt)) >= MAINTENANCE_MAX_OPEN_EXTERIOR_JOBS) return false;
+  return true;
+}
+
+function maybeRecordDebrisImpact(
+  state: StationState,
+  debt: StationState['maintenanceDebts'][number],
+  risk: number,
+  risePerMin: number
+): void {
+  if (risk < 0.42 || risePerMin <= MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN) return;
+  const cadence = clamp(20 - risk * 14, 4, 18);
+  const last = debt.lastImpactAt ?? -9999;
+  if (state.now - last < cadence) return;
+  const phase = Math.floor(state.now / cadence);
+  const trigger = (Math.sin(debt.anchorTile * 19.17 + state.seedAtCreation * 0.013 + phase * 5.31) + 1) / 2;
+  if (trigger > 0.58) debt.lastImpactAt = state.now;
+}
+
+function addExteriorCandidate(
+  candidates: Map<string, ExteriorMaintenanceCandidate>,
+  key: string,
+  candidate: ExteriorMaintenanceCandidate
+): void {
+  const existing = candidates.get(key);
+  if (!existing || candidate.risk + candidate.traffic * 0.2 > existing.risk + existing.traffic * 0.2) {
+    candidates.set(key, candidate);
+  }
+}
+
+function collectExteriorMaintenanceCandidates(state: StationState): ExteriorMaintenanceCandidate[] {
+  ensureRoomClustersCache(state);
+  ensureDockEntitiesUpToDate(state);
+  ensureDockByTileCache(state);
+  const candidates = new Map<string, ExteriorMaintenanceCandidate>();
+
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] !== TileType.Wall) continue;
+    const exposedNeighbors = exteriorNeighborTiles(state, i);
+    if (exposedNeighbors.length <= 0) continue;
+    const pos = fromIndex(i, state.width);
+    const sector = `${Math.floor(pos.x / 6)}:${Math.floor(pos.y / 6)}`;
+    const risk = Math.max(mapConditionAt(state, 'debris-risk', i), ...exposedNeighbors.map((tile) => mapConditionAt(state, 'debris-risk', tile)));
+    addExteriorCandidate(candidates, `hull:${sector}`, {
+      domain: 'hull',
+      anchorTile: i,
+      targetTile: i,
+      risk,
+      traffic: 0,
+      label: 'exterior hull',
+      effect: 'EVA repair pressure'
+    });
+  }
+
+  const dockAnchors = new Set<number>();
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (state.tiles[i] !== TileType.Dock) continue;
+    const dock = getDockByTile(state, i);
+    const anchor = dock?.anchorTile ?? i;
+    if (dockAnchors.has(anchor)) continue;
+    dockAnchors.add(anchor);
+    const tiles = dock?.tiles ?? [i];
+    const exposed = tiles.filter((tile) => exteriorNeighborTiles(state, tile).length > 0);
+    const sampleTiles = exposed.length > 0 ? exposed : tiles;
+    const risk = sampleTiles.reduce((max, tile) => Math.max(max, mapConditionAt(state, 'debris-risk', tile)), 0);
+    const traffic =
+      (dock?.occupiedByShipId !== null && dock?.occupiedByShipId !== undefined ? 1 : 0) +
+      state.arrivingShips.filter((ship) => ship.assignedDockId === dock?.id && ship.stage !== 'depart').length * 0.5;
+    addExteriorCandidate(candidates, `dock:${anchor}`, {
+      domain: 'dock',
+      anchorTile: anchor,
+      targetTile: sampleTiles[0] ?? anchor,
+      risk,
+      traffic,
+      label: 'dock hull',
+      effect: 'ship service slowed at high wear'
+    });
+  }
+
+  for (const cluster of roomClusters(state, RoomType.Berth)) {
+    const exposed = cluster.filter((tile) => exteriorNeighborTiles(state, tile).length > 0);
+    if (exposed.length <= 0) continue;
+    const anchor = clusterAnchor(cluster);
+    const risk = exposed.reduce((max, tile) => Math.max(max, mapConditionAt(state, 'debris-risk', tile)), 0);
+    const traffic = state.arrivingShips.filter((ship) => ship.assignedBerthAnchor === anchor && ship.stage !== 'depart').length;
+    addExteriorCandidate(candidates, `berth:${anchor}`, {
+      domain: 'berth',
+      anchorTile: anchor,
+      targetTile: exposed[0],
+      risk,
+      traffic,
+      label: 'berth perimeter',
+      effect: 'berth service slowed at high wear'
+    });
+  }
+
+  return [...candidates.values()];
+}
+
+function processExteriorMaintenance(state: StationState, minutes: number, ensureDebt: EnsureMaintenanceDebt): void {
+  if (minutes <= 0) return;
+  for (const target of collectExteriorMaintenanceCandidates(state)) {
+    const debt = ensureDebt({
+      key: maintenanceTargetKey(target.domain, target.anchorTile),
+      domain: target.domain,
+      source: target.traffic > 0.2 ? 'traffic' : 'debris',
+      anchorTile: target.anchorTile,
+      targetTile: target.targetTile,
+      exterior: true,
+      label: target.label,
+      effect: target.effect
+    });
+    const wasOpen = debt.debt >= MAINTENANCE_DEBT_WARNING;
+    const risePerMin =
+      MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN +
+      target.risk * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN +
+      target.traffic * MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN;
+    debt.source = target.traffic > 0.2 ? 'traffic' : 'debris';
+    debt.debt = clamp(debt.debt + risePerMin * minutes, 0, 100);
+    maybeRecordDebrisImpact(state, debt, target.risk, risePerMin);
+    if (wasOpen && debt.debt < MAINTENANCE_DEBT_WARNING) state.usageTotals.maintenanceJobsResolved += 1;
+    if (shouldEnqueueRepairJob(state, debt)) enqueueRepairJobForDebt(state, debt);
+  }
+}
+
+const MODULE_MAINTENANCE_ROOMS = new Map<ModuleType, { domain: MaintenanceDomain; room: RoomType; label: string; effect: string }>([
+  [ModuleType.Stove, { domain: 'module', room: RoomType.Kitchen, label: 'kitchen stove', effect: 'meal prep slowed at high wear' }],
+  [ModuleType.Workbench, { domain: 'module', room: RoomType.Workshop, label: 'workshop bench', effect: 'trade-good work slowed at high wear' }],
+  [ModuleType.GrowStation, { domain: 'module', room: RoomType.Hydroponics, label: 'grow station', effect: 'crop output slowed at high wear' }],
+  [ModuleType.Vent, { domain: 'vent', room: RoomType.LifeSupport, label: 'life-support vent', effect: 'air distribution risk' }],
+  [ModuleType.FireExtinguisher, { domain: 'module', room: RoomType.None, label: 'fire extinguisher', effect: 'fire response risk' }],
+  [ModuleType.CargoArm, { domain: 'berth', room: RoomType.Berth, label: 'berth cargo arm', effect: 'cargo handling slowed at high wear' }],
+  [ModuleType.Gangway, { domain: 'berth', room: RoomType.Berth, label: 'berth gangway', effect: 'boarding flow slowed at high wear' }],
+  [ModuleType.CustomsCounter, { domain: 'berth', room: RoomType.Berth, label: 'customs counter', effect: 'ship processing slowed at high wear' }]
+]);
+
+function processModuleMaintenance(state: StationState, minutes: number, ensureDebt: EnsureMaintenanceDebt): void {
+  if (minutes <= 0) return;
+  const activeByRoom = new Map<RoomType, Set<number>>();
+  for (const room of [RoomType.Kitchen, RoomType.Workshop, RoomType.Hydroponics, RoomType.LifeSupport, RoomType.Berth]) {
+    activeByRoom.set(room, new Set(activeRoomClusterTiles(state, room)));
+  }
+  for (const module of state.moduleInstances) {
+    const config = MODULE_MAINTENANCE_ROOMS.get(module.type);
+    if (!config) continue;
+    const room = config.room === RoomType.None ? state.rooms[module.originTile] : config.room;
+    const active = activeByRoom.get(room)?.has(module.originTile) ?? false;
+    const exterior = config.domain === 'berth' && exteriorNeighborTiles(state, module.originTile).length > 0;
+    const risk = exterior ? mapConditionAt(state, 'debris-risk', module.originTile) : 0;
+    const debt = ensureDebt({
+      key: maintenanceTargetKey(config.domain, module.originTile),
+      domain: config.domain,
+      source: exterior && risk >= 0.42 ? 'debris' : active ? 'high-load' : 'idle',
+      anchorTile: module.originTile,
+      targetTile: module.originTile,
+      room,
+      moduleId: module.id,
+      exterior,
+      label: config.label,
+      effect: config.effect
+    });
+    const risePerMin =
+      MAINTENANCE_MODULE_IDLE_RISE_PER_MIN +
+      (active ? MAINTENANCE_MODULE_LOAD_RISE_PER_MIN : 0) +
+      (exterior ? risk * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN * 0.45 : 0);
+    debt.debt = clamp(debt.debt + risePerMin * minutes, 0, 100);
+    if (shouldEnqueueRepairJob(state, debt)) enqueueRepairJobForDebt(state, debt);
+  }
+}
+
 function updateMaintenanceDebt(state: StationState, dt: number): void {
   const seenKeys = new Set<string>();
   const minutes = dt / 60;
+  for (const debt of state.maintenanceDebts) normalizeMaintenanceDebt(debt);
+
+  const ensureDebt = (target: {
+    key: string;
+    domain: MaintenanceDomain;
+    source: MaintenanceSource;
+    anchorTile: number;
+    targetTile: number;
+    debt?: number;
+    system?: MaintenanceSystem;
+    room?: RoomType;
+    moduleId?: number;
+    exterior: boolean;
+    label: string;
+    effect: string;
+  }): StationState['maintenanceDebts'][number] => {
+    seenKeys.add(target.key);
+    let debt = state.maintenanceDebts.find((entry) => entry.key === target.key);
+    if (!debt) {
+      debt = {
+        key: target.key,
+        system: target.system,
+        domain: target.domain,
+        source: target.source,
+        anchorTile: target.anchorTile,
+        targetTile: target.targetTile,
+        room: target.room,
+        moduleId: target.moduleId,
+        exterior: target.exterior,
+        label: target.label,
+        effect: target.effect,
+        debt: target.debt ?? 0,
+        lastServicedAt: state.now
+      };
+      state.maintenanceDebts.push(debt);
+    } else {
+      debt.system = target.system ?? debt.system;
+      debt.domain = target.domain;
+      debt.source = target.source;
+      debt.anchorTile = target.anchorTile;
+      debt.targetTile = target.targetTile;
+      debt.room = target.room ?? debt.room;
+      debt.moduleId = target.moduleId ?? debt.moduleId;
+      debt.exterior = target.exterior;
+      debt.label = target.label;
+      debt.effect = target.effect;
+      normalizeMaintenanceDebt(debt);
+    }
+    return debt;
+  };
+
   const processSystem = (system: MaintenanceSystem): void => {
     const room = maintenanceRoom(system);
     const activeAnchors = new Set(
@@ -5201,12 +5613,18 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
     for (const cluster of roomClusters(state, room)) {
       const anchor = clusterAnchor(cluster);
       const key = maintenanceKey(system, anchor);
-      seenKeys.add(key);
-      let debt = state.maintenanceDebts.find((entry) => entry.key === key);
-      if (!debt) {
-        debt = { key, system, anchorTile: anchor, debt: 0, lastServicedAt: state.now };
-        state.maintenanceDebts.push(debt);
-      }
+      const debt = ensureDebt({
+        key,
+        system,
+        domain: 'utility',
+        source: activeAnchors.has(anchor) ? 'high-load' : 'idle',
+        anchorTile: anchor,
+        targetTile: anchor,
+        room,
+        exterior: false,
+        label: maintenanceLabelForDebt({ system }),
+        effect: maintenanceEffectForDebt({ system })
+      });
 
       const wasOpen = debt.debt >= MAINTENANCE_DEBT_WARNING;
       let risePerMin = activeAnchors.has(anchor)
@@ -5230,8 +5648,8 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
       // When debt crosses the repair-job threshold and no repair job is already
       // outstanding for this anchor, queue one. Generalist crew pick it up via
       // the same dispatcher as transport jobs.
-      if (debt.debt >= REPAIR_JOB_DEBT_THRESHOLD && !hasOpenRepairJobAt(state, anchor, system)) {
-        enqueueRepairJob(state, system, anchor);
+      if (shouldEnqueueRepairJob(state, debt)) {
+        enqueueRepairJobForDebt(state, debt);
       }
       // Fire ignition: sustained extreme debt without service ignites the cluster.
       // Track the moment debt first crossed the ignition threshold; if it stays
@@ -5254,6 +5672,8 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
 
   processSystem('reactor');
   processSystem('life-support');
+  processExteriorMaintenance(state, minutes, ensureDebt);
+  processModuleMaintenance(state, minutes, ensureDebt);
   state.maintenanceDebts = state.maintenanceDebts.filter((debt) => seenKeys.has(debt.key));
 }
 
@@ -6751,6 +7171,14 @@ function logisticsJobPriority(state: StationState, job: StationState['jobs'][num
     if (dirt >= SANITATION_DIRTY_THRESHOLD) return 88;
     return 35;
   }
+  if (job.type === 'repair') {
+    const debt = repairDebtForJob(state, job);
+    const amount = debt?.debt ?? 0;
+    const mechanicalBonus = mechanicalDepartmentActive(state) ? 18 : 0;
+    if (amount >= 85) return (job.repairExterior ? 150 : 132) + mechanicalBonus;
+    if (amount >= MAINTENANCE_DEBT_SEVERE) return (job.repairExterior ? 118 : 104) + mechanicalBonus;
+    return (job.repairExterior ? 82 : 68) + mechanicalBonus;
+  }
   if (job.type === 'construct') return job.constructionMode === 'build' ? 78 : 70;
   if (job.type === 'cook') return 92;
   if (isWorkshopToMarketTradeDelivery(state, job)) {
@@ -6774,7 +7202,15 @@ function crewSuitabilityForJob(crew: CrewMember, job: StationState['jobs'][numbe
     return system === 'kitchen' || system === 'cafeteria' ? 26 : crew.role === 'idle' ? 6 : 0;
   }
   if (job.type === 'sanitize') return system === 'hygiene' || crew.role === 'idle' ? 12 : 4;
-  if (job.type === 'repair') return system === 'reactor' || system === 'life-support' ? 28 : 6;
+  if (job.type === 'repair') {
+    let score = system === 'reactor' || system === 'life-support' ? 28 : 6;
+    if (crew.staffRole === 'mechanic-officer') score += 36;
+    if (crew.staffRole === 'engineer' || crew.staffRole === 'technician') score += 24;
+    if (crew.staffRole === 'mechanic') score += 20;
+    if (job.repairExterior && (crew.staffRole === 'welder' || crew.staffRole === 'eva-engineer')) score += 28;
+    if (job.repairExterior && homeLane === 'construction-eva') score += 10;
+    return score;
+  }
   if (job.type === 'extinguish') return system === 'security' || system === 'life-support' || system === 'reactor' ? 24 : 10;
   if (job.type === 'construct') return system === 'reactor' || system === 'life-support' ? 18 : 8;
   if (job.type === 'deliver' || job.type === 'pickup') {
@@ -7121,13 +7557,37 @@ function enqueueRepairJob(
   system: MaintenanceSystem,
   anchorTile: number
 ): void {
+  const debt =
+    state.maintenanceDebts.find((entry) => entry.key === maintenanceKey(system, anchorTile)) ??
+    normalizeMaintenanceDebt({
+      key: maintenanceKey(system, anchorTile),
+      system,
+      domain: 'utility',
+      source: 'idle',
+      anchorTile,
+      targetTile: anchorTile,
+      exterior: false,
+      label: maintenanceLabelForDebt({ system }),
+      effect: maintenanceEffectForDebt({ system }),
+      debt: 0,
+      lastServicedAt: state.now
+    });
+  enqueueRepairJobForDebt(state, debt);
+}
+
+function enqueueRepairJobForDebt(state: StationState, rawDebt: StationState['maintenanceDebts'][number]): void {
+  const debt = normalizeMaintenanceDebt(rawDebt);
+  const domain = maintenanceDebtDomain(debt);
+  const source = maintenanceDebtSource(debt);
+  const targetTile = maintenanceDebtTargetTile(debt);
+  const workTile = debt.exterior ? exteriorRepairWorkTile(state, targetTile) : targetTile;
   state.jobs.push({
     id: state.jobSpawnCounter++,
     type: 'repair',
     itemType: 'rawMaterial',
     amount: REPAIR_JOB_DEBT_TARGET,
-    fromTile: anchorTile,
-    toTile: anchorTile,
+    fromTile: workTile,
+    toTile: targetTile,
     assignedCrewId: null,
     createdAt: state.now,
     expiresAt: state.now + JOB_TTL_SEC,
@@ -7137,18 +7597,34 @@ function enqueueRepairJob(
     lastProgressAt: state.now,
     stallReason: 'none',
     stalledSince: undefined,
-    repairSystem: system,
+    repairSystem: debt.system,
+    repairTargetKey: debt.key,
+    repairTargetLabel: debt.label ?? maintenanceLabelForDebt(debt),
+    repairDomain: domain,
+    repairSource: source,
+    repairExterior: debt.exterior === true,
     repairProgress: 0
   });
   state.metrics.createdJobs += 1;
 }
 
 function hasOpenRepairJobAt(state: StationState, anchorTile: number, system: MaintenanceSystem): boolean {
+  return hasOpenRepairJobForKey(state, maintenanceKey(system, anchorTile));
+}
+
+function hasOpenRepairJobForKey(state: StationState, key: string): boolean {
   for (const job of state.jobs) {
     if (job.type !== 'repair') continue;
     if (job.state === 'done' || job.state === 'expired') continue;
-    if (job.fromTile === anchorTile && job.repairSystem === system) return true;
+    if (job.repairTargetKey === key) return true;
   }
+  return false;
+}
+
+function hasOpenRepairJobForDebt(state: StationState, debt: StationState['maintenanceDebts'][number]): boolean {
+  normalizeMaintenanceDebt(debt);
+  if (hasOpenRepairJobForKey(state, debt.key)) return true;
+  if (debt.system && hasOpenRepairJobAt(state, debt.anchorTile, debt.system)) return true;
   return false;
 }
 
@@ -7917,6 +8393,51 @@ function jobWorkTile(state: StationState, job: StationState['jobs'][number]): nu
   return job.fromTile;
 }
 
+function repairDebtForJob(state: StationState, job: StationState['jobs'][number]): StationState['maintenanceDebts'][number] | null {
+  if (job.type !== 'repair') return null;
+  if (job.repairTargetKey) {
+    const byKey = state.maintenanceDebts.find((debt) => debt.key === job.repairTargetKey);
+    if (byKey) return normalizeMaintenanceDebt(byKey);
+  }
+  if (job.repairSystem) {
+    const legacy = state.maintenanceDebts.find((debt) => debt.key === maintenanceKey(job.repairSystem!, job.toTile));
+    if (legacy) return normalizeMaintenanceDebt(legacy);
+  }
+  return null;
+}
+
+function repairJobLabel(state: StationState, job: StationState['jobs'][number]): string {
+  const debt = repairDebtForJob(state, job);
+  return job.repairTargetLabel ?? debt?.label ?? job.repairSystem ?? 'maintenance target';
+}
+
+function mechanicalDepartmentActive(state: StationState): boolean {
+  ensureCommandState(state);
+  return state.command.departments.mechanical?.active === true;
+}
+
+function findRepairPath(state: StationState, crewTile: number, job: StationState['jobs'][number]): number[] | null {
+  if (job.type !== 'repair' || !job.repairExterior) {
+    return findPath(state, crewTile, jobWorkTile(state, job), { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
+  }
+  const workTile = jobWorkTile(state, job);
+  if (isEvaTraversalTile(state, crewTile) && state.tiles[crewTile] !== TileType.Airlock) {
+    return findSpacePath(state, crewTile, workTile);
+  }
+  let best: number[] | null = null;
+  for (const airlock of activeAirlockTiles(state)) {
+    const inside =
+      findPath(state, crewTile, airlock, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ??
+      findPath(state, crewTile, airlock, { allowRestricted: true, intent: 'crew' });
+    if (!inside) continue;
+    const outside = findSpacePath(state, airlock, workTile);
+    if (!outside) continue;
+    const combined = [...inside, ...outside];
+    if (!best || combined.length < best.length) best = combined;
+  }
+  return best;
+}
+
 function activeCaptainConsole(state: StationState): ModuleInstance | null {
   const bridgeTiles = new Set(activeRoomClusterTiles(state, RoomType.Bridge));
   if (bridgeTiles.size <= 0) return null;
@@ -8474,20 +8995,31 @@ function assignJobsToIdleCrew(state: StationState): void {
         let path =
           job.type === 'construct' && job.constructionMode === 'build' && site
             ? findConstructionPath(state, crew.tileIndex, site)
-            : findPath(
-                state,
-                crew.tileIndex,
-                jobWorkTile(state, job),
-                { allowRestricted: true, intent: 'logistics' },
-                state.pathOccupancyByTile
-              );
+            : job.type === 'repair'
+              ? findRepairPath(state, crew.tileIndex, job)
+              : findPath(
+                  state,
+                  crew.tileIndex,
+                  jobWorkTile(state, job),
+                  { allowRestricted: true, intent: 'logistics' },
+                  state.pathOccupancyByTile
+                );
         if (!path && (ownLane || staffRoleWorkLane(crew.staffRole) === lane)) {
           path =
             job.type === 'construct' && job.constructionMode === 'build' && site
               ? findConstructionPath(state, crew.tileIndex, site)
-              : findPath(state, crew.tileIndex, jobWorkTile(state, job), { allowRestricted: true, intent: 'logistics' });
+              : job.type === 'repair'
+                ? findRepairPath(state, crew.tileIndex, job)
+                : findPath(state, crew.tileIndex, jobWorkTile(state, job), { allowRestricted: true, intent: 'logistics' });
         }
-        if (!path) continue;
+        if (!path) {
+          if (job.type === 'repair' && job.repairExterior) {
+            job.blockedReason = activeAirlockTiles(state).length <= 0 ? 'no airlock for EVA repair' : 'no airlock EVA route';
+            markJobStall(state, job, 'stalled_unreachable_source');
+            pendingByLane[lane].blocked += 1;
+          }
+          continue;
+        }
         const age = Math.max(0, state.now - job.createdAt);
         const laneBonus = ownLane ? 45 : flex ? 18 : emergencyBorrow ? -8 : -24;
         const suitability = crewSuitabilityForJob(crew, job);
@@ -8556,6 +9088,10 @@ function pendingJobStillViable(state: StationState, job: StationState['jobs'][nu
   }
   if (job.type === 'sanitize') {
     return (state.dirtByTile[job.fromTile] ?? 0) > SANITATION_JOB_TARGET + 3;
+  }
+  if (job.type === 'repair') {
+    const debt = repairDebtForJob(state, job);
+    return (debt?.debt ?? 0) > REPAIR_JOB_COMPLETE_DEBT + 2;
   }
   return false;
 }
@@ -9647,23 +10183,31 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         }
         continue;
       } else if (job.type === 'repair') {
-        // Repair: walk to the system anchor tile and stand still while ticking
-        // down the cluster's debt. No item carry. Repairs leave the system
-        // visibly healthy instead of shaving a small fixed amount and
-        // immediately requeueing another wrench job.
-        const anchorTile = job.fromTile;
-        if (crew.tileIndex !== anchorTile) {
+        // Repair: walk to the target work tile and stand still while ticking
+        // down the target debt. Exterior repair uses the same airlock/EVA
+        // route semantics as construction, but still consumes repair supplies
+        // and reports through engineering job metrics.
+        const workTile = job.fromTile;
+        const usingEva = job.repairExterior === true;
+        if (usingEva) updateEvaSuitForRoute(state, crew, dt);
+        else if (state.tiles[crew.tileIndex] === TileType.Airlock) {
+          crew.evaSuit = false;
+          crew.evaOxygenSec = 0;
+        }
+        if (crew.tileIndex !== workTile) {
           if (crew.path.length === 0) {
-            setCrewPath(
-              state,
-              crew,
-              findPath(state, crew.tileIndex, anchorTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ?? []
-            );
+            setCrewPath(state, crew, findRepairPath(state, crew.tileIndex, job) ?? []);
             if (crew.path.length === 0) {
+              job.blockedReason = usingEva
+                ? activeAirlockTiles(state).length <= 0
+                  ? 'no airlock for EVA repair'
+                  : 'no airlock EVA route'
+                : 'no path to repair target';
               markJobStall(state, job, 'stalled_unreachable_source');
             }
           }
           const moveResult = moveCrew(crew);
+          if (usingEva) updateEvaSuitForRoute(state, crew, dt);
           if (moveResult === 'moved') {
             job.lastProgressAt = state.now;
             markJobStall(state, job, 'none');
@@ -9671,6 +10215,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           } else if (moveResult === 'blocked') {
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
             markJobStall(state, job, 'stalled_path_blocked');
+            setCrewPath(state, crew, []);
           }
         } else {
           // At anchor: tick debt down. Job becomes 'in_progress' on first tick.
@@ -9681,35 +10226,37 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             job.repairSuppliesUsed = consumeOperationalSupplies(state, REPAIR_SUPPLY_PARTS);
             job.repairSupplyChecked = true;
             job.blockedReason =
-              job.repairSuppliesUsed >= REPAIR_SUPPLY_PARTS ? null : 'no repair supplies';
+            job.repairSuppliesUsed >= REPAIR_SUPPLY_PARTS ? null : 'no repair supplies';
           }
-          const system = job.repairSystem;
-          if (system) {
-            const debtEntry = state.maintenanceDebts.find(
-              (d) => d.key === maintenanceKey(system, anchorTile)
-            );
-            if (debtEntry) {
-              const supplyMultiplier = (job.repairSuppliesUsed ?? 0) >= REPAIR_SUPPLY_PARTS ? 1 : REPAIR_NO_SUPPLY_MULTIPLIER;
-              const reduction = Math.min(debtEntry.debt, REPAIR_JOB_RATE_PER_SEC * supplyMultiplier * dt);
-              debtEntry.debt = Math.max(0, debtEntry.debt - reduction);
-              debtEntry.lastServicedAt = state.now;
-              job.repairProgress = (job.repairProgress ?? 0) + reduction;
-              job.lastProgressAt = state.now;
-              if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= REPAIR_JOB_COMPLETE_DEBT) {
-                job.state = 'done';
-                job.completedAt = state.now;
-                markJobStall(state, job, 'none');
-                crew.activeJobId = null;
-                setCrewPath(state, crew, []);
-                state.usageTotals.maintenanceJobsResolved += 1;
-              }
-            } else {
-              // Debt cluster vanished (room destroyed?). Cancel.
+          const debtEntry = repairDebtForJob(state, job);
+          if (debtEntry) {
+            const supplyMultiplier = (job.repairSuppliesUsed ?? 0) >= REPAIR_SUPPLY_PARTS ? 1 : REPAIR_NO_SUPPLY_MULTIPLIER;
+            const routeMultiplier = usingEva ? (mechanicalDepartmentActive(state) ? 0.82 : 0.48) : 1;
+            const reduction = Math.min(debtEntry.debt, REPAIR_JOB_RATE_PER_SEC * supplyMultiplier * routeMultiplier * dt);
+            debtEntry.debt = Math.max(0, debtEntry.debt - reduction);
+            debtEntry.lastServicedAt = state.now;
+            job.repairProgress = (job.repairProgress ?? 0) + reduction;
+            job.lastProgressAt = state.now;
+            markJobStall(state, job, 'none');
+            if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= REPAIR_JOB_COMPLETE_DEBT) {
               job.state = 'done';
               job.completedAt = state.now;
               crew.activeJobId = null;
               setCrewPath(state, crew, []);
+              if (usingEva && state.tiles[crew.tileIndex] === TileType.Airlock) {
+                crew.evaSuit = false;
+                crew.evaOxygenSec = 0;
+              }
+              releaseReservationsForOwner(state, 'crew', crew.id, 'completed', ['actor-job']);
+              releaseReservationsForOwner(state, 'job', job.id, 'completed');
+              state.usageTotals.maintenanceJobsResolved += 1;
             }
+          } else {
+            // Debt target vanished (room/module/tile removed). Cancel cleanly.
+            job.state = 'done';
+            job.completedAt = state.now;
+            crew.activeJobId = null;
+            setCrewPath(state, crew, []);
           }
         }
         continue;
@@ -12478,10 +13025,22 @@ function computeMetrics(state: StationState): void {
   } else if (state.metrics.dirtyTiles > 0) {
     roomWarnings.unshift(`sanitation needed: ${state.metrics.dirtyTiles} dirty tiles`);
   }
-  if (state.metrics.maintenanceDebtMax >= MAINTENANCE_DEBT_SEVERE) {
-    roomWarnings.unshift('maintenance critical: utility output degraded');
+  const blockedExteriorRepairs = state.jobs.filter(
+    (job) =>
+      job.type === 'repair' &&
+      job.repairExterior &&
+      job.state !== 'done' &&
+      job.state !== 'expired' &&
+      Boolean(job.blockedReason)
+  ).length;
+  if (blockedExteriorRepairs > 0) {
+    roomWarnings.unshift(
+      `EVA repair blocked: ${blockedExteriorRepairs} exterior job${blockedExteriorRepairs === 1 ? '' : 's'}`
+    );
+  } else if (state.metrics.maintenanceDebtMax >= MAINTENANCE_DEBT_SEVERE) {
+    roomWarnings.unshift('maintenance critical: wear degrading station systems');
   } else if (state.metrics.maintenanceJobsOpen > 0) {
-    roomWarnings.unshift('maintenance needed: reactor/life-support debt rising');
+    roomWarnings.unshift('maintenance needed: repair backlog rising');
   }
   if (state.ops.marketTotal > 0) {
     if (state.ops.marketActive <= 0) {

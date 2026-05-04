@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-05-04T01:09:51.616Z",
+  "version": "sprite-v1-2026-05-04T19:44:09.839Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -945,38 +945,80 @@
       "w": 64,
       "h": 64
     },
+    "space.planet.rocky.1": {
+      "x": 2,
+      "y": 594,
+      "w": 256,
+      "h": 256
+    },
+    "space.asteroid.cluster.1": {
+      "x": 262,
+      "y": 594,
+      "w": 256,
+      "h": 256
+    },
+    "space.debris.metal.1": {
+      "x": 522,
+      "y": 594,
+      "w": 128,
+      "h": 128
+    },
+    "space.debris.ice.1": {
+      "x": 654,
+      "y": 594,
+      "w": 128,
+      "h": 128
+    },
+    "fx.repair.spark": {
+      "x": 786,
+      "y": 594,
+      "w": 128,
+      "h": 128
+    },
+    "overlay.wall.hull_wear.1": {
+      "x": 918,
+      "y": 594,
+      "w": 64,
+      "h": 64
+    },
+    "overlay.wall.hull_wear.2": {
+      "x": 986,
+      "y": 594,
+      "w": 64,
+      "h": 64
+    },
     "icon.tier1_unlock": {
-      "x": 2926,
-      "y": 526,
+      "x": 1054,
+      "y": 594,
       "w": 64,
       "h": 64
     },
     "icon.tier2_unlock": {
-      "x": 2994,
-      "y": 526,
+      "x": 1122,
+      "y": 594,
       "w": 64,
       "h": 64
     },
     "icon.tier3_unlock": {
-      "x": 2,
+      "x": 1190,
       "y": 594,
       "w": 64,
       "h": 64
     },
     "icon.tier4_unlock": {
-      "x": 70,
+      "x": 1258,
       "y": 594,
       "w": 64,
       "h": 64
     },
     "icon.tier5_unlock": {
-      "x": 138,
+      "x": 1326,
       "y": 594,
       "w": 64,
       "h": 64
     },
     "icon.tier6_unlock": {
-      "x": 206,
+      "x": 1394,
       "y": 594,
       "w": 64,
       "h": 64
@@ -1019,6 +1061,13 @@
     "overlay.floor.wear.1": 0.24,
     "overlay.floor.wear.2": 0.24,
     "overlay.floor.wear.3": 0.24,
-    "overlay.floor.wear.4": 0.24
+    "overlay.floor.wear.4": 0.24,
+    "space.planet.rocky.1": 0.42,
+    "space.asteroid.cluster.1": 0.52,
+    "space.debris.metal.1": 0.55,
+    "space.debris.ice.1": 0.5,
+    "fx.repair.spark": 0.88,
+    "overlay.wall.hull_wear.1": 0.48,
+    "overlay.wall.hull_wear.2": 0.52
   }
 }
