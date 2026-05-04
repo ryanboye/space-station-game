@@ -330,7 +330,7 @@ function renderDebrisBackdrop(
 ): void {
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
-  const spriteCount = 70;
+  const spriteCount = 180;
   for (let i = 0; i < spriteCount; i++) {
     const x = renderHash01(state.seedAtCreation, i, 1) * worldW;
     const y = renderHash01(state.seedAtCreation, i, 2) * worldH;
@@ -340,8 +340,9 @@ function renderDebrisBackdrop(
     const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
     const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
     const tile = toIndex(tileX, tileY, state.width);
+    if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
     const debris = mapConditionSamplesAt(state, tile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
-    const keep = renderHash01(state.seedAtCreation, i, 3) < 0.12 + debris * 0.78;
+    const keep = renderHash01(state.seedAtCreation, i, 3) < 0.18 + debris * 0.82;
     if (!keep) continue;
     const drift = ((state.now * (0.5 + debris) * 0.08 + renderHash01(state.seedAtCreation, i, 4) * 100) % 20) - 10;
     const variant = renderHash01(state.seedAtCreation, i, 5);
@@ -353,9 +354,9 @@ function renderDebrisBackdrop(
           : variant > 0.31
             ? SPACE_BACKDROP_SPRITE_KEYS[2]
             : SPACE_BACKDROP_SPRITE_KEYS[3];
-    const baseSize = spriteKey.includes('planet') ? 130 : spriteKey.includes('cluster') ? 82 : 34;
-    const size = baseSize * (0.75 + renderHash01(state.seedAtCreation, i, 6) * 0.65);
-    const alpha = clampRender(0.13 + debris * 0.28, 0.12, spriteKey.includes('planet') ? 0.38 : 0.48);
+    const baseSize = spriteKey.includes('planet') ? 150 : spriteKey.includes('cluster') ? 96 : 42;
+    const size = baseSize * (0.82 + renderHash01(state.seedAtCreation, i, 6) * 0.7);
+    const alpha = clampRender(0.2 + debris * 0.38, 0.18, spriteKey.includes('planet') ? 0.48 : 0.72);
     const dx = x + drift - size * 0.5;
     const dy = y - drift * 0.35 - size * 0.5;
     if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, 0, alpha)) continue;
@@ -368,6 +369,61 @@ function renderDebrisBackdrop(
       alpha
     );
   }
+
+  for (const debt of state.maintenanceDebts) {
+    if (!debt.exterior || debt.debt < 25) continue;
+    const target = debt.targetTile ?? debt.anchorTile;
+    const pos = fromIndex(target, state.width);
+    const debris = mapConditionSamplesAt(state, target).find((sample) => sample.kind === 'debris-risk')?.value ?? 0.55;
+    for (let j = 0; j < 3; j++) {
+      const angle = renderHash01(state.seedAtCreation + target, j, 11) * Math.PI * 2;
+      const distance = TILE_SIZE * (2.4 + j * 1.2 + renderHash01(state.seedAtCreation + target, j, 12));
+      const x = (pos.x + 0.5) * TILE_SIZE + Math.cos(angle) * distance;
+      const y = (pos.y + 0.5) * TILE_SIZE + Math.sin(angle) * distance;
+      if (viewport && (x < viewport.x - 80 || x > viewport.x + viewport.width + 80 || y < viewport.y - 80 || y > viewport.y + viewport.height + 80)) {
+        continue;
+      }
+      const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
+      const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
+      const tile = toIndex(tileX, tileY, state.width);
+      if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
+      const key = j === 0 ? SPACE_BACKDROP_SPRITE_KEYS[1] : j === 1 ? SPACE_BACKDROP_SPRITE_KEYS[2] : SPACE_BACKDROP_SPRITE_KEYS[3];
+      const size = TILE_SIZE * (1.1 + debris * 1.1 + j * 0.18);
+      const alpha = clampRender(0.38 + debris * 0.34, 0.36, 0.78);
+      if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) continue;
+      drawDebrisFallback(ctx, x, y, size, j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock', alpha);
+    }
+  }
+}
+
+function exteriorImpactPoint(state: StationState, targetTile: number): { x: number; y: number; sx: number; sy: number } {
+  const target = fromIndex(targetTile, state.width);
+  let bestNeighbor = targetTile;
+  let bestRisk = -1;
+  for (const delta of [
+    { dx: 0, dy: -1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }
+  ]) {
+    const nx = target.x + delta.dx;
+    const ny = target.y + delta.dy;
+    if (!inBounds(nx, ny, state.width, state.height)) continue;
+    const neighbor = toIndex(nx, ny, state.width);
+    const kind = state.tiles[neighbor];
+    if (kind !== TileType.Space && kind !== TileType.Truss) continue;
+    const risk = mapConditionSamplesAt(state, neighbor).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
+    if (risk > bestRisk) {
+      bestRisk = risk;
+      bestNeighbor = neighbor;
+    }
+  }
+  const space = fromIndex(bestNeighbor, state.width);
+  const impactX = (target.x + 0.5) * TILE_SIZE;
+  const impactY = (target.y + 0.5) * TILE_SIZE;
+  const sourceX = bestNeighbor === targetTile ? impactX - TILE_SIZE * 1.6 : (space.x + 0.5) * TILE_SIZE;
+  const sourceY = bestNeighbor === targetTile ? impactY - TILE_SIZE * 1.2 : (space.y + 0.5) * TILE_SIZE;
+  return { x: impactX, y: impactY, sx: sourceX, sy: sourceY };
 }
 
 function renderMaintenanceImpacts(
@@ -378,17 +434,37 @@ function renderMaintenanceImpacts(
   viewport: RenderViewport | null
 ): void {
   for (const debt of state.maintenanceDebts) {
-    if (!debt.exterior || !debt.lastImpactAt) continue;
-    const age = state.now - debt.lastImpactAt;
-    if (age < 0 || age > 0.85) continue;
+    if (!debt.exterior || debt.debt < 28) continue;
     const target = debt.targetTile ?? debt.anchorTile;
-    const pos = fromIndex(target, state.width);
-    const cx = pos.x * TILE_SIZE + TILE_SIZE * 0.5;
-    const cy = pos.y * TILE_SIZE + TILE_SIZE * 0.5;
+    const risk = mapConditionSamplesAt(state, target).find((sample) => sample.kind === 'debris-risk')?.value ?? 0.55;
+    const period = clampRender(2.8 - risk * 1.35 - debt.debt / 180, 1.25, 2.9);
+    const phase = renderHash01(state.seedAtCreation + target, 5, 17) * period;
+    const periodicAge = positiveMod(state.now + phase, period);
+    const recordedAge = debt.lastImpactAt ? state.now - debt.lastImpactAt : Number.POSITIVE_INFINITY;
+    const age = recordedAge >= 0 && recordedAge < periodicAge ? recordedAge : periodicAge;
+    if (age < 0 || age > 0.72) continue;
+    const impact = exteriorImpactPoint(state, target);
+    const cx = impact.x;
+    const cy = impact.y;
     if (viewport && (cx < viewport.x - 80 || cx > viewport.x + viewport.width + 80 || cy < viewport.y - 80 || cy > viewport.y + viewport.height + 80)) continue;
-    const t = age / 0.85;
-    const size = TILE_SIZE * (1.3 - t * 0.35);
-    const alpha = (1 - t) * 0.86;
+    const t = age / 0.72;
+    const size = TILE_SIZE * (1.75 - t * 0.42);
+    const alpha = clampRender((1 - t) * (0.72 + risk * 0.34), 0, 0.96);
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.82;
+    ctx.strokeStyle = '#ffcf62';
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.08 * (1 - t * 0.45));
+    ctx.beginPath();
+    ctx.moveTo(impact.sx, impact.sy);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 105, 72, 0.78)';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.beginPath();
+    ctx.moveTo((impact.sx + cx) * 0.5, (impact.sy + cy) * 0.5);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.restore();
     if (useSprites && drawSpriteByKey(ctx, spriteAtlas, FX_SPRITE_KEYS.repairSpark, cx - size * 0.5, cy - size * 0.5, size, size, 0, alpha)) continue;
     drawDebrisFallback(ctx, cx, cy, size, 'spark', alpha);
   }
@@ -2046,10 +2122,13 @@ function ensureStaticLayer(
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const tileType = state.tiles[i];
-    const drewTileSprite = useSprites && drawTileSprite(state, i, tileType, ctx, spriteAtlas, px, py);
+    const isOpenSpace = tileType === TileType.Space;
+    const drewTileSprite = !isOpenSpace && useSprites && drawTileSprite(state, i, tileType, ctx, spriteAtlas, px, py);
     if (!drewTileSprite) {
-      ctx.fillStyle = tileColor[tileType];
-      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      if (!isOpenSpace) {
+        ctx.fillStyle = tileColor[tileType];
+        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      }
     }
     if (state.rooms[i] === RoomType.Berth && state.tiles[i] !== TileType.Space) {
       drawBerthTileTexture(ctx, state, i, px, py);
@@ -2106,7 +2185,7 @@ function ensureStaticLayer(
         ctx.fillText(label, px + Math.round(4.5 * PX), py + Math.round(4.5 * PX));
       }
     }
-    if (!drewTileSprite) {
+    if (!drewTileSprite && !isOpenSpace) {
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
       ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE, TILE_SIZE);
     }
