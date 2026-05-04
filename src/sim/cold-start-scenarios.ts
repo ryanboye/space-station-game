@@ -15,6 +15,7 @@
 // paths or JSON blobs land through this door.
 
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
+import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { ItemType, StationState, UnlockId, UnlockTier } from './types';
 import { buyMaterials, buyRawFood, setTile, setRoom, setModule } from './sim';
@@ -33,6 +34,44 @@ function unlockThrough(state: StationState, targetTier: UnlockTier): void {
     state.unlocks.triggerProgress[
       UNLOCK_DEFINITIONS.find((d) => d.id === id)!.tier
     ] = 1;
+  }
+}
+
+function completeSpecialtyForScenario(state: StationState, id: 'sanitation-program'): void {
+  state.command.selectedSpecialty = null;
+  if (!state.command.completedSpecialties.includes(id)) state.command.completedSpecialties.push(id);
+  state.command.specialtyProgress[id] = {
+    id,
+    state: 'completed',
+    progress: 1,
+    selectedAt: 0,
+    completedAt: 0
+  };
+}
+
+function setScenarioCrew(state: StationState): void {
+  const counts = createEmptyStaffRoleCounts();
+  counts.captain = 1;
+  counts['sanitation-officer'] = 1;
+  counts.janitor = 2;
+  counts.assistant = 5;
+  state.crew.roleCounts = counts;
+  state.crew.total = totalStaffCount(counts);
+  state.crew.free = state.crew.total;
+  state.crew.assigned = 0;
+  state.command.officers.captain = true;
+  state.command.officers['sanitation-officer'] = true;
+}
+
+function seedRoomDirt(state: StationState, room: RoomType, sourceCode: number, base: number): void {
+  let n = 0;
+  for (let i = 0; i < state.rooms.length; i++) {
+    if (state.rooms[i] !== room) continue;
+    if (state.tiles[i] === TileType.Wall || state.tiles[i] === TileType.Space) continue;
+    const variation = ((i * 17 + n * 11) % 29);
+    state.dirtByTile[i] = Math.min(96, base + variation);
+    state.dirtSourceByTile[i] = sourceCode;
+    n += 1;
   }
 }
 
@@ -89,6 +128,29 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.metrics.residentsConvertedLifetime = 3;
     s.metrics.credits = 5000;
     s.metrics.materials = 500;
+  },
+
+  // Entropy slice 19-1/19-4: a busy public/service station with live
+  // dirt, open sanitation pressure, and the Sanitation Department ready
+  // to activate once the first tick refreshes Bridge reachability.
+  'entropy-sanitation': (s) => {
+    unlockThrough(s, 2);
+    s.metrics.credits = 1500;
+    s.metrics.materials = 400;
+    completeSpecialtyForScenario(s, 'sanitation-program');
+    setScenarioCrew(s);
+    applyDemoStationOverlay(s);
+    paintRoom(s, 49, 31, 61, 38, RoomType.Bridge, 'north');
+    placeMod(s, 51, 33, ModuleType.CaptainConsole);
+    placeMod(s, 55, 33, ModuleType.SanitationTerminal);
+    seedRoomDirt(s, RoomType.Cafeteria, 2, 54);
+    seedRoomDirt(s, RoomType.Hygiene, 3, 48);
+    seedRoomDirt(s, RoomType.Market, 6, 42);
+    s.controls.paused = false;
+    s.controls.simSpeed = 1;
+    s.controls.diagnosticOverlay = 'sanitation';
+    s.controls.shipsPerCycle = 0;
+    s.controls.materialAutoImportEnabled = false;
   },
 
   // Demo showcase: T6 unlocked + a PROGRAMMATICALLY BUILT multi-room

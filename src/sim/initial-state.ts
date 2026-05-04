@@ -19,6 +19,7 @@
 
 import { MODULE_DEFINITIONS } from './balance';
 import {
+  createInitialDepartments,
   createInitialSpecialtyProgress,
   createInitialStaffRoleCounts,
   totalStaffCount
@@ -148,6 +149,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       roomHousingPolicies[idx] = 'crew';
     }
   }
+  const starterBridgeDoor = toIndex(starterFloorMinX + 5, starterFloorMinY + 2, GRID_WIDTH);
+  tiles[starterBridgeDoor] = TileType.Door;
+  rooms[starterBridgeDoor] = RoomType.Bridge;
   addStarterModule(ModuleType.CaptainConsole, starterFloorMinX + 1, starterFloorMinY, 0);
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
@@ -198,7 +202,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
         captainConsoleStaffed: false,
         activeTerminalStaff: 0,
         requiredTerminalStaff: 1
-      }
+      },
+      departments: createInitialDepartments()
     },
     maintenanceDebts: [],
     arrivingShips: [],

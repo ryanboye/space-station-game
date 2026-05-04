@@ -399,6 +399,21 @@ export interface SpecialtyProgress {
   completedAt: number | null;
 }
 
+export type DepartmentInactiveReason =
+  | 'specialty-not-completed'
+  | 'no-officer'
+  | 'no-bridge'
+  | 'no-terminal'
+  | 'unreachable';
+
+export interface DepartmentRuntime {
+  active: boolean;
+  inactiveReason: DepartmentInactiveReason | null;
+  officerRole: StaffRole | null;
+  terminal: ModuleType | null;
+  specialty: SpecialtyId | null;
+}
+
 export interface CommandState {
   selectedSpecialty: SpecialtyId | null;
   completedSpecialties: SpecialtyId[];
@@ -409,6 +424,7 @@ export interface CommandState {
     activeTerminalStaff: number;
     requiredTerminalStaff: number;
   };
+  departments: Record<StaffDepartment, DepartmentRuntime>;
 }
 export type CrewPriorityPreset = 'balanced' | 'life-support' | 'food-chain' | 'economy';
 export type CrewPrioritySystem =

@@ -1,8 +1,21 @@
 # 19-4 Shared Drift Spine And Rollout
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
-Status: cross-slice implementation plan. Keep this open while implementing `19-1`, `19-2`, and `19-3`.
+Status: shared spine active. The sanitation portion is implemented; keep this open while implementing `19-2` and `19-3` so maintenance/debris and sunlight/thermal use the same vocabulary, UI, save/load, and scenario patterns.
+
+## Implementation Status
+
+- [x] Shared map-condition API and versioning.
+- [x] Shared severity vocabulary adopted by sanitation.
+- [x] Sanitation drift state, metrics, overlay, inspector language, and live grime.
+- [x] Job-volume controls for sanitation through thresholds, duplicate suppression, and room/tile targeting.
+- [x] Station Ops drift rows for sanitation/maintenance job pressure.
+- [x] Save/load migration rules for sanitation live arrays.
+- [x] `?scenario=entropy-sanitation` cold-start fixture.
+- [ ] `?scenario=entropy-maintenance`.
+- [ ] `?scenario=entropy-thermal`.
+- [ ] `?scenario=entropy-combined`.
 
 ## Goal
 

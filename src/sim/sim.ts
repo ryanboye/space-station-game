@@ -16,9 +16,11 @@ import {
   STAFF_ROLE_DEFINITIONS,
   STAFF_ROLES,
   createEmptyStaffRoleCounts,
+  createInitialDepartments,
   createInitialSpecialtyProgress,
   createInitialStaffRoleCounts,
   isSpecialtyPhaseAvailable,
+  specialtyForUnlockedModule,
   totalStaffCount
 } from './content/command';
 import { SHIP_PROFILES } from './content/ships';
@@ -42,6 +44,7 @@ import {
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type CrewWorkLane,
+  type DepartmentRuntime,
   type WorkLaneMetrics,
   type CrewTaskCandidate,
   type CrewPriorityWeights,
@@ -70,6 +73,7 @@ import {
   type CrewMember,
   type CrewRole,
   type StaffRole,
+  type StaffDepartment,
   type StaffRoleCounts,
   type SpecialtyId,
   type JobStallReason,
@@ -530,6 +534,10 @@ export function isRoomUnlocked(state: StationState, room: RoomType): boolean {
 }
 
 export function isModuleUnlocked(state: StationState, module: ModuleType): boolean {
+  const specialty = specialtyForUnlockedModule(module);
+  if (specialty) {
+    return state.command?.completedSpecialties?.includes(specialty.id) === true;
+  }
   return isModuleUnlockedAtTier(module, state.unlocks.tier);
 }
 
@@ -3757,9 +3765,11 @@ function ensureCommandState(state: StationState): void {
         captainConsoleStaffed: false,
         activeTerminalStaff: 0,
         requiredTerminalStaff: 1
-      }
+      },
+      departments: createInitialDepartments()
     };
   }
+  if (!state.command.departments) state.command.departments = createInitialDepartments();
   if (!state.command.specialtyProgress) state.command.specialtyProgress = createInitialSpecialtyProgress();
   for (const def of SPECIALTY_DEFINITIONS) {
     const existing = state.command.specialtyProgress[def.id];
@@ -5278,6 +5288,8 @@ function updateCriticalStaffTracking(state: StationState, dt: number): void {
 
 function operationalClustersForRoomSelection(state: StationState, room: RoomType): number[][] {
   switch (room) {
+    case RoomType.Bridge:
+      return operationalClustersForRoom(state, room, 0, false);
     case RoomType.Cafeteria:
       return operationalClustersForRoom(state, room, CREW_PER_CAFETERIA, false);
     case RoomType.Kitchen:
@@ -7906,15 +7918,135 @@ function jobWorkTile(state: StationState, job: StationState['jobs'][number]): nu
 }
 
 function activeCaptainConsole(state: StationState): ModuleInstance | null {
-  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
+  const bridgeTiles = new Set(activeRoomClusterTiles(state, RoomType.Bridge));
   if (bridgeTiles.size <= 0) return null;
   return state.moduleInstances.find((module) => module.type === ModuleType.CaptainConsole && bridgeTiles.has(module.originTile)) ?? null;
+}
+
+function resetDepartmentRuntimes(state: StationState): Record<StaffDepartment, DepartmentRuntime> {
+  const defaults = createInitialDepartments();
+  const departments = state.command.departments;
+  for (const dept of Object.keys(defaults) as StaffDepartment[]) {
+    if (!departments[dept]) {
+      departments[dept] = defaults[dept];
+      continue;
+    }
+    Object.assign(departments[dept], defaults[dept]);
+  }
+  return departments;
+}
+
+function moduleDutyTilesInBridge(state: StationState, module: ModuleInstance, bridgeTiles: Set<number>): number[] {
+  const out = new Set<number>();
+  for (const tile of module.tiles) {
+    for (const candidate of adjacentWalkableTiles(state, tile)) {
+      if (!bridgeTiles.has(candidate)) continue;
+      if (state.moduleOccupancyByTile[candidate] !== null) continue;
+      out.add(candidate);
+    }
+  }
+  if (out.size <= 0) {
+    for (const tile of bridgeTiles) {
+      if (!isWalkable(state.tiles[tile])) continue;
+      if (state.moduleOccupancyByTile[tile] !== null) continue;
+      out.add(tile);
+    }
+  }
+  return [...out];
+}
+
+function officerCanReachDutyTile(state: StationState, officerRole: StaffRole, dutyTiles: number[]): boolean {
+  if (dutyTiles.length <= 0) return false;
+  for (const crew of state.crewMembers) {
+    if (crew.staffRole !== officerRole || crew.resting) continue;
+    for (const dest of dutyTiles) {
+      if (crew.tileIndex === dest) return true;
+      const path =
+        findPath(state, crew.tileIndex, dest, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ??
+        findPath(state, crew.tileIndex, dest, { allowRestricted: true, intent: 'crew' });
+      if (path) return true;
+    }
+  }
+  return false;
+}
+
+function deriveDepartmentRuntimes(state: StationState): void {
+  ensureCommandState(state);
+  const departments = resetDepartmentRuntimes(state);
+  const activeBridgeTiles = new Set(activeRoomClusterTiles(state, RoomType.Bridge));
+  const bridgeActive = activeBridgeTiles.size > 0;
+
+  const cmd = departments.command;
+  const captainConsole = state.moduleInstances.find(
+    (module) => module.type === ModuleType.CaptainConsole && activeBridgeTiles.has(module.originTile)
+  );
+  const captainHired = (state.crew.roleCounts?.captain ?? 0) > 0;
+  cmd.officerRole = 'captain';
+  cmd.terminal = ModuleType.CaptainConsole;
+  cmd.specialty = null;
+  if (!captainHired) {
+    cmd.active = false;
+    cmd.inactiveReason = 'no-officer';
+  } else if (!bridgeActive) {
+    cmd.active = false;
+    cmd.inactiveReason = 'no-bridge';
+  } else if (!captainConsole) {
+    cmd.active = false;
+    cmd.inactiveReason = 'no-terminal';
+  } else if (!officerCanReachDutyTile(state, 'captain', moduleDutyTilesInBridge(state, captainConsole, activeBridgeTiles))) {
+    cmd.active = false;
+    cmd.inactiveReason = 'unreachable';
+  } else {
+    cmd.active = true;
+    cmd.inactiveReason = null;
+  }
+
+  for (const def of SPECIALTY_DEFINITIONS) {
+    const dept = def.department;
+    if (dept === 'command') continue;
+    const row = departments[dept];
+    if (!row) continue;
+    row.officerRole = def.officerRole;
+    row.terminal = def.terminal;
+    row.specialty = def.id;
+
+    if (!state.command.completedSpecialties.includes(def.id)) {
+      row.active = false;
+      row.inactiveReason = 'specialty-not-completed';
+      continue;
+    }
+    if ((state.crew.roleCounts?.[def.officerRole] ?? 0) <= 0) {
+      row.active = false;
+      row.inactiveReason = 'no-officer';
+      continue;
+    }
+    if (!bridgeActive) {
+      row.active = false;
+      row.inactiveReason = 'no-bridge';
+      continue;
+    }
+    const terminal = state.moduleInstances.find(
+      (module) => module.type === def.terminal && activeBridgeTiles.has(module.originTile)
+    );
+    if (!terminal) {
+      row.active = false;
+      row.inactiveReason = 'no-terminal';
+      continue;
+    }
+    if (!officerCanReachDutyTile(state, def.officerRole, moduleDutyTilesInBridge(state, terminal, activeBridgeTiles))) {
+      row.active = false;
+      row.inactiveReason = 'unreachable';
+      continue;
+    }
+    row.active = true;
+    row.inactiveReason = null;
+  }
 }
 
 function captainConsoleDutyTiles(state: StationState): number[] {
   const captainConsole = activeCaptainConsole(state);
   if (!captainConsole) return [];
-  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
+  const bridgeTiles = new Set(activeRoomClusterTiles(state, RoomType.Bridge));
   const out = new Set<number>();
   for (const tile of captainConsole.tiles) {
     for (const candidate of adjacentWalkableTiles(state, tile)) {
@@ -13410,7 +13542,7 @@ export function updateCommandProgress(state: StationState, dt: number): void {
     if (progress.state === 'locked' && isSpecialtyPhaseAvailable(def.id, state.command.completedSpecialties.length)) progress.state = 'available';
   }
   const specialtyId = state.command.selectedSpecialty;
-  const bridgeTiles = activeRoomTargets(state, RoomType.Bridge);
+  const bridgeTiles = activeRoomClusterTiles(state, RoomType.Bridge);
   const bridgeModules = state.moduleInstances.filter((module) => bridgeTiles.includes(module.originTile));
   const captainDutyTiles = captainConsoleDutyTiles(state);
   if (captainDutyTiles.length > 0) {
@@ -13448,14 +13580,16 @@ export function updateCommandProgress(state: StationState, dt: number): void {
     (crew) => !crew.resting && crew.staffRole === 'captain' && captainDutyTiles.includes(crew.tileIndex)
   ).length;
   state.command.bridgeStaffing.captainConsoleStaffed = state.command.bridgeStaffing.activeTerminalStaff > 0;
-  if (!specialtyId) return;
-  const def = SPECIALTY_BY_ID[specialtyId];
-  const progress = state.command.specialtyProgress[specialtyId];
-  const hasResearchTerminal = bridgeModules.some((module) => module.type === ModuleType.ResearchTerminal || module.type === def.terminal);
-  const bridgeBonus = bridgeTiles.length > 0 ? 1 : 0.45;
-  const terminalBonus = hasResearchTerminal ? 1 : 0.55;
-  progress.progress = clamp(progress.progress + (dt / def.researchSeconds) * bridgeBonus * terminalBonus, 0, 1);
-  if (progress.progress >= 1) completeActiveSpecialty(state);
+  if (specialtyId) {
+    const def = SPECIALTY_BY_ID[specialtyId];
+    const progress = state.command.specialtyProgress[specialtyId];
+    const hasResearchTerminal = bridgeModules.some((module) => module.type === ModuleType.ResearchTerminal || module.type === def.terminal);
+    const bridgeBonus = bridgeTiles.length > 0 ? 1 : 0.45;
+    const terminalBonus = hasResearchTerminal ? 1 : 0.55;
+    progress.progress = clamp(progress.progress + (dt / def.researchSeconds) * bridgeBonus * terminalBonus, 0, 1);
+    if (progress.progress >= 1) completeActiveSpecialty(state);
+  }
+  deriveDepartmentRuntimes(state);
 }
 
 export function hireCrew(state: StationState, creditCost = HIRE_COST): boolean {

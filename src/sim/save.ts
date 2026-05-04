@@ -35,6 +35,7 @@ import {
   SPECIALTY_DEFINITIONS,
   STAFF_ROLES,
   createEmptyStaffRoleCounts,
+  createInitialDepartments,
   createInitialSpecialtyProgress,
   totalStaffCount
 } from './content/command';
@@ -1163,7 +1164,8 @@ export function hydrateStateFromSave(
         captainConsoleStaffed: false,
         activeTerminalStaff: 0,
         requiredTerminalStaff: 1
-      }
+      },
+      departments: createInitialDepartments()
     };
   }
 

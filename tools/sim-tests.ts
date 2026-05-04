@@ -2574,6 +2574,22 @@ function testDemoStationRoomsPressurized(): void {
   }
 }
 
+function testEntropySanitationScenarioFixture(): void {
+  const state = createInitialState({ seed: 5019 });
+  const applied = applyColdStartScenario(state, 'entropy-sanitation');
+  assertCondition(applied, 'entropy-sanitation fixture should exist in COLD_START_SCENARIOS.');
+
+  runFor(state, 1);
+
+  assertCondition(state.controls.diagnosticOverlay === 'sanitation', 'Entropy sanitation fixture should open on the sanitation overlay.');
+  assertCondition(state.metrics.dirtyTiles > 0, 'Entropy sanitation fixture should seed visible dirty tiles.');
+  assertCondition(state.metrics.sanitationJobsOpen > 0, 'Entropy sanitation fixture should create cleaning pressure.');
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Entropy sanitation fixture should start with an active Sanitation Department (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+}
+
 function testDoorsArePressureBarriers(): void {
   // Sealed room + one door must pressurize — doors are airlocks, not leaks.
   const state = createInitialState({ seed: 9001 });
@@ -3664,6 +3680,11 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   runFor(state, 4, 0.5);
   assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
   assertCondition(hireStaffRole(state, 'janitor'), 'Janitor should be hireable after sanitation specialty completion.');
+  state.metrics.credits = 500;
+  assertCondition(
+    selectSpecialty(state, 'security-command'),
+    'Completing the sanitation specialty should reopen the next branch choice.'
+  );
   const payload = serializeSave('command-roundtrip', state, 'sim-tests');
   const parsed = parseAndMigrateSave(payload);
   assertCondition(parsed.ok, 'Command save should parse.');
@@ -3673,6 +3694,68 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   assertCondition(
     loaded.command.completedSpecialties.includes('sanitation-program'),
     'Completed command specialties should roundtrip.'
+  );
+}
+
+function testDepartmentRuntimeActivationRule(): void {
+  const state = createInitialState({ seed: 43101 });
+  state.metrics.credits = 800;
+  tick(state, 0);
+
+  assertCondition(
+    state.command.departments.sanitation.active === false,
+    'Sanitation department should be inactive at cold start.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'specialty-not-completed',
+    'Initial sanitation inactive reason should point to missing specialty.'
+  );
+  assertCondition(
+    !isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should be department-owned before the sanitation branch completes.'
+  );
+
+  assertCondition(hireStaffRole(state, 'captain'), 'Captain should be hireable.');
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.command.active === true,
+    `Command department should be active with a hired, reachable captain (reason: ${state.command.departments.command.inactiveReason}).`
+  );
+
+  assertCondition(selectSpecialty(state, 'sanitation-program'), 'Sanitation specialty should be selectable.');
+  state.command.specialtyProgress['sanitation-program'].progress = 0.99;
+  state.controls.paused = false;
+  runFor(state, 3, 0.5);
+  assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
+  tick(state, 0);
+  assertCondition(
+    state.command.completedSpecialties.includes('sanitation-program'),
+    'Sanitation specialty should be completed before activation can proceed.'
+  );
+  assertCondition(
+    isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should unlock from department branch completion rather than old tier copy.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'no-terminal',
+    `Without a SanitationTerminal in the active Bridge, inactive reason should be no-terminal (got ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  const placed = tryPlaceModule(state, ModuleType.SanitationTerminal, toIndex(49, 34, state.width));
+  assertCondition(placed.ok, `Sanitation terminal should place in the active Bridge (${placed.reason ?? 'unknown'}).`);
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Sanitation department should activate with officer, active Bridge, terminal, and reachability (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  setTile(state, toIndex(50, 36, state.width), TileType.Floor);
+  tick(state, 0);
+  assertCondition(state.ops.bridgeActive === 0, 'Removing the starter Bridge door should make the Bridge operationally inactive.');
+  assertCondition(
+    state.command.departments.sanitation.active === false &&
+      state.command.departments.sanitation.inactiveReason === 'no-bridge',
+    `Sanitation department should not stay active when the Bridge is inactive (reason: ${state.command.departments.sanitation.inactiveReason}).`
   );
 }
 
@@ -5595,6 +5678,7 @@ function run(): void {
   testActivationChecksPreserved();
   testDoorsArePressureBarriers();
   testDemoStationRoomsPressurized();
+  testEntropySanitationScenarioFixture();
   testReactorInspectorReportsRealPressurizationPct();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
@@ -5627,6 +5711,7 @@ function run(): void {
   testSaveRoundtripLayoutAndResources();
   testStarterBridgeCaptainAndSpecialtyResearch();
   testSpecialtyUnlocksRoleHiringAndSaveRoundtrip();
+  testDepartmentRuntimeActivationRule();
   testSaveLoadRegeneratesRuntimeEntities();
   testSaveLoadBestEffortMigration();
   testSaveRoundtripLifetimeCountersSurvive();
