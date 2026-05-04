@@ -746,6 +746,42 @@ sprites:
     offsetY: 0
     blendMode: normal
     alpha: 0.42
+  space.massive.moon_dark_limb.1:
+    prompt: Massive dark cratered moon limb for screen-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 768
+    frameHeight: 768
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 1
+  space.massive.gas_blue_limb.1:
+    prompt: Massive blue gas giant limb with subtle rings for screen-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 768
+    frameHeight: 768
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 1
+  space.massive.planet_rust_limb.1:
+    prompt: Massive rust-red planet limb for screen-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 768
+    frameHeight: 768
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 1
+  space.massive.moon_ice_limb.1:
+    prompt: Massive icy moon limb for screen-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 768
+    frameHeight: 768
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 1
   space.asteroid.cluster.1:
     prompt: Distant asteroid cluster sprite for station-space backdrop. Transparent background.
     rotation: 0
@@ -773,6 +809,96 @@ sprites:
     offsetY: 0
     blendMode: normal
     alpha: 0.5
+  space.debris.rock.2:
+    prompt: Tiny gray asteroid chunk sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
+  space.debris.rust.1:
+    prompt: Tiny rust asteroid chunk sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
+  space.debris.ice.2:
+    prompt: Tiny icy asteroid shard sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
+  space.debris.metal.2:
+    prompt: Tiny metallic debris chunk sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
+  space.debris.dark.1:
+    prompt: Tiny dark asteroid shard sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.56
+  space.debris.hot.1:
+    prompt: Tiny glowing hot meteor chunk sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.7
+  space.debris.crater.1:
+    prompt: Tiny cratered asteroid chunk sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.56
+  space.debris.ice.3:
+    prompt: Tiny blue ice shard sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
+  space.debris.rust.2:
+    prompt: Tiny rust pebble cluster sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.56
+  space.debris.metal.3:
+    prompt: Tiny bright metal shard sprite for station-space backdrop. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: normal
+    alpha: 0.58
   fx.repair.spark:
     prompt: Pixel art hull impact spark/puff effect. Transparent background.
     rotation: 0
@@ -782,6 +908,78 @@ sprites:
     offsetY: 0
     blendMode: screen
     alpha: 0.88
+  fx.impact.micro_rock.1:
+    prompt: Tiny incoming gray micro-meteor projectile with short hot trail. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.9
+  fx.impact.micro_rust.1:
+    prompt: Tiny incoming rust micro-meteor projectile with short hot trail. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.9
+  fx.impact.micro_ice.1:
+    prompt: Tiny incoming icy micro-meteor projectile with short blue-white trail. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.9
+  fx.impact.micro_metal.1:
+    prompt: Tiny incoming metallic micro-debris projectile with short hot trail. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.9
+  fx.impact.micro_dark.1:
+    prompt: Tiny incoming dark micro-debris projectile with short hot trail. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.88
+  fx.impact.micro_hot.1:
+    prompt: Tiny incoming glowing hot micro-meteor projectile. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.94
+  fx.impact.micro_rock.2:
+    prompt: Very tiny incoming gray micro-meteor projectile. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.88
+  fx.impact.micro_hot.2:
+    prompt: Very tiny incoming glowing micro-meteor projectile. Transparent background.
+    rotation: 0
+    frameWidth: 96
+    frameHeight: 96
+    offsetX: 0
+    offsetY: 0
+    blendMode: screen
+    alpha: 0.94
   overlay.wall.hull_wear.1:
     prompt: Sparse pixel-art scraped metal scratch decal for exterior station hull wall. Transparent background.
     rotation: 0

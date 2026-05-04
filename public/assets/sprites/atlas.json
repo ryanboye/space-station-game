@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-05-04T19:44:09.839Z",
+  "version": "sprite-v1-2026-05-04T22:01:24.933Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -951,75 +951,207 @@
       "w": 256,
       "h": 256
     },
-    "space.asteroid.cluster.1": {
+    "space.massive.moon_dark_limb.1": {
       "x": 262,
       "y": 594,
+      "w": 768,
+      "h": 768
+    },
+    "space.massive.gas_blue_limb.1": {
+      "x": 1034,
+      "y": 594,
+      "w": 768,
+      "h": 768
+    },
+    "space.massive.planet_rust_limb.1": {
+      "x": 1806,
+      "y": 594,
+      "w": 768,
+      "h": 768
+    },
+    "space.massive.moon_ice_limb.1": {
+      "x": 2,
+      "y": 1366,
+      "w": 768,
+      "h": 768
+    },
+    "space.debris.rock.2": {
+      "x": 774,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.rust.1": {
+      "x": 874,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.ice.2": {
+      "x": 974,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.metal.2": {
+      "x": 1074,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.dark.1": {
+      "x": 1174,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.hot.1": {
+      "x": 1274,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.crater.1": {
+      "x": 1374,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.ice.3": {
+      "x": 1474,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.rust.2": {
+      "x": 1574,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.debris.metal.3": {
+      "x": 1674,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_rock.1": {
+      "x": 1774,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_rust.1": {
+      "x": 1874,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_ice.1": {
+      "x": 1974,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_metal.1": {
+      "x": 2074,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_dark.1": {
+      "x": 2174,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_hot.1": {
+      "x": 2274,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_rock.2": {
+      "x": 2374,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "fx.impact.micro_hot.2": {
+      "x": 2474,
+      "y": 1366,
+      "w": 96,
+      "h": 96
+    },
+    "space.asteroid.cluster.1": {
+      "x": 2574,
+      "y": 1366,
       "w": 256,
       "h": 256
     },
     "space.debris.metal.1": {
-      "x": 522,
-      "y": 594,
+      "x": 2834,
+      "y": 1366,
       "w": 128,
       "h": 128
     },
     "space.debris.ice.1": {
-      "x": 654,
-      "y": 594,
+      "x": 2,
+      "y": 2138,
       "w": 128,
       "h": 128
     },
     "fx.repair.spark": {
-      "x": 786,
-      "y": 594,
+      "x": 134,
+      "y": 2138,
       "w": 128,
       "h": 128
     },
     "overlay.wall.hull_wear.1": {
-      "x": 918,
-      "y": 594,
+      "x": 266,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "overlay.wall.hull_wear.2": {
-      "x": 986,
-      "y": 594,
+      "x": 334,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier1_unlock": {
-      "x": 1054,
-      "y": 594,
+      "x": 402,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier2_unlock": {
-      "x": 1122,
-      "y": 594,
+      "x": 470,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier3_unlock": {
-      "x": 1190,
-      "y": 594,
+      "x": 538,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier4_unlock": {
-      "x": 1258,
-      "y": 594,
+      "x": 606,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier5_unlock": {
-      "x": 1326,
-      "y": 594,
+      "x": 674,
+      "y": 2138,
       "w": 64,
       "h": 64
     },
     "icon.tier6_unlock": {
-      "x": 1394,
-      "y": 594,
+      "x": 742,
+      "y": 2138,
       "w": 64,
       "h": 64
     }
@@ -1063,6 +1195,24 @@
     "overlay.floor.wear.3": 0.24,
     "overlay.floor.wear.4": 0.24,
     "space.planet.rocky.1": 0.42,
+    "space.debris.rock.2": 0.58,
+    "space.debris.rust.1": 0.58,
+    "space.debris.ice.2": 0.58,
+    "space.debris.metal.2": 0.58,
+    "space.debris.dark.1": 0.56,
+    "space.debris.hot.1": 0.7,
+    "space.debris.crater.1": 0.56,
+    "space.debris.ice.3": 0.58,
+    "space.debris.rust.2": 0.56,
+    "space.debris.metal.3": 0.58,
+    "fx.impact.micro_rock.1": 0.9,
+    "fx.impact.micro_rust.1": 0.9,
+    "fx.impact.micro_ice.1": 0.9,
+    "fx.impact.micro_metal.1": 0.9,
+    "fx.impact.micro_dark.1": 0.88,
+    "fx.impact.micro_hot.1": 0.94,
+    "fx.impact.micro_rock.2": 0.88,
+    "fx.impact.micro_hot.2": 0.94,
     "space.asteroid.cluster.1": 0.52,
     "space.debris.metal.1": 0.55,
     "space.debris.ice.1": 0.5,

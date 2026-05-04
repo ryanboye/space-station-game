@@ -66,10 +66,49 @@ export const FX_SPRITE_KEYS = {
 } as const;
 
 export const SPACE_BACKDROP_SPRITE_KEYS = [
-  'space.planet.rocky.1',
-  'space.asteroid.cluster.1',
+  'space.debris.rock.2',
+  'space.debris.rust.1',
+  'space.debris.ice.2',
+  'space.debris.metal.2',
+  'space.debris.dark.1',
+  'space.debris.hot.1',
+  'space.debris.crater.1',
+  'space.debris.ice.3',
+  'space.debris.rust.2',
+  'space.debris.metal.3'
+] as const;
+
+export const SPACE_MASSIVE_PLANET_SPRITE_KEYS = [
+  'space.massive.moon_dark_limb.1',
+  'space.massive.gas_blue_limb.1',
+  'space.massive.planet_rust_limb.1',
+  'space.massive.moon_ice_limb.1'
+] as const;
+
+export const SPACE_DEBRIS_SPRITE_KEYS = [
   'space.debris.metal.1',
-  'space.debris.ice.1'
+  'space.debris.ice.1',
+  'space.debris.rock.2',
+  'space.debris.rust.1',
+  'space.debris.ice.2',
+  'space.debris.metal.2',
+  'space.debris.dark.1',
+  'space.debris.hot.1',
+  'space.debris.crater.1',
+  'space.debris.ice.3',
+  'space.debris.rust.2',
+  'space.debris.metal.3'
+] as const;
+
+export const IMPACT_DEBRIS_SPRITE_KEYS = [
+  'fx.impact.micro_rock.1',
+  'fx.impact.micro_rust.1',
+  'fx.impact.micro_ice.1',
+  'fx.impact.micro_metal.1',
+  'fx.impact.micro_dark.1',
+  'fx.impact.micro_hot.1',
+  'fx.impact.micro_rock.2',
+  'fx.impact.micro_hot.2'
 ] as const;
 
 export const HULL_WEAR_SPRITE_KEYS = [
