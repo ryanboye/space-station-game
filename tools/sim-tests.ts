@@ -23,15 +23,21 @@ import {
   getResidentInspectorById,
   getLifeSupportTileDiagnostic,
   getMaintenanceTileDiagnostic,
+  getSanitationRoomDiagnosticAt,
+  getSanitationTileDiagnostic,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
+  hireStaffRole,
+  mapConditionAt,
+  mapConditionSamplesAt,
   setRoomHousingPolicy,
   getVisitorInspectorById,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
   reservationsForOwner,
   sellMaterials,
+  selectSpecialty,
   setRoom,
   setTile,
   SHIP_MIN_DOCK_AREA,
@@ -1146,6 +1152,38 @@ function testRepairSuppliesImproveMaintenanceRepairSpeed(): void {
   );
 }
 
+function testRepairJobClearsDebtBelowRequeueThreshold(): void {
+  const state = createInitialState({ seed: 31053 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 8;
+  state.metrics.materials = 8;
+  state.crew.total = 1;
+  runFor(state, 0.25);
+  const anchor = toIndex(6, 6, state.width);
+  state.maintenanceDebts = [{
+    key: `reactor:${anchor}`,
+    system: 'reactor',
+    anchorTile: anchor,
+    debt: 82,
+    lastServicedAt: 0
+  }];
+
+  runFor(state, 32);
+
+  const debt = state.maintenanceDebts.find((entry) => entry.anchorTile === anchor)?.debt ?? 100;
+  const liveRepairJobs = state.jobs.filter(
+    (job) => job.type === 'repair' && job.fromTile === anchor && job.state !== 'done' && job.state !== 'expired'
+  );
+  assertCondition(
+    debt < 30,
+    `Repair job should clear debt below the warning/requeue threshold, not leave a repeated repair loop (${debt.toFixed(1)}).`
+  );
+  assertCondition(liveRepairJobs.length === 0, 'Repair job should complete once the system is visibly healthy.');
+  assertCondition(state.usageTotals.maintenanceJobsResolved > 0, 'Completed repair should increment maintenance resolution counters.');
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -1292,6 +1330,122 @@ function testMaintenanceDiagnosticHelperReportsUtilityDebt(): void {
     'Maintenance diagnostic should expose output degradation.'
   );
   assertCondition(nonUtilityDiagnostic === null, 'Maintenance diagnostic should stay null on unrelated tiles.');
+}
+
+function testMapConditionsAreDeterministicAndSeeded(): void {
+  const first = createInitialState({ seed: 9101 });
+  const same = createInitialState({ seed: 9101 });
+  const different = createInitialState({ seed: 9102 });
+  const tile = toIndex(18, 14, first.width);
+
+  const firstSamples = mapConditionSamplesAt(first, tile);
+  const sameSamples = mapConditionSamplesAt(same, tile);
+  const differentSamples = mapConditionSamplesAt(different, tile);
+
+  assertCondition(firstSamples.length === 3, 'Map condition sample should include sunlight, debris, and thermal fields.');
+  assertCondition(
+    Math.abs(mapConditionAt(first, 'sunlight', tile) - mapConditionAt(same, 'sunlight', tile)) < 0.000001,
+    'Same seed and tile should produce stable sunlight.'
+  );
+  assertCondition(
+    firstSamples.every((sample, index) => sample.label === sameSamples[index].label && Math.abs(sample.value - sameSamples[index].value) < 0.000001),
+    'Same seed and tile should produce stable map condition labels and values.'
+  );
+  assertCondition(
+    firstSamples.some((sample, index) => Math.abs(sample.value - differentSamples[index].value) > 0.015),
+    'Different map seeds should change at least one local condition value.'
+  );
+}
+
+function testSanitationDiagnosticsJobsAndCrewCleanup(): void {
+  const state = createInitialState({ seed: 9103 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  const dirtyTile = toIndex(18, 10, state.width);
+  state.dirtByTile[dirtyTile] = 82;
+  state.dirtSourceByTile[dirtyTile] = 2;
+
+  const tileDiagnostic = getSanitationTileDiagnostic(state, 18, 10);
+  const roomDiagnostic = getSanitationRoomDiagnosticAt(state, dirtyTile);
+  assertCondition(tileDiagnostic?.severity === 'filthy', 'Sanitation tile diagnostic should identify filthy tiles.');
+  assertCondition(tileDiagnostic?.dominantSource === 'meals', 'Sanitation tile diagnostic should preserve source attribution.');
+  assertCondition(!!roomDiagnostic && roomDiagnostic.maxDirt >= 82, 'Sanitation room diagnostic should surface max room dirt.');
+
+  tick(state, 0.5);
+  assertCondition(
+    state.jobs.some((job) => job.type === 'sanitize' && job.state !== 'expired'),
+    'Dirty tiles above threshold should create sanitation jobs.'
+  );
+
+  runFor(state, 14);
+
+  assertCondition(
+    state.dirtByTile[dirtyTile] < 45,
+    `Crew should clean the sanitation target below dirty threshold (${state.dirtByTile[dirtyTile].toFixed(1)}).`
+  );
+  assertCondition(state.metrics.sanitationJobsCompletedPerMin > 0, 'Completed cleaning should be counted in sanitation throughput.');
+  assertCondition(state.usageTotals.sanitationJobsResolved > 0, 'Resolved sanitation jobs should increment lifetime counters.');
+}
+
+function testSanitationCleansDirtyModuleTilesFromAdjacentFloor(): void {
+  const state = createInitialState({ seed: 91031 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  const tableTile = toIndex(18, 10, state.width);
+  assertCondition(state.moduleOccupancyByTile[tableTile] !== null, 'Fixture table tile should be module-occupied.');
+  state.dirtByTile[tableTile] = 82;
+  state.dirtSourceByTile[tableTile] = 2;
+
+  tick(state, 0.5);
+
+  const job = state.jobs.find((candidate) => candidate.type === 'sanitize' && candidate.fromTile === tableTile);
+  assertCondition(!!job, 'Dirty table tile should create a sanitation job.');
+  assertCondition(job!.toTile !== tableTile, 'Sanitation job on a module tile should choose an adjacent work tile.');
+
+  runFor(state, 10);
+
+  assertCondition(
+    state.dirtByTile[tableTile] < 32,
+    `Crew should clean dirty module/table tiles from an adjacent floor tile (${state.dirtByTile[tableTile].toFixed(1)}).`
+  );
+  assertCondition(
+    state.jobs.some((candidate) => candidate.id === job!.id && candidate.state === 'done'),
+    'Adjacent module sanitation job should complete.'
+  );
+}
+
+function testSanitationPersistsAndRemapsOnExpansion(): void {
+  const state = createInitialState({ seed: 9104 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  const oldWidth = state.width;
+  const dirtyTile = toIndex(16, 14, state.width);
+  state.dirtByTile[dirtyTile] = 66;
+  state.dirtSourceByTile[dirtyTile] = 1;
+
+  const payload = serializeSave('sanitation', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Sanitation save should parse.');
+  if (!parsed.ok) return;
+  const loaded = hydrateStateFromSave(parsed.save).state;
+  assertCondition(Math.abs(loaded.dirtByTile[dirtyTile] - 66) < 0.2, 'Sanitation dirt should survive save/load.');
+  assertCondition(loaded.dirtSourceByTile[dirtyTile] === 1, 'Sanitation source should survive save/load.');
+
+  state.metrics.credits = 100000;
+  const expanded = expandMap(state, 'north');
+  assertCondition(expanded.ok, 'North expansion should succeed for sanitation remap.');
+  const remappedTile = toIndex(16, 14 + 40, state.width);
+  assertCondition(
+    Math.abs(state.dirtByTile[remappedTile] - 66) < 0.2,
+    'Sanitation dirt should remap with tiles during north expansion.'
+  );
+  assertCondition(state.dirtByTile[toIndex(16, 14, oldWidth)] !== 66, 'Old pre-expansion array position should not retain dirt by accident.');
 }
 
 function testAutonomousRoomsNoStaff(): void {
@@ -1614,6 +1768,47 @@ function testCookBatchJobConsumesRawAndProducesMeals(): void {
   const mealStockAfterCook = state.itemNodes.reduce((sum, node) => sum + (node.items.meal ?? 0), 0);
   assertCondition(mealStockAfterCook > 0, 'Cook batch should produce meals into the food chain.');
   assertCondition(state.metrics.jobCountsByType.cook.done > 0, 'Job board metrics should count completed cook jobs.');
+}
+
+function testHiredCookClaimsKitchenWorkBeforeAssistants(): void {
+  const state = createInitialState({ seed: 316031 });
+  assertCondition(applyColdStartScenario(state, 'demo-station'), 'Demo fixture should be available for crowded role dispatch.');
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 0;
+  state.controls.materialAutoImportEnabled = false;
+  assertCondition(hireStaffRole(state, 'cook'), 'Cook should be hireable into a busy assistant-heavy station.');
+  tick(state, 0);
+
+  const stoveNode = state.itemNodes.find((node) => state.rooms[node.tileIndex] === RoomType.Kitchen);
+  assertCondition(!!stoveNode, 'Demo station should expose a kitchen stove node.');
+  if (!stoveNode) return;
+  state.jobs.length = 0;
+  state.reservations.length = 0;
+  for (const node of state.itemNodes) {
+    node.items.rawMeal = 0;
+    node.items.meal = 0;
+  }
+  stoveNode.items.rawMeal = 8;
+  stoveNode.items.meal = 0;
+  for (const crew of state.crewMembers) {
+    crew.energy = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.resting = false;
+    crew.activeJobId = null;
+    crew.path = [];
+  }
+
+  runFor(state, 48, 0.25);
+
+  const completedCookJob = state.jobs.find((job) => job.type === 'cook' && job.state === 'done');
+  assertCondition(!!completedCookJob, 'A raw-meal kitchen batch should complete as a cook job.');
+  const assignedCrew = state.crewMembers.find((crew) => crew.id === completedCookJob?.assignedCrewId);
+  assertCondition(
+    assignedCrew?.staffRole === 'cook',
+    `Hired cook should claim kitchen cook work before fallback assistants; got ${assignedCrew?.staffRole ?? 'none'}.`
+  );
 }
 
 function testUrgentFoodJobsInterruptCrewNeedTravel(): void {
@@ -2606,6 +2801,121 @@ function testSelfCareCrewNotStolenByLogisticsDispatch(): void {
   assertCondition(state.jobs[state.jobs.length - 1].state === 'pending', 'Logistics job should remain pending while crew handles urgent self-care.');
 }
 
+function testRoleLaneDispatcherBypassesBusyLogisticsForSanitation(): void {
+  const state = createInitialState({ seed: 301023 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 10;
+  tick(state, 0.25);
+
+  const busyCrew = state.crewMembers.slice(0, 6);
+  for (const crew of busyCrew) {
+    const job = {
+      id: state.jobSpawnCounter++,
+      type: 'deliver' as const,
+      itemType: 'rawMaterial' as const,
+      amount: 1,
+      fromTile: toIndex(8, 8, state.width),
+      toTile: toIndex(10, 8, state.width),
+      assignedCrewId: crew.id,
+      createdAt: state.now,
+      expiresAt: state.now + 60,
+      state: 'assigned' as const,
+      pickedUpAmount: 0,
+      completedAt: null,
+      lastProgressAt: state.now,
+      stallReason: 'none' as const
+    };
+    state.jobs.push(job);
+    crew.activeJobId = job.id;
+    crew.workLane = 'logistics';
+    crew.lastWorkLane = 'logistics';
+  }
+
+  const dirtyTile = toIndex(18, 10, state.width);
+  state.dirtByTile[dirtyTile] = 90;
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'sanitize',
+    itemType: 'rawMaterial',
+    amount: 45,
+    fromTile: dirtyTile,
+    toTile: dirtyTile,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + 60,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none',
+    sanitationSource: 'meals',
+    workProgress: 0,
+    workRequired: 45
+  });
+
+  runFor(state, 1.5);
+
+  const sanitizeJob = state.jobs.find((job) => job.type === 'sanitize' && job.fromTile === dirtyTile);
+  assertCondition(
+    sanitizeJob?.state === 'assigned' || sanitizeJob?.state === 'in_progress' || sanitizeJob?.state === 'done',
+    'Sanitation lane should dispatch cleaning even while multiple logistics jobs are already active.'
+  );
+  assertCondition(
+    state.metrics.workforceLanes.sanitation.working > 0 || state.metrics.workforceLanes.sanitation.pending === 0,
+    'Workforce metrics should show sanitation work running or completed.'
+  );
+}
+
+function testRoleLaneDispatcherKeepsFoodAndSanitationSeparate(): void {
+  const state = createInitialState({ seed: 301024 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  setupFoodChain(state);
+  state.crew.total = 12;
+  buyRawFood(state, 0, 40);
+  for (let i = 0; i < 6; i++) {
+    const tile = toIndex(16 + i, 10 + (i % 3), state.width);
+    state.dirtByTile[tile] = 82;
+  }
+
+  runFor(state, 12);
+
+  assertCondition(
+    state.metrics.workforceLanes.food.working > 0 || state.metrics.jobCountsByType.cook.done > 0 || state.metrics.jobCountsByItem.meal.done > 0,
+    'Food lane should keep cooking or meal movement active while sanitation work exists.'
+  );
+  assertCondition(
+    state.metrics.sanitationJobsCompletedPerMin > 0 || state.metrics.workforceLanes.sanitation.working > 0,
+    'Sanitation lane should clean in parallel instead of waiting for the food/logistics queue to drain.'
+  );
+  assertCondition(
+    state.metrics.workforceLanes.sanitation.target > 0 && state.metrics.workforceLanes.food.target > 0,
+    'Food and sanitation should both receive workforce targets when both pressures exist.'
+  );
+}
+
+function testCaptainStaysOnBridgeDutyAndCookRoleKeepsFoodLane(): void {
+  const state = createInitialState({ seed: 301025 });
+  state.controls.paused = false;
+  state.controls.simSpeed = 1;
+  state.controls.shipsPerCycle = 0;
+  assertCondition(hireStaffRole(state, 'captain'), 'Captain should be hireable for command duty.');
+  assertCondition(hireStaffRole(state, 'cook'), 'Cook should be hireable for food work.');
+  tick(state, 0.25);
+
+  const captain = state.crewMembers.find((crew) => crew.staffRole === 'captain');
+  const cook = state.crewMembers.find((crew) => crew.staffRole === 'cook');
+  assertCondition(!!captain, 'Expected hired captain actor to exist.');
+  assertCondition(!!cook, 'Expected hired cook actor to exist.');
+  assertCondition(cook!.workLane === 'food', 'Cook role should stay bound to the food work lane.');
+
+  runFor(state, 18);
+
+  assertCondition(captain!.activeJobId === null, 'Captain should stay reserved from ordinary jobs while on bridge duty.');
+}
+
 function testCrewRestAvoidsOverloadedDormTarget(): void {
   const state = createInitialState({ seed: 30103 });
   buildHabitat(state);
@@ -3298,6 +3608,72 @@ function testSaveRoundtripLayoutAndResources(): void {
   assertCondition(loaded.controls.materialAutoImportEnabled === false, 'Supply auto-import toggle should be restored from save.');
   assertCondition(loaded.controls.materialTargetStock === 155, 'Supply target should be restored from save.');
   assertCondition(loaded.controls.materialImportBatchSize === 35, 'Supply import batch size should be restored from save.');
+}
+
+function testStarterBridgeCaptainAndSpecialtyResearch(): void {
+  const state = createInitialState({ seed: 43001 });
+  tick(state, 0);
+  assertCondition(state.rooms.some((room) => room === RoomType.Bridge), 'Starter station should include a bridge.');
+  assertCondition(
+    state.moduleInstances.some((module) => module.type === ModuleType.CaptainConsole),
+    'Starter bridge should include a captain console.'
+  );
+  assertCondition(state.crew.roleCounts.captain === 0, 'Starter crew should not auto-assign a captain.');
+  assertCondition(hireStaffRole(state, 'captain'), 'Captain should be available as the first command hire.');
+  assertCondition(state.crew.roleCounts.captain === 1, 'Hiring captain should add exactly one captain.');
+  runFor(state, 2, 0.5);
+  assertCondition(
+    state.crewMembers.filter((crew) => crew.staffRole === 'captain').length === 1,
+    'Hired captain crew sprite role should remain locked after scheduling ticks.'
+  );
+  assertCondition(hireStaffRole(state, 'cook'), 'Cook should be hireable from the starting staff pool.');
+  assertCondition(hireStaffRole(state, 'botanist'), 'Botanist should be hireable from the starting staff pool.');
+  runFor(state, 2, 0.5);
+  assertCondition(
+    state.crewMembers.filter((crew) => crew.staffRole === 'cook').length === 1 &&
+      state.crewMembers.filter((crew) => crew.staffRole === 'botanist').length === 1,
+    'Distinct hired staff roles should remain mapped to distinct crew sprites.'
+  );
+  state.metrics.credits = 200;
+  const selected = selectSpecialty(state, 'sanitation-program');
+  assertCondition(selected, 'Available specialty should be selectable.');
+  state.command.specialtyProgress['sanitation-program'].progress = 0.99;
+  state.controls.paused = false;
+  runFor(state, 4, 0.5);
+  assertCondition(
+    !state.command.completedSpecialties.includes('sanitation-program'),
+    'Researched specialty should wait for its officer before completing.'
+  );
+  assertCondition(
+    hireStaffRole(state, 'sanitation-officer'),
+    'Researched specialty officer should be hireable before branch completion.'
+  );
+  assertCondition(
+    state.command.completedSpecialties.includes('sanitation-program'),
+    'Selected specialty should complete after research and officer hiring.'
+  );
+}
+
+function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
+  const state = createInitialState({ seed: 43002 });
+  state.metrics.credits = 200;
+  assertCondition(!hireStaffRole(state, 'janitor'), 'Janitor should be gated before sanitation specialty completion.');
+  assertCondition(selectSpecialty(state, 'sanitation-program'), 'Sanitation specialty should be selectable from starter command.');
+  state.command.specialtyProgress['sanitation-program'].progress = 0.99;
+  state.controls.paused = false;
+  runFor(state, 4, 0.5);
+  assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
+  assertCondition(hireStaffRole(state, 'janitor'), 'Janitor should be hireable after sanitation specialty completion.');
+  const payload = serializeSave('command-roundtrip', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Command save should parse.');
+  if (!parsed.ok) return;
+  const { state: loaded } = hydrateStateFromSave(parsed.save);
+  assertCondition(loaded.crew.roleCounts.janitor === 1, 'Staff role counts should roundtrip.');
+  assertCondition(
+    loaded.command.completedSpecialties.includes('sanitation-program'),
+    'Completed command specialties should roundtrip.'
+  );
 }
 
 function testSaveLoadRegeneratesRuntimeEntities(): void {
@@ -5173,11 +5549,16 @@ function run(): void {
   testMaintenanceDebtReducesLifeSupportAir();
   testCrewAtUtilityReducesMaintenanceDebt();
   testRepairSuppliesImproveMaintenanceRepairSpeed();
+  testRepairJobClearsDebtBelowRequeueThreshold();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
   testResidentComfortDiagnosticHelperHighlightsServiceNoise();
   testMaintenanceDiagnosticHelperReportsUtilityDebt();
+  testMapConditionsAreDeterministicAndSeeded();
+  testSanitationDiagnosticsJobsAndCrewCleanup();
+  testSanitationCleansDirtyModuleTilesFromAdjacentFloor();
+  testSanitationPersistsAndRemapsOnExpansion();
   testVisitorAuxiliaryHygieneNeedIsInspectable();
   testFoodChainEndToEnd();
   testFoodJobsDoNotLetRawBacklogBlockMeals();
@@ -5185,6 +5566,7 @@ function run(): void {
   testReservationKernelPreventsItemOverReserve();
   testFoodLogisticsCreatesBatchesAndCapacityReservations();
   testCookBatchJobConsumesRawAndProducesMeals();
+  testHiredCookClaimsKitchenWorkBeforeAssistants();
   testUrgentFoodJobsInterruptCrewNeedTravel();
   testLowFoodUsesJobBoardInsteadOfRoomPosts();
   testServingStarvationQueue();
@@ -5219,6 +5601,9 @@ function run(): void {
   testActiveLogisticsCrewDoNotRestBeforeCompletingJobs();
   testStaleRequeuedJobReleasesCrewAssignment();
   testSelfCareCrewNotStolenByLogisticsDispatch();
+  testRoleLaneDispatcherBypassesBusyLogisticsForSanitation();
+  testRoleLaneDispatcherKeepsFoodAndSanitationSeparate();
+  testCaptainStaysOnBridgeDutyAndCookRoleKeepsFoodLane();
   testCrewRestAvoidsOverloadedDormTarget();
   testVisitorBerthsAcceptTrafficResidentialDoNot();
   testLegacyDockTrafficUsesTinyPods();
@@ -5240,6 +5625,8 @@ function run(): void {
   testMapExpansionNorthRemapsRuntimeReferences();
   testMapExpansionWestRemapsCoreAndDockIntegrity();
   testSaveRoundtripLayoutAndResources();
+  testStarterBridgeCaptainAndSpecialtyResearch();
+  testSpecialtyUnlocksRoleHiringAndSaveRoundtrip();
   testSaveLoadRegeneratesRuntimeEntities();
   testSaveLoadBestEffortMigration();
   testSaveRoundtripLifetimeCountersSurvive();

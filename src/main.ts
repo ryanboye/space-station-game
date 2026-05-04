@@ -2,6 +2,7 @@ import './styles.css';
 import { renderWorld, type RenderViewport } from './render/render';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
+import { STAFF_ROLE_SPRITE_KEYS } from './render/sprite-keys-extended';
 import {
   applyLegendStates,
   attachLegendTooltipHandlers,
@@ -11,6 +12,15 @@ import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
+import {
+  SPECIALTY_BRANCH_COMPLETION_REQUIREMENT,
+  SPECIALTY_BRANCH_PHASE,
+  SPECIALTY_DEFINITIONS,
+  STAFF_ROLE_DEFINITIONS,
+  STAFF_ROLES,
+  SURFACED_STAFF_ROLES,
+  isSpecialtyPhaseAvailable
+} from './sim/content/command';
 import { sigilForFaction } from './sim/system-map';
 import {
   buyMaterialsDetailed,
@@ -18,11 +28,10 @@ import {
   buildStationExpansionOnTruss,
   cancelConstructionAtTile,
   canExpandDirection,
-  clearBodies,
   createInitialState,
   diagnoseFoodChain,
   expandMap,
-  fireCrew,
+  fireStaffRole,
   getBerthInspectorAt,
   getCrewInspectorById,
   getHousingInspectorAt,
@@ -38,16 +47,19 @@ import {
   getVisitorInspectorById,
   getNextExpansionCost,
   getDockByTile,
+  getSanitationTileDiagnostic,
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
   hireCrew,
+  hireStaffRole,
   planModuleConstruction,
   planTileConstruction,
   quoteMaterialImportCost,
   removeModuleAtTile,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
+  selectSpecialty,
   setDockFacing,
   setDockPurpose,
   setDockAllowedShipType,
@@ -64,6 +76,7 @@ import {
   tryPlaceModuleWithCredits,
   trySetTileWithCredits,
   getCrewPriorityPresetWeights,
+  mapConditionSamplesAt,
   validateDockPlacement
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
@@ -75,6 +88,7 @@ import {
   type CardinalDirection,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
+  type CrewWorkLane,
   type DiagnosticOverlay,
   type DockPurpose,
   type SpaceLane,
@@ -86,10 +100,13 @@ import {
   type JobStatusCounts,
   type ModuleRotation,
   type StationState,
+  type StaffRole,
+  type SpecialtyId,
   ModuleType,
   RoomType,
   TILE_SIZE,
   TileType,
+  WALKABLE_TILES,
   ZoneType,
   clamp,
   fromIndex,
@@ -214,6 +231,7 @@ app.innerHTML = `
         <div class="hud-card-title">Command</div>
         <div class="command-actions">
           <button id="open-market" class="primary-command">Market</button>
+          <button id="open-crew-command" class="primary-command">Crew</button>
           <button id="open-progression-modal" class="primary-command">Progress</button>
           <button id="edit-priorities" class="secondary-command">Priorities</button>
         </div>
@@ -222,40 +240,42 @@ app.innerHTML = `
           <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
           <small id="traffic-status" class="traffic-status">Paused</small>
         </div>
-        <div class="row compact list-row command-note"><span>Crew Mgmt</span><span class="value" id="crew-note">Payroll 0.32c/crew/30s</span></div>
       </section>
       <section class="dock-card selected-card">
         <div class="hud-card-title">Selection</div>
         <div id="selection-summary" class="selection-summary">No room, dock, or resident selected.</div>
-        <small id="dock-info">Dock: none selected</small>
-        <small id="dock-preview">Dock preview: n/a</small>
+        <small id="dock-info" class="hidden"></small>
+        <small id="dock-preview" class="hidden"></small>
       </section>
       <section class="dock-card ops-card">
         <div class="hud-card-title ops-card-head">
           <span>Station Ops</span>
           <button id="open-ops-modal" class="mini-action-btn">Details</button>
         </div>
-        <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Work 0 | Idle 0 | Log 0 | Rest 0 | Block 0</span></div>
+        <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
-        <div class="row compact list-row"><span>Systems</span><span class="value" id="ops">Caf 0/0 | Food K0/0 H0/0 | LS 0/0 | R 0/0</span></div>
-        <div class="row compact list-row"><span>Residents</span><span class="value" id="ops-residents">0 | waiting</span></div>
-        <div class="row compact list-row"><span>Jobs</span><span class="value" id="jobs">P0 A0 X0 D0 | none</span></div>
-        <small id="critical-staffing-line">Room ops: module/path/pressure checks active; crew posts disabled</small>
+        <div class="row compact list-row hidden"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Kitchen 0/0 | Life Support 0/0</span></div>
+        <div class="row compact list-row hidden"><span>Residents</span><span class="value" id="ops-residents">0 | waiting</span></div>
+        <div class="row compact list-row"><span>Work Queue</span><span class="value" id="jobs">No queued work</span></div>
+        <small id="critical-staffing-line" class="hidden"></small>
       </section>
       <section class="dock-card event-card">
-        <div class="hud-card-title">Station Health</div>
+        <div class="hud-card-title ops-card-head">
+          <span>Station Health</span>
+          <button id="open-health-details" class="mini-action-btn">Details</button>
+        </div>
         <div class="row compact list-row"><span>Rating</span><span class="value" id="health-rating">70</span></div>
-        <small id="resident-conversion-summary">Residents: waiting for eligible visitor exit</small>
         <small id="room-warnings">Room warnings: none</small>
-        <small id="visitor-feelings">Visitor feelings: none</small>
-        <small id="rating-reasons">Rating drivers: none</small>
-        <small id="morale-reasons">Crew morale drivers: none</small>
+        <small id="resident-conversion-summary" class="hidden"></small>
+        <small id="visitor-feelings" class="hidden"></small>
+        <small id="rating-reasons" class="hidden"></small>
+        <small id="morale-reasons" class="hidden"></small>
       </section>
       <section class="dock-card diagnostics-card">
         <div class="hud-card-title">Alerts</div>
         <div id="alert-list" class="alert-list is-clear">No active alerts</div>
-        <button id="clear-bodies" class="alert-action">Clear Bodies (-6 supplies)</button>
-        <details class="mini-collapse">
+        <div id="incident-list" class="incident-list is-empty">Incidents: none</div>
+        <details class="mini-collapse hidden">
           <summary>Diagnostics</summary>
         <div class="row compact list-row"><span>Economy</span><span class="value" id="economy">Supplies 0 | Credits 0</span></div>
         <div class="row compact list-row"><span>Air / Hull</span><span class="value" id="pressure">0% sealed | 0 leaking tiles</span></div>
@@ -314,6 +334,7 @@ app.innerHTML = `
       <button class="palette-tab active" data-palette-target="structure">Build</button>
       <button class="palette-tab" data-palette-target="rooms">Rooms</button>
       <button class="palette-tab" data-palette-target="modules">Modules</button>
+      <button class="palette-tab" data-palette-target="crew">Crew</button>
       <button class="palette-tab" data-palette-target="overlays">Overlays</button>
     </div>
     <div id="toolbar" aria-label="Build tools">
@@ -333,6 +354,7 @@ app.innerHTML = `
       </div>
       <div class="tool-row palette-section" data-palette-section="rooms" data-tool-section="rooms">
         <span class="tool-row-label">Rooms</span>
+        <button class="tool-btn" data-tool-room="bridge" title="Build Bridge"><span class="tool-key">·</span>Bridge</button>
         <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
         <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
         <button class="tool-btn" data-tool-room="hydroponics" title="Build Hydroponics (F)"><span class="tool-key">F</span>Hydroponics</button>
@@ -355,6 +377,12 @@ app.innerHTML = `
       </div>
       <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
         <span class="tool-row-label">Furniture</span>
+        <button class="tool-btn" data-tool-module="captain-console" title="Place Captain's Console"><span class="tool-key">·</span>Captain</button>
+        <button class="tool-btn" data-tool-module="sanitation-terminal" title="Place Sanitation Terminal"><span class="tool-key">·</span>Sanit.</button>
+        <button class="tool-btn" data-tool-module="mechanical-terminal" title="Place Mechanical Terminal"><span class="tool-key">·</span>Mech.</button>
+        <button class="tool-btn" data-tool-module="industrial-terminal" title="Place Industrial Terminal"><span class="tool-key">·</span>Ind.</button>
+        <button class="tool-btn" data-tool-module="research-terminal" title="Place Research Terminal"><span class="tool-key">·</span>Research</button>
+        <button class="tool-btn" data-tool-module="logistics-terminal" title="Place Logistics Terminal"><span class="tool-key">·</span>Log.</button>
         <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
         <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
         <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
@@ -389,6 +417,18 @@ app.innerHTML = `
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
       </div>
+      <div class="tool-row palette-section crew-palette-section" data-palette-section="crew">
+        <span class="tool-row-label">Crew Hiring</span>
+        <div class="crew-palette-summary">
+          <div class="row compact list-row"><span>Command</span><span class="value" id="crew-command-summary">Captain assigned</span></div>
+          <div class="row compact list-row"><span>Research</span><span class="value" id="crew-specialty-summary">Manage in Progress</span></div>
+          <div class="row compact list-row"><span>Officers</span><span class="value" id="officer-summary">0 hired</span></div>
+        </div>
+        <div id="officer-grid" class="crew-grid"></div>
+        <div class="row compact list-row crew-palette-subhead"><span>Staff</span><span class="value" id="staff-summary">0 crew</span></div>
+        <div id="staff-grid" class="crew-grid"></div>
+        <small id="crew-panel-status" class="market-status">Ready.</small>
+      </div>
       <div class="tool-row palette-section" data-palette-section="overlays">
         <span class="tool-row-label">Overlays</span>
         <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
@@ -404,6 +444,8 @@ app.innerHTML = `
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="service-noise" title="Show service noise heatmap">Service Noise</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="maintenance" title="Show maintenance debt heatmap">Maintenance</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, and cleaning pressure heatmap">Sanitation</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="map-conditions" title="Show seeded sunlight, debris, and thermal map pressure">Map Conditions</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show active route pressure heatmap">Route Pressure</button>
         <small id="diagnostic-readout" class="diagnostic-readout">Diagnostics off</small>
         <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
@@ -452,8 +494,8 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Last trade</span><span class="value" id="market-note">No purchase yet</span></div>
       <div class="row compact list-row"><span>Crew</span><span class="value" id="market-crew">0 / 0</span></div>
       <div class="button-row">
-        <button id="hire-crew">Hire +1 Crew (14c)</button>
-        <button id="fire-crew">Fire -1 Crew (+5c)</button>
+        <button id="open-crew-panel">Crew Panel</button>
+        <button id="hire-crew">Quick Assistant (14c)</button>
       </div>
       <div class="button-row">
         <button id="buy-small">Buy +25 Supplies (20c)</button>
@@ -498,38 +540,29 @@ app.innerHTML = `
   <div id="progression-modal" class="modal hidden">
     <div class="modal-card progression-modal-card">
       <div class="modal-head">
-        <h2>Station Progression</h2>
+        <h2>Specialties</h2>
         <button id="close-progression-modal" class="ghost-btn">Close</button>
       </div>
       <div class="progression-hero">
-        <div id="progress-modal-tier-name" class="progression-tier-name">Tier 0: Founding Outpost</div>
-        <small id="progress-modal-tier-theme" class="progression-tier-theme">Keep oxygen, food, and beds stable before adding complexity.</small>
+        <div id="progress-modal-tier-name" class="progression-tier-name">Choose A Specialty</div>
+        <small id="progress-modal-tier-theme" class="progression-tier-theme">Complete one department branch at a time to shape this station.</small>
         <div class="tier-progress-track tier-progress-track-lg"><div id="progress-modal-fill" class="tier-progress-fill"></div></div>
         <div class="row compact list-row">
-          <span id="progress-modal-pct">Progress: 0%</span>
-          <span class="value" id="progress-modal-goal">Goal: meet next-tier requirements</span>
+          <span id="progress-modal-pct">Branches: 0/8</span>
+          <span class="value" id="progress-modal-goal">Choose one specialty branch.</span>
         </div>
       </div>
       <div class="progression-section">
-        <div class="section-title">Next Tier Unlocks</div>
-        <small id="progress-modal-next-tier-name">Tier 1 - Settled Ring</small>
-        <small id="progress-modal-next-criteria">Unlock Requirement: first visitor arrives</small>
-        <small id="progress-modal-next-buildings">New Buildings: Lounge, Market</small>
-        <small id="progress-modal-next-needs">New Citizen Needs: social need now matters via lounge access</small>
-        <small id="progress-modal-next-visitor-needs">New Visitor/Ship Needs: lounge and market demand appears in manifests</small>
-        <small id="progress-modal-next-ships">New Ship Families: no new family at Tier 1</small>
-        <small id="progress-modal-next-systems">New Systems: leisure + market service now affects ratings and economy</small>
-      </div>
-      <div class="progression-section">
-        <div class="section-title">Tier Roadmap</div>
-        <div id="progress-modal-roadmap"></div>
+        <div class="section-title">Specialty Branches</div>
+        <small id="progress-modal-specialty-summary">No specialty selected.</small>
+        <div id="progress-modal-specialties" class="specialty-roadmap"></div>
       </div>
     </div>
   </div>
   <div id="priority-modal" class="modal hidden">
     <div class="modal-card">
       <div class="modal-head">
-        <h2>Crew Priorities</h2>
+        <h2>Crew Assignments</h2>
         <button id="close-priority" class="ghost-btn">Close</button>
       </div>
       <div class="row compact list-row">
@@ -582,6 +615,7 @@ app.innerHTML = `
           <small id="ops-modal-crew-why" class="ops-note">Crew: no blockers</small>
           <div id="ops-modal-shifts" class="metric-list" data-metric-title="Rest">Rest shifts</div>
           <div id="ops-modal-crew-needs" class="metric-list" data-metric-title="Needs">Crew needs</div>
+          <div id="ops-modal-workforce" class="metric-list" data-metric-title="Workforce">Workforce lanes</div>
           <div id="ops-modal-staffing" class="metric-list" data-metric-title="Room Ops">Room operations</div>
           <div id="ops-modal-duty-transit" class="metric-list" data-metric-title="Dispatch">Job dispatch</div>
         </section>
@@ -877,6 +911,8 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   'resident-comfort': 'Resident Comfort',
   'service-noise': 'Service Noise',
   maintenance: 'Maintenance',
+  sanitation: 'Sanitation',
+  'map-conditions': 'Map Conditions',
   'route-pressure': 'Route Pressure'
 };
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
@@ -886,6 +922,8 @@ const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'resident-comfort',
   'service-noise',
   'maintenance',
+  'sanitation',
+  'map-conditions',
   'route-pressure'
 ];
 
@@ -934,6 +972,26 @@ function diagnosticReadoutText(): string {
     const diagnostic = getMaintenanceTileDiagnostic(state, p.x, p.y);
     if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no system debt here.`;
     return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}%; output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%.`;
+  }
+  if (overlay === 'sanitation') {
+    const globalLine = `Sanitation: avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | filthy ${state.metrics.filthyTiles} | open ${state.metrics.sanitationJobsOpen}`;
+    if (hoveredTile === null) return `${globalLine}\nHover a pressurized floor tile for dirt source, effect, and cleanup state.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getSanitationTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no sanitation sample here.`;
+    const effect = diagnostic.effectSummary === 'none' ? 'no active penalty' : diagnostic.effectSummary;
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.severity} ${diagnostic.dirt.toFixed(0)}%, source ${diagnostic.dominantSource}; ${effect}.`;
+  }
+  if (overlay === 'map-conditions') {
+    const globalLine = `Map seed: ${state.seedAtCreation} | conditions v${state.mapConditionVersion}`;
+    if (hoveredTile === null) return `${globalLine}\nHover the map to inspect sunlight, debris risk, and thermal sink pressure.`;
+    const samples = mapConditionSamplesAt(state, hoveredTile);
+    const parts = samples.map((sample) => `${sample.kind} ${Math.round(sample.value * 100)}% ${sample.label}`);
+    const downsides = samples
+      .filter((sample) => sample.downside)
+      .map((sample) => sample.downside)
+      .slice(0, 2);
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${parts.join(' | ')}${downsides.length > 0 ? `\nPressure: ${downsides.join(' | ')}` : ''}`;
   }
   if (overlay === 'route-pressure') {
     const routePressure = getRoutePressureDiagnostics(state);
@@ -1022,6 +1080,27 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
           { color: '#ee4f4f', label: 'Serious debt reducing system output' }
         ]
       };
+    case 'sanitation':
+      return {
+        title: 'Sanitation',
+        stats: `avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | filthy ${state.metrics.filthyTiles} | open jobs ${state.metrics.sanitationJobsOpen}`,
+        rows: [
+          { color: '#6edb8f', label: 'Clean or recently serviced room' },
+          { color: '#ffd65c', label: 'Lived-in grime, watch high-traffic routes' },
+          { color: '#ee4f4f', label: 'Filthy area hurting guests and residents' }
+        ]
+      };
+    case 'map-conditions':
+      return {
+        title: 'Map Conditions',
+        stats: `seed ${state.seedAtCreation} | condition map v${state.mapConditionVersion}`,
+        rows: [
+          { color: '#ffd95f', label: 'High sunlight band, future heat/power pressure' },
+          { color: '#61c8ff', label: 'Cold thermal sink or shadow band' },
+          { color: '#d072ff', label: 'Debris-risk corridor for future maintenance pressure' },
+          { color: '#31414f', label: 'Neutral build space' }
+        ]
+      };
     case 'route-pressure': {
       const routePressure = getRoutePressureDiagnostics(state);
       return {
@@ -1102,14 +1181,8 @@ const progressModalTierThemeEl = document.querySelector<HTMLElement>('#progress-
 const progressModalFillEl = document.querySelector<HTMLElement>('#progress-modal-fill')!;
 const progressModalPctEl = document.querySelector<HTMLElement>('#progress-modal-pct')!;
 const progressModalGoalEl = document.querySelector<HTMLElement>('#progress-modal-goal')!;
-const progressModalNextTierNameEl = document.querySelector<HTMLElement>('#progress-modal-next-tier-name')!;
-const progressModalNextCriteriaEl = document.querySelector<HTMLElement>('#progress-modal-next-criteria')!;
-const progressModalNextBuildingsEl = document.querySelector<HTMLElement>('#progress-modal-next-buildings')!;
-const progressModalNextNeedsEl = document.querySelector<HTMLElement>('#progress-modal-next-needs')!;
-const progressModalNextVisitorNeedsEl = document.querySelector<HTMLElement>('#progress-modal-next-visitor-needs')!;
-const progressModalNextShipsEl = document.querySelector<HTMLElement>('#progress-modal-next-ships')!;
-const progressModalNextSystemsEl = document.querySelector<HTMLElement>('#progress-modal-next-systems')!;
-const progressModalRoadmapEl = document.querySelector<HTMLElement>('#progress-modal-roadmap')!;
+const progressModalSpecialtySummaryEl = document.querySelector<HTMLElement>('#progress-modal-specialty-summary')!;
+const progressModalSpecialtiesEl = document.querySelector<HTMLElement>('#progress-modal-specialties')!;
 const resourcesEl = document.querySelector<HTMLSpanElement>('#resources')!;
 const pressureEl = document.querySelector<HTMLSpanElement>('#pressure')!;
 const economyEl = document.querySelector<HTMLSpanElement>('#economy')!;
@@ -1123,9 +1196,16 @@ const foodChainHintEl = document.querySelector<HTMLElement>('#food-chain-hint')!
 const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
 const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
-const crewNoteEl = document.querySelector<HTMLSpanElement>('#crew-note')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
-const fireCrewBtn = document.querySelector<HTMLButtonElement>('#fire-crew')!;
+const openCrewCommandBtn = document.querySelector<HTMLButtonElement>('#open-crew-command')!;
+const openCrewPanelBtn = document.querySelector<HTMLButtonElement>('#open-crew-panel')!;
+const crewCommandSummaryEl = document.querySelector<HTMLElement>('#crew-command-summary')!;
+const crewSpecialtySummaryEl = document.querySelector<HTMLElement>('#crew-specialty-summary')!;
+const officerSummaryEl = document.querySelector<HTMLElement>('#officer-summary')!;
+const officerGridEl = document.querySelector<HTMLElement>('#officer-grid')!;
+const staffSummaryEl = document.querySelector<HTMLElement>('#staff-summary')!;
+const staffGridEl = document.querySelector<HTMLElement>('#staff-grid')!;
+const crewPanelStatusEl = document.querySelector<HTMLElement>('#crew-panel-status')!;
 const marketNoteEl = document.querySelector<HTMLSpanElement>('#market-note')!;
 const buySmallBtn = document.querySelector<HTMLButtonElement>('#buy-small')!;
 const buyLargeBtn = document.querySelector<HTMLButtonElement>('#buy-large')!;
@@ -1162,6 +1242,7 @@ const priorityModal = document.querySelector<HTMLDivElement>('#priority-modal')!
 const closePriorityBtn = document.querySelector<HTMLButtonElement>('#close-priority')!;
 const opsModal = document.querySelector<HTMLDivElement>('#ops-modal')!;
 const openOpsModalBtn = document.querySelector<HTMLButtonElement>('#open-ops-modal')!;
+const openHealthDetailsBtn = document.querySelector<HTMLButtonElement>('#open-health-details')!;
 const closeOpsModalBtn = document.querySelector<HTMLButtonElement>('#close-ops-modal')!;
 const opsChipWorkEl = document.querySelector<HTMLElement>('#ops-chip-work')!;
 const opsChipIdleEl = document.querySelector<HTMLElement>('#ops-chip-idle')!;
@@ -1174,6 +1255,7 @@ const opsModalIdleEl = document.querySelector<HTMLElement>('#ops-modal-idle')!;
 const opsModalCrewWhyEl = document.querySelector<HTMLElement>('#ops-modal-crew-why')!;
 const opsModalShiftsEl = document.querySelector<HTMLElement>('#ops-modal-shifts')!;
 const opsModalCrewNeedsEl = document.querySelector<HTMLElement>('#ops-modal-crew-needs')!;
+const opsModalWorkforceEl = document.querySelector<HTMLElement>('#ops-modal-workforce')!;
 const opsModalStaffingEl = document.querySelector<HTMLElement>('#ops-modal-staffing')!;
 const opsModalDutyTransitEl = document.querySelector<HTMLElement>('#ops-modal-duty-transit')!;
 const opsModalJobsEl = document.querySelector<HTMLElement>('#ops-modal-jobs')!;
@@ -1212,11 +1294,11 @@ const opsModalRatingEl = document.querySelector<HTMLElement>('#ops-modal-rating'
 const foodFlowEl = document.querySelector<HTMLElement>('#food-flow')!;
 const powerEl = document.querySelector<HTMLSpanElement>('#power')!;
 const incidentsEl = document.querySelector<HTMLSpanElement>('#incidents')!;
+const incidentListEl = document.querySelector<HTMLElement>('#incident-list')!;
 const lifeSupportStatusEl = document.querySelector<HTMLElement>('#life-support-status')!;
 const airTrendEl = document.querySelector<HTMLElement>('#air-trend')!;
 const airHealthEl = document.querySelector<HTMLElement>('#air-health')!;
 const airBlockedWarningEl = document.querySelector<HTMLElement>('#air-blocked-warning')!;
-const clearBodiesBtn = document.querySelector<HTMLButtonElement>('#clear-bodies')!;
 const dockedShipsEl = document.querySelector<HTMLSpanElement>('#docked-ships')!;
 const avgDockTimeEl = document.querySelector<HTMLSpanElement>('#avg-dock-time')!;
 const bayUtilizationEl = document.querySelector<HTMLSpanElement>('#bay-utilization')!;
@@ -1351,6 +1433,15 @@ const prioritySystems: CrewPrioritySystem[] = [
   'security',
   'hygiene'
 ];
+const workforceLaneOrder: CrewWorkLane[] = ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva', 'flex'];
+const workforceLaneLabels: Record<CrewWorkLane, string> = {
+  food: 'Food',
+  sanitation: 'Sanitation',
+  engineering: 'Engineering',
+  logistics: 'Logistics',
+  'construction-eva': 'Construction/EVA',
+  flex: 'Flex'
+};
 const priorityInputs = new Map<CrewPrioritySystem, HTMLInputElement>();
 const priorityValueEls = new Map<CrewPrioritySystem, HTMLElement>();
 for (const system of prioritySystems) {
@@ -1796,8 +1887,10 @@ function dominantCountReason<T extends string>(counts: Record<T, number>): T | n
 function jobWhyText(): string {
   const stalledReason = dominantCountReason(state.metrics.stalledJobsByReason);
   const expiredReason = dominantCountReason(state.metrics.expiredJobsByReason);
-  if (state.metrics.logisticsDispatchSlots <= 0 && state.metrics.pendingJobs > 0) {
-    return 'Jobs: dispatch saturated; all hauler slots are occupied.';
+  const pressureLane = state.metrics.workforceHighestPressureLane;
+  if (pressureLane && state.metrics.workforceLanes[pressureLane].pending > 0) {
+    const lane = state.metrics.workforceLanes[pressureLane];
+    return `Jobs: ${workforceLaneLabels[pressureLane]} lane pressure is highest (${lane.pending} pending, ${lane.working}/${lane.target} working).`;
   }
   if (stalledReason && stalledReason !== 'none' && state.metrics.stalledJobsByReason[stalledReason] > 0) {
     return `Jobs: current stalls are mostly ${JOB_STALL_LABELS[stalledReason].toLowerCase()} problems.`;
@@ -1818,8 +1911,12 @@ function crewWhyText(): string {
   const waiting = state.metrics.idleCrewByReason.idle_waiting_reassign;
   if (waiting <= 0) return 'Crew: no one is waiting for reassignment.';
   if (state.metrics.pendingJobs <= 0) return 'Crew: waiting workers are roaming because no jobs are pending.';
-  if (state.metrics.logisticsDispatchSlots <= 0) {
-    return `Crew: ${waiting} waiting while pending jobs exceed the current logistics crew cap.`;
+  const pressureLane = state.metrics.workforceHighestPressureLane;
+  if (pressureLane) {
+    const lane = state.metrics.workforceLanes[pressureLane];
+    if (lane.blocked > 0) return `Crew: ${workforceLaneLabels[pressureLane]} has ${lane.blocked} blocked or unreachable jobs.`;
+    if (lane.idle > 0 && lane.pending > 0) return `Crew: ${workforceLaneLabels[pressureLane]} has idle workers but no reachable lane work.`;
+    return `Crew: ${waiting} waiting while ${workforceLaneLabels[pressureLane]} is the highest-pressure lane.`;
   }
   if (state.metrics.stalledJobs > 0) {
     return `Crew: ${waiting} waiting while the dispatcher avoids stalled jobs.`;
@@ -1883,12 +1980,10 @@ function residentConversionStatusText(compact = false): string {
 }
 
 function crewOpsSummaryText(compact = false): string {
-  const logisticsLabel = compact ? 'Log' : 'Logistics';
-  const restingLabel = compact ? 'Rest' : 'Resting';
-  const blockedLabel = compact ? 'Block' : 'Blocked';
-  return `Work ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | ` +
-    `${logisticsLabel} ${state.metrics.crewOnLogisticsJobs} | ${restingLabel} ${state.metrics.crewResting} | ` +
-    `${blockedLabel} ${state.metrics.crewBlockedNoPath}`;
+  const blocked = state.metrics.crewBlockedNoPath > 0 ? ` | Blocked ${state.metrics.crewBlockedNoPath}` : '';
+  return compact
+    ? `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Resting ${state.metrics.crewResting}${blocked}`
+    : `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Logistics ${state.metrics.crewOnLogisticsJobs} | Resting ${state.metrics.crewResting}${blocked}`;
 }
 
 function trafficOpsSummaryText(): string {
@@ -1902,7 +1997,11 @@ function coreOpsSummaryText(): string {
 }
 
 function jobsSummaryText(): string {
-  return `P${state.metrics.pendingJobs} A${state.metrics.assignedJobs} X${state.metrics.expiredJobs} D${state.metrics.completedJobs} | ${state.metrics.topBacklogType}`;
+  const active = state.metrics.pendingJobs + state.metrics.assignedJobs;
+  const stalled = state.metrics.stalledJobs > 0 ? ` | ${state.metrics.stalledJobs} stalled` : '';
+  const clean = state.metrics.sanitationJobsOpen > 0 ? ` | ${state.metrics.sanitationJobsOpen} cleaning` : '';
+  if (active <= 0 && state.metrics.sanitationJobsOpen <= 0) return 'No queued work';
+  return `${active} active | ${state.metrics.topBacklogType}${clean}${stalled}`;
 }
 
 function criticalStaffingText(): string {
@@ -1939,9 +2038,11 @@ function crewShiftsText(): string {
 }
 
 function crewRetargetsText(): string {
+  const pressureLane = state.metrics.workforceHighestPressureLane;
+  const laneText = pressureLane ? `${workforceLaneLabels[pressureLane]} ${(state.metrics.workforceLanes[pressureLane].pressure * 100).toFixed(0)}%` : 'none';
   return `Crew retargets/min: ${state.metrics.crewRetargetsPerMin.toFixed(1)} | ` +
     `critical drops/min: ${state.metrics.criticalStaffDropsPerMin.toFixed(1)} | ` +
-    `dispatch ${state.metrics.logisticsDispatchSlots} | pressure ${(state.metrics.logisticsPressure * 100).toFixed(0)}%`;
+    `assigned ${state.metrics.logisticsDispatchSlots} | lane pressure ${laneText} | borrowed ${state.metrics.workforceBorrowedCrew}`;
 }
 
 function opsExtraText(): string {
@@ -1963,6 +2064,7 @@ function roomUsageText(): string {
 function roomFlowText(): string {
   return `Flow/min: dorm ${state.metrics.dormVisitsPerMin.toFixed(1)} | hygiene ${state.metrics.hygieneUsesPerMin.toFixed(1)} | ` +
     `meals ${state.metrics.mealsConsumedPerMin.toFixed(1)} | dorm fail ${state.metrics.dormFailedAttemptsPerMin.toFixed(1)} | ` +
+    `clean ${state.metrics.sanitationJobsCompletedPerMin.toFixed(1)} | ` +
     `failed needs H/E/Y ${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}`;
 }
 
@@ -2032,6 +2134,21 @@ function refreshOpsModal(): void {
     { label: 'Fatigue Driver', value: state.metrics.crewMoraleDrivers.find((d) => d.startsWith('fatigue'))?.replace('fatigue ', '') ?? '0.0' },
     { label: 'Hygiene Driver', value: state.metrics.crewMoraleDrivers.find((d) => d.startsWith('hygiene'))?.replace('hygiene ', '') ?? '0.0' },
   ]);
+  setMetricList(
+    opsModalWorkforceEl,
+    workforceLaneOrder.map((lane) => {
+      const metrics = state.metrics.workforceLanes[lane];
+      const tone =
+        metrics.blocked > 0 ? 'danger' as const :
+        metrics.pending > metrics.working + metrics.idle ? 'warn' as const :
+        'default' as const;
+      return {
+        label: lane === 'construction-eva' ? 'Build/EVA' : workforceLaneLabels[lane],
+        value: `T${metrics.target} A${metrics.assigned} W${metrics.working} I${metrics.idle} P${metrics.pending} B${metrics.blocked} R${metrics.borrowed}`,
+        tone
+      };
+    })
+  );
   setMetricList(opsModalStaffingEl, [
     { label: 'Reactor', value: `${state.ops.reactorsActive}/${state.ops.reactorsTotal}` },
     { label: 'Life Support', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
@@ -2040,11 +2157,11 @@ function refreshOpsModal(): void {
     { label: 'Cafeteria', value: `${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal}` },
   ]);
   setMetricList(opsModalDutyTransitEl, [
-    { label: 'Dispatch Slots', value: state.metrics.logisticsDispatchSlots },
-    { label: 'Pressure', value: state.metrics.logisticsPressure.toFixed(2) },
+    { label: 'Assigned Now', value: state.metrics.logisticsDispatchSlots },
+    { label: 'Pressure', value: state.metrics.workforceHighestPressureLane ? workforceLaneLabels[state.metrics.workforceHighestPressureLane] : 'none' },
     { label: 'On Jobs', value: state.metrics.crewOnLogisticsJobs },
     { label: 'Pending', value: state.metrics.pendingJobs },
-    { label: 'Top Backlog', value: state.metrics.topBacklogType },
+    { label: 'Borrowed', value: state.metrics.workforceBorrowedCrew },
   ]);
   setMetricList(opsModalJobsEl, [
     { label: 'Pending', value: state.metrics.pendingJobs, tone: state.metrics.pendingJobs > 20 ? 'warn' : 'default' },
@@ -2058,6 +2175,8 @@ function refreshOpsModal(): void {
     { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'pending') },
     { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'pending') },
     { label: 'Cook jobs', value: statusBreakdownText(state.metrics.jobCountsByType.cook, 'pending') },
+    { label: 'Sanitize jobs', value: statusBreakdownText(state.metrics.jobCountsByType.sanitize, 'pending'), tone: state.metrics.jobCountsByType.sanitize.pending > 0 ? 'warn' : 'default' },
+    { label: 'Repair jobs', value: statusBreakdownText(state.metrics.jobCountsByType.repair, 'pending'), tone: state.metrics.jobCountsByType.repair.pending > 0 ? 'warn' : 'default' },
     { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'pending') },
     { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'pending') },
     { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'pending') },
@@ -2088,6 +2207,8 @@ function refreshOpsModal(): void {
     { label: 'Deliver jobs', value: statusBreakdownText(state.metrics.jobCountsByType.deliver, 'expired'), tone: state.metrics.jobCountsByType.deliver.expired > 0 ? 'warn' : 'default' },
     { label: 'Pickup jobs', value: statusBreakdownText(state.metrics.jobCountsByType.pickup, 'expired'), tone: state.metrics.jobCountsByType.pickup.expired > 0 ? 'warn' : 'default' },
     { label: 'Cook jobs', value: statusBreakdownText(state.metrics.jobCountsByType.cook, 'expired'), tone: state.metrics.jobCountsByType.cook.expired > 0 ? 'warn' : 'default' },
+    { label: 'Sanitize jobs', value: statusBreakdownText(state.metrics.jobCountsByType.sanitize, 'expired'), tone: state.metrics.jobCountsByType.sanitize.expired > 0 ? 'warn' : 'default' },
+    { label: 'Repair jobs', value: statusBreakdownText(state.metrics.jobCountsByType.repair, 'expired'), tone: state.metrics.jobCountsByType.repair.expired > 0 ? 'warn' : 'default' },
     { label: ITEM_LABELS.rawMeal, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMeal, 'expired') },
     { label: ITEM_LABELS.meal, value: statusBreakdownText(state.metrics.jobCountsByItem.meal, 'expired') },
     { label: ITEM_LABELS.rawMaterial, value: statusBreakdownText(state.metrics.jobCountsByItem.rawMaterial, 'expired') },
@@ -2103,8 +2224,8 @@ function refreshOpsModal(): void {
   setMetricList(opsModalRetargetsEl, [
     { label: 'Retargets', value: `${state.metrics.crewRetargetsPerMin.toFixed(1)}/m` },
     { label: 'Drops', value: `${state.metrics.criticalStaffDropsPerMin.toFixed(1)}/m`, tone: state.metrics.criticalStaffDropsPerMin > 0 ? 'warn' : 'default' },
-    { label: 'Slots', value: state.metrics.logisticsDispatchSlots },
-    { label: 'Pressure', value: `${(state.metrics.logisticsPressure * 100).toFixed(0)}%`, tone: state.metrics.logisticsPressure > 0.85 ? 'warn' : 'default' },
+    { label: 'Assigned', value: state.metrics.logisticsDispatchSlots },
+    { label: 'Lane', value: state.metrics.workforceHighestPressureLane ? workforceLaneLabels[state.metrics.workforceHighestPressureLane] : 'none' },
     { label: 'Res Fail', value: state.metrics.reservationFailures, tone: state.metrics.reservationFailures > 0 ? 'warn' : 'default' },
   ]);
   opsModalJobWhyEl.textContent = jobWhyText();
@@ -2114,6 +2235,7 @@ function refreshOpsModal(): void {
     { label: 'Unreachable', value: state.metrics.serviceNodesUnreachable, tone: state.metrics.serviceNodesUnreachable > 0 ? 'warn' : 'default' },
     { label: 'Pressure', value: `${state.metrics.pressurizationPct.toFixed(0)}%`, tone: state.metrics.pressurizationPct < 95 ? 'warn' : 'default' },
     { label: 'Leaks', value: state.metrics.leakingTiles, tone: state.metrics.leakingTiles > 0 ? 'danger' : 'default' },
+    { label: 'Dirty Tiles', value: `${state.metrics.dirtyTiles}/${state.metrics.filthyTiles}`, tone: state.metrics.filthyTiles > 0 ? 'danger' : state.metrics.dirtyTiles > 0 ? 'warn' : 'default' },
   ]);
   setDetailList(
     opsModalRoomWarningsEl,
@@ -2140,6 +2262,7 @@ function refreshOpsModal(): void {
     { label: 'Observatory', value: `${state.ops.observatoryActive}/${state.ops.observatoryTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
     { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
+    { label: 'Sanitation', value: `${state.metrics.sanitationAvg.toFixed(1)}% avg / ${state.metrics.sanitationMax.toFixed(0)}% max / ${state.metrics.sanitationJobsOpen} open`, tone: state.metrics.sanitationJobsOpen > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalLifeSupportEl, [
     { label: 'Active', value: `${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal}` },
@@ -2160,6 +2283,7 @@ function refreshOpsModal(): void {
     { label: 'Dorm/m', value: state.metrics.dormVisitsPerMin.toFixed(1) },
     { label: 'Hygiene/m', value: state.metrics.hygieneUsesPerMin.toFixed(1) },
     { label: 'Meals/m', value: state.metrics.mealsConsumedPerMin.toFixed(1) },
+    { label: 'Clean/m', value: state.metrics.sanitationJobsCompletedPerMin.toFixed(1), tone: state.metrics.sanitationJobsOpen > 0 ? 'warn' : 'default' },
     { label: 'Dorm Fails/m', value: state.metrics.dormFailedAttemptsPerMin.toFixed(1), tone: state.metrics.dormFailedAttemptsPerMin > 0 ? 'warn' : 'default' },
     { label: 'Failed H/E/Y', value: `${state.metrics.failedNeedAttemptsHunger}/${state.metrics.failedNeedAttemptsEnergy}/${state.metrics.failedNeedAttemptsHygiene}` },
   ]);
@@ -2240,6 +2364,7 @@ function refreshOpsModal(): void {
     { label: 'Long Routes', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
     { label: 'Bad Routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
     { label: 'Environment', value: `${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.environment > 0 ? 'warn' : 'default' },
+    { label: 'Sanitation', value: `${state.metrics.sanitationPenaltyPerMin.toFixed(1)}/m`, tone: state.metrics.sanitationPenaltyPerMin > 0 ? 'warn' : 'default' },
   ]);
   setMetricList(opsModalRatingBonusesEl, [
     { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
@@ -2268,7 +2393,16 @@ function refreshAlertPanel(): void {
   if (state.metrics.leakingTiles > 0 || state.metrics.pressurizationPct < 85) {
     alerts.push({ tone: state.metrics.pressurizationPct < 60 ? 'danger' : 'warn', text: `Hull ${Math.round(state.metrics.pressurizationPct)}%, leaks ${state.metrics.leakingTiles}` });
   }
+  if (state.metrics.filthyTiles > 0) {
+    alerts.push({ tone: 'danger', text: `Filthy rooms: ${state.metrics.filthyTiles} tiles (${state.metrics.sanitationTopSource})` });
+  } else if (state.metrics.dirtyTiles > 10) {
+    alerts.push({ tone: 'warn', text: `Cleaning backlog: ${state.metrics.dirtyTiles} dirty tiles` });
+  }
+  if (state.metrics.sanitationJobsOpen > Math.max(4, state.crew.total)) {
+    alerts.push({ tone: 'warn', text: `Sanitation jobs backing up: ${state.metrics.sanitationJobsOpen}` });
+  }
   if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  if (state.metrics.bodyCount > 0) alerts.push({ tone: 'warn', text: `Cleanup needed: ${state.metrics.bodyCount} bodies` });
   if (state.effects.fires.length > 0) {
     const total = state.effects.fires.length;
     const peak = Math.round(state.effects.fires.reduce((m, f) => Math.max(m, f.intensity), 0));
@@ -2289,6 +2423,57 @@ function refreshAlertPanel(): void {
   alertListEl.innerHTML = alerts
     .slice(0, 5)
     .map((alert) => `<div class="alert-item ${alert.tone}">${alert.text}</div>`)
+    .join('');
+}
+
+function activeIncidentsForUi() {
+  return state.incidents
+    .filter((incident) => incident.stage !== 'resolved' && incident.stage !== 'failed')
+    .sort((a, b) => b.severity - a.severity || a.resolveBy - b.resolveBy || a.id - b.id);
+}
+
+function incidentStageLabel(stage: string): string {
+  switch (stage) {
+    case 'detected':
+      return 'detected';
+    case 'dispatching':
+      return 'dispatching';
+    case 'intervening':
+      return 'security en route';
+    case 'intervening_extended':
+      return 'containing';
+    default:
+      return stage;
+  }
+}
+
+function incidentTypeLabel(type: string): string {
+  return type === 'fight' ? 'Fight' : type === 'trespass' ? 'Trespass' : type;
+}
+
+function refreshIncidentList(): void {
+  const incidents = activeIncidentsForUi();
+  if (incidents.length === 0) {
+    incidentListEl.textContent = 'Incidents: none';
+    incidentListEl.classList.add('is-empty');
+    return;
+  }
+  incidentListEl.classList.remove('is-empty');
+  incidentListEl.innerHTML = incidents
+    .slice(0, 4)
+    .map((incident) => {
+      const tile = fromIndex(incident.tileIndex, state.width);
+      const secondsLeft = Math.max(0, incident.resolveBy - state.now);
+      const responder = incident.assignedCrewId === null ? 'no responder' : `crew #${incident.assignedCrewId}`;
+      const tone = incident.stage === 'dispatching' || incident.assignedCrewId === null ? 'danger' : 'warn';
+      return `<button class="incident-item ${tone}" data-incident-focus="${incident.id}" title="Focus incident #${incident.id}">
+        <span class="incident-dot"></span>
+        <span class="incident-copy">
+          <strong>${escapeHtml(incidentTypeLabel(incident.type))} #${incident.id}</strong>
+          <small>${escapeHtml(incidentStageLabel(incident.stage))} · ${responder} · ${secondsLeft.toFixed(0)}s · ${tile.x},${tile.y}</small>
+        </span>
+      </button>`;
+    })
     .join('');
 }
 
@@ -2555,6 +2740,7 @@ function routeTileColor(roomType: RoomType): string {
     case RoomType.Workshop:
     case RoomType.Kitchen:
     case RoomType.Hydroponics:
+    case RoomType.Bridge:
       return '#5cd8ff'; // service
     case RoomType.Storage:
     case RoomType.LogisticsStock:
@@ -2772,60 +2958,100 @@ function formatTierList(items: string[]): string {
   return items.length > 0 ? items.join(', ') : 'None';
 }
 
+function specialtyBranchRequirementText(id: SpecialtyId): string {
+  const phase = SPECIALTY_BRANCH_PHASE[id] ?? 0;
+  const requiredCompleted = SPECIALTY_BRANCH_COMPLETION_REQUIREMENT[phase] ?? phase;
+  const completedCount = state.command.completedSpecialties.length;
+  if (requiredCompleted <= 0) return 'Available from starter Command.';
+  const remaining = Math.max(0, requiredCompleted - completedCount);
+  if (remaining <= 0) return 'Available after prior specialty progress.';
+  return `Complete ${remaining} more specialty ${remaining === 1 ? 'branch' : 'branches'}.`;
+}
+
 function refreshProgressionModal(): void {
-  const tier = getUnlockTier(state);
-  const tierInfo = TIER_PRESENTATION[tier];
-  const progress = tierProgressSnapshot();
-  progressModalTierNameEl.textContent = `Tier ${tier}: ${tierInfo.name}`;
-  progressModalTierThemeEl.textContent = tierInfo.theme;
-  progressModalFillEl.style.width = `${progress.pct}%`;
-  progressModalPctEl.textContent = `Progress: ${progress.pct}%`;
-  progressModalGoalEl.textContent = progress.requirement;
+  const activeSpecialty = state.command.selectedSpecialty;
+  const activeDef = activeSpecialty ? SPECIALTY_DEFINITIONS.find((def) => def.id === activeSpecialty) ?? null : null;
+  const completedCount = state.command.completedSpecialties.length;
+  const totalSpecialties = SPECIALTY_DEFINITIONS.length;
+  const activeProgress = activeSpecialty
+    ? Math.round((state.command.specialtyProgress[activeSpecialty]?.progress ?? 0) * 100)
+    : 0;
+  progressModalTierNameEl.textContent = activeDef ? activeDef.label : completedCount >= totalSpecialties ? 'All Specialties Complete' : 'Choose A Specialty';
+  progressModalTierThemeEl.textContent = activeDef
+    ? activeDef.description
+    : 'Complete one department branch at a time to shape this station.';
+  progressModalFillEl.style.width = activeDef ? `${activeProgress}%` : `${Math.round((completedCount / totalSpecialties) * 100)}%`;
+  progressModalPctEl.textContent = activeDef ? `Research: ${activeProgress}%` : `Branches: ${completedCount}/${totalSpecialties}`;
+  progressModalGoalEl.textContent = activeDef
+    ? activeProgress >= 100 && roleCount(activeDef.officerRole) <= 0
+      ? `Research complete. Hire ${STAFF_ROLE_DEFINITIONS[activeDef.officerRole].label} to approve this branch.`
+      : `Research ${activeDef.label}, then hire ${STAFF_ROLE_DEFINITIONS[activeDef.officerRole].label} before choosing another branch.`
+    : 'Choose one available specialty branch.';
 
-  if (progress.nextTier !== null) {
-    const nextInfo = TIER_PRESENTATION[progress.nextTier];
-    const nextCopy = PROGRESSION_TOOLTIP_COPY[progress.nextTier];
-    progressModalNextTierNameEl.textContent = `Tier ${progress.nextTier}: ${nextInfo.name}`;
-    progressModalNextCriteriaEl.textContent = `Unlock Requirement: ${tierRequirementText(progress.nextTier)}`;
-    progressModalNextBuildingsEl.textContent = `New Buildings: ${formatTierList(nextInfo.buildings)}`;
-    progressModalNextNeedsEl.textContent = `New Citizen Needs: ${formatTierList(nextInfo.citizenNeeds)}`;
-    progressModalNextVisitorNeedsEl.textContent = `New Visitor/Ship Needs: ${formatTierList(nextInfo.visitorNeeds)}`;
-    progressModalNextShipsEl.textContent = `New Ship Families: ${formatTierList(nextInfo.ships)}`;
-    progressModalNextSystemsEl.textContent = `New Systems: ${formatTierList(nextInfo.systems)}`;
-  } else {
-    progressModalNextTierNameEl.textContent = 'Tier 6 complete: all tiers unlocked';
-    progressModalNextCriteriaEl.textContent = 'Unlock Requirement: n/a';
-    progressModalNextBuildingsEl.textContent = 'New Buildings: none';
-    progressModalNextNeedsEl.textContent = 'New Citizen Needs: none';
-    progressModalNextVisitorNeedsEl.textContent = 'New Visitor/Ship Needs: none';
-    progressModalNextShipsEl.textContent = 'New Ship Families: none';
-    progressModalNextSystemsEl.textContent = 'New Systems: none';
-  }
-
-  progressModalRoadmapEl.innerHTML = TIER_ORDER.map((entryTier) => {
-    const entry = TIER_PRESENTATION[entryTier];
-    const statusClass = entryTier < tier ? 'done' : entryTier === tier ? 'current' : 'upcoming';
-    const statusLabel = entryTier < tier ? 'Unlocked' : entryTier === tier ? 'Current Tier' : 'Upcoming';
+  progressModalSpecialtySummaryEl.textContent = activeSpecialty
+    ? `Active: ${specialtyLabel(activeSpecialty)}. Finish this branch before choosing another.`
+    : state.command.completedSpecialties.length > 0
+      ? `Completed: ${state.command.completedSpecialties.map((id) => specialtyLabel(id)).join(', ')}.`
+      : 'Choose one specialty branch. Completing it unlocks its officer, staff, and bridge terminal.';
+  progressModalSpecialtiesEl.innerHTML = SPECIALTY_DEFINITIONS.map((def) => {
+    const progressState = state.command.specialtyProgress[def.id];
+    const pct = Math.round((progressState?.progress ?? 0) * 100);
+    const branchAvailable = isSpecialtyPhaseAvailable(def.id, completedCount);
+    const locked = !branchAvailable;
+    const completed = progressState?.state === 'completed';
+    const active = state.command.selectedSpecialty === def.id;
+    const blockedByActive = !!state.command.selectedSpecialty && !active;
+    const selectable = !locked && !completed && !state.command.selectedSpecialty;
+    const researchDone = active && pct >= 100;
+    const officerHired = roleCount(def.officerRole) > 0;
+    const affordable = state.metrics.credits >= def.researchCost;
+    const status =
+      completed
+        ? 'Complete'
+        : researchDone && !officerHired
+          ? 'Hire Officer'
+        : active
+          ? `${pct}%`
+        : blockedByActive
+            ? 'Waiting'
+            : !locked
+            ? 'Available'
+            : 'Future Branch';
+    const unlockedStaff = def.unlocksStaff
+      .filter((role) => SURFACED_STAFF_ROLES.includes(role))
+      .map((role) => STAFF_ROLE_DEFINITIONS[role].label)
+      .join(', ');
+    const officer = STAFF_ROLE_DEFINITIONS[def.officerRole].label;
+    const buttonLabel = active
+      ? researchDone && !officerHired
+        ? `Hire ${officer}`
+        : 'Researching'
+      : completed
+        ? 'Complete'
+        : blockedByActive
+          ? 'Finish Active Branch'
+        : locked
+          ? 'Locked'
+            : `Research - ${def.researchCost}c`;
     return `
-      <div class="progression-tier-card ${statusClass}">
-        <div class="progression-tier-head">
-          <strong>Tier ${entryTier}: ${entry.name}</strong>
-          <span class="progression-tier-status">${statusLabel}</span>
+      <div class="specialty-roadmap-card ${completed ? 'completed' : active ? 'active' : locked ? 'locked' : 'available'}">
+        <div class="specialty-roadmap-head">
+          <strong>${def.label}</strong>
+          <span class="progression-tier-status">${status}</span>
         </div>
-        <small class="progression-tier-theme-line">${entry.theme}</small>
-        <small><strong>Unlock Requirement:</strong> ${tierRequirementText(entryTier)}</small>
-        <small><strong>Buildings:</strong> ${formatTierList(entry.buildings)}</small>
-        <small><strong>Citizen Needs:</strong> ${formatTierList(entry.citizenNeeds)}</small>
-        <small><strong>Visitor/Ship Needs:</strong> ${formatTierList(entry.visitorNeeds)}</small>
-        <small><strong>Ship Families:</strong> ${formatTierList(entry.ships)}</small>
-        <small><strong>Systems:</strong> ${formatTierList(entry.systems)}</small>
+        <small>${def.description}</small>
+        <small><strong>Requirement:</strong> ${specialtyBranchRequirementText(def.id)}</small>
+        <small><strong>Cost:</strong> ${def.researchCost} credits</small>
+        <small><strong>Officer:</strong> ${officer}</small>
+        <small><strong>Staff:</strong> ${unlockedStaff || 'Bridge systems only'}</small>
+        <button data-select-specialty="${def.id}" ${selectable && affordable ? '' : 'disabled'}>${!affordable && selectable ? `Need ${def.researchCost}c` : buttonLabel}</button>
       </div>
     `;
   }).join('');
 }
 
 const simSpeeds: Array<1 | 2 | 4> = [1, 2, 4];
-type PaletteSection = 'structure' | 'rooms' | 'modules' | 'overlays';
+type PaletteSection = 'structure' | 'rooms' | 'modules' | 'crew' | 'overlays';
 const market = {
   hireCost: 14,
   fireRefund: 5,
@@ -2939,8 +3165,7 @@ function updateMarketRates(): void {
 }
 
 function refreshMarketUi(): void {
-  hireCrewBtn.textContent = `Hire +1 Crew (${market.hireCost}c)`;
-  fireCrewBtn.textContent = `Fire -1 Crew (+${market.fireRefund}c)`;
+  hireCrewBtn.textContent = `Quick Assistant (${market.hireCost}c)`;
   buySmallBtn.textContent = `Buy +25 Supplies (${market.buyMat25Cost}c)`;
   sellSmallBtn.textContent = `Sell -25 Supplies (+${market.sellMat25Gain}c)`;
   buyLargeBtn.textContent = `Buy +80 Supplies (${market.buyMat80Cost}c)`;
@@ -2961,6 +3186,155 @@ function refreshMarketUi(): void {
 
   const spread = market.buyMat25Cost - market.sellMat25Gain;
   marketRateEl.textContent = spread <= 8 ? 'Favorable' : spread <= 12 ? 'Normal' : 'Tight';
+}
+
+function specialtyLabel(id: SpecialtyId | null): string {
+  if (!id) return 'None selected';
+  return SPECIALTY_DEFINITIONS.find((def) => def.id === id)?.label ?? id;
+}
+
+function roleCount(role: StaffRole): number {
+  return state.crew.roleCounts?.[role] ?? 0;
+}
+
+function roleSpriteMarkup(role: StaffRole): string {
+  const spriteKey = STAFF_ROLE_SPRITE_KEYS[role];
+  const frame = spriteKey ? spriteAtlas.getFrame(spriteKey) : null;
+  const image = spriteAtlas.image;
+  if (spriteAtlas.ready && image && frame) {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const style = [
+      `background-image:url("${image.src}")`,
+      `background-position:-${frame.x}px -${frame.y}px`,
+      `background-size:${width}px ${height}px`
+    ].join(';');
+    return `<div class="crew-card-portrait sprite" style='${style}' aria-hidden="true"></div>`;
+  }
+  const initials = STAFF_ROLE_DEFINITIONS[role].label
+    .split(/\s+/)
+    .map((part) => part[0] ?? '')
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  return `<div class="crew-card-portrait fallback" aria-hidden="true">${initials}</div>`;
+}
+
+function refreshCrewPanel(): void {
+  const completed = new Set(state.command.completedSpecialties);
+  const active = state.command.selectedSpecialty;
+  crewCommandSummaryEl.textContent =
+    `Bridge ${state.ops.bridgeActive}/${state.ops.bridgeTotal} | captain ${roleCount('captain') > 0 ? 'assigned' : 'missing'}`;
+  crewSpecialtySummaryEl.textContent = active
+    ? `${specialtyLabel(active)} ${Math.round((state.command.specialtyProgress[active]?.progress ?? 0) * 100)}% in Progress`
+    : 'Use Progress to unlock more roles';
+  const officerCount = STAFF_ROLES.filter((role) => STAFF_ROLE_DEFINITIONS[role].officer && roleCount(role) > 0).length;
+  officerSummaryEl.textContent = `${officerCount} hired`;
+  staffSummaryEl.textContent = `${state.crew.total} crew`;
+
+  const roleIsAvailableInHiringPanel = (role: StaffRole): boolean => {
+    const def = STAFF_ROLE_DEFINITIONS[role];
+    return !def.requiresSpecialty || completed.has(def.requiresSpecialty) || roleCount(role) > 0;
+  };
+
+  const visibleHiringRoles = SURFACED_STAFF_ROLES.filter((role) => roleCount(role) > 0 || roleIsAvailableInHiringPanel(role));
+  const officerRoles = visibleHiringRoles.filter((role) => STAFF_ROLE_DEFINITIONS[role].officer);
+  officerGridEl.innerHTML = officerRoles.map((role) => {
+    const def = STAFF_ROLE_DEFINITIONS[role];
+    const count = roleCount(role);
+    const disabled = count > 0 || state.metrics.credits < def.cost;
+    const status = count > 0 ? 'Hired' : role === 'captain' ? `${def.cost}c | first command hire` : `${def.cost}c`;
+    const armed = currentTool.kind === 'hire-staff' && currentTool.staffRole === role;
+    return `<div class="crew-card${armed ? ' armed' : ''}">
+      <div class="crew-card-main">
+        ${roleSpriteMarkup(role)}
+        <div class="crew-card-copy">
+          <strong>${def.label}</strong>
+          <small>${def.department}</small>
+          <small>${status}</small>
+        </div>
+      </div>
+      <button data-hire-role="${role}" ${disabled ? 'disabled' : ''}>${armed ? 'Placing' : 'Hire'}</button>
+    </div>`;
+  }).join('');
+
+  const staffRoles = visibleHiringRoles.filter((role) => !STAFF_ROLE_DEFINITIONS[role].officer);
+  staffGridEl.innerHTML = staffRoles.map((role) => {
+    const def = STAFF_ROLE_DEFINITIONS[role];
+    const count = roleCount(role);
+    const hireDisabled = state.metrics.credits < def.cost;
+    const status = `${def.cost}c | ${count} hired`;
+    const armed = currentTool.kind === 'hire-staff' && currentTool.staffRole === role;
+    return `<div class="crew-card${armed ? ' armed' : ''}">
+      <div class="crew-card-main">
+        ${roleSpriteMarkup(role)}
+        <div class="crew-card-copy">
+          <strong>${def.label}</strong>
+          <small>${def.department} | ${def.lane}</small>
+          <small>${status}</small>
+        </div>
+      </div>
+      <div class="button-row compact-buttons">
+        <button data-hire-role="${role}" ${hireDisabled ? 'disabled' : ''}>${armed ? 'Placing' : 'Hire'}</button>
+        <button data-fire-role="${role}" ${count <= 0 ? 'disabled' : ''}>Fire</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectHireStaffTool(role: StaffRole): void {
+  const def = STAFF_ROLE_DEFINITIONS[role];
+  currentTool = { kind: 'hire-staff', staffRole: role };
+  toolLockMessage = '';
+  crewPanelStatusEl.textContent = `Click a built station tile to place ${def.label}.`;
+  setPaletteSection('crew');
+  refreshCrewPanel();
+  refreshToolbar();
+}
+
+function placeHiredStaffAt(role: StaffRole, idx: number): boolean {
+  const def = STAFF_ROLE_DEFINITIONS[role];
+  if (!WALKABLE_TILES.has(state.tiles[idx])) {
+    crewPanelStatusEl.textContent = `Place ${def.label} on a reachable station floor, dock, door, or airlock.`;
+    toolLockMessage = crewPanelStatusEl.textContent;
+    return false;
+  }
+  const beforeMaxId = state.crewMembers.reduce((max, crew) => Math.max(max, crew.id), -1);
+  const hired = hireStaffRole(state, role);
+  if (!hired) {
+    crewPanelStatusEl.textContent = `Cannot hire ${def.label}.`;
+    toolLockMessage = crewPanelStatusEl.textContent;
+    refreshCrewPanel();
+    return false;
+  }
+  const placedCrew =
+    state.crewMembers.find((crew) => crew.id > beforeMaxId) ??
+    [...state.crewMembers].reverse().find((crew) => crew.staffRole === role);
+  if (placedCrew) {
+    const p = fromIndex(idx, state.width);
+    placedCrew.x = p.x + 0.5;
+    placedCrew.y = p.y + 0.5;
+    placedCrew.tileIndex = idx;
+    placedCrew.path = [];
+    placedCrew.role = 'idle';
+    placedCrew.staffRole = role;
+    placedCrew.workLane = def.lane;
+    placedCrew.lastWorkLane = def.lane;
+    placedCrew.targetTile = null;
+    placedCrew.activeJobId = null;
+    placedCrew.carryingItemType = null;
+    placedCrew.carryingAmount = 0;
+    placedCrew.retargetAt = state.now;
+    placedCrew.assignmentStickyUntil = 0;
+    placedCrew.assignmentHoldUntil = 0;
+  }
+  currentTool = { kind: 'none' };
+  crewPanelStatusEl.textContent = `Placed ${def.label}.`;
+  toolLockMessage = '';
+  refreshCrewPanel();
+  refreshToolbar();
+  setPaletteSection('crew');
+  return true;
 }
 
 function materialBuyStatusText(
@@ -3018,6 +3392,7 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
   restricted: ZoneType.Restricted,
 };
 const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
+  bridge: RoomType.Bridge,
   cafeteria: RoomType.Cafeteria,
   kitchen: RoomType.Kitchen,
   workshop: RoomType.Workshop,
@@ -3039,6 +3414,25 @@ const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   observatory: RoomType.Observatory,
 };
 const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
+  'captain-console': ModuleType.CaptainConsole,
+  'sanitation-terminal': ModuleType.SanitationTerminal,
+  'security-terminal': ModuleType.SecurityTerminal,
+  'mechanical-terminal': ModuleType.MechanicalTerminal,
+  'industrial-terminal': ModuleType.IndustrialTerminal,
+  'navigation-terminal': ModuleType.NavigationTerminal,
+  'comms-terminal': ModuleType.CommsTerminal,
+  'medical-terminal': ModuleType.MedicalTerminal,
+  'research-terminal': ModuleType.ResearchTerminal,
+  'logistics-terminal': ModuleType.LogisticsTerminal,
+  'fleet-command-terminal': ModuleType.FleetCommandTerminal,
+  'traffic-control-terminal': ModuleType.TrafficControlTerminal,
+  'resource-management-terminal': ModuleType.ResourceManagementTerminal,
+  'power-management-terminal': ModuleType.PowerManagementTerminal,
+  'life-support-terminal': ModuleType.LifeSupportTerminal,
+  'atmosphere-control-terminal': ModuleType.AtmosphereControlTerminal,
+  'ai-core-terminal': ModuleType.AiCoreTerminal,
+  'emergency-control-terminal': ModuleType.EmergencyControlTerminal,
+  'records-terminal': ModuleType.RecordsTerminal,
   bed: ModuleType.Bed,
   table: ModuleType.Table,
   'serving-station': ModuleType.ServingStation,
@@ -3076,6 +3470,25 @@ const MODULE_PALETTE_ICON_MAX_W = 46;
 const MODULE_PALETTE_ICON_MAX_H = 34;
 const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.None]: '',
+  [ModuleType.CaptainConsole]: 'CP',
+  [ModuleType.SanitationTerminal]: 'SN',
+  [ModuleType.SecurityTerminal]: 'SC',
+  [ModuleType.MechanicalTerminal]: 'MC',
+  [ModuleType.IndustrialTerminal]: 'IN',
+  [ModuleType.NavigationTerminal]: 'NV',
+  [ModuleType.CommsTerminal]: 'CM',
+  [ModuleType.MedicalTerminal]: 'MD',
+  [ModuleType.ResearchTerminal]: 'RS',
+  [ModuleType.LogisticsTerminal]: 'LG',
+  [ModuleType.FleetCommandTerminal]: 'FL',
+  [ModuleType.TrafficControlTerminal]: 'TR',
+  [ModuleType.ResourceManagementTerminal]: 'RM',
+  [ModuleType.PowerManagementTerminal]: 'PW',
+  [ModuleType.LifeSupportTerminal]: 'LS',
+  [ModuleType.AtmosphereControlTerminal]: 'AT',
+  [ModuleType.AiCoreTerminal]: 'AI',
+  [ModuleType.EmergencyControlTerminal]: 'EM',
+  [ModuleType.RecordsTerminal]: 'RC',
   [ModuleType.WallLight]: 'LT',
   [ModuleType.Bed]: 'BD',
   [ModuleType.Table]: 'TB',
@@ -3166,6 +3579,7 @@ function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'copy-room' || tool.kind === 'paste-room') return 'structure';
   if (tool.kind === 'room') return 'rooms';
   if (tool.kind === 'module') return 'modules';
+  if (tool.kind === 'hire-staff') return 'crew';
   if (tool.kind === 'zone') return 'overlays';
   return 'structure';
 }
@@ -3178,6 +3592,7 @@ function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'module') return `module:${tool.module}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
   if (tool.kind === 'cancel-construction') return 'cancel-construction';
+  if (tool.kind === 'hire-staff') return `hire-staff:${tool.staffRole}`;
   return 'none';
 }
 
@@ -3210,6 +3625,29 @@ function wirePaletteMenu(): void {
 }
 
 function wireToolbar(): void {
+  const toolbar = document.querySelector<HTMLElement>('#toolbar')!;
+  const handleCrewButtonAction = (event: Event): void => {
+    const btn = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null;
+    if (!btn || !toolbar.contains(btn)) return;
+    const hireRole = btn.dataset.hireRole as StaffRole | undefined;
+    const fireRole = btn.dataset.fireRole as StaffRole | undefined;
+    if (!hireRole && !fireRole) return;
+    if (btn.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (hireRole) {
+      selectHireStaffTool(hireRole);
+    } else if (fireRole) {
+      const ok = fireStaffRole(state, fireRole);
+      const label = STAFF_ROLE_DEFINITIONS[fireRole].label;
+      currentTool = { kind: 'none' };
+      crewPanelStatusEl.textContent = ok ? `Fired ${label}.` : `Cannot fire ${label}.`;
+      refreshCrewPanel();
+      refreshToolbar();
+      setPaletteSection('crew');
+    }
+  };
+  toolbar.addEventListener('pointerdown', handleCrewButtonAction, true);
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tileKey = btn.dataset.toolTile;
@@ -3404,6 +3842,15 @@ function centerViewportOnWorldPx(worldX: number, worldY: number): void {
   gameWrap.scrollLeft = mapContentOffsetX() + worldX * zoom - gameWrap.clientWidth * 0.5;
   gameWrap.scrollTop = mapContentOffsetY() + worldY * zoom - gameWrap.clientHeight * 0.5;
   clampViewportScroll();
+}
+
+function focusIncident(incidentId: number): void {
+  const incident = state.incidents.find((entry) => entry.id === incidentId);
+  if (!incident) return;
+  const tile = fromIndex(incident.tileIndex, state.width);
+  centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
+  hoveredTile = incident.tileIndex;
+  refreshIncidentList();
 }
 
 function centerViewportOnMapCenter(): void {
@@ -4280,6 +4727,15 @@ function pasteRoomStampAt(originX: number, originY: number): void {
 }
 
 function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }): void {
+  if (currentTool.kind === 'hire-staff') {
+    if (a.x !== b.x || a.y !== b.y) {
+      crewPanelStatusEl.textContent = 'Click one station tile to place crew.';
+      toolLockMessage = crewPanelStatusEl.textContent;
+      return;
+    }
+    if (currentTool.staffRole) placeHiredStaffAt(currentTool.staffRole, toIndex(a.x, a.y, state.width));
+    return;
+  }
   if (currentTool.kind === 'room' && currentTool.room && currentTool.room !== RoomType.None && !isRoomUnlocked(state, currentTool.room)) {
     toolLockMessage = roomLockedMessage(currentTool.room);
     return;
@@ -4735,12 +5191,13 @@ window.addEventListener('keydown', (e) => {
       state.controls.showInventoryOverlay = !state.controls.showInventoryOverlay;
       syncToggleLabels();
       break;
-    case 'F2':
+      case 'F2':
       state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
       if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
         void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
           spriteAtlas = loaded;
           refreshModulePaletteSprites();
+          refreshCrewPanel();
         });
       }
       syncToggleLabels();
@@ -4918,7 +5375,8 @@ for (const btn of diagnosticOverlayBtns) {
   btn.addEventListener('click', () => {
     const overlay = btn.dataset.diagnosticOverlay;
     if (!isDiagnosticOverlay(overlay)) return;
-    state.controls.diagnosticOverlay = overlay;
+    state.controls.diagnosticOverlay =
+      overlay !== 'none' && state.controls.diagnosticOverlay === overlay ? 'none' : overlay;
     syncToggleLabels();
   });
 }
@@ -4929,6 +5387,7 @@ toggleSpritesBtn.addEventListener('click', () => {
     void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
       spriteAtlas = loaded;
       refreshModulePaletteSprites();
+      refreshCrewPanel();
     });
   }
   syncToggleLabels();
@@ -5159,8 +5618,18 @@ function refreshSystemMapModal(): void {
   systemMapLanesEl.innerHTML = '<div class="section-title">Lanes</div>' + laneLines;
 }
 
+function openCrewPalette(): void {
+  refreshCrewPanel();
+  setPaletteSection('crew');
+}
+
 wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
 wireModal({ modal: marketModal, openBtn: openMarketBtn, closeBtn: closeMarketBtn });
+openCrewCommandBtn.addEventListener('click', openCrewPalette);
+openCrewPanelBtn.addEventListener('click', () => {
+  marketModal.classList.add('hidden');
+  openCrewPalette();
+});
 wireModal({ modal: expansionModal, openBtn: openExpansionModalBtn, closeBtn: closeExpansionModalBtn, beforeOpen: refreshExpansionUi });
 wireModal({
   modal: systemMapModal,
@@ -5171,6 +5640,11 @@ wireModal({
 wireModal({ modal: progressionModal, openBtn: openProgressionModalBtn, closeBtn: closeProgressionModalBtn, beforeOpen: refreshProgressionModal });
 wireModal({ modal: priorityModal, openBtn: editPrioritiesBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
 wireModal({ modal: opsModal, openBtn: openOpsModalBtn, closeBtn: closeOpsModalBtn, beforeOpen: refreshOpsModal });
+openHealthDetailsBtn.addEventListener('click', () => {
+  setOpsTab('traffic');
+  refreshOpsModal();
+  opsModal.classList.remove('hidden');
+});
 wireModal({ modal: dockModal, closeBtn: closeDockBtn });
 wireModal({
   modal: roomModal,
@@ -5492,12 +5966,18 @@ buyLargeBtn.addEventListener('click', () => {
 
 hireCrewBtn.addEventListener('click', () => {
   const ok = hireCrew(state, market.hireCost);
-  crewNoteEl.textContent = ok ? 'Hired +1 crew' : 'Not enough credits or max crew';
+  crewPanelStatusEl.textContent = ok ? 'Hired +1 assistant' : 'Not enough credits or max crew';
+  refreshCrewPanel();
 });
 
-fireCrewBtn.addEventListener('click', () => {
-  const ok = fireCrew(state, market.fireRefund);
-  crewNoteEl.textContent = ok ? `Fired -1 crew (+${market.fireRefund}c)` : 'No crew to fire';
+progressionModal.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  const specialty = target.dataset.selectSpecialty as SpecialtyId | undefined;
+  if (!specialty) return;
+  selectSpecialty(state, specialty);
+  refreshProgressionModal();
+  refreshCrewPanel();
 });
 
 sellSmallBtn.addEventListener('click', () => {
@@ -5556,15 +6036,13 @@ sellFoodLargeBtn.addEventListener('click', () => {
   marketNoteEl.textContent = ok ? `Sold -60 raw food (+${market.sellFood60Gain}c)` : 'Not enough raw food';
 });
 
-clearBodiesBtn.addEventListener('click', () => {
-  const ok = clearBodies(state);
-  if (ok) {
-    marketNoteEl.textContent = 'Cleared body remains';
-  } else if (state.metrics.bodyCount <= 0) {
-    marketNoteEl.textContent = 'No bodies to clear';
-  } else {
-    marketNoteEl.textContent = 'Need 6 supplies to clear bodies';
-  }
+incidentListEl.addEventListener('click', (event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const button = target?.closest<HTMLButtonElement>('button[data-incident-focus]');
+  if (!button) return;
+  const incidentId = Number(button.dataset.incidentFocus);
+  if (!Number.isFinite(incidentId)) return;
+  focusIncident(incidentId);
 });
 
 let lastTime = performance.now();
@@ -5654,6 +6132,7 @@ function frame(now: number): void {
   refreshHudStatus();
   refreshTrafficStatus();
   refreshAlertPanel();
+  refreshIncidentList();
   refreshTierChecklist();
   refreshSelectionSummary();
   refreshDevTierOverlay();
@@ -5692,6 +6171,7 @@ function frame(now: number): void {
     `Col ${state.metrics.shipsByTypePerMin.colonist.toFixed(1)}`;
   refreshUnlockLegendAndHotkeys();
   refreshProgressionModal();
+  refreshCrewPanel();
   roomUsageEl.textContent = roomUsageText();
   roomFlowEl.textContent = roomFlowText();
   resourcesEl.textContent = `Raw Meal ${Math.round(state.metrics.rawFoodStock)} -> Meals ${Math.round(state.metrics.mealStock)} | Water ${Math.round(state.metrics.waterStock)} | Air ${Math.round(state.metrics.airQuality)}%`;
@@ -5710,9 +6190,7 @@ function frame(now: number): void {
   updateMarketRates();
   refreshMarketUi();
   refreshExpansionUi();
-  crewNoteEl.textContent = `Hire ${market.hireCost}c | Payroll 0.32c/crew/30s`;
-  hireCrewBtn.disabled = state.metrics.credits < market.hireCost || state.crew.total >= 40;
-  fireCrewBtn.disabled = state.crew.total <= 0;
+  hireCrewBtn.disabled = state.metrics.credits < market.hireCost || state.crew.total >= 60;
   buySmallBtn.disabled = state.metrics.credits < market.buyMat25Cost;
   buyLargeBtn.disabled = state.metrics.credits < market.buyMat80Cost;
   sellSmallBtn.disabled = state.metrics.materials < 25;
@@ -5721,7 +6199,6 @@ function frame(now: number): void {
   buyFoodLargeBtn.disabled = state.metrics.credits < market.buyFood60Cost;
   sellFoodSmallBtn.disabled = state.metrics.rawFoodStock < 20;
   sellFoodLargeBtn.disabled = state.metrics.rawFoodStock < 60;
-  clearBodiesBtn.disabled = state.metrics.bodyCount <= 0 || state.metrics.materials < 6;
   foodFlowEl.textContent = foodFlowText();
   powerEl.textContent = `${Math.round(state.metrics.powerDemand)} / ${Math.round(state.metrics.powerSupply)}`;
   powerEl.style.color = state.metrics.powerDemand > state.metrics.powerSupply ? '#ff7676' : '#6edb8f';
@@ -5770,7 +6247,8 @@ function frame(now: number): void {
     `service ${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(2)} | ` +
     `route length ${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(2)} | ` +
     `bad routes ${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(2)} | ` +
-    `env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(2)}`;
+    `env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(2)} | ` +
+    `clean ${state.metrics.sanitationPenaltyPerMin.toFixed(2)}`;
   ratingInsightBonusEl.textContent =
     `Bonus/min: meals ${state.metrics.stationRatingBonusPerMin.mealService.toFixed(2)} | ` +
     `leisure ${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(2)} | ` +
@@ -5796,7 +6274,8 @@ function frame(now: number): void {
     `service ${state.metrics.stationRatingPenaltyTotal.serviceFailure.toFixed(1)} | ` +
     `route length ${state.metrics.stationRatingPenaltyTotal.longWalks.toFixed(1)} | ` +
     `bad routes ${state.metrics.stationRatingPenaltyTotal.routeExposure.toFixed(1)} | ` +
-    `env ${state.metrics.stationRatingPenaltyTotal.environment.toFixed(1)}`;
+    `env ${state.metrics.stationRatingPenaltyTotal.environment.toFixed(1)} | ` +
+    `clean ${state.metrics.sanitationPenaltyTotal.toFixed(1)}`;
   ratingInsightBonusTotalEl.textContent =
     `Total bonus: meals ${state.metrics.stationRatingBonusTotal.mealService.toFixed(1)} | ` +
     `leisure ${state.metrics.stationRatingBonusTotal.leisureService.toFixed(1)} | ` +
@@ -5828,14 +6307,17 @@ function frame(now: number): void {
     const dock = state.docks.find((d) => d.id === selectedDockId) ?? null;
     if (dock) {
       dockInfoEl.textContent = `Dock #${dock.id}: ${dock.purpose} berth | ${dock.lane} facing ${dock.facing} | area ${dock.area} | type ${dock.allowedShipTypes.join(', ')} | size ${dock.allowedShipSizes.join(', ')}`;
+      dockInfoEl.classList.remove('hidden');
       refreshDockModal();
     } else {
-      dockInfoEl.textContent = 'Dock: none selected';
+      dockInfoEl.textContent = '';
+      dockInfoEl.classList.add('hidden');
       selectedDockId = null;
       dockModal.classList.add('hidden');
     }
   } else {
-    dockInfoEl.textContent = 'Dock: none selected';
+    dockInfoEl.textContent = '';
+    dockInfoEl.classList.add('hidden');
     dockModal.classList.add('hidden');
   }
   if (selectedRoomTile !== null) {
@@ -5851,9 +6333,11 @@ function frame(now: number): void {
     const preview = validateDockPlacement(state, hoveredTile);
     dockPreviewEl.textContent = `Dock preview: ${preview.valid ? 'valid' : `invalid (${preview.reason})`}`;
     dockPreviewEl.style.color = preview.valid ? '#6edb8f' : '#ff7676';
+    dockPreviewEl.classList.remove('hidden');
   } else {
-    dockPreviewEl.textContent = 'Dock preview: n/a';
+    dockPreviewEl.textContent = '';
     dockPreviewEl.style.color = '#8ea2bd';
+    dockPreviewEl.classList.add('hidden');
   }
 
   // The Build Guidance sidebar panel (room-diagnostic + paint-guidance
@@ -5974,6 +6458,7 @@ function offerAutosaveLoadOnColdStart(): void {
 
 async function startGameLoop(): Promise<void> {
   spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
+  refreshCrewPanel();
   refreshModulePaletteSprites();
   offerAutosaveLoadOnColdStart();
   if (autosaveTimer !== null) clearInterval(autosaveTimer);

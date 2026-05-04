@@ -4,6 +4,7 @@ const PX = TILE_SIZE / 18;
 
 const ROOM_LABELS: Record<RoomType, string> = {
   [RoomType.None]: '',
+  [RoomType.Bridge]: 'BRIDGE',
   [RoomType.Cafeteria]: 'MESS HALL',
   [RoomType.Kitchen]: 'KITCHEN',
   [RoomType.Workshop]: 'WORKSHOP',

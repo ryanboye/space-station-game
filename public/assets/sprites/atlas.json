@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-05-01T23:44:30.104Z",
+  "version": "sprite-v1-2026-05-04T01:09:51.616Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -147,567 +147,837 @@
       "w": 64,
       "h": 64
     },
-    "room.cafeteria": {
+    "room.bridge": {
       "x": 1826,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.kitchen": {
+    "room.cafeteria": {
       "x": 1894,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.workshop": {
+    "room.kitchen": {
       "x": 1962,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.clinic": {
+    "room.workshop": {
       "x": 2030,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.brig": {
+    "room.clinic": {
       "x": 2098,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.rec_hall": {
+    "room.brig": {
       "x": 2166,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.reactor": {
+    "room.rec_hall": {
       "x": 2234,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.security": {
+    "room.reactor": {
       "x": 2302,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.dorm": {
+    "room.security": {
       "x": 2370,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.hygiene": {
+    "room.dorm": {
       "x": 2438,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.hydroponics": {
+    "room.hygiene": {
       "x": 2506,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.life_support": {
+    "room.hydroponics": {
       "x": 2574,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.lounge": {
+    "room.life_support": {
       "x": 2642,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.market": {
+    "room.lounge": {
       "x": 2710,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.logistics_stock": {
+    "room.market": {
       "x": 2778,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "room.storage": {
+    "room.logistics_stock": {
       "x": 2846,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "module.none": {
+    "room.storage": {
       "x": 2914,
       "y": 2,
       "w": 64,
       "h": 64
     },
-    "module.wall_light": {
+    "module.none": {
       "x": 2982,
       "y": 2,
+      "w": 64,
+      "h": 64
+    },
+    "module.wall_light": {
+      "x": 2,
+      "y": 262,
       "w": 64,
       "h": 32
     },
     "module.bed": {
-      "x": 2,
+      "x": 70,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.table": {
-      "x": 134,
+      "x": 202,
       "y": 262,
       "w": 128,
       "h": 128
     },
     "module.serving_station": {
-      "x": 266,
+      "x": 334,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.stove": {
-      "x": 398,
+      "x": 466,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.workbench": {
-      "x": 530,
+      "x": 598,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.med_bed": {
-      "x": 662,
+      "x": 730,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.cell_console": {
-      "x": 794,
+      "x": 862,
       "y": 262,
       "w": 64,
       "h": 64
     },
     "module.rec_unit": {
-      "x": 862,
+      "x": 930,
       "y": 262,
       "w": 128,
       "h": 128
     },
     "module.grow_station": {
-      "x": 994,
+      "x": 1062,
       "y": 262,
       "w": 128,
       "h": 128
     },
     "module.terminal": {
-      "x": 1126,
+      "x": 1194,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.captain_console": {
+      "x": 1262,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.sanitation_terminal": {
+      "x": 1330,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.security_terminal": {
+      "x": 1398,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.mechanical_terminal": {
+      "x": 1466,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.industrial_terminal": {
+      "x": 1534,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.navigation_terminal": {
+      "x": 1602,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.comms_terminal": {
+      "x": 1670,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.medical_terminal": {
+      "x": 1738,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.research_terminal": {
+      "x": 1806,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.logistics_terminal": {
+      "x": 1874,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.fleet_command_terminal": {
+      "x": 1942,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.traffic_control_terminal": {
+      "x": 2010,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.resource_management_terminal": {
+      "x": 2078,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.power_management_terminal": {
+      "x": 2146,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.life_support_terminal": {
+      "x": 2214,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.atmosphere_control_terminal": {
+      "x": 2282,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.ai_core_terminal": {
+      "x": 2350,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.emergency_control_terminal": {
+      "x": 2418,
+      "y": 262,
+      "w": 64,
+      "h": 64
+    },
+    "module.bridge.records_terminal": {
+      "x": 2486,
       "y": 262,
       "w": 64,
       "h": 64
     },
     "module.couch": {
-      "x": 1194,
+      "x": 2554,
       "y": 262,
       "w": 128,
       "h": 64
     },
     "module.game_station": {
-      "x": 1326,
+      "x": 2686,
       "y": 262,
       "w": 128,
       "h": 128
     },
     "module.shower": {
-      "x": 1458,
+      "x": 2818,
       "y": 262,
       "w": 64,
       "h": 64
     },
     "module.sink": {
-      "x": 1526,
+      "x": 2886,
       "y": 262,
       "w": 64,
       "h": 64
     },
     "module.market_stall": {
-      "x": 1594,
-      "y": 262,
+      "x": 2,
+      "y": 394,
       "w": 128,
       "h": 64
     },
     "module.intake_pallet": {
-      "x": 1726,
-      "y": 262,
+      "x": 134,
+      "y": 394,
       "w": 128,
       "h": 128
     },
     "module.storage_rack": {
-      "x": 1858,
-      "y": 262,
+      "x": 266,
+      "y": 394,
       "w": 128,
       "h": 64
     },
     "room.berth": {
-      "x": 1990,
-      "y": 262,
+      "x": 398,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "room.cantina": {
-      "x": 2058,
-      "y": 262,
+      "x": 466,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "room.observatory": {
-      "x": 2126,
-      "y": 262,
+      "x": 534,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.gangway": {
-      "x": 2194,
-      "y": 262,
+      "x": 602,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.customs_counter": {
-      "x": 2262,
-      "y": 262,
+      "x": 670,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.cargo_arm": {
-      "x": 2330,
-      "y": 262,
+      "x": 738,
+      "y": 394,
       "w": 128,
       "h": 128
     },
     "module.fire_extinguisher": {
-      "x": 2462,
-      "y": 262,
+      "x": 870,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.vent": {
-      "x": 2530,
-      "y": 262,
+      "x": 938,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.vending_machine": {
-      "x": 2598,
-      "y": 262,
+      "x": 1006,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.bench": {
-      "x": 2666,
-      "y": 262,
+      "x": 1074,
+      "y": 394,
       "w": 128,
       "h": 64
     },
     "module.bar_counter": {
-      "x": 2798,
-      "y": 262,
+      "x": 1206,
+      "y": 394,
       "w": 128,
       "h": 64
     },
     "module.tap": {
-      "x": 2930,
-      "y": 262,
+      "x": 1338,
+      "y": 394,
       "w": 64,
       "h": 64
     },
     "module.telescope": {
-      "x": 2,
+      "x": 1406,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.water_fountain": {
-      "x": 134,
+      "x": 1538,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.plant": {
-      "x": 202,
+      "x": 1606,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "ship.tourist": {
-      "x": 270,
+      "x": 1674,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "ship.trader": {
-      "x": 338,
+      "x": 1742,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "ship.industrial": {
-      "x": 406,
+      "x": 1810,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "ship.military": {
-      "x": 474,
+      "x": 1878,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "ship.colonist": {
-      "x": 542,
+      "x": 1946,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.solo": {
-      "x": 610,
+      "x": 2014,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.start": {
-      "x": 678,
+      "x": 2082,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.middle": {
-      "x": 746,
+      "x": 2150,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.end": {
-      "x": 814,
+      "x": 2218,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.1": {
-      "x": 882,
+      "x": 2286,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.2": {
-      "x": 950,
+      "x": 2354,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.3": {
-      "x": 1018,
+      "x": 2422,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.4": {
-      "x": 1086,
+      "x": 2490,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.5": {
-      "x": 1154,
+      "x": 2558,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.6": {
-      "x": 1222,
+      "x": 2626,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.1": {
-      "x": 1290,
+      "x": 2694,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.2": {
-      "x": 1358,
+      "x": 2762,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.3": {
-      "x": 1426,
+      "x": 2830,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.4": {
-      "x": 1494,
+      "x": 2898,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.1": {
-      "x": 1562,
+      "x": 2966,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "agent.visitor.2": {
-      "x": 1630,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.visitor.3": {
-      "x": 1698,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.visitor.4": {
-      "x": 1766,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.visitor.5": {
-      "x": 1834,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.visitor.6": {
-      "x": 1902,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.1": {
-      "x": 1970,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.2": {
-      "x": 2038,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.3": {
-      "x": 2106,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.4": {
-      "x": 2174,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.5": {
-      "x": 2242,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.resident.6": {
-      "x": 2310,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.1": {
-      "x": 2378,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.2": {
-      "x": 2446,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.3": {
-      "x": 2514,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.4": {
-      "x": 2582,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.5": {
-      "x": 2650,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.6": {
-      "x": 2718,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "agent.crew.eva_suit": {
-      "x": 2786,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier1_unlock": {
-      "x": 2854,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier2_unlock": {
-      "x": 2922,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier3_unlock": {
-      "x": 2990,
-      "y": 394,
-      "w": 64,
-      "h": 64
-    },
-    "icon.tier4_unlock": {
       "x": 2,
       "y": 526,
       "w": 64,
       "h": 64
     },
-    "icon.tier5_unlock": {
+    "agent.visitor.3": {
       "x": 70,
       "y": 526,
       "w": 64,
       "h": 64
     },
-    "icon.tier6_unlock": {
+    "agent.visitor.4": {
       "x": 138,
       "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.5": {
+      "x": 206,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.visitor.6": {
+      "x": 274,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.1": {
+      "x": 342,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.2": {
+      "x": 410,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.3": {
+      "x": 478,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.4": {
+      "x": 546,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.5": {
+      "x": 614,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.resident.6": {
+      "x": 682,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.1": {
+      "x": 750,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.2": {
+      "x": 818,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.3": {
+      "x": 886,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.4": {
+      "x": 954,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.5": {
+      "x": 1022,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.6": {
+      "x": 1090,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.eva_suit": {
+      "x": 1158,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.captain": {
+      "x": 1226,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.sanitation_officer": {
+      "x": 1294,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.security_officer": {
+      "x": 1362,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.mechanic_officer": {
+      "x": 1430,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.industrial_officer": {
+      "x": 1498,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.navigation_officer": {
+      "x": 1566,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.comms_officer": {
+      "x": 1634,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.medical_officer": {
+      "x": 1702,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.eva_specialist": {
+      "x": 1770,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.eva_engineer": {
+      "x": 1838,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.flight_controller": {
+      "x": 1906,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.docking_officer": {
+      "x": 1974,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.doctor": {
+      "x": 2042,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.nurse": {
+      "x": 2110,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.cook": {
+      "x": 2178,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.cleaner": {
+      "x": 2246,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.janitor": {
+      "x": 2314,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.botanist": {
+      "x": 2382,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.technician": {
+      "x": 2450,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.assistant": {
+      "x": 2518,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.security_guard": {
+      "x": 2586,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.maintenance_tech": {
+      "x": 2654,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.engineer": {
+      "x": 2722,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.mechanic": {
+      "x": 2790,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.welder": {
+      "x": 2858,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier1_unlock": {
+      "x": 2926,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier2_unlock": {
+      "x": 2994,
+      "y": 526,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier3_unlock": {
+      "x": 2,
+      "y": 594,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier4_unlock": {
+      "x": 70,
+      "y": 594,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier5_unlock": {
+      "x": 138,
+      "y": 594,
+      "w": 64,
+      "h": 64
+    },
+    "icon.tier6_unlock": {
+      "x": 206,
+      "y": 594,
       "w": 64,
       "h": 64
     }

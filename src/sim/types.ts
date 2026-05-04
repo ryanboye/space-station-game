@@ -60,11 +60,24 @@ export interface RoomEnvironmentScore extends RoomEnvironmentTraits {
 export type DiagnosticOverlay =
   | 'none'
   | 'life-support'
+  | 'map-conditions'
   | 'visitor-status'
   | 'resident-comfort'
   | 'service-noise'
+  | 'sanitation'
   | 'maintenance'
   | 'route-pressure';
+
+export type DriftSeverity = 'none' | 'low' | 'warning' | 'active' | 'severe';
+export type MapConditionKind = 'sunlight' | 'debris-risk' | 'thermal-sink';
+
+export interface MapConditionSample {
+  kind: MapConditionKind;
+  value: number;
+  label: string;
+  upside: string;
+  downside: string;
+}
 
 export type IncidentType = 'fight' | 'trespass';
 export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
@@ -72,6 +85,7 @@ export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality
 
 export enum RoomType {
   None = 'none',
+  Bridge = 'bridge',
   Cafeteria = 'cafeteria',
   Kitchen = 'kitchen',
   Workshop = 'workshop',
@@ -116,6 +130,25 @@ export type HousingPolicy = 'crew' | 'visitor' | 'resident' | 'private_resident'
 
 export enum ModuleType {
   None = 'none',
+  CaptainConsole = 'captain-console',
+  SanitationTerminal = 'sanitation-terminal',
+  SecurityTerminal = 'security-terminal',
+  MechanicalTerminal = 'mechanical-terminal',
+  IndustrialTerminal = 'industrial-terminal',
+  NavigationTerminal = 'navigation-terminal',
+  CommsTerminal = 'comms-terminal',
+  MedicalTerminal = 'medical-terminal',
+  ResearchTerminal = 'research-terminal',
+  LogisticsTerminal = 'logistics-terminal',
+  FleetCommandTerminal = 'fleet-command-terminal',
+  TrafficControlTerminal = 'traffic-control-terminal',
+  ResourceManagementTerminal = 'resource-management-terminal',
+  PowerManagementTerminal = 'power-management-terminal',
+  LifeSupportTerminal = 'life-support-terminal',
+  AtmosphereControlTerminal = 'atmosphere-control-terminal',
+  AiCoreTerminal = 'ai-core-terminal',
+  EmergencyControlTerminal = 'emergency-control-terminal',
+  RecordsTerminal = 'records-terminal',
   WallLight = 'wall-light',
   Bed = 'bed',
   Table = 'table',
@@ -307,6 +340,76 @@ export interface Resident {
 
 export type CrewRole = 'idle' | 'reactor' | 'cafeteria' | 'security';
 export type CrewIdleReason = 'idle_available' | 'idle_no_jobs' | 'idle_resting' | 'idle_no_path' | 'idle_waiting_reassign';
+export type CrewWorkLane = 'food' | 'sanitation' | 'engineering' | 'logistics' | 'construction-eva' | 'flex';
+export type StaffRole =
+  | 'captain'
+  | 'sanitation-officer'
+  | 'security-officer'
+  | 'mechanic-officer'
+  | 'industrial-officer'
+  | 'navigation-officer'
+  | 'comms-officer'
+  | 'medical-officer'
+  | 'cook'
+  | 'cleaner'
+  | 'janitor'
+  | 'botanist'
+  | 'technician'
+  | 'engineer'
+  | 'mechanic'
+  | 'welder'
+  | 'doctor'
+  | 'nurse'
+  | 'security-guard'
+  | 'assistant'
+  | 'eva-specialist'
+  | 'eva-engineer'
+  | 'flight-controller'
+  | 'docking-officer';
+export type StaffDepartment =
+  | 'command'
+  | 'sanitation'
+  | 'security'
+  | 'mechanical'
+  | 'industrial'
+  | 'navigation'
+  | 'communications'
+  | 'medical'
+  | 'logistics'
+  | 'food'
+  | 'eva'
+  | 'general';
+export type SpecialtyId =
+  | 'sanitation-program'
+  | 'security-command'
+  | 'industrial-logistics'
+  | 'mechanical-maintenance'
+  | 'medical-services'
+  | 'navigation-traffic'
+  | 'communications-comms'
+  | 'research-archives';
+export type SpecialtyState = 'locked' | 'available' | 'active' | 'completed';
+export type StaffRoleCounts = Record<StaffRole, number>;
+
+export interface SpecialtyProgress {
+  id: SpecialtyId;
+  state: SpecialtyState;
+  progress: number;
+  selectedAt: number | null;
+  completedAt: number | null;
+}
+
+export interface CommandState {
+  selectedSpecialty: SpecialtyId | null;
+  completedSpecialties: SpecialtyId[];
+  specialtyProgress: Record<SpecialtyId, SpecialtyProgress>;
+  officers: Partial<Record<StaffRole, boolean>>;
+  bridgeStaffing: {
+    captainConsoleStaffed: boolean;
+    activeTerminalStaff: number;
+    requiredTerminalStaff: number;
+  };
+}
 export type CrewPriorityPreset = 'balanced' | 'life-support' | 'food-chain' | 'economy';
 export type CrewPrioritySystem =
   | 'life-support'
@@ -370,6 +473,48 @@ export interface MaintenanceTileDiagnostic {
 
 export type RoutePressureDominant = 'visitor' | 'resident' | 'crew' | 'logistics' | null;
 
+export type SanitationSource =
+  | 'none'
+  | 'traffic'
+  | 'meals'
+  | 'hygiene'
+  | 'kitchen'
+  | 'hydroponics'
+  | 'market'
+  | 'fire'
+  | 'body'
+  | 'mixed';
+
+export type SanitationSeverity = 'clean' | 'lived-in' | 'dirty' | 'filthy';
+
+export interface SanitationTileDiagnostic {
+  tileIndex: number;
+  dirt: number;
+  severity: SanitationSeverity;
+  driftSeverity: DriftSeverity;
+  dominantSource: SanitationSource;
+  room: RoomType;
+  roomAnchor: number | null;
+  roomAverage: number;
+  cleaningJobOpen: boolean;
+  reachableByCrew: boolean;
+  effectSummary: string;
+  suggestedFix: string;
+}
+
+export interface SanitationRoomDiagnostic {
+  room: RoomType;
+  anchorTile: number;
+  averageDirt: number;
+  maxDirt: number;
+  dirtyTiles: number;
+  filthyTiles: number;
+  dominantSource: SanitationSource;
+  effectSummary: string;
+  suggestedFix: string;
+  cleaningJobsOpen: number;
+}
+
 export interface RoutePressureDiagnostics {
   visitorByTile: Uint16Array;
   residentByTile: Uint16Array;
@@ -410,6 +555,16 @@ export interface CriticalCapacityTargets {
   requiredKitchenPosts: number;
   requiredCafeteriaPosts: number;
 }
+export interface WorkLaneMetrics {
+  target: number;
+  assigned: number;
+  working: number;
+  idle: number;
+  pending: number;
+  blocked: number;
+  borrowed: number;
+  pressure: number;
+}
 export type JobStallReason =
   | 'none'
   | 'stalled_path_blocked'
@@ -425,6 +580,7 @@ export interface CrewMember {
   path: number[];
   speed: number;
   role: CrewRole;
+  staffRole: StaffRole;
   targetTile: number | null;
   retargetAt: number;
   energy: number;
@@ -460,6 +616,9 @@ export interface CrewMember {
   assignmentHoldUntil: number;
   lastSystem: CrewPrioritySystem | null;
   assignedSystem: CrewPrioritySystem | null;
+  workLane: CrewWorkLane;
+  lastWorkLane: CrewWorkLane | null;
+  workLaneAssignedAt: number;
   retargetCountWindow: number;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
@@ -469,7 +628,7 @@ export interface CrewMember {
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook';
+export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook' | 'sanitize';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -503,6 +662,7 @@ export interface TransportJob {
   repairProgress?: number;
   repairSupplyChecked?: boolean;
   repairSuppliesUsed?: number;
+  sanitationSource?: SanitationSource;
   constructionSiteId?: number;
   constructionMode?: 'deliver' | 'build';
   workProgress?: number;
@@ -986,6 +1146,9 @@ export interface Metrics {
   failedNeedAttemptsEnergy: number;
   failedNeedAttemptsHygiene: number;
   idleCrewByReason: Record<CrewIdleReason, number>;
+  workforceLanes: Record<CrewWorkLane, WorkLaneMetrics>;
+  workforceBorrowedCrew: number;
+  workforceHighestPressureLane: CrewWorkLane | null;
   stalledJobsByReason: Record<JobStallReason, number>;
   crewMoraleDrivers: string[];
   stationRatingDrivers: string[];
@@ -1055,6 +1218,15 @@ export interface Metrics {
   maintenanceDebtMax: number;
   maintenanceJobsOpen: number;
   maintenanceJobsResolvedPerMin: number;
+  sanitationAvg: number;
+  sanitationMax: number;
+  dirtyTiles: number;
+  filthyTiles: number;
+  sanitationJobsOpen: number;
+  sanitationJobsCompletedPerMin: number;
+  sanitationPenaltyPerMin: number;
+  sanitationPenaltyTotal: number;
+  sanitationTopSource: SanitationSource;
   lifeSupportCoveragePct: number;
   avgLifeSupportDistance: number;
   poorLifeSupportTiles: number;
@@ -1185,6 +1357,7 @@ export interface RoomInspector {
     maxPressure: number;
     reasons: string[];
   };
+  sanitation?: SanitationRoomDiagnostic;
   cafeteriaLoad?: {
     tableNodes: number;
     queueNodes: number;
@@ -1277,6 +1450,7 @@ export interface CrewInspector extends AgentInspectorBase {
   kind: 'crew';
   state: string;
   role: CrewRole;
+  staffRole: StaffRole;
   assignedSystem: CrewPrioritySystem | null;
   lastSystem: CrewPrioritySystem | null;
   energy: number;
@@ -1299,9 +1473,12 @@ export interface CrewState {
   total: number;
   assigned: number;
   free: number;
+  roleCounts: StaffRoleCounts;
 }
 
 export interface RoomOps {
+  bridgeTotal: number;
+  bridgeActive: number;
   cafeteriasTotal: number;
   cafeteriasActive: number;
   kitchenTotal: number;
@@ -1464,6 +1641,12 @@ export interface StationState {
   // resident) read this instead of metrics.airQuality so a sealed-off wing
   // becomes locally lethal even when the station-wide average looks fine.
   airQualityByTile: Float32Array;
+  // Per-tile sanitation drift, 0..100. Dirt sources are stored as compact
+  // codes for hover/inspector diagnostics and are reset to none when a tile
+  // is cleaned or rebuilt.
+  dirtByTile: Float32Array;
+  dirtSourceByTile: Uint8Array;
+  mapConditionVersion: number;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
   reservations: Reservation[];
@@ -1474,6 +1657,7 @@ export interface StationState {
   visitors: Visitor[];
   residents: Resident[];
   crewMembers: CrewMember[];
+  command: CommandState;
   maintenanceDebts: MaintenanceDebt[];
   arrivingShips: ArrivingShip[];
   pendingSpawns: PendingSpawn[];
@@ -1581,6 +1765,9 @@ export interface StationState {
     visitorEnvironmentPenalty: number;
     residentEnvironmentStress: number;
     maintenanceJobsResolved: number;
+    sanitationJobsResolved: number;
+    ratingFromSanitation: number;
+    residentSanitationStress: number;
     criticalStaffDrops: number;
     securityDispatches: number;
     securityResolved: number;
@@ -1635,12 +1822,13 @@ export interface BuildStampPreview {
 }
 
 export interface BuildTool {
-  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'copy-room' | 'paste-room' | 'cancel-construction';
+  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'copy-room' | 'paste-room' | 'cancel-construction' | 'hire-staff';
   tile?: TileType;
   zone?: ZoneType;
   room?: RoomType;
   module?: ModuleType;
   pasteStamp?: BuildStampPreview;
+  staffRole?: StaffRole;
 }
 
 export const WALKABLE_TILES = new Set<TileType>([

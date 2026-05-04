@@ -10,6 +10,17 @@ import {
   TASK_TIMINGS
 } from './balance';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
+import {
+  SPECIALTY_BY_ID,
+  SPECIALTY_DEFINITIONS,
+  STAFF_ROLE_DEFINITIONS,
+  STAFF_ROLES,
+  createEmptyStaffRoleCounts,
+  createInitialSpecialtyProgress,
+  createInitialStaffRoleCounts,
+  isSpecialtyPhaseAvailable,
+  totalStaffCount
+} from './content/command';
 import { SHIP_PROFILES } from './content/ships';
 import {
   UNLOCK_DEFINITIONS,
@@ -17,6 +28,7 @@ import {
   isModuleUnlockedAtTier,
   isRoomUnlockedAtTier
 } from './content/unlocks';
+import { MAP_CONDITION_VERSION, mapConditionAt, mapConditionSamplesAt } from './map-conditions';
 import { generateSystemMap, laneWeightsFromSystem } from './system-map';
 import {
   type ArrivingShip,
@@ -29,6 +41,8 @@ import {
   type ConstructionSite,
   type CrewPriorityPreset,
   type CrewPrioritySystem,
+  type CrewWorkLane,
+  type WorkLaneMetrics,
   type CrewTaskCandidate,
   type CrewPriorityWeights,
   type CriticalCapacityTargets,
@@ -55,6 +69,9 @@ import {
   type PathOptions,
   type CrewMember,
   type CrewRole,
+  type StaffRole,
+  type StaffRoleCounts,
+  type SpecialtyId,
   type JobStallReason,
   type JobType,
   type JobStatusCounts,
@@ -72,6 +89,9 @@ import {
   type RoutePressureDiagnostics,
   type RoutePressureDominant,
   type RoutePressureTileDiagnostic,
+  type SanitationRoomDiagnostic,
+  type SanitationSource,
+  type SanitationTileDiagnostic,
   type RoomEnvironmentTraits,
   type RoomEnvironmentScore,
   type RoomEnvironmentTileDiagnostic,
@@ -143,6 +163,15 @@ const MAINTENANCE_IDLE_RISE_PER_MIN = 0.16;
 const MAINTENANCE_REACTOR_RISE_PER_MIN = 0.6;
 const MAINTENANCE_LIFE_SUPPORT_RISE_PER_MIN = 0.8;
 const MAINTENANCE_STAFF_REPAIR_PER_MIN = 4.5;
+const SANITATION_DIRTY_THRESHOLD = 32;
+const SANITATION_FILTHY_THRESHOLD = 68;
+const SANITATION_JOB_SPAWN_THRESHOLD = 36;
+const SANITATION_JOB_TARGET = 18;
+const SANITATION_JOB_RATE_PER_SEC = 32;
+const SANITATION_JOB_PATCH_RADIUS = 2;
+const SANITATION_MAX_OPEN_JOBS = 14;
+const SANITATION_VISITOR_RATING_PENALTY_PER_SEC = 0.0014;
+const SANITATION_RESIDENT_STRESS_PER_SEC = 0.018;
 const STARTING_CREDITS = 260;
 const STARTING_SUPPLIES = 100;
 const MATERIAL_IMPORT_CADENCE_SEC = 10;
@@ -319,6 +348,16 @@ function randomInt(min: number, max: number, rng: () => number): number {
 
 const LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const CREW_WORK_LANES: CrewWorkLane[] = ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva', 'flex'];
+const SPECIALIST_WORK_LANES: CrewWorkLane[] = ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva'];
+const WORK_LANE_LABELS: Record<CrewWorkLane, string> = {
+  food: 'Food',
+  sanitation: 'Sanitation',
+  engineering: 'Engineering',
+  logistics: 'Logistics',
+  'construction-eva': 'Construction/EVA',
+  flex: 'Flex'
+};
 const RESERVATION_KINDS: ReservationKind[] = [
   'provider-slot',
   'service-tile',
@@ -755,6 +794,20 @@ function collectModuleAnchors(
 }
 
 function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
+  if (room === RoomType.Bridge) {
+    return [
+      ModuleType.CaptainConsole,
+      ModuleType.SanitationTerminal,
+      ModuleType.SecurityTerminal,
+      ModuleType.MechanicalTerminal,
+      ModuleType.IndustrialTerminal,
+      ModuleType.NavigationTerminal,
+      ModuleType.CommsTerminal,
+      ModuleType.MedicalTerminal,
+      ModuleType.ResearchTerminal,
+      ModuleType.LogisticsTerminal
+    ];
+  }
   if (room === RoomType.Dorm) return [ModuleType.Bed];
   if (room === RoomType.Cafeteria) return [ModuleType.ServingStation];
   if (room === RoomType.Kitchen) return [ModuleType.Stove];
@@ -774,6 +827,7 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
 }
 
 const SERVICE_NODE_OVERLAY_ROOMS: RoomType[] = [
+  RoomType.Bridge,
   RoomType.Cafeteria,
   RoomType.Kitchen,
   RoomType.Workshop,
@@ -796,6 +850,7 @@ const SERVICE_NODE_OVERLAY_ROOMS: RoomType[] = [
 
 const CACHED_ROOM_TYPES: RoomType[] = [
   RoomType.None,
+  RoomType.Bridge,
   RoomType.Cafeteria,
   RoomType.Kitchen,
   RoomType.Workshop,
@@ -1499,6 +1554,142 @@ function maintenanceDebtAtAnchor(state: StationState, system: MaintenanceSystem,
   return state.maintenanceDebts.find((debt) => debt.key === maintenanceKey(system, anchorTile)) ?? null;
 }
 
+const SANITATION_SOURCE_CODES: Record<SanitationSource, number> = {
+  none: 0,
+  traffic: 1,
+  meals: 2,
+  hygiene: 3,
+  kitchen: 4,
+  hydroponics: 5,
+  market: 6,
+  fire: 7,
+  body: 8,
+  mixed: 9
+};
+
+const SANITATION_SOURCE_BY_CODE: SanitationSource[] = [
+  'none',
+  'traffic',
+  'meals',
+  'hygiene',
+  'kitchen',
+  'hydroponics',
+  'market',
+  'fire',
+  'body',
+  'mixed'
+];
+
+function sanitationSourceCode(source: SanitationSource): number {
+  return SANITATION_SOURCE_CODES[source] ?? 0;
+}
+
+function sanitationSourceFromCode(code: number): SanitationSource {
+  return SANITATION_SOURCE_BY_CODE[code] ?? 'none';
+}
+
+function sanitationSeverityFromDirt(dirt: number): SanitationTileDiagnostic['severity'] {
+  if (dirt >= SANITATION_FILTHY_THRESHOLD) return 'filthy';
+  if (dirt >= SANITATION_DIRTY_THRESHOLD) return 'dirty';
+  if (dirt >= 22) return 'lived-in';
+  return 'clean';
+}
+
+function driftSeverityFromDirt(dirt: number): SanitationTileDiagnostic['driftSeverity'] {
+  if (dirt >= 90) return 'severe';
+  if (dirt >= SANITATION_FILTHY_THRESHOLD) return 'active';
+  if (dirt >= SANITATION_DIRTY_THRESHOLD) return 'warning';
+  if (dirt >= 22) return 'low';
+  return 'none';
+}
+
+function addDirt(state: StationState, tileIndex: number, amount: number, source: SanitationSource): void {
+  if (amount <= 0 || tileIndex < 0 || tileIndex >= state.dirtByTile.length) return;
+  if (!isWalkable(state.tiles[tileIndex])) return;
+  const prev = state.dirtByTile[tileIndex];
+  const next = clamp(prev + amount, 0, 100);
+  state.dirtByTile[tileIndex] = next;
+  if (next <= 0.5) {
+    state.dirtSourceByTile[tileIndex] = 0;
+    return;
+  }
+  const sourceCode = sanitationSourceCode(source);
+  const existing = state.dirtSourceByTile[tileIndex];
+  if (existing === 0 || existing === sourceCode) {
+    state.dirtSourceByTile[tileIndex] = sourceCode;
+  } else {
+    state.dirtSourceByTile[tileIndex] = sanitationSourceCode('mixed');
+  }
+}
+
+function reduceDirt(state: StationState, tileIndex: number, amount: number): number {
+  if (amount <= 0 || tileIndex < 0 || tileIndex >= state.dirtByTile.length) return 0;
+  const before = state.dirtByTile[tileIndex];
+  const after = Math.max(0, before - amount);
+  state.dirtByTile[tileIndex] = after;
+  if (after <= 0.5) state.dirtSourceByTile[tileIndex] = 0;
+  return before - after;
+}
+
+function sanitationEffectSummary(dirt: number, room: RoomType): string {
+  if (dirt < 22) return 'no current effect';
+  if (dirt < SANITATION_DIRTY_THRESHOLD) return 'cosmetic lived-in wear';
+  const publicRoom =
+    room === RoomType.Cafeteria ||
+    room === RoomType.Market ||
+    room === RoomType.Lounge ||
+    room === RoomType.RecHall ||
+    room === RoomType.Cantina ||
+    room === RoomType.Observatory;
+  const housingRoom = room === RoomType.Dorm || room === RoomType.Hygiene;
+  if (dirt >= SANITATION_FILTHY_THRESHOLD) {
+    if (room === RoomType.Cafeteria || room === RoomType.Kitchen || room === RoomType.Hygiene) return 'service and hygiene penalties';
+    if (publicRoom) return 'visitor status penalty';
+    if (housingRoom) return 'resident comfort penalty';
+    return 'crew work environment penalty';
+  }
+  if (publicRoom) return 'minor visitor status pressure';
+  if (housingRoom) return 'minor resident comfort pressure';
+  return 'maintenance-style room warning';
+}
+
+function sanitationSuggestedFix(source: SanitationSource, dirt: number): string {
+  if (dirt < SANITATION_DIRTY_THRESHOLD) return 'monitor or wait for routine cleaning';
+  if (source === 'meals') return 'clean, add tables/serving capacity, or widen cafeteria routes';
+  if (source === 'hygiene') return 'clean and add hygiene capacity or nearby crew access';
+  if (source === 'traffic') return 'clean, widen corridor, or separate public/logistics routes';
+  if (source === 'kitchen') return 'clean and add kitchen service access';
+  if (source === 'hydroponics') return 'clean and reduce grow-room bottlenecks';
+  if (source === 'market') return 'clean and reduce shopper/logistics crossing';
+  if (source === 'fire') return 'clean fire aftermath after extinguishing';
+  if (source === 'body') return 'clear bodies and sanitize the room';
+  return 'clean or redesign the dirty traffic pattern';
+}
+
+function hasOpenSanitizeJobAt(state: StationState, tileIndex: number): boolean {
+  return state.jobs.some(
+    (job) =>
+      job.type === 'sanitize' &&
+      job.fromTile === tileIndex &&
+      job.state !== 'done' &&
+      job.state !== 'expired'
+  );
+}
+
+function sanitationWorkTileForTarget(state: StationState, targetTile: number): number {
+  const room = state.rooms[targetTile];
+  const candidates = [targetTile, ...adjacentWalkableTiles(state, targetTile)];
+  let fallback = targetTile;
+  for (const tile of candidates) {
+    if (!isWalkable(state.tiles[tile])) continue;
+    if (state.pressurized[tile] === false) continue;
+    if (state.rooms[tile] !== room) continue;
+    fallback = tile;
+    if (state.moduleOccupancyByTile[tile] === null) return tile;
+  }
+  return fallback;
+}
+
 type LifeSupportCoverage = {
   distanceByTile: Int16Array;
   sourceCount: number;
@@ -1728,6 +1919,113 @@ export function getMaintenanceTileDiagnostic(
     anchorTile: clusterMeta.anchor,
     debt,
     outputMultiplier: maintenanceOutputMultiplierFromDebt(debt)
+  };
+}
+
+export { mapConditionAt, mapConditionSamplesAt };
+
+function sanitationRoomDiagnosticForCluster(
+  state: StationState,
+  room: RoomType,
+  anchorTile: number,
+  cluster: number[]
+): SanitationRoomDiagnostic {
+  let total = 0;
+  let maxDirt = 0;
+  let dirtyTiles = 0;
+  let filthyTiles = 0;
+  const sourceCounts: Record<SanitationSource, number> = {
+    none: 0,
+    traffic: 0,
+    meals: 0,
+    hygiene: 0,
+    kitchen: 0,
+    hydroponics: 0,
+    market: 0,
+    fire: 0,
+    body: 0,
+    mixed: 0
+  };
+  let cleaningJobsOpen = 0;
+  for (const tile of cluster) {
+    const dirt = state.dirtByTile[tile] ?? 0;
+    total += dirt;
+    maxDirt = Math.max(maxDirt, dirt);
+    if (dirt >= SANITATION_DIRTY_THRESHOLD) dirtyTiles += 1;
+    if (dirt >= SANITATION_FILTHY_THRESHOLD) filthyTiles += 1;
+    sourceCounts[sanitationSourceFromCode(state.dirtSourceByTile[tile] ?? 0)] += dirt;
+    if (hasOpenSanitizeJobAt(state, tile)) cleaningJobsOpen += 1;
+  }
+  const dominantSource = dominantSanitationSource(sourceCounts);
+  const averageDirt = cluster.length > 0 ? total / cluster.length : 0;
+  return {
+    room,
+    anchorTile,
+    averageDirt,
+    maxDirt,
+    dirtyTiles,
+    filthyTiles,
+    dominantSource,
+    effectSummary: sanitationEffectSummary(Math.max(averageDirt, maxDirt * 0.72), room),
+    suggestedFix: sanitationSuggestedFix(dominantSource, maxDirt),
+    cleaningJobsOpen
+  };
+}
+
+function dominantSanitationSource(counts: Record<SanitationSource, number>): SanitationSource {
+  let best: SanitationSource = 'none';
+  let bestValue = 0;
+  for (const source of SANITATION_SOURCE_BY_CODE) {
+    const value = counts[source] ?? 0;
+    if (source === 'none') continue;
+    if (value > bestValue) {
+      best = source;
+      bestValue = value;
+    }
+  }
+  return bestValue > 0 ? best : 'none';
+}
+
+export function getSanitationRoomDiagnosticAt(state: StationState, tileIndex: number): SanitationRoomDiagnostic | null {
+  if (tileIndex < 0 || tileIndex >= state.tiles.length) return null;
+  const room = state.rooms[tileIndex];
+  if (room === RoomType.None) return null;
+  ensureRoomClustersCache(state);
+  const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  if (!clusterMeta || clusterMeta.room !== room) return null;
+  return sanitationRoomDiagnosticForCluster(state, room, clusterMeta.anchor, clusterMeta.cluster);
+}
+
+export function getSanitationTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number
+): SanitationTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  if (!isWalkable(state.tiles[tileIndex])) return null;
+  ensureRoomClustersCache(state);
+  const room = state.rooms[tileIndex];
+  const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  const roomDiagnostic =
+    room !== RoomType.None && clusterMeta
+      ? sanitationRoomDiagnosticForCluster(state, room, clusterMeta.anchor, clusterMeta.cluster)
+      : null;
+  const dirt = state.dirtByTile[tileIndex] ?? 0;
+  const source = sanitationSourceFromCode(state.dirtSourceByTile[tileIndex] ?? 0);
+  return {
+    tileIndex,
+    dirt,
+    severity: sanitationSeverityFromDirt(dirt),
+    driftSeverity: driftSeverityFromDirt(dirt),
+    dominantSource: source,
+    room,
+    roomAnchor: clusterMeta?.anchor ?? null,
+    roomAverage: roomDiagnostic?.averageDirt ?? dirt,
+    cleaningJobOpen: hasOpenSanitizeJobAt(state, tileIndex),
+    reachableByCrew: isWalkable(state.tiles[tileIndex]) && state.pressurized[tileIndex] !== false,
+    effectSummary: sanitationEffectSummary(dirt, room),
+    suggestedFix: sanitationSuggestedFix(source, dirt)
   };
 }
 
@@ -3236,6 +3534,7 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     path: [],
     speed: actorSpeed(2.4, id, 101, 0.1),
     role: 'idle',
+    staffRole: 'assistant',
     targetTile: null,
     retargetAt: 0,
     energy: 100,
@@ -3266,6 +3565,9 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     assignmentHoldUntil: 0,
     lastSystem: null,
     assignedSystem: null,
+    workLane: 'flex',
+    lastWorkLane: null,
+    workLaneAssignedAt: 0,
     retargetCountWindow: 0,
     airExposureSec: 0,
     healthState: 'healthy',
@@ -3414,8 +3716,126 @@ function planVisitorLeisureLegs(state: StationState, archetype: VisitorArchetype
   }
 }
 
+function normalizeStaffRoleCounts(input?: Partial<Record<StaffRole, number>>): StaffRoleCounts {
+  const counts = createEmptyStaffRoleCounts();
+  for (const role of STAFF_ROLES) {
+    counts[role] = Math.max(0, Math.floor(input?.[role] ?? 0));
+  }
+  return counts;
+}
+
+function ensureCommandState(state: StationState): void {
+  if (!state.command) {
+    state.command = {
+      selectedSpecialty: null,
+      completedSpecialties: [],
+      specialtyProgress: createInitialSpecialtyProgress(),
+      officers: {},
+      bridgeStaffing: {
+        captainConsoleStaffed: false,
+        activeTerminalStaff: 0,
+        requiredTerminalStaff: 1
+      }
+    };
+  }
+  if (!state.command.specialtyProgress) state.command.specialtyProgress = createInitialSpecialtyProgress();
+  for (const def of SPECIALTY_DEFINITIONS) {
+    const existing = state.command.specialtyProgress[def.id];
+    const completed = state.command.completedSpecialties.includes(def.id);
+    const branchAvailable = isSpecialtyPhaseAvailable(def.id, state.command.completedSpecialties.length);
+    if (!existing) {
+      state.command.specialtyProgress[def.id] = {
+        id: def.id,
+        state: completed ? 'completed' : branchAvailable ? 'available' : 'locked',
+        progress: completed ? 1 : 0,
+        selectedAt: null,
+        completedAt: completed ? state.now : null
+      };
+      continue;
+    }
+    if (completed) {
+      existing.state = 'completed';
+      existing.progress = 1;
+      if (existing.completedAt === null) existing.completedAt = state.now;
+    } else if (state.command.selectedSpecialty === def.id) {
+      existing.state = 'active';
+    } else if (branchAvailable && existing.state === 'locked') {
+      existing.state = 'available';
+    }
+  }
+  if (!state.command.officers) state.command.officers = {};
+  state.command.officers.captain = (state.crew.roleCounts?.captain ?? 0) > 0;
+  if (!state.command.bridgeStaffing) {
+    state.command.bridgeStaffing = {
+      captainConsoleStaffed: false,
+      activeTerminalStaff: 0,
+      requiredTerminalStaff: 1
+    };
+  }
+  if (!state.crew.roleCounts) {
+    const counts = createEmptyStaffRoleCounts();
+    counts.assistant = Math.max(0, state.crew.total);
+    if (counts.assistant > 0) {
+      counts.assistant = Math.max(0, counts.assistant - 1);
+      counts.captain = 1;
+    }
+    state.crew.roleCounts = counts;
+  } else {
+    state.crew.roleCounts = normalizeStaffRoleCounts(state.crew.roleCounts);
+  }
+  const countedStaff = totalStaffCount(state.crew.roleCounts);
+  if (state.crew.total !== countedStaff) {
+    const desiredTotal = Math.max(0, Math.floor(state.crew.total));
+    if (desiredTotal <= 0) {
+      state.crew.roleCounts = createEmptyStaffRoleCounts();
+    } else {
+      while (totalStaffCount(state.crew.roleCounts) > desiredTotal) {
+        const role = [...STAFF_ROLES].reverse().find((candidate) => candidate !== 'captain' && state.crew.roleCounts[candidate] > 0);
+        if (!role) break;
+        state.crew.roleCounts[role] -= 1;
+      }
+      while (totalStaffCount(state.crew.roleCounts) < desiredTotal) {
+        state.crew.roleCounts.assistant += 1;
+      }
+    }
+  }
+  state.crew.total = totalStaffCount(state.crew.roleCounts);
+  state.command.officers.captain = state.crew.roleCounts.captain > 0;
+}
+
+function assignStaffRolesToCrew(state: StationState): void {
+  ensureCommandState(state);
+  const remaining = normalizeStaffRoleCounts(state.crew.roleCounts);
+  const nextRoles: Array<StaffRole | null> = new Array(state.crewMembers.length).fill(null);
+  for (let i = 0; i < state.crewMembers.length; i++) {
+    const current = state.crewMembers[i].staffRole;
+    if (remaining[current] > 0) {
+      nextRoles[i] = current;
+      remaining[current] -= 1;
+    }
+  }
+  const desired: StaffRole[] = [];
+  for (const role of STAFF_ROLES) {
+    for (let i = 0; i < remaining[role]; i++) desired.push(role);
+  }
+  for (let i = 0; i < state.crewMembers.length; i++) {
+    const crew = state.crewMembers[i];
+    const nextRole = nextRoles[i] ?? desired.shift() ?? 'assistant';
+    if (crew.staffRole !== nextRole) {
+      crew.staffRole = nextRole;
+      crew.workLane = staffRoleWorkLane(nextRole);
+      crew.lastWorkLane = crew.workLane;
+      crew.workLaneAssignedAt = state.now;
+    }
+  }
+}
+
 function ensureCrewPool(state: StationState): void {
-  if (state.crewMembers.length === state.crew.total) return;
+  ensureCommandState(state);
+  if (state.crewMembers.length === state.crew.total) {
+    assignStaffRolesToCrew(state);
+    return;
+  }
 
   const docks = collectTiles(state, TileType.Dock);
   const fallbackTiles = docks.length > 0 ? docks : collectTiles(state, TileType.Floor);
@@ -3427,6 +3847,7 @@ function ensureCrewPool(state: StationState): void {
   if (state.crewMembers.length > state.crew.total) {
     state.crewMembers.length = state.crew.total;
   }
+  assignStaffRolesToCrew(state);
 }
 
 function ensureResidentPopulation(_state: StationState): void {
@@ -4397,6 +4818,7 @@ function assignCrewJobs(state: StationState): void {
   state.crew.free = Math.max(0, availableCrew.length - assignedCount);
 
   state.ops.reactorsTotal = roomClusters(state, RoomType.Reactor).length;
+  state.ops.bridgeTotal = roomClusters(state, RoomType.Bridge).length;
   state.ops.cafeteriasTotal = roomClusters(state, RoomType.Cafeteria).length;
   state.ops.kitchenTotal = roomClusters(state, RoomType.Kitchen).length;
   state.ops.workshopTotal = roomClusters(state, RoomType.Workshop).length;
@@ -4439,6 +4861,7 @@ function clearLegacyCrewPostAssignments(state: StationState): void {
 
 function refreshRoomOpsTotals(state: StationState): void {
   state.ops.reactorsTotal = roomClusters(state, RoomType.Reactor).length;
+  state.ops.bridgeTotal = roomClusters(state, RoomType.Bridge).length;
   state.ops.cafeteriasTotal = roomClusters(state, RoomType.Cafeteria).length;
   state.ops.kitchenTotal = roomClusters(state, RoomType.Kitchen).length;
   state.ops.workshopTotal = roomClusters(state, RoomType.Workshop).length;
@@ -4635,6 +5058,7 @@ function operationalClustersForRoom(
 }
 
 function refreshRoomOpsFromCrewPresence(state: StationState, dt = 0, updateDebounce = false): void {
+  state.ops.bridgeActive = operationalClustersForRoom(state, RoomType.Bridge, 0, false, dt, updateDebounce).length;
   state.ops.reactorsActive = operationalClustersForRoom(
     state,
     RoomType.Reactor,
@@ -5144,8 +5568,14 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   const providers = providerSummariesForCluster(state, room, cluster);
   const stockTargets = stockTargetsForCluster(state, room, serviceTargetsInCluster);
   const openJobs = jobLabelsForCluster(state, cluster);
+  const sanitation = sanitationRoomDiagnosticForCluster(state, room, clusterMeta.anchor, cluster);
 
   const warnings = [...inspection.warnings];
+  if (sanitation.maxDirt >= SANITATION_FILTHY_THRESHOLD) {
+    warnings.push(`sanitation filthy: ${sanitation.dominantSource}`);
+  } else if (sanitation.maxDirt >= SANITATION_DIRTY_THRESHOLD) {
+    warnings.push(`sanitation dirty: ${sanitation.dominantSource}`);
+  }
   if (serviceNodeReachability.unreachableCount > 0) {
     warnings.push(
       `service nodes unreachable ${serviceNodeReachability.unreachableCount}/${serviceTargetsInCluster.length}`
@@ -5271,6 +5701,13 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   hints.push(
     `environment status ${environment.visitorStatus.toFixed(1)} | comfort ${environment.residentialComfort.toFixed(1)} | noise ${environment.serviceNoise.toFixed(1)}`
   );
+  hints.push(
+    `sanitation avg ${sanitation.averageDirt.toFixed(0)}% | max ${sanitation.maxDirt.toFixed(0)}% | source ${sanitation.dominantSource}`
+  );
+  if (sanitation.maxDirt >= 22) {
+    hints.push(`sanitation effect: ${sanitation.effectSummary}`);
+    hints.push(`sanitation fix: ${sanitation.suggestedFix}`);
+  }
   const lifeSupportCoverage = computeLifeSupportCoverage(state);
   if (lifeSupportCoverage.sourceCount > 0) {
     const avgLifeSupportDistance = averageLifeSupportDistanceForTiles(lifeSupportCoverage, cluster);
@@ -5377,6 +5814,7 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     flowHints,
     environment,
     routePressure,
+    sanitation,
     cafeteriaLoad,
     providers,
     stockTargets,
@@ -6273,6 +6711,12 @@ function isWorkshopToMarketTradeDelivery(state: StationState, job: StationState[
 }
 
 function logisticsJobPriority(state: StationState, job: StationState['jobs'][number]): number {
+  if (job.type === 'sanitize') {
+    const dirt = state.dirtByTile[job.fromTile] ?? 0;
+    if (dirt >= SANITATION_FILTHY_THRESHOLD) return 160;
+    if (dirt >= SANITATION_DIRTY_THRESHOLD) return 88;
+    return 35;
+  }
   if (job.type === 'construct') return job.constructionMode === 'build' ? 78 : 70;
   if (job.type === 'cook') return 92;
   if (isWorkshopToMarketTradeDelivery(state, job)) {
@@ -6289,12 +6733,21 @@ function logisticsJobPriority(state: StationState, job: StationState['jobs'][num
 
 function crewSuitabilityForJob(crew: CrewMember, job: StationState['jobs'][number]): number {
   const system = crew.assignedSystem ?? crew.lastSystem;
-  if (job.type === 'cook') return system === 'kitchen' || system === 'cafeteria' ? 34 : crew.role === 'idle' ? 8 : 0;
+  const homeLane = staffRoleWorkLane(crew.staffRole);
+  if (job.type === 'cook') {
+    if (crew.staffRole === 'cook') return 82;
+    if (homeLane === 'food') return 44;
+    return system === 'kitchen' || system === 'cafeteria' ? 26 : crew.role === 'idle' ? 6 : 0;
+  }
+  if (job.type === 'sanitize') return system === 'hygiene' || crew.role === 'idle' ? 12 : 4;
   if (job.type === 'repair') return system === 'reactor' || system === 'life-support' ? 28 : 6;
   if (job.type === 'extinguish') return system === 'security' || system === 'life-support' || system === 'reactor' ? 24 : 10;
   if (job.type === 'construct') return system === 'reactor' || system === 'life-support' ? 18 : 8;
   if (job.type === 'deliver' || job.type === 'pickup') {
     if (job.itemType === 'meal' || job.itemType === 'rawMeal') {
+      if (crew.staffRole === 'cook' && job.itemType === 'meal') return 48;
+      if (crew.staffRole === 'botanist' && job.itemType === 'rawMeal') return 46;
+      if (homeLane === 'food') return 34;
       return system === 'cafeteria' || system === 'kitchen' || system === 'hydroponics' ? 22 : crew.role === 'idle' ? 10 : 2;
     }
     return system === 'workshop' || crew.role === 'idle' ? 14 : 2;
@@ -7038,7 +7491,8 @@ function enqueueCookJob(state: StationState, stoveTile: number, amount: number):
 // at the post" reduction — that only applies to crew with assignedSystem set.
 // This loop lets idle crew help dig out a debt spike without needing a specialty.
 const REPAIR_JOB_DEBT_THRESHOLD = 45;
-const REPAIR_JOB_DEBT_TARGET = 32;
+const REPAIR_JOB_DEBT_TARGET = 100;
+const REPAIR_JOB_COMPLETE_DEBT = 8;
 const REPAIR_JOB_RATE_PER_SEC = 8;
 
 // Fire model: when reactor or life-support debt sustains above the ignition
@@ -7147,6 +7601,78 @@ function enqueueExtinguishJob(state: StationState, fireTile: number): void {
   state.metrics.createdJobs += 1;
 }
 
+function enqueueSanitizeJob(state: StationState, tileIndex: number, source: SanitationSource): void {
+  if (hasOpenSanitizeJobAt(state, tileIndex)) return;
+  const workTile = sanitationWorkTileForTarget(state, tileIndex);
+  state.jobs.push({
+    id: state.jobSpawnCounter++,
+    type: 'sanitize',
+    itemType: 'rawMaterial',
+    amount: Math.max(10, state.dirtByTile[tileIndex] - SANITATION_JOB_TARGET),
+    fromTile: tileIndex,
+    toTile: workTile,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + JOB_TTL_SEC,
+    state: 'pending',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none',
+    sanitationSource: source,
+    workProgress: 0,
+    workRequired: Math.max(10, state.dirtByTile[tileIndex] - SANITATION_JOB_TARGET)
+  });
+  state.metrics.createdJobs += 1;
+}
+
+function openSanitizeJobCount(state: StationState): number {
+  return state.jobs.filter((job) => job.type === 'sanitize' && job.state !== 'done' && job.state !== 'expired').length;
+}
+
+function createSanitationJobs(state: StationState): void {
+  let open = openSanitizeJobCount(state);
+  if (open >= SANITATION_MAX_OPEN_JOBS) return;
+  ensureRoomClustersCache(state);
+  const candidates: Array<{ tile: number; dirt: number; source: SanitationSource; roomBonus: number }> = [];
+  for (let tile = 0; tile < state.dirtByTile.length; tile++) {
+    const dirt = state.dirtByTile[tile];
+    if (dirt < SANITATION_JOB_SPAWN_THRESHOLD) continue;
+    if (!isWalkable(state.tiles[tile])) continue;
+    if (hasOpenSanitizeJobAt(state, tile)) continue;
+    const room = state.rooms[tile];
+    const roomBonus =
+      room === RoomType.Cafeteria || room === RoomType.Kitchen || room === RoomType.Hygiene
+        ? 12
+        : room === RoomType.Market || room === RoomType.Dorm
+          ? 8
+          : 0;
+    candidates.push({
+      tile,
+      dirt,
+      source: sanitationSourceFromCode(state.dirtSourceByTile[tile] ?? 0),
+      roomBonus
+    });
+  }
+  candidates.sort((a, b) => b.dirt + b.roomBonus - (a.dirt + a.roomBonus) || a.tile - b.tile);
+  const reservedPatchTiles = new Set<number>();
+  for (const candidate of candidates) {
+    if (open >= SANITATION_MAX_OPEN_JOBS) break;
+    if (reservedPatchTiles.has(candidate.tile)) continue;
+    enqueueSanitizeJob(state, candidate.tile, candidate.source);
+    open += 1;
+    const p = fromIndex(candidate.tile, state.width);
+    for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
+      for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
+        const nx = p.x + dx;
+        const ny = p.y + dy;
+        if (!inBounds(nx, ny, state.width, state.height)) continue;
+        reservedPatchTiles.add(toIndex(nx, ny, state.width));
+      }
+    }
+  }
+}
+
 // Per-tick fire update: extinguisher modules within radius reduce intensity,
 // fires grow if unsuppressed, hot fires spread to walkable neighbors, and tiles
 // with intensity above the block threshold become impassable. When intensity
@@ -7253,6 +7779,49 @@ function updateFires(state: StationState, dt: number): void {
     survivors.push(fire);
   }
   state.effects.fires = survivors;
+}
+
+function updateSanitation(state: StationState, dt: number): void {
+  if (dt <= 0) return;
+  const addActorTraffic = (tile: number, source: SanitationSource, rate: number): void => {
+    addDirt(state, tile, rate * dt, source);
+  };
+  for (const visitor of state.visitors) {
+    addActorTraffic(visitor.tileIndex, 'traffic', visitor.state === VisitorState.Queueing ? 0.105 : 0.052);
+    if (visitor.state === VisitorState.Eating) addDirt(state, visitor.tileIndex, 0.3 * dt, 'meals');
+    if (visitor.state === VisitorState.Leisure && state.rooms[visitor.tileIndex] === RoomType.Market) {
+      addDirt(state, visitor.tileIndex, 0.1 * dt, 'market');
+    }
+  }
+  for (const resident of state.residents) {
+    addActorTraffic(resident.tileIndex, 'traffic', 0.04);
+    if (resident.state === ResidentState.Eating) addDirt(state, resident.tileIndex, 0.2 * dt, 'meals');
+    if (resident.state === ResidentState.Cleaning || resident.state === ResidentState.ToHygiene) {
+      addDirt(state, resident.tileIndex, 0.12 * dt, 'hygiene');
+    }
+  }
+  for (const crew of state.crewMembers) {
+    addActorTraffic(crew.tileIndex, crew.activeJobId !== null ? 'traffic' : 'traffic', crew.activeJobId !== null ? 0.06 : 0.028);
+    if (crew.toileting || crew.cleaning) addDirt(state, crew.tileIndex, 0.09 * dt, 'hygiene');
+  }
+  for (const tile of activeRoomTargets(state, RoomType.Kitchen)) addDirt(state, tile, 0.24 * dt, 'kitchen');
+  for (const tile of activeRoomTargets(state, RoomType.Hydroponics)) addDirt(state, tile, 0.09 * dt, 'hydroponics');
+  for (const tile of activeRoomTargets(state, RoomType.Market)) {
+    if (state.metrics.marketTradeGoodUseRate > 0) addDirt(state, tile, 0.09 * dt, 'market');
+  }
+  for (const fire of state.effects.fires) {
+    addDirt(state, fire.anchorTile, (0.2 + fire.intensity / 280) * dt, 'fire');
+  }
+  for (const tile of state.bodyTiles) addDirt(state, tile, 0.18 * dt, 'body');
+
+  // Slow passive cleanup from ventilation/normal housekeeping prevents tiny
+  // lived-in specks from being permanent while leaving dirty rooms actionable.
+  for (let i = 0; i < state.dirtByTile.length; i++) {
+    const dirt = state.dirtByTile[i];
+    if (dirt <= 0) continue;
+    const decay = dirt < 18 ? 0.006 * dt : 0.001 * dt;
+    if (decay > 0) reduceDirt(state, i, decay);
+  }
 }
 
 function markJobStall(state: StationState, job: StationState['jobs'][number], reason: JobStallReason): void {
@@ -7714,46 +8283,333 @@ function createTradeGoodTransportJobs(state: StationState): void {
   });
 }
 
-function assignJobsToIdleCrew(state: StationState): void {
-  const pendingJobs = state.jobs.filter((j) => j.state === 'pending');
-  if (pendingJobs.length === 0) {
-    state.metrics.logisticsDispatchSlots = 0;
-    state.metrics.logisticsPressure = 0;
-    return;
+function workLaneForSystem(system: CrewPrioritySystem | null): CrewWorkLane {
+  if (system === 'kitchen' || system === 'cafeteria' || system === 'hydroponics') return 'food';
+  if (system === 'hygiene') return 'sanitation';
+  if (system === 'reactor' || system === 'life-support') return 'engineering';
+  if (system === 'workshop' || system === 'market') return 'logistics';
+  return 'flex';
+}
+
+function staffRoleWorkLane(role: StaffRole): CrewWorkLane {
+  return STAFF_ROLE_DEFINITIONS[role]?.lane ?? 'logistics';
+}
+
+function staffRoleAllowsFallback(role: StaffRole): boolean {
+  return STAFF_ROLE_DEFINITIONS[role]?.fallback ?? true;
+}
+
+function jobWorkLane(state: StationState, job: StationState['jobs'][number]): CrewWorkLane {
+  if (job.type === 'cook') return 'food';
+  if (job.type === 'sanitize' || job.itemType === 'body') return 'sanitation';
+  if (job.type === 'repair' || job.type === 'extinguish') return 'engineering';
+  if (job.type === 'construct' || job.constructionSiteId !== undefined) return 'construction-eva';
+  if (job.itemType === 'meal' || job.itemType === 'rawMeal') return 'food';
+  if (job.itemType === 'rawMaterial' && state.rooms[job.toTile] === RoomType.Hydroponics) return 'food';
+  return 'logistics';
+}
+
+function jobWorkTile(state: StationState, job: StationState['jobs'][number]): number {
+  if (job.type === 'sanitize') return sanitationWorkTileForTarget(state, job.fromTile);
+  return job.fromTile;
+}
+
+function activeCaptainConsole(state: StationState): ModuleInstance | null {
+  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
+  if (bridgeTiles.size <= 0) return null;
+  return state.moduleInstances.find((module) => module.type === ModuleType.CaptainConsole && bridgeTiles.has(module.originTile)) ?? null;
+}
+
+function captainConsoleDutyTiles(state: StationState): number[] {
+  const captainConsole = activeCaptainConsole(state);
+  if (!captainConsole) return [];
+  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
+  const out = new Set<number>();
+  for (const tile of captainConsole.tiles) {
+    for (const candidate of adjacentWalkableTiles(state, tile)) {
+      if (!bridgeTiles.has(candidate)) continue;
+      if (state.moduleOccupancyByTile[candidate] !== null) continue;
+      out.add(candidate);
+    }
   }
-  const isFoodServiceJob = (job: (typeof pendingJobs)[number]): boolean =>
-    job.type === 'cook' || job.itemType === 'meal' || job.itemType === 'rawMeal';
-  const airEmergency = state.metrics.airQuality < 25 || state.metrics.airBlockedWarningActive;
-  const criticalAirEmergency = state.metrics.airQuality < AIR_CRITICAL_THRESHOLD;
-  const needsAirFloor = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
+  if (out.size <= 0) {
+    for (const tile of bridgeTiles) {
+      if (!isWalkable(state.tiles[tile])) continue;
+      if (state.moduleOccupancyByTile[tile] !== null) continue;
+      out.add(tile);
+    }
+  }
+  const origin = fromIndex(captainConsole.originTile, state.width);
+  return [...out].sort((a, b) => {
+    const ap = fromIndex(a, state.width);
+    const bp = fromIndex(b, state.width);
+    const ad = Math.abs(ap.x - origin.x) + Math.abs(ap.y - origin.y);
+    const bd = Math.abs(bp.x - origin.x) + Math.abs(bp.y - origin.y);
+    if (ad !== bd) return ad - bd;
+    return a - b;
+  });
+}
+
+function isCrewReservedForCommandDuty(state: StationState, crew: CrewMember): boolean {
+  return crew.staffRole === 'captain' && !crew.resting && activeCaptainConsole(state) !== null;
+}
+
+function normalizeCrewWorkLane(crew: CrewMember, now: number): void {
+  const maybeCrew = crew as CrewMember & Partial<Pick<CrewMember, 'workLane' | 'lastWorkLane' | 'workLaneAssignedAt'>>;
+  if (!maybeCrew.workLane || !CREW_WORK_LANES.includes(maybeCrew.workLane)) {
+    crew.workLane = staffRoleWorkLane(crew.staffRole ?? 'assistant') ?? workLaneForSystem(crew.assignedSystem ?? crew.lastSystem);
+    if (crew.workLane === 'flex') crew.workLane = 'logistics';
+  }
+  if (maybeCrew.lastWorkLane === undefined) crew.lastWorkLane = crew.workLane;
+  if (typeof maybeCrew.workLaneAssignedAt !== 'number') crew.workLaneAssignedAt = now;
+}
+
+function laneWeightFromPriorities(state: StationState, lane: CrewWorkLane): number {
+  const weights = state.controls.crewPriorityWeights;
+  if (lane === 'food') return Math.max(weights.hydroponics, weights.kitchen, weights.cafeteria);
+  if (lane === 'sanitation') return weights.hygiene;
+  if (lane === 'engineering') return Math.max(weights.reactor, weights['life-support'], weights.workshop);
+  if (lane === 'construction-eva') return Math.max(weights.workshop, weights.reactor, weights['life-support']);
+  if (lane === 'logistics') return Math.max(weights.workshop, weights.market);
+  return 4;
+}
+
+function deriveWorkLaneTargets(
+  state: StationState,
+  pendingJobs: StationState['jobs'],
+  nonRestingCrew: CrewMember[]
+): Record<CrewWorkLane, number> {
+  const total = nonRestingCrew.length;
+  const targets: Record<CrewWorkLane, number> = {
+    food: 0,
+    sanitation: 0,
+    engineering: 0,
+    logistics: 0,
+    'construction-eva': 0,
+    flex: 0
+  };
+  if (total <= 0) return targets;
+  const pendingByLane = createWorkforceLaneMetrics();
+  for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
+  ensureCommandState(state);
+  for (const role of STAFF_ROLES) {
+    if (role === 'captain' && activeCaptainConsole(state) !== null) continue;
+    const lane = staffRoleWorkLane(role);
+    targets[lane] += state.crew.roleCounts[role] ?? 0;
+  }
+  if (Object.values(targets).some((value) => value > 0)) {
+    const fallbackCrew = nonRestingCrew.filter((crew) => staffRoleAllowsFallback(crew.staffRole)).length;
+    for (const lane of SPECIALIST_WORK_LANES) {
+      if (pendingByLane[lane].pending > 0 && targets[lane] <= 0 && fallbackCrew > 0) {
+        targets[lane] = 1;
+      }
+    }
+    let overflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
+    const trimOrder: CrewWorkLane[] = ['logistics', 'construction-eva', 'food', 'sanitation', 'engineering', 'flex'];
+    for (const lane of trimOrder) {
+      while (overflow > 0 && targets[lane] > 0) {
+        targets[lane] -= 1;
+        overflow -= 1;
+      }
+    }
+    return targets;
+  }
   const needsFoodFloor =
     state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
-  const hasUrgentFoodWork = needsFoodFloor && pendingJobs.some(isFoodServiceJob);
-  const protectedMinimumBySystem = new Map<CrewPrioritySystem, number>();
-  const setProtectedMinimum = (system: CrewPrioritySystem, min: number): void => {
-    if (min <= 0) return;
-    protectedMinimumBySystem.set(system, Math.max(protectedMinimumBySystem.get(system) ?? 0, min));
-  };
-  if (needsAirFloor && roomClusterAnchors(state, RoomType.LifeSupport).length > 0) {
-    setProtectedMinimum('life-support', 1);
+  const airEmergency = state.metrics.airQuality < 35 || state.metrics.airBlockedWarningActive;
+  const filthySanitation = pendingJobs.some(
+    (job) => job.type === 'sanitize' && (state.dirtByTile[job.fromTile] ?? 0) >= SANITATION_FILTHY_THRESHOLD
+  );
+
+  targets.food = pendingByLane.food.pending > 0 || needsFoodFloor ? Math.min(total, total >= 8 ? 3 : 1) : 0;
+  targets.sanitation =
+    pendingByLane.sanitation.pending > 0
+      ? Math.min(total, Math.max(1, Math.ceil(total * (filthySanitation ? 0.24 : 0.14))))
+      : 0;
+  targets.engineering =
+    pendingByLane.engineering.pending > 0 || airEmergency || state.metrics.maintenanceJobsOpen > 0
+      ? Math.min(total, airEmergency ? Math.max(2, Math.ceil(total * 0.2)) : 1)
+      : 0;
+  targets['construction-eva'] = pendingByLane['construction-eva'].pending > 0 ? Math.min(total, Math.max(1, Math.ceil(total * 0.12))) : 0;
+  targets.logistics = pendingByLane.logistics.pending > 0 ? Math.min(total, Math.max(1, Math.ceil(total * 0.16))) : 0;
+  targets.flex = total >= 10 ? Math.max(1, Math.ceil(total * 0.1)) : 0;
+
+  const usedFloor = SPECIALIST_WORK_LANES.reduce((sum, lane) => sum + targets[lane], 0) + targets.flex;
+  let remaining = Math.max(0, total - usedFloor);
+  const weightedLanes = SPECIALIST_WORK_LANES.filter((lane) => pendingByLane[lane].pending > 0 || targets[lane] > 0);
+  const totalWeight = Math.max(1, weightedLanes.reduce((sum, lane) => sum + laneWeightFromPriorities(state, lane), 0));
+  for (const lane of weightedLanes) {
+    if (remaining <= 0) break;
+    const add = Math.min(remaining, Math.floor((remaining * laneWeightFromPriorities(state, lane)) / totalWeight));
+    targets[lane] += add;
+    remaining -= add;
   }
-  if (state.metrics.powerDemand > state.metrics.powerSupply && roomClusterAnchors(state, RoomType.Reactor).length > 0) {
-    setProtectedMinimum('reactor', 1);
-  }
-  if (needsFoodFloor) {
-    if (collectServiceTargets(state, RoomType.Hydroponics).length > 0) setProtectedMinimum('hydroponics', 1);
-    if (roomClusterAnchors(state, RoomType.Kitchen).length > 0) setProtectedMinimum('kitchen', 1);
-    if (collectServiceTargets(state, RoomType.Cafeteria).length > 0) setProtectedMinimum('cafeteria', 1);
+  while (remaining > 0) {
+    const best = [...weightedLanes].sort((a, b) => {
+      const aNeed = pendingByLane[a].pending - targets[a];
+      const bNeed = pendingByLane[b].pending - targets[b];
+      if (aNeed !== bNeed) return bNeed - aNeed;
+      return laneWeightFromPriorities(state, b) - laneWeightFromPriorities(state, a);
+    })[0] ?? 'logistics';
+    targets[best] += 1;
+    remaining -= 1;
   }
 
-  const nonRestingCrew = state.crewMembers.filter((c) => !c.resting);
-  const assignedBySystem = new Map<CrewPrioritySystem, number>();
-  for (const crew of nonRestingCrew) {
-    if (crew.activeJobId !== null) continue;
-    if (!crew.assignedSystem) continue;
-    assignedBySystem.set(crew.assignedSystem, (assignedBySystem.get(crew.assignedSystem) ?? 0) + 1);
+  let overflow = SPECIALIST_WORK_LANES.reduce((sum, lane) => sum + targets[lane], 0) + targets.flex - total;
+  const trimOrder: CrewWorkLane[] = ['flex', 'logistics', 'construction-eva', 'food', 'sanitation', 'engineering'];
+  for (const lane of trimOrder) {
+    while (overflow > 0 && targets[lane] > 0) {
+      targets[lane] -= 1;
+      overflow -= 1;
+    }
   }
-  const activeLogisticsCrew = nonRestingCrew.filter((c) => c.activeJobId !== null).length;
+  return targets;
+}
+
+function assignCrewWorkLanes(
+  state: StationState,
+  targets: Record<CrewWorkLane, number>,
+  pendingByLane: Record<CrewWorkLane, WorkLaneMetrics>
+): void {
+  const counts: Record<CrewWorkLane, number> = {
+    food: 0,
+    sanitation: 0,
+    engineering: 0,
+    logistics: 0,
+    'construction-eva': 0,
+    flex: 0
+  };
+  const nonResting = state.crewMembers.filter((crew) => !crew.resting).sort((a, b) => a.id - b.id);
+  for (const crew of nonResting) {
+    normalizeCrewWorkLane(crew, state.now);
+    if (isCrewReservedForCommandDuty(state, crew)) continue;
+    if (crew.activeJobId === null) crew.workLane = staffRoleWorkLane(crew.staffRole);
+    counts[crew.workLane] += 1;
+  }
+
+  const laneDeficit = (lane: CrewWorkLane): number => Math.max(0, targets[lane] - counts[lane]);
+  const bestDeficitLane = (): CrewWorkLane | null => {
+    let best: CrewWorkLane | null = null;
+    let bestScore = 0;
+    for (const lane of SPECIALIST_WORK_LANES) {
+      const score = laneDeficit(lane) * 10 + pendingByLane[lane].pending + laneWeightFromPriorities(state, lane) * 0.2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = lane;
+      }
+    }
+    return best;
+  };
+
+  for (const crew of nonResting) {
+    if (isCrewReservedForCommandDuty(state, crew)) continue;
+    if (crew.activeJobId !== null) continue;
+    const current = crew.workLane;
+    const homeLane = staffRoleWorkLane(crew.staffRole);
+    if (current !== homeLane && (pendingByLane[homeLane].pending > 0 || !staffRoleAllowsFallback(crew.staffRole))) {
+      counts[current] = Math.max(0, counts[current] - 1);
+      crew.lastWorkLane = current;
+      crew.workLane = homeLane;
+      crew.workLaneAssignedAt = state.now;
+      counts[homeLane] += 1;
+      continue;
+    }
+    if (!staffRoleAllowsFallback(crew.staffRole)) continue;
+    const sticky = state.now - crew.workLaneAssignedAt < CREW_ASSIGNMENT_STICKY_SEC;
+    const currentHasWork = pendingByLane[current].pending > 0;
+    const underTarget = laneDeficit(current) > 0;
+    const shouldKeep =
+      current !== 'flex' &&
+      (currentHasWork || underTarget || (sticky && counts[current] <= Math.max(1, targets[current])));
+    if (shouldKeep) continue;
+    const nextLane = bestDeficitLane();
+    if (!nextLane) continue;
+    if (current !== nextLane && (current === 'flex' || counts[current] > targets[current] || !currentHasWork)) {
+      counts[current] = Math.max(0, counts[current] - 1);
+      crew.lastWorkLane = current;
+      crew.workLane = nextLane;
+      crew.workLaneAssignedAt = state.now;
+      counts[nextLane] += 1;
+    }
+  }
+}
+
+function assignJobToCrew(state: StationState, crew: CrewMember, job: StationState['jobs'][number], path: number[]): void {
+  if (crew.role !== 'idle' || crew.targetTile !== null || crew.assignedSystem !== null) {
+    crew.role = 'idle';
+    crew.targetTile = null;
+    crew.lastSystem = null;
+    crew.assignedSystem = null;
+    crew.assignmentHoldUntil = 0;
+    crew.assignmentStickyUntil = 0;
+  }
+  job.state = 'assigned';
+  job.assignedCrewId = crew.id;
+  job.lastProgressAt = state.now;
+  markJobStall(state, job, 'none');
+  if (job.type === 'construct' && job.constructionSiteId !== undefined) {
+    const site = state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId);
+    if (site) {
+      site.assignedCrewId = crew.id;
+      site.state = job.constructionMode === 'build' ? 'building' : 'delivering';
+    }
+  }
+  crew.activeJobId = job.id;
+  crew.lastWorkLane = crew.workLane;
+  tryCreateReservation(state, {
+    ownerKind: 'crew',
+    ownerId: crew.id,
+    kind: 'actor-job',
+    targetTile: job.toTile,
+    targetId: String(job.id),
+    amount: 1,
+    capacity: 1,
+    ttlSec: JOB_TTL_SEC + 5,
+    replaceOwnerReservations: true
+  });
+  crew.cleaning = false;
+  crew.cleanSessionActive = false;
+  crew.toileting = false;
+  crew.toiletSessionActive = false;
+  clearCrewLeisure(crew);
+  setCrewPath(state, crew, path);
+  const targetTile = jobWorkTile(state, job);
+  if (crew.path.length === 0 && crew.tileIndex !== targetTile) {
+    markJobStall(state, job, 'stalled_unreachable_source');
+  }
+}
+
+function releaseCrewJobForCommandDuty(state: StationState, crew: CrewMember): void {
+  if (crew.activeJobId === null) return;
+  if (crew.carryingItemType !== null && crew.carryingAmount > 0) return;
+  const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
+  if (job && job.state !== 'done' && job.state !== 'expired') {
+    job.state = 'pending';
+    job.assignedCrewId = null;
+    job.lastProgressAt = state.now;
+    markJobStall(state, job, 'none');
+    if (job.constructionSiteId !== undefined) {
+      const site = state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId);
+      if (site?.assignedCrewId === crew.id) {
+        site.assignedCrewId = null;
+        if (site.state === 'building' || site.state === 'delivering') site.state = 'planned';
+      }
+    }
+  }
+  crew.activeJobId = null;
+  setCrewPath(state, crew, []);
+  releaseReservationsForOwner(state, 'crew', crew.id, 'replaced', ['actor-job']);
+}
+
+function assignJobsToIdleCrew(state: StationState): void {
+  const pendingJobs = state.jobs.filter((j) => j.state === 'pending');
+  const openJobs = state.jobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
+  const nonRestingCrew = state.crewMembers.filter((c) => !c.resting);
+  const pendingByLane = createWorkforceLaneMetrics();
+  for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
+  const targets = deriveWorkLaneTargets(state, openJobs, nonRestingCrew);
+  assignCrewWorkLanes(state, targets, pendingByLane);
+
   const pendingPressure = clamp(pendingJobs.length / 6, 0, 1);
   const foodPressure = clamp(
     Math.max(
@@ -7763,21 +8619,19 @@ function assignJobsToIdleCrew(state: StationState): void {
     0,
     1
   );
-  const logisticsPressure = Math.max(pendingPressure, foodPressure);
-  let maxLogisticsCrew = Math.ceil(nonRestingCrew.length * (0.12 + logisticsPressure * 0.5));
-  if (needsFoodFloor) {
-    const foodFloorHaulers = nonRestingCrew.length >= 6 ? 2 : 1;
-    maxLogisticsCrew = Math.max(maxLogisticsCrew, foodFloorHaulers);
+  state.metrics.logisticsPressure = Math.max(pendingPressure, foodPressure);
+  if (pendingJobs.length === 0) {
+    state.metrics.logisticsDispatchSlots = 0;
+    return;
   }
-  if (airEmergency) {
-    const emergencyCap = Math.max(1, Math.floor(nonRestingCrew.length * (criticalAirEmergency ? 0.22 : 0.35)));
-    maxLogisticsCrew = Math.min(maxLogisticsCrew, emergencyCap);
-  }
-  const dispatchSlots = Math.max(0, maxLogisticsCrew - activeLogisticsCrew);
-  state.metrics.logisticsDispatchSlots = dispatchSlots;
-  state.metrics.logisticsPressure = logisticsPressure;
-  if (dispatchSlots <= 0) return;
 
+  const isFoodServiceJob = (job: (typeof pendingJobs)[number]): boolean =>
+    job.type === 'cook' || job.itemType === 'meal' || job.itemType === 'rawMeal';
+  const airEmergency = state.metrics.airQuality < 25 || state.metrics.airBlockedWarningActive;
+  const criticalAirEmergency = state.metrics.airQuality < AIR_CRITICAL_THRESHOLD;
+  const needsFoodFloor =
+    state.metrics.mealStock < FOOD_CHAIN_LOW_MEAL_STOCK || state.metrics.kitchenRawBuffer < FOOD_CHAIN_LOW_KITCHEN_RAW;
+  const hasUrgentFoodWork = needsFoodFloor && pendingJobs.some(isFoodServiceJob);
   const hygieneAvailable = preferredHygieneTargets(state).length > 0;
   const drinkAvailable = crewDrinkTargets(state).length > 0;
   const hasProtectedSelfCare = (crew: CrewMember): boolean =>
@@ -7796,128 +8650,163 @@ function assignJobsToIdleCrew(state: StationState): void {
     !crew.toiletSessionActive &&
     !crew.drinkSessionActive;
 
+  const laneActive: Record<CrewWorkLane, number> = {
+    food: 0,
+    sanitation: 0,
+    engineering: 0,
+    logistics: 0,
+    'construction-eva': 0,
+    flex: 0
+  };
+  for (const crew of nonRestingCrew) {
+    normalizeCrewWorkLane(crew, state.now);
+    if (crew.activeJobId === null) continue;
+    const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
+    laneActive[job ? jobWorkLane(state, job) : crew.workLane] += 1;
+  }
+  const laneHasOwnWork = (lane: CrewWorkLane): boolean => pendingJobs.some((job) => job.state === 'pending' && jobWorkLane(state, job) === lane);
+  const canInterruptSelfCareForOwnLane = (crew: CrewMember): boolean =>
+    laneHasOwnWork(crew.workLane) &&
+    crew.energy > CREW_REST_ENERGY_THRESHOLD + 8 &&
+    crew.thirst > CREW_THIRST_DRINK_THRESHOLD - 10 &&
+    crew.hygiene > CREW_CLEAN_HYGIENE_THRESHOLD - 12 &&
+    crew.bladder > CREW_BLADDER_TOILET_THRESHOLD - 12 &&
+    !crew.cleanSessionActive &&
+    !crew.toiletSessionActive &&
+    !crew.drinkSessionActive;
+
   const candidates = state.crewMembers
     .filter((crew) => !crew.resting && crew.activeJobId === null)
-    .filter((crew) => !hasProtectedSelfCare(crew) || canInterruptSelfCareForFood(crew))
-    .filter((crew) => {
-      if (crew.role === 'idle') return true;
-      if (crew.energy <= CREW_REST_ENERGY_THRESHOLD + 8) return false;
-      if (logisticsPressure < 0.55) return false;
-      if (crew.assignedSystem === null) return true;
-      const requiredMinimum = protectedMinimumBySystem.get(crew.assignedSystem) ?? 0;
-      const currentlyAssigned = assignedBySystem.get(crew.assignedSystem) ?? 0;
-      if (requiredMinimum > 0 && currentlyAssigned <= requiredMinimum) return false;
-      if (
-        state.now < crew.assignmentHoldUntil &&
-        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
-        logisticsPressure < 0.65 &&
-        !criticalAirEmergency
-      ) {
-        return false;
-      }
-      if (
-        state.now < crew.assignmentStickyUntil &&
-        crew.blockedTicks < CREW_ASSIGNMENT_FORCE_REPATH_BLOCKED_TICKS &&
-        logisticsPressure < 0.65 &&
-        !airEmergency
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      const aIdle = a.role === 'idle' ? 0 : 1;
-      const bIdle = b.role === 'idle' ? 0 : 1;
-      if (aIdle !== bIdle) return aIdle - bIdle;
-      const aw = a.assignedSystem ? state.controls.crewPriorityWeights[a.assignedSystem] : 0;
-      const bw = b.assignedSystem ? state.controls.crewPriorityWeights[b.assignedSystem] : 0;
-      if (aw !== bw) return aw - bw;
-      return a.id - b.id;
-    });
+    .filter((crew) => !isCrewReservedForCommandDuty(state, crew))
+    .filter((crew) => !hasProtectedSelfCare(crew) || canInterruptSelfCareForFood(crew) || canInterruptSelfCareForOwnLane(crew))
+    .filter(
+      (crew) =>
+        crew.role === 'idle' ||
+        laneHasOwnWork(crew.workLane) ||
+        state.metrics.logisticsPressure >= 0.55 ||
+        airEmergency ||
+        criticalAirEmergency
+    )
+    .sort((a, b) => a.id - b.id);
+
+  const lanePriority = [...SPECIALIST_WORK_LANES].sort((a, b) => {
+    const ap = pendingByLane[a].pending / Math.max(1, targets[a]);
+    const bp = pendingByLane[b].pending / Math.max(1, targets[b]);
+    if (ap !== bp) return bp - ap;
+    return laneWeightFromPriorities(state, b) - laneWeightFromPriorities(state, a);
+  });
 
   let assignedNow = 0;
-  for (const crew of candidates) {
-    if (assignedNow >= dispatchSlots) break;
-    let bestJob: (typeof pendingJobs)[number] | null = null;
-    let bestPath: number[] | null = null;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    const crewNeedsFoodOverride = hasProtectedSelfCare(crew) && canInterruptSelfCareForFood(crew);
-    for (const job of pendingJobs) {
-      if (job.state !== 'pending') continue;
-      if (crewNeedsFoodOverride && !isFoodServiceJob(job)) continue;
-      const site =
-        job.type === 'construct' && job.constructionSiteId !== undefined
-          ? state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId) ?? null
-          : null;
-      if (job.type === 'construct' && !site) continue;
-      if (site?.requiresEva && activeAirlockTiles(state).length <= 0) {
-        site.state = 'blocked';
-        site.blockedReason = 'no airlock for EVA';
-        continue;
-      }
-      const path =
-        job.type === 'construct' && job.constructionMode === 'build' && site
-          ? findConstructionPath(state, crew.tileIndex, site)
-          : findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
-      if (!path) continue;
-      const age = Math.max(0, state.now - job.createdAt);
-      const suitability = crewSuitabilityForJob(crew, job);
-      const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
-      const score = logisticsJobPriority(state, job) * 100 + suitability + Math.min(30, age / 6) - path.length - needsPenalty;
-      if (score > bestScore) {
-        bestScore = score;
-        bestJob = job;
-        bestPath = path;
-      }
-    }
-    if (!bestJob || !bestPath) continue;
+  let borrowedNow = 0;
+  const emergencyLane = (lane: CrewWorkLane): boolean =>
+    (lane === 'engineering' && (airEmergency || pendingJobs.some((job) => job.type === 'repair' || job.type === 'extinguish'))) ||
+    (lane === 'food' && hasUrgentFoodWork);
 
-    if (crew.role !== 'idle' || crew.targetTile !== null || crew.assignedSystem !== null) {
-      if (crew.assignedSystem) {
-        assignedBySystem.set(crew.assignedSystem, Math.max(0, (assignedBySystem.get(crew.assignedSystem) ?? 1) - 1));
-      }
-      crew.role = 'idle';
-      crew.targetTile = null;
-      crew.lastSystem = null;
-      crew.assignedSystem = null;
-      crew.assignmentHoldUntil = 0;
-      crew.assignmentStickyUntil = 0;
-    }
-
-    bestJob.state = 'assigned';
-    bestJob.assignedCrewId = crew.id;
-    bestJob.lastProgressAt = state.now;
-    markJobStall(state, bestJob, 'none');
-    if (bestJob.type === 'construct' && bestJob.constructionSiteId !== undefined) {
-      const site = state.constructionSites.find((candidate) => candidate.id === bestJob.constructionSiteId);
-      if (site) {
-        site.assignedCrewId = crew.id;
-        site.state = bestJob.constructionMode === 'build' ? 'building' : 'delivering';
-      }
-    }
-    crew.activeJobId = bestJob.id;
-    tryCreateReservation(state, {
-      ownerKind: 'crew',
-      ownerId: crew.id,
-      kind: 'actor-job',
-      targetTile: bestJob.toTile,
-      targetId: String(bestJob.id),
-      amount: 1,
-      capacity: 1,
-      ttlSec: JOB_TTL_SEC + 5,
-      replaceOwnerReservations: true
+  const dispatchLane = (lane: CrewWorkLane, maxAssignments: number, allowFallback: boolean): number => {
+    let dispatched = 0;
+    const candidatesForLane = [...candidates].sort((a, b) => {
+      const aHomeLane = staffRoleWorkLane(a.staffRole);
+      const bHomeLane = staffRoleWorkLane(b.staffRole);
+      const aRank =
+        (aHomeLane === lane ? 1000 : 0) +
+        (a.workLane === lane ? 300 : 0) +
+        (a.workLane === 'flex' ? 120 : 0) +
+        (staffRoleAllowsFallback(a.staffRole) ? 20 : 0);
+      const bRank =
+        (bHomeLane === lane ? 1000 : 0) +
+        (b.workLane === lane ? 300 : 0) +
+        (b.workLane === 'flex' ? 120 : 0) +
+        (staffRoleAllowsFallback(b.staffRole) ? 20 : 0);
+      if (aRank !== bRank) return bRank - aRank;
+      return a.id - b.id;
     });
-    crew.cleaning = false;
-    crew.cleanSessionActive = false;
-    crew.toileting = false;
-    crew.toiletSessionActive = false;
-    clearCrewLeisure(crew);
-    setCrewPath(state, crew, bestPath);
-    if (crew.path.length === 0 && crew.tileIndex !== bestJob.fromTile) {
-      markJobStall(state, bestJob, 'stalled_unreachable_source');
+    for (const crew of candidatesForLane) {
+      if (dispatched >= maxAssignments) break;
+      if (crew.activeJobId !== null) continue;
+      const ownLane = crew.workLane === lane;
+      const flex = crew.workLane === 'flex';
+      const roleCanFallback = staffRoleAllowsFallback(crew.staffRole);
+      const fallback = allowFallback && roleCanFallback && !ownLane && !flex && !laneHasOwnWork(crew.workLane);
+      const emergencyBorrow = roleCanFallback && !ownLane && !flex && emergencyLane(lane);
+      if (!ownLane && !flex && !fallback && !emergencyBorrow) continue;
+      const crewNeedsFoodOverride = hasProtectedSelfCare(crew) && canInterruptSelfCareForFood(crew);
+      let bestJob: (typeof pendingJobs)[number] | null = null;
+      let bestPath: number[] | null = null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      for (const job of pendingJobs) {
+        if (job.state !== 'pending') continue;
+        if (jobWorkLane(state, job) !== lane) continue;
+        if (crewNeedsFoodOverride && !isFoodServiceJob(job)) continue;
+        const site =
+          job.type === 'construct' && job.constructionSiteId !== undefined
+            ? state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId) ?? null
+            : null;
+        if (job.type === 'construct' && !site) continue;
+        if (site?.requiresEva && activeAirlockTiles(state).length <= 0) {
+          site.state = 'blocked';
+          site.blockedReason = 'no airlock for EVA';
+          pendingByLane[lane].blocked += 1;
+          continue;
+        }
+        let path =
+          job.type === 'construct' && job.constructionMode === 'build' && site
+            ? findConstructionPath(state, crew.tileIndex, site)
+            : findPath(
+                state,
+                crew.tileIndex,
+                jobWorkTile(state, job),
+                { allowRestricted: true, intent: 'logistics' },
+                state.pathOccupancyByTile
+              );
+        if (!path && (ownLane || staffRoleWorkLane(crew.staffRole) === lane)) {
+          path =
+            job.type === 'construct' && job.constructionMode === 'build' && site
+              ? findConstructionPath(state, crew.tileIndex, site)
+              : findPath(state, crew.tileIndex, jobWorkTile(state, job), { allowRestricted: true, intent: 'logistics' });
+        }
+        if (!path) continue;
+        const age = Math.max(0, state.now - job.createdAt);
+        const laneBonus = ownLane ? 45 : flex ? 18 : emergencyBorrow ? -8 : -24;
+        const suitability = crewSuitabilityForJob(crew, job);
+        const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
+        const score = logisticsJobPriority(state, job) * 100 + laneBonus + suitability + Math.min(30, age / 6) - path.length - needsPenalty;
+        if (score > bestScore) {
+          bestScore = score;
+          bestJob = job;
+          bestPath = path;
+        }
+      }
+      if (!bestJob || !bestPath) continue;
+      if (!ownLane && !flex) borrowedNow += 1;
+      assignJobToCrew(state, crew, bestJob, bestPath);
+      laneActive[lane] += 1;
+      dispatched += 1;
+      assignedNow += 1;
     }
-    assignedNow += 1;
+    return dispatched;
+  };
+
+  for (const lane of lanePriority) {
+    const slots = Math.max(0, targets[lane] - laneActive[lane]);
+    if (slots > 0) dispatchLane(lane, slots, false);
   }
+  const fallbackBudget = candidates.filter(
+    (crew) => crew.activeJobId === null && staffRoleAllowsFallback(crew.staffRole) && !laneHasOwnWork(crew.workLane)
+  ).length;
+  const flexBudget =
+    Math.max(0, targets.flex - laneActive.flex) +
+    candidates.filter((crew) => crew.activeJobId === null && crew.workLane === 'flex').length +
+    fallbackBudget;
+  let flexRemaining = flexBudget;
+  for (const lane of lanePriority) {
+    if (flexRemaining <= 0) break;
+    const before = assignedNow;
+    dispatchLane(lane, flexRemaining, true);
+    flexRemaining = Math.max(0, flexRemaining - (assignedNow - before));
+  }
+
+  state.metrics.logisticsDispatchSlots = assignedNow;
+  state.metrics.workforceBorrowedCrew = borrowedNow;
 }
 
 function extendActiveReservationsForOwner(
@@ -7941,6 +8830,9 @@ function pendingJobStillViable(state: StationState, job: StationState['jobs'][nu
   }
   if (job.type === 'cook') {
     return itemStockAtNode(state, job.fromTile, 'rawMeal') > 0.05 && itemNodeFreeCapacity(state, job.toTile) > 0.05;
+  }
+  if (job.type === 'sanitize') {
+    return (state.dirtByTile[job.fromTile] ?? 0) > SANITATION_JOB_TARGET + 3;
   }
   return false;
 }
@@ -7983,6 +8875,30 @@ function createJobStatusCounts(): JobStatusCounts {
   return { pending: 0, assigned: 0, expired: 0, done: 0 };
 }
 
+function createWorkLaneMetrics(): WorkLaneMetrics {
+  return {
+    target: 0,
+    assigned: 0,
+    working: 0,
+    idle: 0,
+    pending: 0,
+    blocked: 0,
+    borrowed: 0,
+    pressure: 0
+  };
+}
+
+function createWorkforceLaneMetrics(): Record<CrewWorkLane, WorkLaneMetrics> {
+  return {
+    food: createWorkLaneMetrics(),
+    sanitation: createWorkLaneMetrics(),
+    engineering: createWorkLaneMetrics(),
+    logistics: createWorkLaneMetrics(),
+    'construction-eva': createWorkLaneMetrics(),
+    flex: createWorkLaneMetrics()
+  };
+}
+
 function createJobCountsByItem(): Record<ItemType, JobStatusCounts> {
   return {
     rawMeal: createJobStatusCounts(),
@@ -8000,7 +8916,8 @@ function createJobCountsByType(): Record<JobType, JobStatusCounts> {
     repair: createJobStatusCounts(),
     extinguish: createJobStatusCounts(),
     construct: createJobStatusCounts(),
-    cook: createJobStatusCounts()
+    cook: createJobStatusCounts(),
+    sanitize: createJobStatusCounts()
   };
 }
 
@@ -8048,6 +8965,7 @@ function refreshJobMetrics(state: StationState): void {
   const backlogByType = new Map<string, number>();
   const countsByItem = createJobCountsByItem();
   const countsByType = createJobCountsByType();
+  const workforceLanes = createWorkforceLaneMetrics();
   const expiredByContext: Record<JobExpiryContext, number> = {
     queued: 0,
     assigned: 0,
@@ -8059,12 +8977,14 @@ function refreshJobMetrics(state: StationState): void {
       pending++;
       countsByItem[job.itemType].pending += 1;
       countsByType[job.type].pending += 1;
+      workforceLanes[jobWorkLane(state, job)].pending += 1;
       backlogByType.set(job.type, (backlogByType.get(job.type) ?? 0) + 1);
       ages.push(Math.max(0, state.now - job.createdAt));
     } else if (job.state === 'assigned' || job.state === 'in_progress') {
       assigned++;
       countsByItem[job.itemType].assigned += 1;
       countsByType[job.type].assigned += 1;
+      workforceLanes[jobWorkLane(state, job)].working += 1;
       ages.push(Math.max(0, state.now - job.createdAt));
     } else if (job.state === 'done') {
       done++;
@@ -8110,6 +9030,7 @@ function refreshJobMetrics(state: StationState): void {
     }
     if (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress') {
       stalledByReason[job.stallReason ?? 'none']++;
+      if ((job.stallReason ?? 'none') !== 'none') workforceLanes[jobWorkLane(state, job)].blocked += 1;
       if (job.type === 'deliver' || job.type === 'pickup') {
         logisticsAmount += job.amount;
         logisticsCount += 1;
@@ -8149,6 +9070,43 @@ function refreshJobMetrics(state: StationState): void {
   state.metrics.expiredJobsByContext = expiredByContext;
   state.metrics.jobCountsByItem = countsByItem;
   state.metrics.jobCountsByType = countsByType;
+  const nonRestingCrew = state.crewMembers.filter((crew) => !crew.resting);
+  const targetByLane = deriveWorkLaneTargets(
+    state,
+    state.jobs.filter((job) => job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress'),
+    nonRestingCrew
+  );
+  let borrowedCrew = 0;
+  for (const lane of CREW_WORK_LANES) workforceLanes[lane].target = targetByLane[lane];
+  for (const crew of nonRestingCrew) {
+    normalizeCrewWorkLane(crew, state.now);
+    const job = crew.activeJobId !== null ? state.jobs.find((candidate) => candidate.id === crew.activeJobId) ?? null : null;
+    const lane = crew.workLane;
+    workforceLanes[lane].assigned += 1;
+    if (crew.activeJobId !== null) {
+      const jobLane = job ? jobWorkLane(state, job) : lane;
+      workforceLanes[jobLane].working += job ? 0 : 1;
+      if (crew.workLane !== jobLane && crew.workLane !== 'flex') {
+        workforceLanes[jobLane].borrowed += 1;
+        borrowedCrew += 1;
+      }
+    } else if (crew.role === 'idle') {
+      workforceLanes[lane].idle += 1;
+    }
+  }
+  let highestPressureLane: CrewWorkLane | null = null;
+  let highestPressure = 0;
+  for (const lane of CREW_WORK_LANES) {
+    const metrics = workforceLanes[lane];
+    metrics.pressure = clamp((metrics.pending + metrics.blocked * 1.5) / Math.max(1, metrics.target + metrics.working), 0, 3);
+    if (lane !== 'flex' && metrics.pressure > highestPressure) {
+      highestPressure = metrics.pressure;
+      highestPressureLane = lane;
+    }
+  }
+  state.metrics.workforceLanes = workforceLanes;
+  state.metrics.workforceBorrowedCrew = borrowedCrew;
+  state.metrics.workforceHighestPressureLane = highestPressureLane;
   state.metrics.logisticsAverageBatchSize = logisticsCount > 0 ? logisticsAmount / logisticsCount : 0;
   state.metrics.logisticsJobMilesPerMin = logisticsMiles;
   state.metrics.logisticsBlockedReason =
@@ -8900,10 +9858,76 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           // in_progress with this fromTile. Crew just stays put.
         }
         continue;
+      } else if (job.type === 'sanitize') {
+        const targetTile = job.fromTile;
+        const workTile = sanitationWorkTileForTarget(state, targetTile);
+        job.toTile = workTile;
+        if (crew.tileIndex !== workTile) {
+          if (crew.path.length === 0) {
+            setCrewPath(
+              state,
+              crew,
+              findPath(state, crew.tileIndex, workTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ?? []
+            );
+            if (crew.path.length === 0) {
+              markJobStall(state, job, 'stalled_unreachable_source');
+            }
+          }
+          const moveResult = moveCrew(crew);
+          if (moveResult === 'moved') {
+            job.lastProgressAt = state.now;
+            markJobStall(state, job, 'none');
+            crew.blockedTicks = 0;
+          } else if (moveResult === 'blocked') {
+            crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+            markJobStall(state, job, 'stalled_path_blocked');
+          }
+        } else {
+          if (job.state !== 'in_progress') job.state = 'in_progress';
+          let remainingWork = SANITATION_JOB_RATE_PER_SEC * dt;
+          const p = fromIndex(targetTile, state.width);
+          const patch: number[] = [targetTile];
+          for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
+            for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = p.x + dx;
+              const ny = p.y + dy;
+              if (!inBounds(nx, ny, state.width, state.height)) continue;
+              const tile = toIndex(nx, ny, state.width);
+              if (!isWalkable(state.tiles[tile])) continue;
+              if (state.rooms[tile] !== state.rooms[targetTile]) continue;
+              patch.push(tile);
+            }
+          }
+          patch.sort((a, b) => (state.dirtByTile[b] ?? 0) - (state.dirtByTile[a] ?? 0));
+          let cleaned = 0;
+          for (const tile of patch) {
+            if (remainingWork <= 0) break;
+            const before = state.dirtByTile[tile] ?? 0;
+            if (before <= SANITATION_JOB_TARGET) continue;
+            const spent = Math.min(remainingWork, before - SANITATION_JOB_TARGET);
+            cleaned += reduceDirt(state, tile, spent);
+            remainingWork -= spent;
+          }
+          job.workProgress = (job.workProgress ?? 0) + cleaned;
+          job.lastProgressAt = state.now;
+          markJobStall(state, job, 'none');
+          const targetClean = (state.dirtByTile[targetTile] ?? 0) <= SANITATION_JOB_TARGET + 1;
+          const progressDone = (job.workProgress ?? 0) >= (job.workRequired ?? job.amount);
+          if (targetClean || progressDone) {
+            job.state = 'done';
+            job.completedAt = state.now;
+            crew.activeJobId = null;
+            setCrewPath(state, crew, []);
+            state.usageTotals.sanitationJobsResolved += 1;
+          }
+        }
+        continue;
       } else if (job.type === 'repair') {
         // Repair: walk to the system anchor tile and stand still while ticking
-        // down the cluster's debt. No item carry. When the job's repair target
-        // amount is reached or debt hits zero, the job completes.
+        // down the cluster's debt. No item carry. Repairs leave the system
+        // visibly healthy instead of shaving a small fixed amount and
+        // immediately requeueing another wrench job.
         const anchorTile = job.fromTile;
         if (crew.tileIndex !== anchorTile) {
           if (crew.path.length === 0) {
@@ -8948,7 +9972,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               debtEntry.lastServicedAt = state.now;
               job.repairProgress = (job.repairProgress ?? 0) + reduction;
               job.lastProgressAt = state.now;
-              if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= 0.5) {
+              if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= REPAIR_JOB_COMPLETE_DEBT) {
                 job.state = 'done';
                 job.completedAt = state.now;
                 markJobStall(state, job, 'none');
@@ -9269,6 +10293,15 @@ function applyVisitorCompletedRouteExperience(state: StationState, visitor: Visi
     state.usageTotals.visitorEnvironmentPenalty += penalty;
     if (environmentDiscomfort >= 2.5) addVisitorPatience(state, visitor, environmentDiscomfort * 0.012, false);
   }
+  const sanitation = getSanitationTileDiagnostic(state, visitor.tileIndex % state.width, Math.floor(visitor.tileIndex / state.width));
+  if (sanitation && sanitation.dirt >= SANITATION_DIRTY_THRESHOLD) {
+    const penalty = Math.min(0.18, (sanitation.dirt - SANITATION_DIRTY_THRESHOLD) * SANITATION_VISITOR_RATING_PENALTY_PER_SEC);
+    if (penalty > 0) {
+      serviceFailureRatingPenalty(state, penalty, 'ratingFromEnvironment');
+      state.usageTotals.ratingFromSanitation += penalty;
+      if (sanitation.dirt >= SANITATION_FILTHY_THRESHOLD) addVisitorPatience(state, visitor, 0.14, false);
+    }
+  }
   visitor.lastRouteExposure = undefined;
 }
 
@@ -9289,6 +10322,13 @@ function applyResidentCompletedRouteExperience(state: StationState, resident: Re
     resident.stress = clamp(resident.stress + stress, 0, 120);
     resident.satisfaction = clamp(resident.satisfaction - stress * 0.65, 0, 100);
     state.usageTotals.residentEnvironmentStress += stress;
+  }
+  const sanitation = getSanitationTileDiagnostic(state, resident.tileIndex % state.width, Math.floor(resident.tileIndex / state.width));
+  if (sanitation && sanitation.dirt >= SANITATION_DIRTY_THRESHOLD) {
+    const stress = Math.min(2.5, (sanitation.dirt - SANITATION_DIRTY_THRESHOLD) * SANITATION_RESIDENT_STRESS_PER_SEC);
+    resident.stress = clamp(resident.stress + stress, 0, 120);
+    resident.satisfaction = clamp(resident.satisfaction - stress * 0.55, 0, 100);
+    state.usageTotals.residentSanitationStress += stress;
   }
   resident.lastRouteExposure = undefined;
 }
@@ -9676,6 +10716,7 @@ function updateVisitorLogic(
           visitor.state = VisitorState.Eating;
           const eatBase = TASK_TIMINGS.visitorEatBaseSec[visitor.archetype];
           visitor.eatTimer = eatBase + state.rng() * TASK_TIMINGS.visitorEatJitterSec;
+          addDirt(state, visitor.tileIndex, 3.4, 'meals');
           applyVisitorCompletedRouteExperience(state, visitor);
           setVisitorPath(state, visitor, []);
           state.usageTotals.meals += 1;
@@ -10758,6 +11799,7 @@ function updateResidentLogic(
         ) {
           resident.state = ResidentState.Eating;
           resident.actionTimer = TASK_TIMINGS.residentEatSec;
+          addDirt(state, resident.tileIndex, 2.4, 'meals');
           applyResidentCompletedRouteExperience(state, resident);
           setResidentPath(state, resident, []);
           state.usageTotals.meals += 1;
@@ -11439,6 +12481,39 @@ function computeMetrics(state: StationState): void {
     state.maintenanceDebts.length > 0 ? maintenanceDebtTotal / state.maintenanceDebts.length : 0;
   state.metrics.maintenanceDebtMax = state.maintenanceDebts.reduce((max, debt) => Math.max(max, debt.debt), 0);
   state.metrics.maintenanceJobsOpen = state.maintenanceDebts.filter((debt) => debt.debt >= MAINTENANCE_DEBT_WARNING).length;
+  let sanitationTotal = 0;
+  let sanitationMax = 0;
+  let sanitationSamples = 0;
+  let dirtyTiles = 0;
+  let filthyTiles = 0;
+  const sanitationSourceTotals: Record<SanitationSource, number> = {
+    none: 0,
+    traffic: 0,
+    meals: 0,
+    hygiene: 0,
+    kitchen: 0,
+    hydroponics: 0,
+    market: 0,
+    fire: 0,
+    body: 0,
+    mixed: 0
+  };
+  for (let i = 0; i < state.dirtByTile.length; i++) {
+    if (!isWalkable(state.tiles[i])) continue;
+    const dirt = state.dirtByTile[i] ?? 0;
+    sanitationTotal += dirt;
+    sanitationSamples += 1;
+    sanitationMax = Math.max(sanitationMax, dirt);
+    if (dirt >= SANITATION_DIRTY_THRESHOLD) dirtyTiles += 1;
+    if (dirt >= SANITATION_FILTHY_THRESHOLD) filthyTiles += 1;
+    sanitationSourceTotals[sanitationSourceFromCode(state.dirtSourceByTile[i] ?? 0)] += dirt;
+  }
+  state.metrics.sanitationAvg = sanitationSamples > 0 ? sanitationTotal / sanitationSamples : 0;
+  state.metrics.sanitationMax = sanitationMax;
+  state.metrics.dirtyTiles = dirtyTiles;
+  state.metrics.filthyTiles = filthyTiles;
+  state.metrics.sanitationJobsOpen = openSanitizeJobCount(state);
+  state.metrics.sanitationTopSource = dominantSanitationSource(sanitationSourceTotals);
   state.recentDeathTimes = state.recentDeathTimes.filter((t) => state.now - t <= 60);
   state.metrics.recentDeaths = state.recentDeathTimes.length;
   const crewRestingInDorm = state.crewMembers.filter((c) => c.resting && state.rooms[c.tileIndex] === RoomType.Dorm).length;
@@ -11612,6 +12687,9 @@ function computeMetrics(state: StationState): void {
   state.metrics.visitorEnvironmentPenaltyPerMin = state.usageTotals.visitorEnvironmentPenalty / runMinutes;
   state.metrics.residentEnvironmentStressPerMin = state.usageTotals.residentEnvironmentStress / runMinutes;
   state.metrics.maintenanceJobsResolvedPerMin = state.usageTotals.maintenanceJobsResolved / runMinutes;
+  state.metrics.sanitationJobsCompletedPerMin = state.usageTotals.sanitationJobsResolved / runMinutes;
+  state.metrics.sanitationPenaltyTotal = state.usageTotals.ratingFromSanitation + state.usageTotals.residentSanitationStress;
+  state.metrics.sanitationPenaltyPerMin = state.metrics.sanitationPenaltyTotal / runMinutes;
   state.metrics.dormVisitsPerMin = state.usageTotals.dorm / runMinutes;
   state.metrics.dormFailedAttemptsPerMin = state.failedNeedAttempts.dorm / runMinutes;
   state.metrics.hygieneUsesPerMin = state.usageTotals.hygiene / runMinutes;
@@ -11672,6 +12750,11 @@ function computeMetrics(state: StationState): void {
   if (state.metrics.serviceNoiseNearDorms > 0.9) {
     roomWarnings.unshift('layout noise: dorms near loud systems');
   }
+  if (state.metrics.filthyTiles > 0) {
+    roomWarnings.unshift(`sanitation critical: ${state.metrics.filthyTiles} filthy tiles`);
+  } else if (state.metrics.dirtyTiles > 0) {
+    roomWarnings.unshift(`sanitation needed: ${state.metrics.dirtyTiles} dirty tiles`);
+  }
   if (state.metrics.maintenanceDebtMax >= MAINTENANCE_DEBT_SEVERE) {
     roomWarnings.unshift('maintenance critical: utility output degraded');
   } else if (state.metrics.maintenanceJobsOpen > 0) {
@@ -11714,6 +12797,7 @@ function computeMetrics(state: StationState): void {
     { label: 'long routes', value: state.usageTotals.ratingFromWalkDissatisfaction },
     { label: 'bad routes', value: state.usageTotals.ratingFromRouteExposure },
     { label: 'bad environment', value: state.usageTotals.ratingFromEnvironment },
+    { label: 'sanitation', value: state.usageTotals.ratingFromSanitation },
     { label: 'resident departures', value: state.usageTotals.ratingFromResidentDeparture }
   ]
     .filter((p) => p.value > 0.01)
@@ -11790,6 +12874,32 @@ export function createInitialState(options?: { seed?: number }): StationState {
   const roomHousingPolicies = new Array<HousingPolicy>(GRID_WIDTH * GRID_HEIGHT).fill('visitor');
   const modules = new Array<ModuleType>(GRID_WIDTH * GRID_HEIGHT).fill(ModuleType.None);
   const moduleOccupancyByTile = new Array<number | null>(GRID_WIDTH * GRID_HEIGHT).fill(null);
+  const moduleInstances: ModuleInstance[] = [];
+  let initialModuleSpawnCounter = 1;
+  const addStarterModule = (type: ModuleType, x: number, y: number, rotation: ModuleRotation = 0): void => {
+    const def = MODULE_DEFINITIONS[type];
+    const width = rotation === 90 ? def.height : def.width;
+    const height = rotation === 90 ? def.width : def.height;
+    const originTile = toIndex(x, y, GRID_WIDTH);
+    const instance: ModuleInstance = {
+      id: initialModuleSpawnCounter++,
+      type,
+      originTile,
+      rotation,
+      width,
+      height,
+      tiles: []
+    };
+    for (let yy = y; yy < y + height; yy++) {
+      for (let xx = x; xx < x + width; xx++) {
+        const idx = toIndex(xx, yy, GRID_WIDTH);
+        modules[idx] = type;
+        moduleOccupancyByTile[idx] = instance.id;
+        instance.tiles.push(idx);
+      }
+    }
+    moduleInstances.push(instance);
+  };
   const coreX = Math.floor(GRID_WIDTH / 2);
   const coreY = Math.floor(GRID_HEIGHT / 2);
   const starterFloorMinX = coreX - 5;
@@ -11837,6 +12947,16 @@ export function createInitialState(options?: { seed?: number }): StationState {
   const reactorDoor = toIndex(reactorWallMaxX, coreY, GRID_WIDTH);
   tiles[reactorDoor] = TileType.Door;
   rooms[reactorDoor] = RoomType.Reactor;
+
+  for (let y = starterFloorMinY; y <= starterFloorMinY + 2; y++) {
+    for (let x = starterFloorMinX; x <= starterFloorMinX + 5; x++) {
+      const idx = toIndex(x, y, GRID_WIDTH);
+      rooms[idx] = RoomType.Bridge;
+      roomHousingPolicies[idx] = 'crew';
+    }
+  }
+  addStarterModule(ModuleType.CaptainConsole, starterFloorMinX + 1, starterFloorMinY, 0);
+
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
 
@@ -11848,7 +12968,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     rooms,
     roomHousingPolicies,
     modules,
-    moduleInstances: [],
+    moduleInstances,
     moduleOccupancyByTile,
     core: {
       centerTile: toIndex(coreX, coreY, GRID_WIDTH),
@@ -11863,6 +12983,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
     dockQueue: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
+    dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
+    dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
+    mapConditionVersion: MAP_CONDITION_VERSION,
     pathOccupancyByTile: new Map(),
     jobs: [],
     reservations: [],
@@ -11873,6 +12996,17 @@ export function createInitialState(options?: { seed?: number }): StationState {
     visitors: [],
     residents: [],
     crewMembers: [],
+    command: {
+      selectedSpecialty: null,
+      completedSpecialties: [],
+      specialtyProgress: createInitialSpecialtyProgress(),
+      officers: {},
+      bridgeStaffing: {
+        captainConsoleStaffed: false,
+        activeTerminalStaff: 0,
+        requiredTerminalStaff: 1
+      }
+    },
     maintenanceDebts: [],
     arrivingShips: [],
     pendingSpawns: [],
@@ -12074,6 +13208,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
         idle_no_path: 0,
         idle_waiting_reassign: 0
       },
+      workforceLanes: createWorkforceLaneMetrics(),
+      workforceBorrowedCrew: 0,
+      workforceHighestPressureLane: null,
       stalledJobsByReason: {
         none: 0,
         stalled_path_blocked: 0,
@@ -12155,6 +13292,15 @@ export function createInitialState(options?: { seed?: number }): StationState {
       maintenanceDebtMax: 0,
       maintenanceJobsOpen: 0,
       maintenanceJobsResolvedPerMin: 0,
+      sanitationAvg: 0,
+      sanitationMax: 0,
+      dirtyTiles: 0,
+      filthyTiles: 0,
+      sanitationJobsOpen: 0,
+      sanitationJobsCompletedPerMin: 0,
+      sanitationPenaltyPerMin: 0,
+      sanitationPenaltyTotal: 0,
+      sanitationTopSource: 'none',
       lifeSupportCoveragePct: 100,
       avgLifeSupportDistance: 0,
       poorLifeSupportTiles: 0,
@@ -12258,7 +13404,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     crewSpawnCounter: 1,
     residentSpawnCounter: 1,
     lastResidentSpawnAt: -999,
-    moduleSpawnCounter: 1,
+    moduleSpawnCounter: initialModuleSpawnCounter,
     jobSpawnCounter: 1,
     reservationSpawnCounter: 1,
     constructionSiteSpawnCounter: 1,
@@ -12346,6 +13492,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       visitorEnvironmentPenalty: 0,
       residentEnvironmentStress: 0,
       maintenanceJobsResolved: 0,
+      sanitationJobsResolved: 0,
+      ratingFromSanitation: 0,
+      residentSanitationStress: 0,
       criticalStaffDrops: 0,
       securityDispatches: 0,
       securityResolved: 0,
@@ -12370,11 +13519,14 @@ export function createInitialState(options?: { seed?: number }): StationState {
       dorm: 0
     },
     crew: {
-      total: 8,
+      total: totalStaffCount(createInitialStaffRoleCounts()),
       assigned: 0,
-      free: 8
+      free: totalStaffCount(createInitialStaffRoleCounts()),
+      roleCounts: createInitialStaffRoleCounts()
     },
     ops: {
+      bridgeTotal: 0,
+      bridgeActive: 0,
       cafeteriasTotal: 0,
       cafeteriasActive: 0,
       kitchenTotal: 0,
@@ -12469,6 +13621,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   const moduleOccupancyByTile = new Array<number | null>(newWidth * newHeight).fill(null);
   const pressurized = new Array<boolean>(newWidth * newHeight).fill(false);
   const airQualityByTile = new Float32Array(newWidth * newHeight).fill(100);
+  const dirtByTile = new Float32Array(newWidth * newHeight);
+  const dirtSourceByTile = new Uint8Array(newWidth * newHeight);
 
   for (let y = 0; y < oldHeight; y++) {
     for (let x = 0; x < oldWidth; x++) {
@@ -12482,6 +13636,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
       moduleOccupancyByTile[newIndex] = state.moduleOccupancyByTile[oldIndex];
       pressurized[newIndex] = state.pressurized[oldIndex];
       airQualityByTile[newIndex] = state.airQualityByTile[oldIndex];
+      dirtByTile[newIndex] = state.dirtByTile[oldIndex];
+      dirtSourceByTile[newIndex] = state.dirtSourceByTile[oldIndex];
     }
   }
 
@@ -12496,6 +13652,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   state.moduleOccupancyByTile = moduleOccupancyByTile;
   state.pressurized = pressurized;
   state.airQualityByTile = airQualityByTile;
+  state.dirtByTile = dirtByTile;
+  state.dirtSourceByTile = dirtSourceByTile;
 
   state.core.centerTile = remapIndex(state.core.centerTile);
   state.core.serviceTile = remapIndex(state.core.serviceTile);
@@ -12603,6 +13761,8 @@ export function setTile(state: StationState, index: number, tile: TileType): voi
   if (previousTile === tile) return;
   state.tiles[index] = tile;
   if (!isWalkable(tile)) {
+    state.dirtByTile[index] = 0;
+    state.dirtSourceByTile[index] = 0;
     const moduleId = state.moduleOccupancyByTile[index];
     if (moduleId !== null) {
       removeModuleById(state, moduleId);
@@ -13436,6 +14596,16 @@ function crewInspectorAction(
           stateLabel: 'firefighting'
         };
       }
+      if (job.type === 'sanitize') {
+        const at = crew.tileIndex === job.fromTile;
+        const dirt = state.dirtByTile[job.fromTile] ?? 0;
+        const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
+        return {
+          currentAction: at ? 'sanitizing room' : 'walking to sanitation job',
+          actionReason: `job #${job.id} ${job.state} | dirt ${dirt.toFixed(0)}% | source ${job.sanitationSource ?? 'mixed'}${stall}`,
+          stateLabel: 'sanitation'
+        };
+      }
       const carrying = crew.carryingItemType !== null || job.pickedUpAmount > 0;
       const currentAction = carrying ? `delivering ${job.itemType}` : `walking to ${job.itemType} pickup`;
       const stall = job.stallReason && job.stallReason !== 'none' ? ` | ${job.stallReason}` : '';
@@ -13524,6 +14694,7 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     providerTarget: providerTargetLabelFromTile(state, crewInspectorTargetTile(state, crew)),
     blockedReason: crew.blockedTicks > 4 ? crew.idleReason : null,
     role: crew.role,
+    staffRole: crew.staffRole,
     assignedSystem: crew.assignedSystem,
     lastSystem: crew.lastSystem,
     energy: crew.energy,
@@ -13894,17 +15065,160 @@ export function buyRawFoodDetailed(
   return { ok: true, added };
 }
 
+export function isSpecialtyCompleted(state: StationState, specialtyId: SpecialtyId): boolean {
+  ensureCommandState(state);
+  return state.command.completedSpecialties.includes(specialtyId);
+}
+
+export function canHireStaffRole(state: StationState, role: StaffRole): { ok: boolean; reason?: string } {
+  ensureCommandState(state);
+  const def = STAFF_ROLE_DEFINITIONS[role];
+  if (!def) return { ok: false, reason: 'unknown role' };
+  if (state.crew.total >= 60) return { ok: false, reason: 'crew cap reached' };
+  if (def.officer && state.crew.roleCounts[role] >= 1) return { ok: false, reason: 'officer already hired' };
+  if (def.requiresSpecialty && !isSpecialtyCompleted(state, def.requiresSpecialty)) {
+    const specialty = SPECIALTY_BY_ID[def.requiresSpecialty];
+    const progress = state.command.specialtyProgress[def.requiresSpecialty];
+    const researchedOfficer =
+      def.officer &&
+      state.command.selectedSpecialty === def.requiresSpecialty &&
+      specialty?.officerRole === role &&
+      (progress?.progress ?? 0) >= 1;
+    if (!researchedOfficer) return { ok: false, reason: 'specialty not completed' };
+  }
+  if (role === 'captain' && state.crew.roleCounts.captain >= 1) return { ok: false, reason: 'captain already assigned' };
+  if (state.metrics.credits < def.cost) return { ok: false, reason: 'not enough credits' };
+  return { ok: true };
+}
+
+export function hireStaffRole(state: StationState, role: StaffRole): boolean {
+  ensureCommandState(state);
+  const check = canHireStaffRole(state, role);
+  if (!check.ok) return false;
+  const def = STAFF_ROLE_DEFINITIONS[role];
+  state.metrics.credits -= def.cost;
+  state.crew.roleCounts[role] += 1;
+  if (def.officer) state.command.officers[role] = true;
+  state.crew.total = totalStaffCount(state.crew.roleCounts);
+  ensureCrewPool(state);
+  completeActiveSpecialty(state);
+  return true;
+}
+
+export function fireStaffRole(state: StationState, role: StaffRole): boolean {
+  ensureCommandState(state);
+  if (role === 'captain') return false;
+  if ((state.crew.roleCounts[role] ?? 0) <= 0) return false;
+  state.crew.roleCounts[role] -= 1;
+  state.crew.total = totalStaffCount(state.crew.roleCounts);
+  ensureCrewPool(state);
+  return true;
+}
+
+export function selectSpecialty(state: StationState, specialtyId: SpecialtyId): boolean {
+  ensureCommandState(state);
+  if (state.command.selectedSpecialty !== null) return false;
+  const def = SPECIALTY_BY_ID[specialtyId];
+  if (!def || !isSpecialtyPhaseAvailable(specialtyId, state.command.completedSpecialties.length)) return false;
+  const progress = state.command.specialtyProgress[specialtyId];
+  if (progress.state === 'completed') return false;
+  if (state.metrics.credits < def.researchCost) return false;
+  state.metrics.credits -= def.researchCost;
+  progress.state = 'active';
+  progress.selectedAt = state.now;
+  state.command.selectedSpecialty = specialtyId;
+  return true;
+}
+
+export function completeActiveSpecialty(state: StationState): boolean {
+  ensureCommandState(state);
+  const specialtyId = state.command.selectedSpecialty;
+  if (!specialtyId) return false;
+  const progress = state.command.specialtyProgress[specialtyId];
+  const def = SPECIALTY_BY_ID[specialtyId];
+  if (!def || progress.progress < 1) return false;
+  if ((state.crew.roleCounts[def.officerRole] ?? 0) <= 0) return false;
+  progress.state = 'completed';
+  progress.completedAt = state.now;
+  if (!state.command.completedSpecialties.includes(specialtyId)) {
+    state.command.completedSpecialties.push(specialtyId);
+  }
+  state.command.selectedSpecialty = null;
+  return true;
+}
+
+export function updateCommandProgress(state: StationState, dt: number): void {
+  ensureCommandState(state);
+  for (const def of SPECIALTY_DEFINITIONS) {
+    const progress = state.command.specialtyProgress[def.id];
+    if (progress.state === 'locked' && isSpecialtyPhaseAvailable(def.id, state.command.completedSpecialties.length)) progress.state = 'available';
+  }
+  const specialtyId = state.command.selectedSpecialty;
+  const bridgeTiles = activeRoomTargets(state, RoomType.Bridge);
+  const bridgeModules = state.moduleInstances.filter((module) => bridgeTiles.includes(module.originTile));
+  const captainDutyTiles = captainConsoleDutyTiles(state);
+  if (captainDutyTiles.length > 0) {
+    for (const crew of state.crewMembers) {
+      if (crew.staffRole !== 'captain' || crew.resting) continue;
+      releaseCrewJobForCommandDuty(state, crew);
+      if (crew.activeJobId !== null) continue;
+      const currentDutyTile = captainDutyTiles.includes(crew.tileIndex) ? crew.tileIndex : null;
+      let selectedDutyTile = currentDutyTile;
+      let selectedPath: number[] | null = currentDutyTile !== null ? [] : null;
+      if (selectedDutyTile === null) {
+        for (const dutyTile of captainDutyTiles) {
+          const path =
+            findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ??
+            findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' });
+          if (!path) continue;
+          selectedDutyTile = dutyTile;
+          selectedPath = path;
+          break;
+        }
+      }
+      if (selectedDutyTile === null || selectedPath === null) continue;
+      crew.role = 'idle';
+      crew.targetTile = selectedDutyTile;
+      crew.assignedSystem = null;
+      crew.lastSystem = null;
+      if (crew.tileIndex !== selectedDutyTile && crew.path.length === 0) {
+        setCrewPath(state, crew, selectedPath);
+      }
+      break;
+    }
+  }
+  state.command.bridgeStaffing.requiredTerminalStaff = Math.max(1, Math.min(3, bridgeModules.length));
+  state.command.bridgeStaffing.activeTerminalStaff = state.crewMembers.filter(
+    (crew) => !crew.resting && crew.staffRole === 'captain' && captainDutyTiles.includes(crew.tileIndex)
+  ).length;
+  state.command.bridgeStaffing.captainConsoleStaffed = state.command.bridgeStaffing.activeTerminalStaff > 0;
+  if (!specialtyId) return;
+  const def = SPECIALTY_BY_ID[specialtyId];
+  const progress = state.command.specialtyProgress[specialtyId];
+  const hasResearchTerminal = bridgeModules.some((module) => module.type === ModuleType.ResearchTerminal || module.type === def.terminal);
+  const bridgeBonus = bridgeTiles.length > 0 ? 1 : 0.45;
+  const terminalBonus = hasResearchTerminal ? 1 : 0.55;
+  progress.progress = clamp(progress.progress + (dt / def.researchSeconds) * bridgeBonus * terminalBonus, 0, 1);
+  if (progress.progress >= 1) completeActiveSpecialty(state);
+}
+
 export function hireCrew(state: StationState, creditCost = HIRE_COST): boolean {
   if (state.metrics.credits < creditCost) return false;
   if (state.crew.total >= 40) return false;
   state.metrics.credits -= creditCost;
-  state.crew.total += 1;
+  ensureCommandState(state);
+  state.crew.roleCounts.assistant += 1;
+  state.crew.total = totalStaffCount(state.crew.roleCounts);
   return true;
 }
 
 export function fireCrew(state: StationState, creditRefund = 0): boolean {
   if (state.crew.total <= 0) return false;
-  state.crew.total -= 1;
+  ensureCommandState(state);
+  const role = [...STAFF_ROLES].reverse().find((candidate) => candidate !== 'captain' && state.crew.roleCounts[candidate] > 0);
+  if (!role) return false;
+  state.crew.roleCounts[role] -= 1;
+  state.crew.total = totalStaffCount(state.crew.roleCounts);
   if (creditRefund > 0) {
     state.metrics.credits += creditRefund;
   }
@@ -14149,6 +15463,7 @@ export function tick(state: StationState, frameDt: number): void {
     refreshJobMetrics(state);
     computeMetrics(state);
     updateUnlockProgress(state);
+    updateCommandProgress(state, 0);
     state.metrics.tickMs = perfNowMs() - tickStarted;
     return;
   }
@@ -14181,6 +15496,7 @@ export function tick(state: StationState, frameDt: number): void {
     createTradeGoodTransportJobs(state);
     createRawMaterialTransportJobs(state);
     createConstructionJobs(state);
+    createSanitationJobs(state);
     assignJobsToIdleCrew(state);
   }
   requeueStalledJobs(state);
@@ -14202,6 +15518,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
+  updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);
   updateIncidentPipeline(state, dt, occupancyByTile);
   cleanupConstructionSites(state);
@@ -14212,6 +15529,7 @@ export function tick(state: StationState, frameDt: number): void {
   ensureDerivedUpToDate(state);
   computeMetrics(state);
   updateUnlockProgress(state);
+  updateCommandProgress(state, dt);
   maybeTriggerFailure(state, dt);
   state.metrics.tickMs = perfNowMs() - tickStarted;
 }

@@ -13,6 +13,10 @@ import {
   type DockPurpose,
   type HousingPolicy,
   type ItemType,
+  type SpecialtyId,
+  type SpecialtyProgress,
+  type StaffRole,
+  type StaffRoleCounts,
   type UnlockId,
   type UnlockTier,
   ModuleType,
@@ -27,6 +31,13 @@ import {
   ZoneType
 } from './types';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER, UNLOCK_DEFINITIONS } from './content/unlocks';
+import {
+  SPECIALTY_DEFINITIONS,
+  STAFF_ROLES,
+  createEmptyStaffRoleCounts,
+  createInitialSpecialtyProgress,
+  totalStaffCount
+} from './content/command';
 
 const SAVE_SCHEMA_VERSION = 2 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
@@ -35,6 +46,7 @@ const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', '
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
+const SPECIALTY_IDS = SPECIALTY_DEFINITIONS.map((def) => def.id);
 // Derived from UNLOCK_DEFINITIONS so adding a 7th tier doesn't require
 // hand-editing two parallel tables. UNLOCK_DEFINITIONS is tier-ordered
 // (1..6), so the canonical id list is just .map(d => d.id), and the
@@ -96,6 +108,13 @@ export interface StationSnapshotV1 {
   };
   crew: {
     total: number;
+    roleCounts?: Partial<Record<StaffRole, number>>;
+  };
+  command?: {
+    selectedSpecialty: SpecialtyId | null;
+    completedSpecialties: SpecialtyId[];
+    specialtyProgress: Partial<Record<SpecialtyId, SpecialtyProgress>>;
+    officers: Partial<Record<StaffRole, boolean>>;
   };
   inventoryByTile: Array<{
     tileIndex: number;
@@ -125,6 +144,10 @@ export interface StationSnapshotV1 {
     actorsTreatedLifetime: number;
     residentsConvertedLifetime: number;
     archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>>;
+  };
+  sanitation?: {
+    dirtByTile: number[];
+    dirtSourceByTile: number[];
   };
 }
 
@@ -242,6 +265,18 @@ function requiredUnlockTierForSnapshotContent(
 }
 
 export function captureSnapshot(state: StationState): StationSnapshotV1 {
+  const roleCounts =
+    state.crew.roleCounts && totalStaffCount(state.crew.roleCounts) === state.crew.total
+      ? ({ ...state.crew.roleCounts } as Partial<Record<StaffRole, number>>)
+      : (() => {
+          const counts = createEmptyStaffRoleCounts();
+          const total = Math.max(0, Math.floor(state.crew.total));
+          if (total > 0) {
+            counts.captain = 1;
+            counts.assistant = Math.max(0, total - 1);
+          }
+          return counts as Partial<Record<StaffRole, number>>;
+        })();
   const inventoryByTile: StationSnapshotV1['inventoryByTile'] = [];
   for (const node of state.itemNodes) {
     const items: Partial<Record<ItemType, number>> = {};
@@ -313,7 +348,14 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       legacyMaterialStock: state.legacyMaterialStock
     },
     crew: {
-      total: state.crew.total
+      total: state.crew.total,
+      roleCounts
+    },
+    command: {
+      selectedSpecialty: state.command.selectedSpecialty,
+      completedSpecialties: [...state.command.completedSpecialties],
+      specialtyProgress: { ...state.command.specialtyProgress },
+      officers: { ...state.command.officers }
     },
     inventoryByTile,
     controls: {
@@ -336,6 +378,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
       residentsConvertedLifetime: state.metrics.residentsConvertedLifetime,
       archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen }
+    },
+    sanitation: {
+      dirtByTile: Array.from(state.dirtByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
+      dirtSourceByTile: Array.from(state.dirtSourceByTile)
     }
   };
 }
@@ -554,10 +600,58 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     warnings.push('resources missing; defaulted.');
   }
   let crewTotal = defaultState.crew.total;
+  let roleCounts: StaffRoleCounts = { ...defaultState.crew.roleCounts };
   if (isRecord(snapshotRaw.crew)) {
     crewTotal = clamp(Math.round(asFiniteNumber(snapshotRaw.crew.total, crewTotal)), 0, 40);
+    if (isRecord(snapshotRaw.crew.roleCounts)) {
+      const next = createEmptyStaffRoleCounts();
+      for (const role of STAFF_ROLES) {
+        next[role] = clamp(Math.round(asFiniteNumber(snapshotRaw.crew.roleCounts[role], 0)), 0, 60);
+      }
+      roleCounts = next;
+      crewTotal = totalStaffCount(roleCounts);
+    } else {
+      roleCounts = createEmptyStaffRoleCounts();
+      roleCounts.captain = crewTotal > 0 ? 1 : 0;
+      roleCounts.assistant = Math.max(0, crewTotal - roleCounts.captain);
+    }
   } else {
     warnings.push('crew missing; defaulted.');
+  }
+
+  let command: StationSnapshotV1['command'] = undefined;
+  if (isRecord(snapshotRaw.command)) {
+    const completedSpecialties = Array.isArray(snapshotRaw.command.completedSpecialties)
+      ? snapshotRaw.command.completedSpecialties.filter((id): id is SpecialtyId => isOneOf(id, SPECIALTY_IDS))
+      : [];
+    const selectedSpecialty = isOneOf(snapshotRaw.command.selectedSpecialty, SPECIALTY_IDS)
+      ? snapshotRaw.command.selectedSpecialty
+      : null;
+    const specialtyProgress = createInitialSpecialtyProgress();
+    if (isRecord(snapshotRaw.command.specialtyProgress)) {
+      for (const id of SPECIALTY_IDS) {
+        const raw = snapshotRaw.command.specialtyProgress[id];
+        if (!isRecord(raw)) continue;
+        specialtyProgress[id] = {
+          id,
+          state:
+            raw.state === 'active' || raw.state === 'available' || raw.state === 'completed' || raw.state === 'locked'
+              ? raw.state
+              : specialtyProgress[id].state,
+          progress: clamp(asFiniteNumber(raw.progress, specialtyProgress[id].progress), 0, 1),
+          selectedAt: typeof raw.selectedAt === 'number' ? raw.selectedAt : null,
+          completedAt: typeof raw.completedAt === 'number' ? raw.completedAt : null
+        };
+      }
+    }
+    const officers: Partial<Record<StaffRole, boolean>> = {};
+    if (isRecord(snapshotRaw.command.officers)) {
+      for (const role of STAFF_ROLES) {
+        if (snapshotRaw.command.officers[role] === true) officers[role] = true;
+      }
+    }
+    officers.captain = true;
+    command = { selectedSpecialty, completedSpecialties, specialtyProgress, officers };
   }
 
   const inventoryByTile: StationSnapshotV1['inventoryByTile'] = [];
@@ -666,6 +760,30 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   };
   if (!progRaw) warnings.push('progression counters missing; defaulted to zero (pre-progression save).');
 
+  const sanitationRaw = isRecord(snapshotRaw.sanitation) ? snapshotRaw.sanitation : null;
+  const dirtByTile = new Array<number>(expectedLength).fill(0);
+  const dirtSourceByTile = new Array<number>(expectedLength).fill(0);
+  if (sanitationRaw) {
+    if (Array.isArray(sanitationRaw.dirtByTile)) {
+      const len = Math.min(expectedLength, sanitationRaw.dirtByTile.length);
+      for (let i = 0; i < len; i++) {
+        dirtByTile[i] = clamp(asFiniteNumber(sanitationRaw.dirtByTile[i], 0), 0, 100);
+      }
+      if (sanitationRaw.dirtByTile.length !== expectedLength) {
+        warnings.push(`sanitation.dirtByTile length ${sanitationRaw.dirtByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+    if (Array.isArray(sanitationRaw.dirtSourceByTile)) {
+      const len = Math.min(expectedLength, sanitationRaw.dirtSourceByTile.length);
+      for (let i = 0; i < len; i++) {
+        dirtSourceByTile[i] = clamp(Math.floor(asFiniteNumber(sanitationRaw.dirtSourceByTile[i], 0)), 0, 9);
+      }
+      if (sanitationRaw.dirtSourceByTile.length !== expectedLength) {
+        warnings.push(`sanitation.dirtSourceByTile length ${sanitationRaw.dirtSourceByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+  }
+
   return {
     width,
     height,
@@ -684,8 +802,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       legacyMaterialStock
     },
     crew: {
-      total: crewTotal
+      total: crewTotal,
+      roleCounts
     },
+    command,
     inventoryByTile,
     controls: {
       shipsPerCycle,
@@ -699,7 +819,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       unlockedIds: UNLOCK_IDS.filter((id) => unlockedIds.has(id)),
       unlockedAtSec
     },
-    progression
+    progression,
+    sanitation: {
+      dirtByTile,
+      dirtSourceByTile
+    }
   };
 }
 
@@ -814,6 +938,16 @@ function clearTransientState(state: StationState): void {
   state.metrics.expiredJobs = 0;
   state.metrics.completedJobs = 0;
   state.metrics.stalledJobs = 0;
+  state.metrics.workforceLanes = {
+    food: { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 },
+    sanitation: { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 },
+    engineering: { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 },
+    logistics: { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 },
+    'construction-eva': { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 },
+    flex: { target: 0, assigned: 0, working: 0, idle: 0, pending: 0, blocked: 0, borrowed: 0, pressure: 0 }
+  };
+  state.metrics.workforceBorrowedCrew = 0;
+  state.metrics.workforceHighestPressureLane = null;
   state.crew.assigned = 0;
   state.crew.free = state.crew.total;
 }
@@ -862,6 +996,8 @@ export function hydrateStateFromSave(
   next.zones = snapshot.zones.slice();
   next.rooms = snapshot.rooms.slice();
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
+  next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
+  next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
   const hydratedTier = normalizeUnlockTier(snapshot.unlocks.tier);
   // v1→v2 migration: pre-v2 saves used the old id strings (tier1_stability,
   // tier2_logistics, tier3_civic). Those won't match the new UNLOCK_IDS,
@@ -1008,9 +1144,28 @@ export function hydrateStateFromSave(
   next.metrics.waterStock = Math.max(0, snapshot.resources.waterStock);
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
-  next.crew.total = clamp(Math.round(snapshot.crew.total), 0, 40);
+  next.crew.roleCounts = snapshot.crew.roleCounts
+    ? ({ ...createEmptyStaffRoleCounts(), ...snapshot.crew.roleCounts } as StaffRoleCounts)
+    : next.crew.roleCounts;
+  next.crew.total = totalStaffCount(next.crew.roleCounts);
   next.crew.free = next.crew.total;
   next.crew.assigned = 0;
+  if (snapshot.command) {
+    next.command = {
+      selectedSpecialty: snapshot.command.selectedSpecialty,
+      completedSpecialties: [...snapshot.command.completedSpecialties],
+      specialtyProgress: {
+        ...createInitialSpecialtyProgress(),
+        ...snapshot.command.specialtyProgress
+      },
+      officers: { ...snapshot.command.officers },
+      bridgeStaffing: {
+        captainConsoleStaffed: false,
+        activeTerminalStaff: 0,
+        requiredTerminalStaff: 1
+      }
+    };
+  }
 
   // Restore lifetime counters so predicate-driven tier progression
   // (archetypesServedLifetime is derived from archetypesEverSeen in

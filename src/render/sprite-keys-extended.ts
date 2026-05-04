@@ -23,6 +23,33 @@ export const AGENT_SPRITE_VARIANTS = {
 
 export const AGENT_EVA_SUIT_SPRITE_KEY = 'agent.crew.eva_suit';
 
+export const STAFF_ROLE_SPRITE_KEYS = {
+  captain: 'agent.crew.captain',
+  'sanitation-officer': 'agent.crew.sanitation_officer',
+  'security-officer': 'agent.crew.security_officer',
+  'mechanic-officer': 'agent.crew.mechanic_officer',
+  'industrial-officer': 'agent.crew.industrial_officer',
+  'navigation-officer': 'agent.crew.navigation_officer',
+  'comms-officer': 'agent.crew.comms_officer',
+  'medical-officer': 'agent.crew.medical_officer',
+  cook: 'agent.crew.cook',
+  cleaner: 'agent.crew.cleaner',
+  janitor: 'agent.crew.janitor',
+  botanist: 'agent.crew.botanist',
+  technician: 'agent.crew.technician',
+  engineer: 'agent.crew.engineer',
+  mechanic: 'agent.crew.mechanic',
+  welder: 'agent.crew.welder',
+  doctor: 'agent.crew.doctor',
+  nurse: 'agent.crew.nurse',
+  'security-guard': 'agent.crew.security_guard',
+  assistant: 'agent.crew.assistant',
+  'eva-specialist': 'agent.crew.eva_specialist',
+  'eva-engineer': 'agent.crew.eva_engineer',
+  'flight-controller': 'agent.crew.flight_controller',
+  'docking-officer': 'agent.crew.docking_officer'
+} as const;
+
 export const AGENT_OVERLAY_SPRITE_KEYS = {
   distressed: 'overlay.agent.distressed',
   critical: 'overlay.agent.critical',

@@ -12,8 +12,35 @@ export type ModuleDefinition = {
   reservationCapacity?: number;
 };
 
+const BRIDGE_TERMINAL: ModuleDefinition = {
+  width: 2,
+  height: 2,
+  rotatable: true,
+  allowedRooms: [RoomType.Bridge],
+  reservationCapacity: 1
+};
+
 export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
   [ModuleType.None]: { width: 1, height: 1, rotatable: false, allowedRooms: null },
+  [ModuleType.CaptainConsole]: BRIDGE_TERMINAL,
+  [ModuleType.SanitationTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.SecurityTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.MechanicalTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.IndustrialTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.NavigationTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.CommsTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.MedicalTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.ResearchTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.LogisticsTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.FleetCommandTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.TrafficControlTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.ResourceManagementTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.PowerManagementTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.LifeSupportTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.AtmosphereControlTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.AiCoreTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.EmergencyControlTerminal]: BRIDGE_TERMINAL,
+  [ModuleType.RecordsTerminal]: BRIDGE_TERMINAL,
   [ModuleType.WallLight]: {
     width: 1,
     height: 1,
@@ -194,6 +221,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
 
 export const ROOM_ENVIRONMENT_TRAITS: Record<RoomType, RoomEnvironmentTraits> = {
   [RoomType.None]: { visitorStatus: 0, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0 },
+  [RoomType.Bridge]: { visitorStatus: -0.4, residentialComfort: -0.05, serviceNoise: 0.45, publicAppeal: 0.25 },
   [RoomType.Cafeteria]: { visitorStatus: 0.8, residentialComfort: 0.25, serviceNoise: 0.2, publicAppeal: 1.0 },
   [RoomType.Kitchen]: { visitorStatus: -0.8, residentialComfort: -0.35, serviceNoise: 1.3, publicAppeal: -0.2 },
   [RoomType.Workshop]: { visitorStatus: -1.35, residentialComfort: -0.9, serviceNoise: 2.0, publicAppeal: -0.6 },
@@ -221,6 +249,13 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
     requiredModules: [],
     requiredAnyOf: [],
     activationChecks: { door: false, path: false, pressurization: false },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Bridge]: {
+    minTiles: 8,
+    requiredModules: [{ module: ModuleType.CaptainConsole, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },
   [RoomType.Cafeteria]: {

@@ -38,6 +38,7 @@ export const DOOR_SPRITE_VARIANT_KEYS = {
 
 export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
   [RoomType.None]: 'room.none',
+  [RoomType.Bridge]: 'room.bridge',
   [RoomType.Cafeteria]: 'room.cafeteria',
   [RoomType.Kitchen]: 'room.kitchen',
   [RoomType.Workshop]: 'room.workshop',
@@ -61,6 +62,25 @@ export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
 
 export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.None]: 'module.none',
+  [ModuleType.CaptainConsole]: 'module.bridge.captain_console',
+  [ModuleType.SanitationTerminal]: 'module.bridge.sanitation_terminal',
+  [ModuleType.SecurityTerminal]: 'module.bridge.security_terminal',
+  [ModuleType.MechanicalTerminal]: 'module.bridge.mechanical_terminal',
+  [ModuleType.IndustrialTerminal]: 'module.bridge.industrial_terminal',
+  [ModuleType.NavigationTerminal]: 'module.bridge.navigation_terminal',
+  [ModuleType.CommsTerminal]: 'module.bridge.comms_terminal',
+  [ModuleType.MedicalTerminal]: 'module.bridge.medical_terminal',
+  [ModuleType.ResearchTerminal]: 'module.bridge.research_terminal',
+  [ModuleType.LogisticsTerminal]: 'module.bridge.logistics_terminal',
+  [ModuleType.FleetCommandTerminal]: 'module.bridge.fleet_command_terminal',
+  [ModuleType.TrafficControlTerminal]: 'module.bridge.traffic_control_terminal',
+  [ModuleType.ResourceManagementTerminal]: 'module.bridge.resource_management_terminal',
+  [ModuleType.PowerManagementTerminal]: 'module.bridge.power_management_terminal',
+  [ModuleType.LifeSupportTerminal]: 'module.bridge.life_support_terminal',
+  [ModuleType.AtmosphereControlTerminal]: 'module.bridge.atmosphere_control_terminal',
+  [ModuleType.AiCoreTerminal]: 'module.bridge.ai_core_terminal',
+  [ModuleType.EmergencyControlTerminal]: 'module.bridge.emergency_control_terminal',
+  [ModuleType.RecordsTerminal]: 'module.bridge.records_terminal',
   [ModuleType.WallLight]: 'module.wall_light',
   [ModuleType.Bed]: 'module.bed',
   [ModuleType.Table]: 'module.table',

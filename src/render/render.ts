@@ -27,6 +27,8 @@ import {
   getDockByTile,
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
+  getSanitationTileDiagnostic,
+  mapConditionSamplesAt,
   getMaintenanceTileDiagnostic,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
@@ -51,7 +53,8 @@ import {
   DOCK_OVERLAY_SPRITE_KEYS,
   DOCK_FACADE_ROTATION,
   FLOOR_GRIME_SPRITE_KEYS,
-  FLOOR_WEAR_SPRITE_KEYS
+  FLOOR_WEAR_SPRITE_KEYS,
+  STAFF_ROLE_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
 import { renderDualWallLayer } from './wall-dual-tilemap';
@@ -99,6 +102,7 @@ function drawTrussFallback(ctx: CanvasRenderingContext2D, px: number, py: number
 
 const roomOverlay: Record<RoomType, string> = {
   [RoomType.None]: 'transparent',
+  [RoomType.Bridge]: 'rgba(90, 170, 215, 0.24)',
   [RoomType.Cafeteria]: 'rgba(78, 166, 110, 0.28)',
   [RoomType.Kitchen]: 'rgba(245, 164, 92, 0.28)',
   [RoomType.Workshop]: 'rgba(203, 157, 108, 0.28)',
@@ -125,6 +129,7 @@ const roomOverlay: Record<RoomType, string> = {
 
 const roomLetter: Record<RoomType, string> = {
   [RoomType.None]: '',
+  [RoomType.Bridge]: 'B',
   [RoomType.Cafeteria]: 'C',
   [RoomType.Kitchen]: 'I',
   [RoomType.Workshop]: 'W',
@@ -148,6 +153,25 @@ const roomLetter: Record<RoomType, string> = {
 
 const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.None]: '',
+  [ModuleType.CaptainConsole]: 'CP',
+  [ModuleType.SanitationTerminal]: 'SN',
+  [ModuleType.SecurityTerminal]: 'SC',
+  [ModuleType.MechanicalTerminal]: 'MC',
+  [ModuleType.IndustrialTerminal]: 'IN',
+  [ModuleType.NavigationTerminal]: 'NV',
+  [ModuleType.CommsTerminal]: 'CM',
+  [ModuleType.MedicalTerminal]: 'MD',
+  [ModuleType.ResearchTerminal]: 'RS',
+  [ModuleType.LogisticsTerminal]: 'LG',
+  [ModuleType.FleetCommandTerminal]: 'FL',
+  [ModuleType.TrafficControlTerminal]: 'TR',
+  [ModuleType.ResourceManagementTerminal]: 'RM',
+  [ModuleType.PowerManagementTerminal]: 'PW',
+  [ModuleType.LifeSupportTerminal]: 'LS',
+  [ModuleType.AtmosphereControlTerminal]: 'AT',
+  [ModuleType.AiCoreTerminal]: 'AI',
+  [ModuleType.EmergencyControlTerminal]: 'EM',
+  [ModuleType.RecordsTerminal]: 'RC',
   [ModuleType.WallLight]: 'L',
   [ModuleType.Bed]: 'B',
   [ModuleType.Table]: 'T',
@@ -795,6 +819,18 @@ function drawEvaSuitAgentFallback(ctx: CanvasRenderingContext2D, cx: number, cy:
   ctx.restore();
 }
 
+function crewTintForStaffRole(role: StationState['crewMembers'][number]['staffRole']): string {
+  if (role === 'captain') return '#f5f2da';
+  if (role.includes('officer')) return '#7ec8ff';
+  if (role === 'cleaner' || role === 'janitor') return '#5ee0c2';
+  if (role === 'cook' || role === 'botanist') return '#9ee36f';
+  if (role === 'technician' || role === 'engineer' || role === 'mechanic' || role === 'welder') return '#f2bd62';
+  if (role === 'doctor' || role === 'nurse') return '#a7f4ff';
+  if (role === 'security-guard') return '#9a9cff';
+  if (role.startsWith('eva') || role === 'flight-controller' || role === 'docking-officer') return '#ffffff';
+  return '#7ec8ff';
+}
+
 function pickAgentVariant(variants: readonly string[], agentId: number): string {
   return variants[agentId % variants.length];
 }
@@ -839,6 +875,11 @@ function hashWeatherSeed(tileIndex: number, roomType: RoomType, topologyVersion:
 function pickFloorOverlayKey(state: StationState, tileIndex: number): string | null {
   const tileType = state.tiles[tileIndex];
   if (!isFloorWeatherEligible(tileType)) return null;
+  const dirt = state.dirtByTile[tileIndex] ?? 0;
+  if (dirt >= 25) {
+    const hash = hashWeatherSeed(tileIndex, state.rooms[tileIndex], state.topologyVersion);
+    return FLOOR_GRIME_SPRITE_KEYS[(hash >>> (dirt >= 70 ? 2 : 4)) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
+  }
   const roomType = state.rooms[tileIndex];
   if (suppressFloorWeather(roomType)) return null;
   const hash = hashWeatherSeed(tileIndex, roomType, state.topologyVersion);
@@ -851,6 +892,19 @@ function pickFloorOverlayKey(state: StationState, tileIndex: number): string | n
     return FLOOR_WEAR_SPRITE_KEYS[(hash >>> 8) % FLOOR_WEAR_SPRITE_KEYS.length] ?? null;
   }
   return FLOOR_GRIME_SPRITE_KEYS[(hash >>> 4) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
+}
+
+function sanitationRenderSignature(state: StationState): string {
+  let dirty = 0;
+  let filthy = 0;
+  let maxBucket = 0;
+  for (let i = 0; i < state.dirtByTile.length; i++) {
+    const bucket = Math.floor((state.dirtByTile[i] ?? 0) / 10);
+    if (bucket > 0) dirty += 1;
+    if (bucket >= 7) filthy += 1;
+    if (bucket > maxBucket) maxBucket = bucket;
+  }
+  return `${dirty}:${filthy}:${maxBucket}`;
 }
 
 function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationState['moduleInstances'][number], px: number, py: number, w: number, h: number): boolean {
@@ -1928,6 +1982,7 @@ function ensureDecorativeLayer(
     state.roomVersion,
     state.moduleVersion,
     state.dockVersion,
+    sanitationRenderSignature(state),
     useSprites ? 1 : 0,
     spriteAtlas.version
   ].join('|');
@@ -2141,6 +2196,11 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
             .join(',')
         ].join('|')
       : '';
+  const sanitationKey =
+    overlay === 'sanitation'
+      ? `${state.metrics.dirtyTiles}:${state.metrics.filthyTiles}:${Math.round(state.metrics.sanitationMax)}:${sanitationRenderSignature(state)}`
+      : '';
+  const mapKey = overlay === 'map-conditions' ? `${state.seedAtCreation}:${state.mapConditionVersion}` : '';
   return [
     overlay,
     state.width,
@@ -2156,7 +2216,9 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     state.ops.lifeSupportTotal,
     debtKey,
     fireKey,
-    routeKey
+    routeKey,
+    sanitationKey,
+    mapKey
   ].join('|');
 }
 
@@ -2237,6 +2299,35 @@ function maintenanceDiagnosticColor(state: StationState, tileIndex: number): str
   return rgba(238, 79, 79, 0.38);
 }
 
+function sanitationDiagnosticColor(state: StationState, tileIndex: number): string | null {
+  if (state.tiles[tileIndex] === TileType.Space || state.tiles[tileIndex] === TileType.Wall) return null;
+  const dirt = state.dirtByTile[tileIndex] ?? 0;
+  if (dirt < 8) return null;
+  if (dirt < 25) return rgba(110, 219, 143, 0.1);
+  if (dirt < SANITATION_RENDER_DIRTY) return rgba(255, 214, 92, 0.18);
+  if (dirt < 78) return rgba(238, 120, 74, 0.3);
+  return rgba(126, 74, 45, 0.44);
+}
+
+const SANITATION_RENDER_DIRTY = 32;
+
+function mapConditionsDiagnosticColor(state: StationState, tileIndex: number): string | null {
+  const tile = state.tiles[tileIndex];
+  if (tile === TileType.Wall) return null;
+  const samples = mapConditionSamplesAt(state, tileIndex);
+  const sunlight = samples.find((s) => s.kind === 'sunlight')?.value ?? 0;
+  const debris = samples.find((s) => s.kind === 'debris-risk')?.value ?? 0;
+  const thermal = samples.find((s) => s.kind === 'thermal-sink')?.value ?? 0;
+  if (debris > sunlight && debris > thermal && debris >= 0.55) {
+    return mixRgba([176, 124, 255], [238, 79, 79], Math.min(1, (debris - 0.55) / 0.45), tile === TileType.Space ? 0.16 : 0.28);
+  }
+  if (thermal >= 0.62) {
+    return rgba(55, 211, 230, tile === TileType.Space ? 0.12 : 0.22);
+  }
+  if (sunlight >= 0.5) return mixRgba([255, 214, 92], [255, 146, 70], Math.min(1, (sunlight - 0.5) / 0.5), tile === TileType.Space ? 0.13 : 0.24);
+  return rgba(64, 88, 140, tile === TileType.Space ? 0.12 : 0.18);
+}
+
 function routePressureDiagnosticColor(
   state: StationState,
   tileIndex: number,
@@ -2277,6 +2368,10 @@ function drawDiagnosticOverlayLayer(
     if (overlay === 'life-support') {
       if (!lifeSupportCoverage) continue;
       color = lifeSupportDiagnosticColor(state, i, lifeSupportCoverage);
+    } else if (overlay === 'map-conditions') {
+      color = mapConditionsDiagnosticColor(state, i);
+    } else if (overlay === 'sanitation') {
+      color = sanitationDiagnosticColor(state, i);
     } else if (overlay === 'maintenance') {
       color = maintenanceDiagnosticColor(state, i);
     } else if (overlay === 'route-pressure') {
@@ -2329,6 +2424,20 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         line: `coverage ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles}`,
         scale: 'cyan close | red poor/disconnected',
         color: '#37d3e6'
+      };
+    case 'map-conditions':
+      return {
+        title: 'Map Conditions',
+        line: `seed ${state.seedAtCreation} | condition v${state.mapConditionVersion}`,
+        scale: 'gold sun | purple debris | cyan thermal sink',
+        color: '#ffd65c'
+      };
+    case 'sanitation':
+      return {
+        title: 'Sanitation',
+        line: `avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | jobs ${state.metrics.sanitationJobsOpen}`,
+        scale: 'clear clean | yellow lived-in | brown filthy',
+        color: '#d7a15d'
       };
     case 'visitor-status':
       return {
@@ -2391,6 +2500,16 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic) return `hover ${pos.x},${pos.y}: no reactor/life-support maintenance debt`;
     return `hover ${pos.x},${pos.y}: ${diagnostic.system} debt ${diagnostic.debt.toFixed(0)}% | output ${(diagnostic.outputMultiplier * 100).toFixed(0)}%`;
+  }
+  if (overlay === 'map-conditions') {
+    const samples = mapConditionSamplesAt(state, hoveredTile);
+    const top = [...samples].sort((a, b) => b.value - a.value)[0];
+    return `hover ${pos.x},${pos.y}: ${top.label} ${(top.value * 100).toFixed(0)}% | + ${top.upside} | - ${top.downside}`;
+  }
+  if (overlay === 'sanitation') {
+    const diagnostic = getSanitationTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic) return `hover ${pos.x},${pos.y}: no sanitation sample`;
+    return `hover ${pos.x},${pos.y}: dirt ${diagnostic.dirt.toFixed(0)}% ${diagnostic.severity} | ${diagnostic.dominantSource} | ${diagnostic.effectSummary}`;
   }
   if (overlay === 'route-pressure') {
     const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y);
@@ -2639,6 +2758,111 @@ function drawPasteStampGhost(
   ctx.restore();
 }
 
+function drawCrewHireGhost(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  currentTool: BuildTool,
+  hoveredTile: number | null,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  if (currentTool.kind !== 'hire-staff' || !currentTool.staffRole) return;
+  if (hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return;
+  if (!tileInRange(hoveredTile, state, visibleTiles)) return;
+
+  const valid = isWalkable(state.tiles[hoveredTile]);
+  const p = fromIndex(hoveredTile, state.width);
+  const px = p.x * TILE_SIZE;
+  const py = p.y * TILE_SIZE;
+  const cx = px + TILE_SIZE * 0.5;
+  const cy = py + TILE_SIZE * 0.5;
+  const color = valid ? '#6edb8f' : '#ff7676';
+  const spriteKey = STAFF_ROLE_SPRITE_KEYS[currentTool.staffRole];
+
+  ctx.save();
+  ctx.fillStyle = valid ? 'rgba(110, 219, 143, 0.16)' : 'rgba(255, 118, 118, 0.2)';
+  ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, Math.round(1.4 * PX));
+  ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
+  ctx.strokeRect(px + 1.5, py + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+  ctx.setLineDash([]);
+
+  ctx.globalAlpha = valid ? 0.78 : 0.52;
+  const drewSprite = useSprites && spriteKey
+    ? drawTintedAgentSprite(ctx, spriteAtlas, spriteKey, cx, cy, TILE_SIZE * 0.9, color, valid ? 0.05 : 0.25)
+    : false;
+  if (!drewSprite) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, TILE_SIZE * 0.42, 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, Math.round(1.2 * PX));
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawIncidentMarkers(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  for (const incident of state.incidents) {
+    if (incident.stage === 'resolved' || incident.stage === 'failed') continue;
+    if (!tileInRange(incident.tileIndex, state, visibleTiles)) continue;
+    const p = fromIndex(incident.tileIndex, state.width);
+    const cx = (p.x + 0.5) * TILE_SIZE;
+    const cy = (p.y + 0.5) * TILE_SIZE;
+    const pulse = (Math.sin(state.now * 6 + incident.id) + 1) * 0.5;
+    const urgency = incident.stage === 'dispatching' || incident.assignedCrewId === null ? 1 : 0.65;
+    const color = incident.type === 'fight' ? '#ff3f46' : '#ff9d3a';
+    const alpha = 0.34 + pulse * 0.2;
+    const ringRadius = TILE_SIZE * (0.58 + pulse * 0.22 + incident.severity * 0.04);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = incident.type === 'fight' ? `rgba(255, 63, 70, ${alpha * 0.45})` : `rgba(255, 157, 58, ${alpha * 0.42})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, TILE_SIZE * 0.08 * urgency);
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(8, 12, 18, 0.92)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE_SIZE * 0.24, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.round(13 * PX)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', cx, cy + Math.round(0.5 * PX));
+
+    const label = `${incident.type === 'fight' ? 'FIGHT' : 'TRESPASS'} #${incident.id}`;
+    const labelW = Math.max(Math.round(48 * PX), ctx.measureText(label).width + Math.round(8 * PX));
+    const labelH = Math.round(11 * PX);
+    ctx.fillStyle = 'rgba(8, 12, 18, 0.88)';
+    ctx.fillRect(cx - labelW * 0.5, cy - TILE_SIZE * 0.82, labelW, labelH);
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.round(7 * PX)}px monospace`;
+    ctx.fillText(label, cx, cy - TILE_SIZE * 0.82 + labelH * 0.55);
+    ctx.restore();
+  }
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -2844,7 +3068,7 @@ export function renderWorld(
     ctx.fillText(site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD', px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
   }
 
-  if (hoveredTile !== null && hoveredTile >= 0 && hoveredTile < state.tiles.length) {
+  if (currentTool.kind !== 'hire-staff' && hoveredTile !== null && hoveredTile >= 0 && hoveredTile < state.tiles.length) {
     const p = fromIndex(hoveredTile, state.width);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.lineWidth = 1.5;
@@ -2858,6 +3082,8 @@ export function renderWorld(
       ctx.fillText('Body remains (temporary system)', Math.round(8 * PX), Math.round(36 * PX));
     }
   }
+
+  drawCrewHireGhost(ctx, state, currentTool, hoveredTile, spriteAtlas, useSprites, visibleTiles);
 
   if (currentTool.kind === 'tile' && currentTool.tile === TileType.Dock && hoveredTile !== null) {
     const preview = validateDockPlacement(state, hoveredTile);
@@ -2902,6 +3128,7 @@ export function renderWorld(
   }
 
   drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
+  drawIncidentMarkers(ctx, state, visibleTiles);
 
   const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
     x >= visibleTiles.minX - marginTiles &&
@@ -2973,8 +3200,8 @@ export function renderWorld(
     const o = agentOffset(c.id);
     const cx = (c.x + o.x) * TILE_SIZE;
     const cy = (c.y + o.y) * TILE_SIZE;
-    const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, c.id);
-    const crewTint = c.evaSuit ? '#f1fbff' : '#7ec8ff';
+    const spriteKey = STAFF_ROLE_SPRITE_KEYS[c.staffRole] ?? pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, c.id);
+    const crewTint = c.evaSuit ? '#f1fbff' : crewTintForStaffRole(c.staffRole);
     const crewTintAlpha = c.evaSuit ? 0.5 : 0.2;
     if (c.evaSuit) {
       if (
@@ -3070,7 +3297,9 @@ export function renderWorld(
               ? 'Tool: Paste Station'
           : currentTool.kind === 'module'
             ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
-            : 'Tool: Cancel Build';
+            : currentTool.kind === 'hire-staff'
+              ? `Tool: Place ${currentTool.staffRole}`
+              : 'Tool: Cancel Build';
 
   ctx.fillStyle = '#d3deed';
   ctx.font = `${Math.round(12 * PX)}px monospace`;
@@ -3144,6 +3373,74 @@ export function renderWorld(
       ctx.restore();
     }
   }
+  // Workforce-lane job badges for open work beyond sanitation/repair. These
+  // keep the map legible now that jobs are scheduled by durable role lanes.
+  for (const job of state.jobs) {
+    if (job.type === 'repair' || job.type === 'sanitize') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    if (!tileInRange(job.fromTile, state, visibleTiles)) continue;
+    const tx = job.fromTile % state.width;
+    const ty = Math.floor(job.fromTile / state.width);
+    const cx = (tx + 0.5) * TILE_SIZE;
+    const cy = (ty + 0.5) * TILE_SIZE - TILE_SIZE * 0.18;
+    const r = TILE_SIZE * 0.19;
+    const inProgress = job.state === 'in_progress';
+    const pulse = inProgress ? 0.65 + 0.35 * Math.sin(state.now * 4.4) : 1;
+    const isFood = job.type === 'cook' || job.itemType === 'meal' || job.itemType === 'rawMeal';
+    const isConstruction = job.type === 'construct';
+    ctx.save();
+    ctx.fillStyle = 'rgba(7, 13, 20, 0.8)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = isFood
+      ? `rgba(126, 220, 150, ${0.9 * pulse})`
+      : isConstruction
+        ? `rgba(255, 207, 110, ${0.9 * pulse})`
+        : `rgba(117, 168, 230, ${0.85 * pulse})`;
+    ctx.lineWidth = Math.max(1.4, TILE_SIZE * 0.045);
+    ctx.stroke();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (isFood) {
+      ctx.strokeStyle = `rgba(224, 255, 214, ${pulse})`;
+      ctx.lineWidth = Math.max(1.4, TILE_SIZE * 0.045);
+      ctx.beginPath();
+      ctx.arc(cx - r * 0.08, cy + r * 0.04, r * 0.38, 0.05, Math.PI - 0.05);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + r * 0.25, cy + r * 0.05);
+      ctx.lineTo(cx + r * 0.65, cy - r * 0.12);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(126, 220, 150, ${0.65 * pulse})`;
+      ctx.beginPath();
+      ctx.arc(cx - r * 0.18, cy - r * 0.1, r * 0.12, 0, Math.PI * 2);
+      ctx.arc(cx + r * 0.08, cy - r * 0.12, r * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (isConstruction) {
+      ctx.strokeStyle = `rgba(255, 237, 178, ${pulse})`;
+      ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.055);
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.48, cy - r * 0.28);
+      ctx.lineTo(cx + r * 0.1, cy - r * 0.42);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.02, cy - r * 0.18);
+      ctx.lineTo(cx + r * 0.42, cy + r * 0.5);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = `rgba(209, 229, 255, ${pulse})`;
+      ctx.lineWidth = Math.max(1.2, TILE_SIZE * 0.04);
+      ctx.strokeRect(cx - r * 0.45, cy - r * 0.35, r * 0.9, r * 0.7);
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.45, cy - r * 0.08);
+      ctx.lineTo(cx + r * 0.45, cy - r * 0.08);
+      ctx.moveTo(cx, cy - r * 0.35);
+      ctx.lineTo(cx, cy + r * 0.35);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   // Repair-job indicator: a small wrench badge over the anchor tile of any
   // open repair job. Pulses when a crew is actively servicing it. Surfaces the
   // maintenance debt → repair-job → crew loop without needing the diagnostic
@@ -3177,6 +3474,66 @@ export function renderWorld(
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(cx + r * 0.25, cy - r * 0.25, r * 0.32, 0.4, Math.PI * 1.6);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Sanitation-job indicator: a compact broom + sparkle badge over dirty
+  // tiles with pending or active cleaning work.
+  for (const job of state.jobs) {
+    if (job.type !== 'sanitize') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    if (!tileInRange(job.fromTile, state, visibleTiles)) continue;
+    const tx = job.fromTile % state.width;
+    const ty = Math.floor(job.fromTile / state.width);
+    const cx = (tx + 0.5) * TILE_SIZE;
+    const cy = (ty + 0.5) * TILE_SIZE + TILE_SIZE * 0.2;
+    const r = TILE_SIZE * 0.2;
+    const inProgress = job.state === 'in_progress';
+    const pulse = inProgress ? 0.62 + 0.38 * Math.sin(state.now * 5.5) : 1;
+    ctx.save();
+    ctx.fillStyle = 'rgba(6, 18, 20, 0.82)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(116, 230, 190, ${0.88 * pulse})`;
+    ctx.lineWidth = Math.max(1.6, TILE_SIZE * 0.055);
+    ctx.stroke();
+    // Handle.
+    ctx.strokeStyle = `rgba(223, 248, 229, ${pulse})`;
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.052);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx + r * 0.38, cy - r * 0.52);
+    ctx.lineTo(cx - r * 0.18, cy + r * 0.08);
+    ctx.stroke();
+    // Straw fan.
+    ctx.fillStyle = `rgba(210, 150, 78, ${pulse})`;
+    ctx.strokeStyle = `rgba(98, 65, 42, ${0.8 * pulse})`;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.028);
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.26, cy + r * 0.0);
+    ctx.lineTo(cx - r * 0.62, cy + r * 0.38);
+    ctx.lineTo(cx - r * 0.18, cy + r * 0.66);
+    ctx.lineTo(cx + r * 0.12, cy + r * 0.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(247, 210, 126, ${0.9 * pulse})`;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.46, cy + r * 0.34);
+    ctx.lineTo(cx - r * 0.1, cy + r * 0.18);
+    ctx.moveTo(cx - r * 0.34, cy + r * 0.48);
+    ctx.lineTo(cx - r * 0.02, cy + r * 0.24);
+    ctx.stroke();
+    // Cleanup sparkle.
+    ctx.strokeStyle = `rgba(203, 255, 236, ${0.75 * pulse})`;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(cx + r * 0.48, cy + r * 0.08);
+    ctx.lineTo(cx + r * 0.48, cy + r * 0.34);
+    ctx.moveTo(cx + r * 0.35, cy + r * 0.21);
+    ctx.lineTo(cx + r * 0.61, cy + r * 0.21);
     ctx.stroke();
     ctx.restore();
   }

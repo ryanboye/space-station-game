@@ -136,6 +136,7 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
 // will dial these in against the strawman's aspirational assignments.
 export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.None]: 0,
+  [RoomType.Bridge]: 0,
   [RoomType.Cafeteria]: 0,
   [RoomType.Kitchen]: 0,
   [RoomType.Workshop]: 2,
@@ -161,6 +162,25 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
 
 export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.None]: 0,
+  [ModuleType.CaptainConsole]: 0,
+  [ModuleType.SanitationTerminal]: 1,
+  [ModuleType.SecurityTerminal]: 3,
+  [ModuleType.MechanicalTerminal]: 2,
+  [ModuleType.IndustrialTerminal]: 2,
+  [ModuleType.NavigationTerminal]: 3,
+  [ModuleType.CommsTerminal]: 4,
+  [ModuleType.MedicalTerminal]: 3,
+  [ModuleType.ResearchTerminal]: 4,
+  [ModuleType.LogisticsTerminal]: 2,
+  [ModuleType.FleetCommandTerminal]: 3,
+  [ModuleType.TrafficControlTerminal]: 3,
+  [ModuleType.ResourceManagementTerminal]: 2,
+  [ModuleType.PowerManagementTerminal]: 2,
+  [ModuleType.LifeSupportTerminal]: 2,
+  [ModuleType.AtmosphereControlTerminal]: 2,
+  [ModuleType.AiCoreTerminal]: 4,
+  [ModuleType.EmergencyControlTerminal]: 4,
+  [ModuleType.RecordsTerminal]: 4,
   [ModuleType.WallLight]: 0,
   [ModuleType.Bed]: 0,
   [ModuleType.Table]: 0,
