@@ -8314,18 +8314,29 @@ function jobWorkTile(state: StationState, job: StationState['jobs'][number]): nu
   return job.fromTile;
 }
 
-function activeCaptainConsole(state: StationState): ModuleInstance | null {
-  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
-  if (bridgeTiles.size <= 0) return null;
-  return state.moduleInstances.find((module) => module.type === ModuleType.CaptainConsole && bridgeTiles.has(module.originTile)) ?? null;
+function commandTerminalTypeForRole(role: StaffRole): ModuleType | null {
+  if (role === 'captain') return ModuleType.CaptainConsole;
+  return SPECIALTY_DEFINITIONS.find((def) => def.officerRole === role)?.terminal ?? null;
 }
 
-function captainConsoleDutyTiles(state: StationState): number[] {
-  const captainConsole = activeCaptainConsole(state);
-  if (!captainConsole) return [];
+function activeCommandTerminalForRole(state: StationState, role: StaffRole): ModuleInstance | null {
+  const terminalType = commandTerminalTypeForRole(role);
+  if (!terminalType) return null;
+  const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
+  if (bridgeTiles.size <= 0) return null;
+  return state.moduleInstances.find((module) => module.type === terminalType && bridgeTiles.has(module.originTile)) ?? null;
+}
+
+function activeCaptainConsole(state: StationState): ModuleInstance | null {
+  return activeCommandTerminalForRole(state, 'captain');
+}
+
+function commandDutyTilesForRole(state: StationState, role: StaffRole): number[] {
+  const terminal = activeCommandTerminalForRole(state, role);
+  if (!terminal) return [];
   const bridgeTiles = new Set(activeRoomTargets(state, RoomType.Bridge));
   const out = new Set<number>();
-  for (const tile of captainConsole.tiles) {
+  for (const tile of terminal.tiles) {
     for (const candidate of adjacentWalkableTiles(state, tile)) {
       if (!bridgeTiles.has(candidate)) continue;
       if (state.moduleOccupancyByTile[candidate] !== null) continue;
@@ -8339,7 +8350,7 @@ function captainConsoleDutyTiles(state: StationState): number[] {
       out.add(tile);
     }
   }
-  const origin = fromIndex(captainConsole.originTile, state.width);
+  const origin = fromIndex(terminal.originTile, state.width);
   return [...out].sort((a, b) => {
     const ap = fromIndex(a, state.width);
     const bp = fromIndex(b, state.width);
@@ -8351,7 +8362,7 @@ function captainConsoleDutyTiles(state: StationState): number[] {
 }
 
 function isCrewReservedForCommandDuty(state: StationState, crew: CrewMember): boolean {
-  return crew.staffRole === 'captain' && !crew.resting && activeCaptainConsole(state) !== null;
+  return STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer === true && !crew.resting && activeCommandTerminalForRole(state, crew.staffRole) !== null;
 }
 
 function normalizeCrewWorkLane(crew: CrewMember, now: number): void {
@@ -15156,27 +15167,31 @@ export function updateCommandProgress(state: StationState, dt: number): void {
   const specialtyId = state.command.selectedSpecialty;
   const bridgeTiles = activeRoomTargets(state, RoomType.Bridge);
   const bridgeModules = state.moduleInstances.filter((module) => bridgeTiles.includes(module.originTile));
-  const captainDutyTiles = captainConsoleDutyTiles(state);
-  if (captainDutyTiles.length > 0) {
-    for (const crew of state.crewMembers) {
-      if (crew.staffRole !== 'captain' || crew.resting) continue;
-      releaseCrewJobForCommandDuty(state, crew);
-      if (crew.activeJobId !== null) continue;
-      const currentDutyTile = captainDutyTiles.includes(crew.tileIndex) ? crew.tileIndex : null;
-      let selectedDutyTile = currentDutyTile;
-      let selectedPath: number[] | null = currentDutyTile !== null ? [] : null;
-      if (selectedDutyTile === null) {
-        for (const dutyTile of captainDutyTiles) {
-          const path =
-            findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ??
-            findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' });
-          if (!path) continue;
-          selectedDutyTile = dutyTile;
-          selectedPath = path;
-          break;
-        }
+  const commandDutyTilesByRole = new Map<StaffRole, number[]>();
+  const staffedDutyTiles = new Set<number>();
+  for (const crew of state.crewMembers) {
+    if (crew.resting || STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer !== true) continue;
+    const dutyTiles = commandDutyTilesByRole.get(crew.staffRole) ?? commandDutyTilesForRole(state, crew.staffRole);
+    commandDutyTilesByRole.set(crew.staffRole, dutyTiles);
+    if (dutyTiles.length <= 0) continue;
+    releaseCrewJobForCommandDuty(state, crew);
+    if (crew.activeJobId !== null) continue;
+    const currentDutyTile = dutyTiles.includes(crew.tileIndex) && !staffedDutyTiles.has(crew.tileIndex) ? crew.tileIndex : null;
+    let selectedDutyTile = currentDutyTile;
+    let selectedPath: number[] | null = currentDutyTile !== null ? [] : null;
+    if (selectedDutyTile === null) {
+      for (const dutyTile of dutyTiles) {
+        if (staffedDutyTiles.has(dutyTile)) continue;
+        const path =
+          findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' }, state.pathOccupancyByTile) ??
+          findPath(state, crew.tileIndex, dutyTile, { allowRestricted: true, intent: 'crew' });
+        if (!path) continue;
+        selectedDutyTile = dutyTile;
+        selectedPath = path;
+        break;
       }
-      if (selectedDutyTile === null || selectedPath === null) continue;
+    }
+    if (selectedDutyTile !== null && selectedPath !== null) {
       crew.role = 'idle';
       crew.targetTile = selectedDutyTile;
       crew.assignedSystem = null;
@@ -15184,14 +15199,20 @@ export function updateCommandProgress(state: StationState, dt: number): void {
       if (crew.tileIndex !== selectedDutyTile && crew.path.length === 0) {
         setCrewPath(state, crew, selectedPath);
       }
-      break;
+      staffedDutyTiles.add(selectedDutyTile);
     }
   }
   state.command.bridgeStaffing.requiredTerminalStaff = Math.max(1, Math.min(3, bridgeModules.length));
   state.command.bridgeStaffing.activeTerminalStaff = state.crewMembers.filter(
-    (crew) => !crew.resting && crew.staffRole === 'captain' && captainDutyTiles.includes(crew.tileIndex)
+    (crew) => {
+      if (crew.resting || STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer !== true) return false;
+      const dutyTiles = commandDutyTilesByRole.get(crew.staffRole) ?? commandDutyTilesForRole(state, crew.staffRole);
+      return dutyTiles.includes(crew.tileIndex);
+    }
   ).length;
-  state.command.bridgeStaffing.captainConsoleStaffed = state.command.bridgeStaffing.activeTerminalStaff > 0;
+  state.command.bridgeStaffing.captainConsoleStaffed = state.crewMembers.some(
+    (crew) => !crew.resting && crew.staffRole === 'captain' && (commandDutyTilesByRole.get('captain') ?? commandDutyTilesForRole(state, 'captain')).includes(crew.tileIndex)
+  );
   if (!specialtyId) return;
   const def = SPECIALTY_BY_ID[specialtyId];
   const progress = state.command.specialtyProgress[specialtyId];

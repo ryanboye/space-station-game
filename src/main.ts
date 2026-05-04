@@ -3024,7 +3024,7 @@ function refreshProgressionModal(): void {
     const officer = STAFF_ROLE_DEFINITIONS[def.officerRole].label;
     const buttonLabel = active
       ? researchDone && !officerHired
-        ? `Hire ${officer}`
+        ? 'Open Crew Hiring'
         : 'Researching'
       : completed
         ? 'Complete'
@@ -3033,6 +3033,9 @@ function refreshProgressionModal(): void {
         : locked
           ? 'Locked'
             : `Research - ${def.researchCost}c`;
+    const buttonHtml = active && researchDone && !officerHired
+      ? `<button data-open-crew-panel="1">Open Crew Hiring</button>`
+      : `<button data-select-specialty="${def.id}" ${selectable && affordable ? '' : 'disabled'}>${!affordable && selectable ? `Need ${def.researchCost}c` : buttonLabel}</button>`;
     return `
       <div class="specialty-roadmap-card ${completed ? 'completed' : active ? 'active' : locked ? 'locked' : 'available'}">
         <div class="specialty-roadmap-head">
@@ -3044,7 +3047,7 @@ function refreshProgressionModal(): void {
         <small><strong>Cost:</strong> ${def.researchCost} credits</small>
         <small><strong>Officer:</strong> ${officer}</small>
         <small><strong>Staff:</strong> ${unlockedStaff || 'Bridge systems only'}</small>
-        <button data-select-specialty="${def.id}" ${selectable && affordable ? '' : 'disabled'}>${!affordable && selectable ? `Need ${def.researchCost}c` : buttonLabel}</button>
+        ${buttonHtml}
       </div>
     `;
   }).join('');
@@ -3234,7 +3237,11 @@ function refreshCrewPanel(): void {
 
   const roleIsAvailableInHiringPanel = (role: StaffRole): boolean => {
     const def = STAFF_ROLE_DEFINITIONS[role];
-    return !def.requiresSpecialty || completed.has(def.requiresSpecialty) || roleCount(role) > 0;
+    if (!def.requiresSpecialty || completed.has(def.requiresSpecialty) || roleCount(role) > 0) return true;
+    if (!def.officer || active !== def.requiresSpecialty) return false;
+    const specialty = SPECIALTY_DEFINITIONS.find((candidate) => candidate.id === def.requiresSpecialty);
+    const progress = state.command.specialtyProgress[def.requiresSpecialty];
+    return specialty?.officerRole === role && (progress?.progress ?? 0) >= 1;
   };
 
   const visibleHiringRoles = SURFACED_STAFF_ROLES.filter((role) => roleCount(role) > 0 || roleIsAvailableInHiringPanel(role));
@@ -5973,6 +5980,13 @@ hireCrewBtn.addEventListener('click', () => {
 progressionModal.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) return;
+  if (target.dataset.openCrewPanel) {
+    progressionModal.classList.add('hidden');
+    setPaletteSection('crew');
+    refreshCrewPanel();
+    refreshToolbar();
+    return;
+  }
   const specialty = target.dataset.selectSpecialty as SpecialtyId | undefined;
   if (!specialty) return;
   selectSpecialty(state, specialty);
