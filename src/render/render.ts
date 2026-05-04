@@ -364,21 +364,13 @@ function renderMassivePlanetBackdrop(
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
   const planetView = viewport ?? { x: 0, y: 0, width: worldW, height: worldH };
-  const planetAnchors = [
-    { x: 0.94, y: 0.34, viewportScale: 0.92, alpha: 0.64 },
-    { x: 0.24, y: 0.86, viewportScale: 0.58, alpha: 0.4 }
-  ] as const;
-  for (let i = 0; i < planetAnchors.length; i++) {
-    const key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, i, 52);
-    const anchor = planetAnchors[i];
-    const x = planetView.x + planetView.width * anchor.x;
-    const y = planetView.y + planetView.height * anchor.y;
-    const size = Math.max(planetView.width, planetView.height) * anchor.viewportScale;
-    const rotation = i === 0 ? -6 : 4;
-    const alpha = anchor.alpha;
-    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
-    drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
-  }
+  const key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
+  const x = planetView.x + planetView.width * 0.18;
+  const y = planetView.y + planetView.height * 0.94;
+  const size = Math.max(planetView.width, planetView.height) * 1.18;
+  const alpha = 0.46;
+  if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
+  drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
 }
 
 function renderDebrisBackdrop(
@@ -3240,6 +3232,7 @@ export function renderWorld(
   } else {
     ctx.fillRect(0, 0, widthPx, heightPx);
   }
+  renderMassivePlanetBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   drawCachedLayer(ctx, staticLayer.canvas, viewport);
@@ -3252,7 +3245,6 @@ export function renderWorld(
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
   ctx.save();
   clipToVisibleSpaceTiles(ctx, state, visibleTiles);
-  renderMassivePlanetBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   renderDebrisBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   ctx.restore();
   renderHullWearOverlays(ctx, state, spriteAtlas, useSprites, viewport);
