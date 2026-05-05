@@ -1,6 +1,8 @@
 import {
   clamp,
   fromIndex,
+  GRID_HEIGHT,
+  GRID_WIDTH,
   type MapConditionKind,
   type MapConditionSample,
   type StationState
@@ -41,35 +43,37 @@ function lowFrequencyNoise(seed: number, x: number, y: number, salt: number): nu
 export function mapConditionAt(state: StationState, kind: MapConditionKind, tileIndex: number): number {
   const pos = fromIndex(tileIndex, state.width);
   const seed = state.seedAtCreation;
-  const cx = (pos.x - state.width / 2) / Math.max(1, state.width);
-  const cy = (pos.y - state.height / 2) / Math.max(1, state.height);
+  const worldX = pos.x + (state.mapWorldOriginX ?? 0);
+  const worldY = pos.y + (state.mapWorldOriginY ?? 0);
+  const cx = (worldX - GRID_WIDTH / 2) / Math.max(1, GRID_WIDTH);
+  const cy = (worldY - GRID_HEIGHT / 2) / Math.max(1, GRID_HEIGHT);
   const angle = hash01(seed, 3, 7, 11) * Math.PI * 2;
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const alongSun = cx * dx + cy * dy;
   const crossSun = cx * -dy + cy * dx;
-  const waviness = (lowFrequencyNoise(seed, pos.x, pos.y, 21) - 0.5) * 0.24;
+  const waviness = (lowFrequencyNoise(seed, worldX, worldY, 21) - 0.5) * 0.24;
 
   if (kind === 'sunlight') {
     const band = smoothstep(-0.22, 0.42, alongSun + waviness);
     const occluder = Math.max(0, 1 - Math.abs(crossSun + (hash01(seed, 5, 9, 31) - 0.5) * 0.45) * 5.2);
-    return clamp(band - occluder * 0.34 + lowFrequencyNoise(seed, pos.x, pos.y, 41) * 0.12, 0, 1);
+    return clamp(band - occluder * 0.34 + lowFrequencyNoise(seed, worldX, worldY, 41) * 0.12, 0, 1);
   }
 
   if (kind === 'debris-risk') {
-    const edgeX = Math.min(pos.x, state.width - 1 - pos.x) / Math.max(1, state.width / 2);
-    const edgeY = Math.min(pos.y, state.height - 1 - pos.y) / Math.max(1, state.height / 2);
-    const edge = 1 - Math.min(edgeX, edgeY);
+    const edgeX = Math.min(worldX, GRID_WIDTH - 1 - worldX) / Math.max(1, GRID_WIDTH / 2);
+    const edgeY = Math.min(worldY, GRID_HEIGHT - 1 - worldY) / Math.max(1, GRID_HEIGHT / 2);
+    const edge = clamp(1 - Math.min(edgeX, edgeY), 0, 1);
     const debrisAngle = angle + Math.PI * (0.45 + hash01(seed, 11, 13, 51) * 0.5);
     const ddx = Math.cos(debrisAngle);
     const ddy = Math.sin(debrisAngle);
     const lane = cx * ddx + cy * ddy;
-    const lobe = smoothstep(-0.15, 0.55, lane + lowFrequencyNoise(seed, pos.x, pos.y, 61) * 0.28);
-    return clamp(edge * 0.45 + lobe * 0.55 + lowFrequencyNoise(seed, pos.x, pos.y, 71) * 0.1, 0, 1);
+    const lobe = smoothstep(-0.15, 0.55, lane + lowFrequencyNoise(seed, worldX, worldY, 61) * 0.28);
+    return clamp(edge * 0.45 + lobe * 0.55 + lowFrequencyNoise(seed, worldX, worldY, 71) * 0.1, 0, 1);
   }
 
   const shade = 1 - mapConditionAt(state, 'sunlight', tileIndex);
-  const pocket = lowFrequencyNoise(seed, pos.x, pos.y, 91);
+  const pocket = lowFrequencyNoise(seed, worldX, worldY, 91);
   return clamp(shade * 0.45 + pocket * 0.55, 0, 1);
 }
 

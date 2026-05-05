@@ -43,6 +43,7 @@ import {
   getRoomDiagnosticAt,
   getRoomEnvironmentTileDiagnostic,
   getRoomInspectorAt,
+  getThermalTileDiagnostic,
   getUnlockTier,
   getResidentInspectorById,
   getVisitorInspectorById,
@@ -269,6 +270,7 @@ app.innerHTML = `
         <div class="row compact list-row"><span>Rating</span><span class="value" id="health-rating">70</span></div>
         <small id="room-warnings">Room warnings: none</small>
         <small id="maintenance-status">Maintenance: tracking 0 targets | max 0% | avg 0% | open 0</small>
+        <small id="thermal-status">Thermal: avg 0% | max 0% | hot 0 | stale 0</small>
         <small id="resident-conversion-summary" class="hidden"></small>
         <small id="visitor-feelings" class="hidden"></small>
         <small id="rating-reasons" class="hidden"></small>
@@ -409,6 +411,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place wall Fire Extinguisher — suppresses nearby fires from an adjacent service tile"><span class="tool-key">·</span>Fire Ext</button>
         <button class="tool-btn" data-tool-module="vent" title="Place wall Vent — projects life-support air from an adjacent service tile"><span class="tool-key">·</span>Vent</button>
+        <button class="tool-btn" data-tool-module="insulation-panel" title="Place wall Insulation Panel — reduces sunlight heat transfer nearby"><span class="tool-key">·</span>Insul.</button>
         <button class="tool-btn" data-tool-module="vending-machine" title="Place Vending Machine (T1+) — visitors in leisure spend extra credits on this tile"><span class="tool-key">·</span>Vending</button>
         <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — leisure seating in social rooms; small comfort bonus"><span class="tool-key">·</span>Bench</button>
         <button class="tool-btn" data-tool-module="bar-counter" title="Place Bar Counter (Cantina-only) — drink service anchor"><span class="tool-key">·</span>Bar</button>
@@ -443,6 +446,7 @@ app.innerHTML = `
         <span class="tool-row-label diagnostic-row-label">Diagnostics</span>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Hide diagnostic heatmaps">Diagnostics: OFF</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show life-support coverage heatmap">Air Coverage</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="thermal" title="Show heat and stale-air pressure">Thermal</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show visitor status heatmap">Visitor Status</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="service-noise" title="Show service noise heatmap">Service Noise</button>
@@ -917,6 +921,7 @@ const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   none: 'Diagnostics',
   'life-support': 'Air Coverage',
+  thermal: 'Thermal',
   'visitor-status': 'Visitor Status',
   'resident-comfort': 'Resident Comfort',
   'service-noise': 'Service Noise',
@@ -928,6 +933,7 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
   'life-support',
+  'thermal',
   'visitor-status',
   'resident-comfort',
   'service-noise',
@@ -986,6 +992,15 @@ function diagnosticReadoutText(): string {
     }
     const repair = diagnostic.exterior ? 'EVA repair' : 'interior repair';
     return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.label} ${diagnostic.debt.toFixed(0)}% | ${diagnostic.source} | ${diagnostic.effect} | ${repair}.`;
+  }
+  if (overlay === 'thermal') {
+    const globalLine = `Thermal: avg ${state.metrics.thermalAvg.toFixed(0)}% | max ${state.metrics.thermalMax.toFixed(0)}% | hot ${state.metrics.hotTiles} | stale ${state.metrics.staleAirTiles}`;
+    if (hoveredTile === null) return `${globalLine}\nHover a room tile for condition, heat/stale cause, effect, and fix.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getThermalTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no thermal room sample here.`;
+    const condition = diagnostic.sunlight >= 0.65 ? 'bright sun' : diagnostic.sunlight <= 0.28 ? 'deep shade' : 'mixed light';
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${condition} | heat ${diagnostic.heat.toFixed(0)}% | stale ${diagnostic.staleAir.toFixed(0)}% | cause ${diagnostic.cause} | ${diagnostic.effect} | fix: ${diagnostic.fix}.`;
   }
   if (overlay === 'sanitation') {
     const departmentLine = `Sanitation Department: ${departmentStatusText('sanitation')}`;
@@ -1094,6 +1109,17 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
           { color: '#ffd65c', label: 'Moderate debt, maintenance should visit' },
           { color: '#ee4f4f', label: 'Serious wear causing degradation or EVA urgency' },
           { color: '#d072ff', label: 'Debris-risk space that accelerates exterior wear' }
+        ]
+      };
+    case 'thermal':
+      return {
+        title: 'Thermal',
+        stats: `avg ${state.metrics.thermalAvg.toFixed(0)}% | max ${state.metrics.thermalMax.toFixed(0)}% | hot ${state.metrics.hotTiles} | stale ${state.metrics.staleAirTiles}`,
+        rows: [
+          { color: '#61c8ff', label: 'Cool or well-vented room' },
+          { color: '#ffd65c', label: 'Warm or stale pressure beginning' },
+          { color: '#ee784a', label: 'Hot room hurting comfort or work' },
+          { color: '#ee4f4f', label: 'Overheated/stale, add vents or insulation' }
         ]
       };
     case 'sanitation':
@@ -1211,6 +1237,7 @@ const crewRetargetsEl = document.querySelector<HTMLElement>('#crew-retargets')!;
 const foodChainHintEl = document.querySelector<HTMLElement>('#food-chain-hint')!;
 const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
 const maintenanceStatusEl = document.querySelector<HTMLElement>('#maintenance-status')!;
+const thermalStatusEl = document.querySelector<HTMLElement>('#thermal-status')!;
 const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
@@ -2018,6 +2045,17 @@ function maintenanceStatusToneColor(): string {
   return '#8ea2bd';
 }
 
+function thermalStatusText(): string {
+  return `Thermal: avg ${state.metrics.thermalAvg.toFixed(0)}% | max ${state.metrics.thermalMax.toFixed(0)}% | hot ${state.metrics.hotTiles} | stale ${state.metrics.staleAirTiles}`;
+}
+
+function thermalStatusToneColor(): string {
+  if (state.metrics.thermalMax >= 86) return 'var(--danger)';
+  if (state.metrics.hotTiles > 0 || state.metrics.staleAirTiles > 0 || state.metrics.thermalMax >= 62) return 'var(--warn)';
+  if (state.metrics.thermalAvg > 0) return 'var(--ok)';
+  return '#8ea2bd';
+}
+
 function residentConversionTone(): 'default' | 'warn' | 'danger' | 'ok' {
   if (state.metrics.residentsCount > 0 || state.metrics.residentConversionLastResult === 'converted') return 'ok';
   if (state.metrics.residentPrivateBedsTotal <= 0 || state.metrics.residentBerthsTotal <= 0) return 'danger';
@@ -2333,6 +2371,7 @@ function refreshOpsModal(): void {
     { label: 'Observatory', value: `${state.ops.observatoryActive}/${state.ops.observatoryTotal}` },
     { label: 'Security', value: `${state.ops.securityActive}/${state.ops.securityTotal}` },
     { label: 'Maint', value: `${state.metrics.maintenanceDebtAvg.toFixed(0)}% avg / ${state.metrics.maintenanceJobsOpen} open`, tone: state.metrics.maintenanceJobsOpen > 0 ? 'warn' : 'default' },
+    { label: 'Thermal', value: `max ${state.metrics.thermalMax.toFixed(0)}% / stale ${state.metrics.staleAirTiles}`, tone: state.metrics.hotTiles + state.metrics.staleAirTiles > 0 ? 'warn' : 'default' },
     { label: 'Mechanical Dept', value: departmentStatusText('mechanical'), tone: departmentTone('mechanical') },
     { label: 'Sanitation', value: `${state.metrics.sanitationAvg.toFixed(1)}% avg / ${state.metrics.sanitationMax.toFixed(0)}% max / ${state.metrics.sanitationJobsOpen} open`, tone: state.metrics.sanitationJobsOpen > 0 ? 'warn' : 'default' },
     { label: 'Sanitation Dept', value: departmentStatusText('sanitation'), tone: departmentTone('sanitation') },
@@ -3530,6 +3569,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'cargo-arm': ModuleType.CargoArm,
   'fire-extinguisher': ModuleType.FireExtinguisher,
   vent: ModuleType.Vent,
+  'insulation-panel': ModuleType.InsulationPanel,
   'vending-machine': ModuleType.VendingMachine,
   bench: ModuleType.Bench,
   'bar-counter': ModuleType.BarCounter,
@@ -3586,6 +3626,7 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.CargoArm]: 'CA',
   [ModuleType.FireExtinguisher]: 'FX',
   [ModuleType.Vent]: 'VT',
+  [ModuleType.InsulationPanel]: 'IP',
   [ModuleType.VendingMachine]: 'VM',
   [ModuleType.Bench]: 'BN',
   [ModuleType.BarCounter]: 'BC',
@@ -6234,6 +6275,8 @@ function frame(now: number): void {
   healthRatingEl.style.color = ratingToneColor();
   maintenanceStatusEl.textContent = maintenanceStatusText();
   maintenanceStatusEl.style.color = maintenanceStatusToneColor();
+  thermalStatusEl.textContent = thermalStatusText();
+  thermalStatusEl.style.color = thermalStatusToneColor();
   visitorFeelingsEl.textContent = `Visitor feelings: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;
   moraleReasonsEl.textContent = `Crew morale drivers: ${state.metrics.crewMoraleDrivers.join(' | ') || 'none'}`;
   ratingReasonsEl.textContent = `Rating drivers: ${state.metrics.stationRatingDrivers.join(' | ') || 'none'}`;

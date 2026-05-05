@@ -101,6 +101,9 @@ import {
   type RoomEnvironmentTraits,
   type RoomEnvironmentScore,
   type RoomEnvironmentTileDiagnostic,
+  type ThermalRoomDiagnostic,
+  type ThermalSeverity,
+  type ThermalTileDiagnostic,
   type ShipServiceTag,
   type ShipType,
   type UnlockTier,
@@ -200,6 +203,15 @@ const MAINTENANCE_MODULE_LOAD_RISE_PER_MIN = 0.72;
 const MAINTENANCE_DOOR_TRAFFIC_RISE_PER_MIN = 0.22;
 const MAINTENANCE_MAX_OPEN_REPAIR_JOBS = 12;
 const MAINTENANCE_MAX_OPEN_EXTERIOR_JOBS = 5;
+const THERMAL_COMFORT_HEAT = 50;
+const THERMAL_WARM_HEAT = 60;
+const THERMAL_HOT_HEAT = 72;
+const THERMAL_OVERHEATED_HEAT = 84;
+const THERMAL_STALE_WARNING = 45;
+const THERMAL_STALE_HOT = 62;
+const THERMAL_INSULATION_RADIUS = 4;
+const THERMAL_VENT_RADIUS = 6;
+const THERMAL_DRIFT_CADENCE_SEC = 4;
 const SANITATION_DIRTY_THRESHOLD = 32;
 const SANITATION_FILTHY_THRESHOLD = 68;
 const SANITATION_JOB_SPAWN_THRESHOLD = 36;
@@ -968,6 +980,8 @@ type SimCadenceTimers = {
   nextJobBoardAt: number;
   nextMaterialImportAt: number;
   nextResidentMoveInAt: number;
+  nextThermalDriftAt: number;
+  lastThermalDriftAt: number;
 };
 
 const simCadenceTimers = new WeakMap<StationState, SimCadenceTimers>();
@@ -978,7 +992,9 @@ function cadenceTimersFor(state: StationState): SimCadenceTimers {
     timers = {
       nextJobBoardAt: Number.NEGATIVE_INFINITY,
       nextMaterialImportAt: Number.NEGATIVE_INFINITY,
-      nextResidentMoveInAt: state.now + RESIDENT_MOVE_IN_CADENCE_SEC
+      nextResidentMoveInAt: state.now + RESIDENT_MOVE_IN_CADENCE_SEC,
+      nextThermalDriftAt: Number.NEGATIVE_INFINITY,
+      lastThermalDriftAt: state.now
     };
     simCadenceTimers.set(state, timers);
   }
@@ -2007,6 +2023,167 @@ export function getLifeSupportTileDiagnostic(
     distance,
     poorCoverage,
     noActiveSource
+  };
+}
+
+function thermalSeverityFor(heat: number, staleAir: number): ThermalSeverity {
+  const pressure = Math.max(heat, staleAir + 12);
+  if (pressure >= 92 || heat >= THERMAL_OVERHEATED_HEAT + 10 || staleAir >= 82) return 'severe';
+  if (pressure >= THERMAL_OVERHEATED_HEAT || staleAir >= THERMAL_STALE_HOT) return 'overheated';
+  if (pressure >= THERMAL_HOT_HEAT || heat >= THERMAL_HOT_HEAT) return 'hot';
+  if (pressure >= THERMAL_WARM_HEAT || staleAir >= THERMAL_STALE_WARNING) return 'warm';
+  return 'comfortable';
+}
+
+function thermalEffectFor(severity: ThermalSeverity, heat: number, staleAir: number): string {
+  if (severity === 'severe') return 'comfort, status, and maintenance pressure are severe';
+  if (severity === 'overheated') return 'comfort/status penalties and maintenance wear rise';
+  if (severity === 'hot') return 'small comfort/status penalties; high-load modules wear faster';
+  if (severity === 'warm') return heat >= staleAir ? 'warm but manageable' : 'stale air is noticeable';
+  return 'comfortable';
+}
+
+function thermalFixFor(diagnostic: Pick<ThermalTileDiagnostic, 'heat' | 'staleAir' | 'sunlight' | 'insulation' | 'ventRelief' | 'lifeSupportDistance' | 'thermalSink'>): string {
+  if (diagnostic.staleAir >= THERMAL_STALE_WARNING && diagnostic.ventRelief <= 0.15) return 'add a vent or improve life-support reach';
+  if (diagnostic.heat >= THERMAL_HOT_HEAT && diagnostic.sunlight >= 0.55 && diagnostic.insulation <= 0.15) return 'add insulation or move heat-sensitive rooms into shade';
+  if (diagnostic.heat >= THERMAL_HOT_HEAT && diagnostic.thermalSink <= 0.35) return 'expand into shade or a thermal sink for cooler high-load rooms';
+  if (diagnostic.lifeSupportDistance !== null && diagnostic.lifeSupportDistance > 18) return 'add life support or a powered vent closer to this wing';
+  return 'monitor or use vents/insulation if pressure rises';
+}
+
+function thermalCauseFor(room: RoomType, sunlight: number, thermalSink: number, heat: number, staleAir: number, firePressure = 0): string {
+  const causes: string[] = [];
+  if (sunlight >= 0.65) causes.push('bright sun');
+  else if (sunlight <= 0.28) causes.push('deep shade');
+  if (thermalSink >= 0.6) causes.push('thermal sink');
+  if (room === RoomType.Kitchen) causes.push('kitchen load');
+  else if (room === RoomType.Workshop) causes.push('workshop load');
+  else if (room === RoomType.Reactor) causes.push('reactor heat');
+  else if (room === RoomType.LifeSupport) causes.push('life-support machinery');
+  if (firePressure > 0) causes.push(firePressure >= 8 ? 'active fire heat' : 'fire aftermath');
+  if (staleAir >= THERMAL_STALE_WARNING && staleAir > heat - 12) causes.push('stale air');
+  return causes.join(' + ') || 'neutral conditions';
+}
+
+function nearbyModuleEffect(
+  state: StationState,
+  tileIndex: number,
+  moduleType: ModuleType,
+  radius: number
+): number {
+  const pos = fromIndex(tileIndex, state.width);
+  let best = 0;
+  for (const module of state.moduleInstances) {
+    if (module.type !== moduleType) continue;
+    const mp = fromIndex(module.originTile, state.width);
+    const dist = Math.abs(mp.x - pos.x) + Math.abs(mp.y - pos.y);
+    if (dist > radius) continue;
+    best = Math.max(best, 1 - dist / (radius + 1));
+  }
+  return best;
+}
+
+function thermalTileDiagnosticAt(
+  state: StationState,
+  tileIndex: number,
+  coverage: LifeSupportCoverageDiagnostic = getLifeSupportCoverageDiagnostics(state)
+): ThermalTileDiagnostic | null {
+  if (tileIndex < 0 || tileIndex >= state.tiles.length || !isWalkable(state.tiles[tileIndex])) return null;
+  const heat = clamp(state.heatByTile[tileIndex] ?? 42, 0, 100);
+  const staleAir = clamp(state.staleAirByTile[tileIndex] ?? 0, 0, 100);
+  const sunlight = mapConditionAt(state, 'sunlight', tileIndex);
+  const thermalSink = mapConditionAt(state, 'thermal-sink', tileIndex);
+  const insulation = nearbyModuleEffect(state, tileIndex, ModuleType.InsulationPanel, THERMAL_INSULATION_RADIUS);
+  const ventRelief = nearbyModuleEffect(state, tileIndex, ModuleType.Vent, THERMAL_VENT_RADIUS);
+  const rawDistance = coverage.distanceByTile[tileIndex];
+  const lifeSupportDistance = rawDistance >= 0 ? rawDistance : null;
+  const fire = state.effects.fires.find((entry) => entry.anchorTile === tileIndex);
+  const firePressure =
+    (fire ? Math.min(22, fire.intensity * 0.32) : 0) +
+    (state.dirtSourceByTile[tileIndex] === SANITATION_SOURCE_CODES.fire ? Math.min(5, (state.dirtByTile[tileIndex] ?? 0) * 0.06) : 0);
+  const cooling =
+    (1 - sunlight) * 0.25 +
+    thermalSink * 0.35 +
+    insulation * 0.2 +
+    ventRelief * 0.15 +
+    (lifeSupportDistance !== null ? clamp(1 - lifeSupportDistance / 24, 0, 1) * 0.2 : 0);
+  const room = state.rooms[tileIndex];
+  const severity = thermalSeverityFor(heat, staleAir);
+  const cause = thermalCauseFor(room, sunlight, thermalSink, heat, staleAir, firePressure);
+  const diagnostic: ThermalTileDiagnostic = {
+    tileIndex,
+    heat,
+    staleAir,
+    severity,
+    sunlight,
+    shadow: 1 - sunlight,
+    thermalSink,
+    cooling: clamp(cooling, 0, 1),
+    insulation,
+    ventRelief,
+    lifeSupportDistance,
+    cause,
+    effect: thermalEffectFor(severity, heat, staleAir),
+    fix: 'monitor'
+  };
+  diagnostic.fix = thermalFixFor(diagnostic);
+  return diagnostic;
+}
+
+export function getThermalTileDiagnostic(state: StationState, x: number, y: number): ThermalTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  return thermalTileDiagnosticAt(state, toIndex(x, y, state.width));
+}
+
+function thermalRoomDiagnosticForCluster(
+  state: StationState,
+  room: RoomType,
+  cluster: number[],
+  anchorTile: number
+): ThermalRoomDiagnostic {
+  const coverage = getLifeSupportCoverageDiagnostics(state);
+  let heatTotal = 0;
+  let staleTotal = 0;
+  let maxHeat = 0;
+  let maxStaleAir = 0;
+  const causeWeights = new Map<string, number>();
+  let samples = 0;
+  for (const tile of cluster) {
+    const diagnostic = thermalTileDiagnosticAt(state, tile, coverage);
+    if (!diagnostic) continue;
+    heatTotal += diagnostic.heat;
+    staleTotal += diagnostic.staleAir;
+    maxHeat = Math.max(maxHeat, diagnostic.heat);
+    maxStaleAir = Math.max(maxStaleAir, diagnostic.staleAir);
+    causeWeights.set(diagnostic.cause, (causeWeights.get(diagnostic.cause) ?? 0) + Math.max(diagnostic.heat, diagnostic.staleAir));
+    samples++;
+  }
+  const averageHeat = samples > 0 ? heatTotal / samples : 0;
+  const averageStaleAir = samples > 0 ? staleTotal / samples : 0;
+  const severity = thermalSeverityFor(maxHeat, maxStaleAir);
+  const dominantCause = [...causeWeights.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'neutral conditions';
+  const sampleDiagnostic =
+    thermalTileDiagnosticAt(state, anchorTile, coverage) ??
+    ({
+      heat: averageHeat,
+      staleAir: averageStaleAir,
+      sunlight: mapConditionAt(state, 'sunlight', anchorTile),
+      thermalSink: mapConditionAt(state, 'thermal-sink', anchorTile),
+      insulation: nearbyModuleEffect(state, anchorTile, ModuleType.InsulationPanel, THERMAL_INSULATION_RADIUS),
+      ventRelief: nearbyModuleEffect(state, anchorTile, ModuleType.Vent, THERMAL_VENT_RADIUS),
+      lifeSupportDistance: null
+    } as ThermalTileDiagnostic);
+  return {
+    room,
+    anchorTile,
+    averageHeat,
+    maxHeat,
+    averageStaleAir,
+    maxStaleAir,
+    severity,
+    dominantCause,
+    effect: thermalEffectFor(severity, maxHeat, maxStaleAir),
+    fix: thermalFixFor(sampleDiagnostic)
   };
 }
 
@@ -3360,6 +3537,18 @@ function roomEnvironmentScoreAt(state: StationState, tileIndex: number, radius =
       score.residentialComfort += moduleAdjustment.residentialComfort * weight;
       score.serviceNoise += moduleAdjustment.serviceNoise * weight;
       score.publicAppeal += moduleAdjustment.publicAppeal * weight;
+      const heat = state.heatByTile[sampleTile] ?? 42;
+      const staleAir = state.staleAirByTile[sampleTile] ?? 0;
+      if (heat >= THERMAL_WARM_HEAT) {
+        const heatPenalty = Math.min(0.5, (heat - THERMAL_WARM_HEAT) / 56);
+        score.visitorStatus -= heatPenalty * weight;
+        score.residentialComfort -= heatPenalty * 1.15 * weight;
+      }
+      if (staleAir >= THERMAL_STALE_WARNING) {
+        const stalePenalty = Math.min(0.42, (staleAir - THERMAL_STALE_WARNING) / 70);
+        score.visitorStatus -= stalePenalty * 0.75 * weight;
+        score.residentialComfort -= stalePenalty * weight;
+      }
       score.sampledTiles += 1;
       weightTotal += weight;
     }
@@ -3633,6 +3822,200 @@ function updateLocalAirQuality(state: StationState, dt: number): void {
     const settle = current < 0 || Number.isNaN(current) ? target : current + (target - current) * Math.min(1, dt * 1.2);
     state.airQualityByTile[tile] = clamp(settle, 0, 100);
   }
+}
+
+type ThermalDriftContext = {
+  occupancyByTile: Uint8Array;
+  debtLoadByTile: Float32Array;
+  fireLoadByTile: Float32Array;
+  moduleHeatByTile: Float32Array;
+  insulationByTile: Float32Array;
+  ventReliefByTile: Float32Array;
+};
+
+function addNearbyModuleRelief(
+  state: StationState,
+  target: Float32Array,
+  module: { originTile: number },
+  radius: number
+): void {
+  const pos = fromIndex(module.originTile, state.width);
+  const minX = Math.max(0, pos.x - radius);
+  const maxX = Math.min(state.width - 1, pos.x + radius);
+  const minY = Math.max(0, pos.y - radius);
+  const maxY = Math.min(state.height - 1, pos.y + radius);
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const dist = Math.abs(x - pos.x) + Math.abs(y - pos.y);
+      if (dist > radius) continue;
+      const tile = toIndex(x, y, state.width);
+      target[tile] = Math.max(target[tile], 1 - dist / (radius + 1));
+    }
+  }
+}
+
+function addNearbyModuleHeat(
+  state: StationState,
+  target: Float32Array,
+  module: { originTile: number },
+  radius: number,
+  heat: number
+): void {
+  const pos = fromIndex(module.originTile, state.width);
+  const minX = Math.max(0, pos.x - radius);
+  const maxX = Math.min(state.width - 1, pos.x + radius);
+  const minY = Math.max(0, pos.y - radius);
+  const maxY = Math.min(state.height - 1, pos.y + radius);
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const dist = Math.abs(x - pos.x) + Math.abs(y - pos.y);
+      if (dist > radius) continue;
+      const tile = toIndex(x, y, state.width);
+      if (!isWalkable(state.tiles[tile])) continue;
+      target[tile] = Math.max(target[tile], heat * (1 - dist / (radius + 1)));
+    }
+  }
+}
+
+function buildThermalDriftContext(state: StationState): ThermalDriftContext {
+  const total = state.tiles.length;
+  const occupancyByTile = new Uint8Array(total);
+  const debtLoadByTile = new Float32Array(total);
+  const fireLoadByTile = new Float32Array(total);
+  const moduleHeatByTile = new Float32Array(total);
+  const insulationByTile = new Float32Array(total);
+  const ventReliefByTile = new Float32Array(total);
+
+  for (const visitor of state.visitors) if (visitor.tileIndex >= 0 && visitor.tileIndex < total) occupancyByTile[visitor.tileIndex] = Math.min(255, occupancyByTile[visitor.tileIndex] + 1);
+  for (const resident of state.residents) if (resident.tileIndex >= 0 && resident.tileIndex < total) occupancyByTile[resident.tileIndex] = Math.min(255, occupancyByTile[resident.tileIndex] + 1);
+  for (const crew of state.crewMembers) if (crew.tileIndex >= 0 && crew.tileIndex < total) occupancyByTile[crew.tileIndex] = Math.min(255, occupancyByTile[crew.tileIndex] + 1);
+
+  for (const debt of state.maintenanceDebts) {
+    if (debt.debt < MAINTENANCE_DEBT_WARNING) continue;
+    const load = Math.min(8, (debt.debt - MAINTENANCE_DEBT_WARNING) / 6);
+    const target = debt.targetTile ?? debt.anchorTile;
+    if (target >= 0 && target < total) debtLoadByTile[target] = Math.max(debtLoadByTile[target], load);
+    if (debt.anchorTile >= 0 && debt.anchorTile < total) debtLoadByTile[debt.anchorTile] = Math.max(debtLoadByTile[debt.anchorTile], load);
+  }
+
+  for (const fire of state.effects.fires) {
+    const pos = fromIndex(fire.anchorTile, state.width);
+    for (let y = Math.max(0, pos.y - 2); y <= Math.min(state.height - 1, pos.y + 2); y++) {
+      for (let x = Math.max(0, pos.x - 2); x <= Math.min(state.width - 1, pos.x + 2); x++) {
+        const dist = Math.abs(x - pos.x) + Math.abs(y - pos.y);
+        if (dist > 2) continue;
+        const tile = toIndex(x, y, state.width);
+        const falloff = 1 - dist / 3;
+        fireLoadByTile[tile] = Math.max(fireLoadByTile[tile], Math.min(22, fire.intensity * 0.32 * falloff));
+      }
+    }
+  }
+
+  for (const module of state.moduleInstances) {
+    if (module.type === ModuleType.InsulationPanel) addNearbyModuleRelief(state, insulationByTile, module, THERMAL_INSULATION_RADIUS);
+    else if (module.type === ModuleType.Vent) addNearbyModuleRelief(state, ventReliefByTile, module, THERMAL_VENT_RADIUS);
+    else if (module.type === ModuleType.Stove) addNearbyModuleHeat(state, moduleHeatByTile, module, 3, 9);
+    else if (module.type === ModuleType.Workbench) addNearbyModuleHeat(state, moduleHeatByTile, module, 3, 7);
+    else if (module.type === ModuleType.GrowStation) addNearbyModuleHeat(state, moduleHeatByTile, module, 2, 4);
+  }
+
+  return { occupancyByTile, debtLoadByTile, fireLoadByTile, moduleHeatByTile, insulationByTile, ventReliefByTile };
+}
+
+function roomHeatLoad(state: StationState, tile: number, context?: ThermalDriftContext): number {
+  const room = state.rooms[tile];
+  let load = 0;
+  if (room === RoomType.Reactor) load += state.ops.reactorsActive > 0 ? 20 : 12;
+  else if (room === RoomType.Kitchen) load += state.ops.kitchenActive > 0 ? 14 : 8;
+  else if (room === RoomType.Workshop) load += state.ops.workshopActive > 0 ? 12 : 7;
+  else if (room === RoomType.LifeSupport) load += state.ops.lifeSupportActive > 0 ? 10 : 6;
+  else if (room === RoomType.Hydroponics) load += 5;
+  else if (room === RoomType.Dorm || room === RoomType.Clinic) load -= 2;
+  const module = state.modules[tile];
+  if (module === ModuleType.Stove) load += 10;
+  else if (module === ModuleType.Workbench) load += 8;
+  else if (module === ModuleType.GrowStation) load += 5;
+  else if (module === ModuleType.Vent) load -= 3;
+  else if (module === ModuleType.InsulationPanel) load -= 4;
+  const occupied = context
+    ? context.occupancyByTile[tile]
+    : state.visitors.filter((visitor) => visitor.tileIndex === tile).length +
+      state.residents.filter((resident) => resident.tileIndex === tile).length +
+      state.crewMembers.filter((crew) => crew.tileIndex === tile).length;
+  load += Math.min(8, occupied * 2);
+  if (context) {
+    load += context.debtLoadByTile[tile] + context.fireLoadByTile[tile] + context.moduleHeatByTile[tile];
+  } else {
+    const debt = state.maintenanceDebts.find((entry) => (entry.targetTile ?? entry.anchorTile) === tile || entry.anchorTile === tile);
+    if (debt && debt.debt >= MAINTENANCE_DEBT_WARNING) load += Math.min(8, (debt.debt - MAINTENANCE_DEBT_WARNING) / 6);
+    const fire = state.effects.fires.find((entry) => entry.anchorTile === tile);
+    if (fire) load += Math.min(22, fire.intensity * 0.32);
+  }
+  if (state.dirtSourceByTile[tile] === SANITATION_SOURCE_CODES.fire) {
+    load += Math.min(5, (state.dirtByTile[tile] ?? 0) * 0.06);
+  }
+  return load;
+}
+
+function updateThermalDrift(state: StationState, dt: number): void {
+  const total = state.tiles.length;
+  if (state.heatByTile.length !== total) state.heatByTile = new Float32Array(total).fill(42);
+  if (state.staleAirByTile.length !== total) state.staleAirByTile = new Float32Array(total);
+  const coverage = computeLifeSupportCoverage(state);
+  const thermalContext = buildThermalDriftContext(state);
+  let hotTiles = 0;
+  let staleTiles = 0;
+  for (let tile = 0; tile < total; tile++) {
+    if (!isWalkable(state.tiles[tile]) || state.rooms[tile] === RoomType.None) {
+      state.heatByTile[tile] = 0;
+      state.staleAirByTile[tile] = 0;
+      continue;
+    }
+    const sunlight = mapConditionAt(state, 'sunlight', tile);
+    const thermalSink = mapConditionAt(state, 'thermal-sink', tile);
+    const insulation = thermalContext.insulationByTile[tile];
+    const ventRelief = thermalContext.ventReliefByTile[tile];
+    const heatLoad = roomHeatLoad(state, tile, thermalContext);
+    const sunlightHeat = sunlight * (34 * (1 - insulation * 0.68));
+    const shadeCooling = (1 - sunlight) * 7;
+    const sinkCooling = thermalSink * 12;
+    const lifeSupportDistance = coverage.distanceByTile[tile];
+    const coverageCooling = lifeSupportDistance >= 0 ? clamp(1 - lifeSupportDistance / 26, 0, 1) * 6 : 0;
+    const ventCooling = ventRelief * 4;
+    const targetHeat = clamp(
+      38 + sunlightHeat + heatLoad - shadeCooling - sinkCooling - coverageCooling - ventCooling,
+      24,
+      100
+    );
+
+    const coverageStale =
+      coverage.sourceCount <= 0
+        ? 38
+        : lifeSupportDistance < 0
+          ? 58
+          : lifeSupportDistance <= 8
+            ? 8 + lifeSupportDistance * 1.2
+            : lifeSupportDistance <= 24
+              ? 18 + (lifeSupportDistance - 8) * 1.6
+              : 48;
+    const staleTarget = clamp(
+      coverageStale +
+        Math.max(0, targetHeat - THERMAL_COMFORT_HEAT) * 0.28 +
+        Math.max(0, heatLoad) * 0.35 -
+        ventRelief * 30,
+      0,
+      100
+    );
+    const heatCurrent = state.heatByTile[tile];
+    const staleCurrent = state.staleAirByTile[tile];
+    const heatSettle = Number.isNaN(heatCurrent) ? targetHeat : heatCurrent + (targetHeat - heatCurrent) * Math.min(1, dt * 0.09);
+    const staleSettle = Number.isNaN(staleCurrent) ? staleTarget : staleCurrent + (staleTarget - staleCurrent) * Math.min(1, dt * 0.08);
+    state.heatByTile[tile] = clamp(heatSettle, 0, 100);
+    state.staleAirByTile[tile] = clamp(staleSettle, 0, 100);
+    if (state.heatByTile[tile] >= THERMAL_HOT_HEAT) hotTiles++;
+    if (state.staleAirByTile[tile] >= THERMAL_STALE_WARNING) staleTiles++;
+  }
+  state.usageTotals.thermalPenalty += (hotTiles * 0.00018 + staleTiles * 0.00012) * dt;
 }
 
 function applyAirExposure(
@@ -5543,7 +5926,8 @@ function processModuleMaintenance(state: StationState, minutes: number, ensureDe
     const risePerMin =
       MAINTENANCE_MODULE_IDLE_RISE_PER_MIN +
       (active ? MAINTENANCE_MODULE_LOAD_RISE_PER_MIN : 0) +
-      (exterior ? risk * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN * 0.45 : 0);
+      (exterior ? risk * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN * 0.45 : 0) +
+      Math.max(0, (state.heatByTile[module.originTile] ?? 42) - THERMAL_HOT_HEAT) * 0.018;
     debt.debt = clamp(debt.debt + risePerMin * minutes, 0, 100);
     if (shouldEnqueueRepairJob(state, debt)) enqueueRepairJobForDebt(state, debt);
   }
@@ -5634,6 +6018,8 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
         : MAINTENANCE_IDLE_RISE_PER_MIN;
       if (system === 'reactor' && state.metrics.powerDemand > state.metrics.powerSupply) risePerMin += 0.45;
       if (system === 'life-support' && state.metrics.airQuality < 35) risePerMin += 0.55;
+      const clusterHeat = cluster.reduce((max, tile) => Math.max(max, state.heatByTile[tile] ?? 42), 0);
+      if (clusterHeat >= THERMAL_HOT_HEAT) risePerMin += (clusterHeat - THERMAL_HOT_HEAT) * 0.012;
 
       const maintainers = state.crewMembers.filter(
         (crew) =>
@@ -6140,6 +6526,17 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     }
   }
   const environment = roomEnvironmentScoreAt(state, tileIndex);
+  const thermal = thermalRoomDiagnosticForCluster(state, room, cluster, clusterMeta.anchor);
+  hints.push(
+    `thermal ${thermal.averageHeat.toFixed(0)}% avg / ${thermal.maxHeat.toFixed(0)}% max | stale ${thermal.averageStaleAir.toFixed(0)}% | ${thermal.dominantCause}`
+  );
+  if (thermal.severity !== 'comfortable') {
+    hints.push(`thermal effect: ${thermal.effect}`);
+    hints.push(`thermal fix: ${thermal.fix}`);
+  }
+  if (thermal.severity === 'hot' || thermal.severity === 'overheated' || thermal.severity === 'severe') {
+    warnings.push(`thermal ${thermal.severity}: ${thermal.dominantCause}`);
+  }
   if (
     (room === RoomType.Cafeteria || room === RoomType.Lounge || room === RoomType.Market || room === RoomType.RecHall) &&
     visitorEnvironmentDiscomfort(environment) > 1.2
@@ -6267,6 +6664,7 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     inventory,
     flowHints,
     environment,
+    thermal,
     routePressure,
     sanitation,
     cafeteriaLoad,
@@ -12746,6 +13144,28 @@ function computeMetrics(state: StationState): void {
   state.metrics.visitorStatusAvg = visitorEnvironment.visitorStatus;
   state.metrics.residentComfortAvg = residentEnvironment.residentialComfort;
   state.metrics.serviceNoiseNearDorms = dormEnvironment.serviceNoise;
+  let thermalTotal = 0;
+  let thermalMax = 0;
+  let thermalSamples = 0;
+  let hotTiles = 0;
+  let staleAirTiles = 0;
+  let coolingLoad = 0;
+  for (let tile = 0; tile < state.tiles.length; tile++) {
+    if (!isWalkable(state.tiles[tile]) || state.rooms[tile] === RoomType.None) continue;
+    const heat = clamp(state.heatByTile[tile] ?? 0, 0, 100);
+    const staleAir = clamp(state.staleAirByTile[tile] ?? 0, 0, 100);
+    thermalTotal += heat;
+    thermalMax = Math.max(thermalMax, heat, staleAir + 8);
+    thermalSamples++;
+    if (heat >= THERMAL_HOT_HEAT) hotTiles++;
+    if (staleAir >= THERMAL_STALE_WARNING) staleAirTiles++;
+    coolingLoad += Math.max(0, heat - THERMAL_COMFORT_HEAT) * 0.02 + Math.max(0, staleAir - 25) * 0.01;
+  }
+  state.metrics.thermalAvg = thermalSamples > 0 ? thermalTotal / thermalSamples : 0;
+  state.metrics.thermalMax = thermalMax;
+  state.metrics.hotTiles = hotTiles;
+  state.metrics.staleAirTiles = staleAirTiles;
+  state.metrics.coolingLoad = coolingLoad;
   const maintenanceDebtTotal = state.maintenanceDebts.reduce((acc, debt) => acc + debt.debt, 0);
   state.metrics.maintenanceDebtAvg =
     state.maintenanceDebts.length > 0 ? maintenanceDebtTotal / state.maintenanceDebts.length : 0;
@@ -12956,6 +13376,8 @@ function computeMetrics(state: StationState): void {
   state.metrics.crewPublicInterferencePerMin = state.usageTotals.crewPublicInterference / runMinutes;
   state.metrics.visitorEnvironmentPenaltyPerMin = state.usageTotals.visitorEnvironmentPenalty / runMinutes;
   state.metrics.residentEnvironmentStressPerMin = state.usageTotals.residentEnvironmentStress / runMinutes;
+  state.metrics.thermalPenaltyTotal = state.usageTotals.thermalPenalty;
+  state.metrics.thermalPenaltyPerMin = state.usageTotals.thermalPenalty / runMinutes;
   state.metrics.maintenanceJobsResolvedPerMin = state.usageTotals.maintenanceJobsResolved / runMinutes;
   state.metrics.sanitationJobsCompletedPerMin = state.usageTotals.sanitationJobsResolved / runMinutes;
   state.metrics.sanitationPenaltyTotal = state.usageTotals.ratingFromSanitation + state.usageTotals.residentSanitationStress;
@@ -13019,6 +13441,13 @@ function computeMetrics(state: StationState): void {
   }
   if (state.metrics.serviceNoiseNearDorms > 0.9) {
     roomWarnings.unshift('layout noise: dorms near loud systems');
+  }
+  if (state.metrics.thermalMax >= 86) {
+    roomWarnings.unshift('thermal critical: overheated rooms need cooling');
+  } else if (state.metrics.hotTiles > 0) {
+    roomWarnings.unshift(`thermal load rising: ${state.metrics.hotTiles} hot tiles`);
+  } else if (state.metrics.staleAirTiles > 0) {
+    roomWarnings.unshift(`stale air rising: ${state.metrics.staleAirTiles} room tiles`);
   }
   if (state.metrics.filthyTiles > 0) {
     roomWarnings.unshift(`sanitation critical: ${state.metrics.filthyTiles} filthy tiles`);
@@ -14281,6 +14710,8 @@ export function tick(state: StationState, frameDt: number): void {
   cadence.nextMaterialImportAt = materialImportCadence.nextAt;
   const residentMoveInCadence = consumeCadence(state.now, cadence.nextResidentMoveInAt, RESIDENT_MOVE_IN_CADENCE_SEC);
   cadence.nextResidentMoveInAt = residentMoveInCadence.nextAt;
+  const thermalDriftCadence = consumeCadence(state.now, cadence.nextThermalDriftAt, THERMAL_DRIFT_CADENCE_SEC);
+  cadence.nextThermalDriftAt = thermalDriftCadence.nextAt;
   const hasLiveJobs = state.jobs.some((job) => job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress');
   const refreshJobBoard = jobBoardCadence.due || frameDt <= 0 || !hasLiveJobs;
 
@@ -14308,6 +14739,11 @@ export function tick(state: StationState, frameDt: number): void {
   ensurePressurizationUpToDate(state);
   refreshRoomOpsTotals(state);
   refreshRoomOpsFromCrewPresence(state, dt, true);
+  if (thermalDriftCadence.due) {
+    const thermalDt = Math.max(dt, state.now - cadence.lastThermalDriftAt);
+    cadence.lastThermalDriftAt = state.now;
+    updateThermalDrift(state, thermalDt);
+  }
   updateMaintenanceDebt(state, dt);
   updateFires(state, dt);
   updateResources(state, dt);

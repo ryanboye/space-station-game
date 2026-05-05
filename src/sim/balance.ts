@@ -173,6 +173,13 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: null,
     mount: 'wall'
   },
+  [ModuleType.InsulationPanel]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null,
+    mount: 'wall'
+  },
   [ModuleType.VendingMachine]: {
     width: 1,
     height: 1,

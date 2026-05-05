@@ -14,7 +14,7 @@ Status: shared spine active. The sanitation portion is implemented; keep this op
 - [x] Save/load migration rules for sanitation live arrays.
 - [x] `?scenario=entropy-sanitation` cold-start fixture.
 - [x] `?scenario=entropy-maintenance`.
-- [ ] `?scenario=entropy-thermal`.
+- [x] `?scenario=entropy-thermal`.
 - [ ] `?scenario=entropy-combined`.
 
 ## Goal

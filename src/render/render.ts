@@ -33,6 +33,7 @@ import {
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
+  getThermalTileDiagnostic,
   resolveWallLightFacing,
   wallMountedModuleServiceTile,
   validateBerthModulePlacement,
@@ -203,6 +204,7 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.CargoArm]: 'X',
   [ModuleType.FireExtinguisher]: 'F',
   [ModuleType.Vent]: 'V',
+  [ModuleType.InsulationPanel]: 'I',
   [ModuleType.VendingMachine]: '$',
   [ModuleType.Bench]: 'B',
   [ModuleType.BarCounter]: 'r',
@@ -289,6 +291,10 @@ function pickSpriteKey<T extends readonly string[]>(keys: T, seed: number, index
   return keys[Math.floor(renderHash01(seed, index, salt) * keys.length) % keys.length];
 }
 
+function seededSunAngle(state: StationState): number {
+  return renderHash01(state.seedAtCreation, 3, 11) * Math.PI * 2;
+}
+
 const DEBRIS_PARALLAX_LAYERS = [
   { scale: 0.58, alpha: 0.46, amplitude: 8, period: 96, rotation: 3 },
   { scale: 0.88, alpha: 0.72, amplitude: 18, period: 68, rotation: 7 },
@@ -337,6 +343,63 @@ function drawDebrisFallback(
   ctx.restore();
 }
 
+function renderSeededSpaceConditionBackdrop(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  viewport: RenderViewport | null
+): void {
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  const view = viewport ?? { x: 0, y: 0, width: worldW, height: worldH };
+  const angle = seededSunAngle(state);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const cx = view.x + view.width * 0.5;
+  const cy = view.y + view.height * 0.5;
+  const reach = Math.max(view.width, view.height) * 0.75;
+
+  ctx.save();
+  const light = ctx.createLinearGradient(cx + dx * reach, cy + dy * reach, cx - dx * reach, cy - dy * reach);
+  light.addColorStop(0, 'rgba(255, 203, 105, 0.16)');
+  light.addColorStop(0.36, 'rgba(255, 174, 82, 0.055)');
+  light.addColorStop(0.64, 'rgba(10, 26, 40, 0.03)');
+  light.addColorStop(1, 'rgba(24, 45, 82, 0.18)');
+  ctx.fillStyle = light;
+  ctx.fillRect(view.x, view.y, view.width, view.height);
+
+  const bandOffset = (renderHash01(state.seedAtCreation, 5, 31) - 0.5) * Math.max(view.width, view.height) * 0.34;
+  ctx.translate(cx + -dy * bandOffset, cy + dx * bandOffset);
+  ctx.rotate(angle + Math.PI / 2);
+  const bandW = Math.max(view.width, view.height) * 2.4;
+  const bandH = Math.max(80, Math.min(view.width, view.height) * 0.18);
+  const shadow = ctx.createLinearGradient(0, -bandH, 0, bandH);
+  shadow.addColorStop(0, 'rgba(3, 8, 16, 0)');
+  shadow.addColorStop(0.5, 'rgba(3, 8, 16, 0.2)');
+  shadow.addColorStop(1, 'rgba(3, 8, 16, 0)');
+  ctx.fillStyle = shadow;
+  ctx.fillRect(-bandW * 0.5, -bandH, bandW, bandH * 2);
+  ctx.restore();
+
+  const sinkX = worldW * (0.22 + renderHash01(state.seedAtCreation, 17, 91) * 0.56);
+  const sinkY = worldH * (0.18 + renderHash01(state.seedAtCreation, 23, 91) * 0.64);
+  const sinkRadius = Math.max(worldW, worldH) * (0.22 + renderHash01(state.seedAtCreation, 29, 91) * 0.18);
+  if (
+    sinkX + sinkRadius >= view.x &&
+    sinkX - sinkRadius <= view.x + view.width &&
+    sinkY + sinkRadius >= view.y &&
+    sinkY - sinkRadius <= view.y + view.height
+  ) {
+    ctx.save();
+    const sink = ctx.createRadialGradient(sinkX, sinkY, sinkRadius * 0.08, sinkX, sinkY, sinkRadius);
+    sink.addColorStop(0, 'rgba(83, 214, 255, 0.1)');
+    sink.addColorStop(0.54, 'rgba(83, 214, 255, 0.035)');
+    sink.addColorStop(1, 'rgba(83, 214, 255, 0)');
+    ctx.fillStyle = sink;
+    ctx.fillRect(view.x, view.y, view.width, view.height);
+    ctx.restore();
+  }
+}
+
 function clipToVisibleSpaceTiles(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -363,12 +426,14 @@ function renderMassivePlanetBackdrop(
 ): void {
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
-  const planetView = viewport ?? { x: 0, y: 0, width: worldW, height: worldH };
   const key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
-  const x = planetView.x + planetView.width * 0.18;
-  const y = planetView.y + planetView.height * 0.94;
-  const size = Math.max(planetView.width, planetView.height) * 1.18;
-  const alpha = 0.46;
+  const x = worldW * (0.13 + renderHash01(state.seedAtCreation, 31, 52) * 0.18);
+  const y = worldH * (0.82 + renderHash01(state.seedAtCreation, 37, 52) * 0.12);
+  const size = Math.max(560, Math.min(worldW, worldH) * (0.92 + renderHash01(state.seedAtCreation, 41, 52) * 0.18));
+  if (viewport && (x + size * 0.56 < viewport.x || x - size * 0.56 > viewport.x + viewport.width || y + size * 0.56 < viewport.y || y - size * 0.56 > viewport.y + viewport.height)) {
+    return;
+  }
+  const alpha = 0.38;
   if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
   drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
 }
@@ -2530,6 +2595,16 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
       ? `${state.metrics.dirtyTiles}:${state.metrics.filthyTiles}:${Math.round(state.metrics.sanitationMax)}:${sanitationRenderSignature(state)}`
       : '';
   const mapKey = overlay === 'map-conditions' ? `${state.seedAtCreation}:${state.mapConditionVersion}` : '';
+  const thermalKey =
+    overlay === 'thermal'
+      ? [
+          Math.round(state.metrics.thermalAvg),
+          Math.round(state.metrics.thermalMax),
+          state.metrics.hotTiles,
+          state.metrics.staleAirTiles,
+          Math.round(state.metrics.coolingLoad)
+        ].join(':')
+      : '';
   return [
     overlay,
     state.width,
@@ -2547,7 +2622,8 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     fireKey,
     routeKey,
     sanitationKey,
-    mapKey
+    mapKey,
+    thermalKey
   ].join('|');
 }
 
@@ -2647,6 +2723,37 @@ function sanitationDiagnosticColor(state: StationState, tileIndex: number): stri
 
 const SANITATION_RENDER_DIRTY = 32;
 
+function thermalDiagnosticColor(state: StationState, tileIndex: number): string | null {
+  const tile = state.tiles[tileIndex];
+  if (tile === TileType.Wall) return null;
+  if (tile === TileType.Space || tile === TileType.Truss) {
+    const samples = mapConditionSamplesAt(state, tileIndex);
+    const sunlight = samples.find((s) => s.kind === 'sunlight')?.value ?? 0;
+    const sink = samples.find((s) => s.kind === 'thermal-sink')?.value ?? 0;
+    if (sunlight >= 0.56) return mixRgba([255, 214, 92], [255, 146, 70], Math.min(1, (sunlight - 0.56) / 0.44), 0.08 + sunlight * 0.08);
+    if (sink >= 0.58) return rgba(55, 211, 230, 0.09 + sink * 0.07);
+    return null;
+  }
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getThermalTileDiagnostic(state, pos.x, pos.y);
+  if (!diagnostic) return null;
+  const pressure = Math.max(diagnostic.heat, diagnostic.staleAir + 8);
+  if (pressure < 46) {
+    const cool = clamp01((50 - pressure) / 20);
+    return mixRgba([55, 211, 230], [97, 200, 255], cool, 0.1 + cool * 0.08);
+  }
+  if (pressure < 62) {
+    const t = clamp01((pressure - 46) / 16);
+    return mixRgba([97, 200, 255], [255, 214, 92], t, 0.11 + t * 0.09);
+  }
+  if (pressure < 82) {
+    const t = clamp01((pressure - 62) / 20);
+    return mixRgba([255, 214, 92], [238, 120, 74], t, 0.18 + t * 0.12);
+  }
+  const t = clamp01((pressure - 82) / 18);
+  return mixRgba([238, 120, 74], [238, 79, 79], t, 0.3 + t * 0.12);
+}
+
 function mapConditionsDiagnosticColor(state: StationState, tileIndex: number): string | null {
   const tile = state.tiles[tileIndex];
   if (tile === TileType.Wall) return null;
@@ -2708,6 +2815,8 @@ function drawDiagnosticOverlayLayer(
       color = mapConditionsDiagnosticColor(state, i);
     } else if (overlay === 'sanitation') {
       color = sanitationDiagnosticColor(state, i);
+    } else if (overlay === 'thermal') {
+      color = thermalDiagnosticColor(state, i);
     } else if (overlay === 'maintenance') {
       color = maintenanceDiagnosticColor(state, i);
     } else if (overlay === 'route-pressure') {
@@ -2774,6 +2883,13 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         line: `avg ${state.metrics.sanitationAvg.toFixed(1)}% | max ${state.metrics.sanitationMax.toFixed(0)}% | dirty ${state.metrics.dirtyTiles} | jobs ${state.metrics.sanitationJobsOpen}`,
         scale: 'clear clean | yellow lived-in | brown filthy',
         color: '#d7a15d'
+      };
+    case 'thermal':
+      return {
+        title: 'Thermal',
+        line: `avg ${state.metrics.thermalAvg.toFixed(0)}% | max ${state.metrics.thermalMax.toFixed(0)}% | hot ${state.metrics.hotTiles} | stale ${state.metrics.staleAirTiles}`,
+        scale: 'cyan cool/sink | gold sun | orange hot | red severe',
+        color: '#ffbc52'
       };
     case 'visitor-status':
       return {
@@ -2853,6 +2969,15 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     const diagnostic = getSanitationTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic) return `hover ${pos.x},${pos.y}: no sanitation sample`;
     return `hover ${pos.x},${pos.y}: dirt ${diagnostic.dirt.toFixed(0)}% ${diagnostic.severity} | ${diagnostic.dominantSource} | ${diagnostic.effectSummary}`;
+  }
+  if (overlay === 'thermal') {
+    const diagnostic = getThermalTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic) {
+      const samples = mapConditionSamplesAt(state, hoveredTile);
+      const top = [...samples].sort((a, b) => b.value - a.value)[0];
+      return `hover ${pos.x},${pos.y}: ${top.label} ${(top.value * 100).toFixed(0)}% | thermal backdrop pressure`;
+    }
+    return `hover ${pos.x},${pos.y}: ${diagnostic.severity} | heat ${diagnostic.heat.toFixed(0)}% stale ${diagnostic.staleAir.toFixed(0)}% | ${diagnostic.cause} -> ${diagnostic.effect} | fix: ${diagnostic.fix}`;
   }
   if (overlay === 'route-pressure') {
     const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y);
@@ -3232,6 +3357,7 @@ export function renderWorld(
   } else {
     ctx.fillRect(0, 0, widthPx, heightPx);
   }
+  renderSeededSpaceConditionBackdrop(ctx, state, viewport);
   renderMassivePlanetBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);

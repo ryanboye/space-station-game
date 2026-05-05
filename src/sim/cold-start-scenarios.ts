@@ -18,7 +18,7 @@ import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
-import { buyMaterials, buyRawFood, setTile, setRoom, setModule } from './sim';
+import { buyMaterials, buyRawFood, mapConditionAt, setTile, setRoom, setModule, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -88,6 +88,20 @@ function seedRoomDirt(state: StationState, room: RoomType, sourceCode: number, b
     state.dirtSourceByTile[i] = sourceCode;
     n += 1;
   }
+}
+
+function seedRoomThermalPressure(state: StationState, room: RoomType, heat: number, staleAir: number): void {
+  for (let i = 0; i < state.rooms.length; i++) {
+    if (state.rooms[i] !== room) continue;
+    if (state.tiles[i] === TileType.Wall || state.tiles[i] === TileType.Space) continue;
+    const sun = mapConditionAt(state, 'sunlight', i);
+    state.heatByTile[i] = Math.max(state.heatByTile[i] ?? 42, heat + sun * 8);
+    state.staleAirByTile[i] = Math.max(state.staleAirByTile[i] ?? 0, staleAir);
+  }
+}
+
+function placeWallMod(state: StationState, x: number, y: number, m: ModuleType): void {
+  tryPlaceModule(state, m, y * GRID_WIDTH + x, 0);
 }
 
 export const COLD_START_SCENARIOS: Record<string, Scenario> = {
@@ -209,6 +223,44 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.simSpeed = 1;
     s.controls.diagnosticOverlay = 'maintenance';
     s.controls.shipsPerCycle = 2;
+    s.controls.materialAutoImportEnabled = false;
+  },
+
+  // Entropy slice 19-3: seeded sunlight/shade thermal pressure with a
+  // high-load bright room, a shaded comparison band, vents, and wall
+  // insulation visible from the Thermal overlay on load.
+  'entropy-thermal': (s) => {
+    unlockThrough(s, 3);
+    s.seedAtCreation = 19314;
+    s.metrics.credits = 1800;
+    s.metrics.materials = 520;
+    s.legacyMaterialStock = 520;
+    applyDemoStationOverlay(s);
+    completeSpecialtyForScenario(s, 'mechanical-maintenance');
+    setMaintenanceScenarioCrew(s);
+    paintRoom(s, 49, 31, 61, 38, RoomType.Bridge, 'north');
+    placeMod(s, 51, 33, ModuleType.CaptainConsole);
+    placeMod(s, 55, 33, ModuleType.MechanicalTerminal);
+    placeMod(s, 58, 33, ModuleType.ResearchTerminal);
+    // Leave the kitchen deliberately exposed so the scenario does not solve
+    // its own thermal pressure; the insulated workshop is the comparison.
+    for (const tile of [
+      [55, 6], [56, 6], [57, 6], [58, 6], [59, 6], [60, 6], [61, 6], [62, 6]
+    ] as const) {
+      placeWallMod(s, tile[0], tile[1], ModuleType.InsulationPanel);
+    }
+    placeWallMod(s, 20, 6, ModuleType.Vent);
+    placeWallMod(s, 34, 6, ModuleType.Vent);
+    placeWallMod(s, 64, 6, ModuleType.Vent);
+    placeWallMod(s, 16, 31, ModuleType.Vent);
+    seedRoomThermalPressure(s, RoomType.Kitchen, 74, 38);
+    seedRoomThermalPressure(s, RoomType.Workshop, 70, 34);
+    seedRoomThermalPressure(s, RoomType.Dorm, 50, 24);
+    buyMaterials(s, 0, 160);
+    s.controls.paused = false;
+    s.controls.simSpeed = 1;
+    s.controls.diagnosticOverlay = 'thermal';
+    s.controls.shipsPerCycle = 0;
     s.controls.materialAutoImportEnabled = false;
   },
 

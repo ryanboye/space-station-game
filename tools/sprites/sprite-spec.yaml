@@ -314,6 +314,11 @@ sprites:
     prompt: "Top-down pixel art station module sprite: round floor air vent with cyan airflow. 1x1
       footprint, transparent background, readable at 18x18."
     rotation: 0
+  module.insulation_panel:
+    prompt: "Top-down pixel art station module sprite: wall-mounted thermal insulation panel that reads
+      like an insulated version of the existing blue-gray station wall tile. Full 1x1 tile coverage,
+      ceramic/foam heat-shield plating, subtle bolts and amber gasket accents, no text, readable at 18x18."
+    rotation: 0
   module.vending_machine:
     prompt: "Top-down pixel art station module sprite: compact vending machine with lit product slots. 1x1
       footprint, transparent background, readable at 18x18."

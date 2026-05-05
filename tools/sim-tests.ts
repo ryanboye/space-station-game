@@ -28,6 +28,7 @@ import {
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
+  getThermalTileDiagnostic,
   hireStaffRole,
   mapConditionAt,
   mapConditionSamplesAt,
@@ -1472,6 +1473,237 @@ function testMapConditionsAreDeterministicAndSeeded(): void {
   assertCondition(
     firstSamples.some((sample, index) => Math.abs(sample.value - differentSamples[index].value) > 0.015),
     'Different map seeds should change at least one local condition value.'
+  );
+}
+
+function testMapConditionsPreserveWorldContinuityOnExpansion(): void {
+  const state = createInitialState({ seed: 91021 });
+  const oldTile = toIndex(18, 14, state.width);
+  const before = mapConditionSamplesAt(state, oldTile);
+  state.metrics.credits = 100000;
+
+  const expanded = expandMap(state, 'north');
+  assertCondition(expanded.ok, 'North expansion should succeed for map-condition continuity.');
+  const remappedTile = toIndex(18, 14 + 40, state.width);
+  const after = mapConditionSamplesAt(state, remappedTile);
+
+  for (let i = 0; i < before.length; i++) {
+    assertCondition(before[i].kind === after[i].kind, 'Expansion should preserve map-condition sample ordering.');
+    assertCondition(
+      Math.abs(before[i].value - after[i].value) < 0.000001,
+      `Expansion should preserve ${before[i].kind} at the remapped world tile.`
+    );
+  }
+}
+
+function findThermalCandidateTile(
+  state: StationState,
+  score: (tile: number) => number,
+  mode: 'max' | 'min',
+  requireWallNeighbor = false
+): number {
+  let bestTile = -1;
+  let bestScore = mode === 'max' ? -Infinity : Infinity;
+  for (let y = 5; y < state.height - 5; y++) {
+    for (let x = 5; x < state.width - 5; x++) {
+      const tile = toIndex(x, y, state.width);
+      if (state.tiles[tile] !== TileType.Floor) continue;
+      if (requireWallNeighbor) {
+        const neighbors = [
+          toIndex(x - 1, y, state.width),
+          toIndex(x + 1, y, state.width),
+          toIndex(x, y - 1, state.width),
+          toIndex(x, y + 1, state.width)
+        ];
+        if (!neighbors.some((n) => state.tiles[n] === TileType.Wall)) continue;
+      }
+      const value = score(tile);
+      if ((mode === 'max' && value > bestScore) || (mode === 'min' && value < bestScore)) {
+        bestScore = value;
+        bestTile = tile;
+      }
+    }
+  }
+  assertCondition(bestTile >= 0, 'Expected to find a thermal candidate tile.');
+  return bestTile;
+}
+
+function prepareThermalTestStation(seed: number): StationState {
+  const state = createInitialState({ seed });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  placeCrewAtSystemAnchor(state, toIndex(9, 6, state.width), 'life-support');
+  return state;
+}
+
+function testSunlitHighLoadRoomWarmsMoreThanShadedRoom(): void {
+  const state = prepareThermalTestStation(19303);
+  const brightTile = findThermalCandidateTile(
+    state,
+    (tile) => mapConditionAt(state, 'sunlight', tile) - mapConditionAt(state, 'thermal-sink', tile) * 0.3,
+    'max'
+  );
+  const shadedTile = findThermalCandidateTile(
+    state,
+    (tile) => mapConditionAt(state, 'sunlight', tile) - mapConditionAt(state, 'thermal-sink', tile) * 0.3,
+    'min'
+  );
+  setRoom(state, brightTile, RoomType.Kitchen);
+  setRoom(state, shadedTile, RoomType.Kitchen);
+
+  runFor(state, 80, 4);
+
+  const bright = state.heatByTile[brightTile];
+  const shaded = state.heatByTile[shadedTile];
+  assertCondition(
+    bright > shaded + 6,
+    `Sunlit high-load tile should warm more than shaded tile (bright ${bright.toFixed(1)}, shaded ${shaded.toFixed(1)}).`
+  );
+  const pos = fromIndex(brightTile, state.width);
+  const diagnostic = getThermalTileDiagnostic(state, pos.x, pos.y);
+  assertCondition(!!diagnostic && diagnostic.heat >= bright - 0.5, 'Thermal tile diagnostic should expose live heat.');
+}
+
+function placeNearbyWallModule(state: StationState, floorTile: number, module: ModuleType): void {
+  const pos = fromIndex(floorTile, state.width);
+  const candidates = [
+    { x: pos.x, y: pos.y - 1 },
+    { x: pos.x, y: pos.y + 1 },
+    { x: pos.x - 1, y: pos.y },
+    { x: pos.x + 1, y: pos.y }
+  ];
+  for (const candidate of candidates) {
+    const tile = toIndex(candidate.x, candidate.y, state.width);
+    if (state.tiles[tile] !== TileType.Wall) continue;
+    placeModuleOrThrow(state, module, candidate.x, candidate.y);
+    return;
+  }
+  throw new Error(`No adjacent wall found for module ${module} near ${pos.x},${pos.y}.`);
+}
+
+function testVentReducesStaleAirPressure(): void {
+  const baseline = prepareThermalTestStation(19304);
+  const target = findThermalCandidateTile(baseline, (tile) => fromIndex(tile, baseline.width).x, 'max', true);
+  setRoom(baseline, target, RoomType.Dorm);
+
+  const vented = prepareThermalTestStation(19304);
+  setRoom(vented, target, RoomType.Dorm);
+  placeNearbyWallModule(vented, target, ModuleType.Vent);
+
+  runFor(baseline, 80, 4);
+  runFor(vented, 80, 4);
+
+  assertCondition(
+    vented.staleAirByTile[target] < baseline.staleAirByTile[target] - 6,
+    `Vent should reduce stale-air pressure (baseline ${baseline.staleAirByTile[target].toFixed(1)}, vented ${vented.staleAirByTile[target].toFixed(1)}).`
+  );
+}
+
+function testInsulationReducesSunlightHeatTransfer(): void {
+  const baseline = prepareThermalTestStation(19305);
+  const target = findThermalCandidateTile(
+    baseline,
+    (tile) => mapConditionAt(baseline, 'sunlight', tile),
+    'max'
+  );
+  const targetPos = fromIndex(target, baseline.width);
+  const wallTile = toIndex(targetPos.x, targetPos.y - 1, baseline.width);
+  setTile(baseline, wallTile, TileType.Wall);
+  setRoom(baseline, wallTile, RoomType.None);
+  setRoom(baseline, target, RoomType.Kitchen);
+
+  const insulated = prepareThermalTestStation(19305);
+  setTile(insulated, wallTile, TileType.Wall);
+  setRoom(insulated, wallTile, RoomType.None);
+  setRoom(insulated, target, RoomType.Kitchen);
+  placeModuleOrThrow(insulated, ModuleType.InsulationPanel, targetPos.x, targetPos.y - 1);
+
+  runFor(baseline, 80, 4);
+  runFor(insulated, 80, 4);
+
+  assertCondition(
+    insulated.heatByTile[target] < baseline.heatByTile[target] - 0.75,
+    `Insulation should reduce sun heat transfer (baseline ${baseline.heatByTile[target].toFixed(1)}, insulated ${insulated.heatByTile[target].toFixed(1)}).`
+  );
+}
+
+function testThermalPenaltiesRemainBounded(): void {
+  const state = prepareThermalTestStation(19306);
+  const target = findThermalCandidateTile(state, (tile) => mapConditionAt(state, 'sunlight', tile), 'max');
+  setRoom(state, target, RoomType.Workshop);
+
+  runFor(state, 160, 4);
+
+  assertCondition(state.metrics.thermalMax <= 100, 'Thermal max should remain bounded at 100.');
+  assertCondition(state.metrics.thermalAvg >= 0, 'Thermal average should remain non-negative.');
+  assertCondition(Number.isFinite(state.metrics.thermalPenaltyTotal), 'Thermal penalty should stay finite.');
+}
+
+function testFireAftermathAddsThermalLoad(): void {
+  const baseline = prepareThermalTestStation(193065);
+  const target = findThermalCandidateTile(baseline, (tile) => mapConditionAt(baseline, 'sunlight', tile), 'min');
+  setRoom(baseline, target, RoomType.Dorm);
+
+  const aftermath = prepareThermalTestStation(193065);
+  setRoom(aftermath, target, RoomType.Dorm);
+  aftermath.dirtByTile[target] = 82;
+  aftermath.dirtSourceByTile[target] = 7;
+
+  runFor(baseline, 80, 4);
+  runFor(aftermath, 80, 4);
+
+  assertCondition(
+    aftermath.heatByTile[target] > baseline.heatByTile[target] + 1,
+    `Fire aftermath should add residual heat load (baseline ${baseline.heatByTile[target].toFixed(1)}, aftermath ${aftermath.heatByTile[target].toFixed(1)}).`
+  );
+  const pos = fromIndex(target, aftermath.width);
+  const diagnostic = getThermalTileDiagnostic(aftermath, pos.x, pos.y);
+  assertCondition(!!diagnostic && diagnostic.cause.includes('fire aftermath'), 'Thermal diagnostic should explain fire aftermath heat.');
+}
+
+function testThermalStatePersistsThroughSaveLoad(): void {
+  const state = prepareThermalTestStation(19307);
+  const target = findThermalCandidateTile(state, (tile) => mapConditionAt(state, 'sunlight', tile), 'max');
+  setRoom(state, target, RoomType.Kitchen);
+  state.heatByTile[target] = 77.4;
+  state.staleAirByTile[target] = 42.2;
+  state.mapWorldOriginX = -12;
+  state.mapWorldOriginY = 8;
+
+  const payload = serializeSave('thermal', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Thermal save should parse.');
+  if (!parsed.ok) return;
+  const loaded = hydrateStateFromSave(parsed.save).state;
+
+  assertCondition(Math.abs(loaded.heatByTile[target] - 77.4) < 0.2, 'Heat should survive save/load.');
+  assertCondition(Math.abs(loaded.staleAirByTile[target] - 42.2) < 0.2, 'Stale air should survive save/load.');
+  assertCondition(loaded.mapWorldOriginX === -12 && loaded.mapWorldOriginY === 8, 'Map-condition world origin should survive save/load.');
+}
+
+function testEntropyThermalScenarioFixture(): void {
+  const state = createInitialState({ seed: 19308 });
+  const applied = applyColdStartScenario(state, 'entropy-thermal');
+  assertCondition(applied, 'Entropy thermal scenario should be registered.');
+  assertCondition(state.controls.diagnosticOverlay === 'thermal', 'Entropy thermal scenario should open with the Thermal overlay.');
+  assertCondition(
+    state.moduleInstances.some((module) => module.type === ModuleType.InsulationPanel),
+    'Entropy thermal scenario should include insulation panels.'
+  );
+
+  runFor(state, 5, 1);
+
+  assertCondition(state.metrics.thermalMax > 50, 'Entropy thermal scenario should start with visible thermal pressure.');
+  const kitchenTile = state.rooms.findIndex((room) => room === RoomType.Kitchen);
+  const inspector = getRoomInspectorAt(state, kitchenTile);
+  assertCondition(!!inspector?.thermal, 'Entropy thermal scenario kitchen should expose thermal inspector data.');
+
+  state.controls.simSpeed = 4;
+  runFor(state, 30, 1);
+
+  assertCondition(
+    state.metrics.hotTiles > 0 && state.metrics.thermalMax >= 72,
+    'Entropy thermal scenario should retain hot tiles after running at 4x.'
   );
 }
 
@@ -5762,6 +5994,14 @@ function run(): void {
   testResidentComfortDiagnosticHelperHighlightsServiceNoise();
   testMaintenanceDiagnosticHelperReportsUtilityDebt();
   testMapConditionsAreDeterministicAndSeeded();
+  testMapConditionsPreserveWorldContinuityOnExpansion();
+  testSunlitHighLoadRoomWarmsMoreThanShadedRoom();
+  testVentReducesStaleAirPressure();
+  testInsulationReducesSunlightHeatTransfer();
+  testThermalPenaltiesRemainBounded();
+  testFireAftermathAddsThermalLoad();
+  testThermalStatePersistsThroughSaveLoad();
+  testEntropyThermalScenarioFixture();
   testSanitationDiagnosticsJobsAndCrewCleanup();
   testSanitationCleansDirtyModuleTilesFromAdjacentFloor();
   testSanitationPersistsAndRemapsOnExpansion();

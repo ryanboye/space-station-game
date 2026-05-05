@@ -86,6 +86,7 @@
   "module.cargo_arm",
   "module.fire_extinguisher",
   "module.vent",
+  "module.insulation_panel",
   "module.vending_machine",
   "module.bench",
   "module.bar_counter",

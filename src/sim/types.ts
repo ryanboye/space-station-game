@@ -61,6 +61,7 @@ export type DiagnosticOverlay =
   | 'none'
   | 'life-support'
   | 'map-conditions'
+  | 'thermal'
   | 'visitor-status'
   | 'resident-comfort'
   | 'service-noise'
@@ -181,6 +182,9 @@ export enum ModuleType {
   // fresh-air coverage in a radius. Lets the player extend air to a remote
   // wing without putting a second LS room there.
   Vent = 'vent',
+  // Wall-mounted thermal insulation panel. Reduces sunlight heat transfer and
+  // exterior thermal swings for nearby room tiles.
+  InsulationPanel = 'insulation-panel',
   // Vending machine: 1x1 leisure module placed in any social room
   // (Cafeteria, Lounge, Market, RecHall). Visitors in Leisure state on this
   // tile spend extra credits per second (small but visible bonus). Gives the
@@ -496,6 +500,38 @@ export interface LifeSupportTileDiagnostic {
 export interface RoomEnvironmentTileDiagnostic extends RoomEnvironmentScore {
   visitorDiscomfort: number;
   residentDiscomfort: number;
+}
+
+export type ThermalSeverity = 'comfortable' | 'warm' | 'hot' | 'overheated' | 'severe';
+
+export interface ThermalTileDiagnostic {
+  tileIndex: number;
+  heat: number;
+  staleAir: number;
+  severity: ThermalSeverity;
+  sunlight: number;
+  shadow: number;
+  thermalSink: number;
+  cooling: number;
+  insulation: number;
+  ventRelief: number;
+  lifeSupportDistance: number | null;
+  cause: string;
+  effect: string;
+  fix: string;
+}
+
+export interface ThermalRoomDiagnostic {
+  room: RoomType;
+  anchorTile: number;
+  averageHeat: number;
+  maxHeat: number;
+  averageStaleAir: number;
+  maxStaleAir: number;
+  severity: ThermalSeverity;
+  dominantCause: string;
+  effect: string;
+  fix: string;
 }
 
 export interface MaintenanceTileDiagnostic {
@@ -1261,6 +1297,13 @@ export interface Metrics {
   serviceNoiseNearDorms: number;
   visitorEnvironmentPenaltyPerMin: number;
   residentEnvironmentStressPerMin: number;
+  thermalAvg: number;
+  thermalMax: number;
+  hotTiles: number;
+  staleAirTiles: number;
+  coolingLoad: number;
+  thermalPenaltyPerMin: number;
+  thermalPenaltyTotal: number;
   maintenanceDebtAvg: number;
   maintenanceDebtMax: number;
   maintenanceJobsOpen: number;
@@ -1397,6 +1440,7 @@ export interface RoomInspector {
   };
   flowHints?: string[];
   environment?: RoomEnvironmentScore;
+  thermal?: ThermalRoomDiagnostic;
   routePressure?: {
     activePaths: number;
     pressuredTiles: number;
@@ -1680,6 +1724,8 @@ export interface StationState {
   // state.rng. Mirrored into state.system.seedAtCreation when the
   // system rolls.
   seedAtCreation: number;
+  mapWorldOriginX: number;
+  mapWorldOriginY: number;
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
   pressurized: boolean[];
@@ -1688,6 +1734,10 @@ export interface StationState {
   // resident) read this instead of metrics.airQuality so a sealed-off wing
   // becomes locally lethal even when the station-wide average looks fine.
   airQualityByTile: Float32Array;
+  // Per-tile comfort heat and stale-air pressure, 0..100. These stay separate
+  // from oxygen/survival air quality so Air Coverage remains readable.
+  heatByTile: Float32Array;
+  staleAirByTile: Float32Array;
   // Per-tile sanitation drift, 0..100. Dirt sources are stored as compact
   // codes for hover/inspector diagnostics and are reset to none when a tile
   // is cleaned or rebuilt.
@@ -1811,6 +1861,7 @@ export interface StationState {
     crewPublicInterference: number;
     visitorEnvironmentPenalty: number;
     residentEnvironmentStress: number;
+    thermalPenalty: number;
     maintenanceJobsResolved: number;
     sanitationJobsResolved: number;
     ratingFromSanitation: number;

@@ -70,6 +70,8 @@ const UNLOCK_IDS_BY_TIER: Record<UnlockTier, UnlockId[]> = {
 export interface StationSnapshotV1 {
   width: number;
   height: number;
+  mapWorldOriginX?: number;
+  mapWorldOriginY?: number;
   tiles: TileType[];
   zones: ZoneType[];
   rooms: RoomType[];
@@ -153,6 +155,10 @@ export interface StationSnapshotV1 {
   sanitation?: {
     dirtByTile: number[];
     dirtSourceByTile: number[];
+  };
+  thermal?: {
+    heatByTile: number[];
+    staleAirByTile: number[];
   };
   maintenance?: {
     debts: Array<{
@@ -323,6 +329,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
   return {
     width: state.width,
     height: state.height,
+    mapWorldOriginX: state.mapWorldOriginX,
+    mapWorldOriginY: state.mapWorldOriginY,
     tiles: state.tiles.slice(),
     zones: state.zones.slice(),
     rooms: state.rooms.slice(),
@@ -407,6 +415,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       dirtByTile: Array.from(state.dirtByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
       dirtSourceByTile: Array.from(state.dirtSourceByTile)
     },
+    thermal: {
+      heatByTile: Array.from(state.heatByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
+      staleAirByTile: Array.from(state.staleAirByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10)
+    },
     maintenance: {
       debts: state.maintenanceDebts
         .filter((entry) => entry.debt > 0.05)
@@ -446,6 +458,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const defaultState = createInitialState();
   const width = Math.round(asFiniteNumber(snapshotRaw.width, defaultState.width));
   const height = Math.round(asFiniteNumber(snapshotRaw.height, defaultState.height));
+  const mapWorldOriginX = Math.round(asFiniteNumber(snapshotRaw.mapWorldOriginX, 0));
+  const mapWorldOriginY = Math.round(asFiniteNumber(snapshotRaw.mapWorldOriginY, 0));
   const expectedLength = width * height;
   if (!Array.isArray(snapshotRaw.tiles)) {
     return null;
@@ -829,6 +843,30 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  const thermalRaw = isRecord(snapshotRaw.thermal) ? snapshotRaw.thermal : null;
+  const heatByTile = new Array<number>(expectedLength).fill(42);
+  const staleAirByTile = new Array<number>(expectedLength).fill(0);
+  if (thermalRaw) {
+    if (Array.isArray(thermalRaw.heatByTile)) {
+      const len = Math.min(expectedLength, thermalRaw.heatByTile.length);
+      for (let i = 0; i < len; i++) {
+        heatByTile[i] = clamp(asFiniteNumber(thermalRaw.heatByTile[i], 42), 0, 100);
+      }
+      if (thermalRaw.heatByTile.length !== expectedLength) {
+        warnings.push(`thermal.heatByTile length ${thermalRaw.heatByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+    if (Array.isArray(thermalRaw.staleAirByTile)) {
+      const len = Math.min(expectedLength, thermalRaw.staleAirByTile.length);
+      for (let i = 0; i < len; i++) {
+        staleAirByTile[i] = clamp(asFiniteNumber(thermalRaw.staleAirByTile[i], 0), 0, 100);
+      }
+      if (thermalRaw.staleAirByTile.length !== expectedLength) {
+        warnings.push(`thermal.staleAirByTile length ${thermalRaw.staleAirByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+  }
+
   const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
   const maintenanceDebts: NonNullable<StationSnapshotV1['maintenance']>['debts'] = [];
   if (maintenanceRaw && Array.isArray(maintenanceRaw.debts)) {
@@ -880,6 +918,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   return {
     width,
     height,
+    mapWorldOriginX,
+    mapWorldOriginY,
     tiles,
     zones,
     rooms,
@@ -916,6 +956,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     sanitation: {
       dirtByTile,
       dirtSourceByTile
+    },
+    thermal: {
+      heatByTile,
+      staleAirByTile
     },
     maintenance: {
       debts: maintenanceDebts
@@ -1092,6 +1136,10 @@ export function hydrateStateFromSave(
   next.zones = snapshot.zones.slice();
   next.rooms = snapshot.rooms.slice();
   next.roomHousingPolicies = snapshot.roomHousingPolicies.slice();
+  next.mapWorldOriginX = snapshot.mapWorldOriginX ?? 0;
+  next.mapWorldOriginY = snapshot.mapWorldOriginY ?? 0;
+  next.heatByTile = new Float32Array(snapshot.thermal?.heatByTile ?? new Array(expectedLength).fill(42));
+  next.staleAirByTile = new Float32Array(snapshot.thermal?.staleAirByTile ?? new Array(expectedLength).fill(0));
   next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
   next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
   next.maintenanceDebts = (snapshot.maintenance?.debts ?? []).map((entry) => ({

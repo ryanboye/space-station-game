@@ -38,6 +38,7 @@ export {
   getRoomEnvironmentTileDiagnostic,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
+  getThermalTileDiagnostic,
   getUnlockTier,
   getVisitorInspectorById,
   hireCrew,
