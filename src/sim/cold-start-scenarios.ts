@@ -18,7 +18,7 @@ import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
-import { buyMaterials, buyRawFood, mapConditionAt, setTile, setRoom, setModule, tryPlaceModule } from './sim';
+import { buyMaterials, buyRawFood, mapConditionAt, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -97,6 +97,24 @@ function seedRoomThermalPressure(state: StationState, room: RoomType, heat: numb
     const sun = mapConditionAt(state, 'sunlight', i);
     state.heatByTile[i] = Math.max(state.heatByTile[i] ?? 42, heat + sun * 8);
     state.staleAirByTile[i] = Math.max(state.staleAirByTile[i] ?? 0, staleAir);
+  }
+}
+
+function drawAirDuctLine(state: StationState, x1: number, y1: number, x2: number, y2: number): void {
+  const dx = Math.sign(x2 - x1);
+  const dy = Math.sign(y2 - y1);
+  if (dx !== 0 && dy !== 0) {
+    drawAirDuctLine(state, x1, y1, x2, y1);
+    drawAirDuctLine(state, x2, y1, x2, y2);
+    return;
+  }
+  let x = x1;
+  let y = y1;
+  while (true) {
+    setUtilityUnderlayTile(state, 'air-duct', y * GRID_WIDTH + x, true);
+    if (x === x2 && y === y2) break;
+    x += dx;
+    y += dy;
   }
 }
 
@@ -260,6 +278,41 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = false;
     s.controls.simSpeed = 1;
     s.controls.diagnosticOverlay = 'thermal';
+    s.controls.shipsPerCycle = 0;
+    s.controls.materialAutoImportEnabled = false;
+  },
+
+  // Entropy slice 19-5: underfloor utility networks as the first ducted
+  // ventilation fixture. The source branch leaves Life Support, powers
+  // kitchen/workshop vents, and includes one intentionally disconnected
+  // storage branch for overlay/debug feedback.
+  'entropy-ventilation': (s) => {
+    unlockThrough(s, 3);
+    s.seedAtCreation = 19315;
+    s.metrics.credits = 2200;
+    s.metrics.materials = 620;
+    s.legacyMaterialStock = 620;
+    applyDemoStationOverlay(s);
+    completeSpecialtyForScenario(s, 'mechanical-maintenance');
+    setMaintenanceScenarioCrew(s);
+    placeWallMod(s, 30, 6, ModuleType.Vent);
+    placeWallMod(s, 59, 6, ModuleType.Vent);
+    placeWallMod(s, 73, 6, ModuleType.Vent);
+    drawAirDuctLine(s, 20, 33, 20, 17);
+    drawAirDuctLine(s, 20, 17, 29, 17);
+    drawAirDuctLine(s, 29, 17, 29, 14);
+    drawAirDuctLine(s, 29, 14, 30, 7);
+    drawAirDuctLine(s, 29, 17, 59, 17);
+    drawAirDuctLine(s, 59, 17, 59, 7);
+    drawAirDuctLine(s, 69, 9, 73, 9);
+    drawAirDuctLine(s, 73, 9, 73, 7);
+    seedRoomThermalPressure(s, RoomType.Kitchen, 78, 62);
+    seedRoomThermalPressure(s, RoomType.Workshop, 76, 58);
+    seedRoomThermalPressure(s, RoomType.Clinic, 54, 24);
+    buyMaterials(s, 0, 160);
+    s.controls.paused = false;
+    s.controls.simSpeed = 1;
+    s.controls.diagnosticOverlay = 'utility-underlay';
     s.controls.shipsPerCycle = 0;
     s.controls.materialAutoImportEnabled = false;
   },

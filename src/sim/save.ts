@@ -21,6 +21,7 @@ import {
   type StaffRoleCounts,
   type UnlockId,
   type UnlockTier,
+  type UtilityUnderlayKind,
   ModuleType,
   type ModuleRotation,
   RoomType,
@@ -32,6 +33,12 @@ import {
   type VisitorArchetype,
   ZoneType
 } from './types';
+import {
+  UTILITY_UNDERLAY_KINDS,
+  createUtilityUnderlayFromLayers,
+  ensureUtilityUnderlay,
+  isUtilityUnderlayKind
+} from './utility-underlay';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER, UNLOCK_DEFINITIONS } from './content/unlocks';
 import {
   SPECIALTY_DEFINITIONS,
@@ -159,6 +166,10 @@ export interface StationSnapshotV1 {
   thermal?: {
     heatByTile: number[];
     staleAirByTile: number[];
+  };
+  utilityUnderlay?: {
+    version: number;
+    layers: Partial<Record<UtilityUnderlayKind, number[]>>;
   };
   maintenance?: {
     debts: Array<{
@@ -419,6 +430,22 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       heatByTile: Array.from(state.heatByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
       staleAirByTile: Array.from(state.staleAirByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10)
     },
+    utilityUnderlay: (() => {
+      const utility = ensureUtilityUnderlay(state);
+      const layers: Partial<Record<UtilityUnderlayKind, number[]>> = {};
+      for (const kind of UTILITY_UNDERLAY_KINDS) {
+        const layer = utility.layers[kind];
+        let hasAny = false;
+        for (let i = 0; i < layer.length; i++) {
+          if (layer[i] > 0) {
+            hasAny = true;
+            break;
+          }
+        }
+        if (hasAny) layers[kind] = Array.from(layer);
+      }
+      return { version: utility.version, layers };
+    })(),
     maintenance: {
       debts: state.maintenanceDebts
         .filter((entry) => entry.debt > 0.05)
@@ -867,6 +894,29 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  const utilityUnderlayLayers: Partial<Record<UtilityUnderlayKind, number[]>> = {};
+  const utilityUnderlayRaw = isRecord(snapshotRaw.utilityUnderlay) ? snapshotRaw.utilityUnderlay : null;
+  let utilityUnderlayVersion = 0;
+  if (utilityUnderlayRaw) {
+    utilityUnderlayVersion = Math.max(0, Math.floor(asFiniteNumber(utilityUnderlayRaw.version, 0)));
+    const layersRaw = isRecord(utilityUnderlayRaw.layers) ? utilityUnderlayRaw.layers : null;
+    if (layersRaw) {
+      for (const kind of UTILITY_UNDERLAY_KINDS) {
+        const rawLayer = layersRaw[kind];
+        const layer = new Array<number>(expectedLength).fill(0);
+        if (!Array.isArray(rawLayer)) continue;
+        const len = Math.min(expectedLength, rawLayer.length);
+        for (let i = 0; i < len; i++) layer[i] = asFiniteNumber(rawLayer[i], 0) > 0 ? 1 : 0;
+        if (rawLayer.length !== expectedLength) {
+          warnings.push(`utilityUnderlay.layers.${kind} length ${rawLayer.length} does not match expected ${expectedLength}; adjusted.`);
+        }
+        utilityUnderlayLayers[kind] = layer;
+      }
+    }
+  } else if (isRecord(snapshotRaw.utilityUnderlay)) {
+    warnings.push('utilityUnderlay malformed; defaulted.');
+  }
+
   const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
   const maintenanceDebts: NonNullable<StationSnapshotV1['maintenance']>['debts'] = [];
   if (maintenanceRaw && Array.isArray(maintenanceRaw.debts)) {
@@ -960,6 +1010,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     thermal: {
       heatByTile,
       staleAirByTile
+    },
+    utilityUnderlay: {
+      version: utilityUnderlayVersion,
+      layers: utilityUnderlayLayers
     },
     maintenance: {
       debts: maintenanceDebts
@@ -1140,6 +1194,11 @@ export function hydrateStateFromSave(
   next.mapWorldOriginY = snapshot.mapWorldOriginY ?? 0;
   next.heatByTile = new Float32Array(snapshot.thermal?.heatByTile ?? new Array(expectedLength).fill(42));
   next.staleAirByTile = new Float32Array(snapshot.thermal?.staleAirByTile ?? new Array(expectedLength).fill(0));
+  next.utilityUnderlay = createUtilityUnderlayFromLayers(
+    expectedLength,
+    snapshot.utilityUnderlay?.layers ?? {},
+    snapshot.utilityUnderlay?.version ?? 0
+  );
   next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
   next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
   next.maintenanceDebts = (snapshot.maintenance?.debts ?? []).map((entry) => ({

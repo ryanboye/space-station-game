@@ -24,9 +24,12 @@ import {
   collectActiveRoomTiles,
   collectQueueTargets,
   collectServiceNodeReachability,
+  canPlaceUtilityUnderlay,
   getDockByTile,
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
+  getAirDuctNetworkDiagnostics,
+  getUtilityUnderlayTileDiagnostic,
   getSanitationTileDiagnostic,
   mapConditionSamplesAt,
   getMaintenanceTileDiagnostic,
@@ -35,6 +38,9 @@ import {
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
   resolveWallLightFacing,
+  hasUtilityUnderlay,
+  utilityUnderlayNeighborMask,
+  utilityUnderlayShapeForMask,
   wallMountedModuleServiceTile,
   validateBerthModulePlacement,
   validateDockPlacement
@@ -61,7 +67,8 @@ import {
   SPACE_BACKDROP_SPRITE_KEYS,
   SPACE_DEBRIS_SPRITE_KEYS,
   SPACE_MASSIVE_PLANET_SPRITE_KEYS,
-  STAFF_ROLE_SPRITE_KEYS
+  STAFF_ROLE_SPRITE_KEYS,
+  UTILITY_UNDERLAY_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
 import { renderDualWallLayer } from './wall-dual-tilemap';
@@ -2570,10 +2577,13 @@ function mixRgba(
 }
 
 function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverlay): string {
-  const debtKey = state.maintenanceDebts
-    .map((debt) => `${debt.key}:${Math.round(debt.debt)}`)
-    .sort()
-    .join(',');
+  const debtKey =
+    overlay === 'maintenance'
+      ? state.maintenanceDebts
+          .map((debt) => `${debt.key}:${Math.round(debt.debt)}`)
+          .sort()
+          .join(',')
+      : '';
   // Fire signature drives cache busting on the air overlay so a flare-up
   // visibly degrades local oxygen mid-frame.
   const fireKey =
@@ -2605,6 +2615,15 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
           Math.round(state.metrics.coolingLoad)
         ].join(':')
       : '';
+  const utilityKey =
+    overlay === 'utility-underlay'
+      ? [
+          state.utilityUnderlay.version,
+          state.metrics.airNetworkPoweredVents,
+          state.metrics.airNetworkUnpoweredVents,
+          state.metrics.disconnectedAirDuctTiles
+        ].join(':')
+      : '';
   return [
     overlay,
     state.width,
@@ -2623,7 +2642,8 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     routeKey,
     sanitationKey,
     mapKey,
-    thermalKey
+    thermalKey,
+    utilityKey
   ].join('|');
 }
 
@@ -2663,6 +2683,27 @@ function lifeSupportDiagnosticColor(
   }
   const t = clamp01((distance - 18) / 14);
   return mixRgba([255, 188, 82], [238, 79, 79], t, 0.3 + t * 0.08);
+}
+
+function lifeSupportPlanningColor(
+  state: StationState,
+  tileIndex: number,
+  coverage: LifeSupportCoverageDiagnostic
+): string | null {
+  if (state.tiles[tileIndex] === TileType.Space || state.tiles[tileIndex] === TileType.Wall) return null;
+  const pos = fromIndex(tileIndex, state.width);
+  const diagnostic = getLifeSupportTileDiagnostic(state, pos.x, pos.y, coverage);
+  if (!diagnostic?.walkablePressurized) return null;
+  if (!diagnostic.hasLifeSupportSystem) return null;
+  if (diagnostic.noActiveSource) return rgba(232, 89, 89, 0.28);
+  if (!diagnostic.reachable) return rgba(238, 79, 79, 0.34);
+  const distance = diagnostic.distance ?? 0;
+  if (!diagnostic.poorCoverage) {
+    const t = clamp01(distance / 18);
+    return mixRgba([55, 211, 230], [255, 213, 94], t, 0.13 + t * 0.08);
+  }
+  const t = clamp01((distance - 18) / 16);
+  return mixRgba([255, 188, 82], [238, 79, 79], t, 0.24 + t * 0.12);
 }
 
 function signedDiagnosticColor(value: number, positive: [number, number, number], negative: [number, number, number]): string | null {
@@ -2798,12 +2839,178 @@ function routePressureDiagnosticColor(
   }
 }
 
+function drawUtilityUnderlayDuct(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  tileIndex: number,
+  color: string,
+  accentColor: string,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): void {
+  const { x, y } = fromIndex(tileIndex, state.width);
+  const px = x * TILE_SIZE;
+  const py = y * TILE_SIZE;
+  const centerX = px + TILE_SIZE * 0.5;
+  const centerY = py + TILE_SIZE * 0.5;
+  const mask = utilityUnderlayNeighborMask(state, 'air-duct', tileIndex);
+  const lineWidth = Math.max(5, Math.round(6 * PX));
+  ctx.save();
+  if (useSprites) {
+    drawSpriteByKey(ctx, spriteAtlas, UTILITY_UNDERLAY_SPRITE_KEYS.airDuctTile, px, py, TILE_SIZE, TILE_SIZE, 0, 0.56);
+  }
+  ctx.lineWidth = lineWidth + Math.max(2, Math.round(2 * PX));
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(7, 14, 22, 0.82)';
+  ctx.beginPath();
+  if (mask & 1) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(centerX, py + TILE_SIZE * 0.12);
+  }
+  if (mask & 2) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(px + TILE_SIZE * 0.88, centerY);
+  }
+  if (mask & 4) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(centerX, py + TILE_SIZE * 0.88);
+  }
+  if (mask & 8) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(px + TILE_SIZE * 0.12, centerY);
+  }
+  if (mask === 0) {
+    ctx.arc(centerX, centerY, TILE_SIZE * 0.18, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  if (mask & 1) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(centerX, py + TILE_SIZE * 0.12);
+  }
+  if (mask & 2) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(px + TILE_SIZE * 0.88, centerY);
+  }
+  if (mask & 4) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(centerX, py + TILE_SIZE * 0.88);
+  }
+  if (mask & 8) {
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(px + TILE_SIZE * 0.12, centerY);
+  }
+  if (mask === 0) {
+    ctx.arc(centerX, centerY, TILE_SIZE * 0.18, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+  const shape = utilityUnderlayShapeForMask(mask);
+  ctx.fillStyle = accentColor;
+  if (shape === 'tee' || shape === 'cross' || shape === 'isolated') {
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, TILE_SIZE * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillRect(centerX - TILE_SIZE * 0.08, centerY - TILE_SIZE * 0.08, TILE_SIZE * 0.16, TILE_SIZE * 0.16);
+  }
+  ctx.restore();
+}
+
+function drawAirCoverageUnderlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
+  const coverage = getLifeSupportCoverageDiagnostics(state);
+  ctx.save();
+  ctx.globalAlpha = 0.62;
+  for (let i = 0; i < state.tiles.length; i++) {
+    const color = lifeSupportPlanningColor(state, i, coverage);
+    if (!color) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    ctx.fillStyle = color;
+    ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+  }
+  ctx.restore();
+}
+
+function drawUtilityUnderlayOverlayLayer(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): void {
+  drawAirCoverageUnderlayLayer(ctx, state);
+  const diagnostics = getAirDuctNetworkDiagnostics(state);
+  if (diagnostics.tileCount <= 0) return;
+  const sourceTiles = new Set<number>();
+  const sinkTiles = new Set<number>();
+  for (const component of diagnostics.components) {
+    for (const tile of component.sourceTiles) sourceTiles.add(tile);
+    for (const tile of component.sinkTiles) sinkTiles.add(tile);
+  }
+  for (const component of diagnostics.components) {
+    const powered = component.powered;
+    for (const i of component.tiles) {
+      const { x, y } = fromIndex(i, state.width);
+      const px = x * TILE_SIZE;
+      const py = y * TILE_SIZE;
+      const source = sourceTiles.has(i);
+      const sink = sinkTiles.has(i);
+      const disconnected = !powered;
+      const fill = source
+        ? 'rgba(110, 219, 143, 0.28)'
+        : sink && powered
+          ? 'rgba(101, 223, 255, 0.28)'
+          : disconnected
+            ? 'rgba(238, 79, 79, 0.25)'
+            : 'rgba(97, 200, 255, 0.18)';
+      const stroke = source
+        ? '#6edb8f'
+        : sink && powered
+          ? '#a7f3ff'
+          : disconnected
+            ? '#ee4f4f'
+            : powered
+              ? '#61c8ff'
+              : '#ffbc52';
+      const accent = source ? '#e9ffe9' : sink ? '#e6fbff' : disconnected ? '#ffd0c5' : '#bdeeff';
+      ctx.fillStyle = fill;
+      ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+      drawUtilityUnderlayDuct(ctx, state, i, stroke, accent, spriteAtlas, useSprites);
+      if (source || sink) {
+        ctx.strokeStyle = source ? '#6edb8f' : powered ? '#a7f3ff' : '#ee4f4f';
+        ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+        ctx.strokeRect(px + Math.round(4 * PX) + 0.5, py + Math.round(4 * PX) + 0.5, TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX));
+      }
+    }
+  }
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.Vent) continue;
+    const serviceTile = wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile;
+    if (hasUtilityUnderlay(state, 'air-duct', serviceTile)) continue;
+    const { x, y } = fromIndex(serviceTile, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    ctx.strokeStyle = 'rgba(238, 79, 79, 0.9)';
+    ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
+    ctx.strokeRect(px + Math.round(5 * PX) + 0.5, py + Math.round(5 * PX) + 0.5, TILE_SIZE - Math.round(10 * PX), TILE_SIZE - Math.round(10 * PX));
+    ctx.setLineDash([]);
+  }
+}
+
 function drawDiagnosticOverlayLayer(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  overlay: DiagnosticOverlay
+  overlay: DiagnosticOverlay,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
 ): void {
   if (overlay === 'none') return;
+  if (overlay === 'utility-underlay') {
+    drawUtilityUnderlayOverlayLayer(ctx, state, spriteAtlas, useSprites);
+    return;
+  }
   const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
   const routePressureDiagnostics = overlay === 'route-pressure' ? getRoutePressureDiagnostics(state) : null;
   for (let i = 0; i < state.tiles.length; i++) {
@@ -2844,7 +3051,9 @@ function drawDiagnosticOverlayLayer(
 function ensureDiagnosticOverlayLayer(
   state: StationState,
   widthPx: number,
-  heightPx: number
+  heightPx: number,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
 ): CachedLayer | null {
   const overlay = state.controls.diagnosticOverlay;
   if (overlay === 'none') {
@@ -2853,11 +3062,11 @@ function ensureDiagnosticOverlayLayer(
   }
   diagnosticOverlayCache = ensureCachedLayer(diagnosticOverlayCache, widthPx, heightPx);
   const layer = diagnosticOverlayCache;
-  const key = diagnosticOverlayCacheKey(state, overlay);
+  const key = `${diagnosticOverlayCacheKey(state, overlay)}|sprites:${useSprites ? 1 : 0}:${spriteAtlas.version}`;
   if (layer.key === key) return layer;
   layer.key = key;
   layer.ctx.clearRect(0, 0, widthPx, heightPx);
-  drawDiagnosticOverlayLayer(layer.ctx, state, overlay);
+  drawDiagnosticOverlayLayer(layer.ctx, state, overlay, spriteAtlas, useSprites);
   return layer;
 }
 
@@ -2869,6 +3078,13 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         line: `coverage ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles}`,
         scale: 'cyan close | red poor/disconnected',
         color: '#37d3e6'
+      };
+    case 'utility-underlay':
+      return {
+        title: 'Air Network',
+        line: `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles} | powered vents ${state.metrics.airNetworkPoweredVents}`,
+        scale: 'air reach tint underneath | green source | cyan powered duct | red disconnected',
+        color: '#61c8ff'
       };
     case 'map-conditions':
       return {
@@ -2947,6 +3163,12 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     if (diagnostic.noActiveSource) return `hover ${pos.x},${pos.y}: no active air source -> oxygen risk${localStr}`;
     if (!diagnostic.reachable) return `hover ${pos.x},${pos.y}: disconnected from active air -> oxygen risk${localStr}`;
     return `hover ${pos.x},${pos.y}: air distance ${diagnostic.distance ?? 0} | ${diagnostic.poorCoverage ? 'poor' : 'covered'} room readiness${localStr}`;
+  }
+  if (overlay === 'utility-underlay') {
+    const diagnostic = getUtilityUnderlayTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic) return `hover ${pos.x},${pos.y}: no utility sample`;
+    const network = diagnostic.componentId !== null ? `network ${diagnostic.componentId}` : 'no network';
+    return `hover ${pos.x},${pos.y}: ${diagnostic.reason} | ${network} | ${diagnostic.effect} | fix: ${diagnostic.fix}`;
   }
   if (overlay === 'maintenance') {
     const diagnostic = getMaintenanceTileDiagnostic(state, pos.x, pos.y);
@@ -3367,7 +3589,7 @@ export function renderWorld(
   // state.controls.showGlow; cache key includes dynamic signatures (med-bed
   // occupancy, kitchen-active) so frame cost is ~0 when nothing changes.
   renderGlowPass(ctx, state, widthPx, heightPx, useSprites, viewport);
-  const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx);
+  const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
   ctx.save();
   clipToVisibleSpaceTiles(ctx, state, visibleTiles);
@@ -3586,6 +3808,21 @@ export function renderWorld(
     ctx.lineWidth = 1;
   }
 
+  if (currentTool.kind === 'utility-underlay' && hoveredTile !== null) {
+    const p = fromIndex(hoveredTile, state.width);
+    const valid =
+      currentTool.utilityErase ||
+      canPlaceUtilityUnderlay(state, currentTool.utilityKind ?? 'air-duct', hoveredTile);
+    ctx.fillStyle = currentTool.utilityErase
+      ? 'rgba(255, 188, 82, 0.24)'
+      : valid
+        ? 'rgba(97, 200, 255, 0.26)'
+        : 'rgba(238, 79, 79, 0.26)';
+    ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    ctx.strokeStyle = valid ? 'rgba(167, 243, 255, 0.95)' : 'rgba(238, 79, 79, 0.95)';
+    ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+  }
+
   if (currentTool.kind === 'module' && hoveredTile !== null && currentTool.module) {
     const preview = validateModulePreviewPlacement(
       state,
@@ -3771,6 +4008,10 @@ export function renderWorld(
             ? 'Tool: Copy Station'
             : currentTool.kind === 'paste-room'
               ? 'Tool: Paste Station'
+              : currentTool.kind === 'utility-underlay'
+                ? currentTool.utilityErase
+                  ? `Tool: Erase ${currentTool.utilityKind ?? 'utility'}`
+                  : `Tool: ${currentTool.utilityKind ?? 'utility'}`
           : currentTool.kind === 'module'
             ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
             : currentTool.kind === 'hire-staff'

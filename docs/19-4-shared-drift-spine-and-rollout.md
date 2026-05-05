@@ -15,6 +15,7 @@ Status: shared spine active. The sanitation portion is implemented; keep this op
 - [x] `?scenario=entropy-sanitation` cold-start fixture.
 - [x] `?scenario=entropy-maintenance`.
 - [x] `?scenario=entropy-thermal`.
+- [x] `?scenario=entropy-ventilation`.
 - [ ] `?scenario=entropy-combined`.
 
 ## Goal

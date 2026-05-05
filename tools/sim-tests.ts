@@ -22,6 +22,8 @@ import {
   getCrewInspectorById,
   getResidentInspectorById,
   getLifeSupportTileDiagnostic,
+  getAirDuctNetworkDiagnostics,
+  getUtilityUnderlayTileDiagnostic,
   getMaintenanceTileDiagnostic,
   getSanitationRoomDiagnosticAt,
   getSanitationTileDiagnostic,
@@ -41,12 +43,17 @@ import {
   selectSpecialty,
   setRoom,
   setTile,
+  setUtilityUnderlayTile,
   SHIP_MIN_DOCK_AREA,
   tick,
   tryCreateReservation,
   tryPlaceModule,
   tryPlaceModuleWithCredits,
-  trySetTileWithCredits
+  trySetTileWithCredits,
+  discoverUtilityNetworks,
+  hasUtilityUnderlay,
+  utilityUnderlayNeighborMask,
+  utilityUnderlayShapeForMask
 } from '../src/sim/sim';
 import {
   captureSnapshot,
@@ -316,6 +323,24 @@ function paintRoom(state: StationState, room: RoomType, x0: number, y0: number, 
   const doorIdx = toIndex(x0, y0, state.width);
   setTile(state, doorIdx, TileType.Door);
   setRoom(state, doorIdx, room);
+}
+
+function drawTestAirDuctLine(state: StationState, x1: number, y1: number, x2: number, y2: number): void {
+  const dx = Math.sign(x2 - x1);
+  const dy = Math.sign(y2 - y1);
+  if (dx !== 0 && dy !== 0) {
+    drawTestAirDuctLine(state, x1, y1, x2, y1);
+    drawTestAirDuctLine(state, x2, y1, x2, y2);
+    return;
+  }
+  let x = x1;
+  let y = y1;
+  while (true) {
+    setUtilityUnderlayTile(state, 'air-duct', toIndex(x, y, state.width), true);
+    if (x === x2 && y === y2) break;
+    x += dx;
+    y += dy;
+  }
 }
 
 function placeModuleOrThrow(
@@ -1882,6 +1907,129 @@ function testWallMountedVentRequiresWallAndProjectsAir(): void {
   assertCondition(
     afterDistance >= 0 && (beforeDistance < 0 || afterDistance < beforeDistance),
     `Wall vent should improve nearby air distance (before ${beforeDistance}, after ${afterDistance}).`
+  );
+}
+
+function testUtilityUnderlayMasksAndComponents(): void {
+  const state = createInitialState({ seed: 300361 });
+  buildHabitat(state);
+  drawTestAirDuctLine(state, 10, 10, 12, 10);
+  setUtilityUnderlayTile(state, 'air-duct', toIndex(12, 11, state.width), true);
+
+  const center = toIndex(11, 10, state.width);
+  const elbow = toIndex(12, 10, state.width);
+  assertCondition(utilityUnderlayNeighborMask(state, 'air-duct', center) === 10, 'Straight duct should have east+west mask.');
+  assertCondition(utilityUnderlayShapeForMask(utilityUnderlayNeighborMask(state, 'air-duct', center)) === 'straight', 'Straight duct mask should resolve to straight.');
+  assertCondition(utilityUnderlayShapeForMask(utilityUnderlayNeighborMask(state, 'air-duct', elbow)) === 'corner', 'Elbow duct should resolve to corner.');
+
+  const networks = discoverUtilityNetworks(state, 'air-duct');
+  assertCondition(networks.networkCount === 1, `Expected one connected duct component, got ${networks.networkCount}.`);
+  assertCondition(networks.tileCount === 4, `Expected four duct tiles, got ${networks.tileCount}.`);
+}
+
+function testParallelAirDuctNetworksStayIndependent(): void {
+  const state = createInitialState({ seed: 300362 });
+  buildHabitat(state);
+  drawTestAirDuctLine(state, 10, 10, 12, 10);
+  drawTestAirDuctLine(state, 30, 10, 32, 10);
+  const source = toIndex(10, 10, state.width);
+  const sink = toIndex(12, 10, state.width);
+  const networks = discoverUtilityNetworks(state, 'air-duct', {
+    sourceTiles: [source],
+    sinkTiles: [sink, toIndex(32, 10, state.width)]
+  });
+  assertCondition(networks.networkCount === 2, `Expected two parallel duct networks, got ${networks.networkCount}.`);
+  assertCondition(networks.poweredNetworkCount === 1, `Expected one powered network, got ${networks.poweredNetworkCount}.`);
+  assertCondition(networks.poweredSinkCount === 1, `Expected only the connected sink powered, got ${networks.poweredSinkCount}.`);
+}
+
+function testAirDuctNetworkPowersVentAndBlocksDisconnectedVent(): void {
+  const state = createInitialState({ seed: 300363 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  placeCrewAtSystemAnchor(state, toIndex(9, 6, state.width), 'life-support');
+  placeModuleOrThrow(state, ModuleType.Vent, 20, 4);
+  placeModuleOrThrow(state, ModuleType.Vent, 30, 4);
+  drawTestAirDuctLine(state, 10, 6, 20, 6);
+  drawTestAirDuctLine(state, 20, 6, 20, 5);
+  setUtilityUnderlayTile(state, 'air-duct', toIndex(30, 5, state.width), true);
+  tick(state, 0.5);
+
+  const air = getAirDuctNetworkDiagnostics(state);
+  assertCondition(air.networkCount === 2, `Expected powered and disconnected duct networks, got ${air.networkCount}.`);
+  assertCondition(state.metrics.airNetworkPoweredVents === 1, `Expected one powered vent, got ${state.metrics.airNetworkPoweredVents}.`);
+  assertCondition(state.metrics.airNetworkUnpoweredVents === 1, `Expected one unpowered vent, got ${state.metrics.airNetworkUnpoweredVents}.`);
+
+  const connectedDiagnostic = getUtilityUnderlayTileDiagnostic(state, 20, 5);
+  const disconnectedDiagnostic = getUtilityUnderlayTileDiagnostic(state, 30, 5);
+  assertCondition(connectedDiagnostic?.powered === true && connectedDiagnostic.sink, 'Connected vent service tile should be a powered sink.');
+  assertCondition(disconnectedDiagnostic?.disconnected === true && disconnectedDiagnostic.sink, 'Disconnected vent service tile should report blocked sink.');
+}
+
+function testAirDuctSaveLoadAndLegacyMigration(): void {
+  const state = createInitialState({ seed: 300364 });
+  buildHabitat(state);
+  setUtilityUnderlayTile(state, 'air-duct', toIndex(11, 11, state.width), true);
+  const payload = serializeSave('ducts', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Duct save should parse.');
+  if (!parsed.ok) return;
+  const loaded = hydrateStateFromSave(parsed.save).state;
+  assertCondition(hasUtilityUnderlay(loaded, 'air-duct', toIndex(11, 11, loaded.width)), 'Air duct should survive save/load.');
+
+  const legacy = JSON.parse(payload) as StationSaveEnvelopeV1;
+  delete legacy.snapshot.utilityUnderlay;
+  const legacyParsed = parseAndMigrateSave(JSON.stringify(legacy));
+  assertCondition(legacyParsed.ok, 'Legacy save without utilityUnderlay should parse.');
+  if (!legacyParsed.ok) return;
+  const legacyLoaded = hydrateStateFromSave(legacyParsed.save).state;
+  const legacyNetworks = discoverUtilityNetworks(legacyLoaded, 'air-duct');
+  assertCondition(legacyNetworks.tileCount === 0, 'Legacy save should initialize empty utility underlay.');
+}
+
+function testAirDuctExpansionRemapsUtilities(): void {
+  const state = createInitialState({ seed: 300365 });
+  buildHabitat(state);
+  const oldWidth = state.width;
+  const original = { x: 12, y: 12 };
+  setUtilityUnderlayTile(state, 'air-duct', toIndex(original.x, original.y, state.width), true);
+  state.metrics.credits = 999999;
+  const result = expandMap(state, 'west');
+  assertCondition(result.ok, 'Map expansion west should succeed for underlay remap test.');
+  const shiftX = state.width - oldWidth;
+  assertCondition(
+    hasUtilityUnderlay(state, 'air-duct', toIndex(original.x + shiftX, original.y, state.width)),
+    'Air duct should shift east by the west-expansion offset.'
+  );
+}
+
+function testAirDuctDoorLeakageAndDirectVentBenefit(): void {
+  const disconnected = createInitialState({ seed: 300366 });
+  buildHabitat(disconnected);
+  setupCoreRooms(disconnected);
+  placeCrewAtSystemAnchor(disconnected, toIndex(9, 6, disconnected.width), 'life-support');
+  placeModuleOrThrow(disconnected, ModuleType.Vent, 20, 4);
+  paintRoom(disconnected, RoomType.Dorm, 21, 5, 23, 7);
+  setUtilityUnderlayTile(disconnected, 'air-duct', toIndex(20, 5, disconnected.width), true);
+  disconnected.staleAirByTile[toIndex(22, 6, disconnected.width)] = 75;
+
+  const connected = createInitialState({ seed: 300366 });
+  buildHabitat(connected);
+  setupCoreRooms(connected);
+  placeCrewAtSystemAnchor(connected, toIndex(9, 6, connected.width), 'life-support');
+  placeModuleOrThrow(connected, ModuleType.Vent, 20, 4);
+  paintRoom(connected, RoomType.Dorm, 21, 5, 23, 7);
+  drawTestAirDuctLine(connected, 10, 6, 20, 6);
+  drawTestAirDuctLine(connected, 20, 6, 20, 5);
+  connected.staleAirByTile[toIndex(22, 6, connected.width)] = 75;
+
+  runFor(disconnected, 40, 4);
+  runFor(connected, 40, 4);
+
+  const sample = toIndex(22, 6, connected.width);
+  assertCondition(
+    connected.staleAirByTile[sample] < disconnected.staleAirByTile[sample] - 4,
+    `Connected direct vent should improve stale air (connected ${connected.staleAirByTile[sample].toFixed(1)}, disconnected ${disconnected.staleAirByTile[sample].toFixed(1)}).`
   );
 }
 
@@ -5963,6 +6111,12 @@ function run(): void {
   testBedFootprintRotation();
   testWallLightRequiresAdjacentWall();
   testWallMountedVentRequiresWallAndProjectsAir();
+  testUtilityUnderlayMasksAndComponents();
+  testParallelAirDuctNetworksStayIndependent();
+  testAirDuctNetworkPowersVentAndBlocksDisconnectedVent();
+  testAirDuctSaveLoadAndLegacyMigration();
+  testAirDuctExpansionRemapsUtilities();
+  testAirDuctDoorLeakageAndDirectVentBenefit();
   testWallMountedFireExtinguisherRequiresWallAndSuppressesFire();
   testWallMountedModuleConstructionUsesServiceTile();
   testPathIntentVisitorAvoidsServiceCorridor();

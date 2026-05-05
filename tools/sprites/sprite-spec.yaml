@@ -441,6 +441,11 @@ sprites:
     prompt: Top-down pixel art. space station. Style of rimworld. status overlay icon for confrontation state,
       transparent background, high contrast, no text.
     rotation: 0
+  overlay.utility.air_duct_tile:
+    prompt: "Top-down pixel art station utility overlay sprite: square underfloor Air Duct/conduit tile.
+      Blue-gray metal duct plating, subtle cyan airflow glow, bolts, transparent background, no text,
+      readable at 32x32 and 18x18."
+    rotation: 0
   ship.tourist:
     prompt: Top-down pixel art. space station. Style of rimworld. ship sprite for tourist vessel. Bright civilian
       style, transparent background, readable at small-medium sizes.

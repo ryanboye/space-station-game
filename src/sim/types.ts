@@ -60,6 +60,7 @@ export interface RoomEnvironmentScore extends RoomEnvironmentTraits {
 export type DiagnosticOverlay =
   | 'none'
   | 'life-support'
+  | 'utility-underlay'
   | 'map-conditions'
   | 'thermal'
   | 'visitor-status'
@@ -71,6 +72,60 @@ export type DiagnosticOverlay =
 
 export type DriftSeverity = 'none' | 'low' | 'warning' | 'active' | 'severe';
 export type MapConditionKind = 'sunlight' | 'debris-risk' | 'thermal-sink';
+export type UtilityUnderlayKind =
+  | 'air-duct'
+  | 'hot-pipe'
+  | 'cold-pipe'
+  | 'power-conduit'
+  | 'coolant-pipe'
+  | 'water-pipe'
+  | 'data-conduit';
+
+export interface UtilityUnderlayState {
+  version: number;
+  layers: Record<UtilityUnderlayKind, Uint8Array>;
+}
+
+export interface UtilityNetworkComponent {
+  id: number;
+  kind: UtilityUnderlayKind;
+  tiles: number[];
+  sourceTiles: number[];
+  sinkTiles: number[];
+  powered: boolean;
+  quality: number;
+}
+
+export interface UtilityNetworkDiagnostics {
+  kind: UtilityUnderlayKind;
+  networkCount: number;
+  poweredNetworkCount: number;
+  tileCount: number;
+  sourceCount: number;
+  sinkCount: number;
+  poweredSinkCount: number;
+  disconnectedTileCount: number;
+  averageDistance: number;
+  components: UtilityNetworkComponent[];
+  componentIdByTile: Int16Array;
+  distanceByTile: Int16Array;
+}
+
+export interface UtilityUnderlayTileDiagnostic {
+  tileIndex: number;
+  kind: UtilityUnderlayKind;
+  present: boolean;
+  buildable: boolean;
+  neighborMask: number;
+  componentId: number | null;
+  powered: boolean;
+  source: boolean;
+  sink: boolean;
+  disconnected: boolean;
+  reason: string;
+  effect: string;
+  fix: string;
+}
 
 export interface MapConditionSample {
   kind: MapConditionKind;
@@ -483,6 +538,12 @@ export interface LifeSupportCoverageDiagnostic {
   poorTiles: number;
   avgDistance: number;
   coveragePct: number;
+  ductMode: boolean;
+  poweredVents: number;
+  unpoweredVents: number;
+  airNetworkCount: number;
+  disconnectedAirDuctTiles: number;
+  averageAirNetworkDistance: number;
   hasLifeSupportSystem: boolean;
 }
 
@@ -1302,6 +1363,11 @@ export interface Metrics {
   hotTiles: number;
   staleAirTiles: number;
   coolingLoad: number;
+  airNetworkCount: number;
+  airNetworkPoweredVents: number;
+  airNetworkUnpoweredVents: number;
+  disconnectedAirDuctTiles: number;
+  averageAirNetworkDistance: number;
   thermalPenaltyPerMin: number;
   thermalPenaltyTotal: number;
   maintenanceDebtAvg: number;
@@ -1738,6 +1804,7 @@ export interface StationState {
   // from oxygen/survival air quality so Air Coverage remains readable.
   heatByTile: Float32Array;
   staleAirByTile: Float32Array;
+  utilityUnderlay: UtilityUnderlayState;
   // Per-tile sanitation drift, 0..100. Dirt sources are stored as compact
   // codes for hover/inspector diagnostics and are reset to none when a tile
   // is cleaned or rebuilt.
@@ -1920,11 +1987,23 @@ export interface BuildStampPreview {
 }
 
 export interface BuildTool {
-  kind: 'none' | 'tile' | 'zone' | 'room' | 'module' | 'copy-room' | 'paste-room' | 'cancel-construction' | 'hire-staff';
+  kind:
+    | 'none'
+    | 'tile'
+    | 'zone'
+    | 'room'
+    | 'module'
+    | 'utility-underlay'
+    | 'copy-room'
+    | 'paste-room'
+    | 'cancel-construction'
+    | 'hire-staff';
   tile?: TileType;
   zone?: ZoneType;
   room?: RoomType;
   module?: ModuleType;
+  utilityKind?: UtilityUnderlayKind;
+  utilityErase?: boolean;
   pasteStamp?: BuildStampPreview;
   staffRole?: StaffRole;
 }

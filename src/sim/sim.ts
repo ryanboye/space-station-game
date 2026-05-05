@@ -104,6 +104,8 @@ import {
   type ThermalRoomDiagnostic,
   type ThermalSeverity,
   type ThermalTileDiagnostic,
+  type UtilityNetworkDiagnostics,
+  type UtilityUnderlayTileDiagnostic,
   type ShipServiceTag,
   type ShipType,
   type UnlockTier,
@@ -132,6 +134,15 @@ import {
   type StationState,
   type Visitor
 } from './types';
+import {
+  clearUtilityUnderlayAt,
+  canPlaceUtilityUnderlay,
+  discoverUtilityNetworks,
+  hasUtilityUnderlay,
+  setUtilityUnderlayTile,
+  utilityUnderlayNeighborMask,
+  utilityUnderlayTileCount
+} from './utility-underlay';
 import {
   CONSTRUCTION_BUILD_RATE_PER_SEC,
   EVA_LOW_OXYGEN_SEC,
@@ -1840,6 +1851,12 @@ type LifeSupportCoverage = {
   poorTiles: number;
   avgDistance: number;
   coveragePct: number;
+  ductMode: boolean;
+  poweredVents: number;
+  unpoweredVents: number;
+  airNetworkCount: number;
+  disconnectedAirDuctTiles: number;
+  averageAirNetworkDistance: number;
 };
 
 // Vent module radius — how far a powered Vent projects fresh air. The vent
@@ -1848,10 +1865,124 @@ type LifeSupportCoverage = {
 const VENT_REACH_FROM_LS = 16;
 const VENT_PROJECTION_RADIUS = 6;
 
+type AirDuctRuntime = {
+  ductMode: boolean;
+  diagnostics: UtilityNetworkDiagnostics;
+  poweredVentServiceTiles: Set<number>;
+  unpoweredVentServiceTiles: Set<number>;
+  ventServiceTiles: number[];
+  sourceDuctTiles: number[];
+};
+
+function ventServiceTiles(state: StationState): number[] {
+  const out: number[] = [];
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.Vent) continue;
+    out.push(wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile);
+  }
+  return out;
+}
+
+function computeAirDuctRuntime(state: StationState, lifeSupportTiles?: number[]): AirDuctRuntime {
+  const ductMode = utilityUnderlayTileCount(state, 'air-duct') > 0;
+  const lsTiles =
+    lifeSupportTiles ??
+    operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false).flat();
+  const sourceDuctTiles = lsTiles.filter((tile) => hasUtilityUnderlay(state, 'air-duct', tile));
+  const vents = ventServiceTiles(state);
+  const sinkDuctTiles = vents.filter((tile) => hasUtilityUnderlay(state, 'air-duct', tile));
+  const diagnostics = discoverUtilityNetworks(state, 'air-duct', {
+    sourceTiles: sourceDuctTiles,
+    sinkTiles: sinkDuctTiles
+  });
+  const poweredVentServiceTiles = new Set<number>();
+  const unpoweredVentServiceTiles = new Set<number>();
+  for (const ventTile of vents) {
+    if (!ductMode) continue;
+    const componentId = diagnostics.componentIdByTile[ventTile];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+    if (component?.powered) poweredVentServiceTiles.add(ventTile);
+    else unpoweredVentServiceTiles.add(ventTile);
+  }
+  return {
+    ductMode,
+    diagnostics,
+    poweredVentServiceTiles,
+    unpoweredVentServiceTiles,
+    ventServiceTiles: vents,
+    sourceDuctTiles
+  };
+}
+
+export function getAirDuctNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
+  return computeAirDuctRuntime(state).diagnostics;
+}
+
+export function getUtilityUnderlayTileDiagnostic(
+  state: StationState,
+  x: number,
+  y: number
+): UtilityUnderlayTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  const runtime = computeAirDuctRuntime(state);
+  const present = hasUtilityUnderlay(state, 'air-duct', tileIndex);
+  const componentId = runtime.diagnostics.componentIdByTile[tileIndex];
+  const component = componentId >= 0 ? runtime.diagnostics.components[componentId] : null;
+  const source = runtime.sourceDuctTiles.includes(tileIndex);
+  const sink = runtime.ventServiceTiles.includes(tileIndex);
+  const powered = component?.powered ?? false;
+  const buildable = present || canPlaceUtilityUnderlay(state, 'air-duct', tileIndex);
+  let reason = 'empty utility underlay';
+  let effect = 'no duct network here';
+  let fix = 'draw Air Duct under floors, doors, or docks';
+  if (!buildable && !present) {
+    reason = 'not a ductable underfloor tile';
+    effect = 'air ducts stay hidden under walkable station tiles';
+    fix = 'paint ducts on floors, doors, docks, or airlocks';
+  } else if (present && source && powered) {
+    reason = 'active Life Support source duct';
+    effect = 'fresh air can enter this connected duct network';
+    fix = 'connect this network to wall Vent service tiles';
+  } else if (present && sink && powered) {
+    reason = 'powered wall Vent connection';
+    effect = 'this Vent outputs fresh air into nearby rooms';
+    fix = 'extend vents to large, hot, or stale rooms';
+  } else if (present && sink) {
+    reason = 'unpowered wall Vent connection';
+    effect = 'the Vent is placed but has no active Life Support duct path';
+    fix = 'connect this duct segment back to Life Support';
+  } else if (present && powered) {
+    reason = 'powered duct segment';
+    effect = 'carries fresh air from Life Support toward vents';
+    fix = 'add vents at room edges that need output';
+  } else if (present) {
+    reason = 'disconnected duct segment';
+    effect = 'no fresh-air source reaches this segment';
+    fix = 'connect it to an active Life Support room duct';
+  }
+  return {
+    tileIndex,
+    kind: 'air-duct',
+    present,
+    buildable,
+    neighborMask: utilityUnderlayNeighborMask(state, 'air-duct', tileIndex),
+    componentId: componentId >= 0 ? componentId : null,
+    powered,
+    source,
+    sink,
+    disconnected: present && !powered,
+    reason,
+    effect,
+    fix
+  };
+}
+
 function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
   const distanceByTile = new Int16Array(state.width * state.height);
   distanceByTile.fill(-1);
   const lsTiles = operationalClustersForRoom(state, RoomType.LifeSupport, CREW_PER_LIFE_SUPPORT, false).flat();
+  const airDuctRuntime = computeAirDuctRuntime(state, lsTiles);
   const queue: number[] = [];
   for (const tile of lsTiles) {
     if (!isWalkable(state.tiles[tile]) || !state.pressurized[tile]) continue;
@@ -1863,11 +1994,7 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
   // secondary 0-distance air sources in their own VENT_PROJECTION_RADIUS.
   // First pass: BFS from LS to find which vents are reachable + within range.
   // Second pass: extend the BFS from each powered vent.
-  const ventOriginTiles: number[] = [];
-  for (const m of state.moduleInstances) {
-    if (m.type !== ModuleType.Vent) continue;
-    ventOriginTiles.push(wallMountedModuleServiceTile(state, m.originTile) ?? m.originTile);
-  }
+  const ventOriginTiles = airDuctRuntime.ventServiceTiles;
   const sourceTiles = lsTiles.slice();
 
   let coveredTiles = queue.length;
@@ -1900,7 +2027,11 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
     const ventQueue: number[] = [];
     for (const ventTile of ventOriginTiles) {
       const reach = distanceByTile[ventTile];
-      if (reach < 0 || reach > VENT_REACH_FROM_LS) continue;
+      if (airDuctRuntime.ductMode) {
+        if (!airDuctRuntime.poweredVentServiceTiles.has(ventTile)) continue;
+      } else if (reach < 0 || reach > VENT_REACH_FROM_LS) {
+        continue;
+      }
       if (!isWalkable(state.tiles[ventTile]) || !state.pressurized[ventTile]) continue;
       poweredVents += 1;
       // Vent itself: keep its existing distance (so the LS-side overlay still
@@ -1985,7 +2116,13 @@ function computeLifeSupportCoverage(state: StationState): LifeSupportCoverage {
     walkablePressurizedTiles,
     poorTiles,
     avgDistance: coveredTiles > 0 ? totalDistance / coveredTiles : 0,
-    coveragePct: walkablePressurizedTiles > 0 ? (coveredTiles / walkablePressurizedTiles) * 100 : 100
+    coveragePct: walkablePressurizedTiles > 0 ? (coveredTiles / walkablePressurizedTiles) * 100 : 100,
+    ductMode: airDuctRuntime.ductMode,
+    poweredVents,
+    unpoweredVents: airDuctRuntime.ductMode ? airDuctRuntime.unpoweredVentServiceTiles.size : 0,
+    airNetworkCount: airDuctRuntime.diagnostics.networkCount,
+    disconnectedAirDuctTiles: airDuctRuntime.diagnostics.disconnectedTileCount,
+    averageAirNetworkDistance: airDuctRuntime.diagnostics.averageDistance
   };
 }
 
@@ -2083,6 +2220,23 @@ function nearbyModuleEffect(
   return best;
 }
 
+function connectedVentReliefAt(state: StationState, tileIndex: number): number {
+  const runtime = computeAirDuctRuntime(state);
+  if (!runtime.ductMode) return nearbyModuleEffect(state, tileIndex, ModuleType.Vent, THERMAL_VENT_RADIUS);
+  const pos = fromIndex(tileIndex, state.width);
+  let best = 0;
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.Vent) continue;
+    const serviceTile = wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile;
+    if (!runtime.poweredVentServiceTiles.has(serviceTile)) continue;
+    const mp = fromIndex(serviceTile, state.width);
+    const dist = Math.abs(mp.x - pos.x) + Math.abs(mp.y - pos.y);
+    if (dist > THERMAL_VENT_RADIUS) continue;
+    best = Math.max(best, 1 - dist / (THERMAL_VENT_RADIUS + 1));
+  }
+  return best;
+}
+
 function thermalTileDiagnosticAt(
   state: StationState,
   tileIndex: number,
@@ -2094,7 +2248,7 @@ function thermalTileDiagnosticAt(
   const sunlight = mapConditionAt(state, 'sunlight', tileIndex);
   const thermalSink = mapConditionAt(state, 'thermal-sink', tileIndex);
   const insulation = nearbyModuleEffect(state, tileIndex, ModuleType.InsulationPanel, THERMAL_INSULATION_RADIUS);
-  const ventRelief = nearbyModuleEffect(state, tileIndex, ModuleType.Vent, THERMAL_VENT_RADIUS);
+  const ventRelief = connectedVentReliefAt(state, tileIndex);
   const rawDistance = coverage.distanceByTile[tileIndex];
   const lifeSupportDistance = rawDistance >= 0 ? rawDistance : null;
   const fire = state.effects.fires.find((entry) => entry.anchorTile === tileIndex);
@@ -2170,7 +2324,7 @@ function thermalRoomDiagnosticForCluster(
       sunlight: mapConditionAt(state, 'sunlight', anchorTile),
       thermalSink: mapConditionAt(state, 'thermal-sink', anchorTile),
       insulation: nearbyModuleEffect(state, anchorTile, ModuleType.InsulationPanel, THERMAL_INSULATION_RADIUS),
-      ventRelief: nearbyModuleEffect(state, anchorTile, ModuleType.Vent, THERMAL_VENT_RADIUS),
+      ventRelief: connectedVentReliefAt(state, anchorTile),
       lifeSupportDistance: null
     } as ThermalTileDiagnostic);
   return {
@@ -3911,9 +4065,15 @@ function buildThermalDriftContext(state: StationState): ThermalDriftContext {
     }
   }
 
+  const airDuctRuntime = computeAirDuctRuntime(state);
   for (const module of state.moduleInstances) {
     if (module.type === ModuleType.InsulationPanel) addNearbyModuleRelief(state, insulationByTile, module, THERMAL_INSULATION_RADIUS);
-    else if (module.type === ModuleType.Vent) addNearbyModuleRelief(state, ventReliefByTile, module, THERMAL_VENT_RADIUS);
+    else if (module.type === ModuleType.Vent) {
+      const serviceTile = wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile;
+      if (!airDuctRuntime.ductMode || airDuctRuntime.poweredVentServiceTiles.has(serviceTile)) {
+        addNearbyModuleRelief(state, ventReliefByTile, { originTile: serviceTile }, THERMAL_VENT_RADIUS);
+      }
+    }
     else if (module.type === ModuleType.Stove) addNearbyModuleHeat(state, moduleHeatByTile, module, 3, 9);
     else if (module.type === ModuleType.Workbench) addNearbyModuleHeat(state, moduleHeatByTile, module, 3, 7);
     else if (module.type === ModuleType.GrowStation) addNearbyModuleHeat(state, moduleHeatByTile, module, 2, 4);
@@ -13225,6 +13385,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.lifeSupportCoveragePct = lifeSupportCoverage.coveragePct;
   state.metrics.avgLifeSupportDistance = lifeSupportCoverage.avgDistance;
   state.metrics.poorLifeSupportTiles = lifeSupportCoverage.poorTiles;
+  state.metrics.airNetworkCount = lifeSupportCoverage.airNetworkCount;
+  state.metrics.airNetworkPoweredVents = lifeSupportCoverage.poweredVents;
+  state.metrics.airNetworkUnpoweredVents = lifeSupportCoverage.unpoweredVents;
+  state.metrics.disconnectedAirDuctTiles = lifeSupportCoverage.disconnectedAirDuctTiles;
+  state.metrics.averageAirNetworkDistance = lifeSupportCoverage.averageAirNetworkDistance;
   state.metrics.hydroponicsStaffed = state.crewMembers.filter(
     (c) =>
       !c.resting &&
@@ -13421,6 +13586,11 @@ function computeMetrics(state: StationState): void {
   } else if (state.metrics.poorLifeSupportTiles > 0 && state.ops.lifeSupportActive > 0) {
     roomWarnings.unshift('life-support coverage: distant rooms');
   }
+  if (state.metrics.airNetworkUnpoweredVents > 0) {
+    roomWarnings.unshift(`air network: ${state.metrics.airNetworkUnpoweredVents} unpowered vent${state.metrics.airNetworkUnpoweredVents === 1 ? '' : 's'}`);
+  } else if (state.metrics.disconnectedAirDuctTiles > 0) {
+    roomWarnings.unshift('air network: disconnected duct segments');
+  }
   if (state.metrics.visitorServiceExposurePenaltyPerMin > 0.02) {
     roomWarnings.unshift('layout friction: visitors see back-of-house routes');
   }
@@ -13585,11 +13755,31 @@ export {
   expandMap
 } from './expansion';
 
+export {
+  IMPLEMENTED_UTILITY_UNDERLAY_KINDS,
+  UTILITY_UNDERLAY_KINDS,
+  canPlaceUtilityUnderlay,
+  clearUtilityUnderlayAt,
+  copyUtilityUnderlayAt,
+  createEmptyUtilityUnderlay,
+  createUtilityUnderlayFromLayers,
+  discoverUtilityNetworks,
+  ensureUtilityUnderlay,
+  hasUtilityUnderlay,
+  isUtilityUnderlayKind,
+  setUtilityUnderlayTile,
+  utilityLayerSignature,
+  utilityUnderlayNeighborMask,
+  utilityUnderlayShapeForMask,
+  utilityUnderlayTileCount
+} from './utility-underlay';
+
 export function setTile(state: StationState, index: number, tile: TileType): void {
   const previousTile = state.tiles[index];
   if (previousTile === tile) return;
   state.tiles[index] = tile;
   if (!isWalkable(tile)) {
+    clearUtilityUnderlayAt(state, index);
     state.dirtByTile[index] = 0;
     state.dirtSourceByTile[index] = 0;
     const moduleId = state.moduleOccupancyByTile[index];

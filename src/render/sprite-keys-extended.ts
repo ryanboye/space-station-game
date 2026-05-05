@@ -116,6 +116,10 @@ export const HULL_WEAR_SPRITE_KEYS = [
   'overlay.wall.hull_wear.2'
 ] as const;
 
+export const UTILITY_UNDERLAY_SPRITE_KEYS = {
+  airDuctTile: 'overlay.utility.air_duct_tile'
+} as const;
+
 // Dock facade is 4 canonical sprites (authored in NORTH orientation).
 // East/south/west render-time-rotated from the same set. seb's review pass
 // caught that the gen pipeline silently duplicated 14 of 16 direction-specific

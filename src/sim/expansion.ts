@@ -23,6 +23,7 @@ import {
   fromIndex,
   toIndex
 } from './types';
+import { remapUtilityUnderlayState } from './utility-underlay';
 
 export type ExpandMapFailureReason =
   | 'already_expanded_direction'
@@ -115,6 +116,15 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   state.airQualityByTile = airQualityByTile;
   state.heatByTile = heatByTile;
   state.staleAirByTile = staleAirByTile;
+  state.utilityUnderlay = remapUtilityUnderlayState(
+    state.utilityUnderlay,
+    oldWidth,
+    oldHeight,
+    newWidth,
+    newHeight,
+    shiftX,
+    shiftY
+  );
   state.dirtByTile = dirtByTile;
   state.dirtSourceByTile = dirtSourceByTile;
 

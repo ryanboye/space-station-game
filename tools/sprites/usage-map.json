@@ -52,6 +52,7 @@
     "module.wall_light",
     "module.water_fountain",
     "module.workbench",
+    "overlay.utility.air_duct_tile",
     "overlay.dock.facade.east.end",
     "overlay.dock.facade.east.middle",
     "overlay.dock.facade.east.solo",

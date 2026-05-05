@@ -26,6 +26,7 @@ import {
 } from './content/command';
 import { createInitialUnlockState } from './content/unlocks';
 import { MAP_CONDITION_VERSION } from './map-conditions';
+import { createEmptyUtilityUnderlay } from './utility-underlay';
 import {
   CREW_PRIORITY_PRESET_WEIGHTS,
   CYCLE_DURATION,
@@ -184,6 +185,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     heatByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(42),
     staleAirByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
+    utilityUnderlay: createEmptyUtilityUnderlay(GRID_WIDTH * GRID_HEIGHT),
     dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
     dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
     mapConditionVersion: MAP_CONDITION_VERSION,
@@ -495,6 +497,11 @@ export function createInitialState(options?: { seed?: number }): StationState {
       hotTiles: 0,
       staleAirTiles: 0,
       coolingLoad: 0,
+      airNetworkCount: 0,
+      airNetworkPoweredVents: 0,
+      airNetworkUnpoweredVents: 0,
+      disconnectedAirDuctTiles: 0,
+      averageAirNetworkDistance: 0,
       thermalPenaltyPerMin: 0,
       thermalPenaltyTotal: 0,
       maintenanceDebtAvg: 0,

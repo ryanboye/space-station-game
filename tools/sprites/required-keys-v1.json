@@ -94,6 +94,7 @@
   "module.telescope",
   "module.water_fountain",
   "module.plant",
+  "overlay.utility.air_duct_tile",
   "ship.tourist",
   "ship.trader",
   "ship.industrial",

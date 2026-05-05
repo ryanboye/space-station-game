@@ -42,6 +42,7 @@ Every system doc follows the same shape:
 | `16-roadmap-part-1-living-actors-jobs.md` | Part 1: reservations, providers, logistics, job board, roles, residents |
 | `17-roadmap-part-2-utilities-hazards-sanitation.md` | Part 2: access, districts, utilities, hazards, maintenance, sanitation |
 | `18-roadmap-part-3-command-map-contracts.md` | Part 3: command center, system map, contracts, station identity, incidents |
+| `22-reputation-property-value-and-security.md` | Reputation, property value, crime pressure, and security plan |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions

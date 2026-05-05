@@ -28,7 +28,9 @@ import {
   buyRawFoodDetailed,
   buildStationExpansionOnTruss,
   cancelConstructionAtTile,
+  canPlaceUtilityUnderlay,
   canExpandDirection,
+  clearUtilityUnderlayAt,
   createInitialState,
   diagnoseFoodChain,
   expandMap,
@@ -37,6 +39,8 @@ import {
   getCrewInspectorById,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
+  getAirDuctNetworkDiagnostics,
+  getUtilityUnderlayTileDiagnostic,
   getMaintenanceTileDiagnostic,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
@@ -53,6 +57,7 @@ import {
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
+  isUtilityUnderlayKind,
   hireCrew,
   hireStaffRole,
   planModuleConstruction,
@@ -75,6 +80,7 @@ import {
   setZone,
   tick,
   setTile,
+  setUtilityUnderlayTile,
   tryPlaceModuleWithCredits,
   trySetTileWithCredits,
   getCrewPriorityPresetWeights,
@@ -105,6 +111,7 @@ import {
   type StaffDepartment,
   type StaffRole,
   type SpecialtyId,
+  type UtilityUnderlayKind,
   ModuleType,
   RoomType,
   TILE_SIZE,
@@ -353,6 +360,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
+        <button class="tool-btn" data-tool-utility-underlay="air-duct" title="Draw underfloor Air Ducts — connect Life Support to wall Vents"><span class="tool-key">·</span>Air Duct</button>
+        <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Duct</button>
         <button class="tool-btn" data-tool-cancel-construction="1" title="Cancel build orders by dragging over blueprints"><span class="tool-key">·</span>Cancel Build</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
@@ -446,6 +455,7 @@ app.innerHTML = `
         <span class="tool-row-label diagnostic-row-label">Diagnostics</span>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Hide diagnostic heatmaps">Diagnostics: OFF</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show life-support coverage heatmap">Air Coverage</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="utility-underlay" title="Show underfloor utility networks and air-duct connectivity">Air Network</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="thermal" title="Show heat and stale-air pressure">Thermal</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show visitor status heatmap">Visitor Status</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
@@ -921,6 +931,7 @@ const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   none: 'Diagnostics',
   'life-support': 'Air Coverage',
+  'utility-underlay': 'Air Network',
   thermal: 'Thermal',
   'visitor-status': 'Visitor Status',
   'resident-comfort': 'Resident Comfort',
@@ -933,6 +944,7 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
   'life-support',
+  'utility-underlay',
   'thermal',
   'visitor-status',
   'resident-comfort',
@@ -980,6 +992,16 @@ function diagnosticReadoutText(): string {
     if (diagnostic.noActiveSource) return `${globalLine}\n${diagnosticHoverPrefix()}: no active source; oxygen risk.`;
     if (!diagnostic.reachable) return `${globalLine}\n${diagnosticHoverPrefix()}: disconnected from active air.`;
     return `${globalLine}\n${diagnosticHoverPrefix()}: distance ${diagnostic.distance ?? 0}; ${diagnostic.poorCoverage ? 'poor room readiness' : 'covered'}.`;
+  }
+  if (overlay === 'utility-underlay') {
+    const air = getAirDuctNetworkDiagnostics(state);
+    const globalLine = `Air Network: air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered | poor ${state.metrics.poorLifeSupportTiles} | ${air.networkCount} networks | powered vents ${state.metrics.airNetworkPoweredVents} | unpowered ${state.metrics.airNetworkUnpoweredVents} | disconnected duct ${air.disconnectedTileCount}`;
+    if (hoveredTile === null) return `${globalLine}\nAir reach is tinted underneath the ducts. Draw Air Ducts from active Life Support to wall Vent service tiles.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getUtilityUnderlayTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no utility sample.`;
+    const network = diagnostic.componentId !== null ? `network ${diagnostic.componentId}` : 'no network';
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.reason}; ${network}; ${diagnostic.effect}; fix: ${diagnostic.fix}.`;
   }
   if (overlay === 'maintenance') {
     const globalLine = `Maintenance: max ${state.metrics.maintenanceDebtMax.toFixed(0)}% | open ${state.metrics.maintenanceJobsOpen}`;
@@ -1070,6 +1092,20 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
           { color: '#ee4f4f', label: 'Disconnected or no active air source' }
         ]
       };
+    case 'utility-underlay': {
+      const air = getAirDuctNetworkDiagnostics(state);
+      return {
+        title: 'Air Network',
+        stats: `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles} | networks ${air.networkCount} | powered vents ${state.metrics.airNetworkPoweredVents}`,
+        rows: [
+          { color: '#37d3e6', label: 'Air reach tint underneath' },
+          { color: '#6edb8f', label: 'Life Support source duct' },
+          { color: '#61c8ff', label: 'Powered Air Duct' },
+          { color: '#a7f3ff', label: 'Wall Vent output connection' },
+          { color: '#ee4f4f', label: 'Disconnected duct or unpowered vent' }
+        ]
+      };
+    }
     case 'visitor-status':
       return {
         title: 'Visitor Status',
@@ -2501,6 +2537,13 @@ function refreshAlertPanel(): void {
   else if (state.metrics.mealStock < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${Math.round(state.metrics.mealStock)}` });
   if (state.metrics.airQuality < 35) alerts.push({ tone: 'danger', text: `Oxygen low: ${Math.round(state.metrics.airQuality)}%` });
   if (state.metrics.airBlockedWarningActive) alerts.push({ tone: 'danger', text: 'Life support blocked' });
+  if (state.metrics.airNetworkUnpoweredVents > 0) {
+    alerts.push({ tone: 'warn', text: `Air network: ${state.metrics.airNetworkUnpoweredVents} unpowered vent${state.metrics.airNetworkUnpoweredVents === 1 ? '' : 's'}` });
+  } else if (state.metrics.disconnectedAirDuctTiles > 0) {
+    alerts.push({ tone: 'warn', text: `Air network: ${state.metrics.disconnectedAirDuctTiles} disconnected duct tile${state.metrics.disconnectedAirDuctTiles === 1 ? '' : 's'}` });
+  }
+  if (state.metrics.thermalMax >= 86) alerts.push({ tone: 'danger', text: `Thermal critical: max ${Math.round(state.metrics.thermalMax)}%` });
+  else if (state.metrics.staleAirTiles > 0) alerts.push({ tone: 'warn', text: `Stale air: ${state.metrics.staleAirTiles} tile${state.metrics.staleAirTiles === 1 ? '' : 's'}` });
   if (state.metrics.powerDemand > state.metrics.powerSupply) alerts.push({ tone: 'danger', text: 'Power deficit' });
   else if (state.metrics.loadPct > 85) alerts.push({ tone: 'warn', text: `Power load high: ${Math.round(state.metrics.loadPct)}%` });
   if (state.metrics.leakingTiles > 0 || state.metrics.pressurizationPct < 85) {
@@ -3511,6 +3554,9 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
   public: ZoneType.Public,
   restricted: ZoneType.Restricted,
 };
+const TOOLBAR_UTILITY_UNDERLAY_MAP: Record<string, UtilityUnderlayKind> = {
+  'air-duct': 'air-duct'
+};
 const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   bridge: RoomType.Bridge,
   cafeteria: RoomType.Cafeteria,
@@ -3699,6 +3745,7 @@ function refreshModulePaletteSprites(): void {
 
 function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'copy-room' || tool.kind === 'paste-room') return 'structure';
+  if (tool.kind === 'utility-underlay') return 'structure';
   if (tool.kind === 'room') return 'rooms';
   if (tool.kind === 'module') return 'modules';
   if (tool.kind === 'hire-staff') return 'crew';
@@ -3712,6 +3759,7 @@ function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'copy-room') return 'copy-room';
   if (tool.kind === 'paste-room') return 'paste-room';
   if (tool.kind === 'module') return `module:${tool.module}`;
+  if (tool.kind === 'utility-underlay') return `utility:${tool.utilityKind}:${tool.utilityErase ? 'erase' : 'draw'}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
   if (tool.kind === 'cancel-construction') return 'cancel-construction';
   if (tool.kind === 'hire-staff') return `hire-staff:${tool.staffRole}`;
@@ -3778,6 +3826,7 @@ function wireToolbar(): void {
       const roomCopyKey = btn.dataset.toolRoomCopy;
       const roomPasteKey = btn.dataset.toolRoomPaste;
       const moduleKey = btn.dataset.toolModule;
+      const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
       const rotateKey = btn.dataset.toolRotate;
       const deselectKey = btn.dataset.toolDeselect;
       const cancelConstructionKey = btn.dataset.toolCancelConstruction;
@@ -3803,6 +3852,19 @@ function wireToolbar(): void {
       } else if (moduleKey) {
         const module = TOOLBAR_MODULE_MAP[moduleKey];
         if (module !== undefined) selectModuleTool(module);
+      } else if (utilityUnderlayKey) {
+        if (utilityUnderlayKey === 'erase') {
+          currentTool = { kind: 'utility-underlay', utilityKind: 'air-duct', utilityErase: true };
+          state.controls.diagnosticOverlay = 'utility-underlay';
+          toolLockMessage = '';
+        } else {
+          const utilityKind = TOOLBAR_UTILITY_UNDERLAY_MAP[utilityUnderlayKey];
+          if (utilityKind !== undefined && isUtilityUnderlayKind(utilityKind)) {
+            currentTool = { kind: 'utility-underlay', utilityKind };
+            state.controls.diagnosticOverlay = 'utility-underlay';
+            toolLockMessage = '';
+          }
+        }
       } else if (cancelConstructionKey) {
         currentTool = { kind: 'cancel-construction' };
         toolLockMessage = '';
@@ -3829,6 +3891,7 @@ function refreshToolbar(): void {
     const roomCopyKey = btn.dataset.toolRoomCopy;
     const roomPasteKey = btn.dataset.toolRoomPaste;
     const moduleKey = btn.dataset.toolModule;
+    const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
     const cancelConstructionKey = btn.dataset.toolCancelConstruction;
     let active = false;
@@ -3878,6 +3941,17 @@ function refreshToolbar(): void {
       } else if (module === ModuleType.None) {
         // Clear-module button is always available + active when currentTool is module:None
         if (toolKind === 'module' && currentTool.module === ModuleType.None) active = true;
+      }
+    } else if (utilityUnderlayKey) {
+      if (utilityUnderlayKey === 'erase') {
+        active = toolKind === 'utility-underlay' && currentTool.utilityErase === true;
+      } else {
+        const utilityKind = TOOLBAR_UTILITY_UNDERLAY_MAP[utilityUnderlayKey];
+        active =
+          utilityKind !== undefined &&
+          toolKind === 'utility-underlay' &&
+          currentTool.utilityKind === utilityKind &&
+          currentTool.utilityErase !== true;
       }
     }
     btn.classList.toggle('active', active);
@@ -4899,6 +4973,26 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
     for (let x = minX; x <= maxX; x++) {
       paintTiles.push(toIndex(x, y, state.width));
     }
+  }
+
+  if (currentTool.kind === 'utility-underlay') {
+    const kind = currentTool.utilityKind ?? 'air-duct';
+    let changed = 0;
+    let blocked = 0;
+    for (const idx of paintTiles) {
+      const ok = currentTool.utilityErase
+        ? clearUtilityUnderlayAt(state, idx, kind)
+        : canPlaceUtilityUnderlay(state, kind, idx) && setUtilityUnderlayTile(state, kind, idx, true);
+      if (ok) changed++;
+      else if (!currentTool.utilityErase && !canPlaceUtilityUnderlay(state, kind, idx)) blocked++;
+    }
+    state.controls.diagnosticOverlay = 'utility-underlay';
+    if (changed > 0) {
+      toolLockMessage = `${currentTool.utilityErase ? 'Erased' : 'Drew'} ${changed} ${kind} tile${changed === 1 ? '' : 's'}.`;
+    } else if (blocked > 0) {
+      toolLockMessage = `${kind} can only be drawn under walkable station tiles.`;
+    }
+    return;
   }
 
   if (currentTool.kind === 'tile') {
