@@ -55,6 +55,7 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.cargo_arm': { w: 2, h: 2 },
   'module.fire_extinguisher': { w: 1, h: 1 },
   'module.vent': { w: 1, h: 1 },
+  'module.insulation_panel': { w: 1, h: 1 },
   'module.vending_machine': { w: 1, h: 1 },
   'module.bench': { w: 2, h: 1 },
   'module.bar_counter': { w: 2, h: 1 },

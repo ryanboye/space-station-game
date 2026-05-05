@@ -28,6 +28,7 @@ import {
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getRoomEnvironmentTileDiagnostic,
+  getThermalTileDiagnostic,
   hireStaffRole,
   mapConditionAt,
   mapConditionSamplesAt,
@@ -1184,6 +1185,124 @@ function testRepairJobClearsDebtBelowRequeueThreshold(): void {
   assertCondition(state.usageTotals.maintenanceJobsResolved > 0, 'Completed repair should increment maintenance resolution counters.');
 }
 
+function placeHabitatAirlocks(state: StationState): void {
+  const points: Array<[number, number]> = [
+    [44, 17],
+    [4, 17],
+    [24, 4],
+    [24, 30]
+  ];
+  for (const [x, y] of points) {
+    const idx = toIndex(x, y, state.width);
+    setTile(state, idx, TileType.Airlock);
+    setRoom(state, idx, RoomType.None);
+  }
+}
+
+function firstHullMaintenanceDebt(state: StationState) {
+  return state.maintenanceDebts.find((debt) => debt.domain === 'hull');
+}
+
+function testDebrisRiskDrivesExteriorMaintenanceWear(): void {
+  const state = createInitialState({ seed: 91202 });
+  buildHabitat(state);
+  runFor(state, 240);
+
+  const hullDebts = state.maintenanceDebts
+    .filter((debt) => debt.domain === 'hull')
+    .map((debt) => ({ debt, risk: mapConditionAt(state, 'debris-risk', debt.anchorTile) }))
+    .sort((a, b) => a.risk - b.risk);
+  assertCondition(hullDebts.length >= 2, 'Exterior hull maintenance should discover multiple coalesced hull targets.');
+  const sheltered = hullDebts[0];
+  const exposed = hullDebts[hullDebts.length - 1];
+  assertCondition(
+    exposed.debt.debt > sheltered.debt.debt + 1,
+    `High debris hull should wear faster (${exposed.debt.debt.toFixed(1)} vs ${sheltered.debt.debt.toFixed(1)}).`
+  );
+}
+
+function testExteriorRepairBlocksWithoutAirlock(): void {
+  const state = createInitialState({ seed: 91203 });
+  buildHabitat(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 8;
+  state.metrics.materials = 8;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 82;
+  runFor(state, 18);
+
+  const job = state.jobs.find((candidate) => candidate.type === 'repair' && candidate.repairTargetKey === debt!.key);
+  assertCondition(!!job, 'Exterior hull debt should create a repair job.');
+  assertCondition(job!.repairExterior === true, 'Exterior hull repair should be marked as EVA work.');
+  assertCondition(
+    job!.blockedReason === 'no airlock for EVA repair' || job!.blockedReason === 'no airlock EVA route',
+    `Exterior repair without an airlock should explain the block, got ${job!.blockedReason ?? 'none'}.`
+  );
+}
+
+function testEvaRepairReducesExteriorMaintenanceDebt(): void {
+  const state = createInitialState({ seed: 91204 });
+  buildHabitat(state);
+  placeHabitatAirlocks(state);
+  state.crew.total = 1;
+  state.controls.materialAutoImportEnabled = false;
+  state.legacyMaterialStock = 12;
+  state.metrics.materials = 12;
+  runFor(state, 1);
+  const debt = firstHullMaintenanceDebt(state);
+  assertCondition(!!debt, 'Expected hull maintenance target to exist.');
+  debt!.debt = 84;
+  const startingDebt = debt!.debt;
+  runFor(state, 90);
+
+  const currentDebt = state.maintenanceDebts.find((entry) => entry.key === debt!.key)?.debt ?? 100;
+  const finishedRepair = state.jobs.some((job) => job.type === 'repair' && job.repairTargetKey === debt!.key && job.state === 'done');
+  assertCondition(currentDebt < startingDebt - 20, `EVA repair should reduce exterior debt (${currentDebt.toFixed(1)} from ${startingDebt}).`);
+  assertCondition(finishedRepair || currentDebt < 30, 'Exterior repair should either finish or clear below the warning band.');
+}
+
+function testEntropyMaintenanceScenarioActivatesMechanicalPath(): void {
+  const state = createInitialState({ seed: 91205 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  runFor(state, 1);
+
+  assertCondition(
+    state.command.completedSpecialties.includes('mechanical-maintenance'),
+    'Maintenance scenario should complete the mechanical-maintenance specialty.'
+  );
+  assertCondition(state.command.departments.mechanical.active, 'Maintenance scenario should activate the Mechanical Department.');
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt >= 45),
+    'Maintenance scenario should seed exterior maintenance pressure.'
+  );
+  assertCondition(state.controls.diagnosticOverlay === 'maintenance', 'Maintenance scenario should open the maintenance overlay.');
+}
+
+function testOldSaveExteriorMaintenanceStartsFromEmptyDebt(): void {
+  const state = createInitialState({ seed: 91206 });
+  const applied = applyColdStartScenario(state, 'entropy-maintenance');
+  assertCondition(applied, 'entropy-maintenance fixture should exist in COLD_START_SCENARIOS.');
+  state.maintenanceDebts = [];
+  state.controls.paused = false;
+  state.controls.simSpeed = 4;
+
+  tick(state, 60);
+
+  assertCondition(state.maintenanceDebts.length > 0, 'Loaded saves without 19-2 debt entries should discover maintenance targets.');
+  assertCondition(
+    state.metrics.maintenanceDebtMax > 1,
+    `Loaded saves should show visible early maintenance drift, got max ${state.metrics.maintenanceDebtMax.toFixed(1)}%.`
+  );
+  assertCondition(
+    state.maintenanceDebts.some((debt) => debt.exterior && debt.debt > 1),
+    'Loaded saves should begin accumulating exterior debris maintenance debt.'
+  );
+}
+
 function addSealedIsolatedDorm(state: StationState): number {
   for (let x = 34; x <= 38; x++) {
     setTile(state, toIndex(x, 23, state.width), TileType.Wall);
@@ -1354,6 +1473,237 @@ function testMapConditionsAreDeterministicAndSeeded(): void {
   assertCondition(
     firstSamples.some((sample, index) => Math.abs(sample.value - differentSamples[index].value) > 0.015),
     'Different map seeds should change at least one local condition value.'
+  );
+}
+
+function testMapConditionsPreserveWorldContinuityOnExpansion(): void {
+  const state = createInitialState({ seed: 91021 });
+  const oldTile = toIndex(18, 14, state.width);
+  const before = mapConditionSamplesAt(state, oldTile);
+  state.metrics.credits = 100000;
+
+  const expanded = expandMap(state, 'north');
+  assertCondition(expanded.ok, 'North expansion should succeed for map-condition continuity.');
+  const remappedTile = toIndex(18, 14 + 40, state.width);
+  const after = mapConditionSamplesAt(state, remappedTile);
+
+  for (let i = 0; i < before.length; i++) {
+    assertCondition(before[i].kind === after[i].kind, 'Expansion should preserve map-condition sample ordering.');
+    assertCondition(
+      Math.abs(before[i].value - after[i].value) < 0.000001,
+      `Expansion should preserve ${before[i].kind} at the remapped world tile.`
+    );
+  }
+}
+
+function findThermalCandidateTile(
+  state: StationState,
+  score: (tile: number) => number,
+  mode: 'max' | 'min',
+  requireWallNeighbor = false
+): number {
+  let bestTile = -1;
+  let bestScore = mode === 'max' ? -Infinity : Infinity;
+  for (let y = 5; y < state.height - 5; y++) {
+    for (let x = 5; x < state.width - 5; x++) {
+      const tile = toIndex(x, y, state.width);
+      if (state.tiles[tile] !== TileType.Floor) continue;
+      if (requireWallNeighbor) {
+        const neighbors = [
+          toIndex(x - 1, y, state.width),
+          toIndex(x + 1, y, state.width),
+          toIndex(x, y - 1, state.width),
+          toIndex(x, y + 1, state.width)
+        ];
+        if (!neighbors.some((n) => state.tiles[n] === TileType.Wall)) continue;
+      }
+      const value = score(tile);
+      if ((mode === 'max' && value > bestScore) || (mode === 'min' && value < bestScore)) {
+        bestScore = value;
+        bestTile = tile;
+      }
+    }
+  }
+  assertCondition(bestTile >= 0, 'Expected to find a thermal candidate tile.');
+  return bestTile;
+}
+
+function prepareThermalTestStation(seed: number): StationState {
+  const state = createInitialState({ seed });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  placeCrewAtSystemAnchor(state, toIndex(9, 6, state.width), 'life-support');
+  return state;
+}
+
+function testSunlitHighLoadRoomWarmsMoreThanShadedRoom(): void {
+  const state = prepareThermalTestStation(19303);
+  const brightTile = findThermalCandidateTile(
+    state,
+    (tile) => mapConditionAt(state, 'sunlight', tile) - mapConditionAt(state, 'thermal-sink', tile) * 0.3,
+    'max'
+  );
+  const shadedTile = findThermalCandidateTile(
+    state,
+    (tile) => mapConditionAt(state, 'sunlight', tile) - mapConditionAt(state, 'thermal-sink', tile) * 0.3,
+    'min'
+  );
+  setRoom(state, brightTile, RoomType.Kitchen);
+  setRoom(state, shadedTile, RoomType.Kitchen);
+
+  runFor(state, 80, 4);
+
+  const bright = state.heatByTile[brightTile];
+  const shaded = state.heatByTile[shadedTile];
+  assertCondition(
+    bright > shaded + 6,
+    `Sunlit high-load tile should warm more than shaded tile (bright ${bright.toFixed(1)}, shaded ${shaded.toFixed(1)}).`
+  );
+  const pos = fromIndex(brightTile, state.width);
+  const diagnostic = getThermalTileDiagnostic(state, pos.x, pos.y);
+  assertCondition(!!diagnostic && diagnostic.heat >= bright - 0.5, 'Thermal tile diagnostic should expose live heat.');
+}
+
+function placeNearbyWallModule(state: StationState, floorTile: number, module: ModuleType): void {
+  const pos = fromIndex(floorTile, state.width);
+  const candidates = [
+    { x: pos.x, y: pos.y - 1 },
+    { x: pos.x, y: pos.y + 1 },
+    { x: pos.x - 1, y: pos.y },
+    { x: pos.x + 1, y: pos.y }
+  ];
+  for (const candidate of candidates) {
+    const tile = toIndex(candidate.x, candidate.y, state.width);
+    if (state.tiles[tile] !== TileType.Wall) continue;
+    placeModuleOrThrow(state, module, candidate.x, candidate.y);
+    return;
+  }
+  throw new Error(`No adjacent wall found for module ${module} near ${pos.x},${pos.y}.`);
+}
+
+function testVentReducesStaleAirPressure(): void {
+  const baseline = prepareThermalTestStation(19304);
+  const target = findThermalCandidateTile(baseline, (tile) => fromIndex(tile, baseline.width).x, 'max', true);
+  setRoom(baseline, target, RoomType.Dorm);
+
+  const vented = prepareThermalTestStation(19304);
+  setRoom(vented, target, RoomType.Dorm);
+  placeNearbyWallModule(vented, target, ModuleType.Vent);
+
+  runFor(baseline, 80, 4);
+  runFor(vented, 80, 4);
+
+  assertCondition(
+    vented.staleAirByTile[target] < baseline.staleAirByTile[target] - 6,
+    `Vent should reduce stale-air pressure (baseline ${baseline.staleAirByTile[target].toFixed(1)}, vented ${vented.staleAirByTile[target].toFixed(1)}).`
+  );
+}
+
+function testInsulationReducesSunlightHeatTransfer(): void {
+  const baseline = prepareThermalTestStation(19305);
+  const target = findThermalCandidateTile(
+    baseline,
+    (tile) => mapConditionAt(baseline, 'sunlight', tile),
+    'max'
+  );
+  const targetPos = fromIndex(target, baseline.width);
+  const wallTile = toIndex(targetPos.x, targetPos.y - 1, baseline.width);
+  setTile(baseline, wallTile, TileType.Wall);
+  setRoom(baseline, wallTile, RoomType.None);
+  setRoom(baseline, target, RoomType.Kitchen);
+
+  const insulated = prepareThermalTestStation(19305);
+  setTile(insulated, wallTile, TileType.Wall);
+  setRoom(insulated, wallTile, RoomType.None);
+  setRoom(insulated, target, RoomType.Kitchen);
+  placeModuleOrThrow(insulated, ModuleType.InsulationPanel, targetPos.x, targetPos.y - 1);
+
+  runFor(baseline, 80, 4);
+  runFor(insulated, 80, 4);
+
+  assertCondition(
+    insulated.heatByTile[target] < baseline.heatByTile[target] - 0.75,
+    `Insulation should reduce sun heat transfer (baseline ${baseline.heatByTile[target].toFixed(1)}, insulated ${insulated.heatByTile[target].toFixed(1)}).`
+  );
+}
+
+function testThermalPenaltiesRemainBounded(): void {
+  const state = prepareThermalTestStation(19306);
+  const target = findThermalCandidateTile(state, (tile) => mapConditionAt(state, 'sunlight', tile), 'max');
+  setRoom(state, target, RoomType.Workshop);
+
+  runFor(state, 160, 4);
+
+  assertCondition(state.metrics.thermalMax <= 100, 'Thermal max should remain bounded at 100.');
+  assertCondition(state.metrics.thermalAvg >= 0, 'Thermal average should remain non-negative.');
+  assertCondition(Number.isFinite(state.metrics.thermalPenaltyTotal), 'Thermal penalty should stay finite.');
+}
+
+function testFireAftermathAddsThermalLoad(): void {
+  const baseline = prepareThermalTestStation(193065);
+  const target = findThermalCandidateTile(baseline, (tile) => mapConditionAt(baseline, 'sunlight', tile), 'min');
+  setRoom(baseline, target, RoomType.Dorm);
+
+  const aftermath = prepareThermalTestStation(193065);
+  setRoom(aftermath, target, RoomType.Dorm);
+  aftermath.dirtByTile[target] = 82;
+  aftermath.dirtSourceByTile[target] = 7;
+
+  runFor(baseline, 80, 4);
+  runFor(aftermath, 80, 4);
+
+  assertCondition(
+    aftermath.heatByTile[target] > baseline.heatByTile[target] + 1,
+    `Fire aftermath should add residual heat load (baseline ${baseline.heatByTile[target].toFixed(1)}, aftermath ${aftermath.heatByTile[target].toFixed(1)}).`
+  );
+  const pos = fromIndex(target, aftermath.width);
+  const diagnostic = getThermalTileDiagnostic(aftermath, pos.x, pos.y);
+  assertCondition(!!diagnostic && diagnostic.cause.includes('fire aftermath'), 'Thermal diagnostic should explain fire aftermath heat.');
+}
+
+function testThermalStatePersistsThroughSaveLoad(): void {
+  const state = prepareThermalTestStation(19307);
+  const target = findThermalCandidateTile(state, (tile) => mapConditionAt(state, 'sunlight', tile), 'max');
+  setRoom(state, target, RoomType.Kitchen);
+  state.heatByTile[target] = 77.4;
+  state.staleAirByTile[target] = 42.2;
+  state.mapWorldOriginX = -12;
+  state.mapWorldOriginY = 8;
+
+  const payload = serializeSave('thermal', state, 'sim-tests');
+  const parsed = parseAndMigrateSave(payload);
+  assertCondition(parsed.ok, 'Thermal save should parse.');
+  if (!parsed.ok) return;
+  const loaded = hydrateStateFromSave(parsed.save).state;
+
+  assertCondition(Math.abs(loaded.heatByTile[target] - 77.4) < 0.2, 'Heat should survive save/load.');
+  assertCondition(Math.abs(loaded.staleAirByTile[target] - 42.2) < 0.2, 'Stale air should survive save/load.');
+  assertCondition(loaded.mapWorldOriginX === -12 && loaded.mapWorldOriginY === 8, 'Map-condition world origin should survive save/load.');
+}
+
+function testEntropyThermalScenarioFixture(): void {
+  const state = createInitialState({ seed: 19308 });
+  const applied = applyColdStartScenario(state, 'entropy-thermal');
+  assertCondition(applied, 'Entropy thermal scenario should be registered.');
+  assertCondition(state.controls.diagnosticOverlay === 'thermal', 'Entropy thermal scenario should open with the Thermal overlay.');
+  assertCondition(
+    state.moduleInstances.some((module) => module.type === ModuleType.InsulationPanel),
+    'Entropy thermal scenario should include insulation panels.'
+  );
+
+  runFor(state, 5, 1);
+
+  assertCondition(state.metrics.thermalMax > 50, 'Entropy thermal scenario should start with visible thermal pressure.');
+  const kitchenTile = state.rooms.findIndex((room) => room === RoomType.Kitchen);
+  const inspector = getRoomInspectorAt(state, kitchenTile);
+  assertCondition(!!inspector?.thermal, 'Entropy thermal scenario kitchen should expose thermal inspector data.');
+
+  state.controls.simSpeed = 4;
+  runFor(state, 30, 1);
+
+  assertCondition(
+    state.metrics.hotTiles > 0 && state.metrics.thermalMax >= 72,
+    'Entropy thermal scenario should retain hot tiles after running at 4x.'
   );
 }
 
@@ -2574,6 +2924,22 @@ function testDemoStationRoomsPressurized(): void {
   }
 }
 
+function testEntropySanitationScenarioFixture(): void {
+  const state = createInitialState({ seed: 5019 });
+  const applied = applyColdStartScenario(state, 'entropy-sanitation');
+  assertCondition(applied, 'entropy-sanitation fixture should exist in COLD_START_SCENARIOS.');
+
+  runFor(state, 1);
+
+  assertCondition(state.controls.diagnosticOverlay === 'sanitation', 'Entropy sanitation fixture should open on the sanitation overlay.');
+  assertCondition(state.metrics.dirtyTiles > 0, 'Entropy sanitation fixture should seed visible dirty tiles.');
+  assertCondition(state.metrics.sanitationJobsOpen > 0, 'Entropy sanitation fixture should create cleaning pressure.');
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Entropy sanitation fixture should start with an active Sanitation Department (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+}
+
 function testDoorsArePressureBarriers(): void {
   // Sealed room + one door must pressurize — doors are airlocks, not leaks.
   const state = createInitialState({ seed: 9001 });
@@ -3664,6 +4030,11 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   runFor(state, 4, 0.5);
   assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
   assertCondition(hireStaffRole(state, 'janitor'), 'Janitor should be hireable after sanitation specialty completion.');
+  state.metrics.credits = 500;
+  assertCondition(
+    selectSpecialty(state, 'security-command'),
+    'Completing the sanitation specialty should reopen the next branch choice.'
+  );
   const payload = serializeSave('command-roundtrip', state, 'sim-tests');
   const parsed = parseAndMigrateSave(payload);
   assertCondition(parsed.ok, 'Command save should parse.');
@@ -3673,6 +4044,68 @@ function testSpecialtyUnlocksRoleHiringAndSaveRoundtrip(): void {
   assertCondition(
     loaded.command.completedSpecialties.includes('sanitation-program'),
     'Completed command specialties should roundtrip.'
+  );
+}
+
+function testDepartmentRuntimeActivationRule(): void {
+  const state = createInitialState({ seed: 43101 });
+  state.metrics.credits = 800;
+  tick(state, 0);
+
+  assertCondition(
+    state.command.departments.sanitation.active === false,
+    'Sanitation department should be inactive at cold start.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'specialty-not-completed',
+    'Initial sanitation inactive reason should point to missing specialty.'
+  );
+  assertCondition(
+    !isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should be department-owned before the sanitation branch completes.'
+  );
+
+  assertCondition(hireStaffRole(state, 'captain'), 'Captain should be hireable.');
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.command.active === true,
+    `Command department should be active with a hired, reachable captain (reason: ${state.command.departments.command.inactiveReason}).`
+  );
+
+  assertCondition(selectSpecialty(state, 'sanitation-program'), 'Sanitation specialty should be selectable.');
+  state.command.specialtyProgress['sanitation-program'].progress = 0.99;
+  state.controls.paused = false;
+  runFor(state, 3, 0.5);
+  assertCondition(hireStaffRole(state, 'sanitation-officer'), 'Sanitation officer should approve researched sanitation specialty.');
+  tick(state, 0);
+  assertCondition(
+    state.command.completedSpecialties.includes('sanitation-program'),
+    'Sanitation specialty should be completed before activation can proceed.'
+  );
+  assertCondition(
+    isModuleUnlocked(state, ModuleType.SanitationTerminal),
+    'Sanitation terminal should unlock from department branch completion rather than old tier copy.'
+  );
+  assertCondition(
+    state.command.departments.sanitation.inactiveReason === 'no-terminal',
+    `Without a SanitationTerminal in the active Bridge, inactive reason should be no-terminal (got ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  const placed = tryPlaceModule(state, ModuleType.SanitationTerminal, toIndex(49, 34, state.width));
+  assertCondition(placed.ok, `Sanitation terminal should place in the active Bridge (${placed.reason ?? 'unknown'}).`);
+  tick(state, 0);
+  assertCondition(
+    state.command.departments.sanitation.active === true,
+    `Sanitation department should activate with officer, active Bridge, terminal, and reachability (reason: ${state.command.departments.sanitation.inactiveReason}).`
+  );
+
+  setTile(state, toIndex(50, 36, state.width), TileType.Floor);
+  tick(state, 0);
+  assertCondition(state.ops.bridgeActive === 0, 'Removing the starter Bridge door should make the Bridge operationally inactive.');
+  assertCondition(
+    state.command.departments.sanitation.active === false &&
+      state.command.departments.sanitation.inactiveReason === 'no-bridge',
+    `Sanitation department should not stay active when the Bridge is inactive (reason: ${state.command.departments.sanitation.inactiveReason}).`
   );
 }
 
@@ -5550,12 +5983,25 @@ function run(): void {
   testCrewAtUtilityReducesMaintenanceDebt();
   testRepairSuppliesImproveMaintenanceRepairSpeed();
   testRepairJobClearsDebtBelowRequeueThreshold();
+  testDebrisRiskDrivesExteriorMaintenanceWear();
+  testExteriorRepairBlocksWithoutAirlock();
+  testEvaRepairReducesExteriorMaintenanceDebt();
+  testEntropyMaintenanceScenarioActivatesMechanicalPath();
+  testOldSaveExteriorMaintenanceStartsFromEmptyDebt();
   testLifeSupportCoverageDetectsDisconnectedWing();
   testLifeSupportDiagnosticHelperDetectsDisconnectedWing();
   testVisitorStatusDiagnosticHelperHighlightsIndustrialAdjacency();
   testResidentComfortDiagnosticHelperHighlightsServiceNoise();
   testMaintenanceDiagnosticHelperReportsUtilityDebt();
   testMapConditionsAreDeterministicAndSeeded();
+  testMapConditionsPreserveWorldContinuityOnExpansion();
+  testSunlitHighLoadRoomWarmsMoreThanShadedRoom();
+  testVentReducesStaleAirPressure();
+  testInsulationReducesSunlightHeatTransfer();
+  testThermalPenaltiesRemainBounded();
+  testFireAftermathAddsThermalLoad();
+  testThermalStatePersistsThroughSaveLoad();
+  testEntropyThermalScenarioFixture();
   testSanitationDiagnosticsJobsAndCrewCleanup();
   testSanitationCleansDirtyModuleTilesFromAdjacentFloor();
   testSanitationPersistsAndRemapsOnExpansion();
@@ -5595,6 +6041,7 @@ function run(): void {
   testActivationChecksPreserved();
   testDoorsArePressureBarriers();
   testDemoStationRoomsPressurized();
+  testEntropySanitationScenarioFixture();
   testReactorInspectorReportsRealPressurizationPct();
   testLegacyBalanceSanity();
   testJobMetricsConsistency();
@@ -5627,6 +6074,7 @@ function run(): void {
   testSaveRoundtripLayoutAndResources();
   testStarterBridgeCaptainAndSpecialtyResearch();
   testSpecialtyUnlocksRoleHiringAndSaveRoundtrip();
+  testDepartmentRuntimeActivationRule();
   testSaveLoadRegeneratesRuntimeEntities();
   testSaveLoadBestEffortMigration();
   testSaveRoundtripLifetimeCountersSurvive();

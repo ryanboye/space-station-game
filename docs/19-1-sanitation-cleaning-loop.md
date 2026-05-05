@@ -1,8 +1,21 @@
 # 19-1 Sanitation And Cleaning Loop
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
-Status: implementation spec. This is the first proposed slice from `docs/19-entropy-drift-seeded-build-pressure.md`.
+Status: v1 implemented. This is the first shipped slice from `docs/19-entropy-drift-seeded-build-pressure.md`; future work should start from `19-2` / `19-3` rather than expanding sanitation v1.
+
+## Implementation Status
+
+- [x] Per-tile dirt and compact source state.
+- [x] Room-level sanitation diagnostics.
+- [x] Traffic/meal/hygiene/kitchen/hydroponics/market/fire/body dirt sources where those systems exist.
+- [x] Coalesced sanitation jobs with duplicate suppression and crew execution.
+- [x] Sanitation overlay, hover readout, live grime decals, and cache invalidation.
+- [x] Room inspector cause/effect/fix rows.
+- [x] Station Ops, Jobs, workforce lane, and alert integration.
+- [x] Mild visitor/resident/rating effects.
+- [x] Save/load and map-expansion remapping.
+- [x] `?scenario=entropy-sanitation` playtest fixture.
 
 ## Goal
 

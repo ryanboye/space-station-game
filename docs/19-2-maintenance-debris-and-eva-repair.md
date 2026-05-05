@@ -1,8 +1,8 @@
 # 19-2 Maintenance, Debris, And EVA Repair
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
-Status: implementation spec. This is the second proposed slice from `docs/19-entropy-drift-seeded-build-pressure.md`.
+Status: v1 implemented. This is the second shipped slice from `docs/19-entropy-drift-seeded-build-pressure.md`; use `docs/19-2-implementation-checklist.md` for verification notes and any follow-up balance concerns.
 
 ## Goal
 

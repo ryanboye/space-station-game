@@ -48,6 +48,7 @@
     "module.terminal",
     "module.vending_machine",
     "module.vent",
+    "module.insulation_panel",
     "module.wall_light",
     "module.water_fountain",
     "module.workbench",

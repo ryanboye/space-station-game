@@ -61,6 +61,7 @@ export type DiagnosticOverlay =
   | 'none'
   | 'life-support'
   | 'map-conditions'
+  | 'thermal'
   | 'visitor-status'
   | 'resident-comfort'
   | 'service-noise'
@@ -181,6 +182,9 @@ export enum ModuleType {
   // fresh-air coverage in a radius. Lets the player extend air to a remote
   // wing without putting a second LS room there.
   Vent = 'vent',
+  // Wall-mounted thermal insulation panel. Reduces sunlight heat transfer and
+  // exterior thermal swings for nearby room tiles.
+  InsulationPanel = 'insulation-panel',
   // Vending machine: 1x1 leisure module placed in any social room
   // (Cafeteria, Lounge, Market, RecHall). Visitors in Leisure state on this
   // tile spend extra credits per second (small but visible bonus). Gives the
@@ -399,6 +403,21 @@ export interface SpecialtyProgress {
   completedAt: number | null;
 }
 
+export type DepartmentInactiveReason =
+  | 'specialty-not-completed'
+  | 'no-officer'
+  | 'no-bridge'
+  | 'no-terminal'
+  | 'unreachable';
+
+export interface DepartmentRuntime {
+  active: boolean;
+  inactiveReason: DepartmentInactiveReason | null;
+  officerRole: StaffRole | null;
+  terminal: ModuleType | null;
+  specialty: SpecialtyId | null;
+}
+
 export interface CommandState {
   selectedSpecialty: SpecialtyId | null;
   completedSpecialties: SpecialtyId[];
@@ -409,6 +428,7 @@ export interface CommandState {
     activeTerminalStaff: number;
     requiredTerminalStaff: number;
   };
+  departments: Record<StaffDepartment, DepartmentRuntime>;
 }
 export type CrewPriorityPreset = 'balanced' | 'life-support' | 'food-chain' | 'economy';
 export type CrewPrioritySystem =
@@ -425,12 +445,30 @@ export type CrewPrioritySystem =
 export type CrewPriorityWeights = Record<CrewPrioritySystem, number>;
 export type CrewTaskKind = 'critical_post' | 'post' | 'logistics';
 export type MaintenanceSystem = 'reactor' | 'life-support';
+export type MaintenanceDomain = 'utility' | 'module' | 'hull' | 'dock' | 'berth' | 'door' | 'vent';
+export type MaintenanceSource =
+  | 'idle'
+  | 'high-load'
+  | 'debris'
+  | 'traffic'
+  | 'heat'
+  | 'fire-aftermath'
+  | 'construction';
 export interface MaintenanceDebt {
   key: string;
-  system: MaintenanceSystem;
+  system?: MaintenanceSystem;
+  domain?: MaintenanceDomain;
+  source?: MaintenanceSource;
   anchorTile: number;
+  targetTile?: number;
+  room?: RoomType;
+  moduleId?: number;
+  exterior?: boolean;
+  label?: string;
+  effect?: string;
   debt: number;
   lastServicedAt: number;
+  lastImpactAt?: number;
   // Time when debt first crossed the fire-ignition threshold. Reset to 0 when
   // debt drops back under the threshold. Used to require a grace window before
   // a sustained spike actually catches fire.
@@ -464,11 +502,51 @@ export interface RoomEnvironmentTileDiagnostic extends RoomEnvironmentScore {
   residentDiscomfort: number;
 }
 
-export interface MaintenanceTileDiagnostic {
-  system: MaintenanceSystem;
+export type ThermalSeverity = 'comfortable' | 'warm' | 'hot' | 'overheated' | 'severe';
+
+export interface ThermalTileDiagnostic {
+  tileIndex: number;
+  heat: number;
+  staleAir: number;
+  severity: ThermalSeverity;
+  sunlight: number;
+  shadow: number;
+  thermalSink: number;
+  cooling: number;
+  insulation: number;
+  ventRelief: number;
+  lifeSupportDistance: number | null;
+  cause: string;
+  effect: string;
+  fix: string;
+}
+
+export interface ThermalRoomDiagnostic {
+  room: RoomType;
   anchorTile: number;
+  averageHeat: number;
+  maxHeat: number;
+  averageStaleAir: number;
+  maxStaleAir: number;
+  severity: ThermalSeverity;
+  dominantCause: string;
+  effect: string;
+  fix: string;
+}
+
+export interface MaintenanceTileDiagnostic {
+  system?: MaintenanceSystem;
+  domain: MaintenanceDomain;
+  source: MaintenanceSource;
+  anchorTile: number;
+  targetTile: number;
+  exterior: boolean;
+  label: string;
+  effect: string;
+  fix: string;
   debt: number;
   outputMultiplier: number;
+  debrisRisk: number;
 }
 
 export type RoutePressureDominant = 'visitor' | 'resident' | 'crew' | 'logistics' | null;
@@ -659,6 +737,11 @@ export interface TransportJob {
   // anchor), stand and reduce maintenance debt for that cluster. Item fields
   // are unused for repair jobs but kept for shape compatibility.
   repairSystem?: MaintenanceSystem;
+  repairTargetKey?: string;
+  repairTargetLabel?: string;
+  repairDomain?: MaintenanceDomain;
+  repairSource?: MaintenanceSource;
+  repairExterior?: boolean;
   repairProgress?: number;
   repairSupplyChecked?: boolean;
   repairSuppliesUsed?: number;
@@ -1214,6 +1297,13 @@ export interface Metrics {
   serviceNoiseNearDorms: number;
   visitorEnvironmentPenaltyPerMin: number;
   residentEnvironmentStressPerMin: number;
+  thermalAvg: number;
+  thermalMax: number;
+  hotTiles: number;
+  staleAirTiles: number;
+  coolingLoad: number;
+  thermalPenaltyPerMin: number;
+  thermalPenaltyTotal: number;
   maintenanceDebtAvg: number;
   maintenanceDebtMax: number;
   maintenanceJobsOpen: number;
@@ -1350,6 +1440,7 @@ export interface RoomInspector {
   };
   flowHints?: string[];
   environment?: RoomEnvironmentScore;
+  thermal?: ThermalRoomDiagnostic;
   routePressure?: {
     activePaths: number;
     pressuredTiles: number;
@@ -1633,6 +1724,8 @@ export interface StationState {
   // state.rng. Mirrored into state.system.seedAtCreation when the
   // system rolls.
   seedAtCreation: number;
+  mapWorldOriginX: number;
+  mapWorldOriginY: number;
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
   pressurized: boolean[];
@@ -1641,6 +1734,10 @@ export interface StationState {
   // resident) read this instead of metrics.airQuality so a sealed-off wing
   // becomes locally lethal even when the station-wide average looks fine.
   airQualityByTile: Float32Array;
+  // Per-tile comfort heat and stale-air pressure, 0..100. These stay separate
+  // from oxygen/survival air quality so Air Coverage remains readable.
+  heatByTile: Float32Array;
+  staleAirByTile: Float32Array;
   // Per-tile sanitation drift, 0..100. Dirt sources are stored as compact
   // codes for hover/inspector diagnostics and are reset to none when a tile
   // is cleaned or rebuilt.
@@ -1764,6 +1861,7 @@ export interface StationState {
     crewPublicInterference: number;
     visitorEnvironmentPenalty: number;
     residentEnvironmentStress: number;
+    thermalPenalty: number;
     maintenanceJobsResolved: number;
     sanitationJobsResolved: number;
     ratingFromSanitation: number;

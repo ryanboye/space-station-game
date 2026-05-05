@@ -78,6 +78,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   const moduleOccupancyByTile = new Array<number | null>(newWidth * newHeight).fill(null);
   const pressurized = new Array<boolean>(newWidth * newHeight).fill(false);
   const airQualityByTile = new Float32Array(newWidth * newHeight).fill(100);
+  const heatByTile = new Float32Array(newWidth * newHeight).fill(42);
+  const staleAirByTile = new Float32Array(newWidth * newHeight);
   const dirtByTile = new Float32Array(newWidth * newHeight);
   const dirtSourceByTile = new Uint8Array(newWidth * newHeight);
 
@@ -93,6 +95,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
       moduleOccupancyByTile[newIndex] = state.moduleOccupancyByTile[oldIndex];
       pressurized[newIndex] = state.pressurized[oldIndex];
       airQualityByTile[newIndex] = state.airQualityByTile[oldIndex];
+      heatByTile[newIndex] = state.heatByTile[oldIndex] ?? 42;
+      staleAirByTile[newIndex] = state.staleAirByTile[oldIndex] ?? 0;
       dirtByTile[newIndex] = state.dirtByTile[oldIndex];
       dirtSourceByTile[newIndex] = state.dirtSourceByTile[oldIndex];
     }
@@ -109,6 +113,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   state.moduleOccupancyByTile = moduleOccupancyByTile;
   state.pressurized = pressurized;
   state.airQualityByTile = airQualityByTile;
+  state.heatByTile = heatByTile;
+  state.staleAirByTile = staleAirByTile;
   state.dirtByTile = dirtByTile;
   state.dirtSourceByTile = dirtSourceByTile;
 
@@ -175,10 +181,20 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   }));
   state.maintenanceDebts = state.maintenanceDebts.map((debt) => {
     const anchorTile = remapIndex(debt.anchorTile);
+    const targetTile = debt.targetTile !== undefined ? remapIndex(debt.targetTile) : anchorTile;
+    const domain = debt.domain ?? (debt.system ? 'utility' : 'module');
+    const key =
+      domain === 'utility' && debt.system
+        ? maintenanceKey(debt.system, anchorTile)
+        : debt.moduleId !== undefined
+          ? `${domain}:module:${debt.moduleId}`
+          : `${domain}:${anchorTile}`;
     return {
       ...debt,
       anchorTile,
-      key: maintenanceKey(debt.system, anchorTile)
+      targetTile,
+      domain,
+      key
     };
   });
   state.arrivingShips = state.arrivingShips.map((ship) => ({
@@ -200,6 +216,8 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
 
   state.mapExpansion.purchased[direction] = true;
   state.mapExpansion.purchasesMade += 1;
+  state.mapWorldOriginX += direction === 'west' ? -EXPANSION_STEP_TILES : 0;
+  state.mapWorldOriginY += direction === 'north' ? -EXPANSION_STEP_TILES : 0;
 
   bumpTopologyVersion(state);
   rebuildDockEntities(state);

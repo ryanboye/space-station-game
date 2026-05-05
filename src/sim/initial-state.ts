@@ -19,6 +19,7 @@
 
 import { MODULE_DEFINITIONS } from './balance';
 import {
+  createInitialDepartments,
   createInitialSpecialtyProgress,
   createInitialStaffRoleCounts,
   totalStaffCount
@@ -148,6 +149,9 @@ export function createInitialState(options?: { seed?: number }): StationState {
       roomHousingPolicies[idx] = 'crew';
     }
   }
+  const starterBridgeDoor = toIndex(starterFloorMinX + 5, starterFloorMinY + 2, GRID_WIDTH);
+  tiles[starterBridgeDoor] = TileType.Door;
+  rooms[starterBridgeDoor] = RoomType.Bridge;
   addStarterModule(ModuleType.CaptainConsole, starterFloorMinX + 1, starterFloorMinY, 0);
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
@@ -172,10 +176,14 @@ export function createInitialState(options?: { seed?: number }): StationState {
     berthConfigs: [],
     system,
     seedAtCreation: seed,
+    mapWorldOriginX: 0,
+    mapWorldOriginY: 0,
     laneProfiles,
     dockQueue: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
+    heatByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(42),
+    staleAirByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
     dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
     dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
     mapConditionVersion: MAP_CONDITION_VERSION,
@@ -198,7 +206,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
         captainConsoleStaffed: false,
         activeTerminalStaff: 0,
         requiredTerminalStaff: 1
-      }
+      },
+      departments: createInitialDepartments()
     },
     maintenanceDebts: [],
     arrivingShips: [],
@@ -481,6 +490,13 @@ export function createInitialState(options?: { seed?: number }): StationState {
       serviceNoiseNearDorms: 0,
       visitorEnvironmentPenaltyPerMin: 0,
       residentEnvironmentStressPerMin: 0,
+      thermalAvg: 0,
+      thermalMax: 0,
+      hotTiles: 0,
+      staleAirTiles: 0,
+      coolingLoad: 0,
+      thermalPenaltyPerMin: 0,
+      thermalPenaltyTotal: 0,
       maintenanceDebtAvg: 0,
       maintenanceDebtMax: 0,
       maintenanceJobsOpen: 0,
@@ -684,6 +700,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
       crewPublicInterference: 0,
       visitorEnvironmentPenalty: 0,
       residentEnvironmentStress: 0,
+      thermalPenalty: 0,
       maintenanceJobsResolved: 0,
       sanitationJobsResolved: 0,
       ratingFromSanitation: 0,

@@ -1,8 +1,8 @@
 # 20-1 Specialty Progression Reconciliation Checklist
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
-Status: implementation checklist. This file tracks the correction pass for `20-command-staff-tech-tree.md`, specifically the drift where old tier progression remained player-facing beside the new Specialty/Department system.
+Status: implemented for the first department slice. This file tracks the correction pass for `20-command-staff-tech-tree.md`, specifically the drift where old tier progression remained player-facing beside the new Specialty/Department system.
 
 ## Goal
 
@@ -29,16 +29,16 @@ Reconcile progression around the roadmap's existing language:
 
 ## Simulation Checklist
 
-- [ ] Add department state derived from specialty progress, officers, bridge rooms, and terminals.
-- [ ] Track department active/inactive status and reason.
-- [ ] Implement officer activation rule: hired officer + active Bridge + matching terminal + reachable officer.
+- [x] Add department state derived from specialty progress, officers, bridge rooms, and terminals.
+- [x] Track department active/inactive status and reason.
+- [x] Implement officer activation rule: hired officer + active Bridge + matching terminal + reachable officer.
 - [x] Stop using `unlockTier` as the player-facing specialty requirement.
 - [x] Replace specialty availability with branch-order rules.
 - [x] Keep only one active specialty at a time.
 - [x] Keep old tier state for save compatibility and existing progression counters during this correction pass.
-- [ ] Move room/module availability toward specialty/department ownership.
-- [ ] Keep Command/basic survival content always available.
-- [ ] Keep existing saves from crashing and infer sensible command/specialty state.
+- [x] Move room/module availability toward specialty/department ownership.
+- [x] Keep Command/basic survival content always available.
+- [x] Keep existing saves from crashing and infer sensible command/specialty state.
 
 ## Role Cleanup Checklist
 
@@ -58,13 +58,13 @@ Reconcile progression around the roadmap's existing language:
 - [x] Sanitation branch unlocks Sanitation Officer and Janitor hiring.
 - [x] Sanitation branch does not show Cleaner in Crew panel yet.
 - [x] Sanitation branch completion is not just a timer if a branch objective can be safely added.
-- [ ] Sanitation department active state checks officer + bridge + terminal + reachability.
-- [ ] Sanitation overlay/policy copy points to the Sanitation department rather than tiers.
+- [x] Sanitation department active state checks officer + bridge + terminal + reachability.
+- [x] Sanitation overlay/policy copy points to the Sanitation department rather than tiers.
 
 ## UI/Copy Checklist
 
 - [x] Replace `Requires Tier N` specialty copy with branch requirements.
-- [ ] Replace build/tool lock copy where practical with department requirements.
+- [x] Replace build/tool lock copy where practical with department requirements.
 - [x] Remove visible tier-roadmap copy from the progression modal.
 - [ ] Keep quest/task strip compatible, but prefer active specialty language when a specialty is selected.
 - [x] Crew Hiring panel uses personnel-card layout instead of flat text blocks.
@@ -86,7 +86,7 @@ Reconcile progression around the roadmap's existing language:
 - [x] Browser Crew panel hides deferred locked roles.
 - [x] Browser Crew panel shows only currently hireable roles.
 - [x] Selecting a specialty keeps other branches unavailable while active.
-- [ ] Completing a specialty reopens next branch choice.
+- [x] Completing a specialty reopens next branch choice.
 
 ## Implementation Notes
 
