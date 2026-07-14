@@ -51,6 +51,7 @@ import {
   getRoomInspectorAt,
   getThermalTileDiagnostic,
   getUnlockTier,
+  getResidentHousingReadiness,
   getResidentInspectorById,
   getVisitorInspectorById,
   getNextExpansionCost,
@@ -2163,27 +2164,51 @@ function residentConversionStatusText(compact = false): string {
       : '';
   const setup =
     `beds ${state.metrics.residentPrivateBedsTotal} | berth ${state.metrics.residentBerthsTotal} | rating ${Math.round(state.metrics.stationRating)}`;
+  // "Why blocked" surface: the conversion pipeline only reports a blocked
+  // reason once a visitor actually exits and an attempt runs. If housing is
+  // misconfigured (or no visitor has departed yet), it would otherwise stall
+  // on a vague "waiting for eligible visitor exit" with no hint. Show the
+  // first unmet prerequisite proactively; the reactive result takes over once
+  // real attempts start producing outcomes.
+  const readiness = getResidentHousingReadiness(state);
+  const status = !readiness.ready
+    ? `blocked: ${readiness.reason}`
+    : state.metrics.residentConversionAttempts > 0
+      ? result
+      : readiness.reason;
   if (compact) {
-    return `${state.metrics.residentsCount} | ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${result}`;
+    return `${state.metrics.residentsCount} | ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${status}`;
   }
-  if (state.metrics.residentPrivateBedsTotal <= 0) {
-    return `Residents blocked: no private resident beds | ${setup}`;
+  if (!readiness.ready) {
+    return `Residents blocked: ${readiness.reason} | ${setup}`;
   }
-  if (state.metrics.residentBerthsTotal <= 0) {
-    return `Residents blocked: no residential berth | ${setup}`;
-  }
-  return `Residents ${state.metrics.residentsCount} | convert ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${result}${chance}${ship} | ${setup}`;
+  const lead =
+    state.metrics.residentConversionAttempts > 0
+      ? `Residents ${state.metrics.residentsCount} | convert ${state.metrics.residentConversionSuccesses}/${state.metrics.residentConversionAttempts} | ${result}`
+      : `Residents ${state.metrics.residentsCount} | ${readiness.reason}`;
+  return `${lead}${chance}${ship} | ${setup}`;
 }
 
 function crewOpsSummaryText(compact = false): string {
   const blocked = state.metrics.crewBlockedNoPath > 0 ? ` | Blocked ${state.metrics.crewBlockedNoPath}` : '';
+  // "Working" must include crew on logistics/hauling jobs — they are working,
+  // just not standing on a staffed post. Omitting them made the headline read
+  // "Working 0" while a dozen crew visibly hauled (they were bucketed as
+  // crewOnLogisticsJobs). Show the haul count so Working+Logistics+Idle+Resting
+  // reconciles with the roster.
   return compact
-    ? `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Resting ${state.metrics.crewResting}${blocked}`
+    ? `Working ${state.metrics.crewAssignedWorking} | Logistics ${state.metrics.crewOnLogisticsJobs} | Idle ${state.metrics.crewIdleAvailable} | Resting ${state.metrics.crewResting}${blocked}`
     : `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Logistics ${state.metrics.crewOnLogisticsJobs} | Resting ${state.metrics.crewResting}${blocked}`;
 }
 
 function trafficOpsSummaryText(): string {
-  return `Visitors ${state.metrics.visitorsCount} | Docked ${state.metrics.dockedShips} | Exits ${state.metrics.exitsPerMin}/min`;
+  const m = state.metrics;
+  const fails = m.visitFailuresThisCycle > 0 ? ` ${m.visitFailuresThisCycle} lost` : '';
+  const stall = m.visitorExitStalled ? ' | departures backing up' : '';
+  return (
+    `Visitors ${m.visitorsCount} | Docked ${m.dockedShips} | Exits ${m.exitsPerMin}/min | ` +
+    `Cycle: ${m.visitsThisCycle} done${fails} | rev $${Math.round(m.visitRevenueThisCycle)}${stall}`
+  );
 }
 
 function coreOpsSummaryText(): string {
@@ -2611,6 +2636,12 @@ function refreshAlertPanel(): void {
   }
   if (state.metrics.reputationHighRiskZones > 0) {
     alerts.push({ tone: 'warn', text: `High crime-pressure zones: ${state.metrics.reputationHighRiskZones}` });
+  }
+  if (state.metrics.visitorExitStalled) {
+    alerts.push({
+      tone: 'warn',
+      text: `Departures backing up: ${state.metrics.visitorsCount} visitors, no exits in 3 cycles — check exit route/berth distance`
+    });
   }
   if (state.metrics.incidentsOpen > 0) {
     const firstIncident = activeIncidentsForUi()[0];

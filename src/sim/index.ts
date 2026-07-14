@@ -40,6 +40,7 @@ export {
   getRoutePressureTileDiagnostic,
   getReputationTileDiagnostic,
   getReputationZoneScores,
+  getResidentHousingReadiness,
   getResidentInspectorById,
   getRoomEnvironmentTileDiagnostic,
   getRoomDiagnosticAt,

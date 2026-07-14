@@ -1138,6 +1138,7 @@ function clearTransientState(state: StationState): void {
   state.bodyTiles.length = 0;
   state.recentDeathTimes.length = 0;
   state.recentExitTimes.length = 0;
+  state.recentVisitLedger = [];
   state.clusterActivationState = new Map();
   state.effects.blockedUntilByTile = new Map();
   state.effects.trespassCooldownUntilByTile = new Map();

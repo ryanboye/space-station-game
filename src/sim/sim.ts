@@ -5691,6 +5691,43 @@ function privateHousingUnits(state: StationState): PrivateHousingUnit[] {
   return units;
 }
 
+// Proactive resident-conversion readiness. The conversion pipeline only sets
+// a blocked reason when a visitor actually exits and an attempt runs — so if
+// the housing prerequisites are wrong, the player sees nothing but "waiting
+// for eligible visitor exit" forever (the invisible T5 stall called out in
+// docs/99). This reports the FIRST unmet prerequisite using the exact same
+// predicates the conversion path gates on, so the hint can never drift from
+// the real requirement.
+export function getResidentHousingReadiness(state: StationState): { ready: boolean; reason: string } {
+  const dormClusters = roomClusters(state, RoomType.Dorm).filter((c) => c.length > 0);
+  if (dormClusters.length === 0) {
+    return { ready: false, reason: 'build a Dorm for private residents' };
+  }
+  const privateDormClusters = dormClusters.filter((c) =>
+    c.every((tile) => state.roomHousingPolicies[tile] === 'private_resident')
+  );
+  if (privateDormClusters.length === 0) {
+    return { ready: false, reason: 'set a Dorm to Private Housing policy' };
+  }
+  const hasPrivateBed = privateDormClusters.some((c) => {
+    const clusterSet = new Set(c);
+    return state.moduleInstances.some((m) => m.type === ModuleType.Bed && clusterSet.has(m.originTile));
+  });
+  if (!hasPrivateBed) {
+    return { ready: false, reason: 'add Beds to the private Dorm' };
+  }
+  if (privateHygieneTargets(state).length === 0) {
+    return { ready: false, reason: 'set a Hygiene room to Resident policy' };
+  }
+  if (privateHousingUnits(state).length === 0) {
+    return { ready: false, reason: 'connect Hygiene to the private cabins (no path)' };
+  }
+  if (state.docks.filter((d) => d.purpose === 'residential').length === 0) {
+    return { ready: false, reason: 'assign a Dock to Residential purpose' };
+  }
+  return { ready: true, reason: 'ready — waiting for an eligible visitor to convert' };
+}
+
 function assignedHousingBedIds(state: StationState): Set<number> {
   return new Set(state.residents.map((r) => r.bedModuleId).filter((id): id is number => id !== null));
 }
@@ -14419,6 +14456,22 @@ function computeMetrics(state: StationState): void {
     state.dockedShipsCompleted > 0 ? state.dockedTimeTotal / state.dockedShipsCompleted : 0;
   state.recentExitTimes = state.recentExitTimes.filter((t) => state.now - t <= 60);
   const exitsPerMin = state.recentExitTimes.length;
+  // Per-cycle visitor-economy ledger powering the STATION OPS ticker and the
+  // exit-stall alert. gross/fails are cumulative snapshots; the windowed delta
+  // against the oldest sample in a cycle gives "this cycle" revenue/failures.
+  const visitorGrossTotal = state.usageTotals.creditsMarketGross + state.usageTotals.creditsMealPayoutGross;
+  const visitorFailTotal = state.usageTotals.visitorServiceFailures;
+  state.recentVisitLedger.push({ at: state.now, gross: visitorGrossTotal, fails: visitorFailTotal });
+  state.recentVisitLedger = state.recentVisitLedger.filter((e) => state.now - e.at <= state.cycleDuration + 1);
+  const ledgerBase = state.recentVisitLedger[0];
+  state.metrics.visitsThisCycle = state.recentExitTimes.filter((t) => state.now - t <= state.cycleDuration).length;
+  state.metrics.visitRevenueThisCycle = ledgerBase ? Math.max(0, visitorGrossTotal - ledgerBase.gross) : 0;
+  state.metrics.visitFailuresThisCycle = ledgerBase ? Math.max(0, Math.round(visitorFailTotal - ledgerBase.fails)) : 0;
+  // Departures are backing up: visitors piling with no exit in ~3 cycles.
+  // Correct feedback for a too-far berth or a broken exit route, and it clears
+  // itself the moment the loop starts flowing again.
+  state.metrics.visitorExitStalled =
+    state.visitors.length >= 10 && !state.recentExitTimes.some((t) => state.now - t <= 45);
   const openIncidents = state.incidents.filter((incident) => isIncidentActive(incident)).length;
   const resolvedIncidents = state.usageTotals.securityResolved;
   const failedIncidents = state.usageTotals.incidentsFailed;

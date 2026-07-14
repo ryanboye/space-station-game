@@ -1254,6 +1254,10 @@ export interface Metrics {
   averageDockTime: number;
   bayUtilizationPct: number;
   exitsPerMin: number;
+  visitsThisCycle: number;
+  visitFailuresThisCycle: number;
+  visitRevenueThisCycle: number;
+  visitorExitStalled: boolean;
   shipsSkippedNoEligibleDock: number;
   shipsTimedOutInQueue: number;
   // Dock-migration v0: surfaced in alert panel ("trader ship waiting —
@@ -1927,6 +1931,11 @@ export interface StationState {
   lastPayrollAt: number;
   lastResidentTaxAt: number;
   recentExitTimes: number[];
+  // Rolling ledger of visitor economic outcomes for the "this cycle" HUD
+  // ticker. `gross`/`fails` are cumulative snapshots sampled once per metrics
+  // pass; windowed deltas give per-cycle revenue and failure counts. Transient
+  // (rebuilt at runtime), cleared on load like recentExitTimes.
+  recentVisitLedger: Array<{ at: number; gross: number; fails: number }>;
   dockedTimeTotal: number;
   dockedShipsCompleted: number;
   bodyTiles: number[];
