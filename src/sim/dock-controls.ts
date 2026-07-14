@@ -16,6 +16,8 @@ import {
 } from './sim';
 import {
   type BerthConfig,
+  type BerthScreeningLevel,
+  type CustomsPolicy,
   type DockEntity,
   type DockPurpose,
   RoomType,
@@ -103,7 +105,9 @@ function makeDefaultBerthConfig(anchorTile: number): BerthConfig {
   return {
     anchorTile,
     allowedShipTypes: [...ALL_SHIP_TYPES_FOR_BERTH],
-    allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH]
+    allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH],
+    screeningLevel: 'standard',
+    customsPolicy: 'routine'
   };
 }
 
@@ -176,6 +180,24 @@ export function setBerthAllowedShipSize(
   // Mirror dock invariant: never leave the size-allowlist empty.
   if (next.size === 0) next.add('small');
   cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
+}
+
+export function setBerthScreeningLevel(
+  state: StationState,
+  anchorTile: number,
+  screeningLevel: BerthScreeningLevel
+): void {
+  const cfg = ensureBerthConfig(state, anchorTile);
+  cfg.screeningLevel = screeningLevel;
+}
+
+export function setBerthCustomsPolicy(
+  state: StationState,
+  anchorTile: number,
+  customsPolicy: CustomsPolicy
+): void {
+  const cfg = ensureBerthConfig(state, anchorTile);
+  cfg.customsPolicy = customsPolicy;
 }
 
 export function validateDockPlacement(

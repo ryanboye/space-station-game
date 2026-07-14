@@ -2,6 +2,7 @@ import {
   createInitialState,
   setBerthAllowedShipSize,
   setBerthAllowedShipType,
+  setBerthScreeningLevel,
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockFacing,
@@ -11,6 +12,8 @@ import {
 } from './sim';
 import {
   type DockPurpose,
+  type BerthScreeningLevel,
+  type CustomsPolicy,
   type HousingPolicy,
   type ItemType,
   type MaintenanceDomain,
@@ -27,12 +30,14 @@ import {
   RoomType,
   type ShipSize,
   type ShipType,
+  type SecurityPosture,
   type SpaceLane,
   TileType,
   type StationState,
   type VisitorArchetype,
   ZoneType
 } from './types';
+import { setBerthCustomsPolicy } from './dock-controls';
 import {
   UTILITY_UNDERLAY_KINDS,
   createUtilityUnderlayFromLayers,
@@ -54,6 +59,9 @@ const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', '
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
+const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
+const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
+const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
 const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
@@ -113,6 +121,8 @@ export interface StationSnapshotV1 {
     anchorTile: number;
     allowedShipTypes: ShipType[];
     allowedShipSizes: ShipSize[];
+    screeningLevel?: BerthScreeningLevel;
+    customsPolicy?: CustomsPolicy;
   }>;
   resources: {
     credits: number;
@@ -140,6 +150,7 @@ export interface StationSnapshotV1 {
     materialAutoImportEnabled?: boolean;
     materialTargetStock?: number;
     materialImportBatchSize?: number;
+    securityPosture?: SecurityPosture;
   };
   unlocks: {
     tier: UnlockTier;
@@ -381,7 +392,9 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       .map((cfg) => ({
         anchorTile: cfg.anchorTile,
         allowedShipTypes: [...cfg.allowedShipTypes],
-        allowedShipSizes: [...cfg.allowedShipSizes]
+        allowedShipSizes: [...cfg.allowedShipSizes],
+        screeningLevel: cfg.screeningLevel ?? 'standard',
+        customsPolicy: cfg.customsPolicy ?? 'routine'
       }))
       .sort((a, b) => a.anchorTile - b.anchorTile),
     resources: {
@@ -406,7 +419,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       taxRate: state.controls.taxRate,
       materialAutoImportEnabled: state.controls.materialAutoImportEnabled,
       materialTargetStock: state.controls.materialTargetStock,
-      materialImportBatchSize: state.controls.materialImportBatchSize
+      materialImportBatchSize: state.controls.materialImportBatchSize,
+      securityPosture: state.controls.securityPosture
     },
     unlocks: {
       tier: state.unlocks.tier,
@@ -668,7 +682,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         allowedShipTypes:
           allowedShipTypes.length > 0 ? [...new Set(allowedShipTypes)] : ['tourist'],
         allowedShipSizes:
-          allowedShipSizes.length > 0 ? [...new Set(allowedShipSizes)] : ['small']
+          allowedShipSizes.length > 0 ? [...new Set(allowedShipSizes)] : ['small'],
+        screeningLevel: isOneOf(entry.screeningLevel, BERTH_SCREENING_LEVELS) ? entry.screeningLevel : 'standard',
+        customsPolicy: isOneOf(entry.customsPolicy, CUSTOMS_POLICIES) ? entry.customsPolicy : 'routine'
       });
     }
   }
@@ -775,6 +791,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
   let materialTargetStock = defaultState.controls.materialTargetStock;
   let materialImportBatchSize = defaultState.controls.materialImportBatchSize;
+  let securityPosture = defaultState.controls.securityPosture;
   if (isRecord(snapshotRaw.controls)) {
     shipsPerCycle = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.shipsPerCycle, shipsPerCycle)), 0, 3);
     taxRate = clamp(asFiniteNumber(snapshotRaw.controls.taxRate, taxRate), 0, 0.5);
@@ -783,6 +800,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
     materialTargetStock = clamp(asFiniteNumber(snapshotRaw.controls.materialTargetStock, materialTargetStock), 0, 500);
     materialImportBatchSize = clamp(asFiniteNumber(snapshotRaw.controls.materialImportBatchSize, materialImportBatchSize), 1, 160);
+    if (isOneOf(snapshotRaw.controls.securityPosture, SECURITY_POSTURES)) {
+      securityPosture = snapshotRaw.controls.securityPosture;
+    }
   } else {
     warnings.push('controls missing; defaulted.');
   }
@@ -995,7 +1015,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       taxRate,
       materialAutoImportEnabled,
       materialTargetStock,
-      materialImportBatchSize
+      materialImportBatchSize,
+      securityPosture
     },
     unlocks: {
       tier: unlockTier,
@@ -1316,6 +1337,8 @@ export function hydrateStateFromSave(
           berthConfig.allowedShipSizes.includes(shipSize)
         );
       }
+      setBerthScreeningLevel(next, berthConfig.anchorTile, berthConfig.screeningLevel ?? 'standard');
+      setBerthCustomsPolicy(next, berthConfig.anchorTile, berthConfig.customsPolicy ?? 'routine');
     }
   }
 
@@ -1396,6 +1419,7 @@ export function hydrateStateFromSave(
   next.controls.materialAutoImportEnabled = snapshot.controls.materialAutoImportEnabled ?? next.controls.materialAutoImportEnabled;
   next.controls.materialTargetStock = clamp(snapshot.controls.materialTargetStock ?? next.controls.materialTargetStock, 0, 500);
   next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
+  next.controls.securityPosture = snapshot.controls.securityPosture ?? next.controls.securityPosture;
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);

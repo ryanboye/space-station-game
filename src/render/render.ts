@@ -6,6 +6,7 @@ import {
   type DiagnosticOverlay,
   type LifeSupportCoverageDiagnostic,
   type RoutePressureDiagnostics,
+  type ReputationZoneScore,
   type ShipSize,
   type ShipType,
   type SpaceLane,
@@ -35,6 +36,8 @@ import {
   getMaintenanceTileDiagnostic,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
+  getReputationTileDiagnostic,
+  getReputationZoneScores,
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
   resolveWallLightFacing,
@@ -209,6 +212,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'g',
   [ModuleType.CustomsCounter]: 'c',
   [ModuleType.CargoArm]: 'X',
+  [ModuleType.SecurityCamera]: 'o',
+  [ModuleType.AccessGate]: '|',
   [ModuleType.FireExtinguisher]: 'F',
   [ModuleType.Vent]: 'V',
   [ModuleType.InsulationPanel]: 'I',
@@ -2624,6 +2629,16 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
           state.metrics.disconnectedAirDuctTiles
         ].join(':')
       : '';
+  const reputationKey =
+    overlay === 'reputation'
+      ? [
+          Math.round(state.metrics.reputationPrestigeAvg),
+          Math.round(state.metrics.reputationNotorietyAvg),
+          Math.round(state.metrics.reputationCrimePressureAvg),
+          state.metrics.reputationHighRiskZones,
+          state.incidents.map((incident) => `${incident.id}:${incident.stage}:${incident.tileIndex}:${Math.round(incident.severity * 10)}`).join(',')
+        ].join(':')
+      : '';
   return [
     overlay,
     state.width,
@@ -2643,7 +2658,8 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
     sanitationKey,
     mapKey,
     thermalKey,
-    utilityKey
+    utilityKey,
+    reputationKey
   ].join('|');
 }
 
@@ -2839,6 +2855,23 @@ function routePressureDiagnosticColor(
   }
 }
 
+function reputationDiagnosticColor(zone: ReputationZoneScore): string {
+  if (zone.crimePressure >= 65) {
+    const t = clamp01((zone.crimePressure - 55) / 45);
+    return mixRgba([255, 214, 92], [238, 79, 79], t, 0.24 + t * 0.22);
+  }
+  if (zone.prestige >= zone.notoriety + 8) {
+    const t = clamp01(zone.prestige / 82);
+    return mixRgba([82, 209, 167], [110, 219, 143], t, 0.16 + t * 0.18);
+  }
+  if (zone.notoriety >= zone.prestige + 6) {
+    const t = clamp01(zone.notoriety / 80);
+    return mixRgba([176, 124, 255], [255, 214, 92], t, 0.14 + t * 0.18);
+  }
+  const controlTint = clamp01(zone.control / 100);
+  return mixRgba([97, 200, 255], [255, 214, 92], clamp01(zone.value / 100), 0.11 + controlTint * 0.12);
+}
+
 function drawUtilityUnderlayDuct(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -3013,6 +3046,12 @@ function drawDiagnosticOverlayLayer(
   }
   const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
   const routePressureDiagnostics = overlay === 'route-pressure' ? getRoutePressureDiagnostics(state) : null;
+  const reputationByTile = new Map<number, ReputationZoneScore>();
+  if (overlay === 'reputation') {
+    for (const zone of getReputationZoneScores(state)) {
+      for (const tile of zone.tiles) reputationByTile.set(tile, zone);
+    }
+  }
   for (let i = 0; i < state.tiles.length; i++) {
     let color: string | null = null;
     if (overlay === 'life-support') {
@@ -3029,6 +3068,9 @@ function drawDiagnosticOverlayLayer(
     } else if (overlay === 'route-pressure') {
       if (!routePressureDiagnostics) continue;
       color = routePressureDiagnosticColor(state, i, routePressureDiagnostics);
+    } else if (overlay === 'reputation') {
+      const zone = reputationByTile.get(i);
+      color = zone ? reputationDiagnosticColor(zone) : null;
     } else {
       color = environmentDiagnosticColor(state, i, overlay);
     }
@@ -3144,6 +3186,13 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         color: '#ffd65c'
       };
     }
+    case 'reputation':
+      return {
+        title: 'Reputation',
+        line: `prestige ${state.metrics.reputationPrestigeAvg.toFixed(0)} | notoriety ${state.metrics.reputationNotorietyAvg.toFixed(0)} | risk ${state.metrics.reputationCrimePressureAvg.toFixed(0)}`,
+        scale: 'green prestige | gold/purple notoriety | red crime pressure',
+        color: '#52d1a7'
+      };
     case 'none':
       return null;
   }
@@ -3205,6 +3254,12 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic) return `hover ${pos.x},${pos.y}: no active planned routes`;
     return `hover ${pos.x},${pos.y}: total ${diagnostic.totalCount} | V${diagnostic.visitorCount} R${diagnostic.residentCount} C${diagnostic.crewCount} L${diagnostic.logisticsCount} | conflicts ${diagnostic.conflictScore}`;
+  }
+  if (overlay === 'reputation') {
+    const diagnostic = getReputationTileDiagnostic(state, pos.x, pos.y);
+    if (!diagnostic?.zone) return `hover ${pos.x},${pos.y}: no reputation zone`;
+    const zone = diagnostic.zone;
+    return `hover ${pos.x},${pos.y}: ${zone.label} ${zone.room} | P${zone.prestige.toFixed(0)} N${zone.notoriety.toFixed(0)} C${zone.control.toFixed(0)} risk ${zone.crimePressure.toFixed(0)} | ${zone.topDrivers.join(' | ')}`;
   }
   const diagnostic = getRoomEnvironmentTileDiagnostic(state, pos.x, pos.y);
   if (!diagnostic || diagnostic.sampledTiles <= 0) return `hover ${pos.x},${pos.y}: no room environment sample`;
@@ -3504,20 +3559,26 @@ function drawIncidentMarkers(
   visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
 ): void {
   for (const incident of state.incidents) {
-    if (incident.stage === 'resolved' || incident.stage === 'failed') continue;
     if (!tileInRange(incident.tileIndex, state, visibleTiles)) continue;
+    const settled = incident.stage === 'resolved' || incident.stage === 'failed';
     const p = fromIndex(incident.tileIndex, state.width);
     const cx = (p.x + 0.5) * TILE_SIZE;
     const cy = (p.y + 0.5) * TILE_SIZE;
     const pulse = (Math.sin(state.now * 6 + incident.id) + 1) * 0.5;
-    const urgency = incident.stage === 'dispatching' || incident.assignedCrewId === null ? 1 : 0.65;
-    const color = incident.type === 'fight' ? '#ff3f46' : '#ff9d3a';
-    const alpha = 0.34 + pulse * 0.2;
-    const ringRadius = TILE_SIZE * (0.58 + pulse * 0.22 + incident.severity * 0.04);
+    const urgency = settled ? 0.45 : incident.stage === 'dispatching' || incident.assignedCrewId === null ? 1 : 0.65;
+    const color = incident.stage === 'failed'
+      ? '#8ea2bd'
+      : incident.type === 'fight'
+        ? '#ff3f46'
+        : incident.type === 'theft'
+          ? '#ffe06a'
+          : '#ff9d3a';
+    const alpha = settled ? 0.18 : 0.34 + pulse * 0.2;
+    const ringRadius = TILE_SIZE * (settled ? 0.46 : 0.58 + pulse * 0.22 + incident.severity * 0.04);
 
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = incident.type === 'fight' ? `rgba(255, 63, 70, ${alpha * 0.45})` : `rgba(255, 157, 58, ${alpha * 0.42})`;
+    ctx.fillStyle = `rgba(255, 157, 58, ${alpha * 0.42})`;
     ctx.beginPath();
     ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
     ctx.fill();
@@ -3541,7 +3602,7 @@ function drawIncidentMarkers(
     ctx.textBaseline = 'middle';
     ctx.fillText('!', cx, cy + Math.round(0.5 * PX));
 
-    const label = `${incident.type === 'fight' ? 'FIGHT' : 'TRESPASS'} #${incident.id}`;
+    const label = `${incident.type === 'fight' ? 'FIGHT' : incident.type === 'theft' ? 'THEFT' : 'TRESPASS'} #${incident.id}`;
     const labelW = Math.max(Math.round(48 * PX), ctx.measureText(label).width + Math.round(8 * PX));
     const labelH = Math.round(11 * PX);
     ctx.fillStyle = 'rgba(8, 12, 18, 0.88)';

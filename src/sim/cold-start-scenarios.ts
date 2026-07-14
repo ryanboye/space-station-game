@@ -18,7 +18,7 @@ import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
-import { buyMaterials, buyRawFood, mapConditionAt, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import { buyMaterials, buyRawFood, mapConditionAt, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -63,6 +63,23 @@ function setScenarioCrew(state: StationState): void {
   state.command.officers['sanitation-officer'] = true;
 }
 
+function setReputationScenarioCrew(state: StationState): void {
+  const counts = createEmptyStaffRoleCounts();
+  counts.captain = 1;
+  counts['sanitation-officer'] = 1;
+  counts['security-officer'] = 1;
+  counts['security-guard'] = 2;
+  counts.janitor = 2;
+  counts.assistant = 7;
+  state.crew.roleCounts = counts;
+  state.crew.total = totalStaffCount(counts);
+  state.crew.free = state.crew.total;
+  state.crew.assigned = 0;
+  state.command.officers.captain = true;
+  state.command.officers['sanitation-officer'] = true;
+  state.command.officers['security-officer'] = true;
+}
+
 function setMaintenanceScenarioCrew(state: StationState): void {
   const counts = createEmptyStaffRoleCounts();
   counts.captain = 1;
@@ -98,6 +115,32 @@ function seedRoomThermalPressure(state: StationState, room: RoomType, heat: numb
     state.heatByTile[i] = Math.max(state.heatByTile[i] ?? 42, heat + sun * 8);
     state.staleAirByTile[i] = Math.max(state.staleAirByTile[i] ?? 0, staleAir);
   }
+}
+
+function roomClusterAnchorsForScenario(state: StationState, room: RoomType): number[] {
+  const seen = new Set<number>();
+  const anchors: number[] = [];
+  for (let i = 0; i < state.rooms.length; i++) {
+    if (seen.has(i) || state.rooms[i] !== room) continue;
+    const stack = [i];
+    seen.add(i);
+    let anchor = i;
+    while (stack.length > 0) {
+      const tile = stack.pop()!;
+      anchor = Math.min(anchor, tile);
+      const x = tile % GRID_WIDTH;
+      const y = Math.floor(tile / GRID_WIDTH);
+      for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+        if (nx < 0 || ny < 0 || nx >= GRID_WIDTH) continue;
+        const next = ny * GRID_WIDTH + nx;
+        if (next < 0 || next >= state.rooms.length || seen.has(next) || state.rooms[next] !== room) continue;
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+    anchors.push(anchor);
+  }
+  return anchors.sort((a, b) => a - b);
 }
 
 function drawAirDuctLine(state: StationState, x1: number, y1: number, x2: number, y2: number): void {
@@ -334,6 +377,45 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.metrics.credits = 5000;
     s.metrics.materials = 500;
     applyDemoStationOverlay(s);
+  },
+
+  'reputation-slice': (s) => {
+    unlockThrough(s, 3);
+    completeSpecialtyForScenario(s, 'sanitation-program');
+    completeSpecialtyForScenario(s, 'security-command');
+    setReputationScenarioCrew(s);
+    applyDemoStationOverlay(s);
+    paintRoom(s, 49, 31, 61, 38, RoomType.Bridge, 'north');
+    placeMod(s, 51, 33, ModuleType.CaptainConsole);
+    placeMod(s, 55, 33, ModuleType.SanitationTerminal);
+    placeMod(s, 58, 33, ModuleType.SecurityTerminal);
+    s.metrics.credits = 3500;
+    s.metrics.materials = 500;
+    s.controls.paused = false;
+    s.controls.simSpeed = 1;
+    s.controls.shipsPerCycle = 3;
+    s.controls.diagnosticOverlay = 'reputation';
+    // Two berth pockets: first is stricter/cleaner, second is open/cargo-heavy.
+    const berthAnchors = roomClusterAnchorsForScenario(s, RoomType.Berth);
+    if (berthAnchors[0] !== undefined) {
+      setBerthScreeningLevel(s, berthAnchors[0], 'strict');
+      setBerthCustomsPolicy(s, berthAnchors[0], 'selective');
+    }
+    if (berthAnchors[1] !== undefined) {
+      setBerthScreeningLevel(s, berthAnchors[1], 'open');
+      setBerthCustomsPolicy(s, berthAnchors[1], 'expedited');
+    }
+    s.controls.securityPosture = 'standard';
+    seedRoomDirt(s, RoomType.Market, 6, 28);
+    seedRoomDirt(s, RoomType.Cantina, 6, 34);
+    seedRoomDirt(s, RoomType.Workshop, 5, 42);
+    seedRoomDirt(s, RoomType.Storage, 5, 45);
+    seedRoomDirt(s, RoomType.LogisticsStock, 5, 48);
+    seedRoomDirt(s, RoomType.Berth, 5, 14);
+    // Keep the green-zone side visually legible against the red cargo/arrival pocket.
+    for (const room of [RoomType.Lounge, RoomType.Observatory, RoomType.Dorm]) {
+      seedRoomDirt(s, room, 0, 0);
+    }
   }
 };
 
@@ -552,6 +634,7 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 67, 22, ModuleType.Terminal);
   placeMod(state, 70, 22, ModuleType.Terminal);
   placeMod(state, 67, 26, ModuleType.Plant);
+  placeWallMod(state, 65, 23, ModuleType.SecurityCamera);
   // Reactor
   placeMod(state, 7, 33, ModuleType.WaterFountain);
   placeMod(state, 15, 33, ModuleType.FireExtinguisher);
@@ -566,9 +649,11 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 40, 34, ModuleType.CellConsole);
   placeMod(state, 43, 34, ModuleType.CellConsole);
   // Berths
+  placeMod(state, 68, 34, ModuleType.AccessGate);
   placeMod(state, 75, 33, ModuleType.Gangway);
   placeMod(state, 69, 33, ModuleType.CustomsCounter);
   placeMod(state, 73, 32, ModuleType.CargoArm);
+  placeMod(state, 68, 40, ModuleType.AccessGate);
   placeMod(state, 75, 40, ModuleType.Gangway);
   placeMod(state, 69, 40, ModuleType.CustomsCounter);
   placeMod(state, 73, 38, ModuleType.CargoArm);

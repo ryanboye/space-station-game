@@ -216,6 +216,18 @@ body {
   cursor: grabbing;
 }
 
+#game-wrap.inspect-mode #game {
+  cursor: default;
+}
+
+#game-wrap.build-mode #game {
+  cursor: crosshair;
+}
+
+#game-wrap.panning #game {
+  cursor: grabbing;
+}
+
 /* Persistent top-of-canvas status strip. Classic sim-game HUD vibe:
    compact one-liner pinned to the top edge, monospace numbers,
    semi-transparent dark bg so the map reads through on the margins.
@@ -1665,8 +1677,20 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
 }
 
 .alert-item {
+  display: block;
+  width: 100%;
   padding-left: 10px;
   border-left: 2px solid currentColor;
+  background: transparent;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  text-align: left;
+  cursor: default;
+}
+
+button.alert-item {
+  cursor: pointer;
 }
 
 .alert-item.warn {
@@ -1711,6 +1735,11 @@ details.overlay-card:not([open]) > summary.hud-card-title::after {
 .incident-item:hover {
   border-color: currentColor;
   background: rgba(255, 118, 118, 0.18);
+}
+
+.incident-item.is-selected {
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
 .incident-dot {

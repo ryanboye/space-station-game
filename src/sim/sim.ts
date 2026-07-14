@@ -45,6 +45,9 @@ import {
   type CrewPrioritySystem,
   type CrewWorkLane,
   type DepartmentRuntime,
+  type BerthScreeningLevel,
+  type CustomsPolicy,
+  type SecurityPosture,
   type WorkLaneMetrics,
   type CrewTaskCandidate,
   type CrewPriorityWeights,
@@ -56,6 +59,8 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH,
   type IncidentEntity,
+  type IncidentOutcome,
+  type IncidentSubjectKind,
   type HousingInspector,
   type IncidentType,
   type VisitorInspector,
@@ -95,6 +100,9 @@ import {
   type RoutePressureDiagnostics,
   type RoutePressureDominant,
   type RoutePressureTileDiagnostic,
+  type ReputationTileDiagnostic,
+  type ReputationZoneLabel,
+  type ReputationZoneScore,
   type SanitationRoomDiagnostic,
   type SanitationSource,
   type SanitationTileDiagnostic,
@@ -314,8 +322,14 @@ const INCIDENT_INTERVENTION_BASE_SEC = 0.8;
 const INCIDENT_INTERVENTION_PER_TILE_SEC = 0.3;
 const INCIDENT_CONGESTION_WEIGHT_SEC = 0.9;
 const INCIDENT_RESOLVED_RETENTION_SEC = 20;
+const INCIDENT_HOLD_SEC = 12;
+const INCIDENT_ESCORT_GRACE_SEC = 18;
+const INCIDENT_PURSUIT_GRACE_SEC = 20;
+const INCIDENT_THEFT_RESOLVE_WINDOW_SEC = 10;
 const SECURITY_AURA_RADIUS = 9;
 const SECURITY_AURA_MAX_SUPPRESSION_FLOOR = 0.35;
+const SECURITY_CAMERA_RADIUS = 7;
+const ACCESS_GATE_RADIUS = 7;
 const TRESPASS_TILE_COOLDOWN_SEC = 4;
 const RESIDENT_ROUTINE_DAY_SEC = 120;
 const RESIDENT_SOCIAL_DECAY_PER_SEC = 0.95;
@@ -2731,6 +2745,460 @@ export function getRoutePressureTileDiagnostic(
   return tileDiagnostic.totalCount > 0 ? tileDiagnostic : null;
 }
 
+const REPUTATION_ROOMS: RoomType[] = [
+  RoomType.Berth,
+  RoomType.Market,
+  RoomType.Cantina,
+  RoomType.Lounge,
+  RoomType.Observatory,
+  RoomType.Dorm,
+  RoomType.Hygiene,
+  RoomType.Workshop,
+  RoomType.Storage,
+  RoomType.LogisticsStock,
+  RoomType.Security,
+  RoomType.Brig,
+  RoomType.Cafeteria,
+  RoomType.RecHall,
+  RoomType.Kitchen,
+  RoomType.Hydroponics,
+  RoomType.LifeSupport,
+  RoomType.Reactor,
+  RoomType.Clinic
+];
+
+function reputationBaseForRoom(room: RoomType): { prestige: number; notoriety: number; value: number; opacity: number } {
+  switch (room) {
+    case RoomType.Observatory:
+      return { prestige: 72, notoriety: 12, value: 66, opacity: 30 };
+    case RoomType.Lounge:
+      return { prestige: 58, notoriety: 18, value: 48, opacity: 28 };
+    case RoomType.Market:
+      return { prestige: 44, notoriety: 24, value: 62, opacity: 26 };
+    case RoomType.Cantina:
+      return { prestige: 36, notoriety: 32, value: 52, opacity: 30 };
+    case RoomType.Dorm:
+      return { prestige: 46, notoriety: 14, value: 54, opacity: 46 };
+    case RoomType.Hygiene:
+      return { prestige: 34, notoriety: 12, value: 24, opacity: 48 };
+    case RoomType.Berth:
+      return { prestige: 34, notoriety: 30, value: 58, opacity: 26 };
+    case RoomType.Workshop:
+      return { prestige: 22, notoriety: 30, value: 52, opacity: 34 };
+    case RoomType.Storage:
+    case RoomType.LogisticsStock:
+      return { prestige: 18, notoriety: 34, value: 48, opacity: 38 };
+    case RoomType.Security:
+      return { prestige: 28, notoriety: 20, value: 18, opacity: 12 };
+    case RoomType.Brig:
+      return { prestige: 14, notoriety: 32, value: 20, opacity: 18 };
+    case RoomType.RecHall:
+      return { prestige: 34, notoriety: 26, value: 34, opacity: 24 };
+    case RoomType.Cafeteria:
+      return { prestige: 38, notoriety: 22, value: 36, opacity: 18 };
+    case RoomType.Kitchen:
+    case RoomType.Hydroponics:
+    case RoomType.LifeSupport:
+    case RoomType.Reactor:
+      return { prestige: 20, notoriety: 22, value: 30, opacity: 22 };
+    case RoomType.Clinic:
+      return { prestige: 42, notoriety: 8, value: 32, opacity: 18 };
+    default:
+      return { prestige: 20, notoriety: 20, value: 20, opacity: 20 };
+  }
+}
+
+function averageNumberForTiles(tiles: readonly number[], valueAt: (tile: number) => number): number {
+  if (tiles.length <= 0) return 0;
+  let total = 0;
+  for (const tile of tiles) total += valueAt(tile);
+  return total / tiles.length;
+}
+
+function nearbyActorCountForTiles(state: StationState, tiles: readonly number[]): number {
+  const tileSet = new Set(tiles);
+  let count = 0;
+  for (const visitor of state.visitors) if (tileSet.has(visitor.tileIndex)) count += 1;
+  for (const resident of state.residents) if (tileSet.has(resident.tileIndex)) count += 1;
+  return count;
+}
+
+function nearbyIncidentHeatForTiles(state: StationState, tiles: readonly number[]): number {
+  const tileSet = new Set(tiles);
+  let heat = 0;
+  for (const incident of state.incidents) {
+    const settledAge = incident.resolvedAt === null ? 0 : state.now - incident.resolvedAt;
+    if (incident.resolvedAt !== null && settledAge > 45) continue;
+    const decay = incident.resolvedAt === null ? 1 : clamp(1 - settledAge / 45, 0, 1);
+    const incidentTiles = [incident.tileIndex, incident.targetTile ?? -1, incident.brigTile ?? -1];
+    if (!incidentTiles.some((tile) => tileSet.has(tile))) continue;
+    const outcomePressure =
+      incident.stage === 'failed' || incident.outcome === 'escaped' || incident.outcome === 'fatality'
+        ? 2.1
+        : incident.stage === 'resolved'
+          ? 0.45
+          : 1.25;
+    heat += incident.severity * outcomePressure * decay;
+  }
+  return heat;
+}
+
+function moduleCountInTiles(state: StationState, tiles: readonly number[], modules: ModuleType[]): number {
+  const moduleSet = new Set(modules);
+  let count = 0;
+  for (const tile of tiles) if (moduleSet.has(state.modules[tile])) count += 1;
+  return count;
+}
+
+function berthScreeningForAnchor(state: StationState, anchorTile: number, tiles: readonly number[]): BerthScreeningLevel {
+  const cfg = findBerthConfigByAnchor(state, anchorTile);
+  if (cfg?.screeningLevel) return cfg.screeningLevel;
+  const customs = moduleCountInTiles(state, tiles, [ModuleType.CustomsCounter]);
+  const allowedTypeCount = cfg?.allowedShipTypes.length ?? ALL_SHIP_TYPES_FOR_BERTH.length;
+  if (customs > 0 && allowedTypeCount <= 2) return 'strict';
+  if (customs <= 0 && allowedTypeCount >= 4) return 'open';
+  return 'standard';
+}
+
+function customsPolicyForAnchor(state: StationState, anchorTile: number): CustomsPolicy {
+  return findBerthConfigByAnchor(state, anchorTile)?.customsPolicy ?? 'routine';
+}
+
+function customsPolicyProfile(policy: CustomsPolicy): {
+  control: number;
+  notoriety: number;
+  prestige: number;
+  value: number;
+  traffic: number;
+  visibleForce: number;
+} {
+  switch (policy) {
+    case 'selective':
+      return { control: 10, notoriety: -7, prestige: 2, value: 2, traffic: -0.5, visibleForce: 2 };
+    case 'expedited':
+      return { control: -6, notoriety: 9, prestige: -1, value: 8, traffic: 2, visibleForce: 0 };
+    case 'seizure':
+      return { control: 18, notoriety: 8, prestige: -5, value: 5, traffic: -1, visibleForce: 12 };
+    case 'routine':
+    default:
+      return { control: 0, notoriety: 0, prestige: 0, value: 0, traffic: 0, visibleForce: 0 };
+  }
+}
+
+function securityPostureProfile(posture: SecurityPosture): {
+  controlMultiplier: number;
+  controlBonus: number;
+  visibleForceMultiplier: number;
+  visibleForceBonus: number;
+  auraRadiusDelta: number;
+  auraStrength: number;
+  prestige: number;
+} {
+  switch (posture) {
+    case 'discreet':
+      return {
+        controlMultiplier: 0.9,
+        controlBonus: -2,
+        visibleForceMultiplier: 0.62,
+        visibleForceBonus: -4,
+        auraRadiusDelta: -1,
+        auraStrength: 0.86,
+        prestige: 2
+      };
+    case 'visible':
+      return {
+        controlMultiplier: 1.16,
+        controlBonus: 7,
+        visibleForceMultiplier: 1.34,
+        visibleForceBonus: 10,
+        auraRadiusDelta: 2,
+        auraStrength: 1.14,
+        prestige: -2
+      };
+    case 'standard':
+    default:
+      return {
+        controlMultiplier: 1,
+        controlBonus: 0,
+        visibleForceMultiplier: 1,
+        visibleForceBonus: 0,
+        auraRadiusDelta: 0,
+        auraStrength: 1,
+        prestige: 0
+      };
+  }
+}
+
+function activeAccessGateStaffRatio(state: StationState): number {
+  const gateCount = state.moduleInstances.filter((module) => module.type === ModuleType.AccessGate).length;
+  if (gateCount <= 0) return 0;
+  if (!state.command.departments.security.active) return 0;
+  const guards = state.crew.roleCounts?.['security-guard'] ?? 0;
+  return clamp(guards / gateCount, 0, 1);
+}
+
+function averageNearbyModuleEffectForTiles(
+  state: StationState,
+  tiles: readonly number[],
+  moduleType: ModuleType,
+  radius: number
+): number {
+  return averageNumberForTiles(tiles, (tile) => nearbyModuleEffect(state, tile, moduleType, radius));
+}
+
+function labelForReputationZone(score: Omit<ReputationZoneScore, 'label' | 'topDrivers'>): ReputationZoneLabel {
+  if (score.crimePressure >= 72) return 'high-risk';
+  if (score.prestige >= 68 && score.opacity >= 42) return 'exclusive';
+  if (score.prestige >= 64) return 'premium';
+  if (score.prestige >= 48 && score.notoriety < 42) return 'polished';
+  if (score.notoriety >= 64 && score.control < 45) return 'seedy';
+  if (score.notoriety >= 48) return 'rough';
+  if (score.room === RoomType.Workshop || score.room === RoomType.Storage || score.room === RoomType.LogisticsStock || score.room === RoomType.Reactor) {
+    return 'industrial';
+  }
+  return 'ordinary';
+}
+
+function topReputationDrivers(
+  score: Omit<ReputationZoneScore, 'label' | 'topDrivers'>,
+  extraDrivers: Array<{ label: string; value: number }> = []
+): string[] {
+  const drivers: Array<{ label: string; value: number }> = [
+    { label: `prestige ${score.prestige.toFixed(0)}`, value: score.prestige },
+    { label: `notoriety ${score.notoriety.toFixed(0)}`, value: score.notoriety },
+    { label: `control ${score.control.toFixed(0)}`, value: score.control },
+    { label: `value ${score.value.toFixed(0)}`, value: score.value },
+    { label: `opacity ${score.opacity.toFixed(0)}`, value: score.opacity },
+    { label: `incidents ${score.recentIncidentHeat.toFixed(1)}`, value: score.recentIncidentHeat * 18 },
+    { label: `traffic ${score.traffic.toFixed(0)}`, value: score.traffic * 12 }
+  ];
+  drivers.push(...extraDrivers.filter((driver) => driver.value > 0));
+  return drivers.sort((a, b) => b.value - a.value).slice(0, 3).map((driver) => driver.label);
+}
+
+function reputationScoreForCluster(state: StationState, room: RoomType, tiles: number[]): ReputationZoneScore {
+  const anchorTile = tiles.reduce((best, tile) => (tile < best ? tile : best), tiles[0]);
+  const base = reputationBaseForRoom(room);
+  const environment = roomEnvironmentScoreAt(state, anchorTile);
+  const avgDirt = averageNumberForTiles(tiles, (tile) => state.dirtByTile[tile] ?? 0);
+  const avgAir = averageNumberForTiles(tiles, (tile) => airQualityAt(state, tile));
+  const avgSecurity = averageNumberForTiles(tiles, (tile) => state.effects.securityAuraByTile.get(tile) ?? 0);
+  const cameraCoverage = averageNearbyModuleEffectForTiles(state, tiles, ModuleType.SecurityCamera, SECURITY_CAMERA_RADIUS);
+  const gateCoverage = averageNearbyModuleEffectForTiles(state, tiles, ModuleType.AccessGate, ACCESS_GATE_RADIUS);
+  const gateStaffRatio = activeAccessGateStaffRatio(state);
+  const posture = securityPostureProfile(state.controls.securityPosture);
+  const maintenanceNearby = state.maintenanceDebts
+    .filter((debt) => tiles.includes(maintenanceDebtTargetTile(debt)) || tiles.includes(debt.anchorTile))
+    .reduce((max, debt) => Math.max(max, debt.debt), 0);
+  const traffic = nearbyActorCountForTiles(state, tiles);
+  const trafficPressure = clamp(traffic, 0, 8) + Math.max(0, traffic - 8) * 0.35;
+  const recentIncidentHeat = nearbyIncidentHeatForTiles(state, tiles);
+  const accessGateControl = gateCoverage * (gateStaffRatio > 0 ? 30 * gateStaffRatio + 6 * (1 - gateStaffRatio) : 3);
+  const cameraControl = cameraCoverage * 18;
+  const cameraOpacityRelief = cameraCoverage * 20;
+  const gateOpacityRelief = gateCoverage * (gateStaffRatio > 0 ? 9 * gateStaffRatio : 2);
+  const visibleForce = clamp(
+    (avgSecurity * 45 +
+      accessGateControl * 0.7 +
+      cameraCoverage * 4 +
+      posture.visibleForceBonus +
+      (room === RoomType.Security ? 22 : 0) +
+      (room === RoomType.Brig ? 34 : 0) +
+      moduleCountInTiles(state, tiles, [ModuleType.SecurityTerminal, ModuleType.CellConsole]) * 8) *
+      posture.visibleForceMultiplier,
+    0,
+    100
+  );
+  let screeningLevel: BerthScreeningLevel | undefined;
+  let customsPolicy: CustomsPolicy | undefined;
+  let screeningControl = 0;
+  let screeningNotoriety = 0;
+  let customsPolicyControl = 0;
+  let customsPolicyNotoriety = 0;
+  let customsPolicyPrestige = 0;
+  let customsPolicyValue = 0;
+  let customsPolicyTraffic = 0;
+  let customsPolicyVisibleForce = 0;
+  if (room === RoomType.Berth) {
+    screeningLevel = berthScreeningForAnchor(state, anchorTile, tiles);
+    customsPolicy = customsPolicyForAnchor(state, anchorTile);
+    const policy = customsPolicyProfile(customsPolicy);
+    const hasCustomsCounter = moduleCountInTiles(state, tiles, [ModuleType.CustomsCounter]) > 0;
+    const customsPolicyCapacity = hasCustomsCounter ? 1 : 0.35;
+    screeningControl = screeningLevel === 'strict' ? 18 : screeningLevel === 'standard' ? 9 : -6;
+    screeningNotoriety = screeningLevel === 'open' ? 11 : screeningLevel === 'strict' ? -8 : 0;
+    customsPolicyControl = policy.control * customsPolicyCapacity;
+    customsPolicyNotoriety = policy.notoriety * customsPolicyCapacity;
+    customsPolicyPrestige = policy.prestige * customsPolicyCapacity;
+    customsPolicyValue = policy.value * customsPolicyCapacity;
+    customsPolicyTraffic = policy.traffic * customsPolicyCapacity;
+    customsPolicyVisibleForce = policy.visibleForce * customsPolicyCapacity;
+  }
+  const customsControl = moduleCountInTiles(state, tiles, [ModuleType.CustomsCounter]) * 12 + customsPolicyControl;
+  const cargoOpportunity = moduleCountInTiles(state, tiles, [ModuleType.CargoArm]) * 10;
+  const premiumModules = moduleCountInTiles(state, tiles, [ModuleType.Plant, ModuleType.Bench, ModuleType.Telescope]);
+  const valueModules = moduleCountInTiles(state, tiles, [ModuleType.MarketStall, ModuleType.BarCounter, ModuleType.Workbench, ModuleType.CargoArm]);
+  const roomPrivacy = state.zones[anchorTile] === ZoneType.Restricted ? 10 : 0;
+  const airPenalty = clamp((65 - avgAir) * 0.5, 0, 18);
+  const dirtPenalty = clamp(avgDirt * 0.35, 0, 28);
+  const maintenancePenalty = clamp(maintenanceNearby * 0.18, 0, 22);
+  const effectiveVisibleForce = clamp(visibleForce + customsPolicyVisibleForce, 0, 100);
+  const control = clamp(
+    24 +
+      avgSecurity * 58 * posture.controlMultiplier +
+      customsControl +
+      screeningControl +
+      cameraControl +
+      accessGateControl +
+      (state.command.departments.security.active ? posture.controlBonus : 0) +
+      (room === RoomType.Security ? 18 : 0) +
+      (room === RoomType.Brig ? 12 : 0),
+    0,
+    100
+  );
+  const prestige = clamp(
+    base.prestige +
+      environment.publicAppeal * 18 +
+      environment.visitorStatus * 12 +
+      environment.residentialComfort * 10 +
+      premiumModules * 5 +
+      customsPolicyPrestige +
+      posture.prestige -
+      dirtPenalty -
+      airPenalty -
+      maintenancePenalty -
+      Math.max(0, effectiveVisibleForce - 42) * (room === RoomType.Lounge || room === RoomType.Observatory || room === RoomType.Dorm ? 0.28 : 0.08) -
+      recentIncidentHeat * 5,
+    0,
+    100
+  );
+  const notoriety = clamp(
+    base.notoriety +
+      screeningNotoriety +
+      customsPolicyNotoriety +
+      cargoOpportunity +
+      Math.max(0, customsPolicyTraffic) * 4 +
+      trafficPressure * 1.3 +
+      recentIncidentHeat * 8 +
+      clamp(avgDirt * 0.18 + maintenanceNearby * 0.12, 0, 18) -
+      customsControl * 0.12 -
+      avgSecurity * 10 -
+      cameraCoverage * 6 -
+      gateCoverage * gateStaffRatio * 5 -
+      Math.max(0, control - 45) * 0.28,
+    0,
+    100
+  );
+  const value = clamp(
+    base.value +
+      valueModules * 7 +
+      premiumModules * 5 +
+      customsPolicyValue +
+      Math.max(0, customsPolicyTraffic) * 4 +
+      prestige * 0.22 +
+      trafficPressure * 2.2,
+    0,
+    100
+  );
+  const opacity = clamp(
+    base.opacity +
+      roomPrivacy +
+      Math.max(0, 38 - control) * 0.45 +
+      (tiles.length <= 3 ? 8 : 0) +
+      trafficPressure * 0.7 +
+      (customsPolicy === 'expedited' ? 6 : customsPolicy === 'seizure' ? -4 : 0) -
+      cameraOpacityRelief -
+      gateOpacityRelief,
+    0,
+    100
+  );
+  const uncontrolledTrafficPressure = trafficPressure * clamp(1 - control / 105, 0.25, 1);
+  const crimePressure = clamp(value * 0.42 + opacity * 0.34 + notoriety * 0.32 + uncontrolledTrafficPressure * 2 + recentIncidentHeat * 12 - control * 0.62, 0, 100);
+  const marketClass: ReputationZoneScore['marketClass'] =
+    room !== RoomType.Market
+      ? undefined
+      : prestige >= notoriety + 10
+        ? 'boutique'
+        : notoriety >= prestige + 8
+          ? 'gray'
+          : 'ordinary';
+  const partial = {
+    anchorTile,
+    room,
+    tiles,
+    prestige,
+    notoriety,
+    control,
+    value,
+    opacity,
+    crimePressure,
+    recentIncidentHeat,
+    traffic,
+    visibleForce: effectiveVisibleForce,
+    screeningLevel,
+    customsPolicy,
+    marketClass
+  };
+  const driverHints: Array<{ label: string; value: number }> = [];
+  if (customsPolicy && customsPolicy !== 'routine') driverHints.push({ label: `customs ${customsPolicy}`, value: 42 + Math.abs(customsPolicyControl) + Math.abs(customsPolicyNotoriety) });
+  if (screeningLevel && screeningLevel !== 'standard') driverHints.push({ label: `${screeningLevel} screening`, value: 34 + Math.abs(screeningControl) + Math.abs(screeningNotoriety) });
+  if (cameraCoverage >= 0.12) driverHints.push({ label: 'camera coverage', value: 28 + cameraCoverage * 36 });
+  if (gateCoverage >= 0.12) driverHints.push({ label: gateStaffRatio > 0.66 ? 'staffed access gate' : 'understaffed access gate', value: 26 + gateCoverage * 34 });
+  if (state.controls.securityPosture !== 'standard') driverHints.push({ label: `${state.controls.securityPosture} security`, value: 24 + Math.abs(posture.visibleForceBonus) + Math.abs(1 - posture.controlMultiplier) * 40 });
+  return {
+    ...partial,
+    label: labelForReputationZone(partial),
+    topDrivers: topReputationDrivers(partial, driverHints)
+  };
+}
+
+export function getReputationZoneScores(state: StationState): ReputationZoneScore[] {
+  ensureRoomClustersCache(state);
+  const zones: ReputationZoneScore[] = [];
+  for (const room of REPUTATION_ROOMS) {
+    for (const cluster of roomClusters(state, room)) {
+      if (cluster.length <= 0) continue;
+      zones.push(reputationScoreForCluster(state, room, cluster));
+    }
+  }
+  return zones.sort((a, b) => b.crimePressure - a.crimePressure || b.prestige - a.prestige || a.anchorTile - b.anchorTile);
+}
+
+function reputationZoneForTile(state: StationState, tileIndex: number): ReputationZoneScore | null {
+  const room = state.rooms[tileIndex];
+  if (room === RoomType.None) return null;
+  const zone = getReputationZoneScores(state).find((entry) => entry.tiles.includes(tileIndex));
+  return zone ?? null;
+}
+
+export function getReputationTileDiagnostic(state: StationState, x: number, y: number): ReputationTileDiagnostic | null {
+  if (!inBounds(x, y, state.width, state.height)) return null;
+  const tileIndex = toIndex(x, y, state.width);
+  if (!isWalkable(state.tiles[tileIndex])) return null;
+  const zone = reputationZoneForTile(state, tileIndex);
+  if (!zone) {
+    return { tileIndex, zone: null, summary: 'No reputation zone here.', drivers: [] };
+  }
+  return {
+    tileIndex,
+    zone,
+    summary: `${zone.label}: prestige ${zone.prestige.toFixed(0)}, notoriety ${zone.notoriety.toFixed(0)}, control ${zone.control.toFixed(0)}, crime ${zone.crimePressure.toFixed(0)}`,
+    drivers: zone.topDrivers
+  };
+}
+
+function reputationSpendMultiplierAt(state: StationState, tileIndex: number): number {
+  const zone = reputationZoneForTile(state, tileIndex);
+  if (!zone) return 1;
+  return clamp(1 + zone.prestige * 0.0032 + zone.notoriety * 0.0022 - zone.crimePressure * 0.0018, 0.82, 1.36);
+}
+
+function reputationHousingConversionMultiplierAt(state: StationState, tileIndex: number): number {
+  const zone = reputationZoneForTile(state, tileIndex);
+  if (!zone) return 1;
+  return clamp(1 + zone.prestige * 0.0038 - zone.crimePressure * 0.003 - zone.recentIncidentHeat * 0.06, 0.72, 1.42);
+}
+
 function summarizeRoutePressureForTiles(
   state: StationState,
   tiles: readonly number[],
@@ -3522,17 +3990,26 @@ function createIncident(
   type: IncidentType,
   tileIndex: number,
   severity = 1,
-  residentParticipantIds: number[] = []
+  residentParticipantIds: number[] = [],
+  options?: {
+    subjectKind?: IncidentSubjectKind | null;
+    subjectId?: number | null;
+    targetTile?: number | null;
+    value?: number;
+  }
 ): IncidentEntity {
   const normalizedSeverity = clamp(severity, 0.4, 2.4);
   const resolveWindow =
     type === 'fight'
       ? FIGHT_INCIDENT_RESOLVE_WINDOW_SEC / clamp(0.7 + normalizedSeverity * 0.25, 0.75, 1.45)
+      : type === 'theft'
+        ? INCIDENT_THEFT_RESOLVE_WINDOW_SEC
       : TRESPASS_INCIDENT_RESOLVE_WINDOW_SEC;
   const incident: IncidentEntity = {
     id: state.incidentSpawnCounter++,
     type,
     tileIndex,
+    targetTile: options?.targetTile ?? null,
     severity: normalizedSeverity,
     createdAt: state.now,
     dispatchAt: null,
@@ -3542,8 +4019,14 @@ function createIncident(
     outcome: null,
     resolvedAt: null,
     assignedCrewId: null,
+    subjectKind: options?.subjectKind ?? null,
+    subjectId: options?.subjectId ?? null,
     residentParticipantIds: [...new Set(residentParticipantIds)],
-    extendedResolveAt: null
+    extendedResolveAt: null,
+    brigTile: null,
+    holdUntil: null,
+    blockedReason: null,
+    value: options?.value
   };
   state.incidents.push(incident);
   registerIncident(state, 1);
@@ -3581,18 +4064,29 @@ function maybeCreateTier3DispatchIncident(state: StationState, dt: number): void
   const heatBonus = clamp(state.incidentHeat / 30, 0, 0.02);
   if (state.now < 20 || state.rng() > (chancePerSec + heatBonus) * Math.max(0, dt)) return;
 
-  const publicActors = [
-    ...state.visitors.map((visitor) => visitor.tileIndex),
-    ...state.residents.map((resident) => resident.tileIndex)
-  ].filter((tile) => state.zones[tile] === ZoneType.Public && isWalkable(state.tiles[tile]));
-  let tileIndex = publicActors.length > 0 ? publicActors[randomInt(0, publicActors.length - 1, state.rng)] : -1;
-  if (tileIndex < 0) {
-    const fallback = collectTiles(state, TileType.Floor).filter((tile) => state.zones[tile] === ZoneType.Public);
-    if (fallback.length <= 0) return;
-    tileIndex = fallback[randomInt(0, fallback.length - 1, state.rng)];
-  }
+  const publicActors: Array<{ kind: IncidentSubjectKind; id: number; tileIndex: number }> = [
+    ...state.visitors
+      .filter((visitor) => (visitor.activeIncidentId ?? null) === null)
+      .map((visitor) => ({ kind: 'visitor' as const, id: visitor.id, tileIndex: visitor.tileIndex })),
+    ...state.residents
+      .filter((resident) => (resident.activeIncidentId ?? null) === null)
+      .map((resident) => ({ kind: 'resident' as const, id: resident.id, tileIndex: resident.tileIndex }))
+  ].filter((actor) => state.zones[actor.tileIndex] === ZoneType.Public && isWalkable(state.tiles[actor.tileIndex]));
+  if (publicActors.length <= 0) return;
+  const subject = publicActors[randomInt(0, publicActors.length - 1, state.rng)];
+  const tileIndex = subject.tileIndex;
   const localCrowd = nearbyPopulationCount(state, tileIndex, 2);
-  createIncident(state, 'trespass', tileIndex, clamp(0.65 + localCrowd * 0.08, 0.65, 1.35));
+  const incident = createIncident(state, 'trespass', tileIndex, clamp(0.65 + localCrowd * 0.08, 0.65, 1.35), [], {
+    subjectKind: subject.kind,
+    subjectId: subject.id
+  });
+  if (subject.kind === 'visitor') {
+    const visitor = state.visitors.find((entry) => entry.id === subject.id);
+    if (visitor) visitor.activeIncidentId = incident.id;
+  } else {
+    const resident = state.residents.find((entry) => entry.id === subject.id);
+    if (resident) resident.activeIncidentId = incident.id;
+  }
 }
 
 function pathCongestion(path: number[], occupancyByTile: Map<number, number>): number {
@@ -3815,12 +4309,37 @@ export function setCrewPath(state: StationState, crew: CrewMember, path: number[
   crew.lastRouteExposure = path.length > 0 ? scoreRouteExposure(state, path) : undefined;
 }
 
-function isStationedSecurityResponder(state: StationState, crew: CrewMember): boolean {
-  const room = state.rooms[crew.tileIndex];
+function isOfficerCrew(crew: CrewMember): boolean {
+  return STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer === true;
+}
+
+function isAvailableIncidentResponder(state: StationState, crew: CrewMember): boolean {
   return (
+    !isOfficerCrew(crew) &&
     !crew.resting &&
     crew.healthState !== 'critical' &&
     crew.activeJobId === null &&
+    !isCrewHandlingActiveIncident(state, crew.id)
+  );
+}
+
+function isFieldSecurityCrew(crew: CrewMember): boolean {
+  return crew.staffRole === 'security-guard' || crew.assignedSystem === 'security' || crew.role === 'security';
+}
+
+function releaseInterruptibleSecurityResponderJobs(state: StationState): void {
+  for (const crew of state.crewMembers) {
+    if (isOfficerCrew(crew) || !isFieldSecurityCrew(crew)) continue;
+    if (crew.activeJobId === null) continue;
+    if (crew.carryingItemType !== null && crew.carryingAmount > 0) continue;
+    releaseCrewJobForCommandDuty(state, crew);
+  }
+}
+
+function isStationedSecurityResponder(state: StationState, crew: CrewMember): boolean {
+  const room = state.rooms[crew.tileIndex];
+  return (
+    isAvailableIncidentResponder(state, crew) &&
     (crew.assignedSystem === 'security' || crew.role === 'security') &&
     (room === RoomType.Security || room === RoomType.Brig)
   );
@@ -3835,17 +4354,19 @@ function computeSecurityAuraMap(state: StationState): Map<number, number> {
   const auraByTile = new Map<number, number>();
   const stationedSecurity = state.crewMembers.filter((crew) => isSecurityAuraSource(state, crew));
   if (stationedSecurity.length <= 0) return auraByTile;
+  const posture = securityPostureProfile(state.controls.securityPosture);
+  const radius = Math.max(3, Math.round(SECURITY_AURA_RADIUS + posture.auraRadiusDelta));
 
   for (const crew of stationedSecurity) {
     const source = fromIndex(crew.tileIndex, state.width);
-    for (let dy = -SECURITY_AURA_RADIUS; dy <= SECURITY_AURA_RADIUS; dy++) {
-      for (let dx = -SECURITY_AURA_RADIUS; dx <= SECURITY_AURA_RADIUS; dx++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
         const nx = source.x + dx;
         const ny = source.y + dy;
         if (!inBounds(nx, ny, state.width, state.height)) continue;
         const manhattan = Math.abs(dx) + Math.abs(dy);
-        if (manhattan > SECURITY_AURA_RADIUS) continue;
-        const aura = clamp(1 - manhattan / SECURITY_AURA_RADIUS, 0, 1);
+        if (manhattan > radius) continue;
+        const aura = clamp((1 - manhattan / radius) * posture.auraStrength, 0, 1);
         if (aura <= 0) continue;
         const tile = toIndex(nx, ny, state.width);
         const prev = auraByTile.get(tile) ?? 0;
@@ -3872,29 +4393,29 @@ function pickSecurityResponder(
   incidentTile: number
 ): { crew: CrewMember; path: number[] } | null {
   if (state.ops.securityActive <= 0 && state.ops.brigActive <= 0) return null;
+  releaseInterruptibleSecurityResponderJobs(state);
+  const securityGuards = state.crewMembers.filter((crew) => isAvailableIncidentResponder(state, crew) && crew.staffRole === 'security-guard');
   const stationedSecurity = state.crewMembers.filter((crew) => isStationedSecurityResponder(state, crew));
-  const candidates =
-    stationedSecurity.length > 0
-      ? stationedSecurity
-      : state.crewMembers.filter(
-          (crew) =>
-            !crew.resting &&
-            crew.healthState !== 'critical' &&
-            crew.activeJobId === null &&
-            crew.role !== 'security'
-        );
-  if (candidates.length <= 0) return null;
-  let best: { crew: CrewMember; path: number[]; score: number } | null = null;
-  for (const crew of candidates) {
-    const path = findPath(state, crew.tileIndex, incidentTile, { allowRestricted: true, intent: 'security' }, state.pathOccupancyByTile);
-    if (!path) continue;
-    const stationedBonus = isStationedSecurityResponder(state, crew) ? -8 : 0;
-    const score = path.length + pathCongestion(path, state.pathOccupancyByTile) * 0.55 + stationedBonus;
-    if (!best || score < best.score) {
-      best = { crew, path, score };
+  const securityAssigned = state.crewMembers.filter(
+    (crew) => isAvailableIncidentResponder(state, crew) && (crew.assignedSystem === 'security' || crew.role === 'security')
+  );
+  const pools = [securityGuards, stationedSecurity, securityAssigned];
+  for (const candidates of pools) {
+    if (candidates.length <= 0) continue;
+    let best: { crew: CrewMember; path: number[]; score: number } | null = null;
+    for (const crew of candidates) {
+      const path = findPath(state, crew.tileIndex, incidentTile, { allowRestricted: true, intent: 'security' }, state.pathOccupancyByTile);
+      if (!path) continue;
+      const stationedBonus = isStationedSecurityResponder(state, crew) ? -8 : 0;
+      const guardBonus = crew.staffRole === 'security-guard' ? -12 : 0;
+      const score = path.length + pathCongestion(path, state.pathOccupancyByTile) * 0.55 + stationedBonus + guardBonus;
+      if (!best || score < best.score) {
+        best = { crew, path, score };
+      }
     }
+    if (best) return { crew: best.crew, path: best.path };
   }
-  return best ? { crew: best.crew, path: best.path } : null;
+  return null;
 }
 
 function activeFightIncidentForResident(state: StationState, residentId: number): IncidentEntity | null {
@@ -3903,6 +4424,162 @@ function activeFightIncidentForResident(state: StationState, residentId: number)
     if (incident.residentParticipantIds.includes(residentId)) return incident;
   }
   return null;
+}
+
+function activeIncidentForResident(state: StationState, residentId: number): IncidentEntity | null {
+  for (const incident of state.incidents) {
+    if (!isIncidentActive(incident)) continue;
+    if (incident.subjectKind === 'resident' && incident.subjectId === residentId) return incident;
+    if (incident.residentParticipantIds.includes(residentId)) return incident;
+  }
+  return null;
+}
+
+function activeIncidentForVisitor(state: StationState, visitorId: number): IncidentEntity | null {
+  for (const incident of state.incidents) {
+    if (!isIncidentActive(incident)) continue;
+    if (incident.subjectKind === 'visitor' && incident.subjectId === visitorId) return incident;
+  }
+  return null;
+}
+
+function incidentSubjectTile(state: StationState, incident: IncidentEntity): number | null {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return state.visitors.find((visitor) => visitor.id === incident.subjectId)?.tileIndex ?? null;
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return state.residents.find((resident) => resident.id === incident.subjectId)?.tileIndex ?? null;
+  }
+  for (const residentId of incident.residentParticipantIds) {
+    const resident = state.residents.find((entry) => entry.id === residentId);
+    if (resident) return resident.tileIndex;
+  }
+  return null;
+}
+
+function incidentDispatchTile(state: StationState, incident: IncidentEntity): number {
+  return incidentSubjectTile(state, incident) ?? incident.targetTile ?? incident.tileIndex;
+}
+
+function chooseNearestTargetPath(
+  state: StationState,
+  start: number,
+  targets: number[],
+  allowRestricted: boolean,
+  intent: PathIntent,
+  jitterSeed: number | null = null
+): { target: number; path: number[] } | null {
+  let best: { target: number; path: number[]; score: number } | null = null;
+  for (const target of targets) {
+    const path = findPath(state, start, target, { allowRestricted, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
+    if (!path) continue;
+    const score = path.length + targetChoiceJitter(jitterSeed, target, 17);
+    if (!best || score < best.score) best = { target, path, score };
+  }
+  if (!best && !allowRestricted) {
+    return chooseNearestTargetPath(state, start, targets, true, intent, jitterSeed);
+  }
+  return best ? { target: best.target, path: best.path } : null;
+}
+
+function incidentBrigTargets(state: StationState): number[] {
+  const cellConsoles = activeModuleTargets(state, [ModuleType.CellConsole], [RoomType.Brig]);
+  if (cellConsoles.length > 0) return cellConsoles;
+  return activeRoomTargets(state, RoomType.Brig);
+}
+
+function assignIncidentSubjectPath(state: StationState, incident: IncidentEntity, path: number[], mode: 'escort' | 'eject'): boolean {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+    if (!visitor) return false;
+    visitor.activeIncidentId = incident.id;
+    visitor.reservedServingTile = null;
+    visitor.reservedTargetTile = null;
+    visitor.carryingMeal = false;
+    visitor.state = mode === 'eject' ? VisitorState.ToDock : VisitorState.ToLeisure;
+    releaseReservationsForOwner(state, 'visitor', visitor.id, mode === 'eject' ? 'completed' : 'replaced');
+    setVisitorPath(state, visitor, path);
+    return true;
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const resident = state.residents.find((entry) => entry.id === incident.subjectId);
+    if (!resident) return false;
+    resident.activeIncidentId = incident.id;
+    resident.state = ResidentState.Idle;
+    resident.reservedTargetTile = null;
+    releaseReservationsForOwner(state, 'resident', resident.id, mode === 'eject' ? 'completed' : 'failed');
+    setResidentPath(state, resident, path);
+    return true;
+  }
+  return false;
+}
+
+function escortedSubject(state: StationState, incident: IncidentEntity): Visitor | Resident | null {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return state.visitors.find((entry) => entry.id === incident.subjectId) ?? null;
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return state.residents.find((entry) => entry.id === incident.subjectId) ?? null;
+  }
+  return null;
+}
+
+function keepSubjectWithResponder(state: StationState, incident: IncidentEntity): boolean {
+  const responder = incidentResponder(state, incident);
+  const subject = escortedSubject(state, incident);
+  if (!responder || !subject) return false;
+  subject.tileIndex = responder.tileIndex;
+  subject.x = responder.x;
+  subject.y = responder.y;
+  subject.path = [];
+  if (incident.subjectKind === 'visitor') {
+    const visitor = subject as Visitor;
+    visitor.activeIncidentId = incident.id;
+    visitor.reservedServingTile = null;
+    visitor.reservedTargetTile = null;
+    visitor.carryingMeal = false;
+  } else {
+    const resident = subject as Resident;
+    resident.activeIncidentId = incident.id;
+    resident.state = ResidentState.Idle;
+    resident.reservedTargetTile = null;
+  }
+  return true;
+}
+
+function clearIncidentSubject(state: StationState, incident: IncidentEntity, outcome?: IncidentOutcome): void {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+    if (visitor) {
+      visitor.activeIncidentId = null;
+      visitor.reservedServingTile = null;
+      visitor.reservedTargetTile = null;
+      visitor.carryingMeal = false;
+      releaseReservationsForOwner(state, 'visitor', visitor.id, outcome === 'ejected' ? 'completed' : 'replaced');
+      if (outcome === 'ejected') {
+        state.visitors = state.visitors.filter((entry) => entry.id !== visitor.id);
+      }
+    }
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const resident = state.residents.find((entry) => entry.id === incident.subjectId);
+    if (resident) {
+      resident.activeIncidentId = null;
+      resident.confrontationUntil = state.now + 1.4;
+      releaseReservationsForOwner(state, 'resident', resident.id, 'failed');
+      if (outcome === 'detained' || outcome === 'recovered') {
+        resident.stress = clamp(resident.stress - 18, 0, 120);
+        resident.agitation = clamp((resident.agitation ?? 0) - 24, 0, 100);
+        resident.safety = clamp(resident.safety + 10, 0, 100);
+      }
+    }
+  }
+}
+
+function chooseFightDetainee(state: StationState, incident: IncidentEntity): Resident | null {
+  const candidates = state.residents.filter((resident) => incident.residentParticipantIds.includes(resident.id));
+  candidates.sort((a, b) => b.stress + (b.agitation ?? 0) - (a.stress + (a.agitation ?? 0)));
+  return candidates[0] ?? null;
 }
 
 // Read the local air quality at a tile. Falls back to the global metric if the
@@ -4810,6 +5487,8 @@ export interface BerthInspector {
   // forcing the config row to materialize until they change something.
   allowedShipTypes: ShipType[];
   allowedShipSizes: ShipSize[];
+  screeningLevel: BerthScreeningLevel;
+  customsPolicy: CustomsPolicy;
   // Derived (info-only, not stored): the lane this berth opens onto,
   // computed from the cluster's exterior space-tile boundary. Returns
   // the lane with the most adjacent space tiles, or null if the berth
@@ -4849,13 +5528,15 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
       break;
     }
   }
-  const cfg = findBerthConfigByAnchor(state, cluster[0]);
+  const cfg = findBerthConfigByAnchor(state, anchorTile);
   const allowedShipTypes = cfg
     ? [...cfg.allowedShipTypes]
     : [...ALL_SHIP_TYPES_FOR_BERTH];
   const allowedShipSizes = cfg
     ? [...cfg.allowedShipSizes]
     : [...ALL_SHIP_SIZES_FOR_BERTH];
+  const screeningLevel = cfg?.screeningLevel ?? 'standard';
+  const customsPolicy = cfg?.customsPolicy ?? 'routine';
   return {
     anchorTile,
     clusterTiles: cluster,
@@ -4867,6 +5548,8 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     occupiedByShipId,
     allowedShipTypes,
     allowedShipSizes,
+    screeningLevel,
+    customsPolicy,
     derivedFacing: deriveBerthFacing(state, cluster),
     purpose: 'visitor'
   };
@@ -5118,9 +5801,10 @@ function maybeMoveInResident(state: StationState): void {
   state.usageTotals.residentConversionAttempts += 1;
   const freeBedCount = privateHousingUnits(state).length - assignedHousingBedIds(state).size;
   const ratingFactor = clamp((state.metrics.stationRating - RESIDENT_MOVE_IN_MIN_RATING) / 35, 0, 1);
+  const housingReputationFactor = reputationHousingConversionMultiplierAt(state, housing.unit.cabinTile);
   const vacancyBonus = clamp(freeBedCount, 1, 4) * 0.05;
   const firstResidentBonus = state.residents.length === 0 ? 0.25 : 0;
-  const chance = clamp(0.16 + ratingFactor * 0.48 + vacancyBonus + firstResidentBonus, 0.2, 0.92);
+  const chance = clamp((0.16 + ratingFactor * 0.48 + vacancyBonus + firstResidentBonus) * housingReputationFactor, 0.14, 0.94);
   const chancePct = chance * 100;
   if (state.rng() > chance) {
     noteResidentConversionResult(state, 'move-in roll failed', chancePct);
@@ -5184,10 +5868,11 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   state.usageTotals.residentConversionAttempts += 1;
   const ratingFactor = clamp((state.metrics.stationRating - 50) / 32, 0.3, 1.6);
   const comfortFactor = visitor.servedMeal ? 1.2 : 0.8;
+  const housingReputationFactor = reputationHousingConversionMultiplierAt(state, housing.unit.cabinTile);
   const shipProfile = SHIP_PROFILES[ship.shipType];
   const conversionMultiplier = shipProfile?.conversionChanceMultiplier ?? 1;
   const chance = clamp(
-    RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor * conversionMultiplier,
+    RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor * conversionMultiplier * housingReputationFactor,
     0.01,
     0.35
   );
@@ -7595,6 +8280,36 @@ function clearCrewLeisure(crew: CrewMember): void {
   crew.leisureUntil = 0;
 }
 
+function clearCrewSelfCareForDuty(state: StationState, crew: CrewMember, clearPath = true): void {
+  let interrupted = false;
+  if (crew.cleaning) {
+    crew.cleaning = false;
+    crew.cleanSessionActive = false;
+    interrupted = true;
+  }
+  if (crew.toileting) {
+    crew.toileting = false;
+    crew.toiletSessionActive = false;
+    interrupted = true;
+  }
+  if (crew.drinking) {
+    crew.drinking = false;
+    crew.drinkSessionActive = false;
+    interrupted = true;
+  }
+  if (crew.leisure) {
+    clearCrewLeisure(crew);
+    interrupted = true;
+  }
+  if (crew.resting && crew.healthState !== 'critical') {
+    crew.resting = false;
+    crew.restSessionActive = false;
+    crew.restCooldownUntil = state.now + CREW_REST_COOLDOWN_SEC;
+    interrupted = true;
+  }
+  if (interrupted && clearPath) setCrewPath(state, crew, []);
+}
+
 function residentDormTargets(state: StationState): number[] {
   return activeRoomTargets(state, RoomType.Dorm).filter((idx) =>
     state.roomHousingPolicies[idx] === 'resident' || state.roomHousingPolicies[idx] === 'private_resident'
@@ -9153,6 +9868,19 @@ function isCrewReservedForCommandDuty(state: StationState, crew: CrewMember): bo
   return STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer === true && !crew.resting && activeCommandTerminalForRole(state, crew.staffRole) !== null;
 }
 
+function isCrewHandlingActiveIncident(state: StationState, crewId: number): boolean {
+  return state.incidents.some(
+    (incident) =>
+      isIncidentActive(incident) &&
+      incident.assignedCrewId === crewId &&
+      (incident.stage === 'intervening' ||
+        incident.stage === 'intervening_extended' ||
+        incident.stage === 'escorting' ||
+        incident.stage === 'holding' ||
+        incident.stage === 'ejecting')
+  );
+}
+
 function normalizeCrewWorkLane(crew: CrewMember, now: number): void {
   const maybeCrew = crew as CrewMember & Partial<Pick<CrewMember, 'workLane' | 'lastWorkLane' | 'workLaneAssignedAt'>>;
   if (!maybeCrew.workLane || !CREW_WORK_LANES.includes(maybeCrew.workLane)) {
@@ -9477,6 +10205,7 @@ function assignJobsToIdleCrew(state: StationState): void {
   const candidates = state.crewMembers
     .filter((crew) => !crew.resting && crew.activeJobId === null)
     .filter((crew) => !isCrewReservedForCommandDuty(state, crew))
+    .filter((crew) => !isCrewHandlingActiveIncident(state, crew.id))
     .filter((crew) => !hasProtectedSelfCare(crew) || canInterruptSelfCareForFood(crew) || canInterruptSelfCareForOwnLane(crew))
     .filter(
       (crew) =>
@@ -9997,6 +10726,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   };
   for (const crew of state.crewMembers) {
     crew.idleReason = 'idle_available';
+    const incidentDutyLocked = isCrewHandlingActiveIncident(state, crew.id);
+    const commandDutyLocked = isCrewReservedForCommandDuty(state, crew);
     const publicInterference = crew.activeJobId !== null ? routePublicInterference(crew.lastRouteExposure) : 0;
     if (publicInterference > 0) state.usageTotals.crewPublicInterference += publicInterference * dt;
     crew.hygiene = clamp(crew.hygiene - dt * (0.2 + publicInterference * CREW_PUBLIC_CROWD_DRAIN * 0.45), 0, 100);
@@ -10086,7 +10817,22 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         state.metrics.crewRestingNow = currentResting;
       }
     }
-    if (!crew.resting) {
+    if (incidentDutyLocked || commandDutyLocked) {
+      const wasResting = crew.resting;
+      clearCrewSelfCareForDuty(state, crew);
+      if (wasResting && !crew.resting) {
+        currentResting = Math.max(0, currentResting - 1);
+        state.metrics.crewRestingNow = currentResting;
+      }
+      if (incidentDutyLocked) {
+        crew.role = 'security';
+        crew.assignedSystem = 'security';
+        crew.lastSystem = 'security';
+        crew.assignmentStickyUntil = Math.max(crew.assignmentStickyUntil, state.now + CREW_ASSIGNMENT_STICKY_SEC);
+        crew.assignmentHoldUntil = Math.max(crew.assignmentHoldUntil, state.now + INCIDENT_ESCORT_GRACE_SEC);
+      }
+    }
+    if (!crew.resting && !incidentDutyLocked && !commandDutyLocked) {
       crew.energy = clamp(crew.energy - dt * (0.42 + publicInterference * CREW_PUBLIC_CROWD_DRAIN), 0, 100);
       const needsCriticalRest = crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD;
       const shiftMatches = crew.shiftBucket === shiftBucketNow;
@@ -10918,7 +11664,14 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       continue;
     }
 
-    if (crew.role === 'idle' && crew.path.length === 0 && idleTargets.length > 0 && state.now >= crew.retargetAt) {
+    if (
+      crew.role === 'idle' &&
+      crew.path.length === 0 &&
+      idleTargets.length > 0 &&
+      state.now >= crew.retargetAt &&
+      !incidentDutyLocked &&
+      !commandDutyLocked
+    ) {
       const next = idleTargets[randomInt(0, idleTargets.length - 1, state.rng)];
       setCrewPath(
         state,
@@ -11355,7 +12108,7 @@ function marketHelperMultiplier(state: StationState): number {
 
 function marketSpendPerSec(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity, 0.35, 1.05);
-  return 0.45 * visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state);
+  return 0.45 * visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state) * reputationSpendMultiplierAt(state, visitor.tileIndex);
 }
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
@@ -11432,6 +12185,23 @@ function updateVisitorLogic(
       assignPathToClinic(state, visitor);
     }
 
+    if (visitor.activeIncidentId === undefined) visitor.activeIncidentId = null;
+    const activeIncident = visitor.activeIncidentId !== null ? activeIncidentForVisitor(state, visitor.id) : null;
+    if (!activeIncident && visitor.activeIncidentId !== null) {
+      visitor.activeIncidentId = null;
+    }
+    if (activeIncident) {
+      visitor.reservedServingTile = null;
+      visitor.reservedTargetTile = null;
+      visitor.carryingMeal = false;
+      releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced');
+      const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+      if (moveResult === 'blocked') visitor.blockedTicks = Math.min(visitor.blockedTicks + 1, 9999);
+      else if (moveResult === 'moved') visitor.blockedTicks = 0;
+      keep.push(visitor);
+      continue;
+    }
+
     if (state.zones[visitor.tileIndex] === ZoneType.Restricted && !visitor.trespassed) {
       visitor.trespassed = true;
       const localSuppression = incidentSuppressionAtTile(securityAuraByTile, visitor.tileIndex);
@@ -11443,7 +12213,11 @@ function updateVisitorLogic(
       if (state.now >= cooldownUntil) {
         const spawnChance = clamp(0.92 * suppression, 0.2, 0.98);
         if (state.rng() <= spawnChance) {
-          createIncident(state, 'trespass', visitor.tileIndex, 0.8 * multiplier);
+          const incident = createIncident(state, 'trespass', visitor.tileIndex, 0.8 * multiplier, [], {
+            subjectKind: 'visitor',
+            subjectId: visitor.id
+          });
+          visitor.activeIncidentId = incident.id;
           state.effects.trespassCooldownUntilByTile.set(visitor.tileIndex, state.now + TRESPASS_TILE_COOLDOWN_SEC);
         }
       }
@@ -12190,6 +12964,59 @@ function tryStartResidentConfrontation(state: StationState, dt: number, security
   }
 }
 
+function maybeCreateTheftIncident(state: StationState, dt: number): void {
+  if (state.now < 35) return;
+  if (state.incidents.some((incident) => isIncidentActive(incident) && incident.type === 'theft')) return;
+  const zones = getReputationZoneScores(state)
+    .filter((zone) =>
+      zone.crimePressure >= 42 &&
+      (zone.room === RoomType.Market ||
+        zone.room === RoomType.Workshop ||
+        zone.room === RoomType.Storage ||
+        zone.room === RoomType.LogisticsStock ||
+        zone.room === RoomType.Berth ||
+        zone.room === RoomType.Dorm ||
+        zone.room === RoomType.Cantina ||
+        zone.room === RoomType.Lounge ||
+        zone.room === RoomType.Observatory)
+    )
+    .slice(0, 5);
+  if (zones.length <= 0) return;
+  const weightedChance = zones.reduce((acc, zone) => acc + Math.max(0, zone.crimePressure - 38) * 0.00045, 0);
+  if (state.rng() > weightedChance * Math.max(0, dt)) return;
+  const zone = zones[randomInt(0, zones.length - 1, state.rng)];
+  const zoneTiles = new Set(zone.tiles);
+  const zoneAnchor = fromIndex(zone.anchorTile, state.width);
+  const nearZone = (tileIndex: number): boolean => {
+    if (zoneTiles.has(tileIndex)) return true;
+    const p = fromIndex(tileIndex, state.width);
+    return Math.abs(p.x - zoneAnchor.x) + Math.abs(p.y - zoneAnchor.y) <= 4;
+  };
+  const visitorCandidates = state.visitors.filter((visitor) => nearZone(visitor.tileIndex) && (visitor.activeIncidentId ?? null) === null);
+  const residentCandidates = state.residents.filter((resident) => nearZone(resident.tileIndex) && (resident.activeIncidentId ?? null) === null);
+  const candidates: Array<{ kind: IncidentSubjectKind; id: number; tileIndex: number }> = [
+    ...visitorCandidates.map((visitor) => ({ kind: 'visitor' as const, id: visitor.id, tileIndex: visitor.tileIndex })),
+    ...residentCandidates.map((resident) => ({ kind: 'resident' as const, id: resident.id, tileIndex: resident.tileIndex }))
+  ];
+  if (candidates.length <= 0) return;
+  const subject = candidates[randomInt(0, candidates.length - 1, state.rng)];
+  const value = clamp(zone.value * (0.45 + state.rng() * 0.75), 8, 90);
+  const severity = clamp(0.65 + zone.crimePressure / 70 + value / 180, 0.7, 2.2);
+  const incident = createIncident(state, 'theft', subject.tileIndex, severity, [], {
+    subjectKind: subject.kind,
+    subjectId: subject.id,
+    targetTile: zone.anchorTile,
+    value
+  });
+  if (subject.kind === 'visitor') {
+    const visitor = state.visitors.find((entry) => entry.id === subject.id);
+    if (visitor) visitor.activeIncidentId = incident.id;
+  } else {
+    const resident = state.residents.find((entry) => entry.id === subject.id);
+    if (resident) resident.activeIncidentId = incident.id;
+  }
+}
+
 function resolveFightOnIntervention(
   state: StationState,
   incident: IncidentEntity
@@ -12215,7 +13042,7 @@ function resolveFightOnIntervention(
 function hasActiveIncidentResponder(state: StationState, incident: IncidentEntity): boolean {
   if (incident.assignedCrewId === null) return false;
   const responder = state.crewMembers.find((crew) => crew.id === incident.assignedCrewId);
-  return !!responder && !responder.resting && responder.healthState !== 'critical';
+  return !!responder && !isOfficerCrew(responder) && !responder.resting && responder.healthState !== 'critical';
 }
 
 function releaseIncidentResponder(state: StationState, incident: IncidentEntity): void {
@@ -12231,10 +13058,297 @@ function releaseIncidentResponder(state: StationState, incident: IncidentEntity)
   setCrewPath(state, responder, []);
 }
 
+function lockIncidentResponder(state: StationState, incident: IncidentEntity): CrewMember | null {
+  const responder = incidentResponder(state, incident);
+  if (!responder || responder.healthState === 'critical') return null;
+  if (isOfficerCrew(responder)) {
+    incident.assignedCrewId = null;
+    incident.blockedReason = 'Officer cannot perform custody escort';
+    if (responder.role === 'security' || responder.assignedSystem === 'security') {
+      responder.role = 'idle';
+      responder.targetTile = null;
+      responder.assignedSystem = null;
+      responder.assignmentHoldUntil = 0;
+      responder.assignmentStickyUntil = 0;
+      setCrewPath(state, responder, []);
+    }
+    return null;
+  }
+  if (responder.activeJobId !== null) {
+    releaseCrewJobForCommandDuty(state, responder);
+    if (responder.activeJobId !== null) return null;
+  }
+  clearCrewSelfCareForDuty(state, responder);
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.lastSystem = 'security';
+  responder.assignmentStickyUntil = Math.max(responder.assignmentStickyUntil, state.now + CREW_ASSIGNMENT_STICKY_SEC);
+  responder.assignmentHoldUntil = Math.max(responder.assignmentHoldUntil, state.now + INCIDENT_ESCORT_GRACE_SEC);
+  return responder.resting ? null : responder;
+}
+
+function assignResponderToIncidentTarget(state: StationState, incident: IncidentEntity, targetTile: number): boolean {
+  if (incident.assignedCrewId === null) return false;
+  const responder = lockIncidentResponder(state, incident);
+  if (!responder) return false;
+  const path = findPath(state, responder.tileIndex, targetTile, { allowRestricted: true, intent: 'security' }, state.pathOccupancyByTile);
+  if (!path) {
+    incident.blockedReason = 'No responder path';
+    return false;
+  }
+  setCrewPath(state, responder, path);
+  responder.targetTile = targetTile;
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.lastSystem = 'security';
+  responder.assignmentStickyUntil = Math.max(responder.assignmentStickyUntil, state.now + CREW_ASSIGNMENT_STICKY_SEC);
+  responder.assignmentHoldUntil = Math.max(responder.assignmentHoldUntil, state.now + INCIDENT_ESCORT_GRACE_SEC);
+  return true;
+}
+
+function incidentResponder(state: StationState, incident: IncidentEntity): CrewMember | null {
+  if (incident.assignedCrewId === null) return null;
+  return state.crewMembers.find((crew) => crew.id === incident.assignedCrewId) ?? null;
+}
+
+function tileDistance(state: StationState, a: number, b: number): number {
+  const pa = fromIndex(a, state.width);
+  const pb = fromIndex(b, state.width);
+  return Math.abs(pa.x - pb.x) + Math.abs(pa.y - pb.y);
+}
+
+function incidentResponderHasSubject(state: StationState, incident: IncidentEntity): boolean {
+  const responder = incidentResponder(state, incident);
+  const subjectTile = incidentSubjectTile(state, incident);
+  return !!responder && subjectTile !== null && tileDistance(state, responder.tileIndex, subjectTile) <= 1;
+}
+
+function keepSubjectAtIncidentBrig(state: StationState, incident: IncidentEntity): boolean {
+  const subject = escortedSubject(state, incident);
+  const brigTile = incident.brigTile ?? incident.targetTile ?? null;
+  if (!subject || brigTile === null || brigTile === undefined) return false;
+  const center = tileCenter(brigTile, state.width);
+  subject.tileIndex = brigTile;
+  subject.x = center.x;
+  subject.y = center.y;
+  subject.path = [];
+  if (incident.subjectKind === 'visitor') {
+    const visitor = subject as Visitor;
+    visitor.activeIncidentId = incident.id;
+    visitor.reservedServingTile = null;
+    visitor.reservedTargetTile = null;
+    visitor.carryingMeal = false;
+    visitor.state = VisitorState.ToLeisure;
+  } else {
+    const resident = subject as Resident;
+    resident.activeIncidentId = incident.id;
+    resident.state = ResidentState.Idle;
+    resident.reservedTargetTile = null;
+  }
+  return true;
+}
+
+function routeResponderToIncidentSubject(state: StationState, incident: IncidentEntity): boolean {
+  const responder = lockIncidentResponder(state, incident);
+  const subjectTile = incidentSubjectTile(state, incident);
+  if (!responder || subjectTile === null) return false;
+  incident.targetTile = subjectTile;
+  if (tileDistance(state, responder.tileIndex, subjectTile) <= 1) return true;
+  const routed =
+    responder.targetTile === subjectTile && responder.path.length > 0
+      ? true
+      : assignResponderToIncidentTarget(state, incident, subjectTile);
+  if (routed) {
+    const remaining = responder.path.length > 0 ? responder.path.length : tileDistance(state, responder.tileIndex, subjectTile);
+    incident.resolveBy = Math.max(incident.resolveBy, state.now + remaining * 0.55 + INCIDENT_PURSUIT_GRACE_SEC);
+  }
+  return false;
+}
+
+function routeIncidentEjectionToExit(state: StationState, incident: IncidentEntity): boolean {
+  if (incident.subjectKind !== 'visitor' || incident.subjectId === null || incident.subjectId === undefined) return false;
+  const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+  if (!visitor) return false;
+  const responder = lockIncidentResponder(state, incident);
+  if (!responder) return false;
+  if (!incidentResponderHasSubject(state, incident)) {
+    return routeResponderToIncidentSubject(state, incident);
+  }
+  const exit = chooseNearestTargetPath(state, responder.tileIndex, visitorDockTargets(state, visitor), true, 'security', visitor.id);
+  if (!exit) {
+    incident.blockedReason = 'No reachable exit';
+    return false;
+  }
+  incident.targetTile = exit.target;
+  incident.resolveBy = Math.max(incident.resolveBy, state.now + exit.path.length * 0.55 + INCIDENT_ESCORT_GRACE_SEC);
+  assignIncidentSubjectPath(state, incident, [], 'eject');
+  if (!assignResponderToIncidentTarget(state, incident, exit.target)) return false;
+  keepSubjectWithResponder(state, incident);
+  return true;
+}
+
+function updateIncidentResponderPursuit(state: StationState, incident: IncidentEntity): boolean {
+  const responder = lockIncidentResponder(state, incident);
+  if (!responder || responder.resting || responder.healthState === 'critical') return false;
+  const targetTile = incidentDispatchTile(state, incident);
+  incident.targetTile = targetTile;
+  if (tileDistance(state, responder.tileIndex, targetTile) <= 1) {
+    return true;
+  }
+  let hasPursuitPath = responder.targetTile === targetTile && responder.path.length > 0;
+  if (responder.targetTile !== targetTile || responder.path.length === 0) {
+    hasPursuitPath = assignResponderToIncidentTarget(state, incident, targetTile);
+  }
+  if (hasPursuitPath) {
+    incident.resolveBy = Math.max(incident.resolveBy, state.now + INCIDENT_PURSUIT_GRACE_SEC);
+  }
+  return false;
+}
+
+function startIncidentEjection(state: StationState, incident: IncidentEntity): boolean {
+  if (incident.subjectKind !== 'visitor' || incident.subjectId === null || incident.subjectId === undefined) return false;
+  const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+  if (!visitor) return false;
+  incident.stage = 'ejecting';
+  incident.brigTile = incident.brigTile ?? null;
+  incident.holdUntil = null;
+  assignIncidentSubjectPath(state, incident, [], 'eject');
+  if (incidentResponderHasSubject(state, incident)) {
+    return routeIncidentEjectionToExit(state, incident);
+  }
+  const subjectTile = incidentSubjectTile(state, incident);
+  if (subjectTile === null) {
+    incident.blockedReason = 'No incident subject';
+    return false;
+  }
+  const responder = lockIncidentResponder(state, incident);
+  if (!responder) return false;
+  incident.targetTile = subjectTile;
+  incident.resolveBy = Math.max(incident.resolveBy, state.now + INCIDENT_PURSUIT_GRACE_SEC);
+  if (tileDistance(state, responder.tileIndex, subjectTile) <= 1) return true;
+  return assignResponderToIncidentTarget(state, incident, subjectTile);
+}
+
+function startIncidentDetention(state: StationState, incident: IncidentEntity): boolean {
+  if (incident.subjectKind === null || incident.subjectKind === undefined || incident.subjectId === null || incident.subjectId === undefined) {
+    const detainee = chooseFightDetainee(state, incident);
+    if (detainee) {
+      incident.subjectKind = 'resident';
+      incident.subjectId = detainee.id;
+      detainee.activeIncidentId = incident.id;
+    }
+  }
+  const subjectTile = incidentSubjectTile(state, incident);
+  if (subjectTile === null) {
+    incident.blockedReason = 'No incident subject';
+    return false;
+  }
+  const brig = chooseNearestTargetPath(state, subjectTile, incidentBrigTargets(state), true, 'security', incident.subjectId ?? null);
+  if (!brig) {
+    incident.blockedReason = 'No active Brig';
+    return startIncidentEjection(state, incident);
+  }
+  incident.stage = 'escorting';
+  incident.targetTile = brig.target;
+  incident.brigTile = brig.target;
+  incident.holdUntil = null;
+  incident.resolveBy = Math.max(incident.resolveBy, state.now + brig.path.length * 0.65 + INCIDENT_ESCORT_GRACE_SEC);
+  assignIncidentSubjectPath(state, incident, [], 'escort');
+  assignResponderToIncidentTarget(state, incident, brig.target);
+  keepSubjectWithResponder(state, incident);
+  return true;
+}
+
+function updateIncidentEscort(state: StationState, incident: IncidentEntity, occupancyByTile: Map<number, number>): void {
+  lockIncidentResponder(state, incident);
+  if (!keepSubjectWithResponder(state, incident)) {
+    if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+    return;
+  }
+  const responder = incidentResponder(state, incident);
+  const subjectTile = incidentSubjectTile(state, incident);
+  if (responder && responder.path.length === 0 && incident.brigTile !== null && incident.brigTile !== undefined && responder.tileIndex === incident.brigTile) {
+    incident.stage = 'holding';
+    incident.holdUntil = state.now + INCIDENT_HOLD_SEC;
+    incident.outcome = incident.type === 'theft' ? 'recovered' : 'detained';
+    const subjectPath: number[] = [];
+    assignIncidentSubjectPath(state, incident, subjectPath, 'escort');
+    keepSubjectAtIncidentBrig(state, incident);
+    return;
+  }
+  if (subjectTile === null) {
+    if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+    return;
+  }
+  if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+}
+
+function updateIncidentHolding(state: StationState, incident: IncidentEntity, occupancyByTile: Map<number, number>): void {
+  keepSubjectAtIncidentBrig(state, incident);
+  const responder = lockIncidentResponder(state, incident);
+  const brigTile = incident.brigTile ?? null;
+  if (responder && brigTile !== null && brigTile !== undefined && tileDistance(state, responder.tileIndex, brigTile) > 1) {
+    if (responder.targetTile !== brigTile || responder.path.length === 0) {
+      assignResponderToIncidentTarget(state, incident, brigTile);
+    }
+    incident.resolveBy = Math.max(incident.resolveBy, state.now + INCIDENT_ESCORT_GRACE_SEC);
+  } else if (responder && brigTile !== null && brigTile !== undefined && responder.tileIndex === brigTile) {
+    setCrewPath(state, responder, []);
+    responder.targetTile = brigTile;
+  }
+  if (state.now < (incident.holdUntil ?? Number.POSITIVE_INFINITY)) return;
+  if (incident.subjectKind === 'visitor') {
+    if (startIncidentEjection(state, incident)) return;
+    resolveIncident(state, incident, { outcome: 'detained' });
+    return;
+  }
+  resolveIncident(state, incident, { fightOutcome: incident.type === 'fight' ? 'detained' : undefined, outcome: incident.type === 'theft' ? 'recovered' : 'detained' });
+}
+
+function updateIncidentEjection(state: StationState, incident: IncidentEntity, occupancyByTile: Map<number, number>): void {
+  const responder = lockIncidentResponder(state, incident);
+  if (!responder) {
+    if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+    return;
+  }
+  const subjectTile = incidentSubjectTile(state, incident);
+  if (subjectTile === null) {
+    resolveIncident(state, incident, { outcome: 'ejected' });
+    return;
+  }
+  if (!incidentResponderHasSubject(state, incident)) {
+    routeResponderToIncidentSubject(state, incident);
+    if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+    return;
+  }
+  if (
+    incident.targetTile !== null &&
+    incident.targetTile !== undefined &&
+    incident.targetTile !== subjectTile &&
+    responder.path.length === 0 &&
+    responder.tileIndex === incident.targetTile
+  ) {
+    resolveIncident(state, incident, { outcome: 'ejected' });
+    return;
+  }
+  if (incident.targetTile === subjectTile || responder.targetTile === subjectTile || responder.path.length === 0) {
+    if (!routeIncidentEjectionToExit(state, incident)) {
+      if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+    }
+    return;
+  }
+  keepSubjectWithResponder(state, incident);
+  if (responder.path.length === 0 && incident.targetTile !== null && incident.targetTile !== undefined && responder.tileIndex === incident.targetTile) {
+    resolveIncident(state, incident, { outcome: 'ejected' });
+    return;
+  }
+  if (state.now >= incident.resolveBy) failIncident(state, incident, occupancyByTile);
+}
+
 function resolveIncident(
   state: StationState,
   incident: IncidentEntity,
-  options?: { fightOutcome?: 'deescalated' | 'detained' }
+  options?: { fightOutcome?: 'deescalated' | 'detained'; outcome?: IncidentOutcome }
 ): void {
   releaseIncidentResponder(state, incident);
   incident.stage = 'resolved';
@@ -12248,6 +13362,7 @@ function resolveIncident(
   state.metrics.incidentsResolvedLifetime += 1;
   if (incident.type === 'fight') {
     incident.outcome = options?.fightOutcome ?? (incident.severity > 1.35 ? 'detained' : 'deescalated');
+    clearIncidentSubject(state, incident, incident.outcome);
     for (const residentId of incident.residentParticipantIds) {
       const resident = state.residents.find((entry) => entry.id === residentId);
       if (!resident) continue;
@@ -12258,7 +13373,13 @@ function resolveIncident(
       resident.safety = clamp(resident.safety + 14, 0, 100);
     }
   } else {
-    incident.outcome = 'warning';
+    incident.outcome = options?.outcome ?? (incident.type === 'theft' ? 'recovered' : 'warning');
+    clearIncidentSubject(state, incident, incident.outcome);
+    if (incident.type === 'theft' && (incident.outcome === 'recovered' || incident.outcome === 'detained' || incident.outcome === 'ejected')) {
+      const recovered = clamp((incident.value ?? 0) * 0.12, 0, 18);
+      state.metrics.credits += recovered;
+      state.usageTotals.creditsMarketGross += recovered;
+    }
   }
   if (incident.dispatchAt !== null) {
     state.usageTotals.securityResolved += 1;
@@ -12298,7 +13419,14 @@ function failIncident(state: StationState, incident: IncidentEntity, occupancyBy
     serviceFailureRatingPenalty(state, 0.3 * incident.severity, 'ratingFromVisitorFailure');
   } else {
     incident.outcome = 'escaped';
-    addVisitorFailurePenalty(state, 0.1 * incident.severity, 'trespass');
+    clearIncidentSubject(state, incident, incident.outcome);
+    if (incident.type === 'theft') {
+      const loss = clamp(incident.value ?? incident.severity * 16, 4, 120);
+      state.metrics.credits = Math.max(0, state.metrics.credits - loss);
+      serviceFailureRatingPenalty(state, 0.16 * incident.severity + loss * 0.004, 'ratingFromVisitorFailure');
+    } else {
+      addVisitorFailurePenalty(state, 0.1 * incident.severity, 'trespass');
+    }
   }
 }
 
@@ -12307,12 +13435,37 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
   for (const incident of state.incidents) {
     if (!isIncidentActive(incident)) continue;
 
+    if (incident.assignedCrewId !== null) {
+      const assignedResponder = incidentResponder(state, incident);
+      if (!assignedResponder || isOfficerCrew(assignedResponder)) {
+        if (assignedResponder && (assignedResponder.role === 'security' || assignedResponder.assignedSystem === 'security')) {
+          assignedResponder.role = 'idle';
+          assignedResponder.targetTile = null;
+          assignedResponder.assignedSystem = null;
+          assignedResponder.assignmentHoldUntil = 0;
+          assignedResponder.assignmentStickyUntil = 0;
+          setCrewPath(state, assignedResponder, []);
+        }
+        incident.assignedCrewId = null;
+        incident.blockedReason = assignedResponder ? 'Officer cannot perform custody escort' : 'Responder unavailable';
+        if (incident.stage === 'intervening' || incident.stage === 'intervening_extended') {
+          incident.stage = 'dispatching';
+          incident.dispatchAt = null;
+          incident.interveneAt = null;
+          incident.extendedResolveAt = null;
+          incident.targetTile = incidentDispatchTile(state, incident);
+        }
+      }
+    }
+
     if (incident.stage === 'detected' && state.now >= incident.createdAt + 0.25) {
       incident.stage = 'dispatching';
     }
 
     if (incident.stage === 'dispatching') {
-      const responder = pickSecurityResponder(state, incident.tileIndex);
+      const dispatchTile = incidentDispatchTile(state, incident);
+      incident.targetTile = dispatchTile;
+      const responder = pickSecurityResponder(state, dispatchTile);
       if (responder) {
         incident.assignedCrewId = responder.crew.id;
         incident.dispatchAt = state.now;
@@ -12328,7 +13481,7 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
             brigContainmentMultiplier;
         incident.stage = 'intervening';
         setCrewPath(state, responder.crew, responder.path);
-        responder.crew.targetTile = incident.tileIndex;
+        responder.crew.targetTile = dispatchTile;
         responder.crew.role = 'security';
         responder.crew.assignedSystem = 'security';
         responder.crew.assignmentStickyUntil = Math.max(
@@ -12346,11 +13499,18 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
     }
 
     if (incident.stage === 'intervening') {
-      if (state.now >= (incident.interveneAt ?? Number.POSITIVE_INFINITY)) {
+      const responderReachedIncident = updateIncidentResponderPursuit(state, incident);
+      if (state.now >= (incident.interveneAt ?? Number.POSITIVE_INFINITY) && responderReachedIncident) {
         if (incident.type === 'fight') {
           const resolution = resolveFightOnIntervention(state, incident);
           if (resolution.mode === 'resolved') {
-            resolveIncident(state, incident, { fightOutcome: resolution.outcome });
+            if (resolution.outcome === 'detained') {
+              if (!startIncidentDetention(state, incident)) {
+                resolveIncident(state, incident, { fightOutcome: 'deescalated' });
+              }
+            } else {
+              resolveIncident(state, incident, { fightOutcome: resolution.outcome });
+            }
           } else {
             incident.stage = 'intervening_extended';
             incident.extendedResolveAt = resolution.resolveAt;
@@ -12358,7 +13518,14 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
             incident.resolveBy = Math.max(incident.resolveBy, resolution.resolveAt + 1.2);
           }
         } else {
-          resolveIncident(state, incident);
+          const shouldTakeCustody = incident.subjectKind !== null && incident.subjectKind !== undefined;
+          if (shouldTakeCustody && (incident.type === 'theft' || incident.severity >= 0.8 || state.ops.brigActive > 0)) {
+            if (!startIncidentDetention(state, incident)) {
+              resolveIncident(state, incident, { outcome: incident.type === 'theft' ? 'recovered' : 'warning' });
+            }
+          } else {
+            resolveIncident(state, incident);
+          }
         }
       } else if (state.now >= incident.resolveBy) {
         failIncident(state, incident, occupancyByTile);
@@ -12370,10 +13537,28 @@ function updateIncidentPipeline(state: StationState, dt: number, occupancyByTile
         incident.extendedResolveAt = Math.min(incident.extendedResolveAt, state.now + 0.55);
       }
       if (state.now >= (incident.extendedResolveAt ?? Number.POSITIVE_INFINITY) && hasActiveIncidentResponder(state, incident)) {
-        resolveIncident(state, incident, { fightOutcome: incident.severity >= 1.75 ? 'detained' : 'deescalated' });
+        if (incident.severity >= 1.75) {
+          if (!startIncidentDetention(state, incident)) {
+            resolveIncident(state, incident, { fightOutcome: 'deescalated' });
+          }
+        } else {
+          resolveIncident(state, incident, { fightOutcome: 'deescalated' });
+        }
       } else if (state.now >= incident.resolveBy) {
         failIncident(state, incident, occupancyByTile);
       }
+    }
+
+    if (incident.stage === 'escorting') {
+      updateIncidentEscort(state, incident, occupancyByTile);
+    }
+
+    if (incident.stage === 'holding') {
+      updateIncidentHolding(state, incident, occupancyByTile);
+    }
+
+    if (incident.stage === 'ejecting') {
+      updateIncidentEjection(state, incident, occupancyByTile);
     }
   }
   state.incidents = state.incidents.filter((incident) => {
@@ -12432,20 +13617,28 @@ function updateResidentLogic(
     if (!Number.isFinite(resident.safety)) resident.safety = 65;
     if (!resident.routinePhase) resident.routinePhase = 'errands';
     updateResidentRoutinePhase(state, resident);
-    const activeFight = activeFightIncidentForResident(state, resident.id);
-    if (!activeFight && resident.activeIncidentId !== null) {
+    const activeIncident = activeIncidentForResident(state, resident.id);
+    if (!activeIncident && resident.activeIncidentId !== null) {
       resident.activeIncidentId = null;
     }
-    if (activeFight) {
+    if (activeIncident) {
       resident.state = ResidentState.Idle;
-      setResidentPath(state, resident, []);
       resident.reservedTargetTile = null;
       releaseReservationsForOwner(state, 'resident', resident.id, 'failed');
-      resident.stress = clamp(resident.stress + dt * 0.6, 0, 120);
-      resident.agitation = clamp(Math.max(resident.agitation, RESIDENT_AGITATION_CONFRONTATION_THRESHOLD + 15), 0, 100);
-      resident.confrontationUntil = Math.max(resident.confrontationUntil, state.now + dt);
-      resident.safety = clamp(resident.safety - dt * 2.4, 0, 100);
-      resident.social = clamp(resident.social - dt * 0.5, 0, 100);
+      if (activeIncident.stage === 'escorting' || activeIncident.stage === 'ejecting') {
+        const moveResult = moveAlongPath(state, resident, dt, occupancyByTile);
+        if (moveResult === 'blocked') resident.blockedTicks = Math.min(resident.blockedTicks + 1, 9999);
+        else if (moveResult === 'moved') resident.blockedTicks = 0;
+      } else {
+        setResidentPath(state, resident, []);
+      }
+      if (activeIncident.type === 'fight') {
+        resident.stress = clamp(resident.stress + dt * 0.6, 0, 120);
+        resident.agitation = clamp(Math.max(resident.agitation, RESIDENT_AGITATION_CONFRONTATION_THRESHOLD + 15), 0, 100);
+        resident.confrontationUntil = Math.max(resident.confrontationUntil, state.now + dt);
+        resident.safety = clamp(resident.safety - dt * 2.4, 0, 100);
+        resident.social = clamp(resident.social - dt * 0.5, 0, 100);
+      }
       keep.push(resident);
       continue;
     }
@@ -13215,6 +14408,19 @@ function computeMetrics(state: StationState): void {
     state.usageTotals.incidentSuppressionSampleCount > 0
       ? state.usageTotals.incidentSuppressionSampleSum / state.usageTotals.incidentSuppressionSampleCount
       : 1;
+  const reputationZones = getReputationZoneScores(state);
+  const economicZones = reputationZones.filter((zone) => zone.value >= 32 || zone.traffic > 0);
+  const reputationWeight = economicZones.reduce((acc, zone) => acc + Math.max(1, zone.tiles.length) + zone.traffic, 0);
+  const weightedReputation = (pick: (zone: ReputationZoneScore) => number): number =>
+    reputationWeight > 0
+      ? economicZones.reduce((acc, zone) => acc + pick(zone) * (Math.max(1, zone.tiles.length) + zone.traffic), 0) / reputationWeight
+      : 0;
+  const prestigeAvg = weightedReputation((zone) => zone.prestige);
+  const notorietyAvg = weightedReputation((zone) => zone.notoriety);
+  const controlAvg = weightedReputation((zone) => zone.control);
+  const crimePressureAvg = weightedReputation((zone) => zone.crimePressure);
+  const highRiskZones = reputationZones.filter((zone) => zone.crimePressure >= 65).length;
+  const topZone = reputationZones[0];
 
   state.metrics.visitorsCount = visitorsCount;
   state.metrics.residentsCount = residentsCount;
@@ -13243,6 +14449,16 @@ function computeMetrics(state: StationState): void {
   state.metrics.residentHungerAvg = residentHungerAvg;
   state.metrics.residentEnergyAvg = residentEnergyAvg;
   state.metrics.residentHygieneAvg = residentHygieneAvg;
+  state.metrics.reputationPrestigeAvg = prestigeAvg;
+  state.metrics.reputationNotorietyAvg = notorietyAvg;
+  state.metrics.reputationControlAvg = controlAvg;
+  state.metrics.reputationCrimePressureAvg = crimePressureAvg;
+  state.metrics.reputationHighRiskZones = highRiskZones;
+  state.metrics.reputationTopZone = topZone
+    ? `${topZone.label} ${topZone.room} @ ${fromIndex(topZone.anchorTile, state.width).x},${fromIndex(topZone.anchorTile, state.width).y}`
+    : 'none';
+  state.metrics.reputationPremiumDemandBonusPct = clamp((prestigeAvg - 38) * 0.35 - highRiskZones * 1.5, 0, 24);
+  state.metrics.reputationRiskyDemandBonusPct = clamp((notorietyAvg - 34) * 0.35 + Math.max(0, crimePressureAvg - controlAvg) * 0.18, 0, 28);
   state.metrics.load = load;
   state.metrics.capacity = capacity;
   state.metrics.loadPct = loadPct;
@@ -14728,6 +15944,7 @@ export function updateCommandProgress(state: StationState, dt: number): void {
     if (dutyTiles.length <= 0) continue;
     releaseCrewJobForCommandDuty(state, crew);
     if (crew.activeJobId !== null) continue;
+    clearCrewSelfCareForDuty(state, crew);
     const currentDutyTile = dutyTiles.includes(crew.tileIndex) && !staffedDutyTiles.has(crew.tileIndex) ? crew.tileIndex : null;
     let selectedDutyTile = currentDutyTile;
     let selectedPath: number[] | null = currentDutyTile !== null ? [] : null;
@@ -14748,7 +15965,13 @@ export function updateCommandProgress(state: StationState, dt: number): void {
       crew.targetTile = selectedDutyTile;
       crew.assignedSystem = null;
       crew.lastSystem = null;
-      if (crew.tileIndex !== selectedDutyTile && crew.path.length === 0) {
+      if (crew.tileIndex === selectedDutyTile) {
+        setCrewPath(state, crew, []);
+      } else if (
+        crew.path.length === 0 ||
+        crew.targetTile !== selectedDutyTile ||
+        crew.path[crew.path.length - 1] !== selectedDutyTile
+      ) {
         setCrewPath(state, crew, selectedPath);
       }
       staffedDutyTiles.add(selectedDutyTile);
@@ -14852,14 +16075,21 @@ export function setCrewPriorityWeight(state: StationState, system: CrewPriorityS
   state.controls.crewPriorityWeights[system] = clamp(Math.round(weight), 1, 10);
 }
 
+export function setSecurityPosture(state: StationState, posture: SecurityPosture): void {
+  state.controls.securityPosture = posture;
+  state.effects.securityAuraByTile = computeSecurityAuraMap(state);
+}
+
 // Dock + berth control APIs moved to ./dock-controls. Re-exported
 // here so the public surface (main.ts, save.ts, render/, etc.) keeps
 // working unchanged.
 export {
   ensureBerthConfig,
   getDockByTile,
+  setBerthCustomsPolicy,
   setBerthAllowedShipSize,
   setBerthAllowedShipType,
+  setBerthScreeningLevel,
   setDockAllowedShipSize,
   setDockAllowedShipType,
   setDockFacing,
@@ -14954,6 +16184,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateCriticalStaffTracking(state, dt);
   updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
+  maybeCreateTheftIncident(state, dt);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);

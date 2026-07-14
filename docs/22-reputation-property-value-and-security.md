@@ -1,6 +1,6 @@
 # 22 Reputation, Property Value, And Security
 
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 
 Status: product and implementation proposal. This plan turns the current "many systems as checklist" problem into a shared station-identity loop: local property value, local notoriety, crime pressure, and a security response model that makes high-value and seedy areas play differently without requiring explicit "prestige mode" / "crime mode" toggles.
 
@@ -265,50 +265,52 @@ Defer until after the two-pass MVP:
 - murder/organized crime;
 - authority raids/legal heat;
 - manual district painter;
-- cameras and access gates.
+- patrol routes and deeper camera/access-gate overlays.
 
 ## Checklist
 
 ### 0. Baseline And Scope Control
 
-- [ ] Confirm branch and git status before editing.
-- [ ] Re-read `docs/06-visitors-residents.md`, `docs/07-docks-ships.md`, `docs/08-incidents-effects.md`, and `docs/10-economy-rating.md`.
-- [ ] Re-read `docs/99-trip-wires.md`, especially incident, visitors/residents, docks, and rating sections.
-- [ ] Confirm whether Pass 1 and Pass 2 land in one branch or two stacked branches.
-- [ ] Record the starting branch, base commit, and any local constraints in the notes section.
+- [x] Confirm branch and git status before editing.
+- [x] Re-read `docs/06-visitors-residents.md`, `docs/07-docks-ships.md`, `docs/08-incidents-effects.md`, and `docs/10-economy-rating.md`.
+- [x] Re-read `docs/99-trip-wires.md`, especially incident, visitors/residents, docks, and rating sections.
+- [x] Confirm whether Pass 1 and Pass 2 land in one branch or two stacked branches.
+- [x] Record the starting branch, base commit, and any local constraints in the notes section.
 
 ### 1. Existing System Reconnaissance
 
-- [ ] Map current room clusters and room-environment scoring.
-- [ ] Map current route-exposure penalties and route-pressure overlay.
-- [ ] Map current station-rating update paths and per-reason breakdowns.
-- [ ] Map current Market spend, trade-good stock, and MarketStall item-node behavior.
-- [ ] Map current Berth capability matching, per-berth allowlists, and CustomsCounter placement rules.
-- [ ] Map current Security aura, incident pipeline, responder assignment, Brig multiplier, and fight/trespass outcomes.
-- [ ] Map current resident conversion/rent/tax/private housing requirements.
-- [ ] Record any trip-wires found during reconnaissance.
+- [x] Map current room clusters and room-environment scoring.
+- [x] Map current route-exposure penalties and route-pressure overlay.
+- [x] Map current station-rating update paths and per-reason breakdowns.
+- [x] Map current Market spend, trade-good stock, and MarketStall item-node behavior.
+- [x] Map current Berth capability matching, per-berth allowlists, and CustomsCounter placement rules.
+- [x] Map current Security aura, incident pipeline, responder assignment, Brig multiplier, and fight/trespass outcomes.
+- [x] Map current resident conversion/rent/tax/private housing requirements.
+- [x] Record any trip-wires found during reconnaissance.
 
 ### 2. Pass 1 - Incident Selection And UX
 
-- [ ] Add selected-incident state to the UI/sim facade without replacing selected actor/room flows.
-- [ ] Make incident world markers clickable.
-- [ ] Make incident alerts click-to-focus and click-to-select.
-- [ ] Add selected incident inspector rows: type, stage, outcome, severity, subject ids, responder id, target tile, deadline, and blocked reason.
-- [ ] Show responder and subject route lines when an incident is selected.
-- [ ] Keep resolved/failed incidents selectable during their retention window.
+- [x] Add selected-incident state to the UI/sim facade without replacing selected actor/room flows.
+- [x] Make incident world markers clickable.
+- [x] Make incident alerts click-to-focus and click-to-select.
+- [x] Add selected incident inspector rows: type, stage, outcome, severity, subject ids, responder id, target tile, deadline, and blocked reason.
+- [x] Show responder and subject route lines when an incident is selected.
+- [x] Add selected-incident actor callouts: red subject/suspect rings, cyan security ring, and labeled Brig/target/exit markers.
+- [x] Keep resolved/failed incidents selectable during their retention window.
 - [ ] Add a small scenario or debug setup with active trespass/fight incidents for manual UX testing.
+- [x] Add a neutral Inspect/None tool state so incident and inspector clicks are not blocked by Floor being armed by default.
 
 ### 3. Pass 1 - Security And Brig Response
 
-- [ ] Extend incident subject handling so security can target a suspect or participant, not only an incident tile.
-- [ ] Add detained/ejected/warned outcomes where appropriate.
-- [ ] Make security responders physically intercept the subject or participant.
-- [ ] Make detained subjects route with or alongside a security responder to an active Brig.
-- [ ] If no active Brig exists, resolve detention-capable incidents as warning/ejection with weaker recovery.
-- [ ] Make Brig capacity or active CellConsole matter in a minimal way.
-- [ ] Add holding/release/ejection timer state for detainees.
-- [ ] Keep existing trespass/fight behavior working and preserve `incidentsResolvedLifetime` semantics.
-- [ ] Add visible inspector/debug rows for responder, suspect, Brig target, holding state, and blocked reason.
+- [x] Extend incident subject handling so security can target a suspect or participant, not only an incident tile.
+- [x] Add detained/ejected/warned outcomes where appropriate.
+- [x] Make security responders physically intercept the subject or participant.
+- [x] Make detained subjects route with or alongside a security responder to an active Brig.
+- [x] If no active Brig exists, resolve detention-capable incidents as warning/ejection with weaker recovery.
+- [x] Make Brig capacity or active CellConsole matter in a minimal way.
+- [x] Add holding/release/ejection timer state for detainees.
+- [x] Keep existing trespass/fight behavior working and preserve `incidentsResolvedLifetime` semantics.
+- [x] Add visible inspector/debug rows for responder, suspect, Brig target, holding state, and blocked reason.
 - [ ] Add tests for escort-to-Brig, no-Brig fallback, blocked route, and fight/trespass regression.
 
 ### 4. Pass 1 - Verification
@@ -318,88 +320,88 @@ Defer until after the two-pass MVP:
 - [ ] Add sim tests for security escort-to-Brig.
 - [ ] Add regression tests for `incidentsResolvedLifetime`.
 - [ ] Add UI/manual playtest notes for click-to-select, alert focus, and route-line readability.
-- [ ] Run `npm run test:sim`.
-- [ ] Run `npm run build`.
-- [ ] Playtest a security/incident scenario locally.
-- [ ] Record Pass 1 verification notes below.
+- [x] Run `npm run test:sim`.
+- [x] Run `npm run build`.
+- [x] Playtest a security/incident scenario locally.
+- [x] Record Pass 1 verification notes below.
 
 ### 5. Pass 2 - Reputation Data Model
 
-- [ ] Add derived local reputation zone score types without committing to saved manual districts.
-- [ ] Add score derivation helpers for room clusters and local radius samples.
-- [ ] Include inputs for room environment, cleanliness/sanitation, maintenance/air, security aura, visible force, incidents, traffic, privacy/opacity, and nearby room mix.
-- [ ] Add bounded score bands and labels so the overlay can speak in plain language.
-- [ ] Keep Pass 2 scores derived from state. Save only persistent incident memory or policy choices if needed.
-- [ ] Add deterministic tests for score derivation on small fixture layouts.
+- [x] Add derived local reputation zone score types without committing to saved manual districts.
+- [x] Add score derivation helpers for room clusters and local radius samples.
+- [x] Include inputs for room environment, cleanliness/sanitation, maintenance/air, security aura, visible force, incidents, traffic, privacy/opacity, and nearby room mix.
+- [x] Add bounded score bands and labels so the overlay can speak in plain language.
+- [x] Keep Pass 2 scores derived from state. Save only persistent incident memory or policy choices if needed.
+- [x] Add deterministic tests for score derivation on small fixture layouts.
 
 ### 6. Pass 2 - Reputation Memory And Theft
 
 - [ ] Add local reputation memory for recent incidents by tile/zone anchor with decay.
-- [ ] Add `theft` to `IncidentType` with a bounded subject/target model.
-- [ ] Spawn theft from high `crimePressure` in value-bearing areas: Market, Workshop, Storage/LogisticsStock, Berth/CargoArm, private Dorm, and high-value Cantina/Lounge/Observatory pockets.
-- [ ] Scale theft value from room/module score rather than inventing detailed item rarity in Pass 2.
-- [ ] On resolved theft, reduce local incident heat and recover part of the value.
-- [ ] On failed theft, apply local prestige hit, notoriety memory, station-rating penalty, and value loss.
-- [ ] Use Pass 1 detention/ejection/Brig outcomes to differentiate contained theft from failed theft.
+- [x] Add `theft` to `IncidentType` with a bounded subject/target model.
+- [x] Spawn theft from high `crimePressure` in value-bearing areas: Market, Workshop, Storage/LogisticsStock, Berth/CargoArm, private Dorm, and high-value Cantina/Lounge/Observatory pockets.
+- [x] Scale theft value from room/module score rather than inventing detailed item rarity in Pass 2.
+- [x] On resolved theft, reduce local incident heat and recover part of the value.
+- [x] On failed theft, apply local prestige/risk heat, station-rating penalty, and value loss.
+- [x] Use Pass 1 detention/ejection/Brig outcomes to differentiate contained theft from failed theft.
 - [ ] Add tests for theft spawn suppression, resolution, failure, local memory decay, and Brig-mediated recovery.
 
 ### 7. Pass 2 - Room And Economic Hooks
 
-- [ ] Add per-berth `screeningLevel` or equivalent policy, defaulting to standard for old saves.
-- [ ] Make CustomsCounter and screening level affect berth control, processing time, and risky-traffic attractiveness.
-- [ ] Make Market spend respond to local prestige/notoriety and recent theft.
-- [ ] Add simple MarketStall value classification: ordinary, boutique-leaning, gray-leaning, derived from local scores.
-- [ ] Make private-resident conversion/rent respond to local private-housing prestige, opacity, and recent incidents.
-- [ ] Make Cantina service posture or derived crowding/noise affect spend, fight pressure, and local notoriety.
-- [ ] Make Lounge and Observatory contribute stronger green-zone value, with higher scandal damage from unresolved incidents.
-- [ ] Make Workshop value raise production upside and tool-theft pressure.
-- [ ] Make Storage/LogisticsStock and cargo-adjacent Berths raise red-zone opportunity when under-controlled.
-- [ ] Make Security/Brig visible-force penalties apply near high-prestige public/private rooms.
+- [x] Add per-berth `screeningLevel` or equivalent policy, defaulting to standard for old saves.
+- [x] Make CustomsCounter and screening level affect berth control, processing time, and risky-traffic attractiveness.
+- [x] Make Market spend respond to local prestige/notoriety and recent theft.
+- [x] Add simple MarketStall value classification: ordinary, boutique-leaning, gray-leaning, derived from local scores.
+- [x] Make private-resident conversion/rent respond to local private-housing prestige, opacity, and recent incidents.
+- [x] Make Cantina service posture or derived crowding/noise affect spend, fight pressure, and local notoriety.
+- [x] Make Lounge and Observatory contribute stronger green-zone value, with higher scandal damage from unresolved incidents.
+- [x] Make Workshop value raise production upside and tool-theft pressure.
+- [x] Make Storage/LogisticsStock and cargo-adjacent Berths raise red-zone opportunity when under-controlled.
+- [x] Make Security/Brig visible-force penalties apply near high-prestige public/private rooms.
 - [ ] Feed RecHall/Cafeteria crowding, cleanliness, and control into social disorder or civic comfort if safe to do without rebalancing residents broadly.
-- [ ] Keep support rooms such as Hydroponics, Kitchen, Clinic, LifeSupport, and Maintenance as score inputs in Pass 2 rather than separate offer systems.
+- [x] Keep support rooms such as Hydroponics, Kitchen, Clinic, LifeSupport, and Maintenance as score inputs in Pass 2 rather than separate offer systems.
 
 ### 8. Pass 2 - Demand And Station Reputation
 
-- [ ] Add station-level prestige/notoriety summaries weighted by visited zones and active economic rooms.
-- [ ] Use high prestige to improve wealthy visitor spend, resident conversion, premium tenant offers, or premium ship/contract chance.
+- [x] Add station-level prestige/notoriety summaries weighted by visited zones and active economic rooms.
+- [x] Use high prestige to improve wealthy visitor spend, resident conversion, premium tenant offers, or premium ship/contract chance.
 - [ ] Use high notoriety to improve risky cargo/industrial/trader offer chance, gray-market tenant offers, or risky income.
 - [ ] Penalize green-zone incidents more harshly than red-zone incidents.
 - [ ] Penalize red-zone disorder only when it fails security response, escalates, or leaks into green zones.
-- [ ] Add clear metric breakdowns so players can tell whether value, opacity, traffic, or weak control is driving crime.
+- [x] Add clear metric breakdowns so players can tell whether value, opacity, traffic, or weak control is driving crime.
 
 ### 9. Pass 2 - UI, Overlay, Inspectors, And Scenario
 
-- [ ] Add `reputation` or `property-value` diagnostic overlay.
-- [ ] Show prestige/notoriety/control/crime-pressure color bands without hiding build readability.
-- [ ] Add selected room/zone inspector rows: label, prestige, notoriety, value, opacity, control, top drivers, recent incidents.
-- [ ] Add Station Ops summary for station reputation mix and top risky zones.
-- [ ] Add alert copy for high-value low-control areas and unresolved theft.
-- [ ] Add `?scenario=reputation-slice` with a green public zone, red berth/cantina/market/workshop/logistics zone, active security, Brig, and theft pressure.
-- [ ] Verify desktop and mobile-ish viewport readability in the browser.
+- [x] Add `reputation` or `property-value` diagnostic overlay.
+- [x] Show prestige/notoriety/control/crime-pressure color bands without hiding build readability.
+- [x] Add selected room/zone inspector rows: label, prestige, notoriety, value, opacity, control, top drivers, recent incidents.
+- [x] Add Station Ops summary for station reputation mix and top risky zones.
+- [x] Add alert copy for high-value low-control areas and unresolved theft.
+- [x] Add `?scenario=reputation-slice` with a green public zone, red berth/cantina/market/workshop/logistics zone, active security, Brig, and theft pressure.
+- [x] Verify desktop and mobile-ish viewport readability in the browser.
 
 ### 10. Pass 2 - Tests And Verification
 
-- [ ] Add sim tests for local score derivation and labels.
+- [x] Add sim tests for local score derivation and labels.
 - [ ] Add sim tests for Market spend/reputation modifiers.
-- [ ] Add sim tests for Berth screening/reputation modifiers.
+- [x] Add sim tests for Berth screening/reputation modifiers.
 - [ ] Add sim tests for private-resident conversion/rent modifiers if implemented.
 - [ ] Add sim tests for Cantina, Lounge/Observatory, Workshop, and Storage/Logistics reputation modifiers if implemented.
 - [ ] Add sim tests for theft incident lifecycle.
 - [ ] Add sim tests for security escort-to-Brig interaction with theft.
 - [ ] Add regression tests for existing trespass/fight resolution and `incidentsResolvedLifetime`.
-- [ ] Run `npm run test:sim`.
-- [ ] Run `npm run build`.
-- [ ] Playtest `http://localhost:5174/?scenario=reputation-slice`.
-- [ ] Record Pass 2 verification notes below.
+- [x] Run `npm run test:sim`.
+- [x] Run `npm run build`.
+- [x] Playtest `http://127.0.0.1:5175/?scenario=reputation-slice`.
+- [x] Record Pass 2 verification notes below.
 
 ### 11. Follow-Up Layers
 
 - [ ] Tenant offers for MarketStall, Cantina, and private Dorm clusters.
-- [ ] Customs policy depth: strict screening, selective screening, expedited clearance, seizure office.
-- [ ] Security posture depth: discreet, standard, visible patrol.
+- [x] Customs policy depth: routine, selective screening, expedited clearance, seizure office, layered with berth screening.
+- [x] Security posture depth: discreet, standard, visible patrol.
 - [ ] Patrol route or post placement.
-- [ ] Cameras/sensors and blind-spot overlay.
-- [ ] Access gates/checkpoints and privacy/friction effects.
+- [x] Cameras/sensors as a SecurityCamera module feeding control and opacity; a dedicated blind-spot overlay remains future polish.
+- [x] Access gates/checkpoints as an AccessGate module with staff-dependent control and privacy/friction effects.
 - [ ] Contraband incident for Berth/Storage/Market.
 - [ ] Contract families that react to station reputation: VIP event, reputable trade, risky cargo, gray-market fair.
 - [ ] Authority heat/investigation layer if notoriety needs an external pressure.
@@ -412,7 +414,21 @@ Defer until after the two-pass MVP:
 - 2026-05-05: Design decision: Notoriety is not failure. A red zone should be playable if incidents are contained and demand remains profitable.
 - 2026-05-05: Scope concern: tenant offers, contraband inventory, bribery, gangs, and authority heat are all tempting but should wait until the property-value overlay and first crime response loop are visible.
 - 2026-05-05: Security concern: preserve `incidentsResolvedLifetime` event semantics when adding theft or escort states.
+- 2026-05-05: Implementation branch: `codex/reputation-property-security`, starting from `4774ba7`. Pass 1 and Pass 2 landed together because the reputation overlay needs real incident subjects/outcomes to read as a playable loop.
+- 2026-05-05: UX follow-up from browser playtest: defaulting to Floor makes incident/inspector clicks feel destructive. The build palette now starts in Inspect/None, with Floor and other build tools armed only by explicit button/hotkey selection.
+- 2026-05-06: Follow-up layer decision: customs policy, security posture, cameras, and access gates were added as ordinary operational levers instead of explicit prestige/notoriety toggles. They modify derived value/control/opacity/notoriety and inherit the room context around them.
+- 2026-05-06: Balance concern resolved for the reputation-slice scenario: raw berth traffic was making nearby docks read as high-risk even when security and screening were close. Crime pressure now uses damped traffic pressure and controlled-traffic suppression, so an open expedited berth can be red while a strict/selective berth near security reads controlled but still valuable.
+- 2026-05-06: Scope note: SecurityCamera currently acts through the reputation overlay's control/opacity math. A separate blind-spot overlay can wait until camera facing, coverage cones, sabotage, or patrol routing make it worth another UI layer.
 
 ## Verification Log
 
-- _Add dated verification notes here._
+- 2026-05-05: `npm run build` passed after selected-incident callouts and neutral Inspect/None cursor state.
+- 2026-05-05: `npm run test:sim` passed after the reputation/security slice and latest incident UX changes.
+- 2026-05-05: Browser QA at `http://127.0.0.1:5175/?scenario=reputation-slice`: scenario reloads with Inspect active, Floor inactive, `#game-wrap.inspect-mode`, and no browser console warnings/errors. Clicking Floor changes to `build-mode`; clicking Inspect returns to `inspect-mode`.
+- 2026-05-05: Browser QA note: a short fast-forward did not naturally produce a live incident, so selected-incident callouts were build-verified but still need a deterministic active-incident scenario for repeatable visual QA.
+- 2026-05-05: Follow-up incident QA: responders now must physically reach the subject/current incident tile before intervention resolves. Active pursuit extends the escape timer, while no-route cases can still fail instead of chasing forever. Tier-3 dispatch incidents now attach a real visitor/resident subject so the inspector does not show `none`.
+- 2026-05-05: Follow-up escort QA: custody/ejection is now security-driven. The detainee path is cleared and the subject is kept with the responder until the responder reaches Brig or the exit, avoiding subjects self-walking to Brig/ship while security peels off.
+- 2026-05-06: `npm run test:sim` passed after customs policy, security posture, SecurityCamera, AccessGate, and reputation-slice balance changes.
+- 2026-05-06: `npm run build` passed after the follow-up layer changes. Vite still reports the existing large main chunk warning.
+- 2026-05-06: Browser QA at `http://127.0.0.1:5177/?scenario=reputation-slice`: fresh scenario load is console-clean, Modules exposes selectable Camera and Gate buttons, Inspect/None deselects build tools, and Security Posture can switch to Visible Patrol. Scenario probe confirms one camera and two gates are present.
+- 2026-05-06: Balance QA note: the open/expedited berth reads seedy and high-pressure, while the strict/selective berth near active control reads ordinary with low crime pressure. This makes the docks' red/green split more tied to policy and control instead of simply being near security staffing.

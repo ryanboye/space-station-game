@@ -68,7 +68,8 @@ export type DiagnosticOverlay =
   | 'service-noise'
   | 'sanitation'
   | 'maintenance'
-  | 'route-pressure';
+  | 'route-pressure'
+  | 'reputation';
 
 export type DriftSeverity = 'none' | 'low' | 'warning' | 'active' | 'severe';
 export type MapConditionKind = 'sunlight' | 'debris-risk' | 'thermal-sink';
@@ -135,9 +136,58 @@ export interface MapConditionSample {
   downside: string;
 }
 
-export type IncidentType = 'fight' | 'trespass';
-export type IncidentStage = 'detected' | 'dispatching' | 'intervening' | 'intervening_extended' | 'resolved' | 'failed';
-export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'fatality' | 'escaped';
+export type IncidentType = 'fight' | 'trespass' | 'theft';
+export type IncidentStage =
+  | 'detected'
+  | 'dispatching'
+  | 'intervening'
+  | 'intervening_extended'
+  | 'escorting'
+  | 'holding'
+  | 'ejecting'
+  | 'resolved'
+  | 'failed';
+export type IncidentOutcome = 'warning' | 'deescalated' | 'detained' | 'recovered' | 'ejected' | 'fatality' | 'escaped';
+export type IncidentSubjectKind = 'visitor' | 'resident';
+export type BerthScreeningLevel = 'open' | 'standard' | 'strict';
+export type CustomsPolicy = 'routine' | 'selective' | 'expedited' | 'seizure';
+export type SecurityPosture = 'discreet' | 'standard' | 'visible';
+export type ReputationZoneLabel =
+  | 'premium'
+  | 'polished'
+  | 'exclusive'
+  | 'ordinary'
+  | 'rough'
+  | 'seedy'
+  | 'industrial'
+  | 'high-risk';
+
+export interface ReputationZoneScore {
+  anchorTile: number;
+  room: RoomType;
+  tiles: number[];
+  prestige: number;
+  notoriety: number;
+  control: number;
+  value: number;
+  opacity: number;
+  crimePressure: number;
+  recentIncidentHeat: number;
+  traffic: number;
+  visibleForce: number;
+  label: ReputationZoneLabel;
+  screeningLevel?: BerthScreeningLevel;
+  customsPolicy?: CustomsPolicy;
+  marketClass?: 'ordinary' | 'boutique' | 'gray';
+  topDrivers: string[];
+}
+
+export interface ReputationTileDiagnostic {
+  tileIndex: number;
+  zone: ReputationZoneScore | null;
+  summary: string;
+  drivers: string[];
+}
 
 export enum RoomType {
   None = 'none',
@@ -231,6 +281,12 @@ export enum ModuleType {
   Gangway = 'gangway',
   CustomsCounter = 'customs-counter',
   CargoArm = 'cargo-arm',
+  // SecurityCamera: wall-mounted low-friction surveillance. Adds local
+  // control and lowers opacity without the full prestige hit of guards/gates.
+  SecurityCamera = 'security-camera',
+  // AccessGate: staffed floor checkpoint. Strong local control when enough
+  // Security Guards exist; weak/frictional if unstaffed.
+  AccessGate = 'access-gate',
   FireExtinguisher = 'fire-extinguisher',
   // Vent module: 1x1 air-distribution node. Acts as a secondary life-support
   // source within VENT_REACH_FROM_LS tiles of an active LS cluster, projecting
@@ -343,6 +399,7 @@ export interface Visitor {
   leisureLegsRemaining: number;
   leisureLegsPlanned: number;
   lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | 'vending' | null;
+  activeIncidentId?: number | null;
 }
 
 export enum ResidentState {
@@ -1027,6 +1084,8 @@ export interface BerthConfig {
   anchorTile: number;
   allowedShipTypes: ShipType[];
   allowedShipSizes: ShipSize[];
+  screeningLevel?: BerthScreeningLevel;
+  customsPolicy?: CustomsPolicy;
 }
 
 export interface LaneProfile {
@@ -1102,6 +1161,7 @@ export interface IncidentEntity {
   id: number;
   type: IncidentType;
   tileIndex: number;
+  targetTile?: number | null;
   severity: number;
   createdAt: number;
   dispatchAt: number | null;
@@ -1111,8 +1171,14 @@ export interface IncidentEntity {
   outcome: IncidentOutcome | null;
   resolvedAt: number | null;
   assignedCrewId: number | null;
+  subjectKind?: IncidentSubjectKind | null;
+  subjectId?: number | null;
   residentParticipantIds: number[];
   extendedResolveAt: number | null;
+  brigTile?: number | null;
+  holdUntil?: number | null;
+  blockedReason?: string | null;
+  value?: number;
 }
 
 export interface Metrics {
@@ -1142,6 +1208,14 @@ export interface Metrics {
   residentHungerAvg: number;
   residentEnergyAvg: number;
   residentHygieneAvg: number;
+  reputationPrestigeAvg: number;
+  reputationNotorietyAvg: number;
+  reputationControlAvg: number;
+  reputationCrimePressureAvg: number;
+  reputationHighRiskZones: number;
+  reputationTopZone: string;
+  reputationPremiumDemandBonusPct: number;
+  reputationRiskyDemandBonusPct: number;
   load: number;
   capacity: number;
   loadPct: number;
@@ -1759,6 +1833,7 @@ export interface Controls {
   materialAutoImportEnabled: boolean;
   materialTargetStock: number;
   materialImportBatchSize: number;
+  securityPosture: SecurityPosture;
   crewPriorityPreset: CrewPriorityPreset;
   crewPriorityWeights: CrewPriorityWeights;
 }

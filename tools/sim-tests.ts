@@ -29,12 +29,15 @@ import {
   getSanitationTileDiagnostic,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
+  getReputationZoneScores,
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
   hireStaffRole,
   mapConditionAt,
   mapConditionSamplesAt,
+  setBerthCustomsPolicy,
   setRoomHousingPolicy,
+  setSecurityPosture,
   getVisitorInspectorById,
   getRoomDiagnosticAt,
   getRoomInspectorAt,
@@ -73,6 +76,7 @@ import {
   toIndex,
   type ModuleRotation,
   type ArrivingShip,
+  type IncidentEntity,
   type StationState,
   type UnlockTier,
   type Visitor
@@ -4730,6 +4734,191 @@ function setupSecurityArena(state: StationState, posts: Array<{ x: number; y: nu
   }
 }
 
+function testReputationScenarioCreatesGreenAndRedZones(): void {
+  const state = createInitialState({ seed: 7111 });
+  assertCondition(applyColdStartScenario(state, 'reputation-slice'), 'Expected reputation-slice scenario to load.');
+  runFor(state, 1);
+  const zones = getReputationZoneScores(state);
+  assertCondition(zones.length > 0, 'Expected derived reputation zones.');
+  assertCondition(
+    zones.some((zone) => zone.prestige >= 50 && (zone.room === RoomType.Lounge || zone.room === RoomType.Observatory || zone.room === RoomType.Dorm)),
+    'Expected at least one green-zone prestige anchor.'
+  );
+  assertCondition(
+    zones.some((zone) => zone.notoriety >= 45 && zone.crimePressure >= 35),
+    'Expected at least one red-zone notoriety/crime-pressure pocket.'
+  );
+  assertCondition(state.controls.diagnosticOverlay === 'reputation', 'Reputation scenario should open on the reputation overlay.');
+  assertCondition(
+    state.command.completedSpecialties.includes('security-command'),
+    'Reputation scenario should start with security command unlocked.'
+  );
+  assertCondition(state.crew.roleCounts['security-officer'] === 1, 'Reputation scenario should start with a hired security officer.');
+  assertCondition(state.crew.roleCounts['security-guard'] >= 2, 'Reputation scenario should include field security guards.');
+  assertCondition(
+    state.moduleInstances.some((module) => module.type === ModuleType.SecurityTerminal && state.rooms[module.originTile] === RoomType.Bridge),
+    'Reputation scenario should include a SecurityTerminal in the Bridge.'
+  );
+  assertCondition(
+    state.command.departments.security.active,
+    `Reputation scenario security department should be active (${state.command.departments.security.inactiveReason ?? 'no reason'}).`
+  );
+  runFor(state, 18);
+  const bridgeDutyRoles = new Set(['captain', 'sanitation-officer', 'security-officer']);
+  const bridgeDutyCrew = state.crewMembers.filter((crew) => bridgeDutyRoles.has(crew.staffRole));
+  assertCondition(bridgeDutyCrew.length === 3, 'Reputation scenario should have captain, sanitation officer, and security officer actors.');
+  assertCondition(
+    bridgeDutyCrew.every((crew) => state.rooms[crew.tileIndex] === RoomType.Bridge || (crew.targetTile !== null && state.rooms[crew.targetTile] === RoomType.Bridge)),
+    'Command officers should stay on Bridge duty instead of roaming public rooms.'
+  );
+}
+
+function testIncidentDispatchUsesFieldSecurityInsteadOfBridgeOfficers(): void {
+  const state = createInitialState({ seed: 7114 });
+  assertCondition(applyColdStartScenario(state, 'reputation-slice'), 'Expected reputation-slice scenario to load.');
+  state.controls.paused = false;
+  runFor(state, 1);
+
+  const captain = state.crewMembers.find((crew) => crew.staffRole === 'captain');
+  const securityOfficer = state.crewMembers.find((crew) => crew.staffRole === 'security-officer');
+  const guard = state.crewMembers.find((crew) => crew.staffRole === 'security-guard');
+  assertCondition(!!captain, 'Expected scenario captain for officer exclusion test.');
+  assertCondition(!!securityOfficer, 'Expected scenario security officer for officer exclusion test.');
+  assertCondition(!!guard, 'Expected scenario security guard for officer exclusion test.');
+  state.jobs.length = 0;
+  guard!.activeJobId = null;
+  guard!.resting = false;
+  guard!.healthState = 'healthy';
+  guard!.role = 'security';
+  guard!.assignedSystem = 'security';
+  guard!.lastSystem = 'security';
+  guard!.targetTile = guard!.tileIndex;
+  guard!.path = [];
+  guard!.assignmentHoldUntil = state.now + 90;
+  guard!.assignmentStickyUntil = state.now + 90;
+  captain!.role = 'security';
+  captain!.assignedSystem = 'security';
+
+  const incidentTile = captain!.tileIndex;
+  const incident: IncidentEntity = {
+    id: 711401,
+    type: 'theft',
+    tileIndex: incidentTile,
+    targetTile: incidentTile,
+    severity: 1.1,
+    createdAt: state.now,
+    dispatchAt: state.now,
+    interveneAt: state.now + 10,
+    resolveBy: state.now + 90,
+    stage: 'intervening',
+    outcome: null,
+    resolvedAt: null,
+    assignedCrewId: captain!.id,
+    subjectKind: null,
+    subjectId: null,
+    residentParticipantIds: [],
+    extendedResolveAt: null,
+    brigTile: null,
+    holdUntil: null,
+    blockedReason: null,
+    value: 35
+  };
+  state.incidents.push(incident);
+
+  tick(state, 0.25);
+
+  const assigned = state.crewMembers.find((crew) => crew.id === incident.assignedCrewId);
+  assertCondition(!!assigned, 'Dispatch should assign a field security responder.');
+  assertCondition(assigned!.staffRole === 'security-guard', `Incident dispatch should use a security guard, got ${assigned!.staffRole}.`);
+  assertCondition(assigned!.id !== captain!.id, 'Captain should not be assigned as a custody responder.');
+  assertCondition(assigned!.id !== securityOfficer!.id, 'Security officer should command from the Bridge, not perform custody pickup.');
+}
+
+function testBerthScreeningChangesControlAndNotoriety(): void {
+  const state = createInitialState({ seed: 7112 });
+  assertCondition(applyColdStartScenario(state, 'reputation-slice'), 'Expected reputation-slice scenario to load.');
+  runFor(state, 1);
+  const berths = getReputationZoneScores(state).filter((zone) => zone.room === RoomType.Berth);
+  const strict = berths.find((zone) => zone.screeningLevel === 'strict');
+  const open = berths.find((zone) => zone.screeningLevel === 'open');
+  assertCondition(!!strict && !!open, 'Expected both strict and open berth screening zones.');
+  assertCondition(strict!.control > open!.control, `Strict berth control should exceed open berth control (${strict!.control} <= ${open!.control}).`);
+  assertCondition(open!.notoriety >= strict!.notoriety, `Open berth notoriety should be at least strict berth notoriety (${open!.notoriety} < ${strict!.notoriety}).`);
+}
+
+function testCustomsPolicyAndSecurityPostureAffectReputation(): void {
+  const state = createInitialState({ seed: 7115 });
+  assertCondition(applyColdStartScenario(state, 'reputation-slice'), 'Expected reputation-slice scenario to load.');
+  runFor(state, 1);
+
+  const berths = getReputationZoneScores(state).filter((zone) => zone.room === RoomType.Berth);
+  const strict = berths.find((zone) => zone.screeningLevel === 'strict');
+  const open = berths.find((zone) => zone.screeningLevel === 'open');
+  assertCondition(!!strict && !!open, 'Expected strict and open berth zones for customs policy test.');
+  assertCondition(strict!.customsPolicy === 'selective', `Strict berth should start selective, got ${strict!.customsPolicy ?? 'none'}.`);
+  assertCondition(open!.customsPolicy === 'expedited', `Open berth should start expedited, got ${open!.customsPolicy ?? 'none'}.`);
+  assertCondition(open!.notoriety > strict!.notoriety, `Expedited/open berth should read more notorious (${open!.notoriety} <= ${strict!.notoriety}).`);
+
+  setBerthCustomsPolicy(state, strict!.anchorTile, 'seizure');
+  tick(state, 0);
+  const seizure = getReputationZoneScores(state).find((zone) => zone.anchorTile === strict!.anchorTile);
+  assertCondition(!!seizure, 'Expected seizure-policy berth zone after policy change.');
+  assertCondition(seizure!.control > strict!.control + 5, `Seizure policy should raise control (${seizure!.control} <= ${strict!.control}).`);
+  assertCondition(seizure!.visibleForce > strict!.visibleForce, `Seizure policy should raise visible force (${seizure!.visibleForce} <= ${strict!.visibleForce}).`);
+
+  setSecurityPosture(state, 'visible');
+  tick(state, 0);
+  const visible = getReputationZoneScores(state).find((zone) => zone.anchorTile === strict!.anchorTile);
+  setSecurityPosture(state, 'discreet');
+  tick(state, 0);
+  const discreet = getReputationZoneScores(state).find((zone) => zone.anchorTile === strict!.anchorTile);
+  assertCondition(!!visible && !!discreet, 'Expected berth zones after posture changes.');
+  assertCondition(visible!.control > discreet!.control, `Visible posture should raise control (${visible!.control} <= ${discreet!.control}).`);
+  assertCondition(visible!.visibleForce > discreet!.visibleForce, `Visible posture should raise visible force (${visible!.visibleForce} <= ${discreet!.visibleForce}).`);
+}
+
+function tryPlaceCameraNearZone(state: StationState, zoneTiles: readonly number[]): boolean {
+  for (const tile of zoneTiles) {
+    const p = fromIndex(tile, state.width);
+    const candidates = [
+      { x: p.x, y: p.y - 1 },
+      { x: p.x + 1, y: p.y },
+      { x: p.x, y: p.y + 1 },
+      { x: p.x - 1, y: p.y }
+    ];
+    for (const c of candidates) {
+      if (c.x < 0 || c.y < 0 || c.x >= state.width || c.y >= state.height) continue;
+      const wallTile = toIndex(c.x, c.y, state.width);
+      if (state.tiles[wallTile] !== TileType.Wall) continue;
+      if (tryPlaceModule(state, ModuleType.SecurityCamera, wallTile).ok) return true;
+    }
+  }
+  return false;
+}
+
+function testCamerasAndStaffedAccessGatesSuppressCrimePressure(): void {
+  const state = createInitialState({ seed: 7116 });
+  assertCondition(applyColdStartScenario(state, 'reputation-slice'), 'Expected reputation-slice scenario to load.');
+  state.crew.roleCounts['security-guard'] = 6;
+  state.crew.total = Object.values(state.crew.roleCounts).reduce((acc, count) => acc + count, 0);
+  runFor(state, 1);
+
+  const target = getReputationZoneScores(state).find((zone) => zone.room === RoomType.Berth && zone.screeningLevel === 'open');
+  assertCondition(!!target, 'Expected open berth target for camera/gate test.');
+  const emptyFloor = target!.tiles.find((tile) => state.tiles[tile] === TileType.Floor && state.modules[tile] === ModuleType.None);
+  assertCondition(emptyFloor !== undefined, 'Expected an empty berth floor tile for an access gate.');
+  const gatePlaced = tryPlaceModule(state, ModuleType.AccessGate, emptyFloor!);
+  assertCondition(gatePlaced.ok, `Access gate should place in a berth floor (${gatePlaced.reason ?? 'no reason'}).`);
+  assertCondition(tryPlaceCameraNearZone(state, target!.tiles), 'Security camera should place on a wall adjacent to the target zone.');
+
+  tick(state, 0);
+  const improved = getReputationZoneScores(state).find((zone) => zone.anchorTile === target!.anchorTile);
+  assertCondition(!!improved, 'Expected target reputation zone after camera/gate placement.');
+  assertCondition(improved!.control > target!.control + 4, `Camera/gate should raise local control (${improved!.control} <= ${target!.control}).`);
+  assertCondition(improved!.opacity < target!.opacity, `Camera/gate should lower local opacity (${improved!.opacity} >= ${target!.opacity}).`);
+  assertCondition(improved!.crimePressure <= target!.crimePressure, `Camera/gate should not raise crime pressure (${improved!.crimePressure} > ${target!.crimePressure}).`);
+}
+
 function testImmediateDefuseMajority(): void {
   const state = createInitialState({ seed: 4201 });
   buildHabitat(state);
@@ -4757,8 +4946,8 @@ function testImmediateDefuseMajority(): void {
   const incidentCount = 30;
   let residentId = 8800;
   for (let i = 0; i < incidentCount; i++) {
-    const x = 18 + (i % 6);
-    const y = 15 + Math.floor(i / 6);
+    const x = 10;
+    const y = 10 + (i % 2);
     const aId = residentId++;
     const bId = residentId++;
     const incidentId = state.incidentSpawnCounter++;
@@ -5863,12 +6052,199 @@ function testTier3SecurityGeneratesDispatchableIncidents(): void {
   visitor.state = VisitorState.Leisure;
   visitor.eatTimer = 999;
 
+  runFor(state, 3);
+  const responder = state.crewMembers[0];
+  const securityTile = toIndex(24, 13, state.width);
+  const securityPos = fromIndex(securityTile, state.width);
+  responder.tileIndex = securityTile;
+  responder.x = securityPos.x + 0.5;
+  responder.y = securityPos.y + 0.5;
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.targetTile = securityTile;
+  responder.path = [];
+  responder.activeJobId = null;
+  responder.resting = false;
+  responder.healthState = 'healthy';
+  responder.assignmentStickyUntil = state.now + 999;
+  responder.assignmentHoldUntil = state.now + 999;
+
   runFor(state, 120);
 
   assertCondition(
     state.metrics.incidentsResolvedLifetime > 0,
     'Tier 3 security should generate and resolve a dispatchable incident.'
   );
+}
+
+function testIncidentWaitsForResponderContact(): void {
+  const state = createInitialState({ seed: 5122 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Security, 8, 8, 9, 9);
+  placeModuleOrThrow(state, ModuleType.Terminal, 8, 8);
+  state.crew.total = 10;
+  state.controls.crewPriorityWeights.security = 10;
+  state.controls.shipsPerCycle = 0;
+  runFor(state, 3);
+
+  assertCondition(state.crewMembers.length > 0, 'Expected crew pool for incident contact test.');
+  const responder = state.crewMembers[0];
+  const securityTile = toIndex(8, 8, state.width);
+  const securityPos = fromIndex(securityTile, state.width);
+  responder.tileIndex = securityTile;
+  responder.x = securityPos.x + 0.5;
+  responder.y = securityPos.y + 0.5;
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.targetTile = securityTile;
+  responder.path = [];
+  responder.activeJobId = null;
+  responder.resting = false;
+  responder.healthState = 'healthy';
+  responder.assignmentStickyUntil = state.now + 999;
+  responder.assignmentHoldUntil = state.now + 999;
+
+  spawnVisitor(state, 38, 24, 512201);
+  const visitor = state.visitors[0];
+  visitor.state = VisitorState.Leisure;
+  visitor.path = [];
+  visitor.patience = 0;
+  visitor.activeIncidentId = 512201;
+
+  const incident: IncidentEntity = {
+    id: 512201,
+    type: 'trespass',
+    tileIndex: visitor.tileIndex,
+    targetTile: visitor.tileIndex,
+    severity: 0.45,
+    createdAt: state.now,
+    dispatchAt: state.now,
+    interveneAt: state.now + 0.1,
+    resolveBy: state.now + 120,
+    stage: 'intervening',
+    outcome: null,
+    resolvedAt: null,
+    assignedCrewId: responder.id,
+    subjectKind: 'visitor',
+    subjectId: visitor.id,
+    residentParticipantIds: [],
+    extendedResolveAt: null,
+    brigTile: null,
+    holdUntil: null,
+    blockedReason: null
+  };
+  state.incidents.push(incident);
+
+  runFor(state, 1);
+  assertCondition(
+    incident.stage === 'intervening',
+    `Incident should not resolve before responder reaches subject, got ${incident.stage}.`
+  );
+  assertCondition(responder.path.length > 0, 'Responder should pursue the incident subject.');
+
+  runFor(state, 60);
+  assertCondition(incident.stage === 'resolved', `Incident should resolve after responder contact, got ${incident.stage}.`);
+  assertCondition(incident.outcome === 'warning', `Low-severity trespass should resolve as a warning, got ${incident.outcome}.`);
+}
+
+function testIncidentEjectionCollectsDetaineeFromBrig(): void {
+  const state = createInitialState({ seed: 5123 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Security, 8, 8, 9, 9);
+  placeModuleOrThrow(state, ModuleType.Terminal, 8, 8);
+  paintRoom(state, RoomType.Brig, 14, 10, 16, 12);
+  placeModuleOrThrow(state, ModuleType.CellConsole, 15, 11);
+  placeEastHullDock(state, 18, 20);
+  state.crew.total = 4;
+  state.controls.crewPriorityWeights.security = 10;
+  state.controls.shipsPerCycle = 0;
+  runFor(state, 3);
+
+  assertCondition(state.crewMembers.length > 0, 'Expected crew pool for incident custody test.');
+  const responder = state.crewMembers[0];
+  const responderStart = toIndex(8, 8, state.width);
+  const responderPos = fromIndex(responderStart, state.width);
+  responder.tileIndex = responderStart;
+  responder.x = responderPos.x + 0.5;
+  responder.y = responderPos.y + 0.5;
+  responder.role = 'security';
+  responder.assignedSystem = 'security';
+  responder.targetTile = responderStart;
+  responder.path = [];
+  responder.activeJobId = null;
+  responder.resting = false;
+  responder.healthState = 'healthy';
+  responder.assignmentStickyUntil = state.now + 999;
+  responder.assignmentHoldUntil = state.now + 999;
+
+  const brigTile = toIndex(15, 11, state.width);
+  spawnVisitor(state, 15, 11, 512301);
+  const visitor = state.visitors[0];
+  visitor.state = VisitorState.ToLeisure;
+  visitor.path = [];
+  visitor.activeIncidentId = 512301;
+
+  const incident: IncidentEntity = {
+    id: 512301,
+    type: 'trespass',
+    tileIndex: visitor.tileIndex,
+    targetTile: brigTile,
+    severity: 1.1,
+    createdAt: state.now - 10,
+    dispatchAt: state.now - 8,
+    interveneAt: state.now - 7,
+    resolveBy: state.now + 180,
+    stage: 'holding',
+    outcome: 'detained',
+    resolvedAt: null,
+    assignedCrewId: responder.id,
+    subjectKind: 'visitor',
+    subjectId: visitor.id,
+    residentParticipantIds: [],
+    extendedResolveAt: null,
+    brigTile,
+    holdUntil: state.now + 0.25,
+    blockedReason: null
+  };
+  state.incidents.push(incident);
+
+  runFor(state, 0.5);
+
+  assertCondition(incident.stage === 'ejecting', `Expired hold should transition to ejection, got ${incident.stage}.`);
+  assertCondition(visitor.tileIndex === brigTile, 'Detainee should stay in the Brig while the responder returns for pickup.');
+  assertCondition(responder.tileIndex !== visitor.tileIndex, 'Responder should not receive a teleported detainee at ejection start.');
+  assertCondition(responder.targetTile === brigTile, 'Responder should route back to the Brig before escorting to the exit.');
+
+  let sawPickup = false;
+  for (let i = 0; i < 160; i++) {
+    tick(state, 0.25);
+    const visitorStillPresent = state.visitors.find((entry) => entry.id === visitor.id);
+    if (!visitorStillPresent) break;
+    const vp = fromIndex(visitorStillPresent.tileIndex, state.width);
+    const rp = fromIndex(responder.tileIndex, state.width);
+    const distance = Math.abs(vp.x - rp.x) + Math.abs(vp.y - rp.y);
+    if (!sawPickup && distance <= 1) sawPickup = true;
+    if (!sawPickup) {
+      assertCondition(
+        visitorStillPresent.tileIndex === brigTile,
+        'Detainee should not leave the Brig before responder pickup.'
+      );
+    }
+    if (sawPickup && incident.targetTile !== brigTile) {
+      assertCondition(
+        visitorStillPresent.tileIndex === responder.tileIndex,
+        'Detainee should follow the responder after pickup.'
+      );
+      break;
+    }
+  }
+
+  assertCondition(sawPickup, 'Responder should physically collect the detainee from the Brig.');
+  assertCondition(incident.targetTile !== brigTile, 'After pickup, ejection should retarget from Brig to an exit.');
 }
 
 function testBrigReducesIncidentDuration(): void {
@@ -6099,6 +6475,8 @@ function run(): void {
   testClinicLowersDistressAndDeaths();
   testTier3ClinicGeneratesTreatablePatients();
   testTier3SecurityGeneratesDispatchableIncidents();
+  testIncidentWaitsForResponderContact();
+  testIncidentEjectionCollectsDetaineeFromBrig();
   testBrigReducesIncidentDuration();
   testBrigActiveWithoutStandingPosts();
   testSaveV1MigratesToV2UnlockDefaults();
@@ -6241,6 +6619,11 @@ function run(): void {
   testCrewInspectorLogisticsShapeAndPurity();
   testCrewLeisureSocialNeedIsInspectable();
   testAgentInspectorMissingId();
+  testReputationScenarioCreatesGreenAndRedZones();
+  testIncidentDispatchUsesFieldSecurityInsteadOfBridgeOfficers();
+  testBerthScreeningChangesControlAndNotoriety();
+  testCustomsPolicyAndSecurityPostureAffectReputation();
+  testCamerasAndStaffedAccessGatesSuppressCrimePressure();
   testImmediateDefuseMajority();
   testProximitySuppressionEffectiveness();
   testTrespassSpamGuard();

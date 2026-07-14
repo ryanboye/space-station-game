@@ -42,6 +42,8 @@ import {
   getAirDuctNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getMaintenanceTileDiagnostic,
+  getReputationTileDiagnostic,
+  getReputationZoneScores,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getRoomDiagnosticAt,
@@ -73,10 +75,13 @@ import {
   setDockAllowedShipSize,
   setBerthAllowedShipType,
   setBerthAllowedShipSize,
+  setBerthCustomsPolicy,
+  setBerthScreeningLevel,
   sellMaterials,
   sellRawFood,
   setRoom,
   setRoomHousingPolicy,
+  setSecurityPosture,
   setZone,
   tick,
   setTile,
@@ -99,6 +104,10 @@ import {
   type CrewWorkLane,
   type DiagnosticOverlay,
   type DockPurpose,
+  type BerthScreeningLevel,
+  type CustomsPolicy,
+  type IncidentEntity,
+  type SecurityPosture,
   type SpaceLane,
   type ShipSize,
   type ShipType,
@@ -352,6 +361,7 @@ app.innerHTML = `
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="structure">
         <span class="tool-row-label">Structure</span>
+        <button class="tool-btn" data-tool-deselect="1" title="Inspect / no build tool (Esc)"><span class="tool-key">Esc</span>Inspect</button>
         <button class="tool-btn" data-tool-room-copy="1" title="Copy station stamp — drag over floors, walls, rooms, and furniture"><span class="tool-key">⧉</span>Copy</button>
         <button class="tool-btn" data-tool-room-paste="1" title="Paste copied station stamp — tiles, room settings, zones, docks, and fresh furniture"><span class="tool-key">▣</span>Paste</button>
         <button class="tool-btn" data-tool-tile="floor" title="${TRUSS_EXPANSION_EXPERIMENT ? 'Floor (1) - paint over truss to seal a pressurized expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
@@ -418,6 +428,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
         <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
+        <button class="tool-btn" data-tool-module="security-camera" title="Place wall Security Camera (T3+) — lowers local opacity and improves detection/control"><span class="tool-key">·</span>Camera</button>
+        <button class="tool-btn" data-tool-module="access-gate" title="Place Access Gate (T3+) — staffed checkpoint control; needs Security Guards"><span class="tool-key">·</span>Gate</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place wall Fire Extinguisher — suppresses nearby fires from an adjacent service tile"><span class="tool-key">·</span>Fire Ext</button>
         <button class="tool-btn" data-tool-module="vent" title="Place wall Vent — projects life-support air from an adjacent service tile"><span class="tool-key">·</span>Vent</button>
         <button class="tool-btn" data-tool-module="insulation-panel" title="Place wall Insulation Panel — reduces sunlight heat transfer nearby"><span class="tool-key">·</span>Insul.</button>
@@ -464,6 +476,7 @@ app.innerHTML = `
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, and cleaning pressure heatmap">Sanitation</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="map-conditions" title="Show seeded sunlight, debris, and thermal map pressure">Map Conditions</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show active route pressure heatmap">Route Pressure</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show prestige, notoriety, control, and crime pressure">Reputation</button>
         <small id="diagnostic-readout" class="diagnostic-readout">Diagnostics off</small>
         <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
         <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle">Force Fallback: OFF</button>
@@ -589,6 +602,14 @@ app.innerHTML = `
           <option value="life-support">Life Support</option>
           <option value="food-chain">Food Chain</option>
           <option value="economy">Economy</option>
+        </select>
+      </div>
+      <div class="row compact list-row">
+        <span>Security Posture</span>
+        <select id="security-posture">
+          <option value="discreet">Discreet</option>
+          <option value="standard">Standard</option>
+          <option value="visible">Visible Patrol</option>
         </select>
       </div>
       <div class="priority-grid">
@@ -736,6 +757,7 @@ app.innerHTML = `
       <small id="room-modal-inventory">Inventory: n/a</small>
       <small id="room-modal-flow">Flow: n/a</small>
       <small id="room-modal-capacity">Capacity: n/a</small>
+      <small id="room-modal-reputation">Reputation: n/a</small>
       <div class="row compact list-row"><span>Housing Policy</span><span class="value" id="room-modal-housing-policy">n/a</span></div>
       <select id="room-modal-housing-select">
         <option value="crew">Crew</option>
@@ -749,6 +771,8 @@ app.innerHTML = `
         <div class="section-title" style="margin-top:10px;">Berth Config</div>
         <div class="row compact list-row"><span>Purpose</span><span class="value" id="room-modal-berth-purpose">Visitor</span></div>
         <div class="row compact list-row"><span>Facing</span><span class="value" id="room-modal-berth-facing">auto</span></div>
+        <div class="row compact list-row"><span>Screening</span><span class="value"><select id="room-modal-berth-screening"><option value="open">Open</option><option value="standard">Standard</option><option value="strict">Strict</option></select></span></div>
+        <div class="row compact list-row"><span>Customs Policy</span><span class="value"><select id="room-modal-berth-customs"><option value="routine">Routine</option><option value="selective">Selective</option><option value="expedited">Expedited</option><option value="seizure">Seizure Office</option></select></span></div>
         <small id="room-modal-berth-config-note">Berths route by capability tags + the player allowlist below. Purpose is fixed to <em>Visitor</em> in v0; facing is derived from the cluster's exterior opening.</small>
         <div class="section-title" style="margin-top:10px;">Allowed Ship Types</div>
         <label><input type="checkbox" id="room-modal-berth-tourist" checked /> Tourist</label>
@@ -939,7 +963,8 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   maintenance: 'Maintenance',
   sanitation: 'Sanitation',
   'map-conditions': 'Map Conditions',
-  'route-pressure': 'Route Pressure'
+  'route-pressure': 'Route Pressure',
+  reputation: 'Reputation'
 };
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
@@ -952,7 +977,8 @@ const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'maintenance',
   'sanitation',
   'map-conditions',
-  'route-pressure'
+  'route-pressure',
+  'reputation'
 ];
 
 function isDiagnosticOverlay(value: string | undefined): value is DiagnosticOverlay {
@@ -1054,6 +1080,15 @@ function diagnosticReadoutText(): string {
     if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no planned route here.`;
     const reason = diagnostic.reasons.length > 0 ? ` ${diagnostic.reasons.slice(0, 2).join(' | ')}` : ' no route conflict reason.';
     return `${globalLine}\n${diagnosticHoverPrefix()}: V${diagnostic.visitorCount} R${diagnostic.residentCount} C${diagnostic.crewCount} L${diagnostic.logisticsCount}; conflicts ${diagnostic.conflictScore}.${reason}`;
+  }
+  if (overlay === 'reputation') {
+    const globalLine = `Reputation: prestige ${state.metrics.reputationPrestigeAvg.toFixed(0)} | notoriety ${state.metrics.reputationNotorietyAvg.toFixed(0)} | control ${state.metrics.reputationControlAvg.toFixed(0)} | risk ${state.metrics.reputationCrimePressureAvg.toFixed(0)}`;
+    if (hoveredTile === null) return `${globalLine}\nHover a room for local property value, opacity, and crime pressure.`;
+    const p = fromIndex(hoveredTile, state.width);
+    const diagnostic = getReputationTileDiagnostic(state, p.x, p.y);
+    if (!diagnostic?.zone) return `${globalLine}\n${diagnosticHoverPrefix()}: no reputation zone.`;
+    const zone = diagnostic.zone;
+    return `${globalLine}\n${diagnosticHoverPrefix()}: ${zone.label} ${zone.room}; value ${zone.value.toFixed(0)} opacity ${zone.opacity.toFixed(0)} crime ${zone.crimePressure.toFixed(0)}; ${zone.topDrivers.join(' | ')}.`;
   }
   if (hoveredTile === null) {
     const label = DIAGNOSTIC_OVERLAY_LABELS[overlay];
@@ -1193,6 +1228,17 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
         ]
       };
     }
+    case 'reputation':
+      return {
+        title: 'Reputation',
+        stats: `prestige ${state.metrics.reputationPrestigeAvg.toFixed(0)} | notoriety ${state.metrics.reputationNotorietyAvg.toFixed(0)} | risk ${state.metrics.reputationCrimePressureAvg.toFixed(0)} | high-risk ${state.metrics.reputationHighRiskZones}`,
+        rows: [
+          { color: '#52d1a7', label: 'Prestige and property value' },
+          { color: '#ffd65c', label: 'Notoriety and value overlap' },
+          { color: '#ee4f4f', label: 'High crime pressure' },
+          { color: '#5cd8ff', label: 'Control suppressing risk' }
+        ]
+      };
     case 'none':
       return null;
   }
@@ -1275,6 +1321,7 @@ const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
 const maintenanceStatusEl = document.querySelector<HTMLElement>('#maintenance-status')!;
 const thermalStatusEl = document.querySelector<HTMLElement>('#thermal-status')!;
 const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
+const securityPostureSelect = document.querySelector<HTMLSelectElement>('#security-posture')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
 const openCrewCommandBtn = document.querySelector<HTMLButtonElement>('#open-crew-command')!;
@@ -1427,6 +1474,7 @@ const roomModalNodesEl = document.querySelector<HTMLElement>('#room-modal-nodes'
 const roomModalInventoryEl = document.querySelector<HTMLElement>('#room-modal-inventory')!;
 const roomModalFlowEl = document.querySelector<HTMLElement>('#room-modal-flow')!;
 const roomModalCapacityEl = document.querySelector<HTMLElement>('#room-modal-capacity')!;
+const roomModalReputationEl = document.querySelector<HTMLElement>('#room-modal-reputation')!;
 const roomModalHousingPolicyEl = document.querySelector<HTMLElement>('#room-modal-housing-policy')!;
 const roomModalHousingSelect = document.querySelector<HTMLSelectElement>('#room-modal-housing-select')!;
 const roomModalHousingEl = document.querySelector<HTMLElement>('#room-modal-housing')!;
@@ -1442,6 +1490,8 @@ const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth'
 const roomModalBerthConfigEl = document.querySelector<HTMLDivElement>('#room-modal-berth-config')!;
 const roomModalBerthPurposeEl = document.querySelector<HTMLElement>('#room-modal-berth-purpose')!;
 const roomModalBerthFacingEl = document.querySelector<HTMLElement>('#room-modal-berth-facing')!;
+const roomModalBerthScreeningSelect = document.querySelector<HTMLSelectElement>('#room-modal-berth-screening')!;
+const roomModalBerthCustomsSelect = document.querySelector<HTMLSelectElement>('#room-modal-berth-customs')!;
 const roomModalBerthTouristCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-tourist')!;
 const roomModalBerthTraderCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-trader')!;
 const roomModalBerthIndustrialCheckbox = document.querySelector<HTMLInputElement>('#room-modal-berth-industrial')!;
@@ -1538,6 +1588,7 @@ for (const system of prioritySystems) {
   }
 }
 crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
+securityPostureSelect.value = state.controls.securityPosture;
 
 // The Build & Room Legend sidebar panel was removed in the HUD-cleanup
 // pass (awfml's live-game feedback: the top toolbar already surfaces
@@ -2196,7 +2247,8 @@ function opsExtraText(): string {
     `Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | ` +
     `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Cantina ${state.ops.cantinaActive}/${state.ops.cantinaTotal} | ` +
     `Obs ${state.ops.observatoryActive}/${state.ops.observatoryTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
-    `Brig ${state.ops.brigActive}/${state.ops.brigTotal} | RecHall ${state.ops.recHallActive}/${state.ops.recHallTotal}`;
+    `Brig ${state.ops.brigActive}/${state.ops.brigTotal} | RecHall ${state.ops.recHallActive}/${state.ops.recHallTotal} | ` +
+    `Rep P${state.metrics.reputationPrestigeAvg.toFixed(0)} N${state.metrics.reputationNotorietyAvg.toFixed(0)} Risk${state.metrics.reputationCrimePressureAvg.toFixed(0)} | top ${state.metrics.reputationTopZone}`;
 }
 
 function roomUsageText(): string {
@@ -2532,7 +2584,7 @@ function refreshOpsModal(): void {
 }
 
 function refreshAlertPanel(): void {
-  const alerts: Array<{ tone: 'danger' | 'warn'; text: string }> = [];
+  const alerts: Array<{ tone: 'danger' | 'warn'; text: string; incidentId?: number }> = [];
   if (state.metrics.mealStock < 8) alerts.push({ tone: 'danger', text: `Low meals: ${Math.round(state.metrics.mealStock)}` });
   else if (state.metrics.mealStock < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${Math.round(state.metrics.mealStock)}` });
   if (state.metrics.airQuality < 35) alerts.push({ tone: 'danger', text: `Oxygen low: ${Math.round(state.metrics.airQuality)}%` });
@@ -2557,7 +2609,13 @@ function refreshAlertPanel(): void {
   if (state.metrics.sanitationJobsOpen > Math.max(4, state.crew.total)) {
     alerts.push({ tone: 'warn', text: `Sanitation jobs backing up: ${state.metrics.sanitationJobsOpen}` });
   }
-  if (state.metrics.incidentsOpen > 0) alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}` });
+  if (state.metrics.reputationHighRiskZones > 0) {
+    alerts.push({ tone: 'warn', text: `High crime-pressure zones: ${state.metrics.reputationHighRiskZones}` });
+  }
+  if (state.metrics.incidentsOpen > 0) {
+    const firstIncident = activeIncidentsForUi()[0];
+    alerts.push({ tone: 'danger', text: `Active incidents: ${state.metrics.incidentsOpen}`, incidentId: firstIncident?.id });
+  }
   if (state.metrics.bodyCount > 0) alerts.push({ tone: 'warn', text: `Cleanup needed: ${state.metrics.bodyCount} bodies` });
   if (state.effects.fires.length > 0) {
     const total = state.effects.fires.length;
@@ -2578,13 +2636,26 @@ function refreshAlertPanel(): void {
   alertListEl.classList.remove('is-clear');
   alertListEl.innerHTML = alerts
     .slice(0, 5)
-    .map((alert) => `<div class="alert-item ${alert.tone}">${alert.text}</div>`)
+    .map((alert) =>
+      alert.incidentId === undefined
+        ? `<div class="alert-item ${alert.tone}">${alert.text}</div>`
+        : `<button class="alert-item ${alert.tone}" data-incident-select="${alert.incidentId}">${alert.text}</button>`
+    )
     .join('');
 }
 
-function activeIncidentsForUi() {
+function selectedIncident(): IncidentEntity | null {
+  if (selectedIncidentId === null) return null;
+  return state.incidents.find((incident) => incident.id === selectedIncidentId) ?? null;
+}
+
+function incidentIsClosed(incident: IncidentEntity): boolean {
+  return incident.stage === 'resolved' || incident.stage === 'failed';
+}
+
+function activeIncidentsForUi(): IncidentEntity[] {
   return state.incidents
-    .filter((incident) => incident.stage !== 'resolved' && incident.stage !== 'failed')
+    .filter((incident) => !incidentIsClosed(incident))
     .sort((a, b) => b.severity - a.severity || a.resolveBy - b.resolveBy || a.id - b.id);
 }
 
@@ -2598,13 +2669,62 @@ function incidentStageLabel(stage: string): string {
       return 'security en route';
     case 'intervening_extended':
       return 'containing';
+    case 'escorting':
+      return 'escorting';
+    case 'holding':
+      return 'holding';
+    case 'ejecting':
+      return 'ejecting';
+    case 'resolved':
+      return 'resolved';
+    case 'failed':
+      return 'failed';
     default:
       return stage;
   }
 }
 
 function incidentTypeLabel(type: string): string {
-  return type === 'fight' ? 'Fight' : type === 'trespass' ? 'Trespass' : type;
+  return type === 'fight' ? 'Fight' : type === 'trespass' ? 'Trespass' : type === 'theft' ? 'Theft' : type;
+}
+
+function incidentSubjectLabel(incident: IncidentEntity): string {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return `visitor #${incident.subjectId}`;
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    return `resident #${incident.subjectId}`;
+  }
+  if (incident.residentParticipantIds.length > 0) {
+    return incident.residentParticipantIds.map((id) => `resident #${id}`).join(', ');
+  }
+  return 'none';
+}
+
+function incidentTileForFocus(incident: IncidentEntity): number {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+    if (visitor) return visitor.tileIndex;
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const resident = state.residents.find((entry) => entry.id === incident.subjectId);
+    if (resident) return resident.tileIndex;
+  }
+  return incident.targetTile ?? incident.tileIndex;
+}
+
+function incidentAtTile(tileIndex: number): IncidentEntity | null {
+  const candidates = state.incidents
+    .filter((incident) => {
+      const tiles = [incident.tileIndex, incident.targetTile ?? -1, incident.brigTile ?? -1, incidentTileForFocus(incident)];
+      return tiles.includes(tileIndex);
+    })
+    .sort((a, b) => {
+      const aActive = a.stage !== 'resolved' && a.stage !== 'failed' ? 1 : 0;
+      const bActive = b.stage !== 'resolved' && b.stage !== 'failed' ? 1 : 0;
+      return bActive - aActive || b.createdAt - a.createdAt || b.id - a.id;
+    });
+  return candidates[0] ?? null;
 }
 
 function refreshIncidentList(): void {
@@ -2618,15 +2738,16 @@ function refreshIncidentList(): void {
   incidentListEl.innerHTML = incidents
     .slice(0, 4)
     .map((incident) => {
-      const tile = fromIndex(incident.tileIndex, state.width);
+      const tile = fromIndex(incidentTileForFocus(incident), state.width);
       const secondsLeft = Math.max(0, incident.resolveBy - state.now);
       const responder = incident.assignedCrewId === null ? 'no responder' : `crew #${incident.assignedCrewId}`;
       const tone = incident.stage === 'dispatching' || incident.assignedCrewId === null ? 'danger' : 'warn';
-      return `<button class="incident-item ${tone}" data-incident-focus="${incident.id}" title="Focus incident #${incident.id}">
+      const selected = selectedIncidentId === incident.id ? ' is-selected' : '';
+      return `<button class="incident-item ${tone}${selected}" data-incident-select="${incident.id}" title="Select incident #${incident.id}">
         <span class="incident-dot"></span>
         <span class="incident-copy">
           <strong>${escapeHtml(incidentTypeLabel(incident.type))} #${incident.id}</strong>
-          <small>${escapeHtml(incidentStageLabel(incident.stage))} · ${responder} · ${secondsLeft.toFixed(0)}s · ${tile.x},${tile.y}</small>
+          <small>${escapeHtml(incidentStageLabel(incident.stage))} · ${escapeHtml(incidentSubjectLabel(incident))} · ${responder} · ${secondsLeft.toFixed(0)}s · ${tile.x},${tile.y}</small>
         </span>
       </button>`;
     })
@@ -2820,7 +2941,64 @@ function selectedAgentInspectorHtml(): string {
   return formatCrewSelectionHtml(selectedAgent.id);
 }
 
+function formatIncidentInspectorHtml(incident: IncidentEntity): string {
+  const tile = fromIndex(incident.tileIndex, state.width);
+  const targetLabel = incident.targetTile === null || incident.targetTile === undefined ? 'none' : formatTileLabel(incident.targetTile);
+  const brigLabel = incident.brigTile === null || incident.brigTile === undefined ? 'none' : formatTileLabel(incident.brigTile);
+  const responder = incident.assignedCrewId === null
+    ? null
+    : state.crewMembers.find((crew) => crew.id === incident.assignedCrewId) ?? null;
+  const closed = incidentIsClosed(incident);
+  const subjectPath =
+    closed
+      ? null
+      : incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined
+      ? state.visitors.find((visitor) => visitor.id === incident.subjectId)?.path.length ?? 0
+      : incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined
+        ? state.residents.find((resident) => resident.id === incident.subjectId)?.path.length ?? 0
+        : 0;
+  const responderPath = closed ? null : responder?.path.length ?? 0;
+  const secondsLeft = incident.stage === 'holding'
+    ? Math.max(0, (incident.holdUntil ?? state.now) - state.now)
+    : Math.max(0, incident.resolveBy - state.now);
+  const statusTone = incident.stage === 'failed'
+    ? 'critical'
+    : incident.stage === 'resolved'
+      ? 'ok'
+      : incident.assignedCrewId === null
+        ? 'critical'
+        : 'warn';
+  return [
+    `<div class="agent-card__head"><span class="agent-card__title">${escapeHtml(incidentTypeLabel(incident.type))} #${incident.id}</span><span class="agent-card__role">${escapeHtml(incidentStageLabel(incident.stage))}</span></div>`,
+    `<div class="agent-card__action">${escapeHtml(incidentSubjectLabel(incident))}</div>`,
+    `<div class="agent-card__reason">Severity ${incident.severity.toFixed(2)} · ${secondsLeft.toFixed(0)}s</div>`,
+    `<div class="side-inspector-grid">
+      <span>Status</span><strong>${escapeHtml(incident.outcome ?? incidentStageLabel(incident.stage))}</strong>
+      <span>Origin</span><strong>${tile.x},${tile.y}</strong>
+      <span>Target</span><strong>${escapeHtml(targetLabel)}</strong>
+      <span>Brig</span><strong>${escapeHtml(brigLabel)}</strong>
+      <span>Responder</span><strong>${responder ? `crew #${responder.id}` : 'none'}</strong>
+      <span>Responder path</span><strong>${responderPath === null ? 'closed' : `${responderPath} steps`}</strong>
+      <span>Subject path</span><strong>${subjectPath === null ? 'closed' : `${subjectPath} steps`}</strong>
+      <span>Value</span><strong>${incident.value === undefined ? 'n/a' : incident.value.toFixed(1)}</strong>
+    </div>`,
+    incident.blockedReason ? `<div class="agent-card__warn">Blocked: ${escapeHtml(incident.blockedReason)}</div>` : '',
+    `<div class="need-bar need-bar--${statusTone}" title="Incident handling state">
+      <span class="need-bar__label">Control</span>
+      <div class="need-bar__track"><div class="need-bar__fill" style="width:${clamp(100 - secondsLeft * 6, 0, 100).toFixed(0)}%"></div></div>
+      <span class="need-bar__value">${escapeHtml(incidentStageLabel(incident.stage))}</span>
+    </div>`
+  ].join('');
+}
+
 function refreshAgentSidePanel(): boolean {
+  const incident = selectedIncident();
+  if (incident) {
+    agentSideTitleEl.textContent = `${incidentTypeLabel(incident.type)} #${incident.id}`;
+    agentSideBodyEl.innerHTML = formatIncidentInspectorHtml(incident);
+    agentSidePanel.classList.remove('hidden');
+    return true;
+  }
   if (!selectedAgent) {
     agentSidePanel.classList.add('hidden');
     return false;
@@ -2837,6 +3015,12 @@ function refreshAgentSidePanel(): boolean {
 }
 
 function refreshSelectionSummary(): void {
+  const incident = selectedIncident();
+  if (incident) {
+    selectionSummaryEl.textContent =
+      `${incidentTypeLabel(incident.type)} #${incident.id}: ${incidentStageLabel(incident.stage)} | ${incidentSubjectLabel(incident)} | ${incident.outcome ?? 'open'}`;
+    return;
+  }
   if (selectedAgent !== null) {
     if (selectedAgent.kind === 'visitor') {
       const inspector = getVisitorInspectorById(state, selectedAgent.id);
@@ -2994,6 +3178,217 @@ function drawSelectedAgentRoute(ctx: CanvasRenderingContext2D): void {
   ctx.fill();
   ctx.stroke();
   ctx.restore();
+}
+
+function selectedIncidentRouteData(): Array<{ x: number; y: number; path: number[]; color: string }> {
+  const incident = selectedIncident();
+  if (!incident || incidentIsClosed(incident)) return [];
+  const routes: Array<{ x: number; y: number; path: number[]; color: string }> = [];
+  if (incident.assignedCrewId !== null) {
+    const crew = state.crewMembers.find((entry) => entry.id === incident.assignedCrewId);
+    if (crew && crew.path.length > 0) routes.push({ x: crew.x, y: crew.y, path: crew.path, color: '#5cd8ff' });
+  }
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const visitor = state.visitors.find((entry) => entry.id === incident.subjectId);
+    if (visitor && visitor.path.length > 0) routes.push({ x: visitor.x, y: visitor.y, path: visitor.path, color: '#ff5050' });
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const resident = state.residents.find((entry) => entry.id === incident.subjectId);
+    if (resident && resident.path.length > 0) routes.push({ x: resident.x, y: resident.y, path: resident.path, color: '#ff5050' });
+  }
+  return routes;
+}
+
+function drawSelectedIncidentRoutes(ctx: CanvasRenderingContext2D): void {
+  const routes = selectedIncidentRouteData();
+  if (routes.length <= 0) return;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const route of routes) {
+    const startPx = route.x * TILE_SIZE;
+    const startPy = route.y * TILE_SIZE;
+    ctx.strokeStyle = 'rgba(8, 14, 22, 0.65)';
+    ctx.lineWidth = Math.max(4, TILE_SIZE * 0.18);
+    ctx.beginPath();
+    ctx.moveTo(startPx, startPy);
+    for (const tile of route.path) {
+      const tx = tile % state.width;
+      const ty = Math.floor(tile / state.width);
+      ctx.lineTo((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = route.color;
+    ctx.lineWidth = Math.max(2, TILE_SIZE * 0.1);
+    ctx.setLineDash([TILE_SIZE * 0.32, TILE_SIZE * 0.18]);
+    ctx.beginPath();
+    ctx.moveTo(startPx, startPy);
+    for (const tile of route.path) {
+      const tx = tile % state.width;
+      const ty = Math.floor(tile / state.width);
+      ctx.lineTo((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function drawIncidentCalloutLabel(ctx: CanvasRenderingContext2D, label: string, x: number, y: number, color: string): void {
+  const text = label.toUpperCase();
+  ctx.save();
+  ctx.font = `bold ${Math.max(7, Math.round(TILE_SIZE * 0.28))}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const padX = TILE_SIZE * 0.16;
+  const w = ctx.measureText(text).width + padX * 2;
+  const h = TILE_SIZE * 0.42;
+  const bx = x - w * 0.5;
+  const by = y - TILE_SIZE * 0.76 - h * 0.5;
+  ctx.fillStyle = 'rgba(8, 12, 18, 0.92)';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+  ctx.beginPath();
+  ctx.roundRect(bx, by, w, h, TILE_SIZE * 0.12);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, by + h * 0.53);
+  ctx.restore();
+}
+
+function drawIncidentActorRing(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, label: string): void {
+  const radius = TILE_SIZE * 0.52;
+  const pulse = 0.5 + Math.sin(state.now * 7) * 0.5;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(8, 12, 18, 0.86)';
+  ctx.lineWidth = Math.max(4, TILE_SIZE * 0.16);
+  ctx.beginPath();
+  ctx.arc(x, y, radius + TILE_SIZE * 0.04, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, TILE_SIZE * 0.085);
+  ctx.beginPath();
+  ctx.arc(x, y, radius + pulse * TILE_SIZE * 0.08, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, TILE_SIZE * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  drawIncidentCalloutLabel(ctx, label, x, y, color);
+}
+
+function incidentActorOffset(id: number): { x: number; y: number } {
+  const ox = ((id * 17) % 7) - 3;
+  const oy = ((id * 29) % 7) - 3;
+  return { x: ox * 0.08, y: oy * 0.08 };
+}
+
+function drawIncidentActorPulse(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
+  const radius = TILE_SIZE * 0.42;
+  const pulse = 0.5 + Math.sin(state.now * 6.5) * 0.5;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(8, 12, 18, 0.7)';
+  ctx.lineWidth = Math.max(3, TILE_SIZE * 0.12);
+  ctx.beginPath();
+  ctx.arc(x, y, radius + TILE_SIZE * 0.04, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, TILE_SIZE * 0.07);
+  ctx.beginPath();
+  ctx.arc(x, y, radius + pulse * TILE_SIZE * 0.1, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function actorScreenPoint(kind: 'visitor' | 'resident' | 'crew', id: number): { x: number; y: number } | null {
+  const actor =
+    kind === 'visitor'
+      ? state.visitors.find((entry) => entry.id === id)
+      : kind === 'resident'
+        ? state.residents.find((entry) => entry.id === id)
+        : state.crewMembers.find((entry) => entry.id === id);
+  if (!actor) return null;
+  const offset = incidentActorOffset(actor.id);
+  return { x: (actor.x + offset.x) * TILE_SIZE, y: (actor.y + offset.y) * TILE_SIZE };
+}
+
+function drawIncidentTileTarget(ctx: CanvasRenderingContext2D, tileIndex: number, label: string, color: string): void {
+  const p = fromIndex(tileIndex, state.width);
+  const x = (p.x + 0.5) * TILE_SIZE;
+  const y = (p.y + 0.5) * TILE_SIZE;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(8, 12, 18, 0.86)';
+  ctx.lineWidth = Math.max(4, TILE_SIZE * 0.14);
+  ctx.setLineDash([TILE_SIZE * 0.28, TILE_SIZE * 0.16]);
+  ctx.strokeRect(p.x * TILE_SIZE + TILE_SIZE * 0.12, p.y * TILE_SIZE + TILE_SIZE * 0.12, TILE_SIZE * 0.76, TILE_SIZE * 0.76);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, TILE_SIZE * 0.07);
+  ctx.strokeRect(p.x * TILE_SIZE + TILE_SIZE * 0.12, p.y * TILE_SIZE + TILE_SIZE * 0.12, TILE_SIZE * 0.76, TILE_SIZE * 0.76);
+  ctx.setLineDash([]);
+  ctx.restore();
+  drawIncidentCalloutLabel(ctx, label, x, y, color);
+}
+
+function incidentSubjectScreenPoints(incident: IncidentEntity): Array<{ x: number; y: number }> {
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const subject = actorScreenPoint('visitor', incident.subjectId);
+    return subject ? [subject] : [];
+  }
+  if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const subject = actorScreenPoint('resident', incident.subjectId);
+    return subject ? [subject] : [];
+  }
+  return incident.residentParticipantIds
+    .map((residentId) => actorScreenPoint('resident', residentId))
+    .filter((point): point is { x: number; y: number } => point !== null);
+}
+
+function drawActiveIncidentHints(ctx: CanvasRenderingContext2D): void {
+  if (selectedIncident() !== null) return;
+  const active = activeIncidentsForUi();
+  if (active.length === 0) return;
+  for (const incident of active.slice(0, 8)) {
+    if (incident.id === selectedIncidentId) continue;
+    const points = incidentSubjectScreenPoints(incident);
+    if (points.length > 0) {
+      for (const point of points) drawIncidentActorPulse(ctx, point.x, point.y, 'rgba(255, 80, 80, 0.9)');
+      continue;
+    }
+    const tile = fromIndex(incident.tileIndex, state.width);
+    drawIncidentActorPulse(ctx, (tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE, 'rgba(255, 80, 80, 0.9)');
+  }
+}
+
+function drawSelectedIncidentCallouts(ctx: CanvasRenderingContext2D): void {
+  const incident = selectedIncident();
+  if (!incident) return;
+  if (incidentIsClosed(incident)) {
+    drawIncidentTileTarget(ctx, incident.tileIndex, incident.stage, incident.stage === 'resolved' ? '#6edb8f' : '#ff7676');
+    return;
+  }
+  if (incident.assignedCrewId !== null) {
+    const responder = actorScreenPoint('crew', incident.assignedCrewId);
+    if (responder) drawIncidentActorRing(ctx, responder.x, responder.y, '#5cd8ff', 'security');
+  }
+  if (incident.subjectKind === 'visitor' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const subject = actorScreenPoint('visitor', incident.subjectId);
+    if (subject) drawIncidentActorRing(ctx, subject.x, subject.y, '#ff5050', incident.type === 'theft' ? 'suspect' : 'subject');
+  } else if (incident.subjectKind === 'resident' && incident.subjectId !== null && incident.subjectId !== undefined) {
+    const subject = actorScreenPoint('resident', incident.subjectId);
+    if (subject) drawIncidentActorRing(ctx, subject.x, subject.y, '#ff5050', incident.type === 'fight' ? 'detainee' : 'suspect');
+  } else if (incident.residentParticipantIds.length > 0) {
+    for (const [index, residentId] of incident.residentParticipantIds.entries()) {
+      const participant = actorScreenPoint('resident', residentId);
+      if (participant) drawIncidentActorRing(ctx, participant.x, participant.y, '#ff5050', `fight ${index + 1}`);
+    }
+  }
+  if (incident.brigTile !== null && incident.brigTile !== undefined) {
+    drawIncidentTileTarget(ctx, incident.brigTile, 'brig', '#ffe06a');
+  } else if (incident.targetTile !== null && incident.targetTile !== undefined && incident.targetTile !== incident.tileIndex) {
+    drawIncidentTileTarget(ctx, incident.targetTile, incident.stage === 'ejecting' ? 'exit' : 'target', '#ffe06a');
+  }
 }
 
 // Dev-only overlay — "time to tier" at a glance for playtest pacing.
@@ -3277,7 +3672,7 @@ type RoomClipboard = {
   label: string;
 };
 
-let currentTool: BuildTool = { kind: 'tile', tile: TileType.Floor };
+let currentTool: BuildTool = { kind: 'none' };
 let roomClipboard: RoomClipboard | null = null;
 let selectedDockId: number | null = null;
 let selectedRoomTile: number | null = null;
@@ -3286,6 +3681,7 @@ let selectedRoomTile: number | null = null;
 // inspector isn't pointed at a Berth tile.
 let selectedBerthAnchor: number | null = null;
 let selectedAgent: SelectedAgent | null = null;
+let selectedIncidentId: number | null = null;
 let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
@@ -3517,6 +3913,7 @@ function materialBuyStatusText(
 }
 
 function refreshPriorityUi(): void {
+  securityPostureSelect.value = state.controls.securityPosture;
   for (const system of prioritySystems) {
     const input = priorityInputs.get(system);
     const valueEl = priorityValueEls.get(system);
@@ -3620,6 +4017,8 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   gangway: ModuleType.Gangway,
   'customs-counter': ModuleType.CustomsCounter,
   'cargo-arm': ModuleType.CargoArm,
+  'security-camera': ModuleType.SecurityCamera,
+  'access-gate': ModuleType.AccessGate,
   'fire-extinguisher': ModuleType.FireExtinguisher,
   vent: ModuleType.Vent,
   'insulation-panel': ModuleType.InsulationPanel,
@@ -3677,6 +4076,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'GW',
   [ModuleType.CustomsCounter]: 'CC',
   [ModuleType.CargoArm]: 'CA',
+  [ModuleType.SecurityCamera]: 'CM',
+  [ModuleType.AccessGate]: 'GT',
   [ModuleType.FireExtinguisher]: 'FX',
   [ModuleType.Vent]: 'VT',
   [ModuleType.InsulationPanel]: 'IP',
@@ -3884,6 +4285,8 @@ function wireToolbar(): void {
 function refreshToolbar(): void {
   refreshPaletteMenu();
   const toolKind = currentTool.kind;
+  gameWrap.classList.toggle('inspect-mode', toolKind === 'none');
+  gameWrap.classList.toggle('build-mode', toolKind !== 'none');
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
     const tileKey = btn.dataset.toolTile;
     const zoneKey = btn.dataset.toolZone;
@@ -3894,10 +4297,13 @@ function refreshToolbar(): void {
     const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
     const cancelConstructionKey = btn.dataset.toolCancelConstruction;
+    const deselectKey = btn.dataset.toolDeselect;
     let active = false;
     let locked = false;
     let lockedTitle = '';
-    if (tileKey && toolKind === 'tile') {
+    if (deselectKey) {
+      active = toolKind === 'none';
+    } else if (tileKey && toolKind === 'tile') {
       active = TOOLBAR_TILE_MAP[tileKey] === currentTool.tile;
     } else if (zoneKey && toolKind === 'zone') {
       const z = TOOLBAR_ZONE_MAP[zoneKey];
@@ -4043,12 +4449,31 @@ function centerViewportOnWorldPx(worldX: number, worldY: number): void {
   clampViewportScroll();
 }
 
+function selectIncident(incidentId: number): boolean {
+  const incident = state.incidents.find((entry) => entry.id === incidentId);
+  if (!incident) return false;
+  selectedIncidentId = incident.id;
+  selectedAgent = null;
+  selectedDockId = null;
+  selectedRoomTile = null;
+  selectedBerthAnchor = null;
+  agentModal.classList.add('hidden');
+  dockModal.classList.add('hidden');
+  roomModal.classList.add('hidden');
+  refreshAgentSidePanel();
+  refreshSelectionSummary();
+  refreshIncidentList();
+  return true;
+}
+
 function focusIncident(incidentId: number): void {
   const incident = state.incidents.find((entry) => entry.id === incidentId);
   if (!incident) return;
-  const tile = fromIndex(incident.tileIndex, state.width);
+  selectIncident(incidentId);
+  const tileIndex = incidentTileForFocus(incident);
+  const tile = fromIndex(tileIndex, state.width);
   centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
-  hoveredTile = incident.tileIndex;
+  hoveredTile = tileIndex;
   refreshIncidentList();
 }
 
@@ -4331,6 +4756,7 @@ function syncControlsToUiFromState(): void {
   taxInput.value = String(taxPercent);
   taxLabel.textContent = `${taxPercent}%`;
   crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
+  securityPostureSelect.value = state.controls.securityPosture;
   refreshPriorityUi();
   refreshTransportUi();
 }
@@ -4339,6 +4765,7 @@ function clearUiSelectionsAfterLoad(): void {
   selectedDockId = null;
   selectedRoomTile = null;
   selectedAgent = null;
+  selectedIncidentId = null;
   hoveredTile = null;
   isPainting = false;
   paintStart = null;
@@ -4480,6 +4907,19 @@ function refreshRoomModal(): void {
     roomModalCapacityEl.textContent = 'Capacity: n/a';
     roomModalCapacityEl.style.color = '#8ea2bd';
   }
+  const reputationAtRoom = selectedRoomTile !== null
+    ? getReputationTileDiagnostic(state, selectedRoomTile % state.width, Math.floor(selectedRoomTile / state.width))
+    : null;
+  if (reputationAtRoom?.zone) {
+    const zone = reputationAtRoom.zone;
+    roomModalReputationEl.textContent =
+      `Reputation: ${zone.label} | prestige ${zone.prestige.toFixed(0)} | notoriety ${zone.notoriety.toFixed(0)} | control ${zone.control.toFixed(0)} | ` +
+      `value ${zone.value.toFixed(0)} | opacity ${zone.opacity.toFixed(0)} | crime ${zone.crimePressure.toFixed(0)} | ${zone.topDrivers.join(' | ')}`;
+    roomModalReputationEl.style.color = zone.crimePressure >= 65 ? '#ff7676' : zone.prestige >= 55 ? '#6edb8f' : zone.notoriety >= 55 ? '#ffcf6e' : '#8ea2bd';
+  } else {
+    roomModalReputationEl.textContent = 'Reputation: n/a';
+    roomModalReputationEl.style.color = '#8ea2bd';
+  }
   const housingRoom = inspector.room === RoomType.Dorm || inspector.room === RoomType.Hygiene;
   if (housingRoom) {
     roomModalHousingPolicyEl.textContent = inspector.housingPolicy ?? 'crew';
@@ -4529,6 +4969,8 @@ function refreshRoomModal(): void {
       roomModalBerthFacingEl.textContent = berth.derivedFacing
         ? berth.derivedFacing[0].toUpperCase() + berth.derivedFacing.slice(1)
         : 'sealed (no exterior opening)';
+      roomModalBerthScreeningSelect.value = berth.screeningLevel;
+      roomModalBerthCustomsSelect.value = berth.customsPolicy;
       const berthTypes = new Set(berth.allowedShipTypes);
       roomModalBerthTouristCheckbox.checked = berthTypes.has('tourist');
       roomModalBerthTraderCheckbox.checked = berthTypes.has('trader');
@@ -5165,6 +5607,13 @@ canvas.addEventListener('mouseup', (e) => {
     const singleClick = paintStart.x === paintCurrent.x && paintStart.y === paintCurrent.y;
     const clickedTile = singleClick ? toIndex(paintStart.x, paintStart.y, state.width) : null;
     if (singleClick && clickedTile !== null) {
+      const incident = incidentAtTile(clickedTile);
+      if (incident && selectIncident(incident.id)) {
+        isPainting = false;
+        paintStart = null;
+        paintCurrent = null;
+        return;
+      }
       const world = toWorldCoords(e.clientX, e.clientY);
       if (world) {
         const agent = pickInspectableAgent(world.x, world.y, clickedTile);
@@ -5172,6 +5621,7 @@ canvas.addEventListener('mouseup', (e) => {
           selectedAgent = agent;
           selectedDockId = null;
           selectedRoomTile = null;
+          selectedIncidentId = null;
           if (!refreshAgentSidePanel()) {
             selectedAgent = null;
           }
@@ -5192,6 +5642,7 @@ canvas.addEventListener('mouseup', (e) => {
         selectedDockId = dock.id;
         selectedRoomTile = null;
         selectedAgent = null;
+        selectedIncidentId = null;
         refreshDockModal();
         dockModal.classList.remove('hidden');
         roomModal.classList.add('hidden');
@@ -5206,6 +5657,7 @@ canvas.addEventListener('mouseup', (e) => {
         selectedRoomTile = clickedTile;
         selectedDockId = null;
         selectedAgent = null;
+        selectedIncidentId = null;
         refreshRoomModal();
         roomModal.classList.remove('hidden');
         dockModal.classList.add('hidden');
@@ -5219,6 +5671,7 @@ canvas.addEventListener('mouseup', (e) => {
       selectedAgent = null;
       selectedDockId = null;
       selectedRoomTile = null;
+      selectedIncidentId = null;
       agentModal.classList.add('hidden');
       agentSidePanel.classList.add('hidden');
       dockModal.classList.add('hidden');
@@ -5227,6 +5680,7 @@ canvas.addEventListener('mouseup', (e) => {
       selectedDockId = null;
       selectedRoomTile = null;
       selectedAgent = null;
+      selectedIncidentId = null;
       dockModal.classList.add('hidden');
       roomModal.classList.add('hidden');
       agentModal.classList.add('hidden');
@@ -5529,6 +5983,11 @@ crewPriorityPresetSelect.addEventListener('change', () => {
   for (const system of prioritySystems) {
     state.controls.crewPriorityWeights[system] = presetWeights[system];
   }
+  refreshPriorityUi();
+});
+
+securityPostureSelect.addEventListener('change', () => {
+  setSecurityPosture(state, securityPostureSelect.value as SecurityPosture);
   refreshPriorityUi();
 });
 
@@ -5889,12 +6348,14 @@ wireModal({
   closeBtn: closeAgentBtn,
   beforeClose: () => {
     selectedAgent = null;
+    selectedIncidentId = null;
     agentSidePanel.classList.add('hidden');
   }
 });
 
 closeAgentSideBtn.addEventListener('click', () => {
   selectedAgent = null;
+  selectedIncidentId = null;
   agentSidePanel.classList.add('hidden');
   agentModal.classList.add('hidden');
 });
@@ -5992,6 +6453,18 @@ for (const [checkbox, shipSize] of ROOM_MODAL_BERTH_SHIP_SIZE_CHECKBOXES) {
     refreshRoomModal();
   });
 }
+
+roomModalBerthScreeningSelect.addEventListener('change', () => {
+  if (selectedBerthAnchor === null) return;
+  setBerthScreeningLevel(state, selectedBerthAnchor, roomModalBerthScreeningSelect.value as BerthScreeningLevel);
+  refreshRoomModal();
+});
+
+roomModalBerthCustomsSelect.addEventListener('change', () => {
+  if (selectedBerthAnchor === null) return;
+  setBerthCustomsPolicy(state, selectedBerthAnchor, roomModalBerthCustomsSelect.value as CustomsPolicy);
+  refreshRoomModal();
+});
 
 roomModalHousingSelect.addEventListener('change', () => {
   if (selectedRoomTile === null) return;
@@ -6275,9 +6748,18 @@ sellFoodLargeBtn.addEventListener('click', () => {
 
 incidentListEl.addEventListener('click', (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null;
-  const button = target?.closest<HTMLButtonElement>('button[data-incident-focus]');
+  const button = target?.closest<HTMLButtonElement>('button[data-incident-select]');
   if (!button) return;
-  const incidentId = Number(button.dataset.incidentFocus);
+  const incidentId = Number(button.dataset.incidentSelect);
+  if (!Number.isFinite(incidentId)) return;
+  focusIncident(incidentId);
+});
+
+alertListEl.addEventListener('click', (event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const button = target?.closest<HTMLButtonElement>('button[data-incident-select]');
+  if (!button) return;
+  const incidentId = Number(button.dataset.incidentSelect);
   if (!Number.isFinite(incidentId)) return;
   focusIncident(incidentId);
 });
@@ -6334,6 +6816,9 @@ function frame(now: number): void {
   const renderStart = performance.now();
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
   drawSelectedAgentRoute(ctx);
+  drawActiveIncidentHints(ctx);
+  drawSelectedIncidentRoutes(ctx);
+  drawSelectedIncidentCallouts(ctx);
   state.metrics.renderMs = performance.now() - renderStart;
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
@@ -6533,7 +7018,13 @@ function frame(now: number): void {
     `queue timeouts ${state.metrics.shipsTimedOutInQueue} | ` +
     `service fails/min ${state.metrics.visitorServiceFailuresPerMin.toFixed(1)} | ` +
     `resident departures ${state.metrics.residentDepartures}`;
-  if (selectedAgent !== null) {
+  if (selectedIncidentId !== null) {
+    if (!refreshAgentSidePanel()) {
+      selectedIncidentId = null;
+      agentSidePanel.classList.add('hidden');
+    }
+    agentModal.classList.add('hidden');
+  } else if (selectedAgent !== null) {
     if (!refreshAgentSidePanel()) {
       selectedAgent = null;
       agentSidePanel.classList.add('hidden');
@@ -6697,8 +7188,12 @@ function offerAutosaveLoadOnColdStart(): void {
   });
 }
 
-async function startGameLoop(): Promise<void> {
-  spriteAtlas = await loadSpriteAtlas(state.controls.spritePipeline);
+function startGameLoop(): void {
+  void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
+    spriteAtlas = loaded;
+    refreshCrewPanel();
+    refreshModulePaletteSprites();
+  });
   refreshCrewPanel();
   refreshModulePaletteSprites();
   offerAutosaveLoadOnColdStart();
@@ -6707,7 +7202,7 @@ async function startGameLoop(): Promise<void> {
   requestAnimationFrame(frame);
 }
 
-void startGameLoop();
+startGameLoop();
 
 // ---------------------------------------------------------------------------
 // Harness hooks — always-on, read-only, safe to expose in production.
@@ -6768,6 +7263,10 @@ window.__harnessPauseAndFlush = () => {
   const renderViewport = getRenderViewport();
   prepareViewportRender(renderViewport);
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+  drawSelectedAgentRoute(ctx);
+  drawActiveIncidentHints(ctx);
+  drawSelectedIncidentRoutes(ctx);
+  drawSelectedIncidentCallouts(ctx);
 };
 
 window.__harnessAdvanceSim = (seconds: number, step = 0.25) => {
