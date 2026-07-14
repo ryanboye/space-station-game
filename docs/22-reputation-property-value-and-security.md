@@ -336,7 +336,7 @@ Defer until after the two-pass MVP:
 
 ### 6. Pass 2 - Reputation Memory And Theft
 
-- [ ] Add local reputation memory for recent incidents by tile/zone anchor with decay.
+- [x] Add local reputation memory for recent incidents by tile/zone anchor with decay.
 - [x] Add `theft` to `IncidentType` with a bounded subject/target model.
 - [x] Spawn theft from high `crimePressure` in value-bearing areas: Market, Workshop, Storage/LogisticsStock, Berth/CargoArm, private Dorm, and high-value Cantina/Lounge/Observatory pockets.
 - [x] Scale theft value from room/module score rather than inventing detailed item rarity in Pass 2.
@@ -419,6 +419,9 @@ Defer until after the two-pass MVP:
 - 2026-05-06: Follow-up layer decision: customs policy, security posture, cameras, and access gates were added as ordinary operational levers instead of explicit prestige/notoriety toggles. They modify derived value/control/opacity/notoriety and inherit the room context around them.
 - 2026-05-06: Balance concern resolved for the reputation-slice scenario: raw berth traffic was making nearby docks read as high-risk even when security and screening were close. Crime pressure now uses damped traffic pressure and controlled-traffic suppression, so an open expedited berth can be red while a strict/selective berth near security reads controlled but still valuable.
 - 2026-05-06: Scope note: SecurityCamera currently acts through the reputation overlay's control/opacity math. A separate blind-spot overlay can wait until camera facing, coverage cones, sabotage, or patrol routing make it worth another UI layer.
+- 2026-07-14 (bmo/reputation-improve): Boot-hang fix. `?scenario=reputation-slice` froze the main thread at boot: `inspectRoomCluster` probed cluster reachability with a full A* from every start tile, and on a dock-less demo station it fell back to ~1,700 floor tiles as starts — thousands of full-grid searches per cluster, per role, per crew, per tick. Replaced with one cached O(grid) multi-source flood-fill (`clusterReachabilityFromEntries`). Added a per-tick pathfinding-budget console.error so any future A* fan-out fails loud instead of hanging.
+- 2026-07-14: District incident memory (checklist §6 line 1) landed. `state.incidentMemory` keeps a slow-decaying (75s half-life) notoriety trace keyed by room-cluster anchor, stamped in `createIncident` (theft anchors to its value-room target; trespass/fight attribute to the nearest room within radius 4). It feeds `notoriety` and `crimePressure` in `reputationScoreForCluster` and surfaces as a `recent incidents N (heat X)` driver in the room inspector — so a pocket stays notorious after the incident clears and repeat crime compounds (observed: demo-station Observatory h9→15→18 over three thefts). Transient (cleared on load) for now; persisting across saves is a follow-up. Theft spawn floor eased (crimePressure ≥ 36, was 42) so a normal station produces the baseline pulse the memory can build on.
+- 2026-07-14: Visitor reward-loop finding. The loop is NOT deadlocked — arrive→spend→exit completes and rating/credits respond — but the demo overlay parks both Berths ~79 tiles from services (past the 30-tile walk-comfort threshold), so the first exit lands ~t=80 (5+ cycles) and a 3-cycle soak reads Exits 0/min. Added a `visits/revenue this cycle` STATION OPS ticker and a `visitorExitStalled` alert (fires while departures back up, clears when they flow). Berth-distance pacing left for an owner playtest call rather than a blind global speed/layout change.
 
 ## Verification Log
 

@@ -643,6 +643,7 @@ export function createInitialState(options?: { seed?: number }): StationState {
     lastResidentTaxAt: 0,
     recentExitTimes: [],
     recentVisitLedger: [],
+    incidentMemory: [],
     dockedTimeTotal: 0,
     dockedShipsCompleted: 0,
     bodyTiles: [],

@@ -1936,6 +1936,12 @@ export interface StationState {
   // pass; windowed deltas give per-cycle revenue and failure counts. Transient
   // (rebuilt at runtime), cleared on load like recentExitTimes.
   recentVisitLedger: Array<{ at: number; gross: number; fails: number }>;
+  // Persistent-but-decaying "district memory" of incidents, keyed by the room
+  // cluster anchor tile where each incident fired. Lets a neighbourhood stay
+  // notorious after the specific incident resolves, so theft compounds local
+  // reputation pressure (docs/22 §6). Transient (rebuilt in play, cleared on
+  // load) like recentExitTimes.
+  incidentMemory: Array<{ anchor: number; heat: number; count: number; lastAt: number }>;
   dockedTimeTotal: number;
   dockedShipsCompleted: number;
   bodyTiles: number[];

@@ -2873,6 +2873,78 @@ function nearbyIncidentHeatForTiles(state: StationState, tiles: readonly number[
   return heat;
 }
 
+// --- District incident memory (docs/22 §6) --------------------------------
+// A slow-decaying local notoriety trace anchored to the room cluster where an
+// incident fired. Unlike nearbyIncidentHeatForTiles (which reads only live /
+// just-resolved incidents), this persists so a rough pocket stays rough after
+// the incident clears — the compounding loop that gives the station
+// neighbourhoods instead of one global score.
+const INCIDENT_MEMORY_HALFLIFE_SEC = 75;
+const INCIDENT_MEMORY_MAX = 48;
+const INCIDENT_MEMORY_FLOOR = 0.6;
+
+function incidentMemoryDecayFactor(elapsed: number): number {
+  if (elapsed <= 0) return 1;
+  return Math.pow(0.5, elapsed / INCIDENT_MEMORY_HALFLIFE_SEC);
+}
+
+function anchorForTile(state: StationState, tileIndex: number): number {
+  ensureRoomClustersCache(state);
+  const direct = state.derived.clusterByTile.get(tileIndex)?.anchor;
+  if (direct !== undefined) return direct;
+  // Incident landed on a corridor / room-none tile (trespass in an arrival
+  // lane, a chase spilling out of a room). Attribute it to the nearest room
+  // cluster within a short radius so the adjacent district still remembers it
+  // — otherwise the memory keys to a bare corridor tile no zone ever reads.
+  const p = fromIndex(tileIndex, state.width);
+  for (let r = 1; r <= 4; r++) {
+    for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      const a = state.derived.clusterByTile.get(ny * state.width + nx)?.anchor;
+      if (a !== undefined) return a;
+    }
+  }
+  return tileIndex;
+}
+
+function bumpIncidentMemory(state: StationState, tileIndex: number, amount: number): void {
+  if (amount <= 0) return;
+  const anchor = anchorForTile(state, tileIndex);
+  let entry = state.incidentMemory.find((e) => e.anchor === anchor);
+  if (!entry) {
+    entry = { anchor, heat: 0, count: 0, lastAt: state.now };
+    state.incidentMemory.push(entry);
+  } else {
+    entry.heat *= incidentMemoryDecayFactor(state.now - entry.lastAt);
+  }
+  entry.heat = clamp(entry.heat + amount, 0, INCIDENT_MEMORY_MAX);
+  entry.count += 1;
+  entry.lastAt = state.now;
+}
+
+function districtIncidentMemoryAt(state: StationState, anchor: number): { heat: number; count: number } {
+  const entry = state.incidentMemory.find((e) => e.anchor === anchor);
+  if (!entry) return { heat: 0, count: 0 };
+  return { heat: entry.heat * incidentMemoryDecayFactor(state.now - entry.lastAt), count: entry.count };
+}
+
+function decayIncidentMemory(state: StationState): void {
+  if (state.incidentMemory.length === 0) return;
+  state.incidentMemory = state.incidentMemory.filter(
+    (e) => e.heat * incidentMemoryDecayFactor(state.now - e.lastAt) >= INCIDENT_MEMORY_FLOOR
+  );
+}
+
+// How much lasting notoriety an incident stamps on its district. Failed /
+// escaped incidents (uncontrolled crime) leave a deeper scar than a contained
+// one — this is where Pass-1 security outcomes feed Pass-2 reputation.
+function incidentMemoryAmount(type: IncidentType, severity: number): number {
+  const base = type === 'theft' ? 6 : type === 'fight' ? 5 : 3;
+  return base * clamp(0.7 + severity * 0.5, 0.7, 2);
+}
+
 function moduleCountInTiles(state: StationState, tiles: readonly number[], modules: ModuleType[]): number {
   const moduleSet = new Set(modules);
   let count = 0;
@@ -3023,6 +3095,9 @@ function reputationScoreForCluster(state: StationState, room: RoomType, tiles: n
   const traffic = nearbyActorCountForTiles(state, tiles);
   const trafficPressure = clamp(traffic, 0, 8) + Math.max(0, traffic - 8) * 0.35;
   const recentIncidentHeat = nearbyIncidentHeatForTiles(state, tiles);
+  // Persistent district memory: keeps a pocket notorious after the incident
+  // itself has cleared, so repeat crime compounds local reputation pressure.
+  const districtMemory = districtIncidentMemoryAt(state, anchorTile);
   const accessGateControl = gateCoverage * (gateStaffRatio > 0 ? 30 * gateStaffRatio + 6 * (1 - gateStaffRatio) : 3);
   const cameraControl = cameraCoverage * 18;
   const cameraOpacityRelief = cameraCoverage * 20;
@@ -3110,6 +3185,7 @@ function reputationScoreForCluster(state: StationState, room: RoomType, tiles: n
       Math.max(0, customsPolicyTraffic) * 4 +
       trafficPressure * 1.3 +
       recentIncidentHeat * 8 +
+      districtMemory.heat * 0.6 +
       clamp(avgDirt * 0.18 + maintenanceNearby * 0.12, 0, 18) -
       customsControl * 0.12 -
       avgSecurity * 10 -
@@ -3143,7 +3219,7 @@ function reputationScoreForCluster(state: StationState, room: RoomType, tiles: n
     100
   );
   const uncontrolledTrafficPressure = trafficPressure * clamp(1 - control / 105, 0.25, 1);
-  const crimePressure = clamp(value * 0.42 + opacity * 0.34 + notoriety * 0.32 + uncontrolledTrafficPressure * 2 + recentIncidentHeat * 12 - control * 0.62, 0, 100);
+  const crimePressure = clamp(value * 0.42 + opacity * 0.34 + notoriety * 0.32 + uncontrolledTrafficPressure * 2 + recentIncidentHeat * 12 + districtMemory.heat * 0.5 - control * 0.62, 0, 100);
   const marketClass: ReputationZoneScore['marketClass'] =
     room !== RoomType.Market
       ? undefined
@@ -3175,6 +3251,7 @@ function reputationScoreForCluster(state: StationState, room: RoomType, tiles: n
   if (cameraCoverage >= 0.12) driverHints.push({ label: 'camera coverage', value: 28 + cameraCoverage * 36 });
   if (gateCoverage >= 0.12) driverHints.push({ label: gateStaffRatio > 0.66 ? 'staffed access gate' : 'understaffed access gate', value: 26 + gateCoverage * 34 });
   if (state.controls.securityPosture !== 'standard') driverHints.push({ label: `${state.controls.securityPosture} security`, value: 24 + Math.abs(posture.visibleForceBonus) + Math.abs(1 - posture.controlMultiplier) * 40 });
+  if (districtMemory.count > 0) driverHints.push({ label: `recent incidents ${districtMemory.count} (heat ${districtMemory.heat.toFixed(0)})`, value: 40 + districtMemory.heat });
   return {
     ...partial,
     label: labelForReputationZone(partial),
@@ -4060,6 +4137,11 @@ function createIncident(
   };
   state.incidents.push(incident);
   registerIncident(state, 1);
+  // Stamp lasting local notoriety so the district remembers this incident well
+  // after it resolves — the compounding memory the reputation loop reads. Theft
+  // carries a targetTile (the value room it struck); anchor its memory there so
+  // it stains the room, not the corridor its subject happened to stand in.
+  bumpIncidentMemory(state, incident.targetTile ?? tileIndex, incidentMemoryAmount(type, normalizedSeverity));
   return incident;
 }
 
@@ -13037,7 +13119,7 @@ function maybeCreateTheftIncident(state: StationState, dt: number): void {
   if (state.incidents.some((incident) => isIncidentActive(incident) && incident.type === 'theft')) return;
   const zones = getReputationZoneScores(state)
     .filter((zone) =>
-      zone.crimePressure >= 42 &&
+      zone.crimePressure >= 36 &&
       (zone.room === RoomType.Market ||
         zone.room === RoomType.Workshop ||
         zone.room === RoomType.Storage ||
@@ -13050,7 +13132,7 @@ function maybeCreateTheftIncident(state: StationState, dt: number): void {
     )
     .slice(0, 5);
   if (zones.length <= 0) return;
-  const weightedChance = zones.reduce((acc, zone) => acc + Math.max(0, zone.crimePressure - 38) * 0.00045, 0);
+  const weightedChance = zones.reduce((acc, zone) => acc + Math.max(0, zone.crimePressure - 30) * 0.0005, 0);
   if (state.rng() > weightedChance * Math.max(0, dt)) return;
   const zone = zones[randomInt(0, zones.length - 1, state.rng)];
   const zoneTiles = new Set(zone.tiles);
@@ -16269,6 +16351,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateResidentLogic(state, dt, occupancyByTile, securityAuraByTile);
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   maybeCreateTheftIncident(state, dt);
+  decayIncidentMemory(state);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);
