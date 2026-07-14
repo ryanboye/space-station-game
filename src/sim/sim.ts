@@ -408,6 +408,12 @@ export const EXPANSION_STEP_TILES = 40;
 export const EXPANSION_COST_TIERS = [2000, 4000, 6000, 8000] as const;
 const PATH_CACHE_TTL_SEC = 0.45;
 const PATH_CACHE_MAX_ENTRIES = 1200;
+// Fail-loud guard: a healthy tick issues a few thousand (mostly cached)
+// pathfinding calls. If a single tick ever blows past this, some routine is
+// fanning out A* unboundedly (the reputation-slice boot-hang class). Surface
+// it once with a loud console.error instead of silently freezing the tab.
+const PATH_CALLS_PER_TICK_BUDGET = 40000;
+let loggedPathBudgetBreach = false;
 
 const ACTIVATION_DEBOUNCE_ROOMS = new Set<RoomType>([
   RoomType.Cafeteria,
@@ -1368,6 +1374,30 @@ function buildServiceNodeReachabilityContext(state: StationState): ServiceNodeRe
     hasStarts: starts.length > 0,
     reachableWalkTiles: buildWalkableReachabilityFromStarts(state, starts)
   };
+}
+
+// Cached "which walkable tiles can an entering actor reach?" set, used by
+// inspectRoomCluster's activation reachability check. Starts from Dock
+// tiles, falling back to all Floor tiles when a station has no docks (test
+// stations / demo overlays). One O(grid) flood-fill answers reachability
+// for every cluster inspection in a tick instead of thousands of A* runs.
+// Memoized per-state on reachabilityVersionKey (bumps on topology/room/
+// module/dock changes); the WeakMap key is the stable in-place state
+// reference (never replaced — see applyHydratedState).
+const clusterReachabilityMemo = new WeakMap<
+  StationState,
+  { version: string; hasStarts: boolean; reachable: Set<number> }
+>();
+function clusterReachabilityFromEntries(state: StationState): { hasStarts: boolean; reachable: Set<number> } {
+  const version = reachabilityVersionKey(state);
+  const cached = clusterReachabilityMemo.get(state);
+  if (cached && cached.version === version) return cached;
+  let starts = collectTiles(state, TileType.Dock);
+  if (starts.length === 0) starts = collectTiles(state, TileType.Floor);
+  const reachable = buildWalkableReachabilityFromStarts(state, starts);
+  const entry = { version, hasStarts: starts.length > 0, reachable };
+  clusterReachabilityMemo.set(state, entry);
+  return entry;
 }
 
 function summarizeServiceNodeReachabilityForTargets(
@@ -6335,18 +6365,19 @@ function inspectRoomCluster(
       : [...cluster];
   const serviceNodeCount = serviceTargets.length;
 
-  const starts = collectTiles(state, TileType.Dock);
-  if (starts.length === 0) starts.push(...collectTiles(state, TileType.Floor));
-  let hasPath = starts.length === 0;
-  if (!hasPath) {
-    for (const start of starts) {
-      const path = chooseNearestPath(state, start, serviceTargets.length > 0 ? serviceTargets : cluster, true);
-      if (path !== null) {
-        hasPath = true;
-        break;
-      }
-    }
-  }
+  // Reachability is a pure connectivity question ("can an entering actor
+  // reach this cluster's service tiles?"). It used to run a full A* from
+  // EVERY start tile to EVERY target, and when a station has no Dock tiles
+  // it fell back to using ALL floor tiles as starts — on the 100x80 grid
+  // that is ~1700 starts, so a single inspection could fire thousands of
+  // full-grid A* searches (measured 4+ seconds each). Because
+  // inspectRoomCluster runs per-cluster, per-role, per-crew every tick,
+  // that quietly froze the main thread on unpaused dense stations.
+  // A single cached multi-source flood-fill answers the same question in
+  // one O(grid) pass — see clusterReachabilityFromEntries.
+  const reachTargets = serviceTargets.length > 0 ? serviceTargets : cluster;
+  const reach = clusterReachabilityFromEntries(state);
+  const hasPath = !reach.hasStarts || reachTargets.some((tile) => reach.reachable.has(tile));
 
   const requiredStaff = 0;
   const reasons: string[] = [];
@@ -16200,4 +16231,12 @@ export function tick(state: StationState, frameDt: number): void {
   updateCommandProgress(state, dt);
   maybeTriggerFailure(state, dt);
   state.metrics.tickMs = perfNowMs() - tickStarted;
+  if (!loggedPathBudgetBreach && state.metrics.pathCallsPerTick > PATH_CALLS_PER_TICK_BUDGET) {
+    loggedPathBudgetBreach = true;
+    // eslint-disable-next-line no-console
+    console.error(
+      `[sim] pathfinding budget breach: ${state.metrics.pathCallsPerTick} findPath calls in one tick ` +
+        `(budget ${PATH_CALLS_PER_TICK_BUDGET}). A routine is fanning out A* unboundedly — investigate before this freezes the tab.`
+    );
+  }
 }
