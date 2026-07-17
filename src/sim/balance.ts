@@ -469,11 +469,13 @@ export const TASK_TIMINGS = {
   visitorMinStaySec: 4,
   jobTtlSec: 45,
   jobStaleSec: 12,
+  // Crowd-loop v1: meals take long enough to SEE — tables stay visibly
+  // occupied and the room reads as inhabited during a pulse.
   visitorEatBaseSec: {
-    diner: 2.8,
-    shopper: 2.2,
-    lounger: 2.2,
-    rusher: 1.4
+    diner: 6.5,
+    shopper: 5.0,
+    lounger: 5.0,
+    rusher: 3.0
   },
   visitorEatJitterSec: 1.2,
   visitorLeisureBaseSec: {

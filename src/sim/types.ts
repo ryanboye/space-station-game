@@ -400,6 +400,13 @@ export interface Visitor {
   leisureLegsPlanned: number;
   lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | 'vending' | null;
   activeIncidentId?: number | null;
+  // Crowd-loop v1 theater: set on storm-off/balk; renderer shows red tint + "!"
+  // while state.now < angryUntil. Optional for save compat with older snapshots.
+  angryUntil?: number;
+  // Crowd-loop v1 (B2): countdown while being served at the counter. The
+  // provider slot stays held for its duration — service takes TIME, which is
+  // what makes a second serving station a real decision and lines physical.
+  serveTimer?: number;
 }
 
 export enum ResidentState {
@@ -1520,10 +1527,23 @@ export interface ServiceReachabilityCache {
   unreachableNodeTiles: number[];
 }
 
+// Crowd-loop v1: transient, never-serialized crowd state. Queue chains are
+// ordered wall-hugging tile lines per serving station; members are visitor
+// ids in arrival order. Floaters/eventFeed are pure theater (lost-sale coins,
+// death notices) consumed by the renderer + alert panel.
+export interface QueueTheater {
+  chainsByAnchor: Map<number, number[]>;
+  chainsVersion: string;
+  membersByAnchor: Map<number, number[]>;
+  floaters: Array<{ x: number; y: number; text: string; color: string; bornAt: number }>;
+  eventFeed: Array<{ at: number; tone: 'danger' | 'warn' | 'info'; text: string }>;
+}
+
 export interface DerivedCache {
   serviceTargetsByRoom: Map<RoomType, number[]>;
   queueTargets: number[];
   queueTargetSet: Set<number>;
+  queueTheater: QueueTheater;
   roomClustersByRoom: Map<RoomType, number[][]>;
   clusterByTile: Map<number, { room: RoomType; anchor: number; cluster: number[] }>;
   dockByTile: Map<number, DockEntity>;

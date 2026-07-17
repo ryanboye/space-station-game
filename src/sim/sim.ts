@@ -273,11 +273,11 @@ const BERTH_BASE_PASSENGERS: Record<ShipSize, number> = {
   medium: 18,
   large: 34
 };
-const DOCK_POD_PASSENGER_MIN = 1;
-const DOCK_POD_PASSENGER_MAX = 2;
+const DOCK_POD_PASSENGER_MIN = 4; // Crowd-loop v1: pods arrive as a visible pulse
+const DOCK_POD_PASSENGER_MAX = 8;
 const PAYROLL_PERIOD = 30;
-const PAYROLL_PER_CREW = 0.32;
-const HIRE_COST = 14;
+const PAYROLL_PER_CREW = 1.0; // Crowd-loop v1: wages that can lose money
+const HIRE_COST = 40;
 const BLOCKED_REPATH_TICKS = 3;
 const BLOCKED_LOCAL_REROUTE_TICKS = 6;
 const BLOCKED_FULL_REROUTE_TICKS = 10;
@@ -974,6 +974,13 @@ export function createEmptyDerivedCache(): StationState['derived'] {
     serviceTargetsByRoom: new Map(),
     queueTargets: [],
     queueTargetSet: new Set(),
+    queueTheater: {
+      chainsByAnchor: new Map(),
+      chainsVersion: '',
+      membersByAnchor: new Map(),
+      floaters: [],
+      eventFeed: []
+    },
     roomClustersByRoom: new Map(),
     clusterByTile: new Map(),
     dockByTile: new Map(),
@@ -5011,6 +5018,10 @@ function registerBodyDeathAtTile(state: StationState, tileIndex: number, occupan
   state.bodyTiles.push(tileIndex);
   state.recentDeathTimes.push(state.now);
   occupancyByTile.set(tileIndex, Math.max(0, (occupancyByTile.get(tileIndex) ?? 1) - 1));
+  // Crowd-loop v1 (CH-0): a death is never silent.
+  const dp = fromIndex(tileIndex, state.width);
+  pushCrowdFloater(state, dp.x + 0.5, dp.y + 0.5, 'SUFFOCATED', '#ff2f2f');
+  pushCrowdEvent(state, 'danger', `Suffocation death at (${dp.x}, ${dp.y}) — check air / life support`);
 }
 
 function makeCrewMember(id: number, tileIndex: number, width: number): CrewMember {
@@ -7769,7 +7780,8 @@ function countReservedServingTargets(state: StationState): Map<number, number> {
   return counts;
 }
 
-const MEAL_PICKUP_PROVIDER_CAPACITY = 4;
+const SERVE_INTERACTION_SEC = 3.0;
+const MEAL_PICKUP_PROVIDER_CAPACITY = 2; // Crowd-loop v1 (B2): a counter serves ~2 at once — pulses beyond that form a physical line
 
 function mealPickupCapacityForStock(stock: number): number {
   return Math.min(MEAL_PICKUP_PROVIDER_CAPACITY, Math.floor(stock + 0.0001));
@@ -7902,6 +7914,252 @@ function pickQueueSpotPath(
     }
   }
   return bestPath ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Crowd-loop v1 (B2): physical queue chains.
+//
+// Each serving station grows an ORDERED, wall-hugging line of tiles: in-room
+// tiles first, then through the door, then along the corridor. Queueing
+// visitors hold a slot on the chain (arrival order) and physically stand
+// there — a too-small room spills its line into the corridor by construction,
+// and spilled queuers block traffic through the normal occupancy rules.
+// Membership is runtime-only (derived.queueTheater); it rebuilds after load.
+// ---------------------------------------------------------------------------
+
+const QUEUE_CHAIN_MAX_LEN = 24;
+const QUEUE_BALK_LENGTH = 12;
+const CROWD_FEED_MAX = 30;
+const CROWD_FLOATER_MAX = 40;
+export const CROWD_FLOATER_TTL_SEC = 3.2;
+
+export function pushCrowdEvent(
+  state: StationState,
+  tone: 'danger' | 'warn' | 'info',
+  text: string
+): void {
+  const feed = state.derived.queueTheater.eventFeed;
+  feed.push({ at: state.now, tone, text });
+  if (feed.length > CROWD_FEED_MAX) feed.splice(0, feed.length - CROWD_FEED_MAX);
+}
+
+export function pushCrowdFloater(
+  state: StationState,
+  x: number,
+  y: number,
+  text: string,
+  color: string
+): void {
+  const floaters = state.derived.queueTheater.floaters;
+  floaters.push({ x, y, text, color, bornAt: state.now });
+  if (floaters.length > CROWD_FLOATER_MAX) floaters.splice(0, floaters.length - CROWD_FLOATER_MAX);
+}
+
+function wallAdjacencyCount(state: StationState, tileIndex: number): number {
+  const p = fromIndex(tileIndex, state.width);
+  let count = 0;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (!inBounds(nx, ny, state.width, state.height)) continue;
+    if (state.tiles[toIndex(nx, ny, state.width)] === TileType.Wall) count++;
+  }
+  return count;
+}
+
+function buildQueueChain(state: StationState, servingTile: number): number[] {
+  const sp = fromIndex(servingTile, state.width);
+  const deltas: ReadonlyArray<readonly [number, number]> = [[0, 1], [1, 0], [-1, 0], [0, -1]];
+  // Head of the line: a walkable, module-free neighbor of the counter,
+  // preferring an in-cafeteria tile against a wall.
+  let start: number | null = null;
+  let startScore = -Infinity;
+  for (const [dx, dy] of deltas) {
+    const nx = sp.x + dx;
+    const ny = sp.y + dy;
+    if (!inBounds(nx, ny, state.width, state.height)) continue;
+    const ni = toIndex(nx, ny, state.width);
+    if (!isWalkable(state.tiles[ni])) continue;
+    if (state.moduleOccupancyByTile[ni] !== null) continue;
+    const score = (state.rooms[ni] === RoomType.Cafeteria ? 8 : 0) + wallAdjacencyCount(state, ni);
+    if (score > startScore) {
+      startScore = score;
+      start = ni;
+    }
+  }
+  if (start === null) return [];
+  const chain: number[] = [start];
+  const inChain = new Set<number>([servingTile, start]);
+  let current = start;
+  let lastDx = 0;
+  let lastDy = 0;
+  while (chain.length < QUEUE_CHAIN_MAX_LEN) {
+    const cp = fromIndex(current, state.width);
+    let best: number | null = null;
+    let bestScore = -Infinity;
+    let bestDx = 0;
+    let bestDy = 0;
+    for (const [dx, dy] of deltas) {
+      const nx = cp.x + dx;
+      const ny = cp.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      const ni = toIndex(nx, ny, state.width);
+      if (inChain.has(ni)) continue;
+      if (!isWalkable(state.tiles[ni])) continue;
+      if (state.moduleOccupancyByTile[ni] !== null) continue;
+      const isDoor = state.tiles[ni] === TileType.Door;
+      const score =
+        (state.rooms[ni] === RoomType.Cafeteria ? 6 : 0) +
+        wallAdjacencyCount(state, ni) * 3 +
+        (isDoor ? -2 : 0) +
+        (dx === lastDx && dy === lastDy ? 1.5 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = ni;
+        bestDx = dx;
+        bestDy = dy;
+      }
+    }
+    if (best === null) break;
+    chain.push(best);
+    inChain.add(best);
+    current = best;
+    lastDx = bestDx;
+    lastDy = bestDy;
+  }
+  return chain;
+}
+
+function ensureQueueChains(state: StationState): void {
+  const theater = state.derived.queueTheater;
+  const version = queueTargetVersionKey(state);
+  if (theater.chainsVersion === version) return;
+  theater.chainsByAnchor.clear();
+  for (const target of collectServingTargets(state)) {
+    const chain = buildQueueChain(state, target);
+    if (chain.length > 0) theater.chainsByAnchor.set(target, chain);
+  }
+  // Drop membership lists for anchors that no longer exist.
+  for (const anchor of [...theater.membersByAnchor.keys()]) {
+    if (!theater.chainsByAnchor.has(anchor)) theater.membersByAnchor.delete(anchor);
+  }
+  theater.chainsVersion = version;
+}
+
+export function queuePositionOf(
+  state: StationState,
+  visitorId: number
+): { anchor: number; index: number } | null {
+  for (const [anchor, members] of state.derived.queueTheater.membersByAnchor) {
+    const index = members.indexOf(visitorId);
+    if (index >= 0) return { anchor, index };
+  }
+  return null;
+}
+
+/** Join the shortest serving line (or balk if every line is hopeless).
+ *  Returns 'joined' | 'balked' | 'no-queue'. */
+function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | 'balked' | 'no-queue' {
+  ensureQueueChains(state);
+  const theater = state.derived.queueTheater;
+  if (theater.chainsByAnchor.size === 0) return 'no-queue';
+  const existing = queuePositionOf(state, visitor.id);
+  if (existing !== null) return 'joined';
+  let bestAnchor: number | null = null;
+  let bestLen = Infinity;
+  for (const [anchor, chain] of theater.chainsByAnchor) {
+    const members = theater.membersByAnchor.get(anchor) ?? [];
+    if (members.length >= chain.length) continue; // line physically full
+    if (members.length < bestLen) {
+      bestLen = members.length;
+      bestAnchor = anchor;
+    }
+  }
+  if (bestAnchor === null || bestLen >= QUEUE_BALK_LENGTH) {
+    // B3: balk — the visitor looks at the line and refuses on the spot.
+    visitor.angryUntil = state.now + 5;
+    pushCrowdFloater(state, visitor.x, visitor.y, 'line too long!', '#ff9f5f');
+    pushCrowdEvent(state, 'warn', `A ${visitor.archetype} balked — the food line is too long`);
+    addVisitorFailurePenalty(state, 0.05, 'patienceBail');
+    return 'balked';
+  }
+  const members = theater.membersByAnchor.get(bestAnchor) ?? [];
+  members.push(visitor.id);
+  theater.membersByAnchor.set(bestAnchor, members);
+  visitor.state = VisitorState.Queueing;
+  const chain = theater.chainsByAnchor.get(bestAnchor)!;
+  const slotTile = chain[Math.min(members.length - 1, chain.length - 1)];
+  const path = findPath(
+    state,
+    visitor.tileIndex,
+    slotTile,
+    { allowRestricted: false, intent: 'visitor', routeSeed: visitor.id },
+    state.pathOccupancyByTile
+  );
+  setVisitorPath(state, visitor, path ?? []);
+  return 'joined';
+}
+
+/** Per-tick upkeep: prune leavers, compact slots, march everyone forward. */
+function maintainCafeteriaQueues(state: StationState): void {
+  const theater = state.derived.queueTheater;
+  // Expire old floaters regardless of queue activity.
+  if (theater.floaters.length > 0) {
+    theater.floaters = theater.floaters.filter((f) => state.now - f.bornAt < CROWD_FLOATER_TTL_SEC);
+  }
+  if (theater.membersByAnchor.size === 0) return;
+  ensureQueueChains(state);
+  const byId = new Map<number, Visitor>();
+  for (const v of state.visitors) byId.set(v.id, v);
+  for (const [anchor, members] of [...theater.membersByAnchor]) {
+    const chain = theater.chainsByAnchor.get(anchor);
+    if (!chain || chain.length === 0) {
+      theater.membersByAnchor.delete(anchor);
+      continue;
+    }
+    const kept: number[] = [];
+    for (const id of members) {
+      const v = byId.get(id);
+      if (!v) continue;
+      if (v.state !== VisitorState.Queueing || v.carryingMeal) continue;
+      kept.push(id);
+    }
+    for (let i = 0; i < kept.length; i++) {
+      const v = byId.get(kept[i])!;
+      const slotTile = chain[Math.min(i, chain.length - 1)];
+      const currentGoal = v.path.length > 0 ? v.path[v.path.length - 1] : v.tileIndex;
+      if (currentGoal !== slotTile) {
+        const path = findPath(
+          state,
+          v.tileIndex,
+          slotTile,
+          { allowRestricted: false, intent: 'visitor', routeSeed: v.id },
+          state.pathOccupancyByTile
+        );
+        if (path) setVisitorPath(state, v, path);
+      }
+    }
+    if (kept.length === 0) theater.membersByAnchor.delete(anchor);
+    else theater.membersByAnchor.set(anchor, kept);
+  }
+}
+
+/** Route a hungry visitor into a physical serving line; on balk, send them
+ *  to leisure (or the dock) instead. Falls back to the legacy queue-spot
+ *  blob when no serving stations exist. */
+function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
+  const result = joinCafeteriaQueue(state, visitor);
+  if (result === 'joined') return;
+  if (result === 'balked') {
+    if (!visitor.servedMeal && assignPathToLeisure(state, visitor)) {
+      return;
+    }
+    visitor.state = VisitorState.ToDock;
+    assignPathToDock(state, visitor);
+    return;
+  }
+  setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id));
+  visitor.state = VisitorState.Queueing;
 }
 
 function dinersOnTile(state: StationState, tileIndex: number): number {
@@ -8057,7 +8315,12 @@ function updateTrafficArrivalSchedule(state: StationState): void {
 
   let attempts = 0;
   while (state.now >= state.lastCycleTime && attempts < MAX_SHIPS_PER_CYCLE) {
-    scheduleSporadicArrival(state);
+    // Crowd-loop v1 (CH-1): traffic control — don't dispatch arrivals the
+    // docks can't take. A full queue means the next ship simply doesn't come
+    // (instead of arriving, waiting 18s, and silently torching rating).
+    if (state.dockQueue.length < Math.max(1, state.docks.length)) {
+      scheduleSporadicArrival(state);
+    }
     state.lastCycleTime += nextTrafficArrivalDelay(state);
     attempts++;
   }
@@ -8126,8 +8389,9 @@ function updateArrivingShips(state: StationState, dt: number): void {
       continue;
     }
     if (state.now >= entry.timeoutAt) {
+      // Crowd-loop v1 (CH-1): timeouts are telemetry, not a rating bleed —
+      // dock capacity is per-zone and not fixable by the player mid-queue.
       state.metrics.shipsTimedOutInQueue++;
-      serviceFailureRatingPenalty(state, 1.4, 'ratingFromShipTimeout');
       state.dockQueue.splice(i, 1);
       i--;
     }
@@ -11893,13 +12157,18 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
     });
     if (!reservation.ok) {
       visitor.reservedServingTile = null;
-      setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id));
-      visitor.state = VisitorState.Queueing;
+      enterServingLineOrBail(state, visitor);
       return;
     }
   }
+  if (nextServing.target === null) {
+    // Crowd-loop v1 (B2): every counter is at service capacity right now —
+    // this is exactly the moment the physical line exists for.
+    enterServingLineOrBail(state, visitor);
+    return;
+  }
   visitor.state = VisitorState.ToCafeteria;
-  if (visitor.path.length > 0 || (nextServing.target !== null && visitor.tileIndex === nextServing.target)) {
+  if (visitor.path.length > 0 || visitor.tileIndex === nextServing.target) {
     return;
   }
   const queuePath = pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id);
@@ -12263,7 +12532,7 @@ function marketSpendPerSec(state: StationState, visitor: Visitor): number {
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity * 0.9, 0.3, 1.1);
-  const payout = (3 + state.controls.taxRate * 8) * visitor.spendMultiplier * taxPenalty;
+  const payout = (5 + state.controls.taxRate * 6) * visitor.spendMultiplier * taxPenalty; // Crowd-loop v1: income rides served meals
   return Math.max(0.6, payout);
 }
 
@@ -12417,8 +12686,7 @@ function updateVisitorLogic(
           repathVisitorToReservedCafeteriaTarget(state, visitor);
         }
         if (!visitor.carryingMeal && visitor.blockedTicks === VISITOR_BLOCKED_QUEUE_REROUTE_TICKS) {
-          setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id));
-          visitor.state = VisitorState.Queueing;
+          enterServingLineOrBail(state, visitor);
         }
         if (visitor.blockedTicks >= VISITOR_BLOCKED_FULL_REASSIGN_TICKS) {
           visitor.blockedTicks = 0;
@@ -12427,7 +12695,17 @@ function updateVisitorLogic(
 
         if (!visitor.carryingMeal) {
           const servingTile = visitor.reservedServingTile;
-          if (servingTile !== null && visitor.tileIndex === servingTile) {
+          // Crowd-loop v1 (B2): being served takes SERVE_INTERACTION_SEC while
+          // the provider slot stays held — the counter is a rate limiter, so
+          // a passenger pulse beyond its rate forms a physical line.
+          if (servingTile !== null && visitor.tileIndex === servingTile && visitor.serveTimer === undefined) {
+            visitor.serveTimer = SERVE_INTERACTION_SEC;
+          }
+          if (servingTile !== null && visitor.tileIndex === servingTile && (visitor.serveTimer ?? 0) > 0) {
+            visitor.serveTimer = (visitor.serveTimer ?? 0) - dt;
+          }
+          if (servingTile !== null && visitor.tileIndex === servingTile && (visitor.serveTimer ?? 0) <= 0 && visitor.serveTimer !== undefined) {
+            visitor.serveTimer = undefined;
             const picked = takeItemStockAtNode(state, servingTile, 'meal', 1);
             if (picked > 0.01) {
               visitor.carryingMeal = true;
@@ -12442,13 +12720,13 @@ function updateVisitorLogic(
               releaseReservationsForOwner(state, 'visitor', visitor.id, 'expired', ['provider-slot']);
               visitor.reservedServingTile = null;
               addVisitorFailurePenalty(state, 0.012 * dt, 'patienceBail');
-              if (!isCafeteriaQueueSpot(state, visitor.tileIndex)) {
-                setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id));
-              }
-              visitor.state = VisitorState.Queueing;
+              enterServingLineOrBail(state, visitor);
             }
           } else if (visitor.state === VisitorState.Queueing && visitor.path.length === 0) {
-            if (hasUnreservedServingMeal(state)) {
+            // Crowd-loop v1: only the head of the line steps up to the counter;
+            // everyone else stands in their slot and stews.
+            const qpos = queuePositionOf(state, visitor.id);
+            if ((qpos === null || qpos.index <= 1) && hasUnreservedServingMeal(state)) {
               assignPathToCafeteria(state, visitor);
             } else {
               addVisitorFailurePenalty(state, 0.014 * dt, 'patienceBail');
@@ -12610,7 +12888,7 @@ function updateVisitorLogic(
       // amount per second regardless of room kind. Stacks with the market
       // stall trade-good loop below when both apply.
       if (state.modules[visitor.tileIndex] === ModuleType.VendingMachine) {
-        const vendSpend = dt * 0.42 * clamp(visitor.spendMultiplier, 0.7, 1.6);
+        const vendSpend = dt * 0.15 * clamp(visitor.spendMultiplier, 0.7, 1.6); // Crowd-loop v1: passive drip trimmed
         state.metrics.credits += vendSpend;
         state.metrics.creditsEarnedLifetime += vendSpend;
         state.usageTotals.creditsMarketGross += vendSpend;
@@ -12632,7 +12910,7 @@ function updateVisitorLogic(
             if (Math.abs(ax - vx) + Math.abs(ay - vy) <= 8) tapBonus += 0.18;
           }
         }
-        const drinkSpend = dt * 0.85 * tapBonus * clamp(visitor.spendMultiplier, 0.6, 1.7);
+        const drinkSpend = dt * 0.30 * tapBonus * clamp(visitor.spendMultiplier, 0.6, 1.7); // Crowd-loop v1: passive drip trimmed
         state.metrics.credits += drinkSpend;
         state.metrics.creditsEarnedLifetime += drinkSpend;
         state.usageTotals.creditsMarketGross += drinkSpend;
@@ -12739,6 +13017,16 @@ function updateVisitorLogic(
       assignPathToDock(state, visitor);
       visitor.patience = 12;
       addVisitorFailurePenalty(state, 0.05, 'patienceBail');
+      // Crowd-loop v1 (B3): the walk-off is theater with a price tag.
+      visitor.angryUntil = state.now + 8;
+      if (!visitor.servedMeal) {
+        const lostSale = mealExitPayout(state, visitor);
+        pushCrowdFloater(state, visitor.x, visitor.y, `-${lostSale.toFixed(0)}cr`, '#ff5f5f');
+        pushCrowdEvent(state, 'warn', `A ${visitor.archetype} stormed off unserved (-${lostSale.toFixed(0)}cr)`);
+      } else {
+        pushCrowdFloater(state, visitor.x, visitor.y, '!', '#ff9f5f');
+        pushCrowdEvent(state, 'info', `A ${visitor.archetype} left annoyed after long waits`);
+      }
     }
     if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
       setVisitorPath(state, visitor, []);
@@ -16352,6 +16640,7 @@ export function tick(state: StationState, frameDt: number): void {
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   maybeCreateTheftIncident(state, dt);
   decayIncidentMemory(state);
+  maintainCafeteriaQueues(state);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);

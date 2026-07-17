@@ -3910,22 +3910,89 @@ export function renderWorld(
     y >= visibleTiles.minY - marginTiles &&
     y <= visibleTiles.maxY + marginTiles;
 
+  // Crowd-loop v1 (B2): faint dashed guide under active serving lines so the
+  // file of bodies reads as a queue at a glance.
+  const queueTheater = state.derived.queueTheater;
+  if (queueTheater && queueTheater.membersByAnchor.size > 0) {
+    ctx.save();
+    for (const [anchor, members] of queueTheater.membersByAnchor) {
+      if (members.length < 1) continue;
+      const chain = queueTheater.chainsByAnchor.get(anchor);
+      if (!chain || chain.length < 2) continue;
+      // show the occupied stretch plus two upcoming slots so the line's
+      // direction is readable even while it grows
+      const len = Math.min(members.length + 2, chain.length);
+      ctx.strokeStyle = 'rgba(255, 214, 120, 0.55)';
+      ctx.lineWidth = Math.max(2, TILE_SIZE * 0.16);
+      ctx.setLineDash([TILE_SIZE * 0.32, TILE_SIZE * 0.22]);
+      ctx.beginPath();
+      for (let i = 0; i < len; i++) {
+        const cp = fromIndex(chain[i], state.width);
+        const lx = (cp.x + 0.5) * TILE_SIZE;
+        const ly = (cp.y + 0.5) * TILE_SIZE;
+        if (i === 0) ctx.moveTo(lx, ly);
+        else ctx.lineTo(lx, ly);
+      }
+      ctx.stroke();
+      // slot pips under each occupied position
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255, 214, 120, 0.45)';
+      for (let i = 0; i < Math.min(members.length, chain.length); i++) {
+        const cp = fromIndex(chain[i], state.width);
+        ctx.beginPath();
+        ctx.arc((cp.x + 0.5) * TILE_SIZE, (cp.y + 0.5) * TILE_SIZE, Math.max(2, TILE_SIZE * 0.1), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   for (let vi = 0; vi < state.visitors.length; vi++) {
     const v = state.visitors[vi];
     if (!actorInVisibleRange(v.x, v.y)) continue;
     const o = agentOffset(v.id);
     const cx = (v.x + o.x) * TILE_SIZE;
     const cy = (v.y + o.y) * TILE_SIZE;
-    const tint = visitorMoodColor(state, vi);
+    const angry = (v.angryUntil ?? 0) > state.now;
+    const tint = angry ? '#ff3b30' : visitorMoodColor(state, vi);
     const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.visitor, v.id);
-    if (useSprites && drawTintedAgentSprite(
+    const spriteDrawn = useSprites && drawTintedAgentSprite(
       ctx, spriteAtlas, spriteKey, cx, cy,
-      TILE_SIZE * AGENT_SPRITE_SCALE, tint, 0.35
-    )) continue;
-    ctx.fillStyle = tint;
-    ctx.beginPath();
-    ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
-    ctx.fill();
+      TILE_SIZE * AGENT_SPRITE_SCALE, tint, angry ? 0.6 : 0.35
+    );
+    if (!spriteDrawn) {
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Crowd-loop v1 (B3): storm-offs read as angry at a glance...
+    if (angry) {
+      ctx.save();
+      ctx.font = `bold ${Math.max(10, Math.round(TILE_SIZE * 0.62))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.lineWidth = 3;
+      ctx.strokeText('!', cx, cy - TILE_SIZE * 0.5);
+      ctx.fillStyle = '#ff3b30';
+      ctx.fillText('!', cx, cy - TILE_SIZE * 0.5);
+      ctx.restore();
+    } else if (v.state === VisitorState.Queueing) {
+      // ...and queuers visibly wait (blinking dots).
+      const phase = Math.floor(state.now * 1.6) % 3;
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.beginPath();
+      ctx.arc(cx, cy - TILE_SIZE * 0.52, TILE_SIZE * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      for (let d = 0; d <= phase; d++) {
+        ctx.beginPath();
+        ctx.arc(cx - TILE_SIZE * 0.12 + d * TILE_SIZE * 0.12, cy - TILE_SIZE * 0.52, Math.max(1.5, TILE_SIZE * 0.05), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 
   for (const r of state.residents) {
@@ -4025,6 +4092,29 @@ export function renderWorld(
       ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
       ctx.stroke();
     }
+  }
+
+  // Crowd-loop v1 (B3): floating lost-sale coins / death notices.
+  const crowdFloaters = state.derived.queueTheater?.floaters ?? [];
+  if (crowdFloaters.length > 0) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    for (const f of crowdFloaters) {
+      const age = state.now - f.bornAt;
+      if (age < 0 || age > 3.2) continue;
+      const alpha = Math.max(0, 1 - age / 3.2);
+      const rise = age * TILE_SIZE * 0.85;
+      ctx.globalAlpha = alpha;
+      ctx.font = `bold ${Math.max(10, Math.round(TILE_SIZE * 0.5))}px monospace`;
+      const fx = f.x * TILE_SIZE;
+      const fy = f.y * TILE_SIZE - rise - TILE_SIZE * 0.35;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(f.text, fx, fy);
+      ctx.fillStyle = f.color;
+      ctx.fillText(f.text, fx, fy);
+    }
+    ctx.restore();
   }
 
   for (const ship of state.arrivingShips) {

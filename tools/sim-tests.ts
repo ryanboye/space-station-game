@@ -3516,7 +3516,8 @@ function testLegacyDockTrafficUsesTinyPods(): void {
   assertCondition(dockShips.length > 0, 'Legacy visitor dock should receive small pod traffic.');
   for (const ship of dockShips) {
     assertCondition(ship.size === 'small', 'Legacy dock traffic should always use small pod visuals.');
-    assertCondition(ship.passengersTotal >= 1 && ship.passengersTotal <= 2, `Dock pods should carry 1-2 visitors, got ${ship.passengersTotal}.`);
+    // Crowd-loop v1 (B1): pods arrive as a pulse of 4-8 passengers.
+    assertCondition(ship.passengersTotal >= 4 && ship.passengersTotal <= 8, `Dock pods should carry 4-8 visitors, got ${ship.passengersTotal}.`);
     assertCondition((ship.assignedBerthAnchor ?? null) === null, 'Legacy dock pod should not be berth-bound.');
   }
 }

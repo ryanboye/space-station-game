@@ -2610,6 +2610,12 @@ function refreshOpsModal(): void {
 
 function refreshAlertPanel(): void {
   const alerts: Array<{ tone: 'danger' | 'warn'; text: string; incidentId?: number }> = [];
+  // Crowd-loop v1 (CH-0): death is never silent — top alert, always first.
+  if (state.metrics.recentDeaths > 0) {
+    alerts.push({ tone: 'danger', text: `⚠ ${state.metrics.recentDeaths} SUFFOCATED — check air / life support (${state.metrics.deathsTotal} total dead)` });
+  } else if (state.metrics.deathsTotal > 0 && state.metrics.bodyCount > 0) {
+    alerts.push({ tone: 'danger', text: `⚠ ${state.metrics.deathsTotal} dead — bodies await recovery` });
+  }
   if (state.metrics.mealStock < 8) alerts.push({ tone: 'danger', text: `Low meals: ${Math.round(state.metrics.mealStock)}` });
   else if (state.metrics.mealStock < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${Math.round(state.metrics.mealStock)}` });
   if (state.metrics.airQuality < 35) alerts.push({ tone: 'danger', text: `Oxygen low: ${Math.round(state.metrics.airQuality)}%` });
@@ -2658,6 +2664,13 @@ function refreshAlertPanel(): void {
   // would fit by size but not by capability tags.
   if (state.metrics.shipsQueuedNoCapabilityCount > 0 && state.metrics.shipsQueuedNoCapabilityHint) {
     alerts.push({ tone: 'warn', text: state.metrics.shipsQueuedNoCapabilityHint });
+  }
+  // Crowd-loop v1 (B3): latest crowd events (storm-offs, balks, deaths) feed
+  // the panel so the theater has a readable paper trail.
+  const feed = state.derived.queueTheater?.eventFeed ?? [];
+  for (const entry of feed.slice(-3).reverse()) {
+    if (state.now - entry.at > 45) continue;
+    alerts.push({ tone: entry.tone === 'danger' ? 'danger' : 'warn', text: entry.text });
   }
   if (alerts.length === 0) {
     alertListEl.textContent = 'No active alerts';

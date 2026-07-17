@@ -143,6 +143,39 @@ export function createInitialState(options?: { seed?: number }): StationState {
   tiles[reactorDoor] = TileType.Door;
   rooms[reactorDoor] = RoomType.Reactor;
 
+  // Crowd-loop v1 (CH-0): starter Life Support pocket on the east hull,
+  // mirroring the reactor pocket. Without it, the crew's air budget caps at
+  // ~4 breathers and any hiring or expansion suffocates the whole staff
+  // around minute 4 — silently. LifeSupport needs no modules, so the pocket
+  // self-activates once pressurized.
+  // (North wall: the east flank is reserved by the starter dock and several
+  // sim-test fixtures that build at core.x+5..8.)
+  // (East along the north wall: clear of the Bridge cluster so the pocket
+  // door doesn't count as a second Bridge door, and clear of the sim-test
+  // fixtures that build on the east flank at core.x+5..8.)
+  const lsWallMinX = starterWallMinX + 6;
+  const lsWallMaxX = starterWallMinX + 10;
+  const lsWallMinY = starterWallMinY - 4;
+  const lsWallMaxY = starterWallMinY;
+  for (let y = lsWallMinY; y <= lsWallMaxY; y++) {
+    tiles[toIndex(lsWallMinX, y, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(lsWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let x = lsWallMinX; x <= lsWallMaxX; x++) {
+    tiles[toIndex(x, lsWallMinY, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(x, lsWallMaxY, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let y = lsWallMinY + 1; y < lsWallMaxY; y++) {
+    for (let x = lsWallMinX + 1; x < lsWallMaxX; x++) {
+      const idx = toIndex(x, y, GRID_WIDTH);
+      tiles[idx] = TileType.Floor;
+      rooms[idx] = RoomType.LifeSupport;
+    }
+  }
+  const lsDoor = toIndex(lsWallMinX + 2, lsWallMaxY, GRID_WIDTH);
+  tiles[lsDoor] = TileType.Door;
+  rooms[lsDoor] = RoomType.LifeSupport;
+
   for (let y = starterFloorMinY; y <= starterFloorMinY + 2; y++) {
     for (let x = starterFloorMinX; x <= starterFloorMinX + 5; x++) {
       const idx = toIndex(x, y, GRID_WIDTH);
