@@ -2092,7 +2092,7 @@ function refreshTrafficOffers(): void {
     return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
       <div class="traffic-offer-meta">${offer.size} ${offer.shipType} · ${offer.passengersTotal} pax · ${offer.riskLabel} risk</div>
-      <div class="traffic-offer-line"><b>Brings</b> ${cargoSummary(offer.inboundCargo)}</div>
+      <div class="traffic-offer-line"><b>Offers</b> ${cargoSummary(offer.inboundCargo)} · customs accepts useful stock only</div>
       <div class="traffic-offer-line"><b>Wants</b> ${requestSummary(offer.outboundRequest)}</div>
       <div class="traffic-offer-line"><b>Pays</b> ${offer.dockingFee}c fee + ~${offer.projectedSpend}c spend · ${offer.berthTimeSec}s berth</div>
       <div class="traffic-offer-actions">

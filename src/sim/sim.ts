@@ -8719,10 +8719,24 @@ function releaseInboundCargo(state: StationState, ship: ArrivingShip): void {
   // The service clock starts after customs, so a slow inspection never makes
   // an export order fail before the player can act on it.
   turn.loadingDeadlineAt = state.now + manifest.berthTimeSec;
-  turn.phase = turn.inboundTotal > 0 ? 'unloading' : 'loading';
-  for (const [itemType, amount] of Object.entries(manifest.inboundCargo) as Array<['rawMaterial' | 'rawMeal' | 'tradeGood', number]>) {
-    addItemStockAtNode(state, turn.cargoTile, itemType, amount);
+  // Freight is an offer, not compulsory dumping. Customs only clears stock
+  // the station can use and physically store; the remainder stays aboard and
+  // cannot pin a berth forever. This makes manifests a supply decision while
+  // preventing every visitor ship from becoming a material firehose.
+  const stockTargets: Record<'rawMaterial' | 'rawMeal' | 'tradeGood', number> = {
+    rawMaterial: Math.max(0, state.controls.materialTargetStock),
+    rawMeal: 24,
+    tradeGood: 18
+  };
+  const accepted: TrafficOffer['inboundCargo'] = { rawMaterial: 0, rawMeal: 0, tradeGood: 0 };
+  for (const [itemType, offered] of Object.entries(manifest.inboundCargo) as Array<['rawMaterial' | 'rawMeal' | 'tradeGood', number]>) {
+    const currentStock = state.itemNodes.reduce((sum, node) => sum + (node.items[itemType] ?? 0), 0);
+    const usefulAmount = Math.min(offered, Math.max(0, stockTargets[itemType] - currentStock));
+    accepted[itemType] = addItemStockAtNode(state, turn.cargoTile, itemType, usefulAmount);
   }
+  manifest.inboundCargo = accepted;
+  turn.inboundTotal = Object.values(accepted).reduce((sum, amount) => sum + amount, 0);
+  turn.phase = turn.inboundTotal > 0 ? 'unloading' : 'loading';
 }
 
 function updatePortTurnaround(state: StationState, ship: ArrivingShip): void {

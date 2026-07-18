@@ -3609,6 +3609,7 @@ function testApprovedManifestCreatesCrewWorkedPhysicalTurnaround(): void {
   const state = createInitialState({ seed: 3016043, manualTrafficAdmission: true, physicalStarterInventory: true });
   state.controls.paused = false;
   state.controls.shipsPerCycle = 3;
+  state.controls.materialTargetStock = 500;
   runFor(state, 55);
   const offer = state.trafficOffers[0];
   assertCondition(!!offer, 'Turnaround test requires a forecast manifest.');
@@ -3662,6 +3663,7 @@ function testNineCrewDisembarkWhileCargoUnloads(): void {
   const state = createInitialState({ seed: 30160431, manualTrafficAdmission: true, physicalStarterInventory: true });
   state.controls.paused = false;
   state.controls.shipsPerCycle = 3;
+  state.controls.materialTargetStock = 500;
   while (state.crew.total < 9) {
     assertCondition(hireCrew(state, 0), 'Nine-crew fixture should be able to hire assistants.');
   }
@@ -3703,6 +3705,34 @@ function testNineCrewDisembarkWhileCargoUnloads(): void {
   assertCondition(
     shipCargoJobs.some((job) => job.state !== 'pending' || job.pickedUpAmount > 0),
     'At least one of nine crew should claim or progress a ship-unloading job.'
+  );
+}
+
+function testPortRejectsSurplusFreightWithoutBlockingBerth(): void {
+  const state = createInitialState({ seed: 30160432, manualTrafficAdmission: true, physicalStarterInventory: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  state.controls.materialTargetStock = state.metrics.materials;
+  runFor(state, 55);
+  const offer = state.trafficOffers[0];
+  assertCondition(!!offer, 'Surplus-freight test requires a forecast manifest.');
+  offer.size = 'small';
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  offer.passengersTotal = 4;
+  offer.inboundCargo = { rawMaterial: 80, rawMeal: 0, tradeGood: 0 };
+  offer.outboundRequest = { rawMaterial: 0, meal: 0, tradeGood: 0 };
+  const berth = getEligibleBerthsForOffer(state, offer.id)[0];
+  assertCondition(!!berth, 'Starter berth should accept the surplus-freight fixture.');
+  assertCondition(admitTrafficOffer(state, offer.id, berth.anchorTile).ok, 'Surplus-freight manifest should be assignable.');
+  runFor(state, 80);
+  const ship = state.arrivingShips.find((candidate) => candidate.id === offer.id);
+  const turn = ship?.portTurnaround;
+  assertCondition(!turn || turn.inboundTotal === 0, 'Customs should leave surplus materials aboard when stock is already at target.');
+  assertCondition(!turn || turn.phase !== 'unloading', 'Rejected surplus freight must not block the berth in unloading.');
+  assertCondition(
+    !state.jobs.some((job) => job.portShipId === offer.id && job.portCargoDirection === 'inbound'),
+    'Rejected surplus freight should not create pointless hauling jobs.'
   );
 }
 
@@ -6768,6 +6798,7 @@ function run(): void {
   testManualTrafficHoldAndRefusal();
   testApprovedManifestCreatesCrewWorkedPhysicalTurnaround();
   testNineCrewDisembarkWhileCargoUnloads();
+  testPortRejectsSurplusFreightWithoutBlockingBerth();
   testBerthTrafficUsesLargeShipPassengerScale();
   testBerthVisitorsBoardAndDespawnOnReturn();
   testTransientShipPersistsUntilOriginVisitorBoards();
