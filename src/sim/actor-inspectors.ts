@@ -17,6 +17,7 @@ import {
   actorReservationSummary,
   airQualityAt,
   providerTargetLabelFromTile,
+  queuePositionOf,
   residentConfrontationActive,
   visitorVisitAge
 } from './sim';
@@ -83,6 +84,18 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
     };
   }
   if (visitor.state === VisitorState.Queueing) {
+    // Crowd-loop v1 (B2): line members report their slot so the inspector
+    // shows the physical queue working instead of a bare 'no stock' shrug.
+    const linePos = queuePositionOf(state, visitor.id);
+    if (linePos !== null) {
+      return {
+        currentAction: 'standing in the serving line',
+        actionReason:
+          linePos.index === 0
+            ? 'next up at the counter'
+            : `position ${linePos.index + 1} in line${visitor.path.length > 0 ? ' (walking to their spot)' : ''}`
+      };
+    }
     return {
       currentAction: 'waiting in cafeteria queue',
       actionReason: visitor.reservedServingTile !== null ? 'waiting for stock at reserved serving node' : 'no meal stock available yet'

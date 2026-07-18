@@ -7928,6 +7928,7 @@ function pickQueueSpotPath(
 // ---------------------------------------------------------------------------
 
 const QUEUE_CHAIN_MAX_LEN = 24;
+const QUEUE_CHAIN_MAX_SPILL = 6;
 const QUEUE_BALK_LENGTH = 12;
 const CROWD_FEED_MAX = 30;
 const CROWD_FLOATER_MAX = 40;
@@ -7993,7 +7994,8 @@ function buildQueueChain(state: StationState, servingTile: number): number[] {
   let current = start;
   let lastDx = 0;
   let lastDy = 0;
-  while (chain.length < QUEUE_CHAIN_MAX_LEN) {
+  let outsideCount = 0;
+  while (chain.length < QUEUE_CHAIN_MAX_LEN && outsideCount < QUEUE_CHAIN_MAX_SPILL) {
     const cp = fromIndex(current, state.width);
     let best: number | null = null;
     let bestScore = -Infinity;
@@ -8008,8 +8010,11 @@ function buildQueueChain(state: StationState, servingTile: number): number[] {
       if (!isWalkable(state.tiles[ni])) continue;
       if (state.moduleOccupancyByTile[ni] !== null) continue;
       const isDoor = state.tiles[ni] === TileType.Door;
+      const inRoom = state.rooms[ni] === RoomType.Cafeteria;
+      // The line lives INSIDE the cafeteria; it only pokes out the door for
+      // the last few places, hugging walls — never a corridor-crossing snake.
       const score =
-        (state.rooms[ni] === RoomType.Cafeteria ? 6 : 0) +
+        (inRoom ? 10 : 0) +
         wallAdjacencyCount(state, ni) * 3 +
         (isDoor ? -2 : 0) +
         (dx === lastDx && dy === lastDy ? 1.5 : 0);
@@ -8023,11 +8028,24 @@ function buildQueueChain(state: StationState, servingTile: number): number[] {
     if (best === null) break;
     chain.push(best);
     inChain.add(best);
+    if (state.rooms[best] !== RoomType.Cafeteria) outsideCount++;
     current = best;
     lastDx = bestDx;
     lastDy = bestDy;
   }
   return chain;
+}
+
+/** Path a queue member to their slot. Queue slots are meant to be STOOD on,
+ *  so occupancy costs must not veto the route: fall back to a bare
+ *  geometric path, then to allowRestricted (visitors spawn inside
+ *  berth/dock zones and must be able to path OUT of them into the line). */
+function findQueueSlotPath(state: StationState, from: number, slotTile: number, seed: number): number[] | null {
+  return (
+    findPath(state, from, slotTile, { allowRestricted: false, intent: 'visitor', routeSeed: seed }, state.pathOccupancyByTile) ??
+    findPath(state, from, slotTile, { allowRestricted: false, intent: 'visitor', routeSeed: seed }) ??
+    findPath(state, from, slotTile, { allowRestricted: true, intent: 'visitor', routeSeed: seed })
+  );
 }
 
 function ensureQueueChains(state: StationState): void {
@@ -8089,13 +8107,7 @@ function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | '
   visitor.state = VisitorState.Queueing;
   const chain = theater.chainsByAnchor.get(bestAnchor)!;
   const slotTile = chain[Math.min(members.length - 1, chain.length - 1)];
-  const path = findPath(
-    state,
-    visitor.tileIndex,
-    slotTile,
-    { allowRestricted: false, intent: 'visitor', routeSeed: visitor.id },
-    state.pathOccupancyByTile
-  );
+  const path = findQueueSlotPath(state, visitor.tileIndex, slotTile, visitor.id);
   setVisitorPath(state, visitor, path ?? []);
   return 'joined';
 }
@@ -8129,13 +8141,7 @@ function maintainCafeteriaQueues(state: StationState): void {
       const slotTile = chain[Math.min(i, chain.length - 1)];
       const currentGoal = v.path.length > 0 ? v.path[v.path.length - 1] : v.tileIndex;
       if (currentGoal !== slotTile) {
-        const path = findPath(
-          state,
-          v.tileIndex,
-          slotTile,
-          { allowRestricted: false, intent: 'visitor', routeSeed: v.id },
-          state.pathOccupancyByTile
-        );
+        const path = findQueueSlotPath(state, v.tileIndex, slotTile, v.id);
         if (path) setVisitorPath(state, v, path);
       }
     }
@@ -12657,9 +12663,17 @@ function updateVisitorLogic(
       } else {
         if (!visitor.carryingMeal) {
           const servingTargets = collectServingTargets(state);
+          // Crowd-loop v1 (B2): queue members are managed by the line — the
+          // per-tick reassign below would wipe their slot path every frame
+          // (assignPathToCafeteria unconditionally setVisitorPath()s), which
+          // froze them at their spawn point. The line head is promoted to the
+          // counter by the queue branch further down instead.
+          const inServingLine =
+            visitor.state === VisitorState.Queueing && queuePositionOf(state, visitor.id) !== null;
           if (
-            visitor.reservedServingTile === null ||
-            !servingTargets.includes(visitor.reservedServingTile)
+            !inServingLine &&
+            (visitor.reservedServingTile === null ||
+              !servingTargets.includes(visitor.reservedServingTile))
           ) {
             assignPathToCafeteria(state, visitor);
           }
@@ -12724,9 +12738,14 @@ function updateVisitorLogic(
             }
           } else if (visitor.state === VisitorState.Queueing && visitor.path.length === 0) {
             // Crowd-loop v1: only the head of the line steps up to the counter;
-            // everyone else stands in their slot and stews.
+            // everyone else stands in their slot and stews. A queueing visitor
+            // who somehow isn't in any line yet joins one NOW — even with zero
+            // meal stock: waiting on the kitchen happens standing in the line
+            // at the cafeteria, never loitering at the dock.
             const qpos = queuePositionOf(state, visitor.id);
-            if ((qpos === null || qpos.index <= 1) && hasUnreservedServingMeal(state)) {
+            if (qpos === null) {
+              enterServingLineOrBail(state, visitor);
+            } else if (qpos.index <= 1 && hasUnreservedServingMeal(state)) {
               assignPathToCafeteria(state, visitor);
             } else {
               addVisitorFailurePenalty(state, 0.014 * dt, 'patienceBail');

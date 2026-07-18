@@ -3910,10 +3910,12 @@ export function renderWorld(
     y >= visibleTiles.minY - marginTiles &&
     y <= visibleTiles.maxY + marginTiles;
 
-  // Crowd-loop v1 (B2): faint dashed guide under active serving lines so the
-  // file of bodies reads as a queue at a glance.
+  // Crowd-loop v1 (B2): queue guide is HOVER-ONLY — the standing file of
+  // bodies is the always-on signal; the dashed line is inspection detail
+  // (owner feedback: always-on dashes read as debug clutter).
   const queueTheater = state.derived.queueTheater;
-  if (queueTheater && queueTheater.membersByAnchor.size > 0) {
+  const hoveringCafeteria = hoveredTile !== null && state.rooms[hoveredTile] === RoomType.Cafeteria;
+  if (queueTheater && hoveringCafeteria && queueTheater.membersByAnchor.size > 0) {
     ctx.save();
     for (const [anchor, members] of queueTheater.membersByAnchor) {
       if (members.length < 1) continue;
