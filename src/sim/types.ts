@@ -880,7 +880,7 @@ export interface TransportJob {
   /** Port-operations inspection jobs are bound to one physical ship. */
   portShipId?: number;
   /** Cargo moved toward a ship is consumed into its manifest, not stored at the arm. */
-  portCargoDirection?: 'outbound';
+  portCargoDirection?: 'inbound' | 'outbound';
 }
 
 export type ReservationOwnerKind = 'visitor' | 'resident' | 'crew' | 'job' | 'room' | 'system';

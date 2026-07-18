@@ -260,6 +260,13 @@ app.innerHTML = `
         <div id="diagnostic-key-rows" class="diagnostic-key-rows"></div>
       </section>
     </div>
+    <section id="berth-ops-widget" class="hud-card berth-ops-widget overlay-card hidden" aria-live="polite">
+      <div class="hud-card-title berth-ops-head">
+        <span>Live Berth Ops</span>
+        <span id="berth-ops-count" class="berth-ops-count">0 ACTIVE</span>
+      </div>
+      <div id="berth-ops-list" class="berth-ops-list"></div>
+    </section>
     <section id="agent-side-panel" class="side-inspector side-agent-panel floating-agent-panel hidden" aria-live="polite">
       <div class="side-inspector-head">
         <h3 id="agent-side-title">Agent Inspector</h3>
@@ -956,6 +963,9 @@ const trafficOfferListEl = document.querySelector<HTMLElement>('#traffic-offer-l
 const trafficActionNoteEl = document.querySelector<HTMLElement>('#traffic-action-note')!;
 const portAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-port-auto')!;
 const portAutoStatusEl = document.querySelector<HTMLElement>('#port-auto-status')!;
+const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
+const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
+const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
 const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
@@ -2023,6 +2033,7 @@ function requestSummary(request: { rawMaterial: number; meal: number; tradeGood:
 function refreshTrafficOffers(): void {
   if (!state.controls.manualTrafficAdmission) {
     trafficOfferListEl.innerHTML = '';
+    berthOpsWidgetEl.classList.add('hidden');
     return;
   }
   const activeTurnarounds = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
@@ -2057,7 +2068,10 @@ function refreshTrafficOffers(): void {
       ${turn?.payoutSettled ? `<div class="traffic-offer-line"><b>Settled</b> ${Math.round(turn.fulfillmentRatio * 100)}% order · +${turn.payoutCredits}c</div>` : ''}
     </article>`;
   }).join('');
-  if (state.trafficOffers.length === 0 && activeTurnarounds.length === 0) {
+  berthOpsWidgetEl.classList.toggle('hidden', activeTurnarounds.length === 0);
+  berthOpsCountEl.textContent = `${activeTurnarounds.length} ACTIVE`;
+  berthOpsListEl.innerHTML = activeHtml;
+  if (state.trafficOffers.length === 0) {
     trafficOfferListEl.innerHTML = '<div class="traffic-empty">Orbital manifest queue clear</div>';
     return;
   }
@@ -2089,7 +2103,34 @@ function refreshTrafficOffers(): void {
       </div>
     </article>`;
   }).join('');
-  trafficOfferListEl.innerHTML = activeHtml + offersHtml;
+  trafficOfferListEl.innerHTML = offersHtml;
+}
+
+function drawPortTurnaroundCallouts(): void {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 9px Consolas, Menlo, monospace';
+  for (const ship of state.arrivingShips) {
+    if (!ship.portManifest || ship.stage === 'depart' || ship.assignedBerthAnchor == null) continue;
+    const turn = ship.portTurnaround;
+    const x = ship.assignedBerthAnchor % state.width;
+    const y = Math.floor(ship.assignedBerthAnchor / state.width);
+    const label = ship.stage === 'approach' ? 'INBOUND' : (turn?.phase ?? 'BERTHING').toUpperCase();
+    const width = Math.max(54, ctx.measureText(label).width + 18);
+    const cx = x * TILE_SIZE + TILE_SIZE * 0.5;
+    const cy = y * TILE_SIZE - 9;
+    ctx.fillStyle = 'rgba(4, 11, 18, 0.9)';
+    ctx.strokeStyle = turn?.phase === 'inspection' ? '#f3bd62' : turn?.phase === 'open' ? '#63d6a0' : '#75b8e8';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(cx - width / 2, cy - 8, width, 16, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#f4f8fb';
+    ctx.fillText(label, cx, cy + 0.5);
+  }
+  ctx.restore();
 }
 
 type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';
@@ -7089,6 +7130,7 @@ function frame(now: number): void {
   prepareViewportRender(renderViewport);
   const renderStart = performance.now();
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+  drawPortTurnaroundCallouts();
   drawSelectedAgentRoute(ctx);
   drawActiveIncidentHints(ctx);
   drawSelectedIncidentRoutes(ctx);
@@ -7554,6 +7596,7 @@ window.__harnessPauseAndFlush = () => {
   const renderViewport = getRenderViewport();
   prepareViewportRender(renderViewport);
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+  drawPortTurnaroundCallouts();
   drawSelectedAgentRoute(ctx);
   drawActiveIncidentHints(ctx);
   drawSelectedIncidentRoutes(ctx);

@@ -10506,18 +10506,20 @@ function createPortCargoTransportJobs(state: StationState): void {
   if (targets.length === 0) return;
   const cargoSources = state.arrivingShips
     .filter((ship) => ship.stage === 'docked' && ship.portTurnaround?.cargoReleased)
-    .map((ship) => ship.portTurnaround!.cargoTile);
+    .map((ship) => ({ shipId: ship.id, tile: ship.portTurnaround!.cargoTile }));
   if (cargoSources.length === 0) return;
   for (const source of cargoSources) {
     for (const itemType of ['rawMaterial', 'rawMeal', 'tradeGood'] as const) {
-      const alreadyQueued = openJobAmountFromTile(state, source, itemType);
-      let available = Math.max(0, itemStockAtNode(state, source, itemType) - alreadyQueued);
+      const alreadyQueued = openJobAmountFromTile(state, source.tile, itemType);
+      let available = Math.max(0, itemStockAtNode(state, source.tile, itemType) - alreadyQueued);
       for (const target of targets) {
         if (available <= 0.05) break;
         const capacity = Math.max(0, itemNodeUnreservedCapacity(state, target, itemType));
         if (capacity <= 0.05) continue;
         const amount = Math.min(6, available, capacity);
-        enqueueTransportJob(state, 'deliver', itemType, amount, source, target);
+        const job = enqueueTransportJob(state, 'deliver', itemType, amount, source.tile, target);
+        job.portShipId = source.shipId;
+        job.portCargoDirection = 'inbound';
         available -= amount;
       }
     }

@@ -34,6 +34,7 @@ import {
   getReputationZoneScores,
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
+  hireCrew,
   hireStaffRole,
   holdTrafficOffer,
   mapConditionAt,
@@ -3657,6 +3658,54 @@ function testApprovedManifestCreatesCrewWorkedPhysicalTurnaround(): void {
   );
 }
 
+function testNineCrewDisembarkWhileCargoUnloads(): void {
+  const state = createInitialState({ seed: 30160431, manualTrafficAdmission: true, physicalStarterInventory: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  while (state.crew.total < 9) {
+    assertCondition(hireCrew(state, 0), 'Nine-crew fixture should be able to hire assistants.');
+  }
+  runFor(state, 1);
+  assertCondition(state.crewMembers.length === 9, `Expected 9 physical crew, got ${state.crewMembers.length}.`);
+  runFor(state, 55);
+  const offer = state.trafficOffers[0];
+  assertCondition(!!offer, 'Parallel turnaround test requires a forecast manifest.');
+  offer.size = 'small';
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  offer.passengersTotal = 18;
+  offer.inboundCargo = { rawMaterial: 24, rawMeal: 10, tradeGood: 6 };
+  offer.outboundRequest = { rawMaterial: 0, meal: 0, tradeGood: 0 };
+  offer.berthTimeSec = 180;
+  const berth = getEligibleBerthsForOffer(state, offer.id)[0];
+  assertCondition(!!berth, 'Starter berth should accept the nine-crew fixture.');
+  assertCondition(admitTrafficOffer(state, offer.id, berth.anchorTile).ok, 'Nine-crew manifest should be assignable.');
+  runFor(state, 7);
+  const docked = state.arrivingShips.find((ship) => ship.id === offer.id);
+  assertCondition(docked?.stage === 'docked', 'Nine-crew fixture should physically dock.');
+  let inspectionWait = 0;
+  while (inspectionWait < 90 && docked?.portTurnaround?.cargoReleased !== true) {
+    runFor(state, 1);
+    inspectionWait += 1;
+  }
+  assertCondition(docked?.portTurnaround?.cargoReleased === true, 'Nine crew should complete customs within 90 seconds.');
+  runFor(state, 8);
+  const parallel = state.arrivingShips.find((ship) => ship.id === offer.id);
+  assertCondition((parallel?.passengersSpawned ?? 0) > 0, 'Passengers should disembark after customs without waiting for cargo.');
+  assertCondition(
+    !!parallel && (parallel.portTurnaround?.inboundUnloaded ?? 0) < (parallel.portTurnaround?.inboundTotal ?? 0),
+    'Passenger disembarkation should overlap unfinished cargo unloading.'
+  );
+  const shipCargoJobs = state.jobs.filter(
+    (job) => job.portShipId === offer.id && job.portCargoDirection === 'inbound' && job.type === 'deliver'
+  );
+  assertCondition(shipCargoJobs.length > 0, 'Released cargo should be attributed to visible ship-unloading jobs.');
+  assertCondition(
+    shipCargoJobs.some((job) => job.state !== 'pending' || job.pickedUpAmount > 0),
+    'At least one of nine crew should claim or progress a ship-unloading job.'
+  );
+}
+
 function testBerthTrafficUsesLargeShipPassengerScale(): void {
   const state = createInitialState({ seed: 301602 });
   buildHabitat(state);
@@ -6718,6 +6767,7 @@ function run(): void {
   testManualTrafficOffersRequireExplicitAdmission();
   testManualTrafficHoldAndRefusal();
   testApprovedManifestCreatesCrewWorkedPhysicalTurnaround();
+  testNineCrewDisembarkWhileCargoUnloads();
   testBerthTrafficUsesLargeShipPassengerScale();
   testBerthVisitorsBoardAndDespawnOnReturn();
   testTransientShipPersistsUntilOriginVisitorBoards();

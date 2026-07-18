@@ -1607,6 +1607,61 @@ h2 {
   background: rgba(13, 24, 35, 0.96);
 }
 
+.berth-ops-widget {
+  position: fixed;
+  z-index: 10;
+  top: 74px;
+  right: 366px;
+  width: min(350px, 36vw);
+  max-height: min(48vh, 390px);
+  overflow-y: auto;
+  pointer-events: auto;
+  border: 1px solid rgba(91, 201, 166, 0.58);
+  background: linear-gradient(180deg, rgba(11, 28, 31, 0.95), rgba(7, 15, 21, 0.92));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+}
+
+.berth-ops-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.berth-ops-count {
+  color: #72ddb5;
+  font: 700 10px Consolas, Menlo, monospace;
+}
+
+.berth-ops-list {
+  display: grid;
+  gap: 7px;
+}
+
+.berth-ops-list .traffic-offer {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .left-stack {
+    width: min(290px, calc(100vw - 28px));
+  }
+
+  .berth-ops-widget {
+    top: auto;
+    right: 14px;
+    bottom: 122px;
+    width: min(330px, calc(100vw - 28px));
+    max-height: 30vh;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .berth-ops-widget {
+    right: 18px;
+  }
+}
+
 .hud-card,
 .dock-card {
   border-radius: 6px;
