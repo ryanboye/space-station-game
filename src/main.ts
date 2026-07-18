@@ -233,10 +233,20 @@ app.innerHTML = `
     <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
     <div id="game-stage"></div>
     <div class="floating-stack left-stack" aria-label="Station tasks">
-      <details class="hud-card task-card overlay-card" open>
+      <details class="hud-card task-card overlay-card">
         <summary class="hud-card-title">Tasks</summary>
         <div id="quest-bar" aria-live="polite"></div>
         <div id="tier-checklist" class="tier-checklist">No active checklist</div>
+      </details>
+      <details class="hud-card port-dispatch-card overlay-card" open>
+        <summary class="hud-card-title">Port Dispatch</summary>
+        <div class="traffic-controls">
+          <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
+          <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
+          <small id="traffic-status" class="traffic-status">Paused</small>
+          <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
+          <small id="traffic-action-note" class="traffic-action-note"></small>
+        </div>
       </details>
       <section id="diagnostic-key" class="hud-card diagnostic-key hidden" aria-live="polite">
         <div class="hud-card-title" id="diagnostic-key-title">Diagnostics</div>
@@ -259,13 +269,6 @@ app.innerHTML = `
           <button id="open-crew-command" class="primary-command">Crew</button>
           <button id="open-progression-modal" class="primary-command">Progress</button>
           <button id="edit-priorities" class="secondary-command">Priorities</button>
-        </div>
-        <div class="traffic-controls">
-          <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
-          <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
-          <small id="traffic-status" class="traffic-status">Paused</small>
-          <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
-          <small id="traffic-action-note" class="traffic-action-note"></small>
         </div>
       </section>
       <section class="dock-card selected-card">
@@ -2003,6 +2006,7 @@ function refreshTrafficOffers(): void {
   const activeHtml = activeTurnarounds.map((ship) => {
     const offer = ship.portManifest!;
     const turn = ship.portTurnaround;
+    const berthStanding = ship.assignedBerthAnchor == null ? null : getBerthInspectorAt(state, ship.assignedBerthAnchor);
     const phase = ship.stage === 'approach' ? 'APPROACHING' : !turn ? 'BERTHING' : turn.phase.toUpperCase();
     const progress = !turn
       ? 0
@@ -2024,7 +2028,7 @@ function refreshTrafficOffers(): void {
           : 'Gangway open · passengers and commerce active';
     return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase}</span></div>
-      <div class="traffic-offer-meta">BERTH ACTIVE · ${offer.passengersTotal} pax · ${cargoSummary(offer.inboundCargo)}</div>
+      <div class="traffic-offer-meta">BERTH ${berthStanding?.serviceGrade ?? 'C'} SERVICE · ×${(berthStanding?.servicePayoutMultiplier ?? 1).toFixed(2)} PAY · ${offer.passengersTotal} pax · ${cargoSummary(offer.inboundCargo)}</div>
       <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
       <div class="traffic-offer-line"><b>${progress}%</b> ${instruction}</div>
       ${turn?.payoutSettled ? `<div class="traffic-offer-line"><b>Settled</b> ${Math.round(turn.fulfillmentRatio * 100)}% order · +${turn.payoutCredits}c</div>` : ''}
@@ -2035,11 +2039,18 @@ function refreshTrafficOffers(): void {
     return;
   }
   const offersHtml = state.trafficOffers.map((offer) => {
-    const eligible = getEligibleBerthsForOffer(state, offer.id).length;
+    const eligibleBerths = getEligibleBerthsForOffer(state, offer.id);
+    const eligible = eligibleBerths.length;
+    const bestStanding = eligibleBerths
+      .map((candidate) => getBerthInspectorAt(state, candidate.anchorTile))
+      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+      .sort((a, b) => b.serviceScore - a.serviceScore)[0];
     const ready = offer.status === 'holding';
     const cleared = offer.status === 'cleared';
     const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : cleared ? `CLEARED · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
-    const berthText = eligible > 0 ? `${eligible} berth${eligible === 1 ? '' : 's'} ready` : `No ${offer.size} berth ready`;
+    const berthText = eligible > 0
+      ? `${eligible} berth${eligible === 1 ? '' : 's'} ready · best ${bestStanding?.serviceGrade ?? 'C'} ×${(bestStanding?.servicePayoutMultiplier ?? 1).toFixed(2)}`
+      : `No ${offer.size} berth ready`;
     return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
       <div class="traffic-offer-meta">${offer.size} ${offer.shipType} · ${offer.passengersTotal} pax · ${offer.riskLabel} risk</div>
@@ -5112,7 +5123,7 @@ function refreshRoomModal(): void {
         .join(' | ');
       const occ = berth.occupiedByShipId !== null ? ` | occupied by ship #${berth.occupiedByShipId}` : ' | empty';
       roomModalBerthEl.textContent =
-        `Berth: size ${berth.size} (${berth.clusterTiles.length} tiles) | ${exposure}${occ} | capabilities: ${caps} | accepts: ${accepts}` +
+        `Berth: ${berth.serviceGrade} service ${Math.round(berth.serviceScore)}/100 (${berth.serviceVisits} visits, ${berth.serviceLastDelta >= 0 ? '+' : ''}${berth.serviceLastDelta.toFixed(0)} last) · ×${berth.servicePayoutMultiplier.toFixed(2)} contract yield | size ${berth.size} (${berth.clusterTiles.length} tiles) | ${exposure}${occ} | capabilities: ${caps} | accepts: ${accepts}` +
         (rejects ? ` | rejects: ${rejects}` : '');
       roomModalBerthEl.style.color = berth.spaceExposed && berth.acceptedShipTypes.length > 0 ? '#6edb8f' : '#ffcf6e';
       // Dock-modal parity: per-berth allowlists (allowed ship types +

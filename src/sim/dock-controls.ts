@@ -107,7 +107,10 @@ function makeDefaultBerthConfig(anchorTile: number): BerthConfig {
     allowedShipTypes: [...ALL_SHIP_TYPES_FOR_BERTH],
     allowedShipSizes: [...ALL_SHIP_SIZES_FOR_BERTH],
     screeningLevel: 'standard',
-    customsPolicy: 'routine'
+    customsPolicy: 'routine',
+    serviceScore: 50,
+    serviceVisits: 0,
+    serviceLastDelta: 0
   };
 }
 

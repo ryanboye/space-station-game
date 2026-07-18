@@ -171,6 +171,7 @@ import {
 import {
   ALL_SHIP_SIZES_FOR_BERTH,
   ALL_SHIP_TYPES_FOR_BERTH,
+  ensureBerthConfig,
   findBerthConfigByAnchor,
   getDockByTile,
   pruneOrphanedBerthConfigs
@@ -5613,6 +5614,11 @@ export interface BerthInspector {
   allowedShipSizes: ShipSize[];
   screeningLevel: BerthScreeningLevel;
   customsPolicy: CustomsPolicy;
+  serviceScore: number;
+  serviceGrade: 'A' | 'B' | 'C' | 'D';
+  serviceVisits: number;
+  serviceLastDelta: number;
+  servicePayoutMultiplier: number;
   // Derived (info-only, not stored): the lane this berth opens onto,
   // computed from the cluster's exterior space-tile boundary. Returns
   // the lane with the most adjacent space tiles, or null if the berth
@@ -5661,6 +5667,7 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     : [...ALL_SHIP_SIZES_FOR_BERTH];
   const screeningLevel = cfg?.screeningLevel ?? 'standard';
   const customsPolicy = cfg?.customsPolicy ?? 'routine';
+  const serviceScore = clamp(cfg?.serviceScore ?? 50, 0, 100);
   return {
     anchorTile,
     clusterTiles: cluster,
@@ -5674,6 +5681,11 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     allowedShipSizes,
     screeningLevel,
     customsPolicy,
+    serviceScore,
+    serviceGrade: berthServiceGrade(serviceScore),
+    serviceVisits: cfg?.serviceVisits ?? 0,
+    serviceLastDelta: cfg?.serviceLastDelta ?? 0,
+    servicePayoutMultiplier: berthServicePayoutMultiplier(serviceScore),
     derivedFacing: deriveBerthFacing(state, cluster),
     purpose: 'visitor'
   };
@@ -8201,6 +8213,19 @@ const TRAFFIC_HOLD_SEC = 105;
 const SHIP_NAME_PREFIXES = ['Aster', 'Cinder', 'Far', 'Helix', 'Morrow', 'Pioneer', 'Sable', 'Vesper'];
 const SHIP_NAME_SUFFIXES = ['Arc', 'Courier', 'Dawn', 'Kite', 'Prospect', 'Relay', 'Runner', 'Wayfarer'];
 
+function berthServiceGrade(score: number): 'A' | 'B' | 'C' | 'D' {
+  return score >= 82 ? 'A' : score >= 64 ? 'B' : score >= 42 ? 'C' : 'D';
+}
+
+function berthServicePayoutMultiplier(score: number): number {
+  // Local standing matters without creating an unrecoverable death spiral.
+  return clamp(0.82 + score * 0.0036, 0.82, 1.18);
+}
+
+function berthServiceScoreForAnchor(state: StationState, anchor: number | null | undefined): number {
+  return anchor == null ? 50 : clamp(findBerthConfigByAnchor(state, anchor)?.serviceScore ?? 50, 0, 100);
+}
+
 function trafficOfferSize(state: StationState): ShipSize {
   // The first contract is an onboarding beat: always fit the starter berth.
   // Later manifests deliberately include ships that demand expansion.
@@ -8653,7 +8678,9 @@ function updatePortTurnaround(state: StationState, ship: ArrivingShip): void {
         turn.outboundLoaded.rawMaterial * 7 +
         turn.outboundLoaded.meal * 13 +
         turn.outboundLoaded.tradeGood * 24;
-      turn.payoutCredits = Math.round(ship.portManifest!.dockingFee + exportValue);
+      const standingScore = berthServiceScoreForAnchor(state, ship.assignedBerthAnchor);
+      const standingMultiplier = berthServicePayoutMultiplier(standingScore);
+      turn.payoutCredits = Math.round((ship.portManifest!.dockingFee + exportValue) * standingMultiplier);
       state.metrics.credits += turn.payoutCredits;
       turn.payoutSettled = true;
       turn.phase = 'open';
@@ -8661,11 +8688,33 @@ function updatePortTurnaround(state: StationState, ship: ArrivingShip): void {
       state.derived.queueTheater.eventFeed.push({
         at: state.now,
         tone: turn.fulfillmentRatio >= 0.999 ? 'info' : 'warn',
-        text: `${ship.portManifest!.callsign} export order ${percent}% fulfilled · +${turn.payoutCredits}c`
+        text: `${ship.portManifest!.callsign} export order ${percent}% fulfilled · berth ${berthServiceGrade(standingScore)} ×${standingMultiplier.toFixed(2)} · +${turn.payoutCredits}c`
       });
     }
   }
   if (ship.stage === 'depart') turn.phase = 'departing';
+}
+
+function recordBerthServiceOutcome(state: StationState, ship: ArrivingShip): void {
+  if (!ship.portManifest || !ship.portTurnaround || ship.assignedBerthAnchor == null) return;
+  const turn = ship.portTurnaround;
+  const config = ensureBerthConfig(state, ship.assignedBerthAnchor);
+  const fulfillment = clamp(turn.fulfillmentRatio, 0, 1);
+  const boarded = clamp(ship.passengersBoarded / Math.max(1, ship.passengersTotal), 0, 1);
+  const averageDirt = ship.bayTiles.reduce((sum, tile) => sum + (state.dirtByTile[tile] ?? 0), 0) / Math.max(1, ship.bayTiles.length);
+  const cleanliness = clamp(1 - averageDirt / 85, 0, 1);
+  const outcome = fulfillment * 58 + boarded * 24 + cleanliness * 18;
+  const previous = clamp(config.serviceScore ?? 50, 0, 100);
+  const next = clamp(previous * 0.68 + outcome * 0.32, 0, 100);
+  config.serviceScore = next;
+  config.serviceVisits = (config.serviceVisits ?? 0) + 1;
+  config.serviceLastDelta = next - previous;
+  const signed = config.serviceLastDelta >= 0 ? `+${config.serviceLastDelta.toFixed(0)}` : config.serviceLastDelta.toFixed(0);
+  state.derived.queueTheater.eventFeed.push({
+    at: state.now,
+    tone: config.serviceLastDelta >= -0.5 ? 'info' : 'warn',
+    text: `Berth ${berthServiceGrade(next)} service report ${signed} · exports ${Math.round(fulfillment * 100)}% · return ${Math.round(boarded * 100)}% · clean ${Math.round(cleanliness * 100)}%`
+  });
 }
 
 function updateArrivingShips(state: StationState, dt: number): void {
@@ -8758,6 +8807,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         state.dockedTimeTotal += Math.max(0, state.now - ship.dockedAt);
         state.dockedShipsCompleted += 1;
       }
+      recordBerthServiceOutcome(state, ship);
       if (ship.assignedDockId !== null) {
         const dock = state.docks.find((d) => d.id === ship.assignedDockId);
         if (dock && dock.occupiedByShipId === ship.id) {

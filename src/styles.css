@@ -1563,9 +1563,25 @@ h2 {
 .left-stack {
   left: 18px;
   top: 74px;
-  width: min(250px, 30vw);
+  width: min(320px, 34vw);
   display: grid;
   gap: 10px;
+}
+
+.port-dispatch-card {
+  max-height: min(46vh, 330px);
+  overflow: auto;
+  border-color: rgba(123, 167, 217, 0.55);
+  background: linear-gradient(180deg, rgba(13, 24, 35, 0.94), rgba(7, 13, 20, 0.9));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+}
+
+.port-dispatch-card > summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 6px;
+  background: rgba(13, 24, 35, 0.96);
 }
 
 .hud-card,

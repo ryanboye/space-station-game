@@ -1122,6 +1122,10 @@ export interface BerthConfig {
   allowedShipSizes: ShipSize[];
   screeningLevel?: BerthScreeningLevel;
   customsPolicy?: CustomsPolicy;
+  /** Persistent local service record. Good physical turnaround raises the next contract's yield here. */
+  serviceScore?: number;
+  serviceVisits?: number;
+  serviceLastDelta?: number;
 }
 
 export interface LaneProfile {

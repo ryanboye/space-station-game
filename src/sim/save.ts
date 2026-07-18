@@ -38,7 +38,7 @@ import {
   type VisitorArchetype,
   ZoneType
 } from './types';
-import { setBerthCustomsPolicy } from './dock-controls';
+import { ensureBerthConfig, setBerthCustomsPolicy } from './dock-controls';
 import {
   UTILITY_UNDERLAY_KINDS,
   createUtilityUnderlayFromLayers,
@@ -124,6 +124,9 @@ export interface StationSnapshotV1 {
     allowedShipSizes: ShipSize[];
     screeningLevel?: BerthScreeningLevel;
     customsPolicy?: CustomsPolicy;
+    serviceScore?: number;
+    serviceVisits?: number;
+    serviceLastDelta?: number;
   }>;
   resources: {
     credits: number;
@@ -396,7 +399,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         allowedShipTypes: [...cfg.allowedShipTypes],
         allowedShipSizes: [...cfg.allowedShipSizes],
         screeningLevel: cfg.screeningLevel ?? 'standard',
-        customsPolicy: cfg.customsPolicy ?? 'routine'
+        customsPolicy: cfg.customsPolicy ?? 'routine',
+        serviceScore: cfg.serviceScore ?? 50,
+        serviceVisits: cfg.serviceVisits ?? 0,
+        serviceLastDelta: cfg.serviceLastDelta ?? 0
       }))
       .sort((a, b) => a.anchorTile - b.anchorTile),
     resources: {
@@ -687,7 +693,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         allowedShipSizes:
           allowedShipSizes.length > 0 ? [...new Set(allowedShipSizes)] : ['small'],
         screeningLevel: isOneOf(entry.screeningLevel, BERTH_SCREENING_LEVELS) ? entry.screeningLevel : 'standard',
-        customsPolicy: isOneOf(entry.customsPolicy, CUSTOMS_POLICIES) ? entry.customsPolicy : 'routine'
+        customsPolicy: isOneOf(entry.customsPolicy, CUSTOMS_POLICIES) ? entry.customsPolicy : 'routine',
+        serviceScore: Math.max(0, Math.min(100, asFiniteNumber(entry.serviceScore, 50))),
+        serviceVisits: Math.max(0, Math.floor(asFiniteNumber(entry.serviceVisits, 0))),
+        serviceLastDelta: Math.max(-100, Math.min(100, asFiniteNumber(entry.serviceLastDelta, 0)))
       });
     }
   }
@@ -1351,6 +1360,10 @@ export function hydrateStateFromSave(
       }
       setBerthScreeningLevel(next, berthConfig.anchorTile, berthConfig.screeningLevel ?? 'standard');
       setBerthCustomsPolicy(next, berthConfig.anchorTile, berthConfig.customsPolicy ?? 'routine');
+      const runtimeConfig = ensureBerthConfig(next, berthConfig.anchorTile);
+      runtimeConfig.serviceScore = berthConfig.serviceScore ?? 50;
+      runtimeConfig.serviceVisits = berthConfig.serviceVisits ?? 0;
+      runtimeConfig.serviceLastDelta = berthConfig.serviceLastDelta ?? 0;
     }
   }
 
