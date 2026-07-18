@@ -1994,6 +1994,8 @@ function refreshTrafficOffers(): void {
         ? Math.round((turn.inspectionProgress / Math.max(1, turn.inspectionRequired)) * 100)
         : turn.phase === 'unloading'
           ? Math.round((turn.inboundUnloaded / Math.max(1, turn.inboundTotal)) * 100)
+          : turn.phase === 'loading'
+            ? Math.round((Object.values(turn.outboundLoaded).reduce((a, b) => a + b, 0) / Math.max(1, Object.values(turn.outboundRequired).reduce((a, b) => a + b, 0))) * 100)
           : 100;
     const instruction = !turn
       ? 'Stand by for docking collar'
@@ -2001,12 +2003,15 @@ function refreshTrafficOffers(): void {
         ? 'Crew is required at the berth customs counter'
         : turn.phase === 'unloading'
           ? 'Logistics crew must clear the cargo arm into Intake / Storage'
+          : turn.phase === 'loading'
+            ? `Crew loading ${requestSummary(turn.outboundLoaded)} of ${requestSummary(turn.outboundRequired)} · ${Math.max(0, Math.ceil(turn.loadingDeadlineAt - state.now))}s left`
           : 'Gangway open · passengers and commerce active';
     return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase}</span></div>
       <div class="traffic-offer-meta">BERTH ACTIVE · ${offer.passengersTotal} pax · ${cargoSummary(offer.inboundCargo)}</div>
       <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
       <div class="traffic-offer-line"><b>${progress}%</b> ${instruction}</div>
+      ${turn?.payoutSettled ? `<div class="traffic-offer-line"><b>Settled</b> ${Math.round(turn.fulfillmentRatio * 100)}% order · +${turn.payoutCredits}c</div>` : ''}
     </article>`;
   }).join('');
   if (state.trafficOffers.length === 0 && activeTurnarounds.length === 0) {

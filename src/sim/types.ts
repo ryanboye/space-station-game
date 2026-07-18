@@ -878,6 +878,8 @@ export interface TransportJob {
   blockedReason?: string | null;
   /** Port-operations inspection jobs are bound to one physical ship. */
   portShipId?: number;
+  /** Cargo moved toward a ship is consumed into its manifest, not stored at the arm. */
+  portCargoDirection?: 'outbound';
 }
 
 export type ReservationOwnerKind = 'visitor' | 'resident' | 'crew' | 'job' | 'room' | 'system';
@@ -1015,7 +1017,7 @@ export type ShipSize = 'small' | 'medium' | 'large';
 
 export type ShipStage = 'approach' | 'docked' | 'depart';
 
-export type PortTurnaroundPhase = 'inspection' | 'unloading' | 'open' | 'departing';
+export type PortTurnaroundPhase = 'inspection' | 'unloading' | 'loading' | 'open' | 'departing';
 
 export interface PortTurnaround {
   phase: PortTurnaroundPhase;
@@ -1027,6 +1029,12 @@ export interface PortTurnaround {
   cargoReleased: boolean;
   inboundTotal: number;
   inboundUnloaded: number;
+  outboundRequired: { rawMaterial: number; meal: number; tradeGood: number };
+  outboundLoaded: { rawMaterial: number; meal: number; tradeGood: number };
+  loadingDeadlineAt: number;
+  payoutCredits: number;
+  fulfillmentRatio: number;
+  payoutSettled: boolean;
 }
 
 export interface ArrivingShip {

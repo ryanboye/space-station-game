@@ -8583,7 +8583,13 @@ function beginPortTurnaround(state: StationState, ship: ArrivingShip): void {
     clearanceJobId: null,
     cargoReleased: false,
     inboundTotal,
-    inboundUnloaded: 0
+    inboundUnloaded: 0,
+    outboundRequired: { ...ship.portManifest.outboundRequest },
+    outboundLoaded: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    loadingDeadlineAt: state.now + ship.portManifest.berthTimeSec,
+    payoutCredits: 0,
+    fulfillmentRatio: 0,
+    payoutSettled: false
   };
   ship.portTurnaround.clearanceJobId = enqueuePortInspection(state, ship, customsTile);
 }
@@ -8593,7 +8599,10 @@ function releaseInboundCargo(state: StationState, ship: ArrivingShip): void {
   const manifest = ship.portManifest;
   if (!turn || !manifest || turn.cargoReleased) return;
   turn.cargoReleased = true;
-  turn.phase = turn.inboundTotal > 0 ? 'unloading' : 'open';
+  // The service clock starts after customs, so a slow inspection never makes
+  // an export order fail before the player can act on it.
+  turn.loadingDeadlineAt = state.now + manifest.berthTimeSec;
+  turn.phase = turn.inboundTotal > 0 ? 'unloading' : 'loading';
   for (const [itemType, amount] of Object.entries(manifest.inboundCargo) as Array<['rawMaterial' | 'rawMeal' | 'tradeGood', number]>) {
     addItemStockAtNode(state, turn.cargoTile, itemType, amount);
   }
@@ -8611,7 +8620,30 @@ function updatePortTurnaround(state: StationState, ship: ArrivingShip): void {
       0
     );
     turn.inboundUnloaded = Math.max(0, turn.inboundTotal - remaining);
-    if (remaining <= 0.05) turn.phase = 'open';
+    if (remaining <= 0.05 && (turn.phase === 'unloading' || turn.phase === 'inspection')) turn.phase = 'loading';
+  }
+  if (turn.phase === 'loading' && !turn.payoutSettled) {
+    const required = Object.values(turn.outboundRequired).reduce((sum, amount) => sum + amount, 0);
+    const loaded = Object.values(turn.outboundLoaded).reduce((sum, amount) => sum + amount, 0);
+    const complete = loaded >= required - 0.05;
+    if (complete || state.now >= turn.loadingDeadlineAt) {
+      turn.fulfillmentRatio = required <= 0 ? 1 : Math.min(1, loaded / required);
+      // The berth fee is guaranteed; export revenue is earned only by physically loading stock.
+      const exportValue =
+        turn.outboundLoaded.rawMaterial * 7 +
+        turn.outboundLoaded.meal * 13 +
+        turn.outboundLoaded.tradeGood * 24;
+      turn.payoutCredits = Math.round(ship.portManifest!.dockingFee + exportValue);
+      state.metrics.credits += turn.payoutCredits;
+      turn.payoutSettled = true;
+      turn.phase = 'open';
+      const percent = Math.round(turn.fulfillmentRatio * 100);
+      state.derived.queueTheater.eventFeed.push({
+        at: state.now,
+        tone: turn.fulfillmentRatio >= 0.999 ? 'info' : 'warn',
+        text: `${ship.portManifest!.callsign} export order ${percent}% fulfilled · +${turn.payoutCredits}c`
+      });
+    }
   }
   if (ship.stage === 'depart') turn.phase = 'departing';
 }
@@ -9374,7 +9406,7 @@ function enqueueTransportJob(
   amount: number,
   fromTile: number,
   toTile: number
-): void {
+): StationState['jobs'][number] {
   const job = {
     id: state.jobSpawnCounter++,
     type,
@@ -9416,6 +9448,7 @@ function enqueueTransportJob(
     ttlSec: JOB_TTL_SEC + 5
   });
   state.metrics.createdJobs += 1;
+  return job;
 }
 
 function hasOpenCookJobAt(state: StationState, tileIndex: number): boolean {
@@ -10333,22 +10366,64 @@ function createPortCargoTransportJobs(state: StationState): void {
     .filter((ship) => ship.stage === 'docked' && ship.portTurnaround?.cargoReleased)
     .map((ship) => ship.portTurnaround!.cargoTile);
   if (cargoSources.length === 0) return;
-  for (const itemType of ['rawMaterial', 'rawMeal', 'tradeGood'] as const) {
-    const openCount = state.jobs.filter(
-      (job) =>
-        job.itemType === itemType &&
-        cargoSources.includes(job.fromTile) &&
-        (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress')
-    ).length;
-    dispatchTransportJobs(state, itemType, cargoSources, targets, {
-      cap: 9,
-      openCount,
-      targetStock: 999,
-      nearAmount: 6,
-      farAmount: 4,
-      nearDistance: 12,
-      minAmount: 0.5
-    });
+  for (const source of cargoSources) {
+    for (const itemType of ['rawMaterial', 'rawMeal', 'tradeGood'] as const) {
+      const alreadyQueued = openJobAmountFromTile(state, source, itemType);
+      let available = Math.max(0, itemStockAtNode(state, source, itemType) - alreadyQueued);
+      for (const target of targets) {
+        if (available <= 0.05) break;
+        const capacity = Math.max(0, itemNodeUnreservedCapacity(state, target, itemType));
+        if (capacity <= 0.05) continue;
+        const amount = Math.min(6, available, capacity);
+        enqueueTransportJob(state, 'deliver', itemType, amount, source, target);
+        available -= amount;
+      }
+    }
+  }
+}
+
+/** Pull a ship's export order from real station inventory. Every unit must be
+ * carried by crew to the berth cargo arm before it earns revenue. */
+function createPortOutboundTransportJobs(state: StationState): void {
+  const sourceTiles = [
+    ...collectServiceTargets(state, RoomType.LogisticsStock),
+    ...collectServiceTargets(state, RoomType.Storage),
+    ...collectServiceTargets(state, RoomType.Kitchen),
+    ...collectServiceTargets(state, RoomType.Market),
+    ...collectServiceTargets(state, RoomType.Workshop)
+  ];
+  for (const ship of state.arrivingShips) {
+    const turn = ship.portTurnaround;
+    if (ship.stage !== 'docked' || !turn || turn.phase !== 'loading') continue;
+    for (const itemType of ['rawMaterial', 'meal', 'tradeGood'] as const) {
+      const open = state.jobs.reduce((sum, job) => {
+        if (job.portShipId !== ship.id || job.portCargoDirection !== 'outbound' || job.itemType !== itemType) return sum;
+        if (job.state === 'done' || job.state === 'expired') return sum;
+        return sum + job.amount;
+      }, 0);
+      let needed = Math.max(0, turn.outboundRequired[itemType] - turn.outboundLoaded[itemType] - open);
+      if (needed <= 0.05) continue;
+      const sources = sourceTiles
+        .map((tile) => ({ tile, available: Math.max(0, itemStockAtNode(state, tile, itemType) - openJobAmountFromTile(state, tile, itemType)) }))
+        .filter((source) => source.available > 0.05)
+        .sort((a, b) => {
+          const ax = a.tile % state.width;
+          const ay = Math.floor(a.tile / state.width);
+          const bx = b.tile % state.width;
+          const by = Math.floor(b.tile / state.width);
+          const tx = turn.cargoTile % state.width;
+          const ty = Math.floor(turn.cargoTile / state.width);
+          return Math.abs(ax - tx) + Math.abs(ay - ty) - (Math.abs(bx - tx) + Math.abs(by - ty));
+        });
+      for (const source of sources) {
+        if (needed <= 0.05) break;
+        const amount = Math.min(needed, source.available, 5);
+        const job = enqueueTransportJob(state, 'deliver', itemType, amount, source.tile, turn.cargoTile);
+        job.portShipId = ship.id;
+        job.portCargoDirection = 'outbound';
+        needed -= amount;
+      }
+    }
   }
 }
 
@@ -12358,6 +12433,17 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             }
             if (isWorkshopToMarketTradeDelivery(state, job)) {
               state.metrics.tradeCyclesCompletedLifetime += delivered;
+            }
+            if (job.portCargoDirection === 'outbound' && job.portShipId !== undefined) {
+              const ship = state.arrivingShips.find((candidate) => candidate.id === job.portShipId);
+              const turn = ship?.portTurnaround;
+              if (turn && (job.itemType === 'rawMaterial' || job.itemType === 'meal' || job.itemType === 'tradeGood')) {
+                takeItemStockAtNode(state, job.toTile, job.itemType, delivered);
+                turn.outboundLoaded[job.itemType] = Math.min(
+                  turn.outboundRequired[job.itemType],
+                  turn.outboundLoaded[job.itemType] + delivered
+                );
+              }
             }
             crew.carryingAmount = Math.max(0, crew.carryingAmount - delivered);
             if (crew.carryingAmount > 0) {
@@ -16976,6 +17062,7 @@ export function tick(state: StationState, frameDt: number): void {
     createTradeGoodTransportJobs(state);
     createRawMaterialTransportJobs(state);
     createPortCargoTransportJobs(state);
+    createPortOutboundTransportJobs(state);
     createConstructionJobs(state);
     createSanitationJobs(state);
     assignJobsToIdleCrew(state);

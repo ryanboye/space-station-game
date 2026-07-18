@@ -204,7 +204,13 @@ export function createInitialState(options?: {
     .sort((a, b) => a.originTile - b.originTile)
     .map((module) => {
       const capacity = MODULE_DEFINITIONS[module.type].itemNodeCapacity ?? 0;
-      const rawMaterial = options?.physicalStarterInventory ? Math.min(capacity, starterMaterialsRemaining) : 0;
+      // Starter construction stock belongs in Intake / Storage. Seeding every
+      // item node used to fill the berth cargo arm before the first ship and
+      // silently discarded its manifest cargo.
+      const starterStockNode = module.type === ModuleType.IntakePallet || module.type === ModuleType.StorageRack;
+      const rawMaterial = options?.physicalStarterInventory && starterStockNode
+        ? Math.min(capacity, starterMaterialsRemaining)
+        : 0;
       starterMaterialsRemaining -= rawMaterial;
       return {
         tileIndex: module.originTile,
@@ -653,7 +659,9 @@ export function createInitialState(options?: {
       taxRate: 0.2,
       dockPlacementFacing: 'north',
       moduleRotation: 0,
-      materialAutoImportEnabled: true,
+      // Port-ops mode acquires materials through admitted physical freighters;
+      // invisible periodic imports would bypass the entire berth/logistics loop.
+      materialAutoImportEnabled: !(options?.manualTrafficAdmission ?? false),
       materialTargetStock: 120,
       materialImportBatchSize: 25,
       securityPosture: 'standard',

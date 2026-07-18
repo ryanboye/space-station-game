@@ -3592,6 +3592,8 @@ function testApprovedManifestCreatesCrewWorkedPhysicalTurnaround(): void {
   offer.arrivesAt = state.now;
   offer.status = 'holding';
   offer.inboundCargo = { rawMaterial: 8, rawMeal: 5, tradeGood: 3 };
+  offer.outboundRequest = { rawMaterial: 4, meal: 0, tradeGood: 0 };
+  offer.berthTimeSec = 120;
   const berth = getEligibleBerthsForOffer(state, offer.id)[0];
   assertCondition(!!berth, 'Starter berth should accept the turnaround fixture.');
   assertCondition(admitTrafficOffer(state, offer.id, berth.anchorTile).ok, 'Manifest should be assignable to the starter berth.');
@@ -3619,6 +3621,16 @@ function testApprovedManifestCreatesCrewWorkedPhysicalTurnaround(): void {
       job.createdAt >= (docked?.dockedAt ?? 0)
     ),
     'Released cargo should generate physical logistics haul jobs into station storage.'
+  );
+  runFor(state, 80);
+  const settled = state.arrivingShips.find((ship) => ship.id === offer.id)?.portTurnaround;
+  assertCondition(
+    !settled || settled.outboundLoaded.rawMaterial >= 3.95,
+    'Crew should physically load the accepted ship export order from station inventory.'
+  );
+  assertCondition(
+    !settled || settled.payoutSettled,
+    'A completed physical export order should settle the manifest payout.'
   );
 }
 
