@@ -112,6 +112,7 @@ import {
   type ThermalRoomDiagnostic,
   type ThermalSeverity,
   type ThermalTileDiagnostic,
+  type TrafficOffer,
   type UtilityNetworkDiagnostics,
   type UtilityUnderlayTileDiagnostic,
   type ShipServiceTag,
@@ -5508,7 +5509,7 @@ function berthHasSpaceExposure(state: StationState, clusterTiles: number[]): boo
   return clusterTiles.some((tile) => tileTouchesSpace(state, tile));
 }
 
-interface BerthCandidate {
+export interface BerthCandidate {
   anchorTile: number;
   tiles: number[];
   size: BerthSizeClass;
@@ -8192,7 +8193,163 @@ function scheduleNextTrafficArrival(state: StationState): void {
   state.lastCycleTime = Number.isFinite(delay) ? state.now + delay : state.now;
 }
 
+const TRAFFIC_OFFER_LIMIT = 3;
+const TRAFFIC_FORECAST_MIN_SEC = 28;
+const TRAFFIC_FORECAST_MAX_SEC = 52;
+const TRAFFIC_HOLD_SEC = 105;
+
+const SHIP_NAME_PREFIXES = ['Aster', 'Cinder', 'Far', 'Helix', 'Morrow', 'Pioneer', 'Sable', 'Vesper'];
+const SHIP_NAME_SUFFIXES = ['Arc', 'Courier', 'Dawn', 'Kite', 'Prospect', 'Relay', 'Runner', 'Wayfarer'];
+
+function trafficOfferSize(state: StationState): ShipSize {
+  const roll = state.rng();
+  return roll < 0.35 ? 'small' : roll < 0.87 ? 'medium' : 'large';
+}
+
+function createTrafficOffer(state: StationState, lane: SpaceLane, shipType: ShipType): TrafficOffer {
+  const id = state.shipSpawnCounter++;
+  const size = trafficOfferSize(state);
+  const passengersTotal = size === 'small' ? dockPodPassengerCount(state.rng) : berthPassengerCount(size, state.rng);
+  const manifest = generateShipManifest(state, shipType);
+  const forecastSec = TRAFFIC_FORECAST_MIN_SEC + state.rng() * (TRAFFIC_FORECAST_MAX_SEC - TRAFFIC_FORECAST_MIN_SEC);
+  const cargoScale = size === 'large' ? 2.2 : size === 'medium' ? 1.35 : 0.65;
+  const cargoBias = shipType === 'industrial' ? 1.55 : shipType === 'trader' ? 1.25 : 0.75;
+  const serviceTags = SHIP_PROFILES[shipType]?.serviceTags ?? ['cafeteria'];
+  const prefix = SHIP_NAME_PREFIXES[Math.floor(state.rng() * SHIP_NAME_PREFIXES.length)];
+  const suffix = SHIP_NAME_SUFFIXES[Math.floor(state.rng() * SHIP_NAME_SUFFIXES.length)];
+  return {
+    id,
+    callsign: `${lane.slice(0, 1).toUpperCase()}-${String(id).padStart(3, '0')}`,
+    shipName: `${prefix} ${suffix}`,
+    lane,
+    shipType,
+    size,
+    status: 'forecast',
+    forecastAt: state.now,
+    arrivesAt: state.now + forecastSec,
+    expiresAt: state.now + forecastSec + TRAFFIC_HOLD_SEC,
+    passengersTotal,
+    manifestDemand: manifest.demand,
+    manifestMix: manifest.mix,
+    inboundCargo: {
+      rawMaterial: Math.round((6 + state.rng() * 12) * cargoScale * cargoBias),
+      rawMeal: Math.round((3 + state.rng() * 9) * cargoScale * (shipType === 'colonist' ? 1.4 : 0.65)),
+      tradeGood: Math.round((2 + state.rng() * 8) * cargoScale * (shipType === 'trader' ? 1.8 : 0.75))
+    },
+    outboundRequest: {
+      rawMaterial: Math.round(state.rng() * 4 * cargoScale),
+      meal: Math.round((2 + state.rng() * 7) * cargoScale),
+      tradeGood: Math.round((1 + state.rng() * 6) * cargoScale * (shipType === 'trader' ? 1.5 : 0.7))
+    },
+    requestedServices: [...serviceTags],
+    berthTimeSec: Math.round(42 + passengersTotal * 1.4 + cargoScale * 16),
+    dockingFee: Math.round(55 + passengersTotal * 4 + cargoScale * 45),
+    projectedSpend: Math.round(passengersTotal * (shipType === 'tourist' ? 18 : shipType === 'trader' ? 14 : 10)),
+    riskLabel: shipType === 'military' ? 'high' : shipType === 'industrial' ? 'guarded' : 'low'
+  };
+}
+
+function availableOfferShipTypes(state: StationState): ShipType[] {
+  return (['tourist', 'trader', 'industrial', 'military', 'colonist'] as ShipType[]).filter((type) =>
+    isShipTypeUnlocked(state, type)
+  );
+}
+
+function scheduleManualTrafficOffer(state: StationState): void {
+  if (state.trafficOffers.length >= TRAFFIC_OFFER_LIMIT) return;
+  const lanes = [...LANES];
+  const laneTotal = lanes.reduce((sum, lane) => sum + state.laneProfiles[lane].trafficVolume, 0);
+  let laneCursor = state.rng() * Math.max(0.0001, laneTotal);
+  let lane = lanes[0];
+  for (const candidate of lanes) {
+    laneCursor -= state.laneProfiles[candidate].trafficVolume;
+    if (laneCursor <= 0) { lane = candidate; break; }
+  }
+  const types = availableOfferShipTypes(state);
+  if (types.length === 0) return;
+  const weights = state.laneProfiles[lane].weights;
+  let typeCursor = state.rng() * types.reduce((sum, type) => sum + Math.max(0.0001, weights[type]), 0);
+  let shipType = types[0];
+  for (const candidate of types) {
+    typeCursor -= Math.max(0.0001, weights[candidate]);
+    if (typeCursor <= 0) { shipType = candidate; break; }
+  }
+  state.trafficOffers.push(createTrafficOffer(state, lane, shipType));
+}
+
+export function getEligibleBerthsForOffer(state: StationState, offerId: number): BerthCandidate[] {
+  const offer = state.trafficOffers.find((entry) => entry.id === offerId);
+  if (!offer) return [];
+  const required = SHIP_PROFILES[offer.shipType]?.requiredCapabilities ?? [];
+  return listBerthCandidates(state)
+    .filter((berth) => berth.occupiedByShipId === null)
+    .filter((berth) => shipSizeFitsBerth(offer.size, berth.size))
+    .filter((berth) => berth.spaceExposed)
+    .filter((berth) => isCapabilitySuperset(berth.capabilities, required))
+    .filter((berth) => {
+      const config = findBerthConfigByAnchor(state, berth.anchorTile);
+      return !config || (config.allowedShipTypes.includes(offer.shipType) && config.allowedShipSizes.includes(offer.size));
+    });
+}
+
+export function admitTrafficOffer(
+  state: StationState,
+  offerId: number,
+  berthAnchor?: number
+): { ok: boolean; reason?: string; berthAnchor?: number } {
+  const offerIndex = state.trafficOffers.findIndex((entry) => entry.id === offerId);
+  if (offerIndex < 0) return { ok: false, reason: 'Ship manifest is no longer available.' };
+  const offer = state.trafficOffers[offerIndex];
+  if (state.now < offer.arrivesAt) return { ok: false, reason: `Ship reaches holding orbit in ${Math.ceil(offer.arrivesAt - state.now)}s.` };
+  const eligibleBerths = getEligibleBerthsForOffer(state, offerId);
+  const berth = berthAnchor === undefined
+    ? eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0]
+    : eligibleBerths.find((entry) => entry.anchorTile === berthAnchor);
+  if (berth) {
+    spawnShipAtBerth(state, offer.lane, offer.shipType, berth, offer.id, offer.size, offer);
+    state.trafficOffers.splice(offerIndex, 1);
+    return { ok: true, berthAnchor: berth.anchorTile };
+  }
+  if (offer.size === 'small') {
+    const dock = state.docks.find((entry) =>
+      entry.purpose === 'visitor' && entry.occupiedByShipId === null && entry.allowedShipTypes.includes(offer.shipType) && entry.allowedShipSizes.includes('small')
+    );
+    if (dock) {
+      spawnShipAtDock(state, offer.lane, offer.shipType, dock.id, offer.id, 'small', offer);
+      state.trafficOffers.splice(offerIndex, 1);
+      return { ok: true };
+    }
+  }
+  const hint = describeMissingCapabilities(state, offer.shipType, offer.size) ?? `No free ${offer.size} berth accepts this ship.`;
+  return { ok: false, reason: hint };
+}
+
+export function refuseTrafficOffer(state: StationState, offerId: number): boolean {
+  const index = state.trafficOffers.findIndex((entry) => entry.id === offerId);
+  if (index < 0) return false;
+  state.trafficOffers.splice(index, 1);
+  return true;
+}
+
+export function holdTrafficOffer(state: StationState, offerId: number): boolean {
+  const offer = state.trafficOffers.find((entry) => entry.id === offerId);
+  if (!offer || state.now < offer.arrivesAt) return false;
+  offer.expiresAt = Math.min(offer.expiresAt + 25, state.now + 120);
+  return true;
+}
+
+function updateTrafficOffers(state: StationState): void {
+  for (const offer of state.trafficOffers) {
+    if (state.now >= offer.arrivesAt) offer.status = 'holding';
+  }
+  state.trafficOffers = state.trafficOffers.filter((offer) => state.now < offer.expiresAt);
+}
+
 function scheduleSporadicArrival(state: StationState): void {
+  if (state.controls.manualTrafficAdmission) {
+    scheduleManualTrafficOffer(state);
+    return;
+  }
   // Refresh "no-capability" hint on each traffic check. Stays empty unless
   // we actually queue a ship below for capability reasons.
   state.metrics.shipsQueuedNoCapabilityCount = 0;
@@ -8305,6 +8462,7 @@ function scheduleSporadicArrival(state: StationState): void {
 }
 
 function updateTrafficArrivalSchedule(state: StationState): void {
+  updateTrafficOffers(state);
   const intensity = clamp(state.controls.shipsPerCycle, 0, MAX_SHIPS_PER_CYCLE);
   if (intensity <= 0) {
     state.lastCycleTime = state.now;
@@ -8316,7 +8474,14 @@ function updateTrafficArrivalSchedule(state: StationState): void {
     !Number.isFinite(state.lastCycleTime) ||
     state.lastCycleTime < state.now - state.cycleDuration
   ) {
-    scheduleNextTrafficArrival(state);
+    // Manual port play needs a forecast quickly; the ETA itself provides
+    // preparation time. Waiting one random traffic interval before even
+    // showing the first manifest made a fresh station feel inert.
+    if (state.controls.manualTrafficAdmission && state.trafficOffers.length === 0) {
+      state.lastCycleTime = state.now + 3;
+    } else {
+      scheduleNextTrafficArrival(state);
+    }
   }
 
   let attempts = 0;
@@ -8324,7 +8489,7 @@ function updateTrafficArrivalSchedule(state: StationState): void {
     // Crowd-loop v1 (CH-1): traffic control — don't dispatch arrivals the
     // docks can't take. A full queue means the next ship simply doesn't come
     // (instead of arriving, waiting 18s, and silently torching rating).
-    if (state.dockQueue.length < Math.max(1, state.docks.length)) {
+    if (state.controls.manualTrafficAdmission || state.dockQueue.length < Math.max(1, state.docks.length)) {
       scheduleSporadicArrival(state);
     }
     state.lastCycleTime += nextTrafficArrivalDelay(state);
@@ -8497,14 +8662,15 @@ function spawnShipAtDock(
   shipType: ShipType,
   dockId: number,
   forcedShipId?: number,
-  forcedSize?: ShipSize
+  forcedSize?: ShipSize,
+  trafficOffer?: TrafficOffer
 ): void {
   const dock = state.docks.find((d) => d.id === dockId);
   if (!dock) return;
   const size: ShipSize = 'small';
   if (forcedSize && forcedSize !== 'small') return;
-  const passengersTotal = dockPodPassengerCount(state.rng);
-  const manifest = generateShipManifest(state, shipType);
+  const passengersTotal = trafficOffer?.passengersTotal ?? dockPodPassengerCount(state.rng);
+  const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
   dock.occupiedByShipId = shipId;
   const center = dock.tiles
@@ -8537,8 +8703,9 @@ function spawnShipAtDock(
     spawnCarry: 0,
     dockedAt: 0,
     residentIds: [],
-    manifestDemand: manifest.demand,
-    manifestMix: manifest.mix
+    manifestDemand: 'manifestDemand' in manifest ? manifest.manifestDemand : manifest.demand,
+    manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
+    portManifest: trafficOffer ? { ...trafficOffer } : undefined
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }
@@ -8555,7 +8722,8 @@ function spawnShipAtBerth(
   shipType: ShipType,
   berth: BerthCandidate,
   forcedShipId?: number,
-  forcedSize?: ShipSize
+  forcedSize?: ShipSize,
+  trafficOffer?: TrafficOffer
 ): void {
   // Pick the largest size that still fits this berth's class.
   const wanted = forcedSize ?? preferredShipSize(state.rng);
@@ -8564,8 +8732,8 @@ function spawnShipAtBerth(
     if (shipSizeFitsBerth('medium', berth.size)) size = 'medium';
     else size = 'small';
   }
-  const passengersTotal = berthPassengerCount(size, state.rng);
-  const manifest = generateShipManifest(state, shipType);
+  const passengersTotal = trafficOffer?.passengersTotal ?? berthPassengerCount(size, state.rng);
+  const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
   const center = berth.tiles
     .map((tile) => fromIndex(tile, state.width))
@@ -8597,8 +8765,9 @@ function spawnShipAtBerth(
     spawnCarry: 0,
     dockedAt: 0,
     residentIds: [],
-    manifestDemand: manifest.demand,
-    manifestMix: manifest.mix
+    manifestDemand: 'manifestDemand' in manifest ? manifest.manifestDemand : manifest.demand,
+    manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
+    portManifest: trafficOffer ? { ...trafficOffer } : undefined
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }

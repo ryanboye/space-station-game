@@ -1036,6 +1036,8 @@ export interface ArrivingShip {
   residentIds: number[];
   manifestDemand: { cafeteria: number; market: number; lounge: number };
   manifestMix: Record<VisitorArchetype, number>;
+  /** Original player-approved visit contract; retained through turnaround. */
+  portManifest?: TrafficOffer;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
@@ -1162,6 +1164,32 @@ export interface DockQueueEntry {
   size: ShipSize;
   queuedAt: number;
   timeoutAt: number;
+}
+
+export type TrafficOfferStatus = 'forecast' | 'holding';
+
+/** A finite, inspectable ship visit waiting for a player berth decision. */
+export interface TrafficOffer {
+  id: number;
+  callsign: string;
+  shipName: string;
+  lane: SpaceLane;
+  shipType: ShipType;
+  size: ShipSize;
+  status: TrafficOfferStatus;
+  forecastAt: number;
+  arrivesAt: number;
+  expiresAt: number;
+  passengersTotal: number;
+  manifestDemand: { cafeteria: number; market: number; lounge: number };
+  manifestMix: Record<VisitorArchetype, number>;
+  inboundCargo: { rawMaterial: number; rawMeal: number; tradeGood: number };
+  outboundRequest: { rawMaterial: number; meal: number; tradeGood: number };
+  requestedServices: ShipServiceTag[];
+  berthTimeSec: number;
+  dockingFee: number;
+  projectedSpend: number;
+  riskLabel: 'low' | 'guarded' | 'high';
 }
 
 export interface IncidentEntity {
@@ -1842,6 +1870,7 @@ export interface Controls {
   paused: boolean;
   simSpeed: 1 | 2 | 4;
   shipsPerCycle: number;
+  manualTrafficAdmission: boolean;
   diagnosticOverlay: DiagnosticOverlay;
   showZones: boolean;
   showServiceNodes: boolean;
@@ -1893,6 +1922,7 @@ export interface StationState {
   mapWorldOriginY: number;
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
+  trafficOffers: TrafficOffer[];
   pressurized: boolean[];
   // Per-tile air quality 0..100. Computed each tick from life-support coverage
   // distance + active source count. Local exposure checks (crew, visitor,

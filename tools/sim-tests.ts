@@ -1,4 +1,5 @@
 import {
+  admitTrafficOffer,
   buyMaterials,
   buyMaterialsDetailed,
   buyRawFood,
@@ -9,6 +10,7 @@ import {
   createInitialState,
   findPath,
   getUnlockTier,
+  getEligibleBerthsForOffer,
   getNextExpansionCost,
   isModuleUnlocked,
   isRoomUnlocked,
@@ -33,6 +35,7 @@ import {
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
   hireStaffRole,
+  holdTrafficOffer,
   mapConditionAt,
   mapConditionSamplesAt,
   setBerthCustomsPolicy,
@@ -42,6 +45,7 @@ import {
   getRoomDiagnosticAt,
   getRoomInspectorAt,
   reservationsForOwner,
+  refuseTrafficOffer,
   sellMaterials,
   selectSpecialty,
   setRoom,
@@ -3537,6 +3541,46 @@ function testSporadicTrafficSchedulesNextCheck(): void {
   );
 }
 
+function testManualTrafficOffersRequireExplicitAdmission(): void {
+  const state = createInitialState({ seed: 3016041, manualTrafficAdmission: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  runFor(state, 75);
+
+  assertCondition(state.trafficOffers.length > 0, 'Manual traffic should create persistent forecast manifests.');
+  assertCondition(state.arrivingShips.length === 0, 'Manifest ships must not dock before explicit player admission.');
+  const offer = state.trafficOffers[0];
+  offer.size = 'small';
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  assertCondition(offer.inboundCargo.rawMaterial >= 0, 'Manifest should disclose inbound cargo.');
+  assertCondition(offer.dockingFee > 0 && offer.berthTimeSec > 0, 'Manifest should disclose fee and berth occupation.');
+  const eligible = getEligibleBerthsForOffer(state, offer.id);
+  assertCondition(eligible.length > 0, 'Starter station should expose an eligible equipped berth for a small manifest ship.');
+  const result = admitTrafficOffer(state, offer.id, eligible[0].anchorTile);
+  assertCondition(result.ok, `Explicit berth assignment should admit the ship (${result.reason ?? 'unknown'}).`);
+  assertCondition(!state.trafficOffers.some((entry) => entry.id === offer.id), 'Admitted manifest should leave orbital offers.');
+  const ship = state.arrivingShips.find((entry) => entry.id === offer.id);
+  assertCondition(!!ship, 'Admitted manifest should create a physical approaching ship.');
+  assertCondition(ship?.portManifest?.callsign === offer.callsign, 'Physical ship should retain its approved port manifest.');
+}
+
+function testManualTrafficHoldAndRefusal(): void {
+  const state = createInitialState({ seed: 3016042, manualTrafficAdmission: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  runFor(state, 75);
+  assertCondition(state.trafficOffers.length > 0, 'Manual traffic should produce an offer for hold/refusal actions.');
+  const offer = state.trafficOffers[0];
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  const priorExpiry = offer.expiresAt;
+  assertCondition(holdTrafficOffer(state, offer.id), 'Holding action should extend an arrived manifest.');
+  assertCondition(offer.expiresAt > priorExpiry, 'Holding action should visibly buy more decision time.');
+  assertCondition(refuseTrafficOffer(state, offer.id), 'Refusal should remove a pending manifest.');
+  assertCondition(!state.trafficOffers.some((entry) => entry.id === offer.id), 'Refused manifest should leave the queue.');
+}
+
 function testBerthTrafficUsesLargeShipPassengerScale(): void {
   const state = createInitialState({ seed: 301602 });
   buildHabitat(state);
@@ -4244,7 +4288,11 @@ function testDepartmentRuntimeActivationRule(): void {
     `Without a SanitationTerminal in the active Bridge, inactive reason should be no-terminal (got ${state.command.departments.sanitation.inactiveReason}).`
   );
 
-  const placed = tryPlaceModule(state, ModuleType.SanitationTerminal, toIndex(49, 34, state.width));
+  let placed: ReturnType<typeof tryPlaceModule> = { ok: false, reason: 'no open bridge footprint' };
+  for (let tile = 0; tile < state.rooms.length && !placed.ok; tile++) {
+    if (state.rooms[tile] !== RoomType.Bridge || state.modules[tile] !== ModuleType.None) continue;
+    placed = tryPlaceModule(state, ModuleType.SanitationTerminal, tile);
+  }
   assertCondition(placed.ok, `Sanitation terminal should place in the active Bridge (${placed.reason ?? 'unknown'}).`);
   tick(state, 0);
   assertCondition(
@@ -4252,7 +4300,9 @@ function testDepartmentRuntimeActivationRule(): void {
     `Sanitation department should activate with officer, active Bridge, terminal, and reachability (reason: ${state.command.departments.sanitation.inactiveReason}).`
   );
 
-  setTile(state, toIndex(50, 36, state.width), TileType.Floor);
+  const bridgeDoor = state.tiles.findIndex((tile, index) => tile === TileType.Door && state.rooms[index] === RoomType.Bridge);
+  assertCondition(bridgeDoor >= 0, 'Starter Bridge should have a contained access door.');
+  setTile(state, bridgeDoor, TileType.Floor);
   tick(state, 0);
   assertCondition(state.ops.bridgeActive === 0, 'Removing the starter Bridge door should make the Bridge operationally inactive.');
   assertCondition(
@@ -6588,6 +6638,8 @@ function run(): void {
   testVisitorBerthsAcceptTrafficResidentialDoNot();
   testLegacyDockTrafficUsesTinyPods();
   testSporadicTrafficSchedulesNextCheck();
+  testManualTrafficOffersRequireExplicitAdmission();
+  testManualTrafficHoldAndRefusal();
   testBerthTrafficUsesLargeShipPassengerScale();
   testBerthVisitorsBoardAndDespawnOnReturn();
   testTransientShipPersistsUntilOriginVisitorBoards();

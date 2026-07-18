@@ -25,6 +25,7 @@ import {
 import { sigilForFaction } from './sim/system-map';
 import {
   buyMaterialsDetailed,
+  admitTrafficOffer,
   buyRawFoodDetailed,
   buildStationExpansionOnTruss,
   cancelConstructionAtTile,
@@ -36,6 +37,7 @@ import {
   expandMap,
   fireStaffRole,
   getBerthInspectorAt,
+  getEligibleBerthsForOffer,
   getCrewInspectorById,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
@@ -63,10 +65,12 @@ import {
   isUtilityUnderlayKind,
   hireCrew,
   hireStaffRole,
+  holdTrafficOffer,
   planModuleConstruction,
   planTileConstruction,
   quoteMaterialImportCost,
   removeModuleAtTile,
+  refuseTrafficOffer,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
   selectSpecialty,
@@ -259,6 +263,8 @@ app.innerHTML = `
           <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
           <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
           <small id="traffic-status" class="traffic-status">Paused</small>
+          <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
+          <small id="traffic-action-note" class="traffic-action-note"></small>
         </div>
       </section>
       <section class="dock-card selected-card">
@@ -849,7 +855,7 @@ const ctxMaybe = canvas.getContext('2d', { alpha: false, desynchronized: true })
 if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
-const state = createInitialState({ physicalStarterInventory: true });
+const state = createInitialState({ physicalStarterInventory: true, manualTrafficAdmission: true });
 
 // The fresh state now owns a complete, visible Berth room. Keeping starter
 // topology in one factory prevents this UI bootstrap from silently punching
@@ -921,6 +927,8 @@ applyCanvasSize();
 const shipsInput = document.querySelector<HTMLInputElement>('#ships')!;
 const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
 const trafficStatusEl = document.querySelector<HTMLElement>('#traffic-status')!;
+const trafficOfferListEl = document.querySelector<HTMLElement>('#traffic-offer-list')!;
+const trafficActionNoteEl = document.querySelector<HTMLElement>('#traffic-action-note')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
 const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
@@ -1924,6 +1932,7 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
 function refreshTrafficStatus(): void {
   const shipsPerCycle = clamp(state.controls.shipsPerCycle, 0, 3);
   const activeTransientShips = state.arrivingShips.filter((ship) => ship.kind === 'transient').length;
+  const offerCount = state.trafficOffers.length;
   if (shipsPerCycle <= 0) {
     setTrafficStatus('Traffic off', 'muted');
     return;
@@ -1937,7 +1946,12 @@ function refreshTrafficStatus(): void {
     return;
   }
   if (state.controls.paused) {
-    setTrafficStatus('Paused - press play for arrivals', 'muted');
+    setTrafficStatus(offerCount > 0 ? `${offerCount} manifest${offerCount === 1 ? '' : 's'} waiting` : 'Paused - press play for arrivals', offerCount > 0 ? 'warn' : 'muted');
+    return;
+  }
+  if (offerCount > 0) {
+    const holding = state.trafficOffers.filter((offer) => offer.status === 'holding').length;
+    setTrafficStatus(`${offerCount} manifest${offerCount === 1 ? '' : 's'} · ${holding} in holding orbit`, holding > 0 ? 'warn' : 'ok');
     return;
   }
   if (activeTransientShips > 0 || state.pendingSpawns.length > 0) {
@@ -1946,6 +1960,52 @@ function refreshTrafficStatus(): void {
   }
   const seconds = Math.max(1, Math.ceil(state.lastCycleTime - state.now));
   setTrafficStatus(`Next arrival check in ${seconds}s`, 'ok');
+}
+
+function cargoSummary(cargo: { rawMaterial: number; rawMeal: number; tradeGood: number }): string {
+  const parts: string[] = [];
+  if (cargo.rawMaterial > 0) parts.push(`${cargo.rawMaterial} supplies`);
+  if (cargo.rawMeal > 0) parts.push(`${cargo.rawMeal} food`);
+  if (cargo.tradeGood > 0) parts.push(`${cargo.tradeGood} goods`);
+  return parts.join(' · ') || 'passengers only';
+}
+
+function requestSummary(request: { rawMaterial: number; meal: number; tradeGood: number }): string {
+  const parts: string[] = [];
+  if (request.meal > 0) parts.push(`${request.meal} meals`);
+  if (request.tradeGood > 0) parts.push(`${request.tradeGood} goods`);
+  if (request.rawMaterial > 0) parts.push(`${request.rawMaterial} supplies`);
+  return parts.join(' · ') || 'no export order';
+}
+
+function refreshTrafficOffers(): void {
+  if (!state.controls.manualTrafficAdmission) {
+    trafficOfferListEl.innerHTML = '';
+    return;
+  }
+  if (state.trafficOffers.length === 0) {
+    trafficOfferListEl.innerHTML = '<div class="traffic-empty">Orbital manifest queue clear</div>';
+    return;
+  }
+  trafficOfferListEl.innerHTML = state.trafficOffers.map((offer) => {
+    const eligible = getEligibleBerthsForOffer(state, offer.id).length;
+    const ready = offer.status === 'holding';
+    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
+    const berthText = eligible > 0 ? `${eligible} berth${eligible === 1 ? '' : 's'} ready` : `No ${offer.size} berth ready`;
+    return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
+      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
+      <div class="traffic-offer-meta">${offer.size} ${offer.shipType} · ${offer.passengersTotal} pax · ${offer.riskLabel} risk</div>
+      <div class="traffic-offer-line"><b>Brings</b> ${cargoSummary(offer.inboundCargo)}</div>
+      <div class="traffic-offer-line"><b>Wants</b> ${requestSummary(offer.outboundRequest)}</div>
+      <div class="traffic-offer-line"><b>Pays</b> ${offer.dockingFee}c fee + ~${offer.projectedSpend}c spend · ${offer.berthTimeSec}s berth</div>
+      <div class="traffic-offer-actions">
+        <span class="traffic-readiness ${eligible > 0 ? 'ready' : 'blocked'}">${berthText}</span>
+        <button data-traffic-action="assign" data-offer-id="${offer.id}" ${!ready || eligible <= 0 ? 'disabled' : ''}>Assign</button>
+        <button data-traffic-action="hold" data-offer-id="${offer.id}" ${!ready ? 'disabled' : ''}>Hold</button>
+        <button data-traffic-action="refuse" data-offer-id="${offer.id}">Refuse</button>
+      </div>
+    </article>`;
+  }).join('');
 }
 
 type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';
@@ -6003,6 +6063,31 @@ shipsInput.addEventListener('input', () => {
   shipsLabel.textContent = String(state.controls.shipsPerCycle);
 });
 
+trafficOfferListEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-traffic-action]');
+  if (!button) return;
+  const offerId = Number(button.dataset.offerId);
+  if (!Number.isFinite(offerId)) return;
+  const action = button.dataset.trafficAction;
+  if (action === 'assign') {
+    const result = admitTrafficOffer(state, offerId);
+    trafficActionNoteEl.textContent = result.ok
+      ? `Berth assigned. Approach clearance transmitted.`
+      : (result.reason ?? 'Unable to assign berth.');
+    trafficActionNoteEl.className = `traffic-action-note ${result.ok ? 'tone-ok' : 'tone-warn'}`;
+  } else if (action === 'hold') {
+    const held = holdTrafficOffer(state, offerId);
+    trafficActionNoteEl.textContent = held ? 'Holding window extended 25 seconds.' : 'Ship has not reached holding orbit.';
+    trafficActionNoteEl.className = `traffic-action-note ${held ? 'tone-ok' : 'tone-warn'}`;
+  } else if (action === 'refuse') {
+    const refused = refuseTrafficOffer(state, offerId);
+    trafficActionNoteEl.textContent = refused ? 'Manifest declined. Lane control notified.' : 'Manifest already cleared.';
+    trafficActionNoteEl.className = 'traffic-action-note tone-muted';
+  }
+  refreshTrafficStatus();
+  refreshTrafficOffers();
+});
+
 taxInput.addEventListener('input', () => {
   const pct = clamp(parseInt(taxInput.value, 10), 0, 50);
   state.controls.taxRate = pct / 100;
@@ -6891,6 +6976,7 @@ function frame(now: number): void {
   refreshDiagnosticKey();
   refreshHudStatus();
   refreshTrafficStatus();
+  refreshTrafficOffers();
   refreshAlertPanel();
   refreshIncidentList();
   refreshTierChecklist();
@@ -7136,6 +7222,8 @@ function formatClock(ms: number): string {
 }
 
 function applyHydratedState(nextState: StationState): void {
+  nextState.controls.manualTrafficAdmission = true;
+  nextState.trafficOffers ??= [];
   Object.assign(state, nextState);
   applyCanvasSize();
   updateStageLayout();

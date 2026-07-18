@@ -8,6 +8,7 @@
 // (harness, alt renderer) needs more, add explicitly.
 
 export {
+  admitTrafficOffer,
   buyMaterialsDetailed,
   buyRawFoodDetailed,
   buildStationExpansionOnTruss,
@@ -22,6 +23,7 @@ export {
   fireCrew,
   fireStaffRole,
   getBerthInspectorAt,
+  getEligibleBerthsForOffer,
   getCrewInspectorById,
   getCrewPriorityPresetWeights,
   getDockByTile,
@@ -50,6 +52,7 @@ export {
   getVisitorInspectorById,
   hireCrew,
   hireStaffRole,
+  holdTrafficOffer,
   isModuleUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
@@ -58,6 +61,7 @@ export {
   planTileConstruction,
   quoteMaterialImportCost,
   removeModuleAtTile,
+  refuseTrafficOffer,
   sellMaterials,
   sellRawFood,
   setBerthCustomsPolicy,

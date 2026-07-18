@@ -57,7 +57,11 @@ import {
   toIndex
 } from './types';
 
-export function createInitialState(options?: { seed?: number; physicalStarterInventory?: boolean }): StationState {
+export function createInitialState(options?: {
+  seed?: number;
+  physicalStarterInventory?: boolean;
+  manualTrafficAdmission?: boolean;
+}): StationState {
   const seed = options?.seed ?? 1337;
   const rng = makeRng(seed);
   // Roll the system map from a sub-seed so it doesn't deplete the
@@ -235,6 +239,7 @@ export function createInitialState(options?: { seed?: number; physicalStarterInv
     mapWorldOriginY: 0,
     laneProfiles,
     dockQueue: [],
+    trafficOffers: [],
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     heatByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(42),
@@ -635,6 +640,7 @@ export function createInitialState(options?: { seed?: number; physicalStarterInv
       paused: true,
       simSpeed: 1,
       shipsPerCycle: 1,
+      manualTrafficAdmission: options?.manualTrafficAdmission ?? false,
       diagnosticOverlay: 'none',
       showZones: true,
       showServiceNodes: false,
