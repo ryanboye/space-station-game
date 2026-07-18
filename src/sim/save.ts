@@ -175,6 +175,7 @@ export interface StationSnapshotV1 {
     incidentsResolvedLifetime: number;
     actorsTreatedLifetime: number;
     residentsConvertedLifetime: number;
+    dockedShipsCompleted: number;
     archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>>;
   };
   sanitation?: {
@@ -447,6 +448,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       incidentsResolvedLifetime: state.metrics.incidentsResolvedLifetime,
       actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
       residentsConvertedLifetime: state.metrics.residentsConvertedLifetime,
+      dockedShipsCompleted: state.dockedShipsCompleted,
       archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen }
     },
     sanitation: {
@@ -888,6 +890,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     incidentsResolvedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.incidentsResolvedLifetime, 0))),
     actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
     residentsConvertedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.residentsConvertedLifetime, 0))),
+    dockedShipsCompleted: Math.max(0, Math.floor(asFiniteNumber(progRaw?.dockedShipsCompleted, 0))),
     archetypesEverSeen
   };
   if (!progRaw) warnings.push('progression counters missing; defaulted to zero (pre-progression save).');
@@ -1445,6 +1448,7 @@ export function hydrateStateFromSave(
   next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
   next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
   next.metrics.residentsConvertedLifetime = snapshot.progression.residentsConvertedLifetime;
+  next.dockedShipsCompleted = snapshot.progression.dockedShipsCompleted;
   for (const archetype of VISITOR_ARCHETYPES) {
     next.usageTotals.archetypesEverSeen[archetype] = snapshot.progression.archetypesEverSeen[archetype] === true;
   }
