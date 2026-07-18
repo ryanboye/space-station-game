@@ -46,6 +46,7 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH,
   type HousingPolicy,
+  type ItemType,
   type ModuleInstance,
   type ModuleRotation,
   ModuleType,
@@ -170,6 +171,16 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 4, 0);
   addStarterModule(ModuleType.StorageRack, coreX + 7, coreY + 5, 0);
 
+  // A minimal food loop, not an empty tutorial promise. Both rooms are fully
+  // enclosed, open onto the south gallery through a single door, and remain
+  // separated by circulation space. Their cramped footprints are intentional:
+  // one stove, one serving counter and one table handle the first ship only.
+  paintEnclosedRoom(RoomType.Kitchen, coreX - 8, coreY, coreX - 4, coreY, coreX - 3, coreY);
+  addStarterModule(ModuleType.Stove, coreX - 7, coreY, 0);
+  paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 8, coreY + 1, coreX + 2, coreY);
+  addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
+  addStarterModule(ModuleType.Table, coreX + 6, coreY, 0);
+
   // The berth is a hull-side work deck: walls on three sides, a sealed
   // station door to the west, and an open east edge where ships physically
   // meet the station. It is deliberately separate from the intake room.
@@ -212,10 +223,17 @@ export function createInitialState(options?: {
         ? Math.min(capacity, starterMaterialsRemaining)
         : 0;
       starterMaterialsRemaining -= rawMaterial;
+      const items: Partial<Record<ItemType, number>> = {};
+      if (rawMaterial > 0) items.rawMaterial = rawMaterial;
+      // The cafeteria opens with a small visible meal buffer. It prevents the
+      // first five passengers from arriving to a dead station while still
+      // exhausting quickly enough to expose the production/logistics loop.
+      if (module.type === ModuleType.ServingStation) items.meal = 10;
+      if (module.type === ModuleType.Stove) items.rawMeal = 6;
       return {
         tileIndex: module.originTile,
         capacity,
-        items: rawMaterial > 0 ? { rawMaterial } : {}
+        items
       };
     });
 

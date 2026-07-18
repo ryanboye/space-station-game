@@ -3541,6 +3541,25 @@ function testSporadicTrafficSchedulesNextCheck(): void {
   );
 }
 
+function testPortOpsStarterHasCrampedOperationalFoodLoop(): void {
+  const state = createInitialState({ seed: 3016040, manualTrafficAdmission: true, physicalStarterInventory: true });
+  const kitchenTiles = state.rooms.map((room, index) => room === RoomType.Kitchen ? index : -1).filter((index) => index >= 0);
+  const cafeteriaTiles = state.rooms.map((room, index) => room === RoomType.Cafeteria ? index : -1).filter((index) => index >= 0);
+  assertCondition(kitchenTiles.length > 0 && cafeteriaTiles.length > 0, 'Port-ops starter should include a tiny kitchen and cafeteria.');
+  assertCondition(
+    kitchenTiles.some((tile) => state.tiles[tile] === TileType.Door) && cafeteriaTiles.some((tile) => state.tiles[tile] === TileType.Door),
+    'Each starter food room should have its own physical access door.'
+  );
+  assertCondition(
+    state.moduleInstances.some((module) => module.type === ModuleType.Stove) &&
+      state.moduleInstances.some((module) => module.type === ModuleType.ServingStation) &&
+      state.moduleInstances.some((module) => module.type === ModuleType.Table),
+    'Starter food rooms should be equipped and immediately usable.'
+  );
+  const startingMeals = state.itemNodes.reduce((sum, node) => sum + (node.items.meal ?? 0), 0);
+  assertCondition(startingMeals === 10, `Starter cafeteria should open with exactly 10 meals, got ${startingMeals}.`);
+}
+
 function testManualTrafficOffersRequireExplicitAdmission(): void {
   const state = createInitialState({ seed: 3016041, manualTrafficAdmission: true });
   state.controls.paused = false;
@@ -3559,7 +3578,7 @@ function testManualTrafficOffersRequireExplicitAdmission(): void {
   assertCondition(eligible.length > 0, 'Starter station should expose an eligible equipped berth for a small manifest ship.');
   const result = admitTrafficOffer(state, offer.id, eligible[0].anchorTile);
   assertCondition(result.ok, `Explicit berth assignment should reserve the ship (${result.reason ?? 'unknown'}).`);
-  assertCondition(offer.status === 'cleared', 'Advance assignment should visibly clear the inbound ship before arrival.');
+  assertCondition(state.trafficOffers.find((entry) => entry.id === offer.id)?.status === 'cleared', 'Advance assignment should visibly clear the inbound ship before arrival.');
   assertCondition(offer.assignedBerthAnchor === eligible[0].anchorTile, 'Advance assignment should reserve the selected physical berth.');
   assertCondition(state.trafficOffers.some((entry) => entry.id === offer.id), 'Pre-cleared manifest should remain visible until arrival.');
   runFor(state, 4);
@@ -6695,6 +6714,7 @@ function run(): void {
   testVisitorBerthsAcceptTrafficResidentialDoNot();
   testLegacyDockTrafficUsesTinyPods();
   testSporadicTrafficSchedulesNextCheck();
+  testPortOpsStarterHasCrampedOperationalFoodLoop();
   testManualTrafficOffersRequireExplicitAdmission();
   testManualTrafficHoldAndRefusal();
   testApprovedManifestCreatesCrewWorkedPhysicalTurnaround();
