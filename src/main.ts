@@ -7374,6 +7374,19 @@ function formatClock(ms: number): string {
 }
 
 function applyHydratedState(nextState: StationState): void {
+  // Render layers are cached by the simulation version counters. A hydrated
+  // state is rebuilt from createInitialState(), so its counters can exactly
+  // match the currently rendered starter station even though its tile/room
+  // arrays are completely different. That left the old static layer on
+  // screen while freshly restored modules and actors rendered over it — the
+  // apparent "floating people/modules" save bug. Make every load a hard
+  // cache boundary; the sim's derived caches will rebuild on the next tick as
+  // well.
+  nextState.topologyVersion = Math.max(state.topologyVersion, nextState.topologyVersion) + 1;
+  nextState.roomVersion = Math.max(state.roomVersion, nextState.roomVersion) + 1;
+  nextState.moduleVersion = Math.max(state.moduleVersion, nextState.moduleVersion) + 1;
+  nextState.dockVersion = Math.max(state.dockVersion, nextState.dockVersion) + 1;
+  nextState.mapConditionVersion = Math.max(state.mapConditionVersion, nextState.mapConditionVersion) + 1;
   nextState.controls.manualTrafficAdmission = true;
   nextState.trafficOffers ??= [];
   Object.assign(state, nextState);
@@ -7527,7 +7540,7 @@ window.__harnessLoadSave = (json: string) => {
     if (hydrated.warnings.length) {
       console.warn('[harness] __harnessLoadSave warnings:', hydrated.warnings);
     }
-    Object.assign(state, hydrated.state);
+    applyHydratedState(hydrated.state);
     console.log('[harness] state loaded from JSON');
   } catch (e) {
     console.error('[harness] __harnessLoadSave: exception', e);
