@@ -1983,11 +1983,37 @@ function refreshTrafficOffers(): void {
     trafficOfferListEl.innerHTML = '';
     return;
   }
-  if (state.trafficOffers.length === 0) {
+  const activeTurnarounds = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
+  const activeHtml = activeTurnarounds.map((ship) => {
+    const offer = ship.portManifest!;
+    const turn = ship.portTurnaround;
+    const phase = ship.stage === 'approach' ? 'APPROACHING' : !turn ? 'BERTHING' : turn.phase.toUpperCase();
+    const progress = !turn
+      ? 0
+      : turn.phase === 'inspection'
+        ? Math.round((turn.inspectionProgress / Math.max(1, turn.inspectionRequired)) * 100)
+        : turn.phase === 'unloading'
+          ? Math.round((turn.inboundUnloaded / Math.max(1, turn.inboundTotal)) * 100)
+          : 100;
+    const instruction = !turn
+      ? 'Stand by for docking collar'
+      : turn.phase === 'inspection'
+        ? 'Crew is required at the berth customs counter'
+        : turn.phase === 'unloading'
+          ? 'Logistics crew must clear the cargo arm into Intake / Storage'
+          : 'Gangway open · passengers and commerce active';
+    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'}">
+      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase}</span></div>
+      <div class="traffic-offer-meta">BERTH ACTIVE · ${offer.passengersTotal} pax · ${cargoSummary(offer.inboundCargo)}</div>
+      <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
+      <div class="traffic-offer-line"><b>${progress}%</b> ${instruction}</div>
+    </article>`;
+  }).join('');
+  if (state.trafficOffers.length === 0 && activeTurnarounds.length === 0) {
     trafficOfferListEl.innerHTML = '<div class="traffic-empty">Orbital manifest queue clear</div>';
     return;
   }
-  trafficOfferListEl.innerHTML = state.trafficOffers.map((offer) => {
+  const offersHtml = state.trafficOffers.map((offer) => {
     const eligible = getEligibleBerthsForOffer(state, offer.id).length;
     const ready = offer.status === 'holding';
     const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
@@ -2006,6 +2032,7 @@ function refreshTrafficOffers(): void {
       </div>
     </article>`;
   }).join('');
+  trafficOfferListEl.innerHTML = activeHtml + offersHtml;
 }
 
 type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';

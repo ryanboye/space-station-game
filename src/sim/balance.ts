@@ -154,7 +154,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     width: 2,
     height: 2,
     rotatable: false,
-    allowedRooms: [RoomType.Berth]
+    allowedRooms: [RoomType.Berth],
+    itemNodeCapacity: 64
   },
   [ModuleType.SecurityCamera]: {
     width: 1,

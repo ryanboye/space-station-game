@@ -8202,6 +8202,9 @@ const SHIP_NAME_PREFIXES = ['Aster', 'Cinder', 'Far', 'Helix', 'Morrow', 'Pionee
 const SHIP_NAME_SUFFIXES = ['Arc', 'Courier', 'Dawn', 'Kite', 'Prospect', 'Relay', 'Runner', 'Wayfarer'];
 
 function trafficOfferSize(state: StationState): ShipSize {
+  // The first contract is an onboarding beat: always fit the starter berth.
+  // Later manifests deliberately include ships that demand expansion.
+  if (state.dockedShipsCompleted === 0 && state.trafficOffers.length === 0) return 'small';
   const roll = state.rng();
   return roll < 0.35 ? 'small' : roll < 0.87 ? 'medium' : 'large';
 }
@@ -8211,7 +8214,10 @@ function createTrafficOffer(state: StationState, lane: SpaceLane, shipType: Ship
   const size = trafficOfferSize(state);
   const passengersTotal = size === 'small' ? dockPodPassengerCount(state.rng) : berthPassengerCount(size, state.rng);
   const manifest = generateShipManifest(state, shipType);
-  const forecastSec = TRAFFIC_FORECAST_MIN_SEC + state.rng() * (TRAFFIC_FORECAST_MAX_SEC - TRAFFIC_FORECAST_MIN_SEC);
+  const firstContract = state.dockedShipsCompleted === 0 && state.trafficOffers.length === 0;
+  const forecastSec = firstContract
+    ? 10 + state.rng() * 6
+    : TRAFFIC_FORECAST_MIN_SEC + state.rng() * (TRAFFIC_FORECAST_MAX_SEC - TRAFFIC_FORECAST_MIN_SEC);
   const cargoScale = size === 'large' ? 2.2 : size === 'medium' ? 1.35 : 0.65;
   const cargoBias = shipType === 'industrial' ? 1.55 : shipType === 'trader' ? 1.25 : 0.75;
   const serviceTags = SHIP_PROFILES[shipType]?.serviceTags ?? ['cafeteria'];
@@ -8527,7 +8533,87 @@ function activeVisitorsForShip(state: StationState, shipId: number): number {
 }
 
 function transientShipVisitorsResolved(state: StationState, ship: ArrivingShip): boolean {
-  return ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) <= 0;
+  const portWorkComplete = !ship.portTurnaround || ship.portTurnaround.phase === 'open';
+  return portWorkComplete && ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) <= 0;
+}
+
+function portModuleTile(state: StationState, ship: ArrivingShip, type: ModuleType): number | null {
+  const berthTiles = new Set(ship.bayTiles);
+  return state.moduleInstances.find((module) => module.type === type && berthTiles.has(module.originTile))?.originTile ?? null;
+}
+
+function enqueuePortInspection(state: StationState, ship: ArrivingShip, customsTile: number): number {
+  const job = {
+    id: state.jobSpawnCounter++,
+    type: 'inspect' as const,
+    itemType: 'rawMaterial' as const,
+    amount: 1,
+    fromTile: customsTile,
+    toTile: customsTile,
+    assignedCrewId: null,
+    createdAt: state.now,
+    expiresAt: state.now + JOB_TTL_SEC,
+    state: 'pending' as const,
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none' as const,
+    portShipId: ship.id,
+    workProgress: 0,
+    workRequired: 7,
+    blockedReason: null
+  };
+  state.jobs.push(job);
+  state.metrics.createdJobs += 1;
+  return job.id;
+}
+
+function beginPortTurnaround(state: StationState, ship: ArrivingShip): void {
+  if (!ship.portManifest || ship.portTurnaround) return;
+  const customsTile = portModuleTile(state, ship, ModuleType.CustomsCounter);
+  const cargoTile = portModuleTile(state, ship, ModuleType.CargoArm);
+  if (customsTile === null || cargoTile === null) return;
+  const inboundTotal = Object.values(ship.portManifest.inboundCargo).reduce((sum, amount) => sum + amount, 0);
+  ship.portTurnaround = {
+    phase: 'inspection',
+    customsTile,
+    cargoTile,
+    inspectionProgress: 0,
+    inspectionRequired: 7,
+    clearanceJobId: null,
+    cargoReleased: false,
+    inboundTotal,
+    inboundUnloaded: 0
+  };
+  ship.portTurnaround.clearanceJobId = enqueuePortInspection(state, ship, customsTile);
+}
+
+function releaseInboundCargo(state: StationState, ship: ArrivingShip): void {
+  const turn = ship.portTurnaround;
+  const manifest = ship.portManifest;
+  if (!turn || !manifest || turn.cargoReleased) return;
+  turn.cargoReleased = true;
+  turn.phase = turn.inboundTotal > 0 ? 'unloading' : 'open';
+  for (const [itemType, amount] of Object.entries(manifest.inboundCargo) as Array<['rawMaterial' | 'rawMeal' | 'tradeGood', number]>) {
+    addItemStockAtNode(state, turn.cargoTile, itemType, amount);
+  }
+}
+
+function updatePortTurnaround(state: StationState, ship: ArrivingShip): void {
+  const turn = ship.portTurnaround;
+  if (!turn) return;
+  const job = turn.clearanceJobId === null ? null : state.jobs.find((candidate) => candidate.id === turn.clearanceJobId);
+  turn.inspectionProgress = Math.min(turn.inspectionRequired, job?.workProgress ?? (job?.state === 'done' ? turn.inspectionRequired : 0));
+  if (job?.state === 'done' && !turn.cargoReleased) releaseInboundCargo(state, ship);
+  if (turn.cargoReleased) {
+    const remaining = ['rawMaterial', 'rawMeal', 'tradeGood'].reduce(
+      (sum, itemType) => sum + itemStockAtNode(state, turn.cargoTile, itemType as 'rawMaterial' | 'rawMeal' | 'tradeGood'),
+      0
+    );
+    turn.inboundUnloaded = Math.max(0, turn.inboundTotal - remaining);
+    if (remaining <= 0.05) turn.phase = 'open';
+  }
+  if (ship.stage === 'depart') turn.phase = 'departing';
 }
 
 function updateArrivingShips(state: StationState, dt: number): void {
@@ -8575,9 +8661,15 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ship.stage = 'docked';
       ship.stageTime = 0;
       ship.dockedAt = state.now;
+      beginPortTurnaround(state, ship);
     }
 
     if (ship.stage === 'docked' && ship.kind === 'transient') {
+      updatePortTurnaround(state, ship);
+      if (ship.portManifest && ship.portTurnaround?.phase === 'inspection') {
+        keep.push(ship);
+        continue;
+      }
       const spawnRate = ship.passengersTotal / SHIP_DOCKED_TIME;
       ship.spawnCarry += spawnRate * dt;
       while (ship.spawnCarry >= 1 && ship.passengersSpawned < ship.passengersTotal) {
@@ -9027,6 +9119,7 @@ function isWorkshopToMarketTradeDelivery(state: StationState, job: StationState[
 }
 
 function logisticsJobPriority(state: StationState, job: StationState['jobs'][number]): number {
+  if (job.type === 'inspect') return 172;
   if (job.type === 'sanitize') {
     const dirt = state.dirtByTile[job.fromTile] ?? 0;
     if (dirt >= SANITATION_FILTHY_THRESHOLD) return 160;
@@ -9058,6 +9151,11 @@ function logisticsJobPriority(state: StationState, job: StationState['jobs'][num
 function crewSuitabilityForJob(crew: CrewMember, job: StationState['jobs'][number]): number {
   const system = crew.assignedSystem ?? crew.lastSystem;
   const homeLane = staffRoleWorkLane(crew.staffRole);
+  if (job.type === 'inspect') {
+    if (crew.staffRole === 'security-officer') return 90;
+    if (STAFF_ROLE_DEFINITIONS[crew.staffRole]?.officer) return 55;
+    return crew.role === 'idle' ? 12 : 4;
+  }
   if (job.type === 'cook') {
     if (crew.staffRole === 'cook') return 82;
     if (homeLane === 'food') return 44;
@@ -10224,6 +10322,36 @@ function createTradeGoodTransportJobs(state: StationState): void {
   });
 }
 
+/** Move released ship cargo off the berth and into the player's physical stockpile. */
+function createPortCargoTransportJobs(state: StationState): void {
+  const targets = [
+    ...collectServiceTargets(state, RoomType.LogisticsStock),
+    ...collectServiceTargets(state, RoomType.Storage)
+  ];
+  if (targets.length === 0) return;
+  const cargoSources = state.arrivingShips
+    .filter((ship) => ship.stage === 'docked' && ship.portTurnaround?.cargoReleased)
+    .map((ship) => ship.portTurnaround!.cargoTile);
+  if (cargoSources.length === 0) return;
+  for (const itemType of ['rawMaterial', 'rawMeal', 'tradeGood'] as const) {
+    const openCount = state.jobs.filter(
+      (job) =>
+        job.itemType === itemType &&
+        cargoSources.includes(job.fromTile) &&
+        (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress')
+    ).length;
+    dispatchTransportJobs(state, itemType, cargoSources, targets, {
+      cap: 9,
+      openCount,
+      targetStock: 999,
+      nearAmount: 6,
+      farAmount: 4,
+      nearDistance: 12,
+      minAmount: 0.5
+    });
+  }
+}
+
 function workLaneForSystem(system: CrewPrioritySystem | null): CrewWorkLane {
   if (system === 'kitchen' || system === 'cafeteria' || system === 'hydroponics') return 'food';
   if (system === 'hygiene') return 'sanitation';
@@ -10241,6 +10369,7 @@ function staffRoleAllowsFallback(role: StaffRole): boolean {
 }
 
 function jobWorkLane(state: StationState, job: StationState['jobs'][number]): CrewWorkLane {
+  if (job.type === 'inspect') return 'logistics';
   if (job.type === 'cook') return 'food';
   if (job.type === 'sanitize' || job.itemType === 'body') return 'sanitation';
   if (job.type === 'repair' || job.type === 'extinguish') return 'engineering';
@@ -10966,6 +11095,10 @@ function pendingJobStillViable(state: StationState, job: StationState['jobs'][nu
     const debt = repairDebtForJob(state, job);
     return (debt?.debt ?? 0) > REPAIR_JOB_COMPLETE_DEBT + 2;
   }
+  if (job.type === 'inspect') {
+    const ship = state.arrivingShips.find((candidate) => candidate.id === job.portShipId);
+    return ship?.stage === 'docked' && ship.portTurnaround?.phase === 'inspection';
+  }
   return false;
 }
 
@@ -11049,7 +11182,8 @@ export function createJobCountsByType(): Record<JobType, JobStatusCounts> {
     extinguish: createJobStatusCounts(),
     construct: createJobStatusCounts(),
     cook: createJobStatusCounts(),
-    sanitize: createJobStatusCounts()
+    sanitize: createJobStatusCounts(),
+    inspect: createJobStatusCounts()
   };
 }
 
@@ -11733,6 +11867,48 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.carryingItemType = null;
         crew.carryingAmount = 0;
         setCrewPath(state, crew, []);
+      } else if (job.type === 'inspect') {
+        const ship = state.arrivingShips.find((candidate) => candidate.id === job.portShipId);
+        const turnaround = ship?.portTurnaround;
+        if (!ship || ship.stage !== 'docked' || !turnaround || turnaround.phase !== 'inspection') {
+          job.state = 'done';
+          job.completedAt = state.now;
+          crew.activeJobId = null;
+          setCrewPath(state, crew, []);
+          continue;
+        }
+        const customsTile = turnaround.customsTile;
+        if (crew.tileIndex !== customsTile) {
+          if (crew.path.length === 0) {
+            setCrewPath(
+              state,
+              crew,
+              findPath(state, crew.tileIndex, customsTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+            );
+          }
+          const moveResult = moveCrew(crew);
+          if (moveResult === 'moved') {
+            job.lastProgressAt = state.now;
+            markJobStall(state, job, 'none');
+          } else if (moveResult === 'blocked') {
+            markJobStall(state, job, 'stalled_path_blocked');
+            setCrewPath(state, crew, []);
+          }
+        } else {
+          job.state = 'in_progress';
+          job.workProgress = Math.min(job.workRequired ?? 7, (job.workProgress ?? 0) + dt);
+          turnaround.inspectionProgress = job.workProgress;
+          job.lastProgressAt = state.now;
+          if ((job.workProgress ?? 0) >= (job.workRequired ?? 7)) {
+            job.state = 'done';
+            job.completedAt = state.now;
+            crew.activeJobId = null;
+            releaseReservationsForOwner(state, 'crew', crew.id, 'completed', ['actor-job']);
+            setCrewPath(state, crew, []);
+            releaseInboundCargo(state, ship);
+          }
+        }
+        continue;
       } else if (job.type === 'cook') {
         const stoveTile = job.fromTile;
         if (crew.tileIndex !== stoveTile) {
@@ -16799,6 +16975,7 @@ export function tick(state: StationState, frameDt: number): void {
     createKitchenCookJobs(state);
     createTradeGoodTransportJobs(state);
     createRawMaterialTransportJobs(state);
+    createPortCargoTransportJobs(state);
     createConstructionJobs(state);
     createSanitationJobs(state);
     assignJobsToIdleCrew(state);

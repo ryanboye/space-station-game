@@ -1924,6 +1924,28 @@ button.alert-item {
   box-shadow: inset 0 0 16px rgba(229, 171, 78, 0.06);
 }
 
+.traffic-offer.port-turnaround {
+  border-color: #55a9c7;
+  background: linear-gradient(135deg, rgba(24, 71, 87, 0.72), rgba(9, 24, 34, 0.94));
+  box-shadow: inset 3px 0 0 #65d5df;
+}
+
+.turnaround-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(2, 9, 14, 0.8);
+  border: 1px solid rgba(91, 166, 188, 0.4);
+}
+
+.turnaround-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #39a7bb, #8ce6c0);
+  transition: width 180ms linear;
+}
+
 .traffic-offer-head,
 .traffic-offer-actions {
   display: flex;

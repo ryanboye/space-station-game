@@ -3581,6 +3581,47 @@ function testManualTrafficHoldAndRefusal(): void {
   assertCondition(!state.trafficOffers.some((entry) => entry.id === offer.id), 'Refused manifest should leave the queue.');
 }
 
+function testApprovedManifestCreatesCrewWorkedPhysicalTurnaround(): void {
+  const state = createInitialState({ seed: 3016043, manualTrafficAdmission: true, physicalStarterInventory: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  runFor(state, 55);
+  const offer = state.trafficOffers[0];
+  assertCondition(!!offer, 'Turnaround test requires a forecast manifest.');
+  offer.size = 'small';
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  offer.inboundCargo = { rawMaterial: 8, rawMeal: 5, tradeGood: 3 };
+  const berth = getEligibleBerthsForOffer(state, offer.id)[0];
+  assertCondition(!!berth, 'Starter berth should accept the turnaround fixture.');
+  assertCondition(admitTrafficOffer(state, offer.id, berth.anchorTile).ok, 'Manifest should be assignable to the starter berth.');
+  runFor(state, 7);
+  const docked = state.arrivingShips.find((ship) => ship.id === offer.id);
+  assertCondition(docked?.stage === 'docked', 'Approved manifest should physically dock.');
+  assertCondition(docked?.portTurnaround?.phase === 'inspection', 'Docked manifest should remain sealed for customs inspection.');
+  assertCondition(
+    state.jobs.some((job) => job.type === 'inspect' && job.portShipId === offer.id),
+    'Docking should create a real crew-dispatched customs job.'
+  );
+  assertCondition((docked?.passengersSpawned ?? 0) === 0, 'Gangway must stay closed while customs is incomplete.');
+  runFor(state, 70);
+  const after = state.arrivingShips.find((ship) => ship.id === offer.id);
+  const inspection = state.jobs.find((job) => job.type === 'inspect' && job.portShipId === offer.id);
+  assertCondition(inspection?.state === 'done', 'A crew member should physically complete customs inspection.');
+  assertCondition(
+    !after || after.portTurnaround?.cargoReleased === true,
+    'Cleared customs should release manifest cargo onto the physical cargo arm.'
+  );
+  assertCondition(
+    state.jobs.some((job) =>
+      ['rawMaterial', 'rawMeal', 'tradeGood'].includes(job.itemType) &&
+      job.type === 'deliver' &&
+      job.createdAt >= (docked?.dockedAt ?? 0)
+    ),
+    'Released cargo should generate physical logistics haul jobs into station storage.'
+  );
+}
+
 function testBerthTrafficUsesLargeShipPassengerScale(): void {
   const state = createInitialState({ seed: 301602 });
   buildHabitat(state);
@@ -6640,6 +6681,7 @@ function run(): void {
   testSporadicTrafficSchedulesNextCheck();
   testManualTrafficOffersRequireExplicitAdmission();
   testManualTrafficHoldAndRefusal();
+  testApprovedManifestCreatesCrewWorkedPhysicalTurnaround();
   testBerthTrafficUsesLargeShipPassengerScale();
   testBerthVisitorsBoardAndDespawnOnReturn();
   testTransientShipPersistsUntilOriginVisitorBoards();

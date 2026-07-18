@@ -831,7 +831,7 @@ export interface CrewMember {
 }
 
 export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook' | 'sanitize';
+export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook' | 'sanitize' | 'inspect';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -876,6 +876,8 @@ export interface TransportJob {
   workProgress?: number;
   workRequired?: number;
   blockedReason?: string | null;
+  /** Port-operations inspection jobs are bound to one physical ship. */
+  portShipId?: number;
 }
 
 export type ReservationOwnerKind = 'visitor' | 'resident' | 'crew' | 'job' | 'room' | 'system';
@@ -1013,6 +1015,20 @@ export type ShipSize = 'small' | 'medium' | 'large';
 
 export type ShipStage = 'approach' | 'docked' | 'depart';
 
+export type PortTurnaroundPhase = 'inspection' | 'unloading' | 'open' | 'departing';
+
+export interface PortTurnaround {
+  phase: PortTurnaroundPhase;
+  customsTile: number;
+  cargoTile: number;
+  inspectionProgress: number;
+  inspectionRequired: number;
+  clearanceJobId: number | null;
+  cargoReleased: boolean;
+  inboundTotal: number;
+  inboundUnloaded: number;
+}
+
 export interface ArrivingShip {
   id: number;
   kind: 'transient' | 'resident_home';
@@ -1038,6 +1054,8 @@ export interface ArrivingShip {
   manifestMix: Record<VisitorArchetype, number>;
   /** Original player-approved visit contract; retained through turnaround. */
   portManifest?: TrafficOffer;
+  /** Physical, crew-worked port visit state for player-approved traffic. */
+  portTurnaround?: PortTurnaround;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
