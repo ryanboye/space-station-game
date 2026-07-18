@@ -374,6 +374,11 @@ const MAX_PENDING_TRADE_JOBS = 18;
 const MAX_PENDING_PRODUCTION_SUPPLY_JOBS = 8;
 const MAX_PENDING_STORAGE_SUPPLY_JOBS = 4;
 const MAX_PENDING_MARKET_DELIVERY_JOBS = 8;
+// Completed work used to remain on the live job board forever. Port cargo
+// creates many short jobs, so a second active berth made every crew/metrics
+// scan progressively more expensive even though the old records were inert.
+const TERMINAL_JOB_HISTORY_LIMIT = 192;
+const TERMINAL_JOB_RETENTION_SEC = 90;
 const MIN_MARKET_DELIVERY_AMOUNT = 2;
 const MARKET_DELIVERY_CREW_FLOOR = 2;
 const MARKET_TRADE_GOOD_TARGET_STOCK = 32;
@@ -11384,6 +11389,22 @@ function expireJobs(state: StationState): void {
   }
 }
 
+function pruneTerminalJobHistory(state: StationState): void {
+  const terminal = state.jobs.filter((job) => job.state === 'done' || job.state === 'expired');
+  if (terminal.length <= TERMINAL_JOB_HISTORY_LIMIT) return;
+  const keepTerminalIds = new Set(
+    terminal
+      .filter((job) => state.now - (job.completedAt ?? job.expiresAt) <= TERMINAL_JOB_RETENTION_SEC)
+      .slice(-TERMINAL_JOB_HISTORY_LIMIT)
+      .map((job) => job.id)
+  );
+  // Always retain the newest records up to the cap, even after a long pause.
+  for (const job of terminal.slice(-TERMINAL_JOB_HISTORY_LIMIT)) keepTerminalIds.add(job.id);
+  state.jobs = state.jobs.filter(
+    (job) => (job.state !== 'done' && job.state !== 'expired') || keepTerminalIds.has(job.id)
+  );
+}
+
 function createJobStatusCounts(): JobStatusCounts {
   return { pending: 0, assigned: 0, expired: 0, done: 0 };
 }
@@ -17243,6 +17264,7 @@ export function tick(state: StationState, frameDt: number): void {
   }
   requeueStalledJobs(state);
   expireJobs(state);
+  if (jobBoardCadence.due) pruneTerminalJobHistory(state);
   ensurePressurizationUpToDate(state);
   refreshRoomOpsTotals(state);
   refreshRoomOpsFromCrewPresence(state, dt, true);
