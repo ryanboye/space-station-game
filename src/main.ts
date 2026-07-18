@@ -849,17 +849,11 @@ const ctxMaybe = canvas.getContext('2d', { alpha: false, desynchronized: true })
 if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
-const state = createInitialState();
+const state = createInitialState({ physicalStarterInventory: true });
 
-// T0 onboarding: pre-place a 2-tile visitor dock on the starter hull so
-// ships arrive on a fresh start without the player painting one first.
-// Keep it core-relative because the starter grid can grow while the
-// sealed room stays centered.
-const starterCore = fromIndex(state.core.centerTile, state.width);
-const starterDockX = starterCore.x + 5;
-for (let dockY = starterCore.y - 3; dockY <= starterCore.y - 2; dockY++) {
-  setTile(state, toIndex(starterDockX, dockY, state.width), TileType.Dock);
-}
+// The fresh state now owns a complete, visible Berth room. Keeping starter
+// topology in one factory prevents this UI bootstrap from silently punching
+// unzoned dock tiles through the authored station.
 
 // ?scenario=<name> thin-spec cold-start loader: skip the starter grind
 // for sprite/UX iteration. Whitelisted fixtures in COLD_START_SCENARIOS

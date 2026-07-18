@@ -491,7 +491,7 @@ function testStarterCoreIsOpenWithSideReactor(): void {
 function testTileBuildCostDoesNotScaleWithDistance(): void {
   const state = createInitialState({ seed: 1338 });
   const core = fromIndex(state.core.centerTile, state.width);
-  const near = toIndex(core.x + 6, core.y, state.width);
+  const near = toIndex(core.x, core.y + 10, state.width);
   const farAnchor = toIndex(state.width - 4, state.height - 4, state.width);
   const far = toIndex(state.width - 3, state.height - 4, state.width);
 
@@ -515,7 +515,7 @@ function testCreditBuildDoesNotConsumeSuppliesOrNeedIntake(): void {
   state.metrics.materials = 12;
 
   const core = fromIndex(state.core.centerTile, state.width);
-  const floorTile = toIndex(core.x + 6, core.y, state.width);
+  const floorTile = toIndex(core.x, core.y + 10, state.width);
   const creditsBeforeFloor = state.metrics.credits;
   const suppliesBeforeFloor = state.metrics.materials;
   const floor = trySetTileWithCredits(state, floorTile, TileType.Floor);
@@ -539,7 +539,7 @@ function testCreditBuildBlocksOnCredits(): void {
   const state = createInitialState({ seed: 13382 });
   state.metrics.credits = 0;
   const core = fromIndex(state.core.centerTile, state.width);
-  const result = trySetTileWithCredits(state, toIndex(core.x + 6, core.y, state.width), TileType.Floor);
+  const result = trySetTileWithCredits(state, toIndex(core.x, core.y + 10, state.width), TileType.Floor);
   assertCondition(!result.ok, 'Credits-first build should block when credits are insufficient.');
   if (result.ok) throw new Error('Expected insufficient-credit build failure.');
   assertCondition(result.reason.includes('credits'), 'Insufficient-credit build failure should mention credits.');
@@ -548,8 +548,8 @@ function testCreditBuildBlocksOnCredits(): void {
 function testTrussBuildRequiresEvaAndCanChain(): void {
   const state = createInitialState({ seed: 1339 });
   const core = fromIndex(state.core.centerTile, state.width);
-  const first = toIndex(core.x + 6, core.y, state.width);
-  const second = toIndex(core.x + 7, core.y, state.width);
+  const first = toIndex(core.x, core.y + 10, state.width);
+  const second = toIndex(core.x, core.y + 11, state.width);
   const startingMaterials = state.metrics.materials;
 
   const planned = planTileConstruction(state, first, TileType.Truss);
@@ -572,10 +572,10 @@ function testTrussExpansionConvertsScaffoldIntoPressurizedShell(): void {
   const state = createInitialState({ seed: 1340 });
   const core = fromIndex(state.core.centerTile, state.width);
   const patch = [
-    toIndex(core.x + 6, core.y, state.width),
-    toIndex(core.x + 7, core.y, state.width),
-    toIndex(core.x + 6, core.y + 1, state.width),
-    toIndex(core.x + 7, core.y + 1, state.width)
+    toIndex(core.x, core.y + 10, state.width),
+    toIndex(core.x + 1, core.y + 10, state.width),
+    toIndex(core.x, core.y + 11, state.width),
+    toIndex(core.x + 1, core.y + 11, state.width)
   ];
   for (const index of patch) setTile(state, index, TileType.Truss);
   state.legacyMaterialStock = 11;
@@ -590,14 +590,14 @@ function testTrussExpansionConvertsScaffoldIntoPressurizedShell(): void {
     assertCondition(state.rooms[index] === RoomType.None, 'Fresh expansion floor should not inherit a room paint.');
   }
 
-  const doorTiles = [toIndex(core.x + 5, core.y, state.width), toIndex(core.x + 5, core.y + 1, state.width)];
+  const doorTiles = [toIndex(core.x, core.y + 9, state.width), toIndex(core.x + 1, core.y + 9, state.width)];
   assertCondition(
     doorTiles.filter((index) => state.tiles[index] === TileType.Door).length === 1,
     'Truss expansion should punch one door through the shared hull wall.'
   );
-  assertCondition(state.tiles[toIndex(core.x + 8, core.y, state.width)] === TileType.Wall, 'Expansion should add an outer east wall.');
-  assertCondition(state.tiles[toIndex(core.x + 6, core.y - 1, state.width)] === TileType.Wall, 'Expansion should add an outer north wall.');
-  assertCondition(state.tiles[toIndex(core.x + 7, core.y + 2, state.width)] === TileType.Wall, 'Expansion should add an outer south wall.');
+  assertCondition(state.tiles[toIndex(core.x - 1, core.y + 10, state.width)] === TileType.Wall, 'Expansion should add an outer west wall.');
+  assertCondition(state.tiles[toIndex(core.x + 2, core.y + 10, state.width)] === TileType.Wall, 'Expansion should add an outer east wall.');
+  assertCondition(state.tiles[toIndex(core.x + 1, core.y + 12, state.width)] === TileType.Wall, 'Expansion should add an outer south wall.');
 
   tick(state, 0.1);
   for (const index of patch) {

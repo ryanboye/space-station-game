@@ -57,7 +57,7 @@ import {
   toIndex
 } from './types';
 
-export function createInitialState(options?: { seed?: number }): StationState {
+export function createInitialState(options?: { seed?: number; physicalStarterInventory?: boolean }): StationState {
   const seed = options?.seed ?? 1337;
   const rng = makeRng(seed);
   // Roll the system map from a sub-seed so it doesn't deplete the
@@ -97,10 +97,10 @@ export function createInitialState(options?: { seed?: number }): StationState {
   };
   const coreX = Math.floor(GRID_WIDTH / 2);
   const coreY = Math.floor(GRID_HEIGHT / 2);
-  const starterFloorMinX = coreX - 5;
-  const starterFloorMaxX = coreX + 4;
-  const starterFloorMinY = coreY - 6;
-  const starterFloorMaxY = coreY + 3;
+  const starterFloorMinX = coreX - 11;
+  const starterFloorMaxX = coreX + 10;
+  const starterFloorMinY = coreY - 9;
+  const starterFloorMaxY = coreY + 8;
   const starterWallMinX = starterFloorMinX - 1;
   const starterWallMaxX = starterFloorMaxX + 1;
   const starterWallMinY = starterFloorMinY - 1;
@@ -120,73 +120,94 @@ export function createInitialState(options?: { seed?: number }): StationState {
     tiles[toIndex(x, starterWallMaxY, GRID_WIDTH)] = TileType.Wall;
   }
 
-  const reactorWallMinX = starterWallMinX - 4;
-  const reactorWallMaxX = starterWallMinX;
-  const reactorWallMinY = coreY - 2;
-  const reactorWallMaxY = coreY + 2;
-  for (let y = reactorWallMinY; y <= reactorWallMaxY; y++) {
-    tiles[toIndex(reactorWallMinX, y, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(reactorWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let x = reactorWallMinX; x <= reactorWallMaxX; x++) {
-    tiles[toIndex(x, reactorWallMinY, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, reactorWallMaxY, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let y = reactorWallMinY + 1; y < reactorWallMaxY; y++) {
-    for (let x = reactorWallMinX + 1; x < reactorWallMaxX; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      tiles[idx] = TileType.Reactor;
-      rooms[idx] = RoomType.Reactor;
+  // Port-operations starter: every functional room is an enclosed pod
+  // separated from every other zone by walls and a public circulation deck.
+  // This makes doors, travel distance, staffing and cargo movement readable
+  // from the first frame instead of presenting one large pre-zoned rectangle.
+  const paintEnclosedRoom = (
+    room: RoomType,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    doorX: number,
+    doorY: number,
+    floor: TileType = TileType.Floor
+  ): void => {
+    for (let y = minY - 1; y <= maxY + 1; y++) {
+      for (let x = minX - 1; x <= maxX + 1; x++) {
+        const idx = toIndex(x, y, GRID_WIDTH);
+        const boundary = x === minX - 1 || x === maxX + 1 || y === minY - 1 || y === maxY + 1;
+        tiles[idx] = boundary ? TileType.Wall : floor;
+        rooms[idx] = boundary ? RoomType.None : room;
+      }
     }
-  }
-  const reactorDoor = toIndex(reactorWallMaxX, coreY, GRID_WIDTH);
-  tiles[reactorDoor] = TileType.Door;
-  rooms[reactorDoor] = RoomType.Reactor;
+    const door = toIndex(doorX, doorY, GRID_WIDTH);
+    tiles[door] = TileType.Door;
+    rooms[door] = room;
+  };
 
-  // Crowd-loop v1 (CH-0): starter Life Support pocket on the east hull,
-  // mirroring the reactor pocket. Without it, the crew's air budget caps at
-  // ~4 breathers and any hiring or expansion suffocates the whole staff
-  // around minute 4 — silently. LifeSupport needs no modules, so the pocket
-  // self-activates once pressurized.
-  // (North wall: the east flank is reserved by the starter dock and several
-  // sim-test fixtures that build at core.x+5..8.)
-  // (East along the north wall: clear of the Bridge cluster so the pocket
-  // door doesn't count as a second Bridge door, and clear of the sim-test
-  // fixtures that build on the east flank at core.x+5..8.)
-  const lsWallMinX = starterWallMinX + 6;
-  const lsWallMaxX = starterWallMinX + 10;
-  const lsWallMinY = starterWallMinY - 4;
-  const lsWallMaxY = starterWallMinY;
-  for (let y = lsWallMinY; y <= lsWallMaxY; y++) {
-    tiles[toIndex(lsWallMinX, y, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(lsWallMaxX, y, GRID_WIDTH)] = TileType.Wall;
+  // Command and life support face the north gallery.
+  paintEnclosedRoom(RoomType.Bridge, coreX - 8, coreY - 7, coreX - 3, coreY - 4, coreX - 5, coreY - 3);
+  for (let y = coreY - 7; y <= coreY - 4; y++) {
+    for (let x = coreX - 8; x <= coreX - 3; x++) roomHousingPolicies[toIndex(x, y, GRID_WIDTH)] = 'crew';
   }
-  for (let x = lsWallMinX; x <= lsWallMaxX; x++) {
-    tiles[toIndex(x, lsWallMinY, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, lsWallMaxY, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let y = lsWallMinY + 1; y < lsWallMaxY; y++) {
-    for (let x = lsWallMinX + 1; x < lsWallMaxX; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      tiles[idx] = TileType.Floor;
-      rooms[idx] = RoomType.LifeSupport;
-    }
-  }
-  const lsDoor = toIndex(lsWallMinX + 2, lsWallMaxY, GRID_WIDTH);
-  tiles[lsDoor] = TileType.Door;
-  rooms[lsDoor] = RoomType.LifeSupport;
+  addStarterModule(ModuleType.CaptainConsole, coreX - 7, coreY - 6, 0);
 
-  for (let y = starterFloorMinY; y <= starterFloorMinY + 2; y++) {
-    for (let x = starterFloorMinX; x <= starterFloorMinX + 5; x++) {
+  paintEnclosedRoom(RoomType.LifeSupport, coreX + 2, coreY - 7, coreX + 6, coreY - 4, coreX + 4, coreY - 3);
+
+  // Engineering and cargo intake face the south service gallery. Their
+  // opposite placement creates an immediate, visible hauling distance.
+  paintEnclosedRoom(RoomType.Reactor, coreX - 8, coreY + 2, coreX - 4, coreY + 5, coreX - 6, coreY + 1, TileType.Reactor);
+  paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX + 2, coreY + 2);
+  addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
+  paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 7, coreY + 2);
+  addStarterModule(ModuleType.StorageRack, coreX + 6, coreY + 4, 0);
+  addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 4, 0);
+  addStarterModule(ModuleType.StorageRack, coreX + 7, coreY + 5, 0);
+
+  // The berth is a hull-side work deck: walls on three sides, a sealed
+  // station door to the west, and an open east edge where ships physically
+  // meet the station. It is deliberately separate from the intake room.
+  const berthMinX = starterWallMaxX + 1;
+  const berthMaxX = berthMinX + 5;
+  const berthMinY = coreY - 2;
+  const berthMaxY = coreY + 2;
+  for (let x = berthMinX - 1; x <= berthMaxX; x++) {
+    tiles[toIndex(x, berthMinY - 1, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(x, berthMaxY + 1, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let y = berthMinY; y <= berthMaxY; y++) {
+    for (let x = berthMinX; x <= berthMaxX; x++) {
       const idx = toIndex(x, y, GRID_WIDTH);
-      rooms[idx] = RoomType.Bridge;
-      roomHousingPolicies[idx] = 'crew';
+      tiles[idx] = TileType.Dock;
+      rooms[idx] = RoomType.Berth;
     }
   }
-  const starterBridgeDoor = toIndex(starterFloorMinX + 5, starterFloorMinY + 2, GRID_WIDTH);
-  tiles[starterBridgeDoor] = TileType.Door;
-  rooms[starterBridgeDoor] = RoomType.Bridge;
-  addStarterModule(ModuleType.CaptainConsole, starterFloorMinX + 1, starterFloorMinY, 0);
+  const berthDoor = toIndex(berthMinX - 1, coreY, GRID_WIDTH);
+  tiles[berthDoor] = TileType.Door;
+  rooms[berthDoor] = RoomType.Berth;
+  addStarterModule(ModuleType.CustomsCounter, berthMinX + 1, berthMinY + 1, 0);
+  addStarterModule(ModuleType.CargoArm, berthMaxX - 1, berthMaxY - 1, 0);
+  addStarterModule(ModuleType.Gangway, berthMaxX, coreY, 0);
+
+  // Construction stock begins as physical inventory in the authored intake
+  // and store rooms. The old invisible global pool remains only as a save
+  // migration fallback; a fresh game must preserve and route actual stock.
+  let starterMaterialsRemaining = STARTING_SUPPLIES;
+  const itemNodes = moduleInstances
+    .filter((module) => (MODULE_DEFINITIONS[module.type]?.itemNodeCapacity ?? 0) > 0)
+    .sort((a, b) => a.originTile - b.originTile)
+    .map((module) => {
+      const capacity = MODULE_DEFINITIONS[module.type].itemNodeCapacity ?? 0;
+      const rawMaterial = options?.physicalStarterInventory ? Math.min(capacity, starterMaterialsRemaining) : 0;
+      starterMaterialsRemaining -= rawMaterial;
+      return {
+        tileIndex: module.originTile,
+        capacity,
+        items: rawMaterial > 0 ? { rawMaterial } : {}
+      };
+    });
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
@@ -226,8 +247,8 @@ export function createInitialState(options?: { seed?: number }): StationState {
     jobs: [],
     reservations: [],
     constructionSites: [],
-    itemNodes: [],
-    legacyMaterialStock: STARTING_SUPPLIES,
+    itemNodes,
+    legacyMaterialStock: options?.physicalStarterInventory ? starterMaterialsRemaining : STARTING_SUPPLIES,
     incidents: [],
     visitors: [],
     residents: [],
