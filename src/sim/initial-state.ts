@@ -684,7 +684,15 @@ export function createInitialState(options?: {
       materialImportBatchSize: 25,
       securityPosture: 'standard',
       crewPriorityPreset: 'balanced',
-      crewPriorityWeights: cloneCrewPriorityWeights(CREW_PRIORITY_PRESET_WEIGHTS.balanced)
+      crewPriorityWeights: cloneCrewPriorityWeights(CREW_PRIORITY_PRESET_WEIGHTS.balanced),
+      crewShiftTargets: {
+        food: 1,
+        sanitation: 0,
+        engineering: 1,
+        logistics: 1,
+        'construction-eva': 0,
+        flex: 0
+      }
     },
     mapExpansion: {
       purchased: {

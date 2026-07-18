@@ -70,6 +70,7 @@ export {
   setBerthScreeningLevel,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
+  setCrewShiftTarget,
   selectSpecialty,
   setDockAllowedShipSize,
   setDockAllowedShipType,

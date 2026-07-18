@@ -87,6 +87,7 @@ import {
   setRoom,
   setRoomHousingPolicy,
   setSecurityPosture,
+  setCrewShiftTarget,
   setZone,
   tick,
   setTile,
@@ -619,6 +620,19 @@ app.innerHTML = `
           <option value="visible">Visible Patrol</option>
         </select>
       </div>
+      <div class="shift-roster-head">
+        <div><strong>Shift Roster</strong><small>Reserve real crew for the work that keeps ships and guests moving.</small></div>
+        <span id="shift-roster-total">0 assigned · 0 flexible</span>
+      </div>
+      <div class="shift-roster-grid">
+        <div class="shift-roster-row"><span><strong>Kitchen + Service</strong><small>Cook meals and keep counters staffed</small></span><button data-shift-step="food" data-delta="-1">−</button><b data-shift-count="food">0</b><button data-shift-step="food" data-delta="1">+</button></div>
+        <div class="shift-roster-row"><span><strong>Customs + Cargo</strong><small>Inspect ships, unload, stock, and export</small></span><button data-shift-step="logistics" data-delta="-1">−</button><b data-shift-count="logistics">0</b><button data-shift-step="logistics" data-delta="1">+</button></div>
+        <div class="shift-roster-row"><span><strong>Engineering</strong><small>Keep reactor and life support staffed</small></span><button data-shift-step="engineering" data-delta="-1">−</button><b data-shift-count="engineering">0</b><button data-shift-step="engineering" data-delta="1">+</button></div>
+        <div class="shift-roster-row"><span><strong>Sanitation</strong><small>Clean public rooms before reputation drops</small></span><button data-shift-step="sanitation" data-delta="-1">−</button><b data-shift-count="sanitation">0</b><button data-shift-step="sanitation" data-delta="1">+</button></div>
+        <div class="shift-roster-row"><span><strong>Construction / EVA</strong><small>Build expansion and repair the hull</small></span><button data-shift-step="construction-eva" data-delta="-1">−</button><b data-shift-count="construction-eva">0</b><button data-shift-step="construction-eva" data-delta="1">+</button></div>
+      </div>
+      <small id="shift-roster-note" class="market-status">Unrostered crew automatically cover pressure elsewhere.</small>
+      <div class="section-title priority-advanced-title">Automatic priority inside each shift</div>
       <div class="priority-grid">
         <label class="priority-row">Life Support <input type="range" min="1" max="10" step="1" data-priority="life-support" /><span id="prio-life-support">1</span></label>
         <label class="priority-row">Reactor <input type="range" min="1" max="10" step="1" data-priority="reactor" /><span id="prio-reactor">1</span></label>
@@ -1582,6 +1596,8 @@ const workforceLaneLabels: Record<CrewWorkLane, string> = {
 };
 const priorityInputs = new Map<CrewPrioritySystem, HTMLInputElement>();
 const priorityValueEls = new Map<CrewPrioritySystem, HTMLElement>();
+const shiftRosterTotalEl = document.querySelector<HTMLElement>('#shift-roster-total')!;
+const shiftRosterNoteEl = document.querySelector<HTMLElement>('#shift-roster-note')!;
 for (const system of prioritySystems) {
   const input = document.querySelector<HTMLInputElement>(`input[data-priority="${system}"]`);
   const valueEl = document.querySelector<HTMLElement>(`#prio-${system}`);
@@ -4053,6 +4069,15 @@ function refreshPriorityUi(): void {
     input.value = String(value);
     valueEl.textContent = String(value);
   }
+  const configured = state.controls.crewShiftTargets;
+  let rostered = 0;
+  for (const lane of workforceLaneOrder) {
+    const count = configured?.[lane] ?? 0;
+    rostered += count;
+    const el = document.querySelector<HTMLElement>(`[data-shift-count="${lane}"]`);
+    if (el) el.textContent = String(count);
+  }
+  shiftRosterTotalEl.textContent = `${rostered} assigned · ${Math.max(0, state.crewMembers.length - rostered)} flexible`;
 }
 refreshPriorityUi();
 // Initialize prev-tier tracker to current (prevents flash on cold-load /
@@ -6526,6 +6551,20 @@ for (const system of prioritySystems) {
     setCrewPriorityWeight(state, system, value);
   });
 }
+
+document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const lane = button.dataset.shiftStep as CrewWorkLane;
+    const delta = Number(button.dataset.delta ?? 0);
+    const current = state.controls.crewShiftTargets?.[lane] ?? 0;
+    const changed = setCrewShiftTarget(state, lane, current + delta);
+    shiftRosterNoteEl.textContent = changed
+      ? `${workforceLaneLabels[lane]} shift set to ${current + delta}. Crew will change over at the next dispatch.`
+      : `No flexible crew left. Reduce another shift or hire another assistant.`;
+    shiftRosterNoteEl.style.color = changed ? '#8ee6ad' : '#ffcf6e';
+    refreshPriorityUi();
+  });
+});
 
 const DOCK_MODAL_SHIP_TYPE_CHECKBOXES: Array<[HTMLInputElement, ShipType]> = [
   [dockModalTouristCheckbox, 'tourist'],

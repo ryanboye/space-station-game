@@ -10729,6 +10729,14 @@ function deriveWorkLaneTargets(
     flex: 0
   };
   if (total <= 0) return targets;
+  const configuredTargets = state.controls.crewShiftTargets ?? {
+    food: 0,
+    sanitation: 0,
+    engineering: 0,
+    logistics: 0,
+    'construction-eva': 0,
+    flex: 0
+  };
   const pendingByLane = createWorkforceLaneMetrics();
   for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
   ensureCommandState(state);
@@ -10750,6 +10758,14 @@ function deriveWorkLaneTargets(
       while (overflow > 0 && targets[lane] > 0) {
         targets[lane] -= 1;
         overflow -= 1;
+      }
+    }
+    for (const lane of CREW_WORK_LANES) targets[lane] = Math.max(targets[lane], configuredTargets[lane] ?? 0);
+    let configuredOverflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
+    for (const lane of ['flex', 'construction-eva', 'sanitation', 'engineering', 'food', 'logistics'] as CrewWorkLane[]) {
+      while (configuredOverflow > 0 && targets[lane] > (configuredTargets[lane] ?? 0)) {
+        targets[lane] -= 1;
+        configuredOverflow -= 1;
       }
     }
     return targets;
@@ -10803,7 +10819,27 @@ function deriveWorkLaneTargets(
       overflow -= 1;
     }
   }
+  for (const lane of CREW_WORK_LANES) targets[lane] = Math.max(targets[lane], configuredTargets[lane] ?? 0);
+  overflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
+  for (const lane of ['flex', 'construction-eva', 'sanitation', 'engineering', 'food', 'logistics'] as CrewWorkLane[]) {
+    while (overflow > 0 && targets[lane] > (configuredTargets[lane] ?? 0)) {
+      targets[lane] -= 1;
+      overflow -= 1;
+    }
+  }
   return targets;
+}
+
+export function setCrewShiftTarget(state: StationState, lane: CrewWorkLane, target: number): boolean {
+  const current = state.controls.crewShiftTargets ?? {
+    food: 0, sanitation: 0, engineering: 0, logistics: 0, 'construction-eva': 0, flex: 0
+  };
+  const next = clamp(Math.round(target), 0, state.crewMembers.length);
+  const otherTotal = CREW_WORK_LANES.reduce((sum, candidate) => sum + (candidate === lane ? 0 : current[candidate] ?? 0), 0);
+  if (otherTotal + next > state.crewMembers.length) return false;
+  current[lane] = next;
+  state.controls.crewShiftTargets = current;
+  return true;
 }
 
 function assignCrewWorkLanes(

@@ -1312,6 +1312,34 @@ h2 {
   color: var(--text);
 }
 
+.shift-roster-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 12px 0 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(125, 177, 207, .22);
+  font-size: 12px;
+}
+.shift-roster-head div { display: grid; gap: 2px; }
+.shift-roster-head small, .shift-roster-row small { color: #8ea2bd; font-weight: 400; }
+.shift-roster-head > span { color: #6edb8f; white-space: nowrap; }
+.shift-roster-grid { display: grid; gap: 5px; }
+.shift-roster-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) 30px 22px 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 7px;
+  border: 1px solid rgba(125, 177, 207, .16);
+  background: rgba(6, 16, 27, .48);
+}
+.shift-roster-row > span { display: grid; gap: 2px; }
+.shift-roster-row button { min-width: 30px; padding: 4px; }
+.shift-roster-row b { text-align: center; color: #e7f6ff; }
+.priority-advanced-title { margin: 12px 0 8px; color: #8ea2bd; }
+
 #agent-reason,
 #agent-visitor-details,
 #agent-resident-details {

@@ -464,6 +464,7 @@ export interface Resident {
 export type CrewRole = 'idle' | 'reactor' | 'cafeteria' | 'security';
 export type CrewIdleReason = 'idle_available' | 'idle_no_jobs' | 'idle_resting' | 'idle_no_path' | 'idle_waiting_reassign';
 export type CrewWorkLane = 'food' | 'sanitation' | 'engineering' | 'logistics' | 'construction-eva' | 'flex';
+export type CrewShiftTargets = Record<CrewWorkLane, number>;
 export type StaffRole =
   | 'captain'
   | 'sanitation-officer'
@@ -1917,6 +1918,8 @@ export interface Controls {
   securityPosture: SecurityPosture;
   crewPriorityPreset: CrewPriorityPreset;
   crewPriorityWeights: CrewPriorityWeights;
+  /** Player-set minimum headcount by visible work shift. Zero leaves a lane on automatic dispatch. */
+  crewShiftTargets: CrewShiftTargets;
 }
 
 export interface StationState {

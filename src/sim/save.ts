@@ -14,6 +14,7 @@ import {
   type DockPurpose,
   type BerthScreeningLevel,
   type CustomsPolicy,
+  type CrewShiftTargets,
   type HousingPolicy,
   type ItemType,
   type MaintenanceDomain,
@@ -151,6 +152,7 @@ export interface StationSnapshotV1 {
     materialTargetStock?: number;
     materialImportBatchSize?: number;
     securityPosture?: SecurityPosture;
+    crewShiftTargets?: Partial<CrewShiftTargets>;
   };
   unlocks: {
     tier: UnlockTier;
@@ -420,7 +422,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       materialAutoImportEnabled: state.controls.materialAutoImportEnabled,
       materialTargetStock: state.controls.materialTargetStock,
       materialImportBatchSize: state.controls.materialImportBatchSize,
-      securityPosture: state.controls.securityPosture
+      securityPosture: state.controls.securityPosture,
+      crewShiftTargets: { ...state.controls.crewShiftTargets }
     },
     unlocks: {
       tier: state.unlocks.tier,
@@ -790,6 +793,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   let taxRate = defaultState.controls.taxRate;
   let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
   let materialTargetStock = defaultState.controls.materialTargetStock;
+  let crewShiftTargets = { ...defaultState.controls.crewShiftTargets };
   let materialImportBatchSize = defaultState.controls.materialImportBatchSize;
   let securityPosture = defaultState.controls.securityPosture;
   if (isRecord(snapshotRaw.controls)) {
@@ -799,6 +803,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       materialAutoImportEnabled = snapshotRaw.controls.materialAutoImportEnabled;
     }
     materialTargetStock = clamp(asFiniteNumber(snapshotRaw.controls.materialTargetStock, materialTargetStock), 0, 500);
+    if (isRecord(snapshotRaw.controls.crewShiftTargets)) {
+      for (const lane of ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva', 'flex'] as const) {
+        crewShiftTargets[lane] = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.crewShiftTargets[lane], crewShiftTargets[lane])), 0, 99);
+      }
+    }
     materialImportBatchSize = clamp(asFiniteNumber(snapshotRaw.controls.materialImportBatchSize, materialImportBatchSize), 1, 160);
     if (isOneOf(snapshotRaw.controls.securityPosture, SECURITY_POSTURES)) {
       securityPosture = snapshotRaw.controls.securityPosture;
@@ -1016,7 +1025,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       materialAutoImportEnabled,
       materialTargetStock,
       materialImportBatchSize,
-      securityPosture
+      securityPosture,
+      crewShiftTargets
     },
     unlocks: {
       tier: unlockTier,
@@ -1420,6 +1430,9 @@ export function hydrateStateFromSave(
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);
   next.controls.materialAutoImportEnabled = snapshot.controls.materialAutoImportEnabled ?? next.controls.materialAutoImportEnabled;
   next.controls.materialTargetStock = clamp(snapshot.controls.materialTargetStock ?? next.controls.materialTargetStock, 0, 500);
+  if (snapshot.controls.crewShiftTargets) {
+    next.controls.crewShiftTargets = { ...next.controls.crewShiftTargets, ...snapshot.controls.crewShiftTargets };
+  }
   next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
   next.controls.securityPosture = snapshot.controls.securityPosture ?? next.controls.securityPosture;
   refreshBasicInventoryMetrics(next);
