@@ -2021,7 +2021,8 @@ function refreshTrafficOffers(): void {
   const offersHtml = state.trafficOffers.map((offer) => {
     const eligible = getEligibleBerthsForOffer(state, offer.id).length;
     const ready = offer.status === 'holding';
-    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
+    const cleared = offer.status === 'cleared';
+    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : cleared ? `CLEARED · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
     const berthText = eligible > 0 ? `${eligible} berth${eligible === 1 ? '' : 's'} ready` : `No ${offer.size} berth ready`;
     return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
@@ -2031,7 +2032,7 @@ function refreshTrafficOffers(): void {
       <div class="traffic-offer-line"><b>Pays</b> ${offer.dockingFee}c fee + ~${offer.projectedSpend}c spend · ${offer.berthTimeSec}s berth</div>
       <div class="traffic-offer-actions">
         <span class="traffic-readiness ${eligible > 0 ? 'ready' : 'blocked'}">${berthText}</span>
-        <button data-traffic-action="assign" data-offer-id="${offer.id}" ${!ready || eligible <= 0 ? 'disabled' : ''}>Assign</button>
+        <button data-traffic-action="assign" data-offer-id="${offer.id}" ${cleared || eligible <= 0 ? 'disabled' : ''}>${cleared ? 'Assigned' : ready ? 'Assign' : 'Reserve'}</button>
         <button data-traffic-action="hold" data-offer-id="${offer.id}" ${!ready ? 'disabled' : ''}>Hold</button>
         <button data-traffic-action="refuse" data-offer-id="${offer.id}">Refuse</button>
       </div>
@@ -6104,7 +6105,7 @@ trafficOfferListEl.addEventListener('click', (event) => {
   if (action === 'assign') {
     const result = admitTrafficOffer(state, offerId);
     trafficActionNoteEl.textContent = result.ok
-      ? `Berth assigned. Approach clearance transmitted.`
+      ? (result.reason ?? `Berth assigned. Approach clearance transmitted.`)
       : (result.reason ?? 'Unable to assign berth.');
     trafficActionNoteEl.className = `traffic-action-note ${result.ok ? 'tone-ok' : 'tone-warn'}`;
   } else if (action === 'hold') {

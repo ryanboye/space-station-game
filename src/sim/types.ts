@@ -1192,7 +1192,7 @@ export interface DockQueueEntry {
   timeoutAt: number;
 }
 
-export type TrafficOfferStatus = 'forecast' | 'holding';
+export type TrafficOfferStatus = 'forecast' | 'holding' | 'cleared';
 
 /** A finite, inspectable ship visit waiting for a player berth decision. */
 export interface TrafficOffer {
@@ -1216,6 +1216,8 @@ export interface TrafficOffer {
   dockingFee: number;
   projectedSpend: number;
   riskLabel: 'low' | 'guarded' | 'high';
+  /** Berth reserved by advance player clearance while the ship is still inbound. */
+  assignedBerthAnchor?: number | null;
 }
 
 export interface IncidentEntity {

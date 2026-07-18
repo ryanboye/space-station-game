@@ -8251,7 +8251,8 @@ function createTrafficOffer(state: StationState, lane: SpaceLane, shipType: Ship
     berthTimeSec: Math.round(42 + passengersTotal * 1.4 + cargoScale * 16),
     dockingFee: Math.round(55 + passengersTotal * 4 + cargoScale * 45),
     projectedSpend: Math.round(passengersTotal * (shipType === 'tourist' ? 18 : shipType === 'trader' ? 14 : 10)),
-    riskLabel: shipType === 'military' ? 'high' : shipType === 'industrial' ? 'guarded' : 'low'
+    riskLabel: shipType === 'military' ? 'high' : shipType === 'industrial' ? 'guarded' : 'low',
+    assignedBerthAnchor: null
   };
 }
 
@@ -8286,9 +8287,13 @@ function scheduleManualTrafficOffer(state: StationState): void {
 export function getEligibleBerthsForOffer(state: StationState, offerId: number): BerthCandidate[] {
   const offer = state.trafficOffers.find((entry) => entry.id === offerId);
   if (!offer) return [];
+  const reservedAnchors = new Set(state.trafficOffers
+    .filter((entry) => entry.id !== offerId && entry.status === 'cleared' && entry.assignedBerthAnchor != null)
+    .map((entry) => entry.assignedBerthAnchor as number));
   const required = SHIP_PROFILES[offer.shipType]?.requiredCapabilities ?? [];
   return listBerthCandidates(state)
     .filter((berth) => berth.occupiedByShipId === null)
+    .filter((berth) => !reservedAnchors.has(berth.anchorTile))
     .filter((berth) => shipSizeFitsBerth(offer.size, berth.size))
     .filter((berth) => berth.spaceExposed)
     .filter((berth) => isCapabilitySuperset(berth.capabilities, required))
@@ -8306,11 +8311,21 @@ export function admitTrafficOffer(
   const offerIndex = state.trafficOffers.findIndex((entry) => entry.id === offerId);
   if (offerIndex < 0) return { ok: false, reason: 'Ship manifest is no longer available.' };
   const offer = state.trafficOffers[offerIndex];
-  if (state.now < offer.arrivesAt) return { ok: false, reason: `Ship reaches holding orbit in ${Math.ceil(offer.arrivesAt - state.now)}s.` };
   const eligibleBerths = getEligibleBerthsForOffer(state, offerId);
   const berth = berthAnchor === undefined
-    ? eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0]
+    ? (offer.assignedBerthAnchor != null
+      ? eligibleBerths.find((entry) => entry.anchorTile === offer.assignedBerthAnchor)
+      : eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0])
     : eligibleBerths.find((entry) => entry.anchorTile === berthAnchor);
+  if (state.now < offer.arrivesAt) {
+    if (!berth) {
+      const hint = describeMissingCapabilities(state, offer.shipType, offer.size) ?? `No free ${offer.size} berth accepts this ship.`;
+      return { ok: false, reason: hint };
+    }
+    offer.status = 'cleared';
+    offer.assignedBerthAnchor = berth.anchorTile;
+    return { ok: true, berthAnchor: berth.anchorTile, reason: 'Berth reserved. Ship will dock on arrival.' };
+  }
   if (berth) {
     spawnShipAtBerth(state, offer.lane, offer.shipType, berth, offer.id, offer.size, offer);
     state.trafficOffers.splice(offerIndex, 1);
@@ -8345,9 +8360,14 @@ export function holdTrafficOffer(state: StationState, offerId: number): boolean 
 }
 
 function updateTrafficOffers(state: StationState): void {
+  const clearedArrivals: number[] = [];
   for (const offer of state.trafficOffers) {
-    if (state.now >= offer.arrivesAt) offer.status = 'holding';
+    if (state.now >= offer.arrivesAt) {
+      if (offer.status === 'cleared') clearedArrivals.push(offer.id);
+      else offer.status = 'holding';
+    }
   }
+  for (const offerId of clearedArrivals) admitTrafficOffer(state, offerId);
   state.trafficOffers = state.trafficOffers.filter((offer) => state.now < offer.expiresAt);
 }
 
