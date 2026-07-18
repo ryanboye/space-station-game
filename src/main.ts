@@ -60,6 +60,8 @@ import {
   getDockByTile,
   getSanitationTileDiagnostic,
   isModuleUnlocked,
+  isPortAutoAdmitUnlocked,
+  isCrewAutoStaffUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
   isUtilityUnderlayKind,
@@ -73,6 +75,8 @@ import {
   refuseTrafficOffer,
   setCrewPriorityPreset,
   setCrewPriorityWeight,
+  setPortAutoAdmit,
+  setCrewAutoStaff,
   selectSpecialty,
   setDockFacing,
   setDockPurpose,
@@ -244,6 +248,8 @@ app.innerHTML = `
           <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
           <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
           <small id="traffic-status" class="traffic-status">Paused</small>
+          <button id="toggle-port-auto" class="secondary-command automation-toggle">Dispatch automation locked</button>
+          <small id="port-auto-status" class="automation-status">Complete 3 successful turnarounds to delegate routine traffic.</small>
           <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
           <small id="traffic-action-note" class="traffic-action-note"></small>
         </div>
@@ -627,6 +633,8 @@ app.innerHTML = `
         <div><strong>Shift Roster</strong><small>Reserve real crew for the work that keeps ships and guests moving.</small></div>
         <span id="shift-roster-total">0 assigned · 0 flexible</span>
       </div>
+      <button id="toggle-crew-auto" class="secondary-command automation-toggle">Auto-staffing locked</button>
+      <small id="crew-auto-status" class="automation-status">Available when the station employs 10 crew.</small>
       <div class="shift-roster-grid">
         <div class="shift-roster-row"><span><strong>Kitchen + Service</strong><small>Cook meals and keep counters staffed</small></span><button data-shift-step="food" data-delta="-1">−</button><b data-shift-count="food">0</b><button data-shift-step="food" data-delta="1">+</button></div>
         <div class="shift-roster-row"><span><strong>Customs + Cargo</strong><small>Inspect ships, unload, stock, and export</small></span><button data-shift-step="logistics" data-delta="-1">−</button><b data-shift-count="logistics">0</b><button data-shift-step="logistics" data-delta="1">+</button></div>
@@ -946,6 +954,8 @@ const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
 const trafficStatusEl = document.querySelector<HTMLElement>('#traffic-status')!;
 const trafficOfferListEl = document.querySelector<HTMLElement>('#traffic-offer-list')!;
 const trafficActionNoteEl = document.querySelector<HTMLElement>('#traffic-action-note')!;
+const portAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-port-auto')!;
+const portAutoStatusEl = document.querySelector<HTMLElement>('#port-auto-status')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
 const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
@@ -1601,6 +1611,8 @@ const priorityInputs = new Map<CrewPrioritySystem, HTMLInputElement>();
 const priorityValueEls = new Map<CrewPrioritySystem, HTMLElement>();
 const shiftRosterTotalEl = document.querySelector<HTMLElement>('#shift-roster-total')!;
 const shiftRosterNoteEl = document.querySelector<HTMLElement>('#shift-roster-note')!;
+const crewAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-crew-auto')!;
+const crewAutoStatusEl = document.querySelector<HTMLElement>('#crew-auto-status')!;
 for (const system of prioritySystems) {
   const input = document.querySelector<HTMLInputElement>(`input[data-priority="${system}"]`);
   const valueEl = document.querySelector<HTMLElement>(`#prio-${system}`);
@@ -1949,6 +1961,17 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
 }
 
 function refreshTrafficStatus(): void {
+  const autoUnlocked = isPortAutoAdmitUnlocked(state);
+  portAutoToggleEl.disabled = !autoUnlocked;
+  portAutoToggleEl.textContent = !autoUnlocked
+    ? 'Dispatch automation locked'
+    : state.controls.portAutoAdmitEnabled ? 'Auto-routing: ON' : 'Auto-routing: OFF';
+  portAutoToggleEl.classList.toggle('active', state.controls.portAutoAdmitEnabled);
+  portAutoStatusEl.textContent = !autoUnlocked
+    ? `${Math.min(state.dockedShipsCompleted, 3)}/3 successful turnarounds · prove the route first`
+    : state.controls.portAutoAdmitEnabled
+      ? 'Routine low-risk ships follow berth filters. Risk and failures escalate here.'
+      : 'Manual dispatch active. Enable to delegate matching low-risk ships.';
   const shipsPerCycle = clamp(state.controls.shipsPerCycle, 0, 3);
   const activeTransientShips = state.arrivingShips.filter((ship) => ship.kind === 'transient').length;
   const offerCount = state.trafficOffers.length;
@@ -2047,7 +2070,8 @@ function refreshTrafficOffers(): void {
       .sort((a, b) => b.serviceScore - a.serviceScore)[0];
     const ready = offer.status === 'holding';
     const cleared = offer.status === 'cleared';
-    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : cleared ? `CLEARED · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
+    const autoRouted = cleared && state.controls.portAutoAdmitEnabled && offer.riskLabel === 'low';
+    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : cleared ? `${autoRouted ? 'AUTO ROUTED' : 'CLEARED'} · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
     const berthText = eligible > 0
       ? `${eligible} berth${eligible === 1 ? '' : 's'} ready · best ${bestStanding?.serviceGrade ?? 'C'} ×${(bestStanding?.servicePayoutMultiplier ?? 1).toFixed(2)}`
       : `No ${offer.size} berth ready`;
@@ -4081,6 +4105,20 @@ function refreshPriorityUi(): void {
     valueEl.textContent = String(value);
   }
   const configured = state.controls.crewShiftTargets;
+  const autoUnlocked = isCrewAutoStaffUnlocked(state);
+  crewAutoToggleEl.disabled = !autoUnlocked;
+  crewAutoToggleEl.textContent = !autoUnlocked
+    ? 'Auto-staffing locked'
+    : state.controls.crewAutoStaffEnabled ? 'Auto-staffing: ON' : 'Auto-staffing: OFF';
+  crewAutoToggleEl.classList.toggle('active', state.controls.crewAutoStaffEnabled);
+  crewAutoStatusEl.textContent = !autoUnlocked
+    ? `${state.crewMembers.length}/10 crew · direct supervision still fits this station`
+    : state.controls.crewAutoStaffEnabled
+      ? 'Duty control rebalances survival, food, customs, cleaning, and construction; one responder stays flexible.'
+      : 'Manual shift minimums active. Enable when roster changes become repetitive.';
+  document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
+    button.disabled = state.controls.crewAutoStaffEnabled;
+  });
   let rostered = 0;
   for (const lane of workforceLaneOrder) {
     const count = configured?.[lane] ?? 0;
@@ -6132,6 +6170,19 @@ shipsInput.addEventListener('input', () => {
   shipsLabel.textContent = String(state.controls.shipsPerCycle);
 });
 
+portAutoToggleEl.addEventListener('click', () => {
+  const next = !state.controls.portAutoAdmitEnabled;
+  const changed = setPortAutoAdmit(state, next);
+  trafficActionNoteEl.textContent = changed
+    ? next
+      ? 'Routine dispatch delegated. Berth filters are now standing orders.'
+      : 'Manual manifest clearance restored.'
+    : 'Complete three successful turnarounds before delegating dispatch.';
+  trafficActionNoteEl.className = `traffic-action-note ${changed ? 'tone-ok' : 'tone-warn'}`;
+  refreshTrafficStatus();
+  refreshTrafficOffers();
+});
+
 trafficOfferListEl.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-traffic-action]');
   if (!button) return;
@@ -6562,6 +6613,18 @@ for (const system of prioritySystems) {
     setCrewPriorityWeight(state, system, value);
   });
 }
+
+crewAutoToggleEl.addEventListener('click', () => {
+  const next = !state.controls.crewAutoStaffEnabled;
+  const changed = setCrewAutoStaff(state, next);
+  shiftRosterNoteEl.textContent = changed
+    ? next
+      ? 'Duty control is balancing shifts against live station pressure.'
+      : 'Manual shift control restored.'
+    : 'Auto-staffing unlocks at 10 crew.';
+  shiftRosterNoteEl.style.color = changed ? '#8ee6ad' : '#ffcf6e';
+  refreshPriorityUi();
+});
 
 document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -7060,6 +7123,7 @@ function frame(now: number): void {
   refreshHudStatus();
   refreshTrafficStatus();
   refreshTrafficOffers();
+  if (!priorityModal.classList.contains('hidden')) refreshPriorityUi();
   refreshAlertPanel();
   refreshIncidentList();
   refreshTierChecklist();

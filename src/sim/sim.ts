@@ -51,6 +51,7 @@ import {
   type WorkLaneMetrics,
   type CrewTaskCandidate,
   type CrewPriorityWeights,
+  type CrewShiftTargets,
   type CriticalCapacityTargets,
   type BerthConfig,
   type DockEntity,
@@ -8209,6 +8210,8 @@ const TRAFFIC_OFFER_LIMIT = 3;
 const TRAFFIC_FORECAST_MIN_SEC = 28;
 const TRAFFIC_FORECAST_MAX_SEC = 52;
 const TRAFFIC_HOLD_SEC = 105;
+export const PORT_AUTO_ADMIT_TURNAROUNDS = 3;
+export const CREW_AUTO_STAFF_HEADCOUNT = 10;
 
 const SHIP_NAME_PREFIXES = ['Aster', 'Cinder', 'Far', 'Helix', 'Morrow', 'Pioneer', 'Sable', 'Vesper'];
 const SHIP_NAME_SUFFIXES = ['Arc', 'Courier', 'Dawn', 'Kite', 'Prospect', 'Relay', 'Runner', 'Wayfarer'];
@@ -8385,6 +8388,23 @@ export function holdTrafficOffer(state: StationState, offerId: number): boolean 
 }
 
 function updateTrafficOffers(state: StationState): void {
+  if (state.controls.portAutoAdmitEnabled && state.dockedShipsCompleted < PORT_AUTO_ADMIT_TURNAROUNDS) {
+    state.controls.portAutoAdmitEnabled = false;
+  }
+  if (state.controls.portAutoAdmitEnabled) {
+    for (const offer of state.trafficOffers) {
+      // Routine traffic can be delegated. Risky or unusual manifests always
+      // interrupt the player, as do ships that cannot satisfy berth policy.
+      if (offer.status !== 'forecast' || offer.riskLabel !== 'low') continue;
+      const bestBerth = getEligibleBerthsForOffer(state, offer.id)
+        .sort((a, b) => berthServiceScoreForAnchor(state, b.anchorTile) - berthServiceScoreForAnchor(state, a.anchorTile))[0];
+      if (!bestBerth) continue;
+      const result = admitTrafficOffer(state, offer.id, bestBerth.anchorTile);
+      if (result.ok) {
+        pushCrowdEvent(state, 'info', `${offer.callsign} auto-routed to Berth ${berthServiceGrade(berthServiceScoreForAnchor(state, bestBerth.anchorTile))}`);
+      }
+    }
+  }
   const clearedArrivals: number[] = [];
   for (const offer of state.trafficOffers) {
     if (state.now >= offer.arrivesAt) {
@@ -8394,6 +8414,53 @@ function updateTrafficOffers(state: StationState): void {
   }
   for (const offerId of clearedArrivals) admitTrafficOffer(state, offerId);
   state.trafficOffers = state.trafficOffers.filter((offer) => state.now < offer.expiresAt);
+}
+
+export function isPortAutoAdmitUnlocked(state: StationState): boolean {
+  return state.dockedShipsCompleted >= PORT_AUTO_ADMIT_TURNAROUNDS;
+}
+
+export function setPortAutoAdmit(state: StationState, enabled: boolean): boolean {
+  if (enabled && !isPortAutoAdmitUnlocked(state)) return false;
+  state.controls.portAutoAdmitEnabled = enabled;
+  return true;
+}
+
+export function isCrewAutoStaffUnlocked(state: StationState): boolean {
+  return state.crewMembers.length >= CREW_AUTO_STAFF_HEADCOUNT;
+}
+
+export function setCrewAutoStaff(state: StationState, enabled: boolean): boolean {
+  if (enabled && !isCrewAutoStaffUnlocked(state)) return false;
+  state.controls.crewAutoStaffEnabled = enabled;
+  return true;
+}
+
+function updateCrewAutoStaff(state: StationState): void {
+  if (!isCrewAutoStaffUnlocked(state)) {
+    state.controls.crewAutoStaffEnabled = false;
+    return;
+  }
+  if (!state.controls.crewAutoStaffEnabled) return;
+
+  const activeTurnarounds = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart').length;
+  const requested: CrewShiftTargets = {
+    food: state.ops.kitchenTotal > 0 || state.ops.cafeteriasTotal > 0 ? 2 : 0,
+    logistics: activeTurnarounds > 0 ? Math.min(4, 1 + activeTurnarounds * 2) : (state.metrics.pendingJobs > 3 ? 2 : 1),
+    engineering: state.ops.reactorsTotal > 0 || state.ops.lifeSupportTotal > 0 ? 2 : 1,
+    sanitation: state.metrics.dirtyTiles > 0 || state.metrics.filthyTiles > 0 ? 1 : 0,
+    'construction-eva': state.constructionSites.length > 0 ? 1 : 0,
+    flex: 0
+  };
+  // Keep one person unrostered for shocks. Allocate core survival first,
+  // then port throughput, then condition and expansion work.
+  let remaining = Math.max(0, state.crewMembers.length - 1);
+  const next: CrewShiftTargets = { food: 0, logistics: 0, engineering: 0, sanitation: 0, 'construction-eva': 0, flex: 0 };
+  for (const lane of ['engineering', 'food', 'logistics', 'sanitation', 'construction-eva'] as const) {
+    next[lane] = Math.min(requested[lane], remaining);
+    remaining -= next[lane];
+  }
+  state.controls.crewShiftTargets = next;
 }
 
 function scheduleSporadicArrival(state: StationState): void {
@@ -17153,6 +17220,7 @@ export function tick(state: StationState, frameDt: number): void {
   const refreshJobBoard = jobBoardCadence.due || frameDt <= 0 || !hasLiveJobs;
 
   updateTrafficArrivalSchedule(state);
+  updateCrewAutoStaff(state);
 
   updateSpawns(state);
   updateArrivingShips(state, dt);

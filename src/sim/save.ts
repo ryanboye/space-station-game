@@ -151,6 +151,8 @@ export interface StationSnapshotV1 {
   controls: {
     shipsPerCycle: number;
     taxRate: number;
+    portAutoAdmitEnabled?: boolean;
+    crewAutoStaffEnabled?: boolean;
     materialAutoImportEnabled?: boolean;
     materialTargetStock?: number;
     materialImportBatchSize?: number;
@@ -425,6 +427,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
       taxRate: state.controls.taxRate,
+      portAutoAdmitEnabled: state.controls.portAutoAdmitEnabled,
+      crewAutoStaffEnabled: state.controls.crewAutoStaffEnabled,
       materialAutoImportEnabled: state.controls.materialAutoImportEnabled,
       materialTargetStock: state.controls.materialTargetStock,
       materialImportBatchSize: state.controls.materialImportBatchSize,
@@ -800,6 +804,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
 
   let shipsPerCycle = defaultState.controls.shipsPerCycle;
   let taxRate = defaultState.controls.taxRate;
+  let portAutoAdmitEnabled = defaultState.controls.portAutoAdmitEnabled;
+  let crewAutoStaffEnabled = defaultState.controls.crewAutoStaffEnabled;
   let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
   let materialTargetStock = defaultState.controls.materialTargetStock;
   let crewShiftTargets = { ...defaultState.controls.crewShiftTargets };
@@ -808,6 +814,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   if (isRecord(snapshotRaw.controls)) {
     shipsPerCycle = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.shipsPerCycle, shipsPerCycle)), 0, 3);
     taxRate = clamp(asFiniteNumber(snapshotRaw.controls.taxRate, taxRate), 0, 0.5);
+    portAutoAdmitEnabled = snapshotRaw.controls.portAutoAdmitEnabled === true;
+    crewAutoStaffEnabled = snapshotRaw.controls.crewAutoStaffEnabled === true;
     if (typeof snapshotRaw.controls.materialAutoImportEnabled === 'boolean') {
       materialAutoImportEnabled = snapshotRaw.controls.materialAutoImportEnabled;
     }
@@ -1031,6 +1039,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     controls: {
       shipsPerCycle,
       taxRate,
+      portAutoAdmitEnabled,
+      crewAutoStaffEnabled,
       materialAutoImportEnabled,
       materialTargetStock,
       materialImportBatchSize,
@@ -1441,6 +1451,8 @@ export function hydrateStateFromSave(
 
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);
+  next.controls.portAutoAdmitEnabled = snapshot.controls.portAutoAdmitEnabled ?? false;
+  next.controls.crewAutoStaffEnabled = snapshot.controls.crewAutoStaffEnabled ?? false;
   next.controls.materialAutoImportEnabled = snapshot.controls.materialAutoImportEnabled ?? next.controls.materialAutoImportEnabled;
   next.controls.materialTargetStock = clamp(snapshot.controls.materialTargetStock ?? next.controls.materialTargetStock, 0, 500);
   if (snapshot.controls.crewShiftTargets) {

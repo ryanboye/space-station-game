@@ -665,6 +665,8 @@ export function createInitialState(options?: {
       simSpeed: 1,
       shipsPerCycle: 1,
       manualTrafficAdmission: options?.manualTrafficAdmission ?? false,
+      portAutoAdmitEnabled: false,
+      crewAutoStaffEnabled: false,
       diagnosticOverlay: 'none',
       showZones: true,
       showServiceNodes: false,

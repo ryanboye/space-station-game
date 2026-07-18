@@ -1338,6 +1338,25 @@ h2 {
 .shift-roster-row > span { display: grid; gap: 2px; }
 .shift-roster-row button { min-width: 30px; padding: 4px; }
 .shift-roster-row b { text-align: center; color: #e7f6ff; }
+.automation-toggle {
+  width: 100%;
+  margin: 5px 0 3px;
+  border-color: rgba(91, 176, 214, 0.42);
+  color: #b9d9e8;
+}
+.automation-toggle.active {
+  color: #d8ffe4;
+  border-color: rgba(89, 220, 135, 0.72);
+  background: rgba(35, 112, 68, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(108, 236, 151, 0.12);
+}
+.automation-toggle:disabled { opacity: 0.55; }
+.automation-status {
+  display: block;
+  color: #8ea2bd;
+  line-height: 1.35;
+  margin-bottom: 5px;
+}
 .priority-advanced-title { margin: 12px 0 8px; color: #8ea2bd; }
 
 #agent-reason,

@@ -1904,6 +1904,10 @@ export interface Controls {
   simSpeed: 1 | 2 | 4;
   shipsPerCycle: number;
   manualTrafficAdmission: boolean;
+  /** Earned dispatch policy: low-risk manifests matching berth filters reserve automatically. */
+  portAutoAdmitEnabled: boolean;
+  /** Earned workforce policy: shift minimums rebalance against live operational pressure. */
+  crewAutoStaffEnabled: boolean;
   diagnosticOverlay: DiagnosticOverlay;
   showZones: boolean;
   showServiceNodes: boolean;
