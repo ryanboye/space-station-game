@@ -6,11 +6,10 @@ This directory is a **map of how the game works** — for human contributors and
 
 If you're an agent picking up a task, read in this order:
 
-1. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
-2. **`15-current-roadmap.md`** — the roadmap index and shared product direction.
-3. **`16/17/18-roadmap-part-*.md`** — the active `/goal` checklists split into living actors/jobs, utilities/sanitation, and command/map/contracts.
-4. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
-5. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+1. **`../DESIGN.md`** — the north star: vision, chosen direction, design principles, current state. Read this first.
+2. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
+3. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
+4. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
 
 Every system doc follows the same shape:
 
@@ -38,12 +37,10 @@ Every system doc follows the same shape:
 | `11-render.md` | Render pipeline, wall systems, glow, sprite atlas |
 | `12-ui.md` | `main.ts` DOM driver, hotkeys, URL flags, harness hooks, save/load |
 | `13-pipelines.md` | Sprite tools, harness, sim-tests, deployment, CI, repo config |
-| `15-current-roadmap.md` | Roadmap index and shared product direction |
-| `16-roadmap-part-1-living-actors-jobs.md` | Part 1: reservations, providers, logistics, job board, roles, residents |
-| `17-roadmap-part-2-utilities-hazards-sanitation.md` | Part 2: access, districts, utilities, hazards, maintenance, sanitation |
-| `18-roadmap-part-3-command-map-contracts.md` | Part 3: command center, system map, contracts, station identity, incidents |
-| `22-reputation-property-value-and-security.md` | Reputation, property value, crime pressure, and security plan |
+| `14-agent-playtest-guide.md` | Practical knowledge for automated playtests against the live game |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
+
+The old roadmap/proposal docs (`15`–`22`) were consolidated into `../DESIGN.md` on 2026-07-18 and removed; git history preserves them.
 
 ## Conventions
 

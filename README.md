@@ -2,6 +2,8 @@
 
 Browser-based station management sim built with TypeScript + Vite.
 
+**New here?** Read [`DESIGN.md`](DESIGN.md) first — vision, chosen direction, design principles, and current state. Then `docs/README.md` for the system reference.
+
 ## Local development
 
 ```bash

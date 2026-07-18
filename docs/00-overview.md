@@ -40,17 +40,12 @@ public/assets/sprites/ ← atlas.png + atlas.json (runtime art)
 docs/                  ← you are here
 ```
 
-Product strategy now lives in `docs/` with the rest of the knowledge base:
+Product strategy lives in one place:
 
-- `docs/15-current-roadmap.md` — roadmap index and shared product direction.
-- `docs/16-roadmap-part-1-living-actors-jobs.md` — Part 1: reservations, providers, logistics, job board, roles, residents.
-- `docs/17-roadmap-part-2-utilities-hazards-sanitation.md` — Part 2: access, districts, utilities, hazards, maintenance, sanitation.
-- `docs/18-roadmap-part-3-command-map-contracts.md` — Part 3: command center, system map, contracts, station identity, incidents.
-- `VISION_DRAFT.md` — short vision statement, intentionally not an implementation checklist.
-- `PRODUCT_PLAN.md` and `IMPLEMENTATION_PHASES.md` — retired pointers kept so old links do not mislead agents.
+- `DESIGN.md` (repo root) — vision, chosen direction, design principles, current state, and what's next. The old roadmap/proposal docs (`15`–`22`, `VISION_DRAFT.md`, `PRODUCT_PLAN.md`, `IMPLEMENTATION_PHASES.md`) were consolidated into it on 2026-07-18 and removed; git history preserves them.
 - `README.md` — quickstart, GH Pages setup, save sharing.
 
-When working on a feature, read `docs/15-current-roadmap.md` first, then the relevant system doc and `99-trip-wires.md`.
+When working on a feature, read `DESIGN.md` first, then the relevant system doc and `99-trip-wires.md`.
 
 ## Core concepts
 
