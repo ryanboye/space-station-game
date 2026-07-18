@@ -1589,7 +1589,11 @@ h2 {
 
 .port-dispatch-card {
   max-height: min(46vh, 330px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-gutter: stable;
   border-color: rgba(123, 167, 217, 0.55);
   background: linear-gradient(180deg, rgba(13, 24, 35, 0.94), rgba(7, 13, 20, 0.9));
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);

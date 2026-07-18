@@ -5748,6 +5748,11 @@ window.addEventListener('mousemove', updateRightPan);
 gameWrap.addEventListener(
   'wheel',
   (e) => {
+    // Floating HUD cards live inside #game-wrap, so their wheel events bubble here.
+    // Let scrollable controls consume the gesture instead of turning it into camera zoom.
+    if (e.target instanceof Element && e.target.closest('.port-dispatch-card, .side-inspector-body, .ops-modal-card')) {
+      return;
+    }
     const rect = gameWrap.getBoundingClientRect();
     const viewportX = e.clientX - rect.left;
     const viewportY = e.clientY - rect.top;
