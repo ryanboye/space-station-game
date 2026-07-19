@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> The click-delivery and activation knowledge below is still valid, but the game now boots into the port-ops starter (built station + manual traffic offers), not the empty-station start these sessions used.
+
 # Agent Playtest Guide
 
 Practical knowledge for AI agents running automated playtests against the live game (e.g., the BMO `bmo.ryanboye.com/spacegame-preview/` mirror). Written from real session experience 2026-04-26 → 2026-04-27 — every entry is a problem an agent hit and resolved.

@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> The tick pipeline below predates the slice's added steps (traffic offers, port turnaround tracks, cafeteria queue chains, auto-staffing).
+
 # Simulation Core
 
 The single mutable `StationState` (`src/sim/types.ts:933`) is the source of truth for everything in the game. Every per-frame call to `tick(state, dt)` (`src/sim/sim.ts:8444`) runs a fixed-order pipeline; there are no sub-steps and no async work.

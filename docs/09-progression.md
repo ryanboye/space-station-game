@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> Linear tiers still run, but the slice added earned operational automation (auto-admit after 3 manual turnarounds, auto-staffing at 10 crew); DESIGN.md's direction is operational unlocks over tier ladders.
+
 # Progression — Tiers &amp; Unlocks
 
 A 6-tier system (T0–T6) gating rooms, modules, and ship types. Lifetime monotonic counters trigger advances. Locked content is visible at the build palette but tooltip-only; clicking shows the unlock requirement.

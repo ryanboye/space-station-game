@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> The arrival pipeline below is the legacy automatic path — the default port-ops mode admits ships as manual traffic offers — and cafeteria queueing now uses physical queue chains.
+
 # Visitors &amp; Residents
 
 Two distinct populations sharing a lot of code. **Visitors** arrive on ships, consume services, depart. **Residents** are converted visitors who live on the station with full needs and a daily routine. Visitors drive short-term income; residents drive long-term rating bonuses + tax revenue.

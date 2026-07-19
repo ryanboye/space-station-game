@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> The engine below still runs, but the slice added port cargo/outbound transport jobs, a CargoArm item node, and ship-burst calibration (e.g. visitor eat times roughly doubled).
+
 # Logistics — Item Nodes &amp; Transport Jobs
 
 Resources don't flow through a continuous network. They live at `ItemNode`s attached to specific modules; movement happens via `TransportJob`s that crew members pick up and execute.

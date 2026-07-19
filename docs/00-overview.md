@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> Line counts and the cycle-based arrival note predate the slice; the default boot is now port-ops mode (`createInitialState({ physicalStarterInventory: true, manualTrafficAdmission: true })`, `main.ts:890`).
+
 # Overview
 
 A browser-based station-management sim, TypeScript + Vite, no UI framework. The game runs entirely client-side; the only server-side bits are the build pipeline and a static deploy.

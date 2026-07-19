@@ -8,8 +8,9 @@ If you're an agent picking up a task, read in this order:
 
 1. **`../DESIGN.md`** — the north star: vision, chosen direction, design principles, current state. Read this first.
 2. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
-3. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
+3. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`). Docs carrying a `⚠️ Pre-port-ops reference` banner were written before the port-ops slice — their machinery descriptions still orient you, but verify slice-touched behavior (admission, turnaround, economy numbers, staffing, automation) against the code.
 4. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+5. **`research/`** — the July 2026 design-research corpus behind DESIGN.md (decision map, code audit, genre taxonomy, slice spec). Consult before proposing new systems.
 
 Every system doc follows the same shape:
 
@@ -39,6 +40,7 @@ Every system doc follows the same shape:
 | `13-pipelines.md` | Sprite tools, harness, sim-tests, deployment, CI, repo config |
 | `14-agent-playtest-guide.md` | Practical knowledge for automated playtests against the live game |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
+| `research/` | July 2026 design-research corpus (see `research/README.md`) |
 
 The old roadmap/proposal docs (`15`–`22`) were consolidated into `../DESIGN.md` on 2026-07-18 and removed; git history preserves them.
 

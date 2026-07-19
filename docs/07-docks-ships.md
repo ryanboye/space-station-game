@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> In the default port-ops mode arrivals are player-admitted traffic offers (admit / hold / refuse) with staged physical turnarounds; the automatic scheduler + dock queue below is the legacy fallback. Dock pods now carry 4–8 passengers, not 1–2.
+
 # Docks &amp; Ships
 
 A *dock* is a contiguous run of `Dock` tiles on the outer hull facing one of four `SpaceLane`s (north/east/south/west). Docks now represent small pod ports: each visitor pod carries 1-2 people, visually sits outside the hull, and connects to the dock with an umbilical. Berth rooms are the large-ship surface.

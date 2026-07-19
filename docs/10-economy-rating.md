@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> Superseded specifics: `PAYROLL_PER_CREW` is now 1.0, `HIRE_COST` 40, and ships pay component fees with berth-service-grade payout multipliers.
+
 # Economy, Morale, Station Rating
 
 Three player-visible scalars that share no underlying model:

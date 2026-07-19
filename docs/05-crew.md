@@ -1,3 +1,6 @@
+> ⚠️ Pre-port-ops reference. DESIGN.md + docs/research/ are the current source of truth; some behavior described below is superseded by the port-ops slice.
+> Superseded specifics: `HIRE_COST` is now 40 and `PAYROLL_PER_CREW` 1.0; staffing now runs through shift-lane targets (`crewShiftTargets`) with earn-unlocked auto-staffing at 10 crew.
+
 # Crew
 
 Crew are the player's hireable workers. They take **posts** (staff a room) or **logistics jobs** (haul items between modules). Every crew member can do both — there is no separate hauler role.
