@@ -230,6 +230,14 @@ sprites:
     prompt: "Top-down pixel art station module sprite: bed. 2x1 footprint,
       transparent background, no text, readable at 36x18."
     rotation: 0
+  module.bunk:
+    prompt: "Top-down pixel art station module sprite: compact double bunk. 2x1 footprint,
+      two distinct sleeping positions, dark steel frame, transparent background, no text, readable at 36x18."
+    rotation: 0
+  module.locker:
+    prompt: "Top-down pixel art station module sprite: compact crew locker. 1x1 footprint,
+      blue-gray steel cabinet with handle and amber status light, transparent background, no text, readable at 18x18."
+    rotation: 0
   module.table:
     prompt: "Top-down pixel art station module sprite: table. 2x2 footprint,
       transparent background, no text, readable at 36x36."
@@ -273,6 +281,10 @@ sprites:
   module.game_station:
     prompt: "Top-down pixel art station module sprite: arcade game station. 2x2
       footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.toilet:
+    prompt: "Top-down pixel art station module sprite: compact sci-fi toilet with pale oval bowl,
+      dark water opening and steel cistern. 1x1 footprint, transparent background, no text, readable at 18x18."
     rotation: 0
   module.shower:
     prompt: "Top-down pixel art station module sprite: shower. 1x1 footprint,

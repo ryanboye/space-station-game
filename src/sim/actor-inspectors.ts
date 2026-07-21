@@ -174,6 +174,8 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
     reservationSummary: actorReservationSummary(state, 'visitor', visitor.id),
     providerTarget: providerTargetLabelFromTile(state, targetTile),
     blockedReason: visitor.blockedTicks > 4 ? 'path blocked or provider congested' : null,
+    name: visitor.name ?? `Visitor ${visitor.id}`,
+    trait: visitor.trait ?? 'patient',
     archetype: visitor.archetype,
     primaryPreference: visitor.primaryPreference,
     patience: visitor.patience,
@@ -181,6 +183,9 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
     carryingMeal: visitor.carryingMeal,
     reservedServingTile: visitor.reservedServingTile,
     reservedTargetTile: visitor.reservedTargetTile,
+    servicePlan: [...visitor.servicePlan],
+    completedServices: [...visitor.completedServices],
+    activeService: visitor.activeService,
     desire: visitorInspectorDesire(state, visitor)
   };
 }
@@ -431,8 +436,9 @@ function crewInspectorAction(
     };
   }
   if (crew.toileting) {
+    const atToilet = state.modules[crew.tileIndex] === ModuleType.Toilet;
     return {
-      currentAction: crew.path.length > 0 ? 'walking to hygiene' : 'using restroom',
+      currentAction: atToilet ? 'using restroom' : crew.path.length > 0 ? 'walking to hygiene' : 'waiting for a toilet',
       actionReason: `bladder ${crew.bladder.toFixed(0)} (toilet at <${CREW_BLADDER_TOILET_THRESHOLD})`,
       stateLabel: 'toilet'
     };
@@ -440,10 +446,14 @@ function crewInspectorAction(
   if (crew.drinking) {
     const atCantina = state.rooms[crew.tileIndex] === RoomType.Cantina;
     const atFountain = state.modules[crew.tileIndex] === ModuleType.WaterFountain;
+    const atCafeteriaService =
+      state.rooms[crew.tileIndex] === RoomType.Cafeteria &&
+      state.modules[crew.tileIndex] === ModuleType.ServingStation;
     return {
       currentAction:
         atCantina ? 'drinking at the bar' :
         atFountain ? 'sipping water' :
+        atCafeteriaService ? 'getting water from cafeteria service' :
         crew.path.length > 0 ? 'walking to drink' : 'looking for a drink',
       actionReason: `thirst ${crew.thirst.toFixed(0)} (drink at <${CREW_THIRST_DRINK_THRESHOLD})`,
       stateLabel: 'drink'
@@ -503,6 +513,10 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     hygiene: crew.hygiene,
     bladder: crew.bladder,
     thirst: crew.thirst,
+    morale: crew.morale,
+    missedPayrollCycles: crew.missedPayrollCycles,
+    needsStrainSec: crew.needsStrainSec,
+    resignationNoticeAt: crew.resignationNoticeAt,
     resting: crew.resting,
     cleaning: crew.cleaning,
     toileting: crew.toileting,

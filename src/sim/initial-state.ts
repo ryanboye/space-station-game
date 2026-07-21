@@ -104,8 +104,8 @@ export function createInitialState(options?: {
   const coreY = Math.floor(GRID_HEIGHT / 2);
   const starterFloorMinX = coreX - 11;
   const starterFloorMaxX = coreX + 10;
-  const starterFloorMinY = coreY - 9;
-  const starterFloorMaxY = coreY + 8;
+  const starterFloorMinY = coreY - 3;
+  const starterFloorMaxY = coreY + 7;
   const starterWallMinX = starterFloorMinX - 1;
   const starterWallMaxX = starterFloorMaxX + 1;
   const starterWallMinY = starterFloorMinY - 1;
@@ -123,6 +123,20 @@ export function createInitialState(options?: {
   for (let x = starterWallMinX; x <= starterWallMaxX; x++) {
     tiles[toIndex(x, starterWallMinY, GRID_WIDTH)] = TileType.Wall;
     tiles[toIndex(x, starterWallMaxY, GRID_WIDTH)] = TileType.Wall;
+  }
+
+  // Carve the unused southwest quadrant away from the old rectangular test
+  // hull. The remaining L-shape is a public berth concourse feeding a narrow
+  // freight/service gallery, so route length and crossing points read at a
+  // glance and the player has an obvious expansion edge.
+  for (let y = coreY + 4; y <= starterWallMaxY; y++) {
+    for (let x = starterWallMinX; x <= coreX - 3; x++) {
+      tiles[toIndex(x, y, GRID_WIDTH)] = TileType.Space;
+    }
+    tiles[toIndex(coreX - 2, y, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let x = starterWallMinX; x <= coreX - 2; x++) {
+    tiles[toIndex(x, coreY + 3, GRID_WIDTH)] = TileType.Wall;
   }
 
   // Port-operations starter: every functional room is an enclosed pod
@@ -152,34 +166,53 @@ export function createInitialState(options?: {
     rooms[door] = room;
   };
 
-  // Command and life support face the north gallery.
-  paintEnclosedRoom(RoomType.Bridge, coreX - 8, coreY - 7, coreX - 3, coreY - 4, coreX - 5, coreY - 3);
-  for (let y = coreY - 7; y <= coreY - 4; y++) {
-    for (let x = coreX - 8; x <= coreX - 3; x++) roomHousingPolicies[toIndex(x, y, GRID_WIDTH)] = 'crew';
-  }
-  addStarterModule(ModuleType.CaptainConsole, coreX - 7, coreY - 6, 0);
-
-  paintEnclosedRoom(RoomType.LifeSupport, coreX + 2, coreY - 7, coreX + 6, coreY - 4, coreX + 4, coreY - 3);
-
-  // Engineering and cargo intake face the south service gallery. Their
-  // opposite placement creates an immediate, visible hauling distance.
-  paintEnclosedRoom(RoomType.Reactor, coreX - 8, coreY + 2, coreX - 4, coreY + 5, coreX - 6, coreY + 1, TileType.Reactor);
-  paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX + 2, coreY + 2);
+  // Cargo intake and storage face the south service gallery. Life support,
+  // command and power are baseline hull services in this validation slice;
+  // they do not consume the first screen with rooms the player cannot use.
+  paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX, coreY + 5);
   addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
-  paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 7, coreY + 2);
+  paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 5, coreY + 5);
   addStarterModule(ModuleType.StorageRack, coreX + 6, coreY + 4, 0);
   addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 4, 0);
   addStarterModule(ModuleType.StorageRack, coreX + 7, coreY + 5, 0);
 
-  // A minimal food loop, not an empty tutorial promise. Both rooms are fully
-  // enclosed, open onto the south gallery through a single door, and remain
-  // separated by circulation space. Their cramped footprints are intentional:
-  // one stove, one serving counter and one table handle the first ship only.
-  paintEnclosedRoom(RoomType.Kitchen, coreX - 8, coreY, coreX - 4, coreY, coreX - 3, coreY);
-  addStarterModule(ModuleType.Stove, coreX - 7, coreY, 0);
-  paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 8, coreY + 1, coreX + 2, coreY);
+  // Prepared meals arrive as station stock. The cafeteria is the first public
+  // service; Kitchen and Hydroponics return later as optional margin choices.
+  paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 10, coreY + 2, coreX + 2, coreY);
   addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
-  addStarterModule(ModuleType.Table, coreX + 6, coreY, 0);
+  addStarterModule(ModuleType.Table, coreX + 7, coreY, 0);
+  addStarterModule(ModuleType.Table, coreX + 9, coreY, 0);
+
+  // The starter crew has functional but deliberately ramshackle support.
+  // Four double bunks cover the initial shift at low comfort; beds and
+  // additional lockers are the first visible quality upgrade rather than a
+  // hidden prerequisite. The adjacent shared bathroom prevents need spirals
+  // while still exposing fixture queues when the whole shift changes over.
+  paintEnclosedRoom(RoomType.Dorm, coreX - 9, coreY - 3, coreX - 4, coreY - 1, coreX - 3, coreY - 2);
+  for (let y = coreY - 3; y <= coreY - 1; y++) {
+    for (let x = coreX - 9; x <= coreX - 4; x++) {
+      roomHousingPolicies[toIndex(x, y, GRID_WIDTH)] = 'crew';
+    }
+  }
+  addStarterModule(ModuleType.Bunk, coreX - 9, coreY - 3, 0);
+  addStarterModule(ModuleType.Bunk, coreX - 6, coreY - 3, 0);
+  addStarterModule(ModuleType.Bunk, coreX - 9, coreY - 1, 0);
+  addStarterModule(ModuleType.Bunk, coreX - 6, coreY - 1, 0);
+  addStarterModule(ModuleType.Locker, coreX - 4, coreY - 2, 0);
+
+  // Leave a one-tile public passage between the two pods. It turns south from
+  // the west Berth door, then east toward the concourse without entering crew
+  // quarters or opening either occupied room to vacuum.
+  paintEnclosedRoom(RoomType.Hygiene, coreX - 9, coreY + 3, coreX - 6, coreY + 5, coreX - 8, coreY + 2);
+  for (let y = coreY + 3; y <= coreY + 5; y++) {
+    for (let x = coreX - 9; x <= coreX - 6; x++) {
+      roomHousingPolicies[toIndex(x, y, GRID_WIDTH)] = 'visitor';
+    }
+  }
+  addStarterModule(ModuleType.Toilet, coreX - 9, coreY + 3, 0);
+  addStarterModule(ModuleType.Toilet, coreX - 7, coreY + 3, 0);
+  addStarterModule(ModuleType.Shower, coreX - 9, coreY + 5, 0);
+  addStarterModule(ModuleType.Sink, coreX - 7, coreY + 5, 0);
 
   // The berth is a hull-side work deck: walls on three sides, a sealed
   // station door to the west, and an open east edge where ships physically
@@ -206,6 +239,29 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.CargoArm, berthMaxX - 1, berthMaxY - 1, 0);
   addStarterModule(ModuleType.Gangway, berthMaxX, coreY, 0);
 
+  // The west berth is passenger-first: a gangway and short public approach,
+  // but no cargo arm. Together the two berths create a meaningful first-shift
+  // choice instead of one generic dock that does everything.
+  const passengerBerthMaxX = starterWallMinX - 1;
+  const passengerBerthMinX = passengerBerthMaxX - 5;
+  const passengerBerthMinY = coreY - 2;
+  const passengerBerthMaxY = coreY + 2;
+  for (let x = passengerBerthMinX; x <= passengerBerthMaxX + 1; x++) {
+    tiles[toIndex(x, passengerBerthMinY - 1, GRID_WIDTH)] = TileType.Wall;
+    tiles[toIndex(x, passengerBerthMaxY + 1, GRID_WIDTH)] = TileType.Wall;
+  }
+  for (let y = passengerBerthMinY; y <= passengerBerthMaxY; y++) {
+    for (let x = passengerBerthMinX; x <= passengerBerthMaxX; x++) {
+      const idx = toIndex(x, y, GRID_WIDTH);
+      tiles[idx] = TileType.Dock;
+      rooms[idx] = RoomType.Berth;
+    }
+  }
+  const passengerBerthDoor = toIndex(passengerBerthMaxX + 1, coreY, GRID_WIDTH);
+  tiles[passengerBerthDoor] = TileType.Door;
+  rooms[passengerBerthDoor] = RoomType.Berth;
+  addStarterModule(ModuleType.Gangway, passengerBerthMinX, coreY, 0);
+
   // Construction stock begins as physical inventory in the authored intake
   // and store rooms. The old invisible global pool remains only as a save
   // migration fallback; a fresh game must preserve and route actual stock.
@@ -228,8 +284,7 @@ export function createInitialState(options?: {
       // The cafeteria opens with a small visible meal buffer. It prevents the
       // first five passengers from arriving to a dead station while still
       // exhausting quickly enough to expose the production/logistics loop.
-      if (module.type === ModuleType.ServingStation) items.meal = 10;
-      if (module.type === ModuleType.Stove) items.rawMeal = 6;
+      if (module.type === ModuleType.ServingStation) items.meal = 36;
       return {
         tileIndex: module.originTile,
         capacity,
@@ -239,6 +294,9 @@ export function createInitialState(options?: {
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
+  const initialStaffRoleCounts = createInitialStaffRoleCounts();
+  initialStaffRoleCounts.assistant = 8;
+  const initialStaffTotal = totalStaffCount(initialStaffRoleCounts);
 
   return {
     width: GRID_WIDTH,
@@ -264,6 +322,44 @@ export function createInitialState(options?: {
     laneProfiles,
     dockQueue: [],
     trafficOffers: [],
+    portOps: {
+      version: 1,
+      offerSequenceIndex: 0,
+      nextContractId: 1,
+      nextCargoLotId: 1,
+      nextSettlementId: 1,
+      contracts: [],
+      cargoLots: [],
+      settlements: [],
+      selectedSettlementId: null,
+      firstOfferShownAt: null,
+      firstChoiceAt: null,
+      crewReassignments: 0,
+      cargoHandledLifetime: 0,
+      cargoArmLastHandled: 0,
+      cargoArmStrain: 0,
+      cargoArmStatus: 'ready',
+      cargoArmRepairProgress: 0,
+      cargoArmFaults: 0,
+      cargoArmLastFaultRollAt: 0,
+      cargoArmFaultContractIds: [],
+      telemetry: {
+        offersAccepted: 0,
+        offersRefused: 0,
+        settlements: 0,
+        fullSettlements: 0,
+        partialSettlements: 0,
+        hardDeadlineDepartures: 0,
+        peakPassengerQueue: 0,
+        passengerQueuePersonSeconds: 0,
+        berthOccupancySeconds: 0,
+        cargoUnitTileDistance: 0,
+        mealTarget: 0,
+        mealsCompleted: 0,
+        freightTarget: 0,
+        freightCompleted: 0
+      }
+    },
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     heatByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(42),
@@ -341,8 +437,8 @@ export function createInitialState(options?: {
       stationRating: STATION_RATING_START,
       stationRatingTrendPerMin: 0,
       unlockTier: 0,
-      rawFoodStock: 40,
-      mealStock: 20,
+      rawFoodStock: 0,
+      mealStock: 36,
       kitchenRawBuffer: 0,
       waterStock: 70,
       airQuality: 75,
@@ -505,6 +601,7 @@ export function createInitialState(options?: {
         idle_no_jobs: 0,
         idle_resting: 0,
         idle_no_path: 0,
+        idle_waiting_fixture: 0,
         idle_waiting_reassign: 0
       },
       workforceLanes: createWorkforceLaneMetrics(),
@@ -666,9 +763,10 @@ export function createInitialState(options?: {
       shipsPerCycle: 1,
       manualTrafficAdmission: options?.manualTrafficAdmission ?? false,
       portAutoAdmitEnabled: false,
+      portAutoAdmitPolicy: 'cautious',
       crewAutoStaffEnabled: false,
       diagnosticOverlay: 'none',
-      showZones: true,
+      showZones: false,
       showServiceNodes: false,
       showInventoryOverlay: false,
       showGlow: true,
@@ -847,10 +945,10 @@ export function createInitialState(options?: {
       dorm: 0
     },
     crew: {
-      total: totalStaffCount(createInitialStaffRoleCounts()),
+      total: initialStaffTotal,
       assigned: 0,
-      free: totalStaffCount(createInitialStaffRoleCounts()),
-      roleCounts: createInitialStaffRoleCounts()
+      free: initialStaffTotal,
+      roleCounts: initialStaffRoleCounts
     },
     ops: {
       bridgeTotal: 0,

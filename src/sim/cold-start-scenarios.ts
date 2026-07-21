@@ -170,6 +170,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   // so `?scenario=starter` is a valid URL (and differentiates from a
   // mistyped name which falls through to warning).
   starter: () => {},
+  'two-berth-shift': () => {},
 
   // Tier 1 already fired: first visitor archetype seen, T1 unlocked.
   // Useful for sprite/UX iteration that starts "after the first-visitor
@@ -628,6 +629,7 @@ function applyDemoStationOverlay(state: StationState): void {
   // Hygiene
   placeMod(state, 57, 22, ModuleType.Shower);
   placeMod(state, 59, 22, ModuleType.Shower);
+  placeMod(state, 59, 26, ModuleType.Toilet);
   placeMod(state, 57, 26, ModuleType.Sink);
   placeMod(state, 60, 26, ModuleType.WaterFountain);
   // Security

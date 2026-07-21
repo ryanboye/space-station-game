@@ -257,6 +257,8 @@ export enum ModuleType {
   RecordsTerminal = 'records-terminal',
   WallLight = 'wall-light',
   Bed = 'bed',
+  Bunk = 'bunk',
+  Locker = 'locker',
   Table = 'table',
   ServingStation = 'serving-station',
   Stove = 'stove',
@@ -268,6 +270,9 @@ export enum ModuleType {
   Terminal = 'terminal',
   Couch = 'couch',
   GameStation = 'game-station',
+  // One-user bladder provider. Bathroom room paint only establishes access;
+  // actors must route to and occupy this fixture to receive relief.
+  Toilet = 'toilet',
   Shower = 'shower',
   Sink = 'sink',
   MarketStall = 'market-stall',
@@ -354,7 +359,27 @@ export interface RoomDefinition {
 
 export type VisitorArchetype = 'diner' | 'shopper' | 'lounger' | 'rusher';
 
+export type VisitorTrait =
+  | 'patient'
+  | 'impatient'
+  | 'social'
+  | 'messy'
+  | 'tidy'
+  | 'thirsty'
+  | 'comfort-seeking';
+
 export type VisitorPreference = 'cafeteria' | 'market' | 'lounge';
+
+export type HospitalityServiceKind = 'meal' | 'drink' | 'leisure' | 'restroom' | 'hygiene' | 'comfort';
+
+export interface HospitalityDemand {
+  meal: number;
+  drink: number;
+  leisure: number;
+  restroom: number;
+  hygiene: number;
+  comfort: number;
+}
 
 export enum VisitorState {
   ToCafeteria = 'to-cafeteria',
@@ -367,6 +392,8 @@ export enum VisitorState {
 
 export interface Visitor {
   id: number;
+  name?: string;
+  trait?: VisitorTrait;
   x: number;
   y: number;
   tileIndex: number;
@@ -378,6 +405,8 @@ export interface Visitor {
   trespassed: boolean;
   servedMeal: boolean;
   carryingMeal: boolean;
+  /** A served drink is carried from the bar to a physical cantina seat. */
+  carryingDrink?: boolean;
   reservedServingTile: number | null;
   reservedTargetTile: number | null;
   blockedTicks: number;
@@ -399,6 +428,11 @@ export interface Visitor {
   leisureLegsRemaining: number;
   leisureLegsPlanned: number;
   lastLeisureKind: 'market' | 'lounge' | 'recHall' | 'hygiene' | 'cantina' | 'observatory' | 'vending' | null;
+  /** Ordered, manifest-backed services this passenger expects before returning. */
+  servicePlan: HospitalityServiceKind[];
+  completedServices: HospitalityServiceKind[];
+  activeService: HospitalityServiceKind | null;
+  serviceBlockedSince?: number | null;
   activeIncidentId?: number | null;
   // Crowd-loop v1 theater: set on storm-off/balk; renderer shows red tint + "!"
   // while state.now < angryUntil. Optional for save compat with older snapshots.
@@ -462,7 +496,13 @@ export interface Resident {
 }
 
 export type CrewRole = 'idle' | 'reactor' | 'cafeteria' | 'security';
-export type CrewIdleReason = 'idle_available' | 'idle_no_jobs' | 'idle_resting' | 'idle_no_path' | 'idle_waiting_reassign';
+export type CrewIdleReason =
+  | 'idle_available'
+  | 'idle_no_jobs'
+  | 'idle_resting'
+  | 'idle_no_path'
+  | 'idle_waiting_fixture'
+  | 'idle_waiting_reassign';
 export type CrewWorkLane = 'food' | 'sanitation' | 'engineering' | 'logistics' | 'construction-eva' | 'flex';
 export type CrewShiftTargets = Record<CrewWorkLane, number>;
 export type StaffRole =
@@ -778,6 +818,7 @@ export type JobStallReason =
 
 export interface CrewMember {
   id: number;
+  name: string;
   x: number;
   y: number;
   tileIndex: number;
@@ -789,13 +830,16 @@ export interface CrewMember {
   retargetAt: number;
   energy: number;
   hygiene: number;
-  // Short-cycle bladder need. Decays ~3x faster than energy and triggers a brief
-  // Hygiene-room visit (toilet) at the threshold. Visible in the agent inspector
-  // alongside energy/hygiene, mirroring the visitor toilet v0.
+  // Short-cycle bladder need. Triggers a brief physical Toilet visit at the
+  // threshold and remains visible in the agent inspector.
   bladder: number;
-  // Thirst: short-cycle drink need, satisfied by visiting a Cantina (BarCounter)
-  // or a WaterFountain anywhere. Decays slower than bladder, faster than energy.
+  // Thirst: short-cycle drink need, satisfied by a Cantina, WaterFountain, or
+  // basic cafeteria water service. Decays slower than bladder, faster than energy.
   thirst: number;
+  morale: number;
+  missedPayrollCycles: number;
+  needsStrainSec: number;
+  resignationNoticeAt: number | null;
   resting: boolean;
   cleaning: boolean;
   toileting: boolean;
@@ -821,6 +865,7 @@ export interface CrewMember {
   lastSystem: CrewPrioritySystem | null;
   assignedSystem: CrewPrioritySystem | null;
   workLane: CrewWorkLane;
+  manualWorkLane?: CrewWorkLane | null;
   lastWorkLane: CrewWorkLane | null;
   workLaneAssignedAt: number;
   retargetCountWindow: number;
@@ -879,6 +924,8 @@ export interface TransportJob {
   blockedReason?: string | null;
   /** Port-operations inspection jobs are bound to one physical ship. */
   portShipId?: number;
+  /** Inbound consignment batches retain their authoritative cargo-lot owner. */
+  portCargoLotId?: number;
   /** Cargo moved toward a ship is consumed into its manifest, not stored at the arm. */
   portCargoDirection?: 'inbound' | 'outbound';
 }
@@ -910,11 +957,13 @@ export interface Reservation {
 
 export type ProviderKind =
   | 'meal-pickup'
+  | 'bed'
   | 'seat'
   | 'vending'
   | 'leisure'
   | 'market'
   | 'drink'
+  | 'toilet'
   | 'hygiene'
   | 'stove-work'
   | 'grow-work'
@@ -1065,6 +1114,8 @@ export interface ArrivingShip {
   portManifest?: TrafficOffer;
   /** Physical, crew-worked port visit state for player-approved traffic. */
   portTurnaround?: PortTurnaround;
+  /** Accepted operational promise tracked in StationState.portOps. */
+  portContractId?: number;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
@@ -1198,6 +1249,113 @@ export interface DockQueueEntry {
 }
 
 export type TrafficOfferStatus = 'forecast' | 'holding' | 'cleared';
+export type PortOfferKind = 'passenger' | 'freight' | 'mixed';
+export type PortPromiseKind =
+  | 'dock'
+  | 'passengers-served'
+  | 'drinks-served'
+  | 'leisure-served'
+  | 'restroom-served'
+  | 'hygiene-served'
+  | 'comfort-served'
+  | 'passengers-returned'
+  | 'freight-unloaded'
+  | 'freight-loaded'
+  | 'inspection'
+  | 'condition';
+export type PortContractStatus = 'accepted' | 'active' | 'boarding' | 'settled' | 'departed';
+export type CargoOwnership = 'station' | 'consigned' | 'specialty-input';
+
+export interface PortPromiseComponent {
+  kind: PortPromiseKind;
+  label: string;
+  target: number;
+  completed: number;
+  payoutCredits: number;
+}
+
+export interface PortContract {
+  id: number;
+  offerId: number;
+  shipId: number;
+  callsign: string;
+  offerKind: PortOfferKind;
+  assignedBerthAnchor: number;
+  acceptedAt: number;
+  arrivesAt: number;
+  boardingStartsAt: number;
+  hardDepartureAt: number;
+  status: PortContractStatus;
+  promises: PortPromiseComponent[];
+  passengerSpendingCredits: number;
+  settlementId: number | null;
+}
+
+export interface PortCargoLot {
+  id: number;
+  contractId: number;
+  ownership: CargoOwnership;
+  itemType: ItemType;
+  quantity: number;
+  reservedCapacity: number;
+  handledQuantity: number;
+  locationTile: number | null;
+  location: 'aboard' | 'staging' | 'storage' | 'delivered' | 'closed';
+}
+
+export interface PortSettlement {
+  id: number;
+  contractId: number;
+  shipId: number;
+  callsign: string;
+  /** Berth that produced the result, retained for short-lived in-world feedback. */
+  settledAt: number;
+  promises: PortPromiseComponent[];
+  payoutCredits: number;
+  passengerSpendingCredits: number;
+  notes: string[];
+}
+
+export interface PortOpsTelemetry {
+  offersAccepted: number;
+  offersRefused: number;
+  settlements: number;
+  fullSettlements: number;
+  partialSettlements: number;
+  hardDeadlineDepartures: number;
+  peakPassengerQueue: number;
+  passengerQueuePersonSeconds: number;
+  berthOccupancySeconds: number;
+  cargoUnitTileDistance: number;
+  mealTarget: number;
+  mealsCompleted: number;
+  freightTarget: number;
+  freightCompleted: number;
+}
+
+export interface PortOpsState {
+  version: 1;
+  offerSequenceIndex: number;
+  nextContractId: number;
+  nextCargoLotId: number;
+  nextSettlementId: number;
+  contracts: PortContract[];
+  cargoLots: PortCargoLot[];
+  settlements: PortSettlement[];
+  selectedSettlementId: number | null;
+  firstOfferShownAt: number | null;
+  firstChoiceAt: number | null;
+  crewReassignments: number;
+  cargoHandledLifetime: number;
+  cargoArmLastHandled: number;
+  cargoArmStrain: number;
+  cargoArmStatus: 'ready' | 'warning' | 'fault';
+  cargoArmRepairProgress: number;
+  cargoArmFaults: number;
+  cargoArmLastFaultRollAt: number;
+  cargoArmFaultContractIds: number[];
+  telemetry: PortOpsTelemetry;
+}
 
 /** A finite, inspectable ship visit waiting for a player berth decision. */
 export interface TrafficOffer {
@@ -1206,6 +1364,7 @@ export interface TrafficOffer {
   shipName: string;
   lane: SpaceLane;
   shipType: ShipType;
+  offerKind?: PortOfferKind;
   size: ShipSize;
   status: TrafficOfferStatus;
   forecastAt: number;
@@ -1214,6 +1373,7 @@ export interface TrafficOffer {
   passengersTotal: number;
   manifestDemand: { cafeteria: number; market: number; lounge: number };
   manifestMix: Record<VisitorArchetype, number>;
+  hospitalityDemand?: HospitalityDemand;
   inboundCargo: { rawMaterial: number; rawMeal: number; tradeGood: number };
   outboundRequest: { rawMaterial: number; meal: number; tradeGood: number };
   requestedServices: ShipServiceTag[];
@@ -1223,6 +1383,8 @@ export interface TrafficOffer {
   riskLabel: 'low' | 'guarded' | 'high';
   /** Berth reserved by advance player clearance while the ship is still inbound. */
   assignedBerthAnchor?: number | null;
+  /** One disclosed schedule extension; repeated holds are not free parking. */
+  holdUsed?: boolean;
 }
 
 export interface IncidentEntity {
@@ -1729,6 +1891,8 @@ export interface AgentInspectorBase {
 export interface VisitorInspector extends AgentInspectorBase {
   kind: 'visitor';
   state: VisitorState;
+  name: string;
+  trait: VisitorTrait;
   archetype: VisitorArchetype;
   primaryPreference: VisitorPreference;
   patience: number;
@@ -1736,6 +1900,9 @@ export interface VisitorInspector extends AgentInspectorBase {
   carryingMeal: boolean;
   reservedServingTile: number | null;
   reservedTargetTile: number | null;
+  servicePlan: HospitalityServiceKind[];
+  completedServices: HospitalityServiceKind[];
+  activeService: HospitalityServiceKind | null;
   desire: VisitorDesire;
 }
 
@@ -1773,6 +1940,10 @@ export interface CrewInspector extends AgentInspectorBase {
   hygiene: number;
   bladder: number;
   thirst: number;
+  morale: number;
+  missedPayrollCycles: number;
+  needsStrainSec: number;
+  resignationNoticeAt: number | null;
   resting: boolean;
   cleaning: boolean;
   toileting: boolean;
@@ -1906,6 +2077,8 @@ export interface Controls {
   manualTrafficAdmission: boolean;
   /** Earned dispatch policy: low-risk manifests matching berth filters reserve automatically. */
   portAutoAdmitEnabled: boolean;
+  /** How much traffic risk Approach Control may clear without asking the player. */
+  portAutoAdmitPolicy: 'cautious' | 'balanced' | 'open';
   /** Earned workforce policy: shift minimums rebalance against live operational pressure. */
   crewAutoStaffEnabled: boolean;
   diagnosticOverlay: DiagnosticOverlay;
@@ -1962,6 +2135,7 @@ export interface StationState {
   laneProfiles: Record<SpaceLane, LaneProfile>;
   dockQueue: DockQueueEntry[];
   trafficOffers: TrafficOffer[];
+  portOps: PortOpsState;
   pressurized: boolean[];
   // Per-tile air quality 0..100. Computed each tick from life-support coverage
   // distance + active source count. Local exposure checks (crew, visitor,

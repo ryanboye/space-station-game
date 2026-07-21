@@ -7,10 +7,13 @@ This directory is a **map of how the game works** — for human contributors and
 If you're an agent picking up a task, read in this order:
 
 1. **`00-overview.md`** — repo map, key concepts (tile/room/module/zone), how a tick flows, how the renderer pulls from sim state.
-2. **`15-current-roadmap.md`** — the roadmap index and shared product direction.
-3. **`16/17/18-roadmap-part-*.md`** — the active `/goal` checklists split into living actors/jobs, utilities/sanitation, and command/map/contracts.
-4. **The system docs** for whatever you're touching (e.g. crew → `05-crew.md`; walls → `11-render.md`).
-5. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+2. **`23-operational-promise-core-loop.md`** — current product design authority and next playable slice.
+3. **`24-two-berth-shift-implementation-goal.md`** — single executable goal for the standalone implementation branch.
+4. **`25-crew-sustainability-and-hospitality.md`** — current implementation contract for crew retention and manifest-backed visitor services.
+5. **`15-current-roadmap.md`** — roadmap index and status of the older subsystem sequences.
+6. **`16/17/18-roadmap-part-*.md`** — paused subsystem plans; use as implementation history and inventory, not an automatic feature sequence.
+7. **The system docs** for whatever you're touching (e.g. crew -> `05-crew.md`; walls -> `11-render.md`).
+8. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
 
 Every system doc follows the same shape:
 
@@ -43,6 +46,9 @@ Every system doc follows the same shape:
 | `17-roadmap-part-2-utilities-hazards-sanitation.md` | Part 2: access, districts, utilities, hazards, maintenance, sanitation |
 | `18-roadmap-part-3-command-map-contracts.md` | Part 3: command center, system map, contracts, station identity, incidents |
 | `22-reputation-property-value-and-security.md` | Reputation, property value, crime pressure, and security plan |
+| `23-operational-promise-core-loop.md` | Current core-loop design authority, system disposition, and Two-Berth Shift slice |
+| `24-two-berth-shift-implementation-goal.md` | One-shot implementation goal for the standalone Two-Berth Shift branch |
+| `25-crew-sustainability-and-hospitality.md` | Crew quarters, morale/retention, and manifest-backed hospitality services |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions

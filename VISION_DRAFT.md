@@ -1,25 +1,31 @@
 # Vision
 
-A systemic station-management sim where layout is the main design problem.
+A spatial service-operations sim that grows into institutional and city-scale management.
 
-The player builds a living orbital station, admits ships and people, and then watches food, air, routes, maintenance, services, and social pressure reveal whether the station actually works.
+The player builds a living orbital port, chooses which traffic to serve, promises specific outcomes, and changes the station when passengers, freight, staff, and exceptions expose a bad operating plan.
+
+The persistent loop is:
+
+`Forecast -> Promise -> Allocate -> Operate -> Intervene -> Settle -> Adapt`
 
 ## Pillars
 
-- **Layout creates gameplay.** Room placement, berth access, corridors, zones, and utility reach should matter more than raw checklist completion.
-- **People make the station alive.** Crew, visitors, and residents should have visible needs, routines, and path pressure.
-- **Systems are inspectable.** If the sim calculates a problem, the player should be able to see it through overlays, inspectors, metrics, or route lines.
-- **Failure is recoverable.** Bad designs create ratings drops, stress, work slowdown, shortages, maintenance debt, incidents, and local hazards before they become total collapse.
+- **Promises create demand.** Traffic choices produce changing operational problems; the player should not build the same complete room checklist every game.
+- **Layout creates gameplay.** Berth access, queues, staging, corridors, rooms, and buffers shape visible people and freight flow.
+- **People make the station alive.** Crew and passengers carry work, delay, and consequences through the world. Residents later turn operational districts into a society.
+- **The world explains the sim.** Queues, crates, carts, routes, dirt, faults, and responders show the problem before panels provide precision.
+- **Failure is recoverable.** Bad designs create partial payouts, relationship damage, work slowdown, shortages, local condition problems, and incidents before they become total collapse.
 - **Station identity should emerge.** Trade hub, habitat, industrial yard, military stop, and mixed-use station should push different layouts and service priorities.
+- **Scale grants leverage.** Earned automation replaces mastered micromanagement while unusual ships and failures still ask the player to intervene.
 
 ## Current MVP Target
 
-The first compelling MVP is not the whole fantasy. It is:
+The first compelling MVP is the Two-Berth Shift:
 
-1. Build a station with berths, housing, food, life support, utilities, and public/service spaces.
-2. Receive visitors and support crew/residents.
-3. See route conflicts, service shortages, comfort/status problems, and maintenance/air risks.
-4. Use overlays and inspectors to understand those problems.
-5. Rebuild or specialize the station to make it function better.
+1. Compare passenger, freight, and mixed traffic offers.
+2. Commit limited berth time, labor, space, and stock to one or two promises.
+3. Watch queues, cargo staging, crew travel, and local condition develop in the station.
+4. Intervene during the turnaround and accept partial success when necessary.
+5. Settle each ship at a hard deadline, then rebuild or specialize for the next offers.
 
-The live roadmap is `docs/15-current-roadmap.md`.
+The product design authority is `docs/23-operational-promise-core-loop.md`. The roadmap status is `docs/15-current-roadmap.md`.

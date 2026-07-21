@@ -4,11 +4,8 @@ import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './ren
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
 import { STAFF_ROLE_SPRITE_KEYS } from './render/sprite-keys-extended';
 import {
-  applyLegendStates,
   attachLegendTooltipHandlers,
-  maybeFireTierFlash,
 } from './render/progression/wire';
-import { renderQuestBar } from './render/progression/quest-bar';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
 import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
@@ -24,7 +21,9 @@ import {
 } from './sim/content/command';
 import { sigilForFaction } from './sim/system-map';
 import {
+  buyImportedTradeGoods,
   buyMaterialsDetailed,
+  buyPreparedMeals,
   admitTrafficOffer,
   buyRawFoodDetailed,
   buildStationExpansionOnTruss,
@@ -39,6 +38,7 @@ import {
   getBerthInspectorAt,
   getEligibleBerthsForOffer,
   getCrewInspectorById,
+  getCrewSustainabilitySummary,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
@@ -76,6 +76,7 @@ import {
   setCrewPriorityPreset,
   setCrewPriorityWeight,
   setPortAutoAdmit,
+  setPortAutoAdmitPolicy,
   setCrewAutoStaff,
   selectSpecialty,
   setDockFacing,
@@ -91,6 +92,7 @@ import {
   setRoom,
   setRoomHousingPolicy,
   setSecurityPosture,
+  setCrewManualWorkLane,
   setCrewShiftTarget,
   setZone,
   tick,
@@ -133,6 +135,7 @@ import {
   type UtilityUnderlayKind,
   ModuleType,
   RoomType,
+  VisitorState,
   TILE_SIZE,
   TileType,
   WALKABLE_TILES,
@@ -162,19 +165,21 @@ app.innerHTML = `
       <div>
         <h1>Starlight Station</h1>
         <span id="autosave-status" class="topbar-note hidden" aria-live="polite"></span>
-        <span id="sprite-status" class="topbar-note">Sprites inactive (fallback rendering)</span>
+        <span id="sprite-status" class="topbar-note legacy-ui">Sprites inactive (fallback rendering)</span>
       </div>
     </div>
     <div id="hud-status" aria-label="Station status">
       <span class="hud-item"><span class="hud-label">Crew</span><span class="hud-value" id="hud-crew">--</span></span>
-      <span class="hud-item"><span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span></span>
-      <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
-      <span class="hud-item"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
-      <span class="hud-item"><span class="hud-label">Food</span><span class="hud-value" id="hud-food">--</span></span>
-      <span class="hud-item"><span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span></span>
-      <span class="hud-item"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
+      <button id="hud-air-control" class="hud-item hud-air-control" type="button" title="Open the Air Coverage overlay">
+        <span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span>
+      </button>
+      <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
+      <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
+      <span class="hud-item hud-item-action"><span class="hud-label">Prepared Meals</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Import 12 prepared meals for 36 credits" title="Import 12 prepared meals for 36 credits">+</button></span>
+      <span class="hud-item legacy-ui"><span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span></span>
+      <span class="hud-item legacy-ui"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
       <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
-      <span class="hud-item"><span class="hud-label">Supplies</span><span class="hud-value" id="hud-materials">--</span></span>
+      <span class="hud-item"><span class="hud-label">Station Stock</span><span class="hud-value" id="hud-materials">--</span></span>
     </div>
     <div class="top-actions">
       <button id="open-save-modal" class="topbar-btn utility-icon" aria-label="Save / Load" title="Save / Load">
@@ -191,7 +196,7 @@ app.innerHTML = `
           <path d="M12 8v5l3 2" />
         </svg>
       </button>
-      <button id="open-system-map-modal" class="topbar-btn utility-icon" aria-label="System Map (F4)" title="System Map (F4)">
+      <button id="open-system-map-modal" class="topbar-btn utility-icon legacy-ui" aria-label="System Map (F4)" title="System Map (F4)">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="2" />
           <circle cx="12" cy="12" r="6" fill="none" />
@@ -200,7 +205,7 @@ app.innerHTML = `
           <circle cx="6" cy="6" r="1" />
         </svg>
       </button>
-      <button id="open-expansion-modal" class="topbar-btn utility-icon" aria-label="Map Expansion" title="Map Expansion">
+      <button id="open-expansion-modal" class="topbar-btn utility-icon legacy-ui" aria-label="Map Expansion" title="Map Expansion">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M8 4H4v4" />
           <path d="M16 4h4v4" />
@@ -235,25 +240,44 @@ app.innerHTML = `
   <div id="game-wrap">
     <canvas id="game"></canvas>
     <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
+    <button id="air-emergency-indicator" class="air-emergency-indicator hidden" type="button" aria-live="assertive">
+      Oxygen warning - open Air Coverage
+    </button>
     <div id="game-stage"></div>
     <div class="floating-stack left-stack" aria-label="Station tasks">
-      <details class="hud-card task-card overlay-card">
+      <section id="station-goal-card" class="hud-card station-goal-card" aria-live="polite">
+        <div class="station-goal-head">
+          <span>Global Goal</span>
+          <span id="station-goal-stage">1 / 3</span>
+        </div>
+        <strong id="station-goal-title">Establish a working port</strong>
+        <div id="station-goal-items" class="station-goal-items"></div>
+        <div class="station-goal-progress" aria-hidden="true">
+          <i id="station-goal-fill"></i>
+        </div>
+        <button id="open-progression-summary" class="station-tier-summary" type="button" aria-haspopup="dialog" aria-controls="progression-modal">
+          <span class="station-tier-copy">
+            <span id="station-tier-current">Tier 0: Founding Outpost</span>
+            <strong id="station-tier-next">Next: Guest Services</strong>
+            <small id="station-tier-requirement">First visitor arrives</small>
+          </span>
+          <span class="station-tier-chevron" aria-hidden="true">›</span>
+        </button>
+      </section>
+      <details class="hud-card task-card overlay-card legacy-ui">
         <summary class="hud-card-title">Tasks</summary>
         <div id="quest-bar" aria-live="polite"></div>
         <div id="tier-checklist" class="tier-checklist">No active checklist</div>
       </details>
-      <details class="hud-card port-dispatch-card overlay-card" open>
-        <summary class="hud-card-title">Port Dispatch</summary>
-        <div class="traffic-controls">
-          <div class="row compact list-row"><span>Traffic rate</span><span class="value" id="ships-label">1</span></div>
-          <input class="compact-range" type="range" id="ships" min="0" max="3" step="1" value="1" />
-          <small id="traffic-status" class="traffic-status">Paused</small>
-          <button id="toggle-port-auto" class="secondary-command automation-toggle">Dispatch automation locked</button>
-          <small id="port-auto-status" class="automation-status">Complete 3 successful turnarounds to delegate routine traffic.</small>
-          <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
-          <small id="traffic-action-note" class="traffic-action-note"></small>
-        </div>
-      </details>
+      <button id="open-port-dispatch" class="hud-card port-dispatch-card" type="button" aria-haspopup="dialog" aria-controls="port-dispatch-modal" aria-expanded="false">
+        <span class="dispatch-trigger-mark" aria-hidden="true">↘</span>
+        <span class="dispatch-trigger-copy">
+          <span class="dispatch-trigger-label">Approach Control</span>
+          <strong id="dispatch-trigger-title">Approach lanes clear</strong>
+          <small id="dispatch-trigger-meta">Waiting for traffic</small>
+        </span>
+        <span id="dispatch-trigger-count" class="dispatch-trigger-count hidden">0</span>
+      </button>
       <section id="diagnostic-key" class="hud-card diagnostic-key hidden" aria-live="polite">
         <div class="hud-card-title" id="diagnostic-key-title">Diagnostics</div>
         <div id="diagnostic-key-stats" class="diagnostic-key-stats"></div>
@@ -275,7 +299,7 @@ app.innerHTML = `
       <div id="agent-side-body" class="side-inspector-body">No agent selected.</div>
     </section>
     <div id="bottom-dock">
-      <section class="dock-card command-card">
+      <section class="dock-card command-card legacy-ui">
         <div class="hud-card-title">Command</div>
         <div class="command-actions">
           <button id="open-market" class="primary-command">Market</button>
@@ -292,17 +316,29 @@ app.innerHTML = `
       </section>
       <section class="dock-card ops-card">
         <div class="hud-card-title ops-card-head">
-          <span>Station Ops</span>
-          <button id="open-ops-modal" class="mini-action-btn">Details</button>
+          <span>Operations</span>
+          <button id="open-ops-modal" class="mini-action-btn">Shift Roster</button>
         </div>
+        <div class="shift-quick-controls" aria-label="Shift allocation">
+          <div class="shift-quick-row"><span>Service</span><button data-shift-step="food" data-delta="-1" aria-label="Remove service crew">−</button><b data-shift-count="food">0</b><button data-shift-step="food" data-delta="1" aria-label="Add service crew">+</button></div>
+          <div class="shift-quick-row"><span>Cargo</span><button data-shift-step="logistics" data-delta="-1" aria-label="Remove cargo crew">−</button><b data-shift-count="logistics">0</b><button data-shift-step="logistics" data-delta="1" aria-label="Add cargo crew">+</button></div>
+          <div class="shift-quick-row"><span>Maintenance</span><button data-shift-step="engineering" data-delta="-1" aria-label="Remove maintenance crew">−</button><b data-shift-count="engineering">0</b><button data-shift-step="engineering" data-delta="1" aria-label="Add maintenance crew">+</button></div>
+          <div class="shift-quick-row"><span>Cleaning</span><button data-shift-step="sanitation" data-delta="-1" aria-label="Remove cleaning crew">−</button><b data-shift-count="sanitation">0</b><button data-shift-step="sanitation" data-delta="1" aria-label="Add cleaning crew">+</button></div>
+        </div>
+        <small id="shift-quick-total" class="shift-quick-total">0 assigned · 0 flexible</small>
+        <div class="row compact list-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
         <div class="row compact list-row hidden"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Kitchen 0/0 | Life Support 0/0</span></div>
         <div class="row compact list-row hidden"><span>Residents</span><span class="value" id="ops-residents">0 | waiting</span></div>
         <div class="row compact list-row"><span>Work Queue</span><span class="value" id="jobs">No queued work</span></div>
-        <small id="critical-staffing-line" class="hidden"></small>
+        <small id="critical-staffing-line"></small>
       </section>
-      <section class="dock-card event-card">
+      <section class="dock-card settlement-card">
+        <div class="hud-card-title">Last Turnaround</div>
+        <div id="settlement-summary" class="settlement-summary">No ship settled yet.</div>
+      </section>
+      <section class="dock-card event-card legacy-ui">
         <div class="hud-card-title ops-card-head">
           <span>Station Health</span>
           <button id="open-health-details" class="mini-action-btn">Details</button>
@@ -364,7 +400,7 @@ app.innerHTML = `
         <small id="crew-breakdown">Crew: work 0 | idle 0 | resting 0 | logistics 0 | blocked 0</small>
         <small id="crew-shifts">Shifts: resting 0/0 | wake budget 0 | woken 0</small>
         <small id="crew-lockouts">Emergency lockouts prevented: 0</small>
-        <small id="ops-extra">Kitchen 0/0 | Workshop 0/0 | Hygiene 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
+        <small id="ops-extra">Kitchen 0/0 | Workshop 0/0 | Bathrooms 0/0 | Hydroponics 0/0 | Life Support 0/0 | Lounge 0/0 | Market 0/0</small>
         <small id="kitchen-status">Kitchen: active 0/0 | raw 0.0 | meal +0.0/s</small>
         <small id="trade-status">Trade: workshop +0.0/s | market use 0.0/s | stock 0.0 | sold/min 0.0 | stockouts/min 0.0</small>
         <small id="room-usage">Usage: to dorm 0 | resting 0 | hygiene 0 | queue 0 | eating 0 | hydro staff 0/0</small>
@@ -404,7 +440,7 @@ app.innerHTML = `
         <span class="tool-row-label">Rooms</span>
         <button class="tool-btn" data-tool-room="bridge" title="Build Bridge"><span class="tool-key">·</span>Bridge</button>
         <button class="tool-btn" data-tool-room="dorm" title="Build Dorm (D)"><span class="tool-key">D</span>Dorm</button>
-        <button class="tool-btn" data-tool-room="hygiene" title="Build Hygiene (H)"><span class="tool-key">H</span>Hygiene</button>
+        <button class="tool-btn" data-tool-room="hygiene" title="Build Bathroom (H)"><span class="tool-key">H</span>Bathroom</button>
         <button class="tool-btn" data-tool-room="hydroponics" title="Build Hydroponics (F)"><span class="tool-key">F</span>Hydroponics</button>
         <button class="tool-btn" data-tool-room="kitchen" title="Build Kitchen (I)"><span class="tool-key">I</span>Kitchen</button>
         <button class="tool-btn" data-tool-room="cafeteria" title="Build Cafeteria (C)"><span class="tool-key">C</span>Cafeteria</button>
@@ -432,10 +468,13 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="research-terminal" title="Place Research Terminal"><span class="tool-key">·</span>Research</button>
         <button class="tool-btn" data-tool-module="logistics-terminal" title="Place Logistics Terminal"><span class="tool-key">·</span>Log.</button>
         <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
-        <button class="tool-btn" data-tool-module="table" title="Place Table (T)"><span class="tool-key">T</span>Table</button>
+        <button class="tool-btn" data-tool-module="bunk" title="Place Bunk — two sleep slots, slower recovery"><span class="tool-key">·</span>Bunk</button>
+        <button class="tool-btn" data-tool-module="locker" title="Place Locker — improves crew quarters quality"><span class="tool-key">·</span>Locker</button>
+        <button class="tool-btn" data-tool-module="table" title="Place Dining Table (T) — includes four visible seats"><span class="tool-key">T</span>Table + 4 seats</button>
         <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
         <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
         <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
+        <button class="tool-btn" data-tool-module="toilet" title="Place Toilet (Bathroom-only) — relieves bladder, one user at a time"><span class="tool-key">·</span>Toilet</button>
         <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
         <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
         <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
@@ -458,7 +497,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="vent" title="Place wall Vent — projects life-support air from an adjacent service tile"><span class="tool-key">·</span>Vent</button>
         <button class="tool-btn" data-tool-module="insulation-panel" title="Place wall Insulation Panel — reduces sunlight heat transfer nearby"><span class="tool-key">·</span>Insul.</button>
         <button class="tool-btn" data-tool-module="vending-machine" title="Place Vending Machine (T1+) — visitors in leisure spend extra credits on this tile"><span class="tool-key">·</span>Vending</button>
-        <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — leisure seating in social rooms; small comfort bonus"><span class="tool-key">·</span>Bench</button>
+        <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — two seats for lounges and cantinas"><span class="tool-key">·</span>Bench · 2 seats</button>
         <button class="tool-btn" data-tool-module="bar-counter" title="Place Bar Counter (Cantina-only) — drink service anchor"><span class="tool-key">·</span>Bar</button>
         <button class="tool-btn" data-tool-module="tap" title="Place Tap (Cantina-only) — increases drink throughput"><span class="tool-key">·</span>Tap</button>
         <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
@@ -481,35 +520,65 @@ app.innerHTML = `
         <small id="crew-panel-status" class="market-status">Ready.</small>
       </div>
       <div class="tool-row palette-section" data-palette-section="overlays">
-        <span class="tool-row-label">Overlays</span>
-        <button class="tool-btn" data-tool-zone="public" title="Paint Public zone (8)"><span class="tool-key">8</span>Public</button>
-        <button class="tool-btn" data-tool-zone="restricted" title="Paint Restricted zone (9)"><span class="tool-key">9</span>Restricted</button>
+        <span class="tool-row-label">Optional city lenses</span>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Return to the normal station view">Normal View</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show oxygen quality and life-support coverage across the station">Air Coverage</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show which public spaces visitors enjoy or avoid">Visitor Needs</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, cleaning pressure, and its source">Cleanliness</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show visitor, crew, and freight routes plus conflicts">Foot Traffic</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show local control, notoriety, value, and crime pressure">Security</button>
+        <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Storage: OFF</button>
+        <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Reach: OFF</button>
         <button id="toggle-zones" class="tool-btn overlay-toggle">Zones: OFF</button>
-        <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Nodes: OFF</button>
-        <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Inventory Overlay: OFF</button>
-        <button id="toggle-glow" class="tool-btn overlay-toggle">Glow: ON</button>
-        <span class="tool-row-label diagnostic-row-label">Diagnostics</span>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Hide diagnostic heatmaps">Diagnostics: OFF</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show life-support coverage heatmap">Air Coverage</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="utility-underlay" title="Show underfloor utility networks and air-duct connectivity">Air Network</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="thermal" title="Show heat and stale-air pressure">Thermal</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show visitor status heatmap">Visitor Status</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="resident-comfort" title="Show resident comfort heatmap">Resident Comfort</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="service-noise" title="Show service noise heatmap">Service Noise</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="maintenance" title="Show maintenance debt heatmap">Maintenance</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, and cleaning pressure heatmap">Sanitation</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="map-conditions" title="Show seeded sunlight, debris, and thermal map pressure">Map Conditions</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show active route pressure heatmap">Route Pressure</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show prestige, notoriety, control, and crime pressure">Reputation</button>
         <small id="diagnostic-readout" class="diagnostic-readout">Diagnostics off</small>
-        <button id="toggle-sprites" class="tool-btn overlay-toggle">Sprites: OFF</button>
-        <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle">Force Fallback: OFF</button>
+        <button id="toggle-glow" class="tool-btn overlay-toggle legacy-ui">Glow: ON</button>
+        <button id="toggle-sprites" class="tool-btn overlay-toggle legacy-ui">Sprites: OFF</button>
+        <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle legacy-ui">Force Fallback: OFF</button>
       </div>
     </div>
   </aside>
   <div class="hidden-controls" aria-hidden="true">
     <span id="tax-label">20%</span>
     <input type="range" id="tax" min="0" max="50" step="1" value="20" tabindex="-1" />
+  </div>
+  <div id="port-dispatch-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="port-dispatch-title">
+    <div class="modal-card port-dispatch-modal-card">
+      <div class="modal-head">
+        <div class="dispatch-modal-heading">
+          <span class="dispatch-modal-kicker">Approach Control</span>
+          <h2 id="port-dispatch-title">Incoming Ships</h2>
+        </div>
+        <button id="close-port-dispatch" class="ghost-btn icon-close-btn" aria-label="Close dispatch" title="Close">&times;</button>
+      </div>
+      <div id="shift-brief" class="shift-brief" aria-live="polite">
+        <span class="shift-brief-kicker">Current objective</span>
+        <strong>Review incoming manifests</strong>
+        <span>Choose work that fits the station and crew.</span>
+      </div>
+      <div class="traffic-controls">
+        <label class="traffic-rate-control">
+          <span>Traffic rate</span>
+          <span id="ships-label">1</span>
+          <input type="range" id="ships" min="0" max="3" step="1" value="1" />
+        </label>
+        <div class="traffic-state">
+          <small id="traffic-status" class="traffic-status tone-muted">Paused</small>
+          <small id="port-auto-status">Manual dispatch active.</small>
+        </div>
+        <button id="toggle-port-auto" class="secondary-command">Auto-routing: OFF</button>
+        <div id="approach-policy" class="approach-policy" aria-label="Approach automation policy">
+          <span>Standing orders</span>
+          <div class="approach-policy-options">
+            <button type="button" data-port-policy="cautious" title="Only clear low-risk ships when their requested services are online">Protect service</button>
+            <button type="button" data-port-policy="balanced" title="Clear low- and guarded-risk ships that fit berth filters">Balanced</button>
+            <button type="button" data-port-policy="open" title="Fill eligible berths regardless of traffic risk">Fill berths</button>
+          </div>
+        </div>
+        <small id="approach-reputation-pull" class="approach-reputation-pull">Traffic pull: reputation has no effect yet</small>
+        <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
+        <small id="traffic-action-note" class="traffic-action-note">Select a manifest to reserve a berth.</small>
+      </div>
+    </div>
   </div>
   <div id="save-modal" class="modal hidden">
     <div class="modal-card save-modal-card">
@@ -571,6 +640,9 @@ app.innerHTML = `
         <button id="buy-food-large">Buy +60 Raw Food (30c)</button>
         <button id="sell-food-large">Sell -60 Raw Food (+15c)</button>
       </div>
+      <div class="button-row">
+        <button id="buy-market-goods">Import +12 Market Goods (30c)</button>
+      </div>
     </div>
   </div>
   <div id="expansion-modal" class="modal hidden">
@@ -594,23 +666,28 @@ app.innerHTML = `
   <div id="progression-modal" class="modal hidden">
     <div class="modal-card progression-modal-card">
       <div class="modal-head">
-        <h2>Specialties</h2>
+        <h2>Station Progression</h2>
         <button id="close-progression-modal" class="ghost-btn">Close</button>
       </div>
       <div class="progression-hero">
-        <div id="progress-modal-tier-name" class="progression-tier-name">Choose A Specialty</div>
-        <small id="progress-modal-tier-theme" class="progression-tier-theme">Complete one department branch at a time to shape this station.</small>
+        <div id="progress-modal-tier-name" class="progression-tier-name">Tier 0: Founding Outpost</div>
+        <small id="progress-modal-tier-theme" class="progression-tier-theme">Keep core life support running and establish visitor service.</small>
         <div class="tier-progress-track tier-progress-track-lg"><div id="progress-modal-fill" class="tier-progress-fill"></div></div>
         <div class="row compact list-row">
-          <span id="progress-modal-pct">Branches: 0/8</span>
-          <span class="value" id="progress-modal-goal">Choose one specialty branch.</span>
+          <span id="progress-modal-pct">0% to Tier 1</span>
+          <span class="value" id="progress-modal-goal">Your first visitor unlocks Guest Services.</span>
         </div>
+        <div id="progress-modal-tier-checklist" class="progression-tier-checklist"></div>
       </div>
       <div class="progression-section">
-        <div class="section-title">Specialty Branches</div>
+        <div class="section-title">Tier Roadmap</div>
+        <div id="progress-modal-roadmap"></div>
+      </div>
+      <details class="progression-section progression-specialties">
+        <summary class="section-title">Specialization Branches</summary>
         <small id="progress-modal-specialty-summary">No specialty selected.</small>
         <div id="progress-modal-specialties" class="specialty-roadmap"></div>
-      </div>
+      </details>
     </div>
   </div>
   <div id="priority-modal" class="modal hidden">
@@ -956,16 +1033,37 @@ function applyCanvasSize(): void {
 }
 applyCanvasSize();
 
+const openPortDispatchBtn = document.querySelector<HTMLButtonElement>('#open-port-dispatch')!;
+const dispatchTriggerTitleEl = document.querySelector<HTMLElement>('#dispatch-trigger-title')!;
+const dispatchTriggerMetaEl = document.querySelector<HTMLElement>('#dispatch-trigger-meta')!;
+const dispatchTriggerCountEl = document.querySelector<HTMLElement>('#dispatch-trigger-count')!;
+const portDispatchModal = document.querySelector<HTMLDivElement>('#port-dispatch-modal')!;
+const closePortDispatchBtn = document.querySelector<HTMLButtonElement>('#close-port-dispatch')!;
+const stationGoalCardEl = document.querySelector<HTMLElement>('#station-goal-card')!;
+const stationGoalStageEl = document.querySelector<HTMLElement>('#station-goal-stage')!;
+const stationGoalTitleEl = document.querySelector<HTMLElement>('#station-goal-title')!;
+const stationGoalItemsEl = document.querySelector<HTMLElement>('#station-goal-items')!;
+const stationGoalFillEl = document.querySelector<HTMLElement>('#station-goal-fill')!;
+const openProgressionSummaryBtn = document.querySelector<HTMLButtonElement>('#open-progression-summary')!;
+const stationTierCurrentEl = document.querySelector<HTMLElement>('#station-tier-current')!;
+const stationTierNextEl = document.querySelector<HTMLElement>('#station-tier-next')!;
+const stationTierRequirementEl = document.querySelector<HTMLElement>('#station-tier-requirement')!;
 const shipsInput = document.querySelector<HTMLInputElement>('#ships')!;
 const shipsLabel = document.querySelector<HTMLSpanElement>('#ships-label')!;
 const trafficStatusEl = document.querySelector<HTMLElement>('#traffic-status')!;
+const shiftBriefEl = document.querySelector<HTMLElement>('#shift-brief')!;
 const trafficOfferListEl = document.querySelector<HTMLElement>('#traffic-offer-list')!;
 const trafficActionNoteEl = document.querySelector<HTMLElement>('#traffic-action-note')!;
 const portAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-port-auto')!;
 const portAutoStatusEl = document.querySelector<HTMLElement>('#port-auto-status')!;
+const approachPolicyEl = document.querySelector<HTMLElement>('#approach-policy')!;
+const approachReputationPullEl = document.querySelector<HTMLElement>('#approach-reputation-pull')!;
 const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
 const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
 const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
+const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
+const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
+const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
 const expansionNextCostEl = document.querySelector<HTMLElement>('#expansion-next-cost')!;
@@ -984,6 +1082,8 @@ const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#to
 const toggleGlowBtn = document.querySelector<HTMLButtonElement>('#toggle-glow')!;
 const toggleSpritesBtn = document.querySelector<HTMLButtonElement>('#toggle-sprites')!;
 const toggleSpriteFallbackBtn = document.querySelector<HTMLButtonElement>('#toggle-sprite-fallback')!;
+const hudAirControlEl = document.querySelector<HTMLButtonElement>('#hud-air-control')!;
+const airEmergencyIndicatorEl = document.querySelector<HTMLButtonElement>('#air-emergency-indicator')!;
 const diagnosticOverlayBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-diagnostic-overlay]'));
 const diagnosticReadoutEl = document.querySelector<HTMLElement>('#diagnostic-readout')!;
 const diagnosticKeyEl = document.querySelector<HTMLElement>('#diagnostic-key')!;
@@ -993,18 +1093,18 @@ const diagnosticKeyRowsEl = document.querySelector<HTMLElement>('#diagnostic-key
 const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 
 const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
-  none: 'Diagnostics',
+  none: 'Normal View',
   'life-support': 'Air Coverage',
   'utility-underlay': 'Air Network',
   thermal: 'Thermal',
-  'visitor-status': 'Visitor Status',
+  'visitor-status': 'Visitor Needs',
   'resident-comfort': 'Resident Comfort',
   'service-noise': 'Service Noise',
   maintenance: 'Maintenance',
-  sanitation: 'Sanitation',
+  sanitation: 'Cleanliness',
   'map-conditions': 'Map Conditions',
-  'route-pressure': 'Route Pressure',
-  reputation: 'Reputation'
+  'route-pressure': 'Foot Traffic',
+  reputation: 'Security'
 };
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
@@ -1345,6 +1445,8 @@ const progressModalTierThemeEl = document.querySelector<HTMLElement>('#progress-
 const progressModalFillEl = document.querySelector<HTMLElement>('#progress-modal-fill')!;
 const progressModalPctEl = document.querySelector<HTMLElement>('#progress-modal-pct')!;
 const progressModalGoalEl = document.querySelector<HTMLElement>('#progress-modal-goal')!;
+const progressModalTierChecklistEl = document.querySelector<HTMLElement>('#progress-modal-tier-checklist')!;
+const progressModalRoadmapEl = document.querySelector<HTMLElement>('#progress-modal-roadmap')!;
 const progressModalSpecialtySummaryEl = document.querySelector<HTMLElement>('#progress-modal-specialty-summary')!;
 const progressModalSpecialtiesEl = document.querySelector<HTMLElement>('#progress-modal-specialties')!;
 const resourcesEl = document.querySelector<HTMLSpanElement>('#resources')!;
@@ -1382,6 +1484,7 @@ const buyFoodSmallBtn = document.querySelector<HTMLButtonElement>('#buy-food-sma
 const buyFoodLargeBtn = document.querySelector<HTMLButtonElement>('#buy-food-large')!;
 const sellFoodSmallBtn = document.querySelector<HTMLButtonElement>('#sell-food-small')!;
 const sellFoodLargeBtn = document.querySelector<HTMLButtonElement>('#sell-food-large')!;
+const buyMarketGoodsBtn = document.querySelector<HTMLButtonElement>('#buy-market-goods')!;
 const marketCrewEl = document.querySelector<HTMLSpanElement>('#market-crew')!;
 const marketRateEl = document.querySelector<HTMLSpanElement>('#market-rate')!;
 const materialAutoImportInput = document.querySelector<HTMLInputElement>('#material-auto-import')!;
@@ -1621,6 +1724,7 @@ const priorityInputs = new Map<CrewPrioritySystem, HTMLInputElement>();
 const priorityValueEls = new Map<CrewPrioritySystem, HTMLElement>();
 const shiftRosterTotalEl = document.querySelector<HTMLElement>('#shift-roster-total')!;
 const shiftRosterNoteEl = document.querySelector<HTMLElement>('#shift-roster-note')!;
+const shiftQuickTotalEl = document.querySelector<HTMLElement>('#shift-quick-total')!;
 const crewAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-crew-auto')!;
 const crewAutoStatusEl = document.querySelector<HTMLElement>('#crew-auto-status')!;
 for (const system of prioritySystems) {
@@ -1678,7 +1782,7 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
   0: {
     name: 'Founding Outpost',
     theme: 'Keep oxygen, food, and beds stable before adding complexity.',
-    buildings: ['Reactor', 'Life Support', 'Dorm', 'Hygiene', 'Hydroponics', 'Kitchen', 'Cafeteria', 'Dock'],
+    buildings: ['Reactor', 'Life Support', 'Dorm', 'Bathroom', 'Hydroponics', 'Kitchen', 'Cafeteria', 'Dock'],
     citizenNeeds: ['Core survival loop: hunger, rest, hygiene'],
     visitorNeeds: ['Visitors can be served by the starting cafeteria while guest services are locked'],
     ships: ['Tourist', 'Trader'],
@@ -1756,6 +1860,7 @@ function unlockRequirementText(tier: number): string {
 }
 
 function friendlyName(value: string): string {
+  if (value === RoomType.Hygiene) return 'Bathroom';
   return value
     .split('-')
     .map((part) => (part.length > 0 ? part[0].toUpperCase() + part.slice(1) : part))
@@ -1877,22 +1982,9 @@ function installLegendProgressionHandlers(): void {
 let prevUnlockTier: UnlockTier = 0;
 
 function refreshUnlockLegendAndHotkeys(): void {
-  // Quest bar — pinned "what do I do now" strip at the top of the sidebar.
-  // Reads state.unlocks.tier + triggerProgress[tier+1] + PROGRESSION_TOOLTIP_COPY.
-  // No new sim fields; lives alongside the existing status line surfaces.
-  renderQuestBar(state, questBarEl, (t) => PROGRESSION_TOOLTIP_COPY[t]);
-  // Phase-2 progression wiring — paints locked/available state on any
-  // remaining legend entries. After the Build & Room Legend panel was
-  // removed, roomLegendByType is empty so this is effectively a no-op;
-  // keep the call so tier-flash + tooltip wiring still works if legend
-  // items are ever reintroduced.
-  applyLegendStates(state, roomLegendByType);
-  prevUnlockTier = maybeFireTierFlash(
-    prevUnlockTier,
-    state,
-    roomDisplayName,
-    (t) => PROGRESSION_TOOLTIP_COPY[t],
-  );
+  // Two-Berth Shift has no tier interruption. Progression may add future
+  // options, but the live operating loop never opens a modal over a ship.
+  prevUnlockTier = state.unlocks.tier;
 }
 
 /**
@@ -1928,8 +2020,52 @@ function refreshHudStatus(): void {
   hudOxygenEl.style.color =
     oxygen < 35 ? 'var(--danger)' : oxygen < 70 ? 'var(--warn)' : 'var(--ok)';
 
+  const airFalling = state.metrics.airTrendPerSec < -0.2;
+  const localCoverageRisk =
+    state.metrics.lifeSupportActiveNodes > 0 && state.metrics.poorLifeSupportTiles > 0;
+  const airWarning =
+    oxygen < 70 ||
+    (airFalling && oxygen < 85) ||
+    localCoverageRisk ||
+    state.metrics.airBlockedWarningActive;
+  const airDanger = oxygen < 35 || state.metrics.airBlockedWarningActive;
+  hudAirControlEl.classList.toggle('warn', airWarning && !airDanger);
+  hudAirControlEl.classList.toggle('danger', airDanger);
+
+  let airAction = 'Open Air Coverage';
+  if (state.ops.lifeSupportActive <= 0) {
+    airAction = 'Build Life Support';
+  } else if (state.metrics.pressurizationPct < 75) {
+    airAction = 'Check hull walls and doors';
+  } else if (localCoverageRisk) {
+    airAction = `Check ${state.metrics.poorLifeSupportTiles} poorly supplied tile${state.metrics.poorLifeSupportTiles === 1 ? '' : 's'}`;
+  }
+  const trendText = `${state.metrics.airTrendPerSec >= 0 ? '+' : ''}${state.metrics.airTrendPerSec.toFixed(2)}%/s`;
+  const airStatusText = !airWarning
+    ? `Oxygen stable: ${oxygen}% (${trendText})`
+    : airFalling
+      ? `Oxygen falling: ${oxygen}% (${trendText}) - ${airAction}`
+      : oxygen < 70 || state.metrics.airBlockedWarningActive
+        ? `Oxygen low: ${oxygen}% - ${airAction}`
+        : `Air coverage uneven: ${oxygen}% oxygen - ${airAction}`;
+  hudAirControlEl.title = `${airStatusText}. Click to open Air Coverage.`;
+  hudAirControlEl.setAttribute('aria-label', hudAirControlEl.title);
+  airEmergencyIndicatorEl.classList.toggle('hidden', !airWarning);
+  airEmergencyIndicatorEl.classList.toggle('danger', airDanger);
+  airEmergencyIndicatorEl.classList.toggle('warn', airWarning && !airDanger);
+  if (airWarning) airEmergencyIndicatorEl.textContent = airStatusText;
+
   hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
-  hudCrewEl.textContent = String(state.crew.total);
+  const crewSustainability = getCrewSustainabilitySummary(state);
+  hudCrewEl.textContent = crewSustainability.resignationNotices > 0
+    ? `${state.crew.total} · ${crewSustainability.resignationNotices}!`
+    : String(state.crew.total);
+  hudCrewEl.style.color = crewSustainability.resignationNotices > 0
+    ? 'var(--danger)'
+    : crewSustainability.atRiskCrew > 0
+      ? 'var(--warn)'
+      : '';
+  hudCrewEl.parentElement!.title = `Mood ${Math.round(state.metrics.morale)}% · sleep ${crewSustainability.sleepSlots}/${state.crew.total} · payroll ${Math.ceil(crewSustainability.payrollPerCycle)}c in ${Math.ceil(crewSustainability.secondsToPayroll)}s`;
   hudMaterialsEl.textContent = String(Math.round(state.metrics.materials));
   hudWaterEl.textContent = String(Math.round(state.metrics.waterStock));
   hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
@@ -1970,18 +2106,72 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
   trafficStatusEl.classList.add(`tone-${tone}`);
 }
 
+function openPortDispatch(): void {
+  portDispatchModal.classList.remove('hidden');
+  openPortDispatchBtn.setAttribute('aria-expanded', 'true');
+}
+
+function closePortDispatch(): void {
+  portDispatchModal.classList.add('hidden');
+  openPortDispatchBtn.setAttribute('aria-expanded', 'false');
+}
+
+function refreshDispatchTrigger(): void {
+  const openOffers = state.trafficOffers.filter((offer) => offer.status !== 'cleared');
+  const clearedOffers = state.trafficOffers.filter((offer) => offer.status === 'cleared');
+  const activeShips = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
+  const holdingCount = openOffers.filter((offer) => offer.status === 'holding').length;
+
+  dispatchTriggerCountEl.textContent = String(openOffers.length);
+  dispatchTriggerCountEl.classList.toggle('hidden', openOffers.length === 0);
+  openPortDispatchBtn.classList.toggle('has-waiting-ships', openOffers.length > 0);
+  openPortDispatchBtn.classList.toggle('has-active-ships', openOffers.length === 0 && (clearedOffers.length > 0 || activeShips.length > 0));
+
+  if (openOffers.length > 0) {
+    dispatchTriggerTitleEl.textContent = `${openOffers.length} ship${openOffers.length === 1 ? '' : 's'} waiting to approach`;
+    dispatchTriggerMetaEl.textContent = holdingCount > 0
+      ? `${holdingCount} in holding orbit · review manifests`
+      : 'Compare work, risk, and berth fit';
+  } else if (clearedOffers.length > 0) {
+    dispatchTriggerTitleEl.textContent = `${clearedOffers.length} ship${clearedOffers.length === 1 ? '' : 's'} cleared for approach`;
+    dispatchTriggerMetaEl.textContent = 'Open dispatch for traffic controls';
+  } else if (activeShips.length > 0) {
+    dispatchTriggerTitleEl.textContent = `${activeShips.length} ship${activeShips.length === 1 ? '' : 's'} in service`;
+    dispatchTriggerMetaEl.textContent = 'Live progress appears at the active berth';
+  } else {
+    dispatchTriggerTitleEl.textContent = 'Approach lanes clear';
+    dispatchTriggerMetaEl.textContent = state.controls.shipsPerCycle <= 0
+      ? 'Traffic is switched off'
+      : 'Waiting for traffic';
+  }
+
+}
+
 function refreshTrafficStatus(): void {
+  refreshDispatchTrigger();
   const autoUnlocked = isPortAutoAdmitUnlocked(state);
   portAutoToggleEl.disabled = !autoUnlocked;
   portAutoToggleEl.textContent = !autoUnlocked
     ? 'Dispatch automation locked'
     : state.controls.portAutoAdmitEnabled ? 'Auto-routing: ON' : 'Auto-routing: OFF';
   portAutoToggleEl.classList.toggle('active', state.controls.portAutoAdmitEnabled);
+  for (const button of approachPolicyEl.querySelectorAll<HTMLButtonElement>('button[data-port-policy]')) {
+    button.disabled = !autoUnlocked;
+    button.classList.toggle('active', button.dataset.portPolicy === state.controls.portAutoAdmitPolicy);
+  }
+  approachPolicyEl.classList.toggle('disabled', !autoUnlocked);
+  approachReputationPullEl.textContent =
+    `Traffic pull · premium +${Math.round(state.metrics.reputationPremiumDemandBonusPct)}% · rough +${Math.round(state.metrics.reputationRiskyDemandBonusPct)}%`;
+  const policyLabel = state.controls.portAutoAdmitPolicy === 'cautious'
+    ? 'Protect service'
+    : state.controls.portAutoAdmitPolicy === 'balanced'
+      ? 'Balanced traffic'
+      : 'Fill berths';
   portAutoStatusEl.textContent = !autoUnlocked
     ? `${Math.min(state.dockedShipsCompleted, 3)}/3 successful turnarounds · prove the route first`
     : state.controls.portAutoAdmitEnabled
-      ? 'Routine low-risk ships follow berth filters. Risk and failures escalate here.'
-      : 'Manual dispatch active. Enable to delegate matching low-risk ships.';
+      ? `${policyLabel} standing orders active. Ships outside policy wait here.`
+      : `Manual clearance active · saved policy: ${policyLabel}.`;
   const shipsPerCycle = clamp(state.controls.shipsPerCycle, 0, 3);
   const activeTransientShips = state.arrivingShips.filter((ship) => ship.kind === 'transient').length;
   const offerCount = state.trafficOffers.length;
@@ -2030,47 +2220,273 @@ function requestSummary(request: { rawMaterial: number; meal: number; tradeGood:
   return parts.join(' · ') || 'no export order';
 }
 
+function offerPromisePreview(offer: StationState['trafficOffers'][number]): string {
+  const promises: string[] = [];
+  const hospitality = offer.hospitalityDemand;
+  if (offer.passengersTotal > 0 && hospitality) {
+    if (hospitality.meal > 0) promises.push(`${hospitality.meal} meals`);
+    if (hospitality.drink > 0) promises.push(`${hospitality.drink} drinks`);
+    if (hospitality.leisure > 0) promises.push(`${hospitality.leisure} lounge`);
+    if (hospitality.restroom > 0) promises.push(`${hospitality.restroom} restroom`);
+    if (hospitality.hygiene > 0) promises.push(`${hospitality.hygiene} wash`);
+    if (hospitality.comfort > 0) promises.push(`${hospitality.comfort} premium`);
+    promises.push(`${offer.passengersTotal} returned`);
+  } else if (offer.passengersTotal > 0) {
+    promises.push(`${Math.max(1, Math.ceil(offer.passengersTotal * 0.8))} meals`);
+    promises.push(`${offer.passengersTotal} returned`);
+  }
+  const inbound = Object.values(offer.inboundCargo).reduce((sum, amount) => sum + amount, 0);
+  const outbound = Object.values(offer.outboundRequest).reduce((sum, amount) => sum + amount, 0);
+  if (inbound > 0) promises.push(`${inbound} freight in`);
+  if (outbound > 0) promises.push(`${outbound} freight out`);
+  return promises.join(' · ') || 'berth access only';
+}
+
+function offerFacilityVerdict(offer: StationState['trafficOffers'][number]): { label: string; ready: boolean } {
+  const demand = offer.hospitalityDemand;
+  if (!demand) return { label: 'FACILITIES UNKNOWN', ready: false };
+  const hasModule = (types: ModuleType[], room: RoomType, visitorOnly = false): boolean =>
+    state.moduleInstances.some((module) =>
+      types.includes(module.type) &&
+      state.rooms[module.originTile] === room &&
+      (!visitorOnly || state.roomHousingPolicies[module.originTile] === 'visitor')
+    );
+  const missing: string[] = [];
+  if (demand.meal > 0 && (!hasModule([ModuleType.ServingStation], RoomType.Cafeteria) || !hasModule([ModuleType.Table], RoomType.Cafeteria))) missing.push('cafeteria');
+  if (demand.drink > 0 && (
+    !hasModule([ModuleType.BarCounter], RoomType.Cantina) ||
+    !hasModule([ModuleType.Bench], RoomType.Cantina)
+  )) missing.push('cantina bar + seating');
+  if (demand.leisure > 0 && !(
+    hasModule([ModuleType.Couch, ModuleType.Bench], RoomType.Lounge) ||
+    hasModule([ModuleType.RecUnit, ModuleType.Bench], RoomType.RecHall)
+  )) missing.push('lounge seating');
+  if (demand.restroom > 0 && !hasModule([ModuleType.Toilet], RoomType.Hygiene, true)) missing.push('public toilet');
+  if (demand.hygiene > 0 && !hasModule([ModuleType.Shower, ModuleType.Sink], RoomType.Hygiene, true)) missing.push('public wash');
+  if (demand.comfort > 0 && !(
+    hasModule([ModuleType.GameStation], RoomType.Lounge) ||
+    hasModule([ModuleType.Telescope], RoomType.Observatory)
+  )) missing.push('premium comfort');
+  return missing.length === 0
+    ? { label: 'FACILITIES READY', ready: true }
+    : { label: `MISSING ${missing.join(' + ')}`, ready: false };
+}
+
+function offerCrewPlan(offer: StationState['trafficOffers'][number]): { service: number; cargo: number } {
+  if (offer.offerKind === 'passenger') return { service: 3, cargo: 0 };
+  if (offer.offerKind === 'freight') return { service: 0, cargo: 4 };
+  return { service: 2, cargo: 3 };
+}
+
+function offerOperatingPlan(offer: StationState['trafficOffers'][number]): string {
+  const plan = offerCrewPlan(offer);
+  if (offer.offerKind === 'passenger') return `${plan.service} Service · protect the food line`;
+  if (offer.offerKind === 'freight') return `${plan.cargo} Cargo · clear arm → storage`;
+  return `${plan.service} Service + ${plan.cargo} Cargo · both routes compete`;
+}
+
+function crewPlanVerdict(offer: StationState['trafficOffers'][number]): { label: string; ready: boolean } {
+  const plan = offerCrewPlan(offer);
+  const targets = state.controls.crewShiftTargets;
+  const serviceGap = Math.max(0, plan.service - (targets.food ?? 0));
+  const cargoGap = Math.max(0, plan.cargo - (targets.logistics ?? 0));
+  const gaps = [
+    serviceGap > 0 ? `${serviceGap} Service` : '',
+    cargoGap > 0 ? `${cargoGap} Cargo` : ''
+  ].filter(Boolean);
+  return gaps.length === 0
+    ? { label: 'CREW READY', ready: true }
+    : { label: `SHORT ${gaps.join(' + ')}`, ready: false };
+}
+
+function promiseIntervention(kind: StationState['portOps']['contracts'][number]['promises'][number]['kind']): string {
+  if (kind === 'passengers-served') return 'Move flexible crew to Service or add counter throughput.';
+  if (kind === 'drinks-served') return 'Open a Cantina with a Bar Counter; Taps shorten drink service.';
+  if (kind === 'leisure-served') return 'Add Lounge seating and protect the public route.';
+  if (kind === 'restroom-served') return 'Add visitor-zoned Toilets; every fixture serves one person.';
+  if (kind === 'hygiene-served') return 'Add visitor-zoned Showers or Sinks.';
+  if (kind === 'comfort-served') return 'Add a Game Station or Observatory Telescope.';
+  if (kind === 'passengers-returned') return 'Protect the public route and leave boarding slack.';
+  if (kind === 'freight-unloaded' || kind === 'freight-loaded') return 'Move flexible crew to Cargo and clear the storage route.';
+  return 'Protect the work needed by this promise.';
+}
+
+function refreshShiftBrief(activeTurnarounds: StationState['arrivingShips']): void {
+  const activeShip = activeTurnarounds
+    .map((ship) => ({ ship, contract: ship.portContractId == null ? null : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null }))
+    .filter((entry) => entry.contract !== null)
+    .sort((a, b) => (a.contract?.hardDepartureAt ?? Infinity) - (b.contract?.hardDepartureAt ?? Infinity))[0];
+  if (activeShip?.contract) {
+    const contract = activeShip.contract;
+    const seconds = Math.max(0, Math.ceil(contract.hardDepartureAt - state.now));
+    const incomplete = [...contract.promises]
+      .filter((promise) => promise.completed + 0.01 < promise.target)
+      .sort((a, b) => (a.completed / Math.max(1, a.target)) - (b.completed / Math.max(1, b.target)))[0];
+    if (contract.status === 'boarding') {
+      shiftBriefEl.className = 'shift-brief is-urgent';
+      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Boarding · ${seconds}s left</span><strong>Get ${escapeHtml(contract.callsign)} clear</strong><span>Optional work is over. Passengers are returning and unfinished freight will settle partial.</span>`;
+      return;
+    }
+    if (incomplete) {
+      const offer = activeShip.ship.portManifest;
+      const rosterReady = offer ? crewPlanVerdict(offer).ready : false;
+      shiftBriefEl.className = seconds <= 24 ? 'shift-brief is-urgent' : 'shift-brief is-active';
+      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Operate · ${seconds}s left</span><strong>${escapeHtml(incomplete.label)} ${Math.floor(incomplete.completed)}/${Math.floor(incomplete.target)}</strong><span>${seconds <= 24 || !rosterReady ? escapeHtml(promiseIntervention(incomplete.kind)) : 'Crew plan is staffed. Watch this count and intervene if it stalls.'}</span>`;
+      return;
+    }
+  }
+
+  const accepted = state.portOps.contracts
+    .filter((contract) => contract.status === 'accepted')
+    .sort((a, b) => a.arrivesAt - b.arrivesAt)[0];
+  if (accepted) {
+    const offer = state.trafficOffers.find((entry) => entry.id === accepted.offerId);
+    if (offer) {
+      const plan = offerCrewPlan(offer);
+      const verdict = crewPlanVerdict(offer);
+      shiftBriefEl.className = verdict.ready ? 'shift-brief is-ready' : 'shift-brief is-urgent';
+      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Prepare · arrives in ${Math.max(1, Math.ceil(accepted.arrivesAt - state.now))}s</span><strong>${escapeHtml(accepted.callsign)} needs ${plan.service} Service · ${plan.cargo} Cargo</strong><span>${verdict.ready ? 'Safe plan ready. Press Play, or reserve a second manifest to risk an overlap.' : `${verdict.label}. Reassign the flexible crew before arrival.`}</span>`;
+      return;
+    }
+  }
+
+  if (state.portOps.selectedSettlementId !== null) {
+    const settlement = state.portOps.settlements.find((entry) => entry.id === state.portOps.selectedSettlementId);
+    if (settlement) {
+      const failed = settlement.promises.find((promise) => promise.completed + 0.01 < promise.target);
+      shiftBriefEl.className = failed ? 'shift-brief is-review' : 'shift-brief is-ready';
+      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Review the turnaround</span><strong>${escapeHtml(settlement.callsign)} · ${failed ? `${escapeHtml(failed.label)} fell short` : 'all promises met'}</strong><span>${failed ? escapeHtml(promiseIntervention(failed.kind)) : 'The station is ready for a harder overlap.'}</span>`;
+      return;
+    }
+  }
+
+  const openOffers = state.trafficOffers.filter((offer) => offer.status !== 'cleared');
+  shiftBriefEl.className = 'shift-brief';
+  shiftBriefEl.innerHTML = openOffers.length > 0
+    ? '<span class="shift-brief-kicker">Choose this shift\'s work</span><strong>Reserve one manifest, then staff its promise</strong><span>Passenger work needs Service. Freight needs Cargo. Overlap competes for the same eight crew.</span>'
+    : state.portOps.firstOfferShownAt === null
+      ? '<span class="shift-brief-kicker">Start the shift</span><strong>Press Play to receive the first manifests</strong><span>Dispatch pauses when the choices arrive, so you can compare them before committing.</span>'
+      : '<span class="shift-brief-kicker">Waiting for traffic</span><strong>Keep the station ready</strong><span>Review the roster, meal buffer, storage route, and cargo-arm condition.</span>';
+}
+
+let lastSettlementRenderKey = '';
+
+function refreshSettlementSummary(): void {
+  const settlements = state.portOps.settlements;
+  const settlement = state.portOps.selectedSettlementId == null
+    ? null
+    : settlements.find((entry) => entry.id === state.portOps.selectedSettlementId) ?? settlements[settlements.length - 1] ?? null;
+  const renderKey = JSON.stringify({
+    selectedSettlementId: state.portOps.selectedSettlementId,
+    settlements: settlements.map((entry) => [entry.id, entry.payoutCredits, entry.passengerSpendingCredits])
+  });
+  if (renderKey === lastSettlementRenderKey) return;
+  lastSettlementRenderKey = renderKey;
+  if (!settlement) {
+    settlementSummaryEl.innerHTML = settlements.length > 0
+      ? `<div class="settlement-empty">Turnaround report dismissed.</div>${renderSettlementHistory(settlements)}`
+      : 'No ship settled yet.';
+    return;
+  }
+  const rows = settlement.promises.map((promise) => {
+    const ratio = promise.target <= 0 ? 1 : clamp(promise.completed / promise.target, 0, 1);
+    const tone = ratio >= 0.999 ? 'complete' : ratio > 0 ? 'partial' : 'failed';
+    return `<div class="settlement-row ${tone}"><span>${promise.label}</span><b>${Math.floor(promise.completed)}/${Math.floor(promise.target)}</b></div>`;
+  }).join('');
+  const failedKinds = new Set(
+    settlement.promises
+      .filter((promise) => promise.completed + 0.01 < promise.target)
+      .map((promise) => promise.kind)
+  );
+  const adaptation = failedKinds.has('freight-unloaded') || failedKinds.has('freight-loaded')
+    ? {
+        text: 'Adapt: protect Cargo labor, shorten the storage route, or add spare handling capacity.',
+        tile: state.moduleInstances.find((module) => module.type === ModuleType.CargoArm)?.originTile ?? null
+      }
+    : failedKinds.has('passengers-served')
+      ? {
+          text: 'Adapt: protect Service labor, shorten the public route, or add counter throughput.',
+          tile: state.moduleInstances.find((module) => module.type === ModuleType.ServingStation)?.originTile ?? null
+        }
+      : failedKinds.has('passengers-returned')
+        ? {
+            text: 'Adapt: shorten the berth route or begin boarding with more slack.',
+            tile: state.moduleInstances.find((module) => module.type === ModuleType.Gangway)?.originTile ?? null
+          }
+        : null;
+  const adaptationHtml = adaptation
+    ? adaptation.tile === null
+      ? `<small class="settlement-adaptation">${escapeHtml(adaptation.text)}</small>`
+      : `<button class="settlement-adaptation" data-port-focus="${adaptation.tile}">${escapeHtml(adaptation.text)}</button>`
+    : '<small class="settlement-adaptation complete">Ready for a tighter overlap or a more demanding manifest.</small>';
+  settlementSummaryEl.innerHTML = `
+    <div class="settlement-head"><b>${settlement.callsign}</b><span>+${settlement.payoutCredits}c contract · +${settlement.passengerSpendingCredits}c guests</span><button class="settlement-dismiss" data-dismiss-settlement aria-label="Dismiss turnaround report" title="Dismiss report">&times;</button></div>
+    ${rows}
+    <small>${settlement.notes.join(' · ')}</small>
+    ${adaptationHtml}
+    ${renderSettlementHistory(settlements)}
+  `;
+}
+
+function renderSettlementHistory(settlements: StationState['portOps']['settlements']): string {
+  if (settlements.length === 0) return '';
+  const rows = settlements.slice(-5).reverse().map((entry) => {
+    const completed = entry.promises.filter((promise) => promise.completed + 0.01 >= promise.target).length;
+    return `<div class="settlement-history-row"><span>${escapeHtml(entry.callsign)}</span><span>${completed}/${entry.promises.length} promises</span><b>+${entry.payoutCredits + entry.passengerSpendingCredits}c</b></div>`;
+  }).join('');
+  return `<details class="settlement-history"><summary>Recent turnarounds</summary>${rows}</details>`;
+}
+
+let lastTrafficOfferRenderKey = '';
+
 function refreshTrafficOffers(): void {
+  const cargoOps = state.portOps;
+  const cargoArmCount = state.moduleInstances.filter((module) => module.type === ModuleType.CargoArm).length;
+  cargoArmStatusEl.textContent = cargoOps.cargoArmStatus === 'fault'
+    ? cargoArmCount >= 2
+      ? `PRIMARY FAULT · spare at 55% · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
+      : `FAULT · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
+    : `${cargoOps.cargoArmStatus === 'warning' ? 'Strained' : 'Ready'} · ${Math.round(cargoOps.cargoArmStrain)}% strain${cargoArmCount >= 2 ? ` · ${cargoArmCount} arms` : ''}`;
+  cargoArmStatusEl.className = `value cargo-arm-${cargoOps.cargoArmStatus}`;
   if (!state.controls.manualTrafficAdmission) {
     trafficOfferListEl.innerHTML = '';
     berthOpsWidgetEl.classList.add('hidden');
     return;
   }
   const activeTurnarounds = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
+  refreshShiftBrief(activeTurnarounds);
   const activeHtml = activeTurnarounds.map((ship) => {
     const offer = ship.portManifest!;
     const turn = ship.portTurnaround;
     const berthStanding = ship.assignedBerthAnchor == null ? null : getBerthInspectorAt(state, ship.assignedBerthAnchor);
-    const phase = ship.stage === 'approach' ? 'APPROACHING' : !turn ? 'BERTHING' : turn.phase.toUpperCase();
-    const progress = !turn
-      ? 0
-      : turn.phase === 'inspection'
-        ? Math.round((turn.inspectionProgress / Math.max(1, turn.inspectionRequired)) * 100)
-        : turn.phase === 'unloading'
-          ? Math.round((turn.inboundUnloaded / Math.max(1, turn.inboundTotal)) * 100)
-          : turn.phase === 'loading'
-            ? Math.round((Object.values(turn.outboundLoaded).reduce((a, b) => a + b, 0) / Math.max(1, Object.values(turn.outboundRequired).reduce((a, b) => a + b, 0))) * 100)
-          : 100;
-    const instruction = !turn
-      ? 'Stand by for docking collar'
-      : turn.phase === 'inspection'
-        ? 'Crew is required at the berth customs counter'
-        : turn.phase === 'unloading'
-          ? 'Logistics crew must clear the cargo arm into Intake / Storage'
-          : turn.phase === 'loading'
-            ? `Crew loading ${requestSummary(turn.outboundLoaded)} of ${requestSummary(turn.outboundRequired)} · ${Math.max(0, Math.ceil(turn.loadingDeadlineAt - state.now))}s left`
-          : 'Gangway open · passengers and commerce active';
+    const contract = ship.portContractId == null ? null : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null;
+    const phase = ship.stage === 'approach' ? 'APPROACHING' : contract?.status === 'boarding' ? 'BOARDING' : !turn ? 'BERTHING' : turn.phase.toUpperCase();
+    const promiseRatios = contract?.promises.map((promise) => promise.target <= 0 ? 1 : clamp(promise.completed / promise.target, 0, 1)) ?? [];
+    const progress = promiseRatios.length > 0 ? Math.round((promiseRatios.reduce((sum, ratio) => sum + ratio, 0) / promiseRatios.length) * 100) : 0;
+    const secondsLeft = contract ? Math.max(0, Math.ceil(contract.hardDepartureAt - state.now)) : Math.max(0, Math.ceil((turn?.loadingDeadlineAt ?? state.now) - state.now));
+    const promiseRows = contract?.promises.map((promise) => {
+      const complete = promise.completed >= promise.target - 0.001;
+      return `<div class="turnaround-promise ${complete ? 'complete' : ''}"><span>${promise.label}</span><b>${Math.floor(promise.completed)}/${Math.floor(promise.target)}</b></div>`;
+    }).join('') ?? '<div class="traffic-offer-line">Preparing contract...</div>';
     return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'}">
-      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase}</span></div>
-      <div class="traffic-offer-meta">BERTH ${berthStanding?.serviceGrade ?? 'C'} SERVICE · ×${(berthStanding?.servicePayoutMultiplier ?? 1).toFixed(2)} PAY · ${offer.passengersTotal} pax · ${cargoSummary(offer.inboundCargo)}</div>
+      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase} · ${secondsLeft}s</span></div>
+      <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} SHIFT · BERTH ${berthStanding?.serviceGrade ?? 'C'} · ${offer.passengersTotal} pax</div>
       <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
-      <div class="traffic-offer-line"><b>${progress}%</b> ${instruction}</div>
-      ${turn?.payoutSettled ? `<div class="traffic-offer-line"><b>Settled</b> ${Math.round(turn.fulfillmentRatio * 100)}% order · +${turn.payoutCredits}c</div>` : ''}
+      <div class="turnaround-promises">${promiseRows}</div>
     </article>`;
   }).join('');
   berthOpsWidgetEl.classList.toggle('hidden', activeTurnarounds.length === 0);
   berthOpsCountEl.textContent = `${activeTurnarounds.length} ACTIVE`;
   berthOpsListEl.innerHTML = activeHtml;
+  const offerRenderKey = JSON.stringify({
+    now: Math.floor(state.now),
+    dockVersion: state.dockVersion,
+    manual: state.controls.manualTrafficAdmission,
+    offers: state.trafficOffers.map((offer) => [offer.id, offer.status, offer.holdUsed, Math.ceil(offer.arrivesAt - state.now), Math.ceil(offer.expiresAt - state.now)]),
+    contracts: state.portOps.contracts.map((contract) => [contract.offerId, contract.status])
+  });
+  if (offerRenderKey === lastTrafficOfferRenderKey) return;
+  lastTrafficOfferRenderKey = offerRenderKey;
   if (state.trafficOffers.length === 0) {
     trafficOfferListEl.innerHTML = '<div class="traffic-empty">Orbital manifest queue clear</div>';
     return;
@@ -2089,16 +2505,20 @@ function refreshTrafficOffers(): void {
     const berthText = eligible > 0
       ? `${eligible} berth${eligible === 1 ? '' : 's'} ready · best ${bestStanding?.serviceGrade ?? 'C'} ×${(bestStanding?.servicePayoutMultiplier ?? 1).toFixed(2)}`
       : `No ${offer.size} berth ready`;
+    const crewVerdict = crewPlanVerdict(offer);
+    const facilityVerdict = offerFacilityVerdict(offer);
+    const maxReturn = offer.dockingFee + offer.projectedSpend;
     return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
-      <div class="traffic-offer-meta">${offer.size} ${offer.shipType} · ${offer.passengersTotal} pax · ${offer.riskLabel} risk</div>
-      <div class="traffic-offer-line"><b>Offers</b> ${cargoSummary(offer.inboundCargo)} · customs accepts useful stock only</div>
-      <div class="traffic-offer-line"><b>Wants</b> ${requestSummary(offer.outboundRequest)}</div>
-      <div class="traffic-offer-line"><b>Pays</b> ${offer.dockingFee}c fee + ~${offer.projectedSpend}c spend · ${offer.berthTimeSec}s berth</div>
+      <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} · ${offer.size} ${offer.shipType} · ${offer.riskLabel} risk</div>
+      <div class="traffic-offer-line"><b>Goal</b> ${offerPromisePreview(offer)}</div>
+      <div class="traffic-offer-line"><b>Plan</b> ${offerOperatingPlan(offer)} <span class="crew-plan-verdict ${crewVerdict.ready ? 'ready' : 'short'}">${crewVerdict.label}</span></div>
+      <div class="traffic-offer-line"><b>Facilities</b> <span class="crew-plan-verdict ${facilityVerdict.ready ? 'ready' : 'short'}">${facilityVerdict.label}</span></div>
+      <div class="traffic-offer-line"><b>Win</b> up to ${maxReturn}c · ${offer.berthTimeSec}s</div>
       <div class="traffic-offer-actions">
         <span class="traffic-readiness ${eligible > 0 ? 'ready' : 'blocked'}">${berthText}</span>
         <button data-traffic-action="assign" data-offer-id="${offer.id}" ${cleared || eligible <= 0 ? 'disabled' : ''}>${cleared ? 'Assigned' : ready ? 'Assign' : 'Reserve'}</button>
-        <button data-traffic-action="hold" data-offer-id="${offer.id}" ${!ready ? 'disabled' : ''}>Hold</button>
+        ${ready ? `<button data-traffic-action="hold" data-offer-id="${offer.id}" ${offer.holdUsed ? 'disabled' : ''}>${offer.holdUsed ? 'Held' : 'Hold'}</button>` : ''}
         <button data-traffic-action="refuse" data-offer-id="${offer.id}">Refuse</button>
       </div>
     </article>`;
@@ -2107,21 +2527,10 @@ function refreshTrafficOffers(): void {
 }
 
 function drawPortTurnaroundCallouts(): void {
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = '700 9px Consolas, Menlo, monospace';
-  for (const ship of state.arrivingShips) {
-    if (!ship.portManifest || ship.stage === 'depart' || ship.assignedBerthAnchor == null) continue;
-    const turn = ship.portTurnaround;
-    const x = ship.assignedBerthAnchor % state.width;
-    const y = Math.floor(ship.assignedBerthAnchor / state.width);
-    const label = ship.stage === 'approach' ? 'INBOUND' : (turn?.phase ?? 'BERTHING').toUpperCase();
+  const drawLabel = (label: string, cx: number, cy: number, color: string): void => {
     const width = Math.max(54, ctx.measureText(label).width + 18);
-    const cx = x * TILE_SIZE + TILE_SIZE * 0.5;
-    const cy = y * TILE_SIZE - 9;
-    ctx.fillStyle = 'rgba(4, 11, 18, 0.9)';
-    ctx.strokeStyle = turn?.phase === 'inspection' ? '#f3bd62' : turn?.phase === 'open' ? '#63d6a0' : '#75b8e8';
+    ctx.fillStyle = 'rgba(4, 11, 18, 0.92)';
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(cx - width / 2, cy - 8, width, 16, 4);
@@ -2129,6 +2538,85 @@ function drawPortTurnaroundCallouts(): void {
     ctx.stroke();
     ctx.fillStyle = '#f4f8fb';
     ctx.fillText(label, cx, cy + 0.5);
+  };
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 9px Consolas, Menlo, monospace';
+  for (const ship of state.arrivingShips) {
+    if (!ship.portManifest || ship.stage === 'depart' || ship.assignedBerthAnchor == null) continue;
+    const turn = ship.portTurnaround;
+    const contract = ship.portContractId == null ? null : state.portOps.contracts.find((candidate) => candidate.id === ship.portContractId) ?? null;
+    const x = ship.assignedBerthAnchor % state.width;
+    const y = Math.floor(ship.assignedBerthAnchor / state.width);
+    const seconds = contract ? Math.max(0, Math.ceil(contract.hardDepartureAt - state.now)) : null;
+    const incomplete = contract?.promises.find((promise) => promise.completed + 0.01 < promise.target) ?? null;
+    const quantity = incomplete && seconds !== null && seconds <= 28
+      ? ` · ${Math.floor(incomplete.completed)}/${Math.floor(incomplete.target)}`
+      : '';
+    const label = `${ship.stage === 'approach' ? 'INBOUND' : (turn?.phase ?? 'BERTHING').toUpperCase()}${seconds === null ? '' : ` ${seconds}s`}${quantity}`;
+    const cx = x * TILE_SIZE + TILE_SIZE * 0.5;
+    const cy = y * TILE_SIZE - 9;
+    const color = seconds !== null && incomplete && seconds <= 12
+      ? '#ff6868'
+      : seconds !== null && incomplete && seconds <= 28
+        ? '#f3bd62'
+        : turn?.phase === 'open' ? '#63d6a0' : '#75b8e8';
+    drawLabel(label, cx, cy, color);
+  }
+  const serving = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation);
+  const activeGuests = state.visitors.filter((visitor) => visitor.state !== VisitorState.ToDock).length;
+  if (serving && activeGuests > 0) {
+    const p = fromIndex(serving.originTile, state.width);
+    const queue = state.metrics.cafeteriaQueueingCount;
+    const mealStock = Math.floor(state.metrics.mealStock);
+    const activeServiceCrew = state.crewMembers.filter(
+      (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+    ).length;
+    const label = mealStock <= 0
+      ? `MESS · NO MEALS · LINE ${queue}`
+      : activeServiceCrew <= 0 && queue > 0
+        ? `MESS · SELF-SERVICE · LINE ${queue}`
+        : `MESS · ${activeServiceCrew} SERVICE · ${mealStock} MEALS${queue > 0 ? ` · LINE ${queue}` : ''}`;
+    const color = mealStock <= 0 ? '#ff6868' : activeServiceCrew <= 0 && queue > 0 ? '#ff9f5f' : queue >= 5 ? '#f3bd62' : '#63d6a0';
+    drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
+  }
+  const cargoArm = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm);
+  if (cargoArm && state.portOps.cargoArmStatus !== 'ready') {
+    const p = fromIndex(cargoArm.originTile, state.width);
+    const label = state.portOps.cargoArmStatus === 'fault' ? 'ARM FAULT' : `ARM ${Math.round(state.portOps.cargoArmStrain)}%`;
+    drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, state.portOps.cargoArmStatus === 'fault' ? '#ff6868' : '#f3bd62');
+  }
+  const activeCargoShip = state.arrivingShips.some((ship) => ship.portManifest && ship.stage !== 'depart');
+  const storageNodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === RoomType.Storage);
+  if (activeCargoShip && storageNodes.length > 0) {
+    const stock = storageNodes.reduce(
+      (sum, node) => sum + Object.values(node.items).reduce((nodeSum, amount) => nodeSum + (amount ?? 0), 0),
+      0
+    );
+    const capacity = storageNodes.reduce((sum, node) => sum + node.capacity, 0);
+    const activeLots = state.portOps.cargoLots.filter((lot) => lot.location !== 'closed' && lot.location !== 'delivered');
+    const freightHandled = activeLots.reduce((sum, lot) => sum + lot.handledQuantity, 0);
+    const freightReserved = activeLots.reduce((sum, lot) => sum + lot.reservedCapacity, 0);
+    const blocked = state.jobs.some(
+      (job) => job.portShipId !== undefined && job.state !== 'done' && job.state !== 'expired' && !!job.blockedReason
+    );
+    const p = fromIndex(storageNodes[0].tileIndex, state.width);
+    drawLabel(
+      `STORAGE ${Math.floor(stock)} STOCK · ${Math.floor(freightHandled)}/${Math.floor(freightReserved)} FREIGHT${blocked ? ' · BLOCKED' : ''}`,
+      (p.x + 0.5) * TILE_SIZE,
+      p.y * TILE_SIZE - 6,
+      blocked ? '#ff6868' : stock + freightReserved >= capacity * 0.85 ? '#f3bd62' : '#75b8e8'
+    );
+  }
+  for (const dock of state.docks) {
+    if (dock.purpose !== 'visitor' || dock.occupiedByShipId === null) continue;
+    const ship = state.arrivingShips.find((candidate) => candidate.id === dock.occupiedByShipId);
+    if (!ship || ship.portManifest || ship.stage === 'depart') continue;
+    const guests = state.visitors.filter((visitor) => visitor.originShipId === ship.id).length;
+    const p = fromIndex(dock.anchorTile, state.width);
+    const label = ship.stage === 'docked' ? `POD · ${guests} GUEST${guests === 1 ? '' : 'S'}` : 'POD · INBOUND';
+    drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, '#75b8e8');
   }
   ctx.restore();
 }
@@ -2370,14 +2858,17 @@ function residentConversionStatusText(compact = false): string {
 
 function crewOpsSummaryText(compact = false): string {
   const blocked = state.metrics.crewBlockedNoPath > 0 ? ` | Blocked ${state.metrics.crewBlockedNoPath}` : '';
+  const fixtureWait = state.metrics.idleCrewByReason.idle_waiting_fixture > 0
+    ? ` | Fixture wait ${state.metrics.idleCrewByReason.idle_waiting_fixture}`
+    : '';
   // "Working" must include crew on logistics/hauling jobs — they are working,
   // just not standing on a staffed post. Omitting them made the headline read
   // "Working 0" while a dozen crew visibly hauled (they were bucketed as
   // crewOnLogisticsJobs). Show the haul count so Working+Logistics+Idle+Resting
   // reconciles with the roster.
   return compact
-    ? `Working ${state.metrics.crewAssignedWorking} | Logistics ${state.metrics.crewOnLogisticsJobs} | Idle ${state.metrics.crewIdleAvailable} | Resting ${state.metrics.crewResting}${blocked}`
-    : `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Logistics ${state.metrics.crewOnLogisticsJobs} | Resting ${state.metrics.crewResting}${blocked}`;
+    ? `Working ${state.metrics.crewAssignedWorking} | Logistics ${state.metrics.crewOnLogisticsJobs} | Idle ${state.metrics.crewIdleAvailable} | Resting ${state.metrics.crewResting}${fixtureWait}${blocked}`
+    : `Working ${state.metrics.crewAssignedWorking} | Idle ${state.metrics.crewIdleAvailable} | Logistics ${state.metrics.crewOnLogisticsJobs} | Resting ${state.metrics.crewResting}${fixtureWait}${blocked}`;
 }
 
 function trafficOpsSummaryText(): string {
@@ -2405,15 +2896,24 @@ function jobsSummaryText(): string {
 }
 
 function criticalStaffingText(): string {
-  return `Room ops Caf ${state.ops.cafeteriasActive}/${state.ops.cafeteriasTotal} | ` +
-    `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Hydro ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
-    `LS ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Reactor ${state.ops.reactorsActive}/${state.ops.reactorsTotal}`;
+  const crew = getCrewSustainabilitySummary(state);
+  const needs = [
+    crew.tiredCrew > 0 ? `${crew.tiredCrew} tired` : '',
+    crew.thirstyCrew > 0 ? `${crew.thirstyCrew} need drinks` : '',
+    crew.restroomNeedsCrew > 0 ? `${crew.restroomNeedsCrew} need toilets` : '',
+    crew.hygieneNeedsCrew > 0 ? `${crew.hygieneNeedsCrew} need washing` : ''
+  ].filter(Boolean);
+  if (crew.criticalNeedsCrew > 0 || crew.strainedCrew > 0 || crew.sleepSlots < state.crewMembers.length) {
+    const needsText = needs.length > 0 ? needs.join(' · ') : 'needs stable';
+    return `Crew needs · ${needsText}${crew.criticalNeedsCrew > 0 ? ` · ${crew.criticalNeedsCrew} critical` : ''} · sleep ${crew.sleepSlots}/${state.crewMembers.length}`;
+  }
+  return `Crew ready · ${crew.averageMoveSpeedPct}% move speed · sleep ${crew.sleepSlots}/${state.crewMembers.length}`;
 }
 
 function idleReasonsText(): string {
   return `Idle reasons: available ${state.metrics.idleCrewByReason.idle_available} | no jobs ${state.metrics.idleCrewByReason.idle_no_jobs} | ` +
     `resting ${state.metrics.idleCrewByReason.idle_resting} | no path ${state.metrics.idleCrewByReason.idle_no_path} | ` +
-    `waiting ${state.metrics.idleCrewByReason.idle_waiting_reassign}`;
+    `fixture wait ${state.metrics.idleCrewByReason.idle_waiting_fixture} | waiting ${state.metrics.idleCrewByReason.idle_waiting_reassign}`;
 }
 
 function stallReasonsText(): string {
@@ -2447,7 +2947,7 @@ function crewRetargetsText(): string {
 
 function opsExtraText(): string {
   return `Kitchen ${state.ops.kitchenActive}/${state.ops.kitchenTotal} | Workshop ${state.ops.workshopActive}/${state.ops.workshopTotal} | ` +
-    `Hygiene ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
+    `Bathrooms ${state.ops.hygieneActive}/${state.ops.hygieneTotal} | Hydroponics ${state.ops.hydroponicsActive}/${state.ops.hydroponicsTotal} | ` +
     `Life Support ${state.ops.lifeSupportActive}/${state.ops.lifeSupportTotal} | Lounge ${state.ops.loungeActive}/${state.ops.loungeTotal} | ` +
     `Market ${state.ops.marketActive}/${state.ops.marketTotal} | Cantina ${state.ops.cantinaActive}/${state.ops.cantinaTotal} | ` +
     `Obs ${state.ops.observatoryActive}/${state.ops.observatoryTotal} | Clinic ${state.ops.clinicActive}/${state.ops.clinicTotal} | ` +
@@ -2519,6 +3019,7 @@ function refreshOpsModal(): void {
     { label: 'Available', value: state.metrics.idleCrewByReason.idle_available },
     { label: 'No Jobs', value: state.metrics.idleCrewByReason.idle_no_jobs, tone: state.metrics.idleCrewByReason.idle_no_jobs > 0 ? 'muted' : 'default' },
     { label: 'No Path', value: state.metrics.idleCrewByReason.idle_no_path, tone: state.metrics.idleCrewByReason.idle_no_path > 0 ? 'danger' : 'default' },
+    { label: 'Fixture Wait', value: state.metrics.idleCrewByReason.idle_waiting_fixture, tone: state.metrics.idleCrewByReason.idle_waiting_fixture > 0 ? 'warn' : 'default' },
     { label: 'Waiting', value: state.metrics.idleCrewByReason.idle_waiting_reassign, tone: state.metrics.idleCrewByReason.idle_waiting_reassign > 0 ? 'warn' : 'default' },
   ]);
   opsModalCrewWhyEl.textContent = crewWhyText();
@@ -2787,7 +3288,189 @@ function refreshOpsModal(): void {
   opsModalRatingEl.textContent = ratingWhyText();
 }
 
+let lastPortAlertRenderKey = '';
+
 function refreshAlertPanel(): void {
+  if (state.controls.manualTrafficAdmission) {
+    const portAlerts: Array<{ tone: 'danger' | 'warn'; text: string; tile: number | null; incidentId?: number }> = [];
+    const crewSustainability = getCrewSustainabilitySummary(state);
+    if (crewSustainability.resignationNotices > 0) {
+      portAlerts.push({
+        tone: 'danger',
+        text: `${crewSustainability.resignationNotices} crew resignation notice${crewSustainability.resignationNotices === 1 ? '' : 's'} · restore pay and needs within 60s`,
+        tile: state.crewMembers.find((crew) => crew.resignationNoticeAt !== null)?.tileIndex ?? null
+      });
+    } else if (crewSustainability.unpaidCrew > 0) {
+      portAlerts.push({
+        tone: 'danger',
+        text: `${crewSustainability.unpaidCrew} crew unpaid · next payroll ${Math.ceil(crewSustainability.payrollPerCycle)}c`,
+        tile: state.crewMembers.find((crew) => crew.missedPayrollCycles > 0)?.tileIndex ?? null
+      });
+    } else if (crewSustainability.criticalNeedsCrew > 0) {
+      const pressure = [
+        crewSustainability.tiredCrew > 0 ? `${crewSustainability.tiredCrew} tired` : '',
+        crewSustainability.thirstyCrew > 0 ? `${crewSustainability.thirstyCrew} need drinks` : '',
+        crewSustainability.restroomNeedsCrew > 0 ? `${crewSustainability.restroomNeedsCrew} need toilets` : '',
+        crewSustainability.hygieneNeedsCrew > 0 ? `${crewSustainability.hygieneNeedsCrew} need washing` : ''
+      ].filter(Boolean).join(' · ');
+      const mostStrainedCrew = state.crewMembers.reduce((worst, crew) =>
+        Math.min(crew.energy, crew.hygiene, crew.bladder, crew.thirst) < Math.min(worst.energy, worst.hygiene, worst.bladder, worst.thirst)
+          ? crew
+          : worst
+      );
+      portAlerts.push({
+        tone: 'danger',
+        text: `Crew needs critical: ${pressure}`,
+        tile: mostStrainedCrew.tileIndex
+      });
+    } else if (crewSustainability.sleepSlots < state.crew.total) {
+      portAlerts.push({
+        tone: 'warn',
+        text: `Crew quarters short: ${crewSustainability.sleepSlots}/${state.crew.total} sleep slots · add bunks or beds`,
+        tile: state.moduleInstances.find((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)?.originTile ?? null
+      });
+    }
+    const cargoArmTile = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm)?.originTile ?? null;
+    if (state.portOps.cargoArmStatus === 'fault') {
+      const hasSpareArm = state.moduleInstances.filter((module) => module.type === ModuleType.CargoArm).length >= 2;
+      portAlerts.push({
+        tone: 'danger',
+        text: hasSpareArm
+          ? `Primary cargo arm fault: spare handling at 55% · ${state.portOps.cargoArmRepairProgress.toFixed(1)}/8s repaired`
+          : `Cargo arm stopped: assign Maintenance · ${state.portOps.cargoArmRepairProgress.toFixed(1)}/8s repaired`,
+        tile: cargoArmTile
+      });
+    } else if (state.portOps.cargoArmStatus === 'warning') {
+      portAlerts.push({
+        tone: 'warn',
+        text: `Cargo arm strained: ${Math.round(state.portOps.cargoArmStrain)}% · idle it before the next heavy load`,
+        tile: cargoArmTile
+      });
+    }
+    for (const ship of state.arrivingShips) {
+      const contract = ship.portContractId == null
+        ? null
+        : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null;
+      if (!contract || contract.status === 'departed' || contract.status === 'settled') continue;
+      const seconds = Math.max(0, Math.ceil(contract.hardDepartureAt - state.now));
+      const incomplete = contract.promises.filter((promise) => promise.completed + 0.01 < promise.target);
+      if (seconds <= 24 && incomplete.length > 0) {
+        const lead = incomplete[0];
+        portAlerts.push({
+          tone: seconds <= 12 ? 'danger' : 'warn',
+          text: `${contract.callsign} at risk: ${lead.label} ${Math.floor(lead.completed)}/${Math.floor(lead.target)} · ${seconds}s left`,
+          tile: ship.bayTiles[0] ?? null
+        });
+      }
+    }
+    const blockedCargoJob = state.jobs.find(
+      (job) => job.portShipId !== undefined && job.state !== 'done' && job.state !== 'expired' && !!job.blockedReason
+    );
+    if (blockedCargoJob) {
+      const blockedContract = blockedCargoJob.portShipId === undefined
+        ? null
+        : state.portOps.contracts.find((contract) => contract.shipId === blockedCargoJob.portShipId) ?? null;
+      const seconds = blockedContract ? Math.max(0, Math.ceil(blockedContract.hardDepartureAt - state.now)) : null;
+      portAlerts.push({
+        tone: 'warn',
+        text: `Freight blocked: ${blockedCargoJob.blockedReason}${seconds === null ? '' : ` · ${seconds}s left`}`,
+        tile: blockedCargoJob.toTile
+      });
+    }
+    const servingTile = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation)?.originTile ?? null;
+    const activeServiceCrew = state.crewMembers.filter(
+      (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+    ).length;
+    if (state.metrics.mealStock < 8) {
+      portAlerts.push({
+        tone: 'danger',
+        text: `Meal buffer empty: ${Math.floor(state.metrics.mealStock)} left · import meals or staff Service`,
+        tile: servingTile
+      });
+    } else if (state.metrics.mealStock < 20) {
+      portAlerts.push({
+        tone: 'warn',
+        text: `Meals running low: ${Math.floor(state.metrics.mealStock)} left · restock before the next passenger ship`,
+        tile: servingTile
+      });
+    }
+    if (state.metrics.cafeteriaQueueingCount >= 3) {
+      const nextPassengerDeadline = state.portOps.contracts
+        .filter((contract) => contract.status === 'active' || contract.status === 'boarding')
+        .filter((contract) => contract.promises.some((promise) => promise.kind === 'passengers-served'))
+        .map((contract) => Math.max(0, Math.ceil(contract.hardDepartureAt - state.now)))
+        .sort((a, b) => a - b)[0];
+      portAlerts.push({
+        tone: state.metrics.cafeteriaQueueingCount >= 7 ? 'danger' : 'warn',
+        text: activeServiceCrew <= 0
+          ? `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · counter is on slow self-service; get Service crew into the cafeteria${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`
+          : `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · ${activeServiceCrew} Service active; add crew or another counter${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`,
+        tile: servingTile
+      });
+    }
+    if (state.metrics.filthyTiles > 0 || state.metrics.dirtyTiles > 10) {
+      let dirtiestTile: number | null = null;
+      let maxDirt = 0;
+      for (let tile = 0; tile < state.dirtByTile.length; tile++) {
+        const dirt = state.dirtByTile[tile] ?? 0;
+        if (dirt <= maxDirt) continue;
+        maxDirt = dirt;
+        dirtiestTile = tile;
+      }
+      portAlerts.push({
+        tone: state.metrics.filthyTiles > 0 ? 'danger' : 'warn',
+        text: `${state.metrics.filthyTiles > 0 ? 'Filthy concourse' : 'Cleaning backlog'}: ${state.metrics.filthyTiles || state.metrics.dirtyTiles} tiles · assign Cleaning`,
+        tile: dirtiestTile
+      });
+    }
+    if (state.metrics.airQuality < 35 || state.metrics.pressurizationPct < 75) {
+      portAlerts.push({
+        tone: 'danger',
+        text: `Air emergency: ${Math.round(state.metrics.airQuality)}% quality · inspect walls, doors, and life support`,
+        tile: state.core?.serviceTile ?? null
+      });
+    }
+    const firstIncident = activeIncidentsForUi()[0];
+    if (firstIncident) {
+      const responseStatus = firstIncident.assignedCrewId !== null
+        ? 'Security responding'
+        : state.unlocks.tier < 3
+          ? 'Security unavailable until Tier 3'
+          : 'No responder available';
+      portAlerts.push({
+        tone: 'danger',
+        text: `${firstIncident.type === 'theft' ? 'Theft' : firstIncident.type} in progress · ${responseStatus}`,
+        tile: null,
+        incidentId: firstIncident.id
+      });
+    }
+    const crowdFeed = state.derived.queueTheater?.eventFeed ?? [];
+    for (const entry of crowdFeed.slice(-2).reverse()) {
+      if (state.now - entry.at > 45) continue;
+      portAlerts.push({
+        tone: entry.tone === 'danger' ? 'danger' : 'warn',
+        text: entry.text,
+        tile: null
+      });
+    }
+    const portAlertRenderKey = JSON.stringify(portAlerts);
+    if (portAlertRenderKey === lastPortAlertRenderKey) return;
+    lastPortAlertRenderKey = portAlertRenderKey;
+    if (portAlerts.length === 0) {
+      alertListEl.textContent = 'No active alerts';
+      alertListEl.classList.add('is-clear');
+      return;
+    }
+    alertListEl.classList.remove('is-clear');
+    alertListEl.innerHTML = portAlerts.slice(0, 5).map((alert) =>
+      alert.incidentId !== undefined
+        ? `<button class="alert-item ${alert.tone}" data-incident-select="${alert.incidentId}">${escapeHtml(alert.text)}</button>`
+        : alert.tile === null
+          ? `<div class="alert-item ${alert.tone}">${escapeHtml(alert.text)}</div>`
+          : `<button class="alert-item ${alert.tone}" data-port-focus="${alert.tile}">${escapeHtml(alert.text)}</button>`
+    ).join('');
+    return;
+  }
   const alerts: Array<{ tone: 'danger' | 'warn'; text: string; incidentId?: number }> = [];
   // Crowd-loop v1 (CH-0): death is never silent — top alert, always first.
   if (state.metrics.recentDeaths > 0) {
@@ -3048,11 +3731,11 @@ function formatCrewSelectionHtml(crewId: number): string {
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
   const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
   const bladderHint = `seeks toilet at <${CREW_TOILET_THRESHOLD_UI}`;
-  const thirstHint = `seeks drink at <${CREW_THIRST_THRESHOLD_UI} (Cantina or Water Fountain)`;
+  const thirstHint = `seeks drink at <${CREW_THIRST_THRESHOLD_UI} (Cafeteria, Cantina, or Water Fountain)`;
 
   const parts: string[] = [];
   parts.push(`<div class="agent-card__head">
-    <span class="agent-card__title">Crew #${inspector.id}</span>
+    <span class="agent-card__title">${escapeHtml(crew?.name ?? `Crew #${inspector.id}`)}</span>
     <span class="agent-card__role">${escapeHtml(roleLabel)} · ${escapeHtml(workLabel)}</span>
   </div>`);
   parts.push(`<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`);
@@ -3061,12 +3744,20 @@ function formatCrewSelectionHtml(crewId: number): string {
   }
   const airHint = `local oxygen at this tile (distress <30, critical <15)`;
   parts.push(`<div class="agent-card__needs">
+    ${needBarHtml('Morale', inspector.morale, 35, 22, 'low morale slows work; sustained critical needs or missed pay can trigger resignation')}
     ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
     ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
     ${needBarHtml('Bladder', inspector.bladder, CREW_TOILET_THRESHOLD_UI, null, bladderHint)}
     ${needBarHtml('Thirst', inspector.thirst, CREW_THIRST_THRESHOLD_UI, null, thirstHint)}
     ${needBarHtml('Air', inspector.localAir, 30, 15, airHint)}
   </div>`);
+  if (inspector.missedPayrollCycles > 0) {
+    parts.push(`<div class="agent-card__warn">Unpaid for ${inspector.missedPayrollCycles} payroll cycle${inspector.missedPayrollCycles === 1 ? '' : 's'}</div>`);
+  }
+  if (inspector.resignationNoticeAt !== null) {
+    const remaining = Math.max(0, Math.ceil(60 - (state.now - inspector.resignationNoticeAt)));
+    parts.push(`<div class="agent-card__warn">Resignation notice: ${remaining}s to recover morale and payroll</div>`);
+  }
   if (inspector.airExposureSec > 0.5) {
     parts.push(`<div class="agent-card__warn">⚠ low-air exposure ${inspector.airExposureSec.toFixed(1)}s</div>`);
   }
@@ -3085,6 +3776,22 @@ function formatCrewSelectionHtml(crewId: number): string {
     parts.push(`<div class="agent-card__idle">Idle: ${escapeHtml(inspector.idleReason.replace('idle_', ''))}</div>`);
   }
   parts.push(`<div class="agent-card__route">Target ${escapeHtml(inspector.providerTarget ?? 'none')} · reservation ${escapeHtml(inspector.reservationSummary)}</div>`);
+  if (crew) {
+    const activeLane = crew.manualWorkLane ?? crew.workLane;
+    const laneButtons: Array<[CrewWorkLane, string]> = [
+      ['food', 'Service'],
+      ['logistics', 'Cargo'],
+      ['engineering', 'Maintenance'],
+      ['flex', 'Flex']
+    ];
+    parts.push(`<div class="agent-card__lane">
+      <small>${crew.manualWorkLane == null ? `Shift controlled · ${escapeHtml(activeLane)}` : `Manual override · ${escapeHtml(activeLane)}`}</small>
+      <div class="agent-card__lane-actions">
+        ${laneButtons.map(([lane, label]) => `<button data-crew-lane="${lane}" data-crew-id="${crew.id}" class="${activeLane === lane ? 'active' : ''}">${label}</button>`).join('')}
+        <button data-crew-lane="auto" data-crew-id="${crew.id}" ${crew.manualWorkLane == null ? 'disabled' : ''}>Release</button>
+      </div>
+    </div>`);
+  }
   if (inspector.blockedReason) {
     parts.push(`<div class="agent-card__warn">Blocked: ${escapeHtml(inspector.blockedReason)}</div>`);
   }
@@ -3103,7 +3810,7 @@ function formatCrewSelectionHtml(crewId: number): string {
 
 function selectedAgentTitle(): string {
   if (!selectedAgent) return 'Agent Inspector';
-  if (selectedAgent.kind === 'visitor') return `Visitor #${selectedAgent.id}`;
+  if (selectedAgent.kind === 'visitor') return getVisitorInspectorById(state, selectedAgent.id)?.name ?? `Visitor #${selectedAgent.id}`;
   if (selectedAgent.kind === 'resident') return `Resident #${selectedAgent.id}`;
   return `Crew #${selectedAgent.id}`;
 }
@@ -3112,7 +3819,7 @@ function formatVisitorInspectorHtml(visitorId: number): string {
   const inspector = getVisitorInspectorById(state, visitorId);
   if (!inspector) return 'Selected visitor is no longer available.';
   return [
-    `<div class="agent-card__head"><span class="agent-card__title">Visitor #${inspector.id}</span><span class="agent-card__role">${escapeHtml(inspector.archetype)} · ${escapeHtml(inspector.primaryPreference)}</span></div>`,
+    `<div class="agent-card__head"><span class="agent-card__title">${escapeHtml(inspector.name)}</span><span class="agent-card__role">${escapeHtml(inspector.trait)} · ${escapeHtml(inspector.archetype)}</span></div>`,
     `<div class="agent-card__action">${escapeHtml(inspector.currentAction)}</div>`,
     `<div class="agent-card__reason">${escapeHtml(inspector.actionReason)}</div>`,
     `<div class="side-inspector-grid">
@@ -3125,6 +3832,9 @@ function formatVisitorInspectorHtml(visitorId: number): string {
       <span>Health</span><strong style="color:${healthColor(inspector.healthState)}">${escapeHtml(inspector.healthState)}</strong>
       <span>Patience</span><strong>${inspector.patience.toFixed(1)}</strong>
     </div>`,
+    inspector.servicePlan.length > 0
+      ? `<div class="agent-card__route">Manifest: ${inspector.servicePlan.map((service) => `${inspector.completedServices.includes(service) ? '✓' : service === inspector.activeService ? '→' : '·'} ${escapeHtml(service)}`).join(' · ')}</div>`
+      : '',
     `<div class="agent-card__route">Meal ${inspector.servedMeal ? 'served' : 'not served'} · carrying ${inspector.carryingMeal ? 'yes' : 'no'} · serving ${escapeHtml(formatTileLabel(inspector.reservedServingTile))}</div>`,
     inspector.blockedReason ? `<div class="agent-card__warn">Blocked: ${escapeHtml(inspector.blockedReason)}</div>` : ''
   ].join('');
@@ -3261,7 +3971,7 @@ function refreshSelectionSummary(): void {
     }
     const inspector = getCrewInspectorById(state, selectedAgent.id);
     selectionSummaryEl.textContent = inspector
-      ? `Crew #${inspector.id}: ${inspector.state} | ${inspector.currentAction} | ${inspector.healthState}`
+      ? `Crew #${inspector.id}: ${inspector.state} | ${inspector.currentAction} | morale ${Math.round(inspector.morale)}% | ${inspector.healthState}`
       : 'Selected crew is no longer available.';
     return;
   }
@@ -3274,9 +3984,52 @@ function refreshSelectionSummary(): void {
   }
   if (selectedRoomTile !== null) {
     const inspector = getRoomInspectorAt(state, selectedRoomTile);
-    selectionSummaryEl.textContent = inspector
-      ? `${inspector.room}: ${inspector.active ? 'active' : 'inactive'} | staff ${inspector.staffCount}/${inspector.requiredStaff} | pressure ${inspector.pressurizedPct.toFixed(0)}%`
-      : 'Selected room is no longer available.';
+    if (!inspector) {
+      selectionSummaryEl.textContent = 'Selected room is no longer available.';
+    } else if (inspector.room === RoomType.Cafeteria) {
+      const nextDeadline = state.portOps.contracts
+        .filter((contract) => (contract.status === 'active' || contract.status === 'boarding') && contract.promises.some((promise) => promise.kind === 'passengers-served'))
+        .map((contract) => Math.max(0, Math.ceil(contract.hardDepartureAt - state.now)))
+        .sort((a, b) => a - b)[0];
+      const activeServiceCrew = state.crewMembers.filter(
+        (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+      ).length;
+      selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${Math.floor(state.metrics.mealStock)} ready | Service ${activeServiceCrew}/${state.controls.crewShiftTargets.food} on station${activeServiceCrew <= 0 ? ' (slow self-service)' : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
+    } else if (inspector.room === RoomType.Storage || inspector.room === RoomType.LogisticsStock) {
+      const nodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === inspector.room);
+      const capacity = nodes.reduce((sum, node) => sum + node.capacity, 0);
+      const used = nodes.reduce((sum, node) => sum + Object.values(node.items).reduce((nodeSum, amount) => nodeSum + (amount ?? 0), 0), 0);
+      const activeLots = state.portOps.cargoLots.filter((lot) => lot.location !== 'closed' && lot.location !== 'delivered');
+      const freightHandled = activeLots.reduce((sum, lot) => sum + lot.handledQuantity, 0);
+      const freightTotal = activeLots.reduce((sum, lot) => sum + lot.quantity, 0);
+      selectionSummaryEl.textContent = `${inspector.room === RoomType.Storage ? 'Storage' : 'Intake'}: ${Math.floor(used)}/${capacity} station stock | ${Math.floor(freightHandled)}/${Math.floor(freightTotal)} consigned freight | ${state.controls.crewShiftTargets.logistics} Cargo`;
+    } else if (inspector.room === RoomType.Dorm) {
+      const crewSustainability = getCrewSustainabilitySummary(state);
+      selectionSummaryEl.textContent = `Crew quarters: ${crewSustainability.occupiedSleepSlots}/${crewSustainability.sleepSlots} occupied | ${crewSustainability.bunkSlots} bunk slots, ${crewSustainability.bedSlots} bed slots | ${crewSustainability.lockers} lockers | quality ${Math.round(crewSustainability.quartersQuality)}%`;
+    } else if (inspector.room === RoomType.Hygiene) {
+      const toilets = state.moduleInstances.filter((module) => module.type === ModuleType.Toilet).length;
+      const showers = state.moduleInstances.filter((module) => module.type === ModuleType.Shower).length;
+      const sinks = state.moduleInstances.filter((module) => module.type === ModuleType.Sink).length;
+      const crewUsers = state.crewMembers.filter((crew) => crew.toileting || crew.cleaning).length;
+      const visitorUsers = state.visitors.filter((visitor) => state.rooms[visitor.tileIndex] === RoomType.Hygiene).length;
+      selectionSummaryEl.textContent = `Bathroom (${inspector.housingPolicy ?? 'visitor'}): ${crewUsers} crew + ${visitorUsers} visitors using | ${toilets} toilets, ${showers} showers, ${sinks} sinks | toilet handles restroom; shower is the fastest wash`;
+    } else if (inspector.room === RoomType.Lounge || inspector.room === RoomType.RecHall) {
+      const seats = state.moduleInstances.filter((module) => module.type === ModuleType.Couch || module.type === ModuleType.Bench || module.type === ModuleType.RecUnit).reduce((sum, module) => sum + Math.min(module.tiles.length, module.type === ModuleType.RecUnit ? 3 : 2), 0);
+      const premium = state.moduleInstances.filter((module) => module.type === ModuleType.GameStation || module.type === ModuleType.Telescope).reduce((sum, module) => sum + Math.min(module.tiles.length, 3), 0);
+      const users = state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && (state.rooms[visitor.tileIndex] === RoomType.Lounge || state.rooms[visitor.tileIndex] === RoomType.RecHall)).length;
+      selectionSummaryEl.textContent = `Lounge: ${users} visitors using | ${seats} social seats fulfill leisure | ${premium} premium positions fulfill comfort`;
+    } else if (inspector.room === RoomType.Cantina) {
+      const bars = state.moduleInstances.filter((module) => module.type === ModuleType.BarCounter).length;
+      const taps = state.moduleInstances.filter((module) => module.type === ModuleType.Tap).length;
+      const drinkers = state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && state.rooms[visitor.tileIndex] === RoomType.Cantina).length;
+      const seats = state.moduleInstances
+        .filter((module) => module.type === ModuleType.Bench && state.rooms[module.originTile] === RoomType.Cantina)
+        .reduce((sum, module) => sum + module.tiles.length, 0);
+      const waitingForSeat = state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.carryingDrink && visitor.state === VisitorState.ToLeisure).length;
+      selectionSummaryEl.textContent = `Cantina: ${drinkers}/${seats} seated · ${waitingForSeat} waiting for a seat | ${bars * 2} bar positions | ${taps} taps (${Math.round((1 + taps * 0.28) * 100)}% pickup speed)`;
+    } else {
+      selectionSummaryEl.textContent = `${inspector.room}: ${inspector.active ? 'active' : 'inactive'} | staff ${inspector.staffCount}/${inspector.requiredStaff} | pressure ${inspector.pressurizedPct.toFixed(0)}%`;
+    }
     return;
   }
   selectionSummaryEl.textContent = 'No room, dock, or resident selected.';
@@ -3668,6 +4421,91 @@ function checklistRatio(current: number, target: number): { label: string; done:
   };
 }
 
+type StationGoalMetric = 'credits' | 'visitors' | 'turnarounds' | 'perfect-turnarounds';
+
+type StationGoalDefinition = {
+  title: string;
+  criteria: Array<{ metric: StationGoalMetric; label: string; target: number }>;
+};
+
+const STATION_GOALS: StationGoalDefinition[] = [
+  {
+    title: 'Establish a working port',
+    criteria: [
+      { metric: 'credits', label: 'Earn traffic revenue', target: 500 },
+      { metric: 'visitors', label: 'Serve visitors', target: 20 }
+    ]
+  },
+  {
+    title: 'Become a reliable stop',
+    criteria: [
+      { metric: 'credits', label: 'Earn traffic revenue', target: 1500 },
+      { metric: 'visitors', label: 'Serve visitors', target: 60 },
+      { metric: 'turnarounds', label: 'Complete turnarounds', target: 8 }
+    ]
+  },
+  {
+    title: 'Build a regional hub',
+    criteria: [
+      { metric: 'credits', label: 'Earn traffic revenue', target: 4000 },
+      { metric: 'visitors', label: 'Serve visitors', target: 160 },
+      { metric: 'perfect-turnarounds', label: 'Perfect turnarounds', target: 12 }
+    ]
+  }
+];
+
+function lifetimeVisitorsServed(): number {
+  const unsettledProgress = state.portOps.contracts
+    .filter((contract) => contract.status === 'accepted' || contract.status === 'active' || contract.status === 'boarding')
+    .flatMap((contract) => contract.promises)
+    .filter((promise) => promise.kind === 'passengers-served')
+    .reduce((sum, promise) => sum + promise.completed, 0);
+  return state.portOps.telemetry.mealsCompleted + unsettledProgress;
+}
+
+function stationGoalMetricValue(metric: StationGoalMetric): number {
+  if (metric === 'credits') return state.metrics.creditsEarnedLifetime;
+  if (metric === 'visitors') return lifetimeVisitorsServed();
+  if (metric === 'turnarounds') return state.portOps.telemetry.settlements;
+  return state.portOps.telemetry.fullSettlements;
+}
+
+function refreshStationGoal(): void {
+  const complete = (goal: StationGoalDefinition): boolean =>
+    goal.criteria.every((criterion) => stationGoalMetricValue(criterion.metric) >= criterion.target);
+  const nextIndex = STATION_GOALS.findIndex((goal) => !complete(goal));
+  const allComplete = nextIndex < 0;
+  const goalIndex = allComplete ? STATION_GOALS.length - 1 : nextIndex;
+  const goal = STATION_GOALS[goalIndex];
+  const ratios = goal.criteria.map((criterion) =>
+    Math.min(1, stationGoalMetricValue(criterion.metric) / Math.max(1, criterion.target))
+  );
+  const progress = allComplete ? 1 : ratios.reduce((sum, ratio) => sum + ratio, 0) / Math.max(1, ratios.length);
+
+  stationGoalCardEl.classList.toggle('complete', allComplete);
+  stationGoalStageEl.textContent = allComplete ? 'Complete' : `${goalIndex + 1} / ${STATION_GOALS.length}`;
+  stationGoalTitleEl.textContent = allComplete ? 'Regional hub established' : goal.title;
+  stationGoalFillEl.style.width = `${Math.round(progress * 100)}%`;
+  stationGoalItemsEl.innerHTML = goal.criteria.map((criterion) => {
+    const value = Math.floor(stationGoalMetricValue(criterion.metric));
+    const done = value >= criterion.target;
+    const suffix = criterion.metric === 'credits' ? 'c' : '';
+    return `<div class="station-goal-item ${done ? 'done' : ''}">
+      <span class="station-goal-check">${done ? '✓' : ''}</span>
+      <span>${criterion.label}</span>
+      <b>${Math.min(value, criterion.target)}/${criterion.target}${suffix}</b>
+    </div>`;
+  }).join('');
+
+  const tier = getUnlockTier(state);
+  const tierProgress = tierProgressSnapshot();
+  stationTierCurrentEl.textContent = `Tier ${tier}: ${PROGRESSION_TOOLTIP_COPY[tier].name}`;
+  stationTierNextEl.textContent = tierProgress.nextTier === null
+    ? 'All progression tiers unlocked'
+    : `Next: Tier ${tierProgress.nextTier} ${PROGRESSION_TOOLTIP_COPY[tierProgress.nextTier].name} · ${tierProgress.pct}%`;
+  stationTierRequirementEl.textContent = tierProgress.requirement;
+}
+
 function tierChecklistItems(): Array<{ label: string; value: string; done: boolean }> {
   const tier = getUnlockTier(state);
   const nextTier = tier >= 6 ? null : ((tier + 1) as UnlockTier);
@@ -3743,24 +4581,44 @@ function specialtyBranchRequirementText(id: SpecialtyId): string {
 }
 
 function refreshProgressionModal(): void {
+  const tier = getUnlockTier(state);
+  const tierProgress = tierProgressSnapshot();
+  const currentCopy = PROGRESSION_TOOLTIP_COPY[tier];
+  progressModalTierNameEl.textContent = `Tier ${tier}: ${currentCopy.name}`;
+  progressModalTierThemeEl.textContent = currentCopy.theme;
+  progressModalFillEl.style.width = `${tierProgress.nextTier === null ? 100 : tierProgress.pct}%`;
+  progressModalPctEl.textContent = tierProgress.nextTier === null
+    ? 'All tiers unlocked'
+    : `${tierProgress.pct}% to Tier ${tierProgress.nextTier}`;
+  progressModalGoalEl.textContent = tierProgress.requirement;
+  progressModalTierChecklistEl.innerHTML = tierChecklistItems().map((item) => `
+    <div class="checklist-item ${item.done ? 'done' : ''}">
+      <span class="checkmark">${item.done ? '✓' : ''}</span>
+      <span>${escapeHtml(item.label)}</span>
+      <span class="value">${escapeHtml(item.value)}</span>
+    </div>
+  `).join('');
+  progressModalRoadmapEl.innerHTML = TIER_ORDER.map((roadmapTier) => {
+    const copy = PROGRESSION_TOOLTIP_COPY[roadmapTier];
+    const presentation = TIER_PRESENTATION[roadmapTier];
+    const completed = roadmapTier < tier;
+    const current = roadmapTier === tier;
+    const next = tierProgress.nextTier === roadmapTier;
+    const status = completed ? 'Unlocked' : current ? 'Current' : next ? `${tierProgress.pct}%` : 'Locked';
+    const className = completed ? 'done' : current ? 'current' : next ? 'next' : 'locked';
+    return `<div class="progression-tier-card ${className}">
+      <div class="specialty-roadmap-head">
+        <strong>Tier ${roadmapTier}: ${escapeHtml(copy.name)}</strong>
+        <span class="progression-tier-status">${status}</span>
+      </div>
+      <small>${escapeHtml(copy.theme)}</small>
+      <small><strong>Requirement:</strong> ${escapeHtml(copy.trigger)}</small>
+      <small><strong>Unlocks:</strong> ${escapeHtml(formatTierList(presentation.buildings))}</small>
+    </div>`;
+  }).join('');
+
   const activeSpecialty = state.command.selectedSpecialty;
-  const activeDef = activeSpecialty ? SPECIALTY_DEFINITIONS.find((def) => def.id === activeSpecialty) ?? null : null;
   const completedCount = state.command.completedSpecialties.length;
-  const totalSpecialties = SPECIALTY_DEFINITIONS.length;
-  const activeProgress = activeSpecialty
-    ? Math.round((state.command.specialtyProgress[activeSpecialty]?.progress ?? 0) * 100)
-    : 0;
-  progressModalTierNameEl.textContent = activeDef ? activeDef.label : completedCount >= totalSpecialties ? 'All Specialties Complete' : 'Choose A Specialty';
-  progressModalTierThemeEl.textContent = activeDef
-    ? activeDef.description
-    : 'Complete one department branch at a time to shape this station.';
-  progressModalFillEl.style.width = activeDef ? `${activeProgress}%` : `${Math.round((completedCount / totalSpecialties) * 100)}%`;
-  progressModalPctEl.textContent = activeDef ? `Research: ${activeProgress}%` : `Branches: ${completedCount}/${totalSpecialties}`;
-  progressModalGoalEl.textContent = activeDef
-    ? activeProgress >= 100 && roleCount(activeDef.officerRole) <= 0
-      ? `Research complete. Hire ${STAFF_ROLE_DEFINITIONS[activeDef.officerRole].label} to approve this branch.`
-      : `Research ${activeDef.label}, then hire ${STAFF_ROLE_DEFINITIONS[activeDef.officerRole].label} before choosing another branch.`
-    : 'Choose one available specialty branch.';
 
   progressModalSpecialtySummaryEl.textContent = activeSpecialty
     ? `Active: ${specialtyLabel(activeSpecialty)}. Finish this branch before choosing another.`
@@ -3839,10 +4697,11 @@ const market = {
   buyFood20Cost: 12,
   sellFood20Gain: 6,
   buyFood60Cost: 30,
-  sellFood60Gain: 15
+  sellFood60Gain: 15,
+  buyGoods12Cost: 30
 };
 
-const GAME_VERSION = '0.1.0';
+const GAME_VERSION = '0.2.0-two-berth-shift';
 const SAVE_STORE_KEY = 'stationSim.saves.v1';
 const AUTOSAVE_KEY = 'spacegame-autosave';
 const AUTOSAVE_INTERVAL_MS = 60_000;
@@ -3940,6 +4799,7 @@ function updateMarketRates(): void {
   market.sellFood20Gain = Math.max(2, Math.round(12 * sellMultiplier));
   market.buyFood60Cost = Math.max(15, Math.round(28 * buyMultiplier));
   market.sellFood60Gain = Math.max(5, Math.round(30 * sellMultiplier));
+  market.buyGoods12Cost = Math.max(18, Math.round(30 * buyMultiplier));
 }
 
 function refreshMarketUi(): void {
@@ -3952,6 +4812,7 @@ function refreshMarketUi(): void {
   sellFoodSmallBtn.textContent = `Sell -20 Raw Food (+${market.sellFood20Gain}c)`;
   buyFoodLargeBtn.textContent = `Buy +60 Raw Food (${market.buyFood60Cost}c)`;
   sellFoodLargeBtn.textContent = `Sell -60 Raw Food (+${market.sellFood60Gain}c)`;
+  buyMarketGoodsBtn.textContent = `Import +12 Market Goods (${market.buyGoods12Cost}c)`;
   marketCrewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
   materialAutoImportInput.checked = state.controls.materialAutoImportEnabled;
   materialTargetStockInput.value = String(Math.round(state.controls.materialTargetStock));
@@ -4153,7 +5014,7 @@ function refreshPriorityUi(): void {
     : state.controls.crewAutoStaffEnabled ? 'Auto-staffing: ON' : 'Auto-staffing: OFF';
   crewAutoToggleEl.classList.toggle('active', state.controls.crewAutoStaffEnabled);
   crewAutoStatusEl.textContent = !autoUnlocked
-    ? `${state.crewMembers.length}/10 crew · direct supervision still fits this station`
+    ? `${Math.min(state.dockedShipsCompleted, 3)}/3 turnarounds · operate this shift before delegating it`
     : state.controls.crewAutoStaffEnabled
       ? 'Duty control rebalances survival, food, customs, cleaning, and construction; one responder stays flexible.'
       : 'Manual shift minimums active. Enable when roster changes become repetitive.';
@@ -4164,10 +5025,14 @@ function refreshPriorityUi(): void {
   for (const lane of workforceLaneOrder) {
     const count = configured?.[lane] ?? 0;
     rostered += count;
-    const el = document.querySelector<HTMLElement>(`[data-shift-count="${lane}"]`);
-    if (el) el.textContent = String(count);
+    document.querySelectorAll<HTMLElement>(`[data-shift-count="${lane}"]`).forEach((el) => {
+      el.textContent = String(count);
+    });
   }
-  shiftRosterTotalEl.textContent = `${rostered} assigned · ${Math.max(0, state.crewMembers.length - rostered)} flexible`;
+  const availableCrew = Math.max(state.crew.total, state.crewMembers.length);
+  shiftRosterTotalEl.textContent = `${rostered} assigned · ${Math.max(0, availableCrew - rostered)} flexible`;
+  const buildAssigned = configured?.['construction-eva'] ?? 0;
+  shiftQuickTotalEl.textContent = `${rostered}/${availableCrew} assigned · ${Math.max(0, availableCrew - rostered)} flexible${buildAssigned > 0 ? ` · Build/EVA ${buildAssigned}` : ''}`;
 }
 refreshPriorityUi();
 // Initialize prev-tier tracker to current (prevents flash on cold-load /
@@ -4243,10 +5108,13 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'emergency-control-terminal': ModuleType.EmergencyControlTerminal,
   'records-terminal': ModuleType.RecordsTerminal,
   bed: ModuleType.Bed,
+  bunk: ModuleType.Bunk,
+  locker: ModuleType.Locker,
   table: ModuleType.Table,
   'serving-station': ModuleType.ServingStation,
   stove: ModuleType.Stove,
   'grow-station': ModuleType.GrowStation,
+  toilet: ModuleType.Toilet,
   shower: ModuleType.Shower,
   sink: ModuleType.Sink,
   'wall-light': ModuleType.WallLight,
@@ -4303,6 +5171,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.RecordsTerminal]: 'RC',
   [ModuleType.WallLight]: 'LT',
   [ModuleType.Bed]: 'BD',
+  [ModuleType.Bunk]: 'BK',
+  [ModuleType.Locker]: 'LK',
   [ModuleType.Table]: 'TB',
   [ModuleType.ServingStation]: 'SV',
   [ModuleType.Stove]: 'ST',
@@ -4314,6 +5184,7 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Terminal]: 'TM',
   [ModuleType.Couch]: 'CH',
   [ModuleType.GameStation]: 'GM',
+  [ModuleType.Toilet]: 'WC',
   [ModuleType.Shower]: 'SH',
   [ModuleType.Sink]: 'SK',
   [ModuleType.MarketStall]: 'MK',
@@ -5146,7 +6017,7 @@ function refreshRoomModal(): void {
   if (inspector.room === 'cafeteria' && inspector.cafeteriaLoad) {
     const load = inspector.cafeteriaLoad;
     roomModalCapacityEl.textContent =
-      `Capacity: tables ${load.tableNodes} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
+      `Capacity: seats ${load.tableNodes} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
     roomModalCapacityEl.style.color =
       load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
   } else {
@@ -5358,7 +6229,7 @@ function refreshAgentModal(): boolean {
     agentHealthEl.style.color = healthColor(inspector.healthState);
     agentBlockedEl.textContent = String(inspector.blockedTicks);
     agentVisitorDetailsEl.textContent =
-      `Visitor: ${inspector.archetype} | pref ${inspector.primaryPreference} | ` +
+      `${inspector.name}: ${inspector.trait} ${inspector.archetype} | pref ${inspector.primaryPreference} | ` +
       `patience ${inspector.patience.toFixed(1)} | served ${inspector.servedMeal ? 'yes' : 'no'} | carrying ${inspector.carryingMeal ? 'yes' : 'no'} | ` +
       `serving ${formatTileLabel(inspector.reservedServingTile)} | table ${formatTileLabel(inspector.reservedTargetTile)}`;
     agentResidentDetailsEl.textContent = 'Resident: n/a';
@@ -6162,10 +7033,13 @@ window.addEventListener('keydown', (e) => {
       toolLockMessage = '';
       break;
     case ' ':
+      e.preventDefault();
+      if (e.repeat) break;
       state.controls.paused = !state.controls.paused;
       refreshTransportUi();
       break;
     case 'Escape':
+      closePortDispatch();
       saveModal.classList.add('hidden');
       marketModal.classList.add('hidden');
       expansionModal.classList.add('hidden');
@@ -6216,6 +7090,18 @@ shipsInput.addEventListener('input', () => {
   shipsLabel.textContent = String(state.controls.shipsPerCycle);
 });
 
+buyPreparedMealsBtn.addEventListener('click', () => {
+  const purchased = buyPreparedMeals(state);
+  buyPreparedMealsBtn.classList.toggle('purchase-failed', !purchased);
+  buyPreparedMealsBtn.title = purchased
+    ? 'Imported 12 prepared meals'
+    : 'Need 36 credits and 12 free counter-storage capacity';
+  window.setTimeout(() => {
+    buyPreparedMealsBtn.classList.remove('purchase-failed');
+    buyPreparedMealsBtn.title = 'Import 12 prepared meals for 36 credits';
+  }, 1200);
+});
+
 portAutoToggleEl.addEventListener('click', () => {
   const next = !state.controls.portAutoAdmitEnabled;
   const changed = setPortAutoAdmit(state, next);
@@ -6225,6 +7111,24 @@ portAutoToggleEl.addEventListener('click', () => {
       : 'Manual manifest clearance restored.'
     : 'Complete three successful turnarounds before delegating dispatch.';
   trafficActionNoteEl.className = `traffic-action-note ${changed ? 'tone-ok' : 'tone-warn'}`;
+  refreshTrafficStatus();
+  refreshTrafficOffers();
+  refreshSettlementSummary();
+});
+
+approachPolicyEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-port-policy]');
+  if (!button || button.disabled) return;
+  const policy = button.dataset.portPolicy;
+  if (policy !== 'cautious' && policy !== 'balanced' && policy !== 'open') return;
+  setPortAutoAdmitPolicy(state, policy);
+  const explanation = policy === 'cautious'
+    ? 'Standing orders protect service: only ready, low-risk traffic clears automatically.'
+    : policy === 'balanced'
+      ? 'Standing orders accept low and guarded traffic that fits berth filters.'
+      : 'Standing orders prioritize occupancy: every eligible traffic class may clear.';
+  trafficActionNoteEl.textContent = explanation;
+  trafficActionNoteEl.className = 'traffic-action-note tone-ok';
   refreshTrafficStatus();
   refreshTrafficOffers();
 });
@@ -6254,6 +7158,36 @@ trafficOfferListEl.addEventListener('click', (event) => {
   refreshTrafficOffers();
 });
 
+alertListEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-port-focus]');
+  if (!button) return;
+  const tileIndex = Number(button.dataset.portFocus);
+  if (!Number.isFinite(tileIndex) || tileIndex < 0 || tileIndex >= state.tiles.length) return;
+  const tile = fromIndex(tileIndex, state.width);
+  centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
+  hoveredTile = tileIndex;
+  selectedRoomTile = tileIndex;
+  refreshSelectionSummary();
+});
+
+settlementSummaryEl.addEventListener('click', (event) => {
+  const dismiss = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-dismiss-settlement]');
+  if (dismiss) {
+    state.portOps.selectedSettlementId = null;
+    refreshSettlementSummary();
+    return;
+  }
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-port-focus]');
+  if (!button) return;
+  const tileIndex = Number(button.dataset.portFocus);
+  if (!Number.isFinite(tileIndex) || tileIndex < 0 || tileIndex >= state.tiles.length) return;
+  const tile = fromIndex(tileIndex, state.width);
+  centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
+  hoveredTile = tileIndex;
+  selectedRoomTile = tileIndex;
+  refreshSelectionSummary();
+});
+
 taxInput.addEventListener('input', () => {
   const pct = clamp(parseInt(taxInput.value, 10), 0, 50);
   state.controls.taxRate = pct / 100;
@@ -6281,6 +7215,10 @@ securityPostureSelect.addEventListener('change', () => {
 });
 
 playBtn.addEventListener('click', () => {
+  if (pendingAutosaveLoad) {
+    pendingAutosaveLoad = false;
+    loadAutosaveBtn.classList.add('hidden');
+  }
   state.controls.paused = false;
   refreshTransportUi();
 });
@@ -6291,6 +7229,10 @@ pauseBtn.addEventListener('click', () => {
 });
 
 speedUpBtn.addEventListener('click', () => {
+  if (pendingAutosaveLoad) {
+    pendingAutosaveLoad = false;
+    loadAutosaveBtn.classList.add('hidden');
+  }
   const currentIndex = simSpeeds.indexOf(state.controls.simSpeed as 1 | 2 | 4);
   const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % simSpeeds.length : 0;
   state.controls.simSpeed = simSpeeds[nextIndex];
@@ -6303,10 +7245,10 @@ speedUpBtn.addEventListener('click', () => {
 // props each tick was pure waste (~60Hz × 5 DOM writes).
 function syncToggleLabels(): void {
   toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
-  toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Nodes: ON' : 'Service Nodes: OFF';
+  toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Reach: ON' : 'Service Reach: OFF';
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
-    ? 'Inventory Overlay: ON'
-    : 'Inventory Overlay: OFF';
+    ? 'Storage: ON'
+    : 'Storage: OFF';
   toggleGlowBtn.textContent = state.controls.showGlow ? 'Glow: ON' : 'Glow: OFF';
   toggleSpritesBtn.textContent = state.controls.spriteMode === 'sprites' ? 'Sprites: ON' : 'Sprites: OFF';
   toggleSpriteFallbackBtn.textContent = state.controls.showSpriteFallback
@@ -6319,15 +7261,21 @@ function syncToggleLabels(): void {
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
     const label = DIAGNOSTIC_OVERLAY_LABELS[overlay];
-    btn.textContent =
-      overlay === 'none'
-        ? `Diagnostics: ${active ? 'OFF' : 'Off'}`
-        : `${label}: ${active ? 'ON' : 'Off'}`;
+    btn.textContent = overlay === 'none' ? label : `${label}: ${active ? 'ON' : 'Off'}`;
   }
   refreshDiagnosticReadout();
   refreshDiagnosticKey();
 }
 syncToggleLabels();
+
+function openAirCoverageOverlay(): void {
+  state.controls.diagnosticOverlay = 'life-support';
+  setPaletteSection('overlays');
+  syncToggleLabels();
+}
+
+hudAirControlEl.addEventListener('click', openAirCoverageOverlay);
+airEmergencyIndicatorEl.addEventListener('click', openAirCoverageOverlay);
 
 toggleZonesBtn.addEventListener('click', () => {
   state.controls.showZones = !state.controls.showZones;
@@ -6406,6 +7354,12 @@ function wireModal({ modal, openBtn, closeBtn, beforeOpen, beforeClose }: ModalW
     }
   });
 }
+
+openPortDispatchBtn.addEventListener('click', openPortDispatch);
+closePortDispatchBtn.addEventListener('click', closePortDispatch);
+portDispatchModal.addEventListener('click', (event) => {
+  if (event.target === portDispatchModal) closePortDispatch();
+});
 
 for (const button of opsTabButtons) {
   button.addEventListener('click', () => {
@@ -6615,9 +7569,26 @@ wireModal({
   closeBtn: closeSystemMapBtn,
   beforeOpen: refreshSystemMapModal
 });
-wireModal({ modal: progressionModal, openBtn: openProgressionModalBtn, closeBtn: closeProgressionModalBtn, beforeOpen: refreshProgressionModal });
-wireModal({ modal: priorityModal, openBtn: editPrioritiesBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
-wireModal({ modal: opsModal, openBtn: openOpsModalBtn, closeBtn: closeOpsModalBtn, beforeOpen: refreshOpsModal });
+wireModal({
+  modal: progressionModal,
+  openBtn: openProgressionModalBtn,
+  closeBtn: closeProgressionModalBtn,
+  beforeOpen: () => {
+    refreshProgressionModal();
+    progressionModal.querySelector<HTMLElement>('.modal-card')?.scrollTo({ top: 0 });
+  }
+});
+openProgressionSummaryBtn.addEventListener('click', () => {
+  refreshProgressionModal();
+  progressionModal.querySelector<HTMLElement>('.modal-card')?.scrollTo({ top: 0 });
+  progressionModal.classList.remove('hidden');
+});
+wireModal({ modal: priorityModal, openBtn: openOpsModalBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
+editPrioritiesBtn.addEventListener('click', () => {
+  refreshPriorityUi();
+  priorityModal.classList.remove('hidden');
+});
+wireModal({ modal: opsModal, closeBtn: closeOpsModalBtn, beforeOpen: refreshOpsModal });
 openHealthDetailsBtn.addEventListener('click', () => {
   setOpsTab('traffic');
   refreshOpsModal();
@@ -6647,6 +7618,17 @@ closeAgentSideBtn.addEventListener('click', () => {
   selectedIncidentId = null;
   agentSidePanel.classList.add('hidden');
   agentModal.classList.add('hidden');
+});
+
+agentSideBodyEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-crew-lane]');
+  if (!button) return;
+  const crewId = Number(button.dataset.crewId);
+  const rawLane = button.dataset.crewLane;
+  const lane = rawLane === 'auto' ? null : rawLane as CrewWorkLane;
+  if (!Number.isFinite(crewId) || !setCrewManualWorkLane(state, crewId, lane)) return;
+  refreshAgentSidePanel();
+  refreshSelectionSummary();
 });
 
 for (const system of prioritySystems) {
@@ -6682,6 +7664,16 @@ document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach(
       ? `${workforceLaneLabels[lane]} shift set to ${current + delta}. Crew will change over at the next dispatch.`
       : `No flexible crew left. Reduce another shift or hire another assistant.`;
     shiftRosterNoteEl.style.color = changed ? '#8ee6ad' : '#ffcf6e';
+    if (!changed) {
+      const buildAssigned = state.controls.crewShiftTargets?.['construction-eva'] ?? 0;
+      shiftQuickTotalEl.textContent = `No flexible crew${buildAssigned > 0 ? ` · Build/EVA has ${buildAssigned}` : ''} · open Shift Roster`;
+      shiftQuickTotalEl.classList.add('warn');
+      window.setTimeout(() => {
+        shiftQuickTotalEl.classList.remove('warn');
+        refreshPriorityUi();
+      }, 2600);
+      return;
+    }
     refreshPriorityUi();
   });
 });
@@ -7061,6 +8053,13 @@ sellFoodLargeBtn.addEventListener('click', () => {
   marketNoteEl.textContent = ok ? `Sold -60 raw food (+${market.sellFood60Gain}c)` : 'Not enough raw food';
 });
 
+buyMarketGoodsBtn.addEventListener('click', () => {
+  const ok = buyImportedTradeGoods(state, market.buyGoods12Cost, 12);
+  marketNoteEl.textContent = ok
+    ? 'Imported +12 goods directly to Market stalls'
+    : 'Need a Market stall with 12 free capacity and enough credits';
+});
+
 incidentListEl.addEventListener('click', (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const button = target?.closest<HTMLButtonElement>('button[data-incident-select]');
@@ -7170,9 +8169,11 @@ function frame(now: number): void {
   refreshHudStatus();
   refreshTrafficStatus();
   refreshTrafficOffers();
+  refreshSettlementSummary();
   if (!priorityModal.classList.contains('hidden')) refreshPriorityUi();
   refreshAlertPanel();
   refreshIncidentList();
+  refreshStationGoal();
   refreshTierChecklist();
   refreshSelectionSummary();
   refreshDevTierOverlay();
@@ -7200,6 +8201,12 @@ function frame(now: number): void {
   crewShiftsEl.textContent = crewShiftsText();
   crewLockoutsEl.textContent = `Emergency lockouts prevented: ${state.metrics.crewPingPongPreventions}`;
   criticalStaffingLineEl.textContent = criticalStaffingText();
+  const crewReadiness = getCrewSustainabilitySummary(state);
+  criticalStaffingLineEl.style.color = crewReadiness.criticalNeedsCrew > 0
+    ? 'var(--danger)'
+    : crewReadiness.strainedCrew > 0 || crewReadiness.sleepSlots < state.crewMembers.length
+      ? 'var(--warn)'
+      : 'var(--ok)';
   opsEl.textContent = coreOpsSummaryText();
   opsResidentsEl.textContent = residentConversionStatusText(true);
   opsExtraEl.textContent = opsExtraText();
@@ -7243,6 +8250,7 @@ function frame(now: number): void {
   buyFoodLargeBtn.disabled = state.metrics.credits < market.buyFood60Cost;
   sellFoodSmallBtn.disabled = state.metrics.rawFoodStock < 20;
   sellFoodLargeBtn.disabled = state.metrics.rawFoodStock < 60;
+  buyMarketGoodsBtn.disabled = state.metrics.credits < market.buyGoods12Cost || state.ops.marketTotal <= 0;
   foodFlowEl.textContent = foodFlowText();
   powerEl.textContent = `${Math.round(state.metrics.powerDemand)} / ${Math.round(state.metrics.powerSupply)}`;
   powerEl.style.color = state.metrics.powerDemand > state.metrics.powerSupply ? '#ff7676' : '#6edb8f';
@@ -7444,6 +8452,7 @@ type AutosaveRecord = { savedAt: number; payloadText: string };
 
 let stateDirty = false;
 let autosaveTimer: ReturnType<typeof setInterval> | null = null;
+let pendingAutosaveLoad = false;
 
 function markDirty(): void {
   stateDirty = true;
@@ -7467,7 +8476,7 @@ function readAutosaveRecord(): AutosaveRecord | null {
 }
 
 function writeAutosave(): void {
-  if (!stateDirty) return;
+  if (!stateDirty || pendingAutosaveLoad) return;
   try {
     const record: AutosaveRecord = {
       savedAt: Date.now(),
@@ -7486,6 +8495,7 @@ function writeAutosave(): void {
 function offerAutosaveLoadOnColdStart(): void {
   const record = readAutosaveRecord();
   if (!record) return;
+  pendingAutosaveLoad = true;
   const loadLabel = `Load last session (saved ${formatClock(record.savedAt)})`;
   loadAutosaveBtn.title = loadLabel;
   loadAutosaveBtn.setAttribute('aria-label', loadLabel);
@@ -7502,12 +8512,14 @@ function offerAutosaveLoadOnColdStart(): void {
       } catch {
         /* ignore */
       }
+      pendingAutosaveLoad = false;
       return;
     }
     try {
       const hydrated = hydrateStateFromSave(parsed.save);
       applyHydratedState(hydrated.state);
       stateDirty = true;
+      pendingAutosaveLoad = false;
       loadAutosaveBtn.classList.add('hidden');
       autosaveStatusEl.textContent = `Autosaved ${formatClock(record.savedAt)} · loaded`;
       autosaveStatusEl.classList.remove('hidden');
@@ -7515,6 +8527,7 @@ function offerAutosaveLoadOnColdStart(): void {
       const msg = err instanceof Error ? err.message : String(err);
       const failLabel = `Autosave load failed: ${msg}`;
       loadAutosaveBtn.classList.add('load-error');
+      pendingAutosaveLoad = false;
       loadAutosaveBtn.title = failLabel;
       loadAutosaveBtn.setAttribute('aria-label', failLabel);
     }

@@ -1,5 +1,15 @@
 # Crew
 
+The current player-facing crew contract is specified in
+`25-crew-sustainability-and-hospitality.md`. This file retains the broader
+scheduler and logistics map.
+
+## Port Operating Shift
+
+The active small-station controls are Service, Cargo, Maintenance, and Flex. A fresh shift has eight named assistants and visible lane steppers in the Operations card. Changing a target changes scheduler allocation, but output begins only after people walk to the relevant post or job.
+
+Selecting a named crew member exposes current lane, action, target, job/carry state, blockage, and route. The player can manually override that person to Service, Cargo, Maintenance, or Flex; the scheduler preserves the override until Release returns them to shift control. Manual interventions and aggregate target changes are counted in port telemetry. Auto-staffing is earned after successful manual turnarounds rather than unlocked by a production or resident chain.
+
 Crew are the player's hireable workers. They take **posts** (staff a room) or **logistics jobs** (haul items between modules). Every crew member can do both — there is no separate hauler role.
 
 ## State shape
@@ -11,7 +21,9 @@ Crew are the player's hireable workers. They take **posts** (staff a room) or **
 - `role` — derived from system via `roleForSystem` (`sim.ts:1141`)
 - `state` — `OnDuty`, `Resting`, `Hygiene`, `Hauling`, `Idle`
 - `assignmentStickyUntil`, `assignmentHoldUntil` — anti-thrash locks
-- `fatigue` (0–100, climbs with work), `hygiene` (0–100, drains with work)
+- `energy`, `hygiene`, `bladder`, and `thirst` needs (0-100)
+- `morale`, `missedPayrollCycles`, `needsStrainSec`, and
+  `resignationNoticeAt` for retention
 - `idleReason` — why this crew has no job (`CrewIdleReason` `types.ts:198`)
 
 Pool sizing: `state.crew.total` is the player-set ceiling, `ensureCrewPool` (`sim.ts:2173`) spawns/trims to match each tick.
@@ -48,17 +60,34 @@ All defined at `sim.ts:85`–97; almost all are 1.
 
 Reactor and life-support maintenance debt also contributes to `criticalTargets`: once a utility cluster reaches 30 debt, the existing post assignment system treats that utility as needing staff. Crew standing in the matching cluster reduce debt over time, so distant utility rooms are harder to keep healthy.
 
-## Rest, fatigue, hygiene — `updateCrewLogic`
+## Rest and needs — `updateCrewLogic`
 
 `sim.ts:4581`:
 
-- Fatigue gains 0.42/s while working.
+- Energy drains 0.42/s while awake.
 - Hygiene drains 0.20/s.
+- Bladder drains 0.55/s and triggers a physical Toilet visit below 25.
+- Thirst drains 0.35/s and can be restored at a Water Fountain or Cantina below 32.
 - Below `CREW_REST_ENERGY_THRESHOLD = 42` (`sim.ts:...`), crew may volunteer to rest.
 - Below `CREW_REST_CRITICAL_ENERGY_THRESHOLD = 18`, they always rest.
 - Total resting count is capped at `CREW_MAX_RESTING_RATIO = 0.35` of the pool.
 - **Shift bucketing** (`CREW_SHIFT_BUCKET_COUNT = 3`, `sim.ts:183`–184) staggers volunteer rest across 10 s windows so the station doesn't go to bed all at once.
-- Hygiene `< 38` triggers a hygiene-room walk if no air emergency is active.
+- Hygiene `< 38` triggers a Shower visit, or a slower Sink wash when no Shower is available.
+
+Crew needs are surfaced in-world before the action threshold through sparse sampled thought callouts: restroom, drink, bunk, wash, break, and air/health distress. These are player-facing demand signals for facilities and staffing slack; healthy crew remain visually quiet. Crew currently do not have a separate hunger/meal need.
+
+Dorms and Bathrooms use physical providers. A Bed provides one fast,
+high-quality sleep position; a Bunk provides two slower positions; Lockers and
+low room noise improve quarters quality. Without a sleep fixture crew recover
+at only emergency-fallback speed. A Bathroom activates with a Toilet and Sink,
+while an optional Shower restores hygiene much faster. Toilet, Sink, and Shower
+usage is reserved one actor per physical tile.
+
+Payroll is assessed every 30 seconds at 1 credit per crew. A missed cycle is
+recorded on each crew member and sharply lowers morale. Sustained critical
+needs or repeated missed pay produce a 60-second resignation notice. The notice
+is canceled when payroll is current and morale recovers to 55; otherwise that
+person releases their work and leaves the roster.
 
 Air-critical (< 8) bypasses rest locks entirely (`sim.ts:2505`).
 
@@ -83,7 +112,7 @@ When a crew can't find work, `idleReason` (`types.ts:198`) tells the UI why. Sur
 ## Player framing
 
 - Hire button (top toolbar) calls `sim.hireCrew` (`sim.ts:8311`). `HIRE_COST = 14` (`sim.ts:...`).
-- Each crew costs `PAYROLL_PER_CREW = 0.32` per `PAYROLL_PERIOD = 30 s` (`sim.ts:129`–130).
+- Each crew costs `PAYROLL_PER_CREW = 1.0` per `PAYROLL_PERIOD = 30 s`.
 - Crew render as blue circles or sprite variants (`render.ts:1635`).
 - Priority modal lets the player nudge the weights to bias the scoring.
 - `staffInTransitBySystem` metric distinguishes crew "walking to post" from "at post" — relevant when a critical room is across the map.

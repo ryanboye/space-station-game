@@ -191,6 +191,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.RecordsTerminal]: 'RC',
   [ModuleType.WallLight]: 'L',
   [ModuleType.Bed]: 'B',
+  [ModuleType.Bunk]: 'BK',
+  [ModuleType.Locker]: 'LK',
   [ModuleType.Table]: 'T',
   [ModuleType.ServingStation]: 'S',
   [ModuleType.Stove]: 'V',
@@ -202,6 +204,7 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Terminal]: 'M',
   [ModuleType.Couch]: 'C',
   [ModuleType.GameStation]: 'J',
+  [ModuleType.Toilet]: 'WC',
   [ModuleType.Shower]: 'H',
   [ModuleType.Sink]: 'I',
   [ModuleType.MarketStall]: '$',
@@ -2185,6 +2188,191 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   if (ship.stage === 'docked') drawDockingCollar(ctx, contact.point, palette.engine, Math.max(3, TILE_SIZE * 0.16));
 }
 
+interface BerthChipRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function berthChipOverlaps(a: BerthChipRect, b: BerthChipRect): boolean {
+  const gap = Math.max(2, TILE_SIZE * 0.12);
+  return a.x < b.x + b.w + gap && a.x + a.w + gap > b.x && a.y < b.y + b.h + gap && a.y + a.h + gap > b.y;
+}
+
+function placeBerthChip(
+  state: StationState,
+  bayTiles: number[],
+  width: number,
+  height: number,
+  occupied: BerthChipRect[]
+): BerthChipRect | null {
+  const bounds = bayTileBounds(state, bayTiles);
+  if (!bounds) return null;
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  const bayX = bounds.minX * TILE_SIZE;
+  const bayY = bounds.minY * TILE_SIZE;
+  const bayW = (bounds.maxX - bounds.minX + 1) * TILE_SIZE;
+  const bayH = (bounds.maxY - bounds.minY + 1) * TILE_SIZE;
+  const gap = Math.max(3, TILE_SIZE * 0.16);
+  const centeredX = bayX + (bayW - width) * 0.5;
+  const centeredY = bayY + (bayH - height) * 0.5;
+  const candidates: BerthChipRect[] = [
+    { x: centeredX, y: bayY + bayH + gap, w: width, h: height },
+    { x: centeredX, y: bayY - height - gap, w: width, h: height },
+    { x: bayX + bayW + gap, y: centeredY, w: width, h: height },
+    { x: bayX - width - gap, y: centeredY, w: width, h: height }
+  ];
+  for (let row = 1; row <= 4; row++) {
+    candidates.push({ x: centeredX, y: bayY + bayH + gap + row * (height + gap), w: width, h: height });
+    candidates.push({ x: centeredX, y: bayY - height - gap - row * (height + gap), w: width, h: height });
+  }
+  for (const candidate of candidates) {
+    candidate.x = Math.max(gap, Math.min(worldW - candidate.w - gap, candidate.x));
+    candidate.y = Math.max(gap, Math.min(worldH - candidate.h - gap, candidate.y));
+    if (!occupied.some((entry) => berthChipOverlaps(candidate, entry))) {
+      occupied.push(candidate);
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function portPromiseCompletion(promises: StationState['portOps']['contracts'][number]['promises']): number {
+  const target = promises.reduce((sum, promise) => sum + Math.max(0, promise.target), 0);
+  if (target <= 0) return 1;
+  const completed = promises.reduce(
+    (sum, promise) => sum + Math.min(Math.max(0, promise.completed), Math.max(0, promise.target)),
+    0
+  );
+  return Math.max(0, Math.min(1, completed / target));
+}
+
+function drawBerthChip(
+  ctx: CanvasRenderingContext2D,
+  rect: BerthChipRect,
+  topLine: string,
+  bottomLine: string,
+  accent: string,
+  alpha: number
+): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(5, 12, 20, 0.94)';
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+  ctx.beginPath();
+  ctx.roundRect(rect.x, rect.y, rect.w, rect.h, Math.max(2, TILE_SIZE * 0.12));
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = accent;
+  ctx.fillRect(rect.x, rect.y, Math.max(2, TILE_SIZE * 0.13), rect.h);
+  const padX = Math.max(5, TILE_SIZE * 0.28);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.max(8, Math.round(TILE_SIZE * 0.38))}px monospace`;
+  ctx.fillStyle = '#eff7ff';
+  ctx.fillText(topLine, rect.x + padX, rect.y + rect.h * 0.32);
+  ctx.font = `${Math.max(7, Math.round(TILE_SIZE * 0.32))}px monospace`;
+  ctx.fillStyle = accent;
+  ctx.fillText(bottomLine, rect.x + padX, rect.y + rect.h * 0.72);
+  ctx.restore();
+}
+
+function drawBerthInformationChips(ctx: CanvasRenderingContext2D, state: StationState): void {
+  const occupied: BerthChipRect[] = [];
+  const fontSize = Math.max(8, Math.round(TILE_SIZE * 0.38));
+  const chipHeight = Math.max(24, TILE_SIZE * 1.18);
+  const horizontalPadding = Math.max(14, TILE_SIZE * 0.7);
+
+  ctx.save();
+  ctx.font = `bold ${fontSize}px monospace`;
+  for (const ship of state.arrivingShips) {
+    if ((ship.assignedBerthAnchor ?? null) === null || ship.stage !== 'docked') continue;
+    const contract = ship.portContractId === undefined
+      ? state.portOps.contracts.find((entry) => entry.shipId === ship.id) ?? null
+      : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null;
+    const callsign = contract?.callsign ?? ship.portManifest?.callsign ?? `SHIP ${ship.id}`;
+    const topLine = `${callsign} | ${ship.shipType.toUpperCase()}`;
+    const completion = contract ? portPromiseCompletion(contract.promises) : ship.portTurnaround?.fulfillmentRatio ?? 0;
+    const phase = ship.portTurnaround?.phase.toUpperCase() ?? 'DOCKED';
+    const bottomLine = `${phase} | SERVICE ${Math.round(completion * 100)}%`;
+    const accent = completion >= 0.9 ? '#71e5a0' : completion >= 0.65 ? '#ffd36a' : '#72bff2';
+    ctx.font = `bold ${fontSize}px monospace`;
+    const width = Math.max(
+      TILE_SIZE * 5.2,
+      Math.min(TILE_SIZE * 10.5, Math.max(ctx.measureText(topLine).width, ctx.measureText(bottomLine).width) + horizontalPadding)
+    );
+    const rect = placeBerthChip(state, ship.bayTiles, width, chipHeight, occupied);
+    if (rect) drawBerthChip(ctx, rect, topLine, bottomLine, accent, 1);
+  }
+
+  const resultLifetime = 8;
+  const recentSettlements = state.portOps.settlements
+    .filter((settlement) => state.now >= settlement.settledAt && state.now - settlement.settledAt < resultLifetime)
+    .sort((a, b) => b.settledAt - a.settledAt);
+  for (const settlement of recentSettlements) {
+    const contract = state.portOps.contracts.find((entry) => entry.id === settlement.contractId);
+    if (!contract) continue;
+    const cluster = state.derived.clusterByTile.get(contract.assignedBerthAnchor)?.cluster;
+    if (!cluster || cluster.length === 0) continue;
+    const completion = portPromiseCompletion(settlement.promises);
+    const payout = settlement.payoutCredits + settlement.passengerSpendingCredits;
+    const grade = completion >= 0.95 ? 'A' : completion >= 0.8 ? 'B' : completion >= 0.6 ? 'C' : 'D';
+    const topLine = `${settlement.callsign} DEPARTED`;
+    const bottomLine = `${grade} | ${Math.round(completion * 100)}% | +${payout}c`;
+    const accent = completion >= 0.995 ? '#71e5a0' : completion >= 0.75 ? '#ffd36a' : '#ff7a76';
+    const age = state.now - settlement.settledAt;
+    const alpha = Math.max(0, Math.min(1, (resultLifetime - age) / 2));
+    ctx.font = `bold ${fontSize}px monospace`;
+    const width = Math.max(
+      TILE_SIZE * 5.2,
+      Math.min(TILE_SIZE * 10.5, Math.max(ctx.measureText(topLine).width, ctx.measureText(bottomLine).width) + horizontalPadding)
+    );
+    const rect = placeBerthChip(state, cluster, width, chipHeight, occupied);
+    if (rect) drawBerthChip(ctx, rect, topLine, bottomLine, accent, alpha);
+  }
+  ctx.restore();
+}
+
+function drawPortCargoLots(ctx: CanvasRenderingContext2D, state: StationState): void {
+  for (const lot of state.portOps.cargoLots) {
+    if (lot.locationTile === null || (lot.location !== 'staging' && lot.location !== 'storage')) continue;
+    const tile = fromIndex(lot.locationTile, state.width);
+    const crateCount = Math.max(1, Math.min(4, Math.ceil(lot.quantity / 12)));
+    const baseX = (tile.x + 0.5) * TILE_SIZE;
+    const baseY = (tile.y + 0.5) * TILE_SIZE;
+    ctx.save();
+    for (let i = 0; i < crateCount; i++) {
+      const column = i % 2;
+      const row = Math.floor(i / 2);
+      const size = TILE_SIZE * 0.28;
+      const x = baseX + (column - 0.5) * size * 0.9;
+      const y = baseY + (row - 0.5) * size * 0.82;
+      ctx.fillStyle = lot.ownership === 'consigned' ? '#d6a247' : '#6fa8d8';
+      ctx.strokeStyle = 'rgba(18, 24, 30, 0.9)';
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+      ctx.fillRect(x - size * 0.5, y - size * 0.5, size, size);
+      ctx.strokeRect(x - size * 0.5, y - size * 0.5, size, size);
+      ctx.beginPath();
+      ctx.moveTo(x - size * 0.38, y);
+      ctx.lineTo(x + size * 0.38, y);
+      ctx.stroke();
+    }
+    const label = `${Math.floor(lot.handledQuantity)}/${Math.floor(lot.quantity)}`;
+    ctx.font = `bold ${Math.max(8, Math.round(TILE_SIZE * 0.34))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(3, 8, 12, 0.9)';
+    ctx.strokeText(label, baseX, baseY - TILE_SIZE * 0.48);
+    ctx.fillStyle = '#ffe1a1';
+    ctx.fillText(label, baseX, baseY - TILE_SIZE * 0.48);
+    ctx.restore();
+  }
+}
+
 function drawShipSilhouetteCells(
   ctx: CanvasRenderingContext2D,
   silhouette: ShipSilhouetteResolved,
@@ -2339,10 +2527,6 @@ function ensureStaticLayer(
     if (useSprites && tileType === TileType.Floor && roomType === RoomType.Reactor) {
       ctx.fillStyle = 'rgba(185, 125, 57, 0.20)';
       ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-    }
-    if (i === state.core.serviceTile) {
-      ctx.fillStyle = 'rgba(255, 221, 87, 0.45)';
-      ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
     }
     if (state.tiles[i] === TileType.Dock) {
       const dock = getDockByTile(state, i);
@@ -2522,6 +2706,30 @@ function agentOffset(id: number): { x: number; y: number } {
   return { x: ox * 0.08, y: oy * 0.08 };
 }
 
+function seatedAgentOffset(state: StationState, tileIndex: number, id: number): { x: number; y: number } {
+  const module = state.moduleInstances.find((candidate) => candidate.tiles.includes(tileIndex));
+  if (!module) return agentOffset(id);
+  if (module.type === ModuleType.Table) {
+    // The table sprite has four rendered chairs around its 2x2 footprint.
+    // Place each diner on the matching chair instead of over the tabletop.
+    const local = Math.max(0, module.tiles.indexOf(tileIndex));
+    const offsets = [
+      { x: -0.16, y: 0.24 },
+      { x: 0.16, y: 0.24 },
+      { x: -0.16, y: -0.05 },
+      { x: 0.16, y: -0.05 }
+    ];
+    return offsets[local] ?? { x: 0, y: 0 };
+  }
+  if (
+    module.type === ModuleType.Bench ||
+    module.type === ModuleType.Couch ||
+    module.type === ModuleType.GameStation ||
+    module.type === ModuleType.RecUnit
+  ) return { x: 0, y: 0 };
+  return agentOffset(id);
+}
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -2565,6 +2773,285 @@ function visitorMoodColor(state: StationState, visitorIndex: number): string {
   const g = mixChannel(229, 231, k);
   const b = mixChannel(140, 142, k);
   return toHex(r, g, b);
+}
+
+type WorldThoughtTone = 'neutral' | 'positive' | 'negative';
+
+interface WorldThought {
+  text: string;
+  tone: WorldThoughtTone;
+}
+
+function visitorThoughtVariant(visitorId: number, lines: readonly string[], salt: number): string {
+  return lines[Math.abs(visitorId * 17 + salt * 31) % lines.length];
+}
+
+function visitorWorldThought(state: StationState, visitor: StationState['visitors'][number]): WorldThought | null {
+  if (visitor.healthState === 'critical') return { text: 'I need help!', tone: 'negative' };
+  if ((visitor.angryUntil ?? 0) > state.now) return { text: "I'm leaving!", tone: 'negative' };
+  const hasEnteredStation =
+    state.now - visitor.spawnedAt >= 4 &&
+    state.rooms[visitor.tileIndex] !== RoomType.Berth &&
+    state.tiles[visitor.tileIndex] !== TileType.Dock;
+  if (!hasEnteredStation) return null;
+  const sanitation = getSanitationTileDiagnostic(
+    state,
+    visitor.tileIndex % state.width,
+    Math.floor(visitor.tileIndex / state.width)
+  );
+  if (sanitation?.severity === 'filthy') {
+    return {
+      text: visitorThoughtVariant(visitor.id, ['This place is a dump!', 'This place is filthy!', 'Does anyone clean here?'], 1),
+      tone: 'negative'
+    };
+  }
+  if (sanitation?.severity === 'dirty') {
+    return { text: visitorThoughtVariant(visitor.id, ['This place is a mess', 'The floors are disgusting'], 2), tone: 'negative' };
+  }
+  if (
+    visitor.state === VisitorState.Queueing &&
+    visitor.path.length === 0 &&
+    state.metrics.cafeteriaQueueingCount >= 3
+  ) return { text: 'This line is too long', tone: 'negative' };
+  if (visitor.state === VisitorState.ToCafeteria && !visitor.servedMeal) return { text: "I'm hungry", tone: 'neutral' };
+  if (visitor.state === VisitorState.ToLeisure && visitor.activeService) {
+    const blockedFor = visitor.serviceBlockedSince === null || visitor.serviceBlockedSince === undefined
+      ? 0
+      : state.now - visitor.serviceBlockedSince;
+    const requestText: Record<Exclude<typeof visitor.activeService, null>, string> = {
+      meal: "I'm hungry",
+      drink: visitor.carryingDrink
+        ? blockedFor >= 6 ? 'There is nowhere to sit!' : 'Looking for a seat'
+        : blockedFor >= 6 ? 'Where can I get a drink?' : "I'd like a drink",
+      leisure: blockedFor >= 6 ? 'Is there nowhere to sit?' : 'I need somewhere to relax',
+      restroom: blockedFor >= 6 ? 'Where is the restroom?' : 'I need a restroom',
+      hygiene: blockedFor >= 6 ? 'Are there no showers?' : 'I need to wash up',
+      comfort: blockedFor >= 6 ? 'These facilities are basic' : "I'd like something nicer"
+    };
+    return { text: requestText[visitor.activeService], tone: blockedFor >= 6 ? 'negative' : 'neutral' };
+  }
+  if (visitor.healthState === 'distressed') return { text: 'The air feels wrong', tone: 'negative' };
+
+  const environment = getRoomEnvironmentTileDiagnostic(
+    state,
+    visitor.tileIndex % state.width,
+    Math.floor(visitor.tileIndex / state.width)
+  );
+  const route = visitor.lastRouteExposure;
+  if ((route?.cargoTiles ?? 0) >= 4) {
+    return { text: 'Why am I walking through cargo?', tone: 'negative' };
+  }
+  if ((route?.distance ?? 0) >= 24) {
+    return { text: 'Everything is so far away', tone: 'negative' };
+  }
+  if (environment && environment.visitorDiscomfort >= 1.5) {
+    return {
+      text: environment.serviceNoise >= 1.1 ? "It's too noisy in here" : 'This area feels industrial',
+      tone: 'negative'
+    };
+  }
+
+  const room = state.rooms[visitor.tileIndex];
+  if (visitor.state === VisitorState.Eating) {
+    return { text: visitorThoughtVariant(visitor.id, ['This food is great!', 'Exactly what I needed'], 3), tone: 'positive' };
+  }
+  if (visitor.state === VisitorState.Leisure) {
+    if (room === RoomType.Observatory) return { text: 'What a view!', tone: 'positive' };
+    if (room === RoomType.Cantina) return { text: 'Great drinks!', tone: 'positive' };
+    if (room === RoomType.Market) return { text: 'Good selection!', tone: 'positive' };
+    if (room === RoomType.Hygiene && sanitation?.severity === 'clean') {
+      return { text: 'These facilities are spotless!', tone: 'positive' };
+    }
+    if (room === RoomType.Lounge || room === RoomType.RecHall) {
+      return {
+        text: visitorThoughtVariant(visitor.id, ['This lounge is really nice!', 'I could stay here awhile'], 4),
+        tone: 'positive'
+      };
+    }
+  }
+  if (visitor.state === VisitorState.ToDock && visitor.servedMeal && visitor.patience < 18) {
+    return { text: visitorThoughtVariant(visitor.id, ["I'd come back here", 'That was a good stop'], 5), tone: 'positive' };
+  }
+  if (
+    environment &&
+    environment.visitorStatus >= 0.75 &&
+    environment.publicAppeal >= 0.75 &&
+    sanitation?.severity === 'clean'
+  ) {
+    return {
+      text: visitorThoughtVariant(visitor.id, ['These facilities are really nice!', 'This station is impressive!'], 6),
+      tone: 'positive'
+    };
+  }
+  return null;
+}
+
+function residentWorldThought(state: StationState, resident: StationState['residents'][number]): string | null {
+  if (resident.healthState === 'critical') return 'I need help!';
+  const sanitation = getSanitationTileDiagnostic(
+    state,
+    resident.tileIndex % state.width,
+    Math.floor(resident.tileIndex / state.width)
+  );
+  if (sanitation?.severity === 'filthy') return 'This place is filthy';
+  if (resident.hunger < 35) return "I'm hungry";
+  if (resident.hygiene < 30) return 'I need a wash';
+  if (resident.safety < 35) return "I don't feel safe";
+  if (resident.stress > 75) return 'This place is stressful';
+  if (resident.social < 30) return 'I need somewhere to relax';
+  if (resident.healthState === 'distressed') return 'The air feels wrong';
+  return null;
+}
+
+function crewWorldThought(crew: StationState['crewMembers'][number]): string | null {
+  if (crew.healthState === 'critical') return 'I need help!';
+  if (crew.healthState === 'distressed') return 'The air feels wrong';
+  if (crew.resignationNoticeAt !== null) return "I can't keep working like this";
+  if (crew.missedPayrollCycles > 0) return "I haven't been paid";
+  if (crew.morale < 30) return 'Morale is awful';
+  if (crew.toileting) {
+    return crew.toiletSessionActive ? 'Using the restroom' : crew.path.length > 0 ? 'Heading to the restroom' : 'Finding a restroom';
+  }
+  if (crew.bladder < 40) return 'I need a restroom';
+  if (crew.drinking) {
+    return crew.drinkSessionActive ? 'Having a drink' : crew.path.length > 0 ? 'Getting a drink' : 'Finding a drink';
+  }
+  if (crew.thirst < 45) return 'I need a drink';
+  if (crew.resting) {
+    return crew.restSessionActive ? 'Resting' : crew.path.length > 0 ? 'Heading to a bunk' : 'Finding a bunk';
+  }
+  if (crew.energy < 55) return 'I need a bunk';
+  if (crew.cleaning) {
+    return crew.cleanSessionActive ? 'Cleaning up' : crew.path.length > 0 ? 'Going to wash up' : 'Finding somewhere to wash';
+  }
+  if (crew.hygiene < 48) return 'I need a wash';
+  if (crew.leisure) return 'I need a break';
+  return null;
+}
+
+function drawWorldThought(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  cy: number,
+  urgent: boolean,
+  tone: WorldThoughtTone = 'neutral'
+): void {
+  ctx.save();
+  const thoughtFont = `700 ${Math.max(8, Math.round(TILE_SIZE * 0.48))}px Consolas, Menlo, monospace`;
+  ctx.font = thoughtFont;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const iconSpace = Math.max(15, TILE_SIZE * 0.8);
+  const width = Math.min(TILE_SIZE * 7.5, Math.max(TILE_SIZE * 2.8, ctx.measureText(text).width + iconSpace + 16));
+  const height = Math.max(17, TILE_SIZE * 0.95);
+  const top = cy - TILE_SIZE * 1.65 - height;
+  ctx.fillStyle = 'rgba(5, 11, 17, 0.94)';
+  ctx.strokeStyle = urgent || tone === 'negative' ? '#ff6868' : tone === 'positive' ? '#72dfa2' : '#dbe8f5';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(cx - width / 2, top, width, height, 4);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, top + height);
+  ctx.lineTo(cx, top + height + 5);
+  ctx.lineTo(cx + 4, top + height);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  const iconX = cx - width / 2 + iconSpace * 0.62;
+  const iconY = top + height * 0.5;
+  ctx.strokeStyle = urgent || tone === 'negative' ? '#ff8d85' : tone === 'positive' ? '#78e8a8' : '#ffd36a';
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = Math.max(1.2, TILE_SIZE * 0.07);
+  if (text.includes('hungry')) {
+    ctx.beginPath();
+    ctx.arc(iconX + iconSpace * 0.08, iconY, iconSpace * 0.22, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(iconX - iconSpace * 0.3, iconY - iconSpace * 0.28);
+    ctx.lineTo(iconX - iconSpace * 0.3, iconY + iconSpace * 0.3);
+    ctx.stroke();
+    for (const offset of [-0.38, -0.3, -0.22]) {
+      ctx.beginPath();
+      ctx.moveTo(iconX + iconSpace * offset, iconY - iconSpace * 0.3);
+      ctx.lineTo(iconX + iconSpace * offset, iconY - iconSpace * 0.06);
+      ctx.stroke();
+    }
+  } else if (text.includes('line')) {
+    for (const offset of [-0.24, 0, 0.24]) {
+      ctx.beginPath();
+      ctx.arc(iconX + iconSpace * offset, iconY, Math.max(1.6, iconSpace * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (text.includes('filthy') || text.includes('dump') || text.includes('mess') || text.includes('disgusting')) {
+    for (const [ox, oy, radius] of [[-0.2, 0.12, 0.09], [0.05, -0.18, 0.07], [0.22, 0.16, 0.11]] as const) {
+      ctx.beginPath();
+      ctx.arc(iconX + iconSpace * ox, iconY + iconSpace * oy, iconSpace * radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (tone === 'positive') {
+    for (const [ox, oy, radius] of [[0, 0, 0.09], [-0.24, 0.1, 0.05], [0.2, -0.16, 0.045]] as const) {
+      ctx.beginPath();
+      ctx.arc(iconX + iconSpace * ox, iconY + iconSpace * oy, iconSpace * radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (text.includes('air')) {
+    for (const offset of [-0.2, 0, 0.2]) {
+      ctx.beginPath();
+      ctx.moveTo(iconX - iconSpace * 0.3, iconY + iconSpace * offset);
+      ctx.quadraticCurveTo(
+        iconX,
+        iconY + iconSpace * (offset - 0.18),
+        iconX + iconSpace * 0.3,
+        iconY + iconSpace * offset
+      );
+      ctx.stroke();
+    }
+  } else if (text.includes('help')) {
+    ctx.fillRect(iconX - iconSpace * 0.08, iconY - iconSpace * 0.3, iconSpace * 0.16, iconSpace * 0.6);
+    ctx.fillRect(iconX - iconSpace * 0.3, iconY - iconSpace * 0.08, iconSpace * 0.6, iconSpace * 0.16);
+  } else if (text.includes('restroom')) {
+    ctx.font = `700 ${Math.max(7, Math.round(iconSpace * 0.55))}px Consolas, Menlo, monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('WC', iconX, iconY + 0.5);
+  } else if (text.includes('drink')) {
+    ctx.strokeRect(iconX - iconSpace * 0.22, iconY - iconSpace * 0.22, iconSpace * 0.36, iconSpace * 0.45);
+    ctx.beginPath();
+    ctx.arc(iconX + iconSpace * 0.16, iconY, iconSpace * 0.16, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+  } else if (text.includes('bunk')) {
+    ctx.font = `700 ${Math.max(9, Math.round(iconSpace * 0.7))}px Consolas, Menlo, monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Z', iconX, iconY + 0.5);
+  } else if (text.includes('wash')) {
+    ctx.beginPath();
+    ctx.moveTo(iconX, iconY - iconSpace * 0.32);
+    ctx.quadraticCurveTo(iconX - iconSpace * 0.3, iconY + iconSpace * 0.08, iconX, iconY + iconSpace * 0.3);
+    ctx.quadraticCurveTo(iconX + iconSpace * 0.3, iconY + iconSpace * 0.08, iconX, iconY - iconSpace * 0.32);
+    ctx.stroke();
+  } else if (text.includes('break')) {
+    for (const offset of [-0.2, 0, 0.2]) {
+      ctx.beginPath();
+      ctx.arc(iconX + iconSpace * offset, iconY, Math.max(1.4, iconSpace * 0.07), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(iconX - iconSpace * 0.28, iconY);
+    ctx.lineTo(iconX + iconSpace * 0.2, iconY);
+    ctx.lineTo(iconX + iconSpace * 0.04, iconY - iconSpace * 0.18);
+    ctx.moveTo(iconX + iconSpace * 0.2, iconY);
+    ctx.lineTo(iconX + iconSpace * 0.04, iconY + iconSpace * 0.18);
+    ctx.stroke();
+  }
+  ctx.fillStyle = urgent ? '#ffb0aa' : '#f4f8fb';
+  ctx.font = thoughtFont;
+  ctx.textAlign = 'left';
+  const textX = cx - width / 2 + iconSpace + 8;
+  ctx.fillText(text, textX, top + height * 0.5 + 0.5, width - iconSpace - 12);
+  ctx.restore();
 }
 
 function rgba(r: number, g: number, b: number, a: number): string {
@@ -3561,11 +4048,14 @@ function drawIncidentMarkers(
   for (const incident of state.incidents) {
     if (!tileInRange(incident.tileIndex, state, visibleTiles)) continue;
     const settled = incident.stage === 'resolved' || incident.stage === 'failed';
+    // Closed incidents remain in state briefly for history/metrics, but the
+    // live world marker must agree with Alerts and the active incident list.
+    if (settled) continue;
     const p = fromIndex(incident.tileIndex, state.width);
     const cx = (p.x + 0.5) * TILE_SIZE;
     const cy = (p.y + 0.5) * TILE_SIZE;
     const pulse = (Math.sin(state.now * 6 + incident.id) + 1) * 0.5;
-    const urgency = settled ? 0.45 : incident.stage === 'dispatching' || incident.assignedCrewId === null ? 1 : 0.65;
+    const urgency = incident.stage === 'dispatching' || incident.assignedCrewId === null ? 1 : 0.65;
     const color = incident.stage === 'failed'
       ? '#8ea2bd'
       : incident.type === 'fight'
@@ -3573,8 +4063,8 @@ function drawIncidentMarkers(
         : incident.type === 'theft'
           ? '#ffe06a'
           : '#ff9d3a';
-    const alpha = settled ? 0.18 : 0.34 + pulse * 0.2;
-    const ringRadius = TILE_SIZE * (settled ? 0.46 : 0.58 + pulse * 0.22 + incident.severity * 0.04);
+    const alpha = 0.34 + pulse * 0.2;
+    const ringRadius = TILE_SIZE * (0.58 + pulse * 0.22 + incident.severity * 0.04);
 
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
@@ -3949,10 +4439,25 @@ export function renderWorld(
     ctx.restore();
   }
 
+  let visibleThoughts = 0;
+  const thoughtAnchors: Array<{ x: number; y: number }> = [];
+  const thoughtWindowOpen = (id: number, urgent: boolean): boolean =>
+    urgent || (Math.floor(state.now / 3) + id * 3) % 7 === 0;
+  const shouldDrawThought = (id: number, cx: number, cy: number, urgent: boolean): boolean => {
+    if (!thoughtWindowOpen(id, urgent)) return false;
+    if (visibleThoughts >= 5) return false;
+    if (thoughtAnchors.some((anchor) => Math.abs(anchor.x - cx) < TILE_SIZE * 5 && Math.abs(anchor.y - cy) < TILE_SIZE * 3)) return false;
+    thoughtAnchors.push({ x: cx, y: cy });
+    visibleThoughts++;
+    return true;
+  };
+
   for (let vi = 0; vi < state.visitors.length; vi++) {
     const v = state.visitors[vi];
     if (!actorInVisibleRange(v.x, v.y)) continue;
-    const o = agentOffset(v.id);
+    const o = v.state === VisitorState.Eating || v.state === VisitorState.Leisure
+      ? seatedAgentOffset(state, v.tileIndex, v.id)
+      : agentOffset(v.id);
     const cx = (v.x + o.x) * TILE_SIZE;
     const cy = (v.y + o.y) * TILE_SIZE;
     const angry = (v.angryUntil ?? 0) > state.now;
@@ -3995,6 +4500,13 @@ export function renderWorld(
       }
       ctx.restore();
     }
+    const urgentThought = angry || v.healthState === 'critical';
+    if (thoughtWindowOpen(v.id, urgentThought)) {
+      const thought = visitorWorldThought(state, v);
+      if (thought && shouldDrawThought(v.id, cx, cy, urgentThought)) {
+        drawWorldThought(ctx, thought.text, cx, cy, urgentThought, thought.tone);
+      }
+    }
   }
 
   for (const r of state.residents) {
@@ -4016,10 +4528,11 @@ export function renderWorld(
     const isWarning = inConfrontation || agitation >= 70 || r.healthState === 'critical' || r.healthState === 'distressed';
     const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.resident, r.id);
     const tintAlpha = isWarning ? 0.45 : 0.2;
-    if (useSprites && drawTintedAgentSprite(
+    const spriteDrawn = useSprites && drawTintedAgentSprite(
       ctx, spriteAtlas, spriteKey, cx, cy,
       TILE_SIZE * AGENT_SPRITE_SCALE, residentFill, tintAlpha
-    )) {
+    );
+    if (spriteDrawn) {
       // Draw green ring around sprite
       const ringRadius = TILE_SIZE * AGENT_SPRITE_SCALE * 0.5;
       ctx.beginPath();
@@ -4027,15 +4540,18 @@ export function renderWorld(
       ctx.strokeStyle = RESIDENT_MARK_COLOR;
       ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
       ctx.stroke();
-      continue;
+    } else {
+      ctx.beginPath();
+      ctx.fillStyle = residentFill;
+      ctx.arc(cx, cy, TILE_SIZE * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = RESIDENT_MARK_COLOR;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+      ctx.stroke();
     }
-    ctx.beginPath();
-    ctx.fillStyle = residentFill;
-    ctx.arc(cx, cy, TILE_SIZE * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = RESIDENT_MARK_COLOR;
-    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
-    ctx.stroke();
+    const thought = residentWorldThought(state, r);
+    const urgent = r.healthState === 'critical' || inConfrontation;
+    if (thought && shouldDrawThought(r.id, cx, cy, urgent)) drawWorldThought(ctx, thought, cx, cy, urgent);
   }
 
   for (const c of state.crewMembers) {
@@ -4081,18 +4597,20 @@ export function renderWorld(
       drawEvaSuitAgentFallback(ctx, cx, cy, TILE_SIZE * AGENT_SPRITE_SCALE);
       continue;
     }
-    if (useSprites && drawTintedAgentSprite(
+    const crewSpriteDrawn = useSprites && drawTintedAgentSprite(
       ctx, spriteAtlas, spriteKey, cx, cy,
       TILE_SIZE * AGENT_SPRITE_SCALE, crewTint, crewTintAlpha
-    )) continue;
-    ctx.fillStyle = crewTint;
-    ctx.beginPath();
-    ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
-    ctx.fill();
-    if (c.evaSuit) {
-      ctx.strokeStyle = '#6fd8ff';
-      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
-      ctx.stroke();
+    );
+    if (!crewSpriteDrawn) {
+      ctx.fillStyle = crewTint;
+      ctx.beginPath();
+      ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const thought = crewWorldThought(c);
+    const urgent = c.healthState === 'critical';
+    if (thought && shouldDrawThought(c.id + 10000, cx, cy, urgent)) {
+      drawWorldThought(ctx, thought, cx, cy, urgent);
     }
   }
 
@@ -4139,6 +4657,9 @@ export function renderWorld(
     const palette = shipPalette(ship.shipType, ship.stage === 'docked');
     drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
   }
+
+  drawBerthInformationChips(ctx, state);
+  drawPortCargoLots(ctx, state);
 
   drawQueuedShips(ctx, state, spriteAtlas, useSprites);
   drawLaneEdgeOverlay(ctx, state, widthPx, heightPx);

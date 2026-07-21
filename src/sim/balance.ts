@@ -53,14 +53,29 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Dorm],
+    residentCapacity: 1
+  },
+  [ModuleType.Bunk]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Dorm],
     residentCapacity: 2
+  },
+  [ModuleType.Locker]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Dorm]
   },
   [ModuleType.Table]: {
     width: 2,
     height: 2,
     rotatable: false,
     allowedRooms: [RoomType.Cafeteria],
-    visitorCapacity: 3,
+    // The 2x2 artwork contains four visible seats. Each footprint tile is one
+    // exclusive usage position, so the rendered and simulated capacity agree.
+    visitorCapacity: 4,
     reservationCapacity: 4
   },
   [ModuleType.ServingStation]: {
@@ -68,7 +83,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Cafeteria],
-    itemNodeCapacity: 24
+    itemNodeCapacity: 48
   },
   [ModuleType.Stove]: {
     width: 2,
@@ -112,6 +127,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
   [ModuleType.Terminal]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Security] },
   [ModuleType.Couch]: { width: 2, height: 1, rotatable: true, allowedRooms: [RoomType.Lounge] },
   [ModuleType.GameStation]: { width: 2, height: 2, rotatable: false, allowedRooms: [RoomType.Lounge] },
+  [ModuleType.Toilet]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
   [ModuleType.Shower]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
   [ModuleType.Sink]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
   [ModuleType.MarketStall]: {
@@ -133,7 +149,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Storage],
-    itemNodeCapacity: 28
+    itemNodeCapacity: 108
   },
   // Dock-migration v0: Berth capability modules. Footprints per scope.
   // T0 in v0 for testing — production wants Gangway T0, Customs T1,
@@ -340,15 +356,15 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   },
   [RoomType.Dorm]: {
     minTiles: 6,
-    requiredModules: [{ module: ModuleType.Bed, count: 1 }],
-    requiredAnyOf: [],
+    requiredModules: [],
+    requiredAnyOf: [ModuleType.Bed, ModuleType.Bunk],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },
   [RoomType.Hygiene]: {
     minTiles: 8,
     requiredModules: [
-      { module: ModuleType.Shower, count: 1 },
+      { module: ModuleType.Toilet, count: 1 },
       { module: ModuleType.Sink, count: 1 }
     ],
     requiredAnyOf: [],

@@ -6,6 +6,9 @@ Each item links to where the rule originates. Don't change the underlying behavi
 
 ## Pressurization &amp; air
 
+- **The Two-Berth starter must have zero vented non-berth walkable tiles.** The focused port runner checks this. When carving an irregular hull, preserve a continuous wall on every exposed edge; do not hide a breach by disabling exposure.
+- **Berths are intentionally vacuum-rated but operationally protected.** `operationalAirAt` abstracts suits/ship-side transfer sealing for actors standing in `RoomType.Berth`. Do not mark the connected public concourse as vacuum to achieve this.
+
 - **`computePressurization` is at `src/sim/sim.ts:1793`** — earlier docs cited 1773 (was correct mid-PR-#104; now stale). The function rebuilds `state.pressurized` from scratch each call; no incremental BFS.
 - **Doors are pressure barriers.** `isPressureBarrier(tile)` (`src/sim/types.ts:1113`) returns true for `Wall` and `Door`. **Removing Door breaks the demo-station seal** — every door becomes a leak point and the depressurize overlay misfires across the whole interior.
 - **Outer-hull Docks are barriers via inlined `isOuterHullTile`** (`sim.ts:1555`), NOT via `isPressureBarrier`. Adding hull-Dock-aware checks anywhere else requires duplicating that logic.
@@ -38,6 +41,15 @@ Each item links to where the rule originates. Don't change the underlying behavi
 
 ## Logistics
 
+- **Port cargo ownership is authoritative.** `PortCargoLot.ownership === 'consigned'` must never increase station materials, and departure cleanup must not turn leftover lots into inventory.
+- **Storage doors need an actual walkable neighbor on both sides.** A door painted on a room wall can still open directly into an outer hull wall; the first Two-Berth balance pass stranded 60 units this way.
+
+## Port contracts
+
+- **Hard departure is unconditional.** No passenger, transport job, reservation, cargo lot, or fault may retain berth occupancy past the contract deadline.
+- **Settlement is immutable and idempotent.** Save/load of an active contract must produce one settlement and one payout, never one per hydration or departure path.
+- **The former yellow core/service tile is not a gameplay object.** Connectivity chooses a dynamic walkable anchor, and construction may replace the old center tile.
+
 - **`kitchenRawBuffer` is stove-only** (`sim.ts:6253`). Don't compute it elsewhere by walking all rawMeal item nodes — that double-counts the GrowStation buffer.
 - **All three job creators run every tick with independent caps.** Don't try to share a global cap without rewriting `assignJobsToIdleCrew`.
 - **Item-node capacity is set by `MODULE_DEFINITIONS`.** Changing a module's `itemNodeCapacity` clamps items at save-load time — old saves emit warnings.
@@ -59,6 +71,7 @@ Each item links to where the rule originates. Don't change the underlying behavi
 
 ## Docks &amp; ships
 
+- **Port Dispatch contracts are never small.** Small tourist/trader pods are uncontracted Dock walk-ins; medium/large ships use Berths. Sending contract traffic back through Docks collapses two intentionally different workload channels.
 - **A dock cluster can split when you delete a tile in the middle.** The first new cluster keeps the original id; the other gets a fresh one. Code holding a `dockId` across topology mutations may dangle.
 - **Resident home-ships violate the normal depart stage.** Don't auto-clean ships that have been in `depart` "too long".
 - **`validateDockPlacementAt` requires both an outward Space tile AND a 4-deep approach corridor** (`sim.ts:1605`). Building dock tiles flush against another wall fails silently.
@@ -90,6 +103,8 @@ Each item links to where the rule originates. Don't change the underlying behavi
 
 ## UI / DOM
 
+- **Manual Port Dispatch must not suppress station failures.** Its alert branch must continue to surface meals, queues, sanitation, atmosphere, incidents, and recent crowd events alongside contract/cargo warnings.
+- **Overlays are optional inspection lenses.** Keep Normal View as the default and preserve in-world thoughts/callouts as the primary feedback channel.
 - **`buildDevTierOverlayString` is the only export from `main.ts`** (`main.ts:1890`). Used by harness assertions; do not delete.
 - **The DOM template is one giant string in `main.ts:85`.** Adding a section means editing that string. There's no component model. Keep the pattern.
 - **Mutating sim state from `main.ts` goes through the explicit barrel `src/sim/index.ts`.** Adding a new mutator without updating the barrel breaks the import.

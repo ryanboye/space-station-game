@@ -17,8 +17,13 @@ import {
   type CrewShiftTargets,
   type HousingPolicy,
   type ItemType,
+  type ArrivingShip,
   type MaintenanceDomain,
   type MaintenanceSource,
+  type PortContractStatus,
+  type PortOfferKind,
+  type PortOpsState,
+  type PortPromiseKind,
   type SpecialtyId,
   type SpecialtyProgress,
   type StaffRole,
@@ -55,7 +60,7 @@ import {
   totalStaffCount
 } from './content/command';
 
-const SAVE_SCHEMA_VERSION = 2 as const;
+const SAVE_SCHEMA_VERSION = 3 as const;
 const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
@@ -67,6 +72,22 @@ const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
 const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
 const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction'];
+const PORT_OFFER_KINDS: PortOfferKind[] = ['passenger', 'freight', 'mixed'];
+const PORT_PROMISE_KINDS: PortPromiseKind[] = [
+  'dock',
+  'passengers-served',
+  'drinks-served',
+  'leisure-served',
+  'restroom-served',
+  'hygiene-served',
+  'comfort-served',
+  'passengers-returned',
+  'freight-unloaded',
+  'freight-loaded',
+  'inspection',
+  'condition'
+];
+const PORT_CONTRACT_STATUSES: PortContractStatus[] = ['accepted', 'active', 'boarding', 'settled', 'departed'];
 const SPECIALTY_IDS = SPECIALTY_DEFINITIONS.map((def) => def.id);
 // Derived from UNLOCK_DEFINITIONS so adding a 7th tier doesn't require
 // hand-editing two parallel tables. UNLOCK_DEFINITIONS is tier-ordered
@@ -84,6 +105,7 @@ const UNLOCK_IDS_BY_TIER: Record<UnlockTier, UnlockId[]> = {
 };
 
 export interface StationSnapshotV1 {
+  simTime: number;
   width: number;
   height: number;
   mapWorldOriginX?: number;
@@ -137,6 +159,20 @@ export interface StationSnapshotV1 {
   crew: {
     total: number;
     roleCounts?: Partial<Record<StaffRole, number>>;
+    members?: Array<{
+      id: number;
+      name: string;
+      energy: number;
+      hygiene: number;
+      bladder: number;
+      thirst: number;
+      morale: number;
+      missedPayrollCycles: number;
+      needsStrainSec: number;
+      resignationNoticeAt: number | null;
+      airExposureSec: number;
+      healthState: 'healthy' | 'distressed' | 'critical';
+    }>;
   };
   command?: {
     selectedSpecialty: SpecialtyId | null;
@@ -152,6 +188,7 @@ export interface StationSnapshotV1 {
     shipsPerCycle: number;
     taxRate: number;
     portAutoAdmitEnabled?: boolean;
+    portAutoAdmitPolicy?: 'cautious' | 'balanced' | 'open';
     crewAutoStaffEnabled?: boolean;
     materialAutoImportEnabled?: boolean;
     materialTargetStock?: number;
@@ -209,6 +246,8 @@ export interface StationSnapshotV1 {
       ignitionRiskSince?: number;
     }>;
   };
+  portOps: PortOpsState;
+  activePortShips: ArrivingShip[];
 }
 
 export interface StationSaveEnvelopeV1 {
@@ -357,6 +396,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
   }
 
   return {
+    simTime: state.now,
     width: state.width,
     height: state.height,
     mapWorldOriginX: state.mapWorldOriginX,
@@ -416,7 +456,21 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     },
     crew: {
       total: state.crew.total,
-      roleCounts
+      roleCounts,
+      members: state.crewMembers.map((crew) => ({
+        id: crew.id,
+        name: crew.name,
+        energy: crew.energy,
+        hygiene: crew.hygiene,
+        bladder: crew.bladder,
+        thirst: crew.thirst,
+        morale: crew.morale,
+        missedPayrollCycles: crew.missedPayrollCycles,
+        needsStrainSec: crew.needsStrainSec,
+        resignationNoticeAt: crew.resignationNoticeAt,
+        airExposureSec: crew.airExposureSec,
+        healthState: crew.healthState
+      }))
     },
     command: {
       selectedSpecialty: state.command.selectedSpecialty,
@@ -429,6 +483,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       shipsPerCycle: state.controls.shipsPerCycle,
       taxRate: state.controls.taxRate,
       portAutoAdmitEnabled: state.controls.portAutoAdmitEnabled,
+      portAutoAdmitPolicy: state.controls.portAutoAdmitPolicy,
       crewAutoStaffEnabled: state.controls.crewAutoStaffEnabled,
       materialAutoImportEnabled: state.controls.materialAutoImportEnabled,
       materialTargetStock: state.controls.materialTargetStock,
@@ -495,7 +550,39 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           lastImpactAt: entry.lastImpactAt,
           ignitionRiskSince: entry.ignitionRiskSince
         }))
-    }
+    },
+    portOps: {
+      ...state.portOps,
+      contracts: state.portOps.contracts.map((contract) => ({
+        ...contract,
+        promises: contract.promises.map((promise) => ({ ...promise }))
+      })),
+      cargoLots: state.portOps.cargoLots.map((lot) => ({ ...lot })),
+      settlements: state.portOps.settlements.map((settlement) => ({
+        ...settlement,
+        promises: settlement.promises.map((promise) => ({ ...promise })),
+        notes: [...settlement.notes]
+      }))
+    },
+    activePortShips: state.arrivingShips
+      .filter((ship) => ship.kind === 'transient' && ship.portContractId !== undefined)
+      .map((ship) => ({
+        ...ship,
+        bayTiles: [...ship.bayTiles],
+        residentIds: [...ship.residentIds],
+        manifestDemand: { ...ship.manifestDemand },
+        manifestMix: { ...ship.manifestMix },
+        portManifest: ship.portManifest ? {
+          ...ship.portManifest,
+          inboundCargo: { ...ship.portManifest.inboundCargo },
+          outboundRequest: { ...ship.portManifest.outboundRequest }
+        } : undefined,
+        portTurnaround: ship.portTurnaround ? {
+          ...ship.portTurnaround,
+          outboundRequired: { ...ship.portTurnaround.outboundRequired },
+          outboundLoaded: { ...ship.portTurnaround.outboundLoaded }
+        } : undefined
+      }))
   };
 }
 
@@ -510,13 +597,164 @@ export function serializeSave(name: string, state: StationState, gameVersion: st
   return JSON.stringify(payload);
 }
 
+function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string[]): PortOpsState {
+  if (!isRecord(raw) || raw.version !== 1) {
+    warnings.push('portOps missing or incompatible; reset to a fresh operating shift.');
+    return {
+      ...fallback,
+      contracts: [],
+      cargoLots: [],
+      settlements: []
+    };
+  }
+
+  const promisesFrom = (value: unknown) => {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((entry) => {
+      if (!isRecord(entry) || !isOneOf(entry.kind, PORT_PROMISE_KINDS)) return [];
+      const target = Math.max(0, asFiniteNumber(entry.target, 0));
+      return [{
+        kind: entry.kind,
+        label: typeof entry.label === 'string' ? entry.label : entry.kind,
+        target,
+        completed: clamp(asFiniteNumber(entry.completed, 0), 0, target),
+        payoutCredits: Math.max(0, asFiniteNumber(entry.payoutCredits, 0))
+      }];
+    });
+  };
+
+  const contracts: PortOpsState['contracts'] = [];
+  if (Array.isArray(raw.contracts)) {
+    for (const entry of raw.contracts) {
+      if (
+        !isRecord(entry) ||
+        !isOneOf(entry.offerKind, PORT_OFFER_KINDS) ||
+        !isOneOf(entry.status, PORT_CONTRACT_STATUSES)
+      ) continue;
+      contracts.push({
+        id: Math.max(1, Math.floor(asFiniteNumber(entry.id, 1))),
+        offerId: Math.max(1, Math.floor(asFiniteNumber(entry.offerId, 1))),
+        shipId: Math.max(1, Math.floor(asFiniteNumber(entry.shipId, 1))),
+        callsign: typeof entry.callsign === 'string' ? entry.callsign : 'Unknown vessel',
+        offerKind: entry.offerKind,
+        assignedBerthAnchor: Math.max(0, Math.floor(asFiniteNumber(entry.assignedBerthAnchor, 0))),
+        acceptedAt: Math.max(0, asFiniteNumber(entry.acceptedAt, 0)),
+        arrivesAt: Math.max(0, asFiniteNumber(entry.arrivesAt, 0)),
+        boardingStartsAt: Math.max(0, asFiniteNumber(entry.boardingStartsAt, 0)),
+        hardDepartureAt: Math.max(0, asFiniteNumber(entry.hardDepartureAt, 0)),
+        status: entry.status,
+        promises: promisesFrom(entry.promises),
+        passengerSpendingCredits: Math.max(0, asFiniteNumber(entry.passengerSpendingCredits, 0)),
+        settlementId: typeof entry.settlementId === 'number' ? Math.max(1, Math.floor(entry.settlementId)) : null
+      });
+    }
+  }
+
+  const cargoLots: PortOpsState['cargoLots'] = [];
+  if (Array.isArray(raw.cargoLots)) {
+    for (const entry of raw.cargoLots) {
+      if (
+        !isRecord(entry) ||
+        !isOneOf(entry.ownership, ['station', 'consigned', 'specialty-input'] as const) ||
+        !isOneOf(entry.itemType, ITEM_TYPES) ||
+        !isOneOf(entry.location, ['aboard', 'staging', 'storage', 'delivered', 'closed'] as const)
+      ) continue;
+      cargoLots.push({
+        id: Math.max(1, Math.floor(asFiniteNumber(entry.id, 1))),
+        contractId: Math.max(1, Math.floor(asFiniteNumber(entry.contractId, 1))),
+        ownership: entry.ownership,
+        itemType: entry.itemType,
+        quantity: Math.max(0, asFiniteNumber(entry.quantity, 0)),
+        reservedCapacity: clamp(
+          asFiniteNumber(entry.reservedCapacity, asFiniteNumber(entry.quantity, 0)),
+          0,
+          Math.max(0, asFiniteNumber(entry.quantity, 0))
+        ),
+        handledQuantity: clamp(asFiniteNumber(entry.handledQuantity, 0), 0, Math.max(0, asFiniteNumber(entry.quantity, 0))),
+        locationTile: typeof entry.locationTile === 'number' ? Math.max(0, Math.floor(entry.locationTile)) : null,
+        location: entry.location
+      });
+    }
+  }
+
+  const settlements: PortOpsState['settlements'] = [];
+  if (Array.isArray(raw.settlements)) {
+    for (const entry of raw.settlements) {
+      if (!isRecord(entry)) continue;
+      settlements.push({
+        id: Math.max(1, Math.floor(asFiniteNumber(entry.id, 1))),
+        contractId: Math.max(1, Math.floor(asFiniteNumber(entry.contractId, 1))),
+        shipId: Math.max(1, Math.floor(asFiniteNumber(entry.shipId, 1))),
+        callsign: typeof entry.callsign === 'string' ? entry.callsign : 'Unknown vessel',
+        settledAt: Math.max(0, asFiniteNumber(entry.settledAt, 0)),
+        promises: promisesFrom(entry.promises),
+        payoutCredits: Math.max(0, asFiniteNumber(entry.payoutCredits, 0)),
+        passengerSpendingCredits: Math.max(0, asFiniteNumber(entry.passengerSpendingCredits, 0)),
+        notes: Array.isArray(entry.notes) ? entry.notes.filter((note): note is string => typeof note === 'string') : []
+      });
+    }
+  }
+
+  const telemetryRaw = isRecord(raw.telemetry) ? raw.telemetry : {};
+  const maxContractId = contracts.reduce((max, entry) => Math.max(max, entry.id), 0);
+  const maxCargoLotId = cargoLots.reduce((max, entry) => Math.max(max, entry.id), 0);
+  const maxSettlementId = settlements.reduce((max, entry) => Math.max(max, entry.id), 0);
+  return {
+    version: 1,
+    offerSequenceIndex: Math.max(0, Math.floor(asFiniteNumber(raw.offerSequenceIndex, 0))),
+    nextContractId: Math.max(maxContractId + 1, Math.floor(asFiniteNumber(raw.nextContractId, 1))),
+    nextCargoLotId: Math.max(maxCargoLotId + 1, Math.floor(asFiniteNumber(raw.nextCargoLotId, 1))),
+    nextSettlementId: Math.max(maxSettlementId + 1, Math.floor(asFiniteNumber(raw.nextSettlementId, 1))),
+    contracts,
+    cargoLots,
+    settlements,
+    selectedSettlementId:
+      typeof raw.selectedSettlementId === 'number' ? Math.max(1, Math.floor(raw.selectedSettlementId)) : null,
+    firstOfferShownAt: typeof raw.firstOfferShownAt === 'number' ? Math.max(0, raw.firstOfferShownAt) : null,
+    firstChoiceAt: typeof raw.firstChoiceAt === 'number' ? Math.max(0, raw.firstChoiceAt) : null,
+    crewReassignments: Math.max(0, Math.floor(asFiniteNumber(raw.crewReassignments, 0))),
+    cargoHandledLifetime: Math.max(0, asFiniteNumber(raw.cargoHandledLifetime, 0)),
+    cargoArmLastHandled: Math.max(0, asFiniteNumber(raw.cargoArmLastHandled, 0)),
+    cargoArmStrain: clamp(asFiniteNumber(raw.cargoArmStrain, 0), 0, 100),
+    cargoArmStatus: isOneOf(raw.cargoArmStatus, ['ready', 'warning', 'fault'] as const)
+      ? raw.cargoArmStatus
+      : 'ready',
+    cargoArmRepairProgress: clamp(asFiniteNumber(raw.cargoArmRepairProgress, 0), 0, 8),
+    cargoArmFaults: Math.max(0, Math.floor(asFiniteNumber(raw.cargoArmFaults, 0))),
+    cargoArmLastFaultRollAt: Math.max(0, asFiniteNumber(raw.cargoArmLastFaultRollAt, 0)),
+    cargoArmFaultContractIds: Array.isArray(raw.cargoArmFaultContractIds)
+      ? raw.cargoArmFaultContractIds
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+          .map((value) => Math.max(1, Math.floor(value)))
+      : [],
+    telemetry: {
+      offersAccepted: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.offersAccepted, 0))),
+      offersRefused: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.offersRefused, 0))),
+      settlements: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.settlements, 0))),
+      fullSettlements: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.fullSettlements, 0))),
+      partialSettlements: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.partialSettlements, 0))),
+      hardDeadlineDepartures: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.hardDeadlineDepartures, 0))),
+      peakPassengerQueue: Math.max(0, Math.floor(asFiniteNumber(telemetryRaw.peakPassengerQueue, 0))),
+      passengerQueuePersonSeconds: Math.max(0, asFiniteNumber(telemetryRaw.passengerQueuePersonSeconds, 0)),
+      berthOccupancySeconds: Math.max(0, asFiniteNumber(telemetryRaw.berthOccupancySeconds, 0)),
+      cargoUnitTileDistance: Math.max(0, asFiniteNumber(telemetryRaw.cargoUnitTileDistance, 0)),
+      mealTarget: Math.max(0, asFiniteNumber(telemetryRaw.mealTarget, 0)),
+      mealsCompleted: Math.max(0, asFiniteNumber(telemetryRaw.mealsCompleted, 0)),
+      freightTarget: Math.max(0, asFiniteNumber(telemetryRaw.freightTarget, 0)),
+      freightCompleted: Math.max(0, asFiniteNumber(telemetryRaw.freightCompleted, 0))
+    }
+  };
+}
+
 function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: string[]): StationSnapshotV1 | null {
   const defaultState = createInitialState();
+  const simTime = Math.max(0, asFiniteNumber(snapshotRaw.simTime, 0));
   const width = Math.round(asFiniteNumber(snapshotRaw.width, defaultState.width));
   const height = Math.round(asFiniteNumber(snapshotRaw.height, defaultState.height));
   const mapWorldOriginX = Math.round(asFiniteNumber(snapshotRaw.mapWorldOriginX, 0));
   const mapWorldOriginY = Math.round(asFiniteNumber(snapshotRaw.mapWorldOriginY, 0));
   const expectedLength = width * height;
+  const portOps = normalizePortOps(snapshotRaw.portOps, defaultState.portOps, warnings);
   if (!Array.isArray(snapshotRaw.tiles)) {
     return null;
   }
@@ -738,6 +976,34 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   } else {
     warnings.push('crew missing; defaulted.');
   }
+  const crewMembers: NonNullable<StationSnapshotV1['crew']['members']> = [];
+  if (isRecord(snapshotRaw.crew) && Array.isArray(snapshotRaw.crew.members)) {
+    const seenIds = new Set<number>();
+    for (const entry of snapshotRaw.crew.members) {
+      if (!isRecord(entry)) continue;
+      const id = Math.floor(asFiniteNumber(entry.id, -1));
+      if (id < 0 || crewMembers.length >= crewTotal || seenIds.has(id)) continue;
+      seenIds.add(id);
+      crewMembers.push({
+        id,
+        name: typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name.trim().slice(0, 48) : `Crew ${id + 1}`,
+        energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
+        hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
+        bladder: clamp(asFiniteNumber(entry.bladder, 100), 0, 100),
+        thirst: clamp(asFiniteNumber(entry.thirst, 100), 0, 100),
+        morale: clamp(asFiniteNumber(entry.morale, 100), 0, 100),
+        missedPayrollCycles: Math.max(0, Math.floor(asFiniteNumber(entry.missedPayrollCycles, 0))),
+        needsStrainSec: Math.max(0, asFiniteNumber(entry.needsStrainSec, 0)),
+        resignationNoticeAt: typeof entry.resignationNoticeAt === 'number' && Number.isFinite(entry.resignationNoticeAt)
+          ? Math.max(0, entry.resignationNoticeAt)
+          : null,
+        airExposureSec: Math.max(0, asFiniteNumber(entry.airExposureSec, 0)),
+        healthState: isOneOf(entry.healthState, ['healthy', 'distressed', 'critical'] as const)
+          ? entry.healthState
+          : 'healthy'
+      });
+    }
+  }
 
   let command: StationSnapshotV1['command'] = undefined;
   if (isRecord(snapshotRaw.command)) {
@@ -807,6 +1073,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   let shipsPerCycle = defaultState.controls.shipsPerCycle;
   let taxRate = defaultState.controls.taxRate;
   let portAutoAdmitEnabled = defaultState.controls.portAutoAdmitEnabled;
+  let portAutoAdmitPolicy = defaultState.controls.portAutoAdmitPolicy;
   let crewAutoStaffEnabled = defaultState.controls.crewAutoStaffEnabled;
   let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
   let materialTargetStock = defaultState.controls.materialTargetStock;
@@ -817,6 +1084,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     shipsPerCycle = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.shipsPerCycle, shipsPerCycle)), 0, 3);
     taxRate = clamp(asFiniteNumber(snapshotRaw.controls.taxRate, taxRate), 0, 0.5);
     portAutoAdmitEnabled = snapshotRaw.controls.portAutoAdmitEnabled === true;
+    if (isOneOf(snapshotRaw.controls.portAutoAdmitPolicy, ['cautious', 'balanced', 'open'] as const)) {
+      portAutoAdmitPolicy = snapshotRaw.controls.portAutoAdmitPolicy;
+    }
     crewAutoStaffEnabled = snapshotRaw.controls.crewAutoStaffEnabled === true;
     if (typeof snapshotRaw.controls.materialAutoImportEnabled === 'boolean') {
       materialAutoImportEnabled = snapshotRaw.controls.materialAutoImportEnabled;
@@ -1014,7 +1284,22 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   }
 
+  const activePortShips: ArrivingShip[] = Array.isArray(snapshotRaw.activePortShips)
+    ? snapshotRaw.activePortShips.flatMap((entry) => {
+        if (
+          !isRecord(entry) ||
+          entry.kind !== 'transient' ||
+          typeof entry.id !== 'number' ||
+          typeof entry.portContractId !== 'number' ||
+          !Array.isArray(entry.bayTiles) ||
+          !isOneOf(entry.stage, ['approach', 'docked', 'depart'] as const)
+        ) return [];
+        return [entry as unknown as ArrivingShip];
+      })
+    : [];
+
   return {
+    simTime,
     width,
     height,
     mapWorldOriginX,
@@ -1035,7 +1320,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     },
     crew: {
       total: crewTotal,
-      roleCounts
+      roleCounts,
+      members: crewMembers
     },
     command,
     inventoryByTile,
@@ -1043,6 +1329,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       shipsPerCycle,
       taxRate,
       portAutoAdmitEnabled,
+      portAutoAdmitPolicy,
       crewAutoStaffEnabled,
       materialAutoImportEnabled,
       materialTargetStock,
@@ -1070,7 +1357,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     },
     maintenance: {
       debts: maintenanceDebts
-    }
+    },
+    portOps,
+    activePortShips
   };
 }
 
@@ -1097,14 +1386,10 @@ export function parseAndMigrateSave(text: string): ParseSuccess | ParseFailure {
   if (isRecord(parsed.snapshot)) {
     envelopeRaw = parsed;
   } else if (Array.isArray(parsed.tiles)) {
-    envelopeRaw = {
-      schemaVersion: SAVE_SCHEMA_VERSION,
-      gameVersion: 'legacy',
-      createdAt: new Date().toISOString(),
-      name: typeof parsed.name === 'string' && parsed.name.trim().length > 0 ? parsed.name : 'Imported legacy save',
-      snapshot: parsed
+    return {
+      ok: false,
+      error: 'This save is from the previous station design and cannot be loaded into Two-Berth Shift.'
     };
-    warnings.push('Missing schemaVersion; interpreted as legacy snapshot format.');
   } else {
     return {
       ok: false,
@@ -1113,12 +1398,14 @@ export function parseAndMigrateSave(text: string): ParseSuccess | ParseFailure {
   }
 
   const schemaVersionRaw = envelopeRaw.schemaVersion;
-  if (typeof schemaVersionRaw !== 'number') {
-    warnings.push('schemaVersion missing/invalid; using best-effort migration.');
-  } else if (schemaVersionRaw < SAVE_SCHEMA_VERSION) {
-    warnings.push(`Older schemaVersion ${schemaVersionRaw} detected; migrated best-effort.`);
-  } else if (schemaVersionRaw > SAVE_SCHEMA_VERSION) {
-    warnings.push(`Future schemaVersion ${schemaVersionRaw} detected; unknown fields ignored.`);
+  if (schemaVersionRaw !== SAVE_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      error:
+        typeof schemaVersionRaw === 'number' && schemaVersionRaw > SAVE_SCHEMA_VERSION
+          ? `This save uses newer schema ${schemaVersionRaw}; this build supports schema ${SAVE_SCHEMA_VERSION}.`
+          : 'This save is from the previous station design and cannot be loaded into Two-Berth Shift.'
+    };
   }
 
   const snapshotRaw = envelopeRaw.snapshot;
@@ -1161,6 +1448,7 @@ function clearTransientState(state: StationState): void {
   state.visitors.length = 0;
   state.residents.length = 0;
   state.crewMembers.length = 0;
+  state.crewSpawnCounter = 1;
   state.arrivingShips.length = 0;
   state.pendingSpawns.length = 0;
   state.jobs.length = 0;
@@ -1225,6 +1513,7 @@ export function hydrateStateFromSave(
   const next = createInitialState(options);
   const warnings: string[] = [];
   const snapshot = save.snapshot;
+  next.now = snapshot.simTime;
 
   if (snapshot.width !== next.width || snapshot.height !== next.height) {
     throw new Error(
@@ -1456,6 +1745,7 @@ export function hydrateStateFromSave(
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);
   next.controls.taxRate = clamp(snapshot.controls.taxRate, 0, 0.5);
   next.controls.portAutoAdmitEnabled = snapshot.controls.portAutoAdmitEnabled ?? false;
+  next.controls.portAutoAdmitPolicy = snapshot.controls.portAutoAdmitPolicy ?? 'cautious';
   next.controls.crewAutoStaffEnabled = snapshot.controls.crewAutoStaffEnabled ?? false;
   next.controls.materialAutoImportEnabled = snapshot.controls.materialAutoImportEnabled ?? next.controls.materialAutoImportEnabled;
   next.controls.materialTargetStock = clamp(snapshot.controls.materialTargetStock ?? next.controls.materialTargetStock, 0, 500);
@@ -1464,10 +1754,82 @@ export function hydrateStateFromSave(
   }
   next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
   next.controls.securityPosture = snapshot.controls.securityPosture ?? next.controls.securityPosture;
+  next.portOps = {
+    ...snapshot.portOps,
+    contracts: snapshot.portOps.contracts.map((contract) => ({
+      ...contract,
+      promises: contract.promises.map((promise) => ({ ...promise }))
+    })),
+    cargoLots: snapshot.portOps.cargoLots.map((lot) => ({ ...lot })),
+    settlements: snapshot.portOps.settlements.map((settlement) => ({
+      ...settlement,
+      promises: settlement.promises.map((promise) => ({ ...promise })),
+      notes: [...settlement.notes]
+    }))
+  };
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);
+  next.arrivingShips = snapshot.activePortShips.map((savedShip) => {
+    const ship: ArrivingShip = {
+      ...savedShip,
+      bayTiles: [...savedShip.bayTiles],
+      residentIds: [...savedShip.residentIds],
+      manifestDemand: { ...savedShip.manifestDemand },
+      manifestMix: { ...savedShip.manifestMix },
+      portManifest: savedShip.portManifest ? {
+        ...savedShip.portManifest,
+        inboundCargo: { ...savedShip.portManifest.inboundCargo },
+        outboundRequest: { ...savedShip.portManifest.outboundRequest }
+      } : undefined,
+      portTurnaround: savedShip.portTurnaround ? {
+        ...savedShip.portTurnaround,
+        clearanceJobId: null,
+        outboundRequired: { ...savedShip.portTurnaround.outboundRequired },
+        outboundLoaded: { ...savedShip.portTurnaround.outboundLoaded }
+      } : undefined
+    };
+    const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
+    if (contract && ship.stage === 'docked') {
+      const returned = contract.promises.find((promise) => promise.kind === 'passengers-returned');
+      ship.passengersTotal = Math.max(0, (returned?.target ?? ship.passengersTotal) - (returned?.completed ?? 0));
+      ship.passengersSpawned = 0;
+      ship.passengersBoarded = 0;
+      ship.spawnCarry = 0;
+      if (ship.portTurnaround && !ship.portTurnaround.cargoReleased) {
+        ship.portTurnaround.cargoReleased = true;
+        ship.portTurnaround.phase = ship.portTurnaround.inboundUnloaded + 0.05 < ship.portTurnaround.inboundTotal
+          ? 'unloading'
+          : 'loading';
+        const inspection = contract.promises.find((promise) => promise.kind === 'inspection');
+        if (inspection) inspection.completed = inspection.target;
+      }
+    }
+    return ship;
+  });
+  next.shipSpawnCounter = Math.max(
+    next.shipSpawnCounter,
+    next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1)
+  );
   next.controls.paused = true;
+  tick(next, 0);
+
+  const savedCrewById = new Map((snapshot.crew.members ?? []).map((member) => [member.id, member]));
+  for (const crew of next.crewMembers) {
+    const saved = savedCrewById.get(crew.id);
+    if (!saved) continue;
+    crew.name = saved.name;
+    crew.energy = saved.energy;
+    crew.hygiene = saved.hygiene;
+    crew.bladder = saved.bladder;
+    crew.thirst = saved.thirst;
+    crew.morale = saved.morale;
+    crew.missedPayrollCycles = saved.missedPayrollCycles;
+    crew.needsStrainSec = saved.needsStrainSec;
+    crew.resignationNoticeAt = saved.resignationNoticeAt;
+    crew.airExposureSec = saved.airExposureSec;
+    crew.healthState = saved.healthState;
+  }
   tick(next, 0);
 
   return {

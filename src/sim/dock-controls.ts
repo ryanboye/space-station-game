@@ -95,7 +95,7 @@ export function setDockAllowedShipSize(state: StationState, dockId: number, size
 // ────────────────────────────────────────────────────────────────────
 
 export const ALL_SHIP_TYPES_FOR_BERTH: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
-export const ALL_SHIP_SIZES_FOR_BERTH: ShipSize[] = ['small', 'medium', 'large'];
+export const ALL_SHIP_SIZES_FOR_BERTH: ShipSize[] = ['medium', 'large'];
 
 export function findBerthConfigByAnchor(state: StationState, anchorTile: number): BerthConfig | undefined {
   return state.berthConfigs.find((c) => c.anchorTile === anchorTile);
@@ -176,12 +176,13 @@ export function setBerthAllowedShipSize(
   size: ShipSize,
   allowed: boolean
 ): void {
+  if (size === 'small') return;
   const cfg = ensureBerthConfig(state, anchorTile);
-  const next = new Set(cfg.allowedShipSizes);
+  const next = new Set<ShipSize>(cfg.allowedShipSizes.filter((entry) => entry !== 'small'));
   if (allowed) next.add(size);
   else next.delete(size);
   // Mirror dock invariant: never leave the size-allowlist empty.
-  if (next.size === 0) next.add('small');
+  if (next.size === 0) next.add('medium');
   cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
 }
 

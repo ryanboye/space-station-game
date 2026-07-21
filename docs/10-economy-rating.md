@@ -1,5 +1,11 @@
 # Economy, Morale, Station Rating
 
+## Current Port Economy
+
+Credits and physical station stock are the active opening resources. Contract settlement pays berth and promise components; passenger spending is attributed separately, and local berth standing applies a bounded 0.82x-1.18x payout multiplier. Partial success is normal and does not become global rating bleed. Refusing an offer loses that opportunity but does not punish the station through the legacy score model.
+
+Prepared meals can be imported in 12-unit batches for 36 credits and are stored at the serving station. This keeps Kitchen/Hydroponics optional margin and resilience choices rather than prerequisites. Consigned freight is never revenue inventory. The old resident tax, generic Market/Workshop dependency, and global score-driver tree are not part of the active Two-Berth Shift progression.
+
 Three player-visible scalars that share no underlying model:
 
 - **Credits** — global pool, single number.

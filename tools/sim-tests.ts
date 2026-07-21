@@ -315,7 +315,11 @@ function spawnReturningVisitor(state: StationState, dockTile: number, id: number
     healthState: 'healthy',
     leisureLegsRemaining: 0,
     leisureLegsPlanned: 0,
-    lastLeisureKind: null
+    lastLeisureKind: null,
+    servicePlan: [],
+    completedServices: [],
+    activeService: null,
+    serviceBlockedSince: null
   };
   state.visitors.push(v);
 }
@@ -394,7 +398,11 @@ function spawnVisitor(state: StationState, x: number, y: number, id: number): vo
     healthState: 'healthy',
     leisureLegsRemaining: 0,
     leisureLegsPlanned: 0,
-    lastLeisureKind: null
+    lastLeisureKind: null,
+    servicePlan: [],
+    completedServices: [],
+    activeService: null,
+    serviceBlockedSince: null
   };
   state.visitors.push(v);
 }
@@ -471,7 +479,7 @@ function setupCoreRooms(state: StationState): void {
   paintRoom(state, RoomType.LifeSupport, 9, 6, 11, 7);
 }
 
-function testStarterCoreIsOpenWithSideReactor(): void {
+function testStarterCoreHasNoHardwiredReactor(): void {
   const state = createInitialState({ seed: 1337 });
   const core = fromIndex(state.core.centerTile, state.width);
 
@@ -486,10 +494,10 @@ function testStarterCoreIsOpenWithSideReactor(): void {
   const reactorTiles = state.rooms
     .map((room, idx) => (room === RoomType.Reactor ? idx : -1))
     .filter((idx) => idx >= 0);
-  assertCondition(reactorTiles.length > 0, 'Starter station should still include an off-center reactor alcove.');
+  assertCondition(reactorTiles.length === 0, 'Starter station should not retain a hardwired reactor room.');
   assertCondition(
-    reactorTiles.every((idx) => fromIndex(idx, state.width).x < core.x),
-    'Starter reactor alcove should sit west of the central core.'
+    trySetTileWithCredits(state, state.core.serviceTile, TileType.Wall).ok,
+    'The legacy core service tile should accept normal construction.'
   );
 }
 
@@ -497,9 +505,11 @@ function testTileBuildCostDoesNotScaleWithDistance(): void {
   const state = createInitialState({ seed: 1338 });
   const core = fromIndex(state.core.centerTile, state.width);
   const near = toIndex(core.x, core.y + 10, state.width);
+  const nearAnchor = toIndex(core.x - 1, core.y + 10, state.width);
   const farAnchor = toIndex(state.width - 4, state.height - 4, state.width);
   const far = toIndex(state.width - 3, state.height - 4, state.width);
 
+  setTile(state, nearAnchor, TileType.Wall);
   setTile(state, farAnchor, TileType.Wall);
   assertCondition(planTileConstruction(state, near, TileType.Floor).ok, 'Expected near floor blueprint to be valid.');
   assertCondition(planTileConstruction(state, far, TileType.Floor).ok, 'Expected far floor blueprint to be valid.');
@@ -1054,10 +1064,12 @@ function testVisitorAuxiliaryHygieneNeedIsInspectable(): void {
   setupCoreRooms(state);
   paintRoom(state, RoomType.Hygiene, 12, 10, 14, 12);
   placeModuleOrThrow(state, ModuleType.Shower, 12, 11);
+  placeModuleOrThrow(state, ModuleType.Toilet, 13, 11);
   placeModuleOrThrow(state, ModuleType.Sink, 14, 11);
+  setRoomHousingPolicy(state, toIndex(13, 11, state.width), 'visitor');
   spawnVisitor(state, 8, 11, 31005);
   const visitor = state.visitors[0];
-  const hygieneTile = toIndex(12, 11, state.width);
+  const hygieneTile = toIndex(13, 11, state.width);
   visitor.state = VisitorState.ToLeisure;
   visitor.servedMeal = true;
   visitor.patience = 0;
@@ -3281,6 +3293,7 @@ function testSelfCareCrewNotStolenByLogisticsDispatch(): void {
   setupCoreRooms(state);
   paintRoom(state, RoomType.Hygiene, 12, 10, 15, 12);
   placeModuleOrThrow(state, ModuleType.Shower, 12, 11);
+  placeModuleOrThrow(state, ModuleType.Toilet, 13, 11);
   placeModuleOrThrow(state, ModuleType.Sink, 14, 11);
   state.crew.total = 1;
   tick(state, 0.25);
@@ -3544,21 +3557,54 @@ function testSporadicTrafficSchedulesNextCheck(): void {
 
 function testPortOpsStarterHasCrampedOperationalFoodLoop(): void {
   const state = createInitialState({ seed: 3016040, manualTrafficAdmission: true, physicalStarterInventory: true });
-  const kitchenTiles = state.rooms.map((room, index) => room === RoomType.Kitchen ? index : -1).filter((index) => index >= 0);
   const cafeteriaTiles = state.rooms.map((room, index) => room === RoomType.Cafeteria ? index : -1).filter((index) => index >= 0);
-  assertCondition(kitchenTiles.length > 0 && cafeteriaTiles.length > 0, 'Port-ops starter should include a tiny kitchen and cafeteria.');
+  assertCondition(cafeteriaTiles.length > 0, 'Port-ops starter should include an operational cafeteria.');
   assertCondition(
-    kitchenTiles.some((tile) => state.tiles[tile] === TileType.Door) && cafeteriaTiles.some((tile) => state.tiles[tile] === TileType.Door),
-    'Each starter food room should have its own physical access door.'
+    cafeteriaTiles.some((tile) => state.tiles[tile] === TileType.Door),
+    'The starter cafeteria should have physical corridor access.'
   );
   assertCondition(
-    state.moduleInstances.some((module) => module.type === ModuleType.Stove) &&
+    !state.moduleInstances.some((module) => module.type === ModuleType.Stove) &&
       state.moduleInstances.some((module) => module.type === ModuleType.ServingStation) &&
       state.moduleInstances.some((module) => module.type === ModuleType.Table),
-    'Starter food rooms should be equipped and immediately usable.'
+    'Starter food service should use imported prepared meals without a mandatory production chain.'
   );
+  state.controls.paused = false;
+  tick(state, 0.25);
+  assertCondition(state.ops.cafeteriasActive === 1, 'Starter cafeteria should activate on the first sim tick.');
   const startingMeals = state.itemNodes.reduce((sum, node) => sum + (node.items.meal ?? 0), 0);
-  assertCondition(startingMeals === 10, `Starter cafeteria should open with exactly 10 meals, got ${startingMeals}.`);
+  assertCondition(startingMeals >= 12, `Starter cafeteria should open with enough prepared meals for its first promise, got ${startingMeals}.`);
+}
+
+function testStarterPortVisitorsDisembarkAndBoard(): void {
+  const state = createInitialState({ seed: 3016045, manualTrafficAdmission: true, physicalStarterInventory: true });
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 3;
+  runFor(state, 5);
+
+  const offer = state.trafficOffers.find((entry) => entry.offerKind === 'passenger');
+  assertCondition(!!offer, 'Starter visitor flow requires a passenger manifest.');
+  if (!offer) return;
+  offer.arrivesAt = state.now;
+  offer.status = 'holding';
+  const berth = getEligibleBerthsForOffer(state, offer.id)[0];
+  assertCondition(!!berth, 'Starter berth should accept the first visitor manifest.');
+  assertCondition(admitTrafficOffer(state, offer.id, berth.anchorTile).ok, 'First visitor manifest should be admitted.');
+
+  runFor(state, 130);
+
+  const contract = state.portOps.contracts.find((entry) => entry.offerId === offer.id);
+  const settlement = state.portOps.settlements.find((entry) => entry.contractId === contract?.id);
+  assertCondition(!!settlement, 'The passenger manifest should settle at its hard departure.');
+  assertCondition(
+    (settlement?.promises.find((promise) => promise.kind === 'passengers-served')?.completed ?? 0) > 0,
+    'Origin passengers should disembark and receive physical service.'
+  );
+  assertCondition(
+    (settlement?.promises.find((promise) => promise.kind === 'passengers-returned')?.completed ?? 0) > 0,
+    'At least one origin passenger should return before hard departure.'
+  );
+  assertCondition(state.crewMembers.length === 8 && state.metrics.deathsTotal === 0, 'Starter passenger operations should not kill crew through decompression.');
 }
 
 function testManualTrafficOffersRequireExplicitAdmission(): void {
@@ -6648,7 +6694,7 @@ function testDualWallVariantTruthTable(): void {
 }
 
 function run(): void {
-  testStarterCoreIsOpenWithSideReactor();
+  testStarterCoreHasNoHardwiredReactor();
   testTileBuildCostDoesNotScaleWithDistance();
   testCreditBuildDoesNotConsumeSuppliesOrNeedIntake();
   testCreditBuildBlocksOnCredits();
@@ -6795,6 +6841,7 @@ function run(): void {
   testSporadicTrafficSchedulesNextCheck();
   testPortOpsStarterHasCrampedOperationalFoodLoop();
   testManualTrafficOffersRequireExplicitAdmission();
+  testStarterPortVisitorsDisembarkAndBoard();
   testManualTrafficHoldAndRefusal();
   testApprovedManifestCreatesCrewWorkedPhysicalTurnaround();
   testNineCrewDisembarkWhileCargoUnloads();

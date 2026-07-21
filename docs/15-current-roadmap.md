@@ -1,8 +1,20 @@
 # Living Simulation Roadmap Index
 
-Last updated: 2026-05-02
+Last updated: 2026-07-18
 
 This is the index for the next simulation roadmap. The work is split into three parts so we can pause, rebalance, and reassess between major systems instead of marching through one oversized plan.
+
+## Current Product Authority
+
+Read `docs/23-operational-promise-core-loop.md` before using any checklist in this roadmap.
+
+The executable standalone-branch goal is `docs/24-two-berth-shift-implementation-goal.md`.
+
+The Operational Promise design is the current authority for the game's primary loop and next validation slice. Parts 1-3 remain valuable implementation history and subsystem inventory, but they are **paused as a forward feature sequence**. Do not continue them by checklist until the Two-Berth Shift proves the core loop in local play and the proposed work has been classified as core, supporting, later, or dormant in that design.
+
+In particular, do not add another utility, need, metric, command specialty, production dependency, or reputation input merely because an older roadmap calls for it. New work must improve the loop:
+
+`Forecast -> Promise -> Allocate -> Operate -> Intervene -> Settle -> Adapt`
 
 ## How To Use These Roadmaps
 
@@ -17,21 +29,21 @@ This is the index for the next simulation roadmap. The work is split into three 
 
 ## Roadmap Parts
 
-1. **Part 1 - Living Actors, Jobs, Logistics, and Residents**  
+1. **Part 1 - Living Actors, Jobs, Logistics, and Residents (paused sequence)**
    File: `docs/16-roadmap-part-1-living-actors-jobs.md`  
    Scope: reservations, object providers, batched logistics, job-board facade, first production work slice, production migration, role identity, and residents-as-society. This is the foundational refactor and should be balanced/playtested before deeper utilities.
 
-2. **Part 2 - Utilities, Hazards, Access, and Sanitation**  
+2. **Part 2 - Utilities, Hazards, Access, and Sanitation (paused sequence)**
    File: `docs/17-roadmap-part-2-utilities-hazards-sanitation.md`  
    Scope: access/districts, route control, spatial power/water/ducting, hazards, maintenance, fire/smoke consequences, and sanitation. Start this only after Part 1 feels stable enough that more jobs and object interactions will not amplify old churn.
 
-3. **Part 3 - Command Center, System Map, Contracts, and Incidents**  
+3. **Part 3 - Command Center, System Map, Contracts, and Incidents (paused sequence)**
    File: `docs/18-roadmap-part-3-command-map-contracts.md`  
    Scope: command/ops, actionable system map, faction/lane contracts, station identity, patients, dispatch, and advanced incidents. This is intentionally later because it changes the game's strategic layer.
 
-## Product Direction
+## Prior Product Direction
 
-The player should design a living orbital station where layout creates operational pressure. The sim should show why the station works or fails through actors, rooms, modules, routes, jobs, overlays, inspectors, alerts, and map opportunities.
+This direction remains useful context, but `docs/23-operational-promise-core-loop.md` now establishes the hierarchy between these systems. The game is first a spatial service-operations simulator; resident society and strategic governance are later scale layers.
 
 Core population fantasy:
 

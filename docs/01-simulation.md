@@ -1,5 +1,11 @@
 # Simulation Core
 
+## Current Default: Two-Berth Shift
+
+The default game is now the operational-promise loop defined in `23-operational-promise-core-loop.md`. `state.portOps` owns forecast choices, accepted contracts, component promises, cargo lots, settlements, berth standing, equipment strain, and operating telemetry. The active cadence is Forecast -> Promise -> Allocate -> Operate -> Intervene -> Settle -> Adapt.
+
+Accepted ships have boarding cutoffs and hard departure times. Every ship settles and releases its berth even when passengers, cargo, jobs, or reservations remain incomplete. The old random corridor, cafeteria, security, and brownout failure pulse is dormant; the active exception is cargo-arm strain caused by sustained handling. Atmosphere, power, and water remain simulated primitives, but the authored starter hull supplies the baseline services and does not ask the player to build an opening utility chain.
+
 The single mutable `StationState` (`src/sim/types.ts:933`) is the source of truth for everything in the game. Every per-frame call to `tick(state, dt)` (`src/sim/sim.ts:8444`) runs a fixed-order pipeline; there are no sub-steps and no async work.
 
 ## Tick pipeline (in order)
@@ -27,7 +33,7 @@ The single mutable `StationState` (`src/sim/types.ts:933`) is the source of trut
     - `updateIncidentPipeline`.
     - `refreshJobMetrics`, `ensureDerivedUpToDate`, `computeMetrics`.
     - `updateUnlockProgress` (`sim.ts:360`).
-    - `maybeTriggerFailure` — random effects.
+    - Port-contract lifecycle, hard departure, settlement, and cargo-arm exception updates.
 
 `dt` arrives from `main.ts:frame` multiplied by `state.controls.simSpeed` (1/2/4) and capped at 100 ms (`main.ts:3891`).
 

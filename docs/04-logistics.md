@@ -1,5 +1,11 @@
 # Logistics — Item Nodes &amp; Transport Jobs
 
+## Port Cargo Semantics
+
+Port operations distinguish station-owned stock from contract-owned consigned freight. An accepted inbound manifest creates `PortCargoLot` records, reserves destination capacity, stages aggregate cargo at the berth arm, and advances promise quantities only through physical handling. Consigned freight never enters `metrics.materials` and cannot be consumed by construction or production. Outbound requests pull real station inventory through batched transport jobs and count only units delivered to the ship.
+
+The starter has a 64-unit cargo arm, a 40-unit intake pallet, and three 108-unit storage racks. Intake and storage are connected by an interior transfer door; the route is intentionally longer than the passenger service route so labor and layout matter. Cargo left aboard, staged, or in unfinished jobs is closed at hard departure and can never pin a berth. A second cargo arm divides wear and maintains 55% degraded throughput during a primary-arm fault.
+
 Resources don't flow through a continuous network. They live at `ItemNode`s attached to specific modules; movement happens via `TransportJob`s that crew members pick up and execute.
 
 ## Core types

@@ -1,6 +1,12 @@
 # Docks &amp; Ships
 
-A *dock* is a contiguous run of `Dock` tiles on the outer hull facing one of four `SpaceLane`s (north/east/south/west). Docks now represent small pod ports: each visitor pod carries 1-2 people, visually sits outside the hull, and connects to the dock with an umbilical. Berth rooms are the large-ship surface.
+## Port Contracts And Hard Departure
+
+Fresh play begins with authored Passenger, Freight, and Mixed offers. The player reserves an eligible berth, holds or refuses opportunities, and accepts an immutable contract snapshot with explicit component promises. Passenger meals, drinks, lounge visits, restroom visits, wash visits, premium comfort, returns, and freight unload/load are quantities, not room-presence checks. Dispatch previews missing physical facilities before assignment, and passenger promises advance only after the matching fixture interaction completes.
+
+Arrival begins a physical turnaround with inspection, unloading/loading, passenger service, boarding, and a hard departure. Boarding starts 12 seconds before departure. At the deadline, remaining origin passengers are removed as missed returns, contract jobs and reservations close, the berth releases, and settlement occurs exactly once. Settlement reports every promise separately, supports partial payout, records causal notes, and updates bounded local berth standing. Three successful turnarounds unlock routine low-risk auto-admission; risky or incompatible traffic remains manual.
+
+A *dock* is a contiguous run of `Dock` tiles on the outer hull facing one of four `SpaceLane`s (north/east/south/west). Docks are the low-stakes walk-in channel: each small tourist/trader pod carries 1-2 people, arrives without a Port Dispatch contract, visually sits outside the hull, and connects to the dock with an umbilical. Berth rooms are the scheduled medium/large-ship contract surface.
 
 ## Dock topology
 
@@ -56,7 +62,7 @@ Dock-migration v0 also supports `spawnShipAtBerth`: `assignedDockId = null`, `as
 
 Active ship rendering uses generated project-local sprites in `public/assets/ships/`. Small Dock pods render outside the hull with their docking collar aligned to the hatch. Berth ships render inside the Berth footprint so the room reads as an occupied ship bay, not an exterior parking point.
 
-Berth rooms are ship pads, not sealed rooms. Scheduler preference is berth-first: a capable berth attracts the largest ship it can accept before the sim falls back to dock pod traffic. A valid traffic berth needs:
+Berth rooms are ship pads, not sealed rooms. In manual Port Dispatch mode all offers are medium or large and route only to Berths; free Docks independently roll small walk-in tourist/trader pods. The legacy automatic scheduler likewise gives free Docks a bounded chance to receive a small pod, otherwise choosing a capable medium/large Berth. A valid traffic berth needs:
 
 - One contiguous `RoomType.Berth` cluster. Size class comes from area: small 4+, medium 20+, large 42+.
 - At least one berth tile adjacent to `TileType.Space` or the map edge.

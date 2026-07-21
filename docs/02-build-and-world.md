@@ -1,5 +1,11 @@
 # Build &amp; World
 
+## Current Default: Compact Port Shell
+
+The fresh station is an editable L-shaped hull with a public berth concourse, two small berths, a cafeteria, intake staging, and general storage. Every walkable non-berth starter tile must be enclosed by walls and pressure barriers. Berths remain vacuum-rated transfer areas, with suits/ship-side sealing abstracted for dock users. The former hardwired yellow center/core tile has no rendering, topology, or build restriction; it can be built over like any other floor.
+
+The active palette is deliberately reduced to port operations: structure and doors, berth/public/logistics rooms, cafeteria and storage modules, cargo-arm capability, and crew. Legacy production, utility, residential, command, progression, and diagnostic controls remain hidden on this branch. Prepared meals and physical station stock let the player operate before choosing optional production later.
+
 How the player shapes the station: tiles, zones, rooms, modules, expansion, supplies, construction jobs, and EVA work. Primary build tools spend credits and place instantly; the older blueprint/material hauling path remains for truss/EVA experiments.
 
 ## Layers
