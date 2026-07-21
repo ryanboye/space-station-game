@@ -11,6 +11,7 @@
 import {
   CREW_BLADDER_TOILET_THRESHOLD,
   CREW_CLEAN_HYGIENE_THRESHOLD,
+  CREW_HUNGER_MEAL_THRESHOLD,
   CREW_REST_ENERGY_THRESHOLD,
   CREW_THIRST_DRINK_THRESHOLD,
   DORM_SEEK_ENERGY_THRESHOLD,
@@ -339,6 +340,7 @@ export function getResidentInspectorById(state: StationState, residentId: number
 
 function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.resting) return 'rest';
+  if (crew.eating || crew.carryingMeal) return 'eat';
   if (crew.toileting) return 'toilet';
   if (crew.drinking) return 'drink';
   if (crew.cleaning) return 'clean';
@@ -346,6 +348,7 @@ function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.activeJobId !== null) return 'logistics';
   if (crew.bladder <= CREW_BLADDER_TOILET_THRESHOLD) return 'toilet';
   if (crew.thirst <= CREW_THIRST_DRINK_THRESHOLD) return 'drink';
+  if (crew.hunger <= CREW_HUNGER_MEAL_THRESHOLD) return 'eat';
   if (crew.energy <= CREW_REST_ENERGY_THRESHOLD) return 'rest';
   if (crew.hygiene <= CREW_CLEAN_HYGIENE_THRESHOLD) return 'clean';
   return 'idle';
@@ -435,6 +438,17 @@ function crewInspectorAction(
       stateLabel: 'resting'
     };
   }
+  if (crew.eating || crew.carryingMeal) {
+    return {
+      currentAction: crew.eatSessionActive
+        ? 'eating at a cafeteria seat'
+        : crew.carryingMeal
+          ? crew.path.length > 0 ? 'carrying meal to a seat' : 'waiting for a cafeteria seat'
+          : crew.path.length > 0 ? 'walking to meal service' : 'waiting for a prepared meal',
+      actionReason: `hunger ${crew.hunger.toFixed(0)} (meal at <${CREW_HUNGER_MEAL_THRESHOLD})`,
+      stateLabel: 'meal'
+    };
+  }
   if (crew.toileting) {
     const atToilet = state.modules[crew.tileIndex] === ModuleType.Toilet;
     return {
@@ -510,6 +524,7 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     assignedSystem: crew.assignedSystem,
     lastSystem: crew.lastSystem,
     energy: crew.energy,
+    hunger: crew.hunger,
     hygiene: crew.hygiene,
     bladder: crew.bladder,
     thirst: crew.thirst,
@@ -518,6 +533,8 @@ export function getCrewInspectorById(state: StationState, crewId: number): CrewI
     needsStrainSec: crew.needsStrainSec,
     resignationNoticeAt: crew.resignationNoticeAt,
     resting: crew.resting,
+    eating: crew.eating,
+    carryingMeal: crew.carryingMeal,
     cleaning: crew.cleaning,
     toileting: crew.toileting,
     drinking: crew.drinking,

@@ -207,6 +207,8 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Gangway]: 0,
   [ModuleType.CustomsCounter]: 0,
   [ModuleType.CargoArm]: 0,
+  [ModuleType.FuelTank]: 2,
+  [ModuleType.FuelPump]: 2,
   [ModuleType.SecurityCamera]: 3,
   [ModuleType.AccessGate]: 3,
   [ModuleType.FireExtinguisher]: 0,

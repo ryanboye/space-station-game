@@ -24,6 +24,8 @@
     "module.bed",
     "module.bench",
     "module.cargo_arm",
+    "module.fuel_pump",
+    "module.fuel_tank",
     "module.cell_console",
     "module.couch",
     "module.customs_counter",

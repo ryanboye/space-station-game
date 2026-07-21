@@ -357,7 +357,11 @@ export function createInitialState(options?: {
         mealTarget: 0,
         mealsCompleted: 0,
         freightTarget: 0,
-        freightCompleted: 0
+        freightCompleted: 0,
+        fuelPurchased: 0,
+        fuelSold: 0,
+        fuelTarget: 0,
+        fuelCompleted: 0
       }
     },
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
@@ -794,7 +798,13 @@ export function createInitialState(options?: {
         logistics: 1,
         'construction-eva': 0,
         flex: 0
-      }
+      },
+      crewWatchTargets: [
+        { food: 1, sanitation: 0, engineering: 1, logistics: 1, 'construction-eva': 0, flex: 0 },
+        { food: 2, sanitation: 0, engineering: 1, logistics: 0, 'construction-eva': 0, flex: 0 },
+        { food: 0, sanitation: 1, engineering: 1, logistics: 1, 'construction-eva': 0, flex: 0 }
+      ],
+      emergencyRecallUntil: 0
     },
     mapExpansion: {
       purchased: {

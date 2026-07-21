@@ -18,6 +18,9 @@ export interface PortOfferTemplate {
   hospitalityDemand: HospitalityDemand;
   inboundCargo: { rawMaterial: number; rawMeal: number; tradeGood: number };
   outboundRequest: { rawMaterial: number; meal: number; tradeGood: number };
+  fuelSupply?: number;
+  fuelRequest?: number;
+  fuelProcurementCostCredits?: number;
   requestedServices: ShipServiceTag[];
   forecastSec: number;
   berthTimeSec: number;

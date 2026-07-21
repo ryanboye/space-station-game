@@ -380,6 +380,91 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     applyDemoStationOverlay(s);
   },
 
+  // Focused Stage 4 fixture: one supplier and one customer, with two
+  // pump-equipped berths and visible tank stock. Both manifests begin in
+  // holding orbit so the player can inspect the economics and route them.
+  'fuel-day': (s) => {
+    unlockThrough(s, 2);
+    s.metrics.credits = 2400;
+    s.metrics.materials = 500;
+    applyDemoStationOverlay(s);
+    // This fixture tests fuel routing rather than an intentionally undersized
+    // demo dorm. Keep the port-day roster and its basic self-care capacity in
+    // the 12-16 crew range described by the roadmap.
+    s.crew.total = 12;
+    for (const [x, y] of [
+      [7, 10], [9, 10], [11, 10], [13, 10], [12, 12], [7, 14], [9, 14]
+    ] as const) {
+      placeMod(s, x, y, ModuleType.Bunk);
+    }
+    placeMod(s, 61, 22, ModuleType.Sink);
+    placeMod(s, 62, 22, ModuleType.WaterFountain);
+    placeMod(s, 61, 26, ModuleType.Toilet);
+    placeMod(s, 63, 26, ModuleType.Toilet);
+    placeMod(s, 70, 34, ModuleType.FuelTank);
+    placeMod(s, 72, 35, ModuleType.FuelPump);
+    placeMod(s, 70, 38, ModuleType.FuelTank);
+    placeMod(s, 72, 41, ModuleType.FuelPump);
+    seedItemNodeStock(s, 70, 34, 'fuel', 40);
+    seedItemNodeStock(s, 70, 38, 'fuel', 40);
+    const common = {
+      size: 'medium' as const,
+      status: 'holding' as const,
+      forecastAt: 0,
+      expiresAt: 180,
+      passengersTotal: 0,
+      manifestDemand: { cafeteria: 0, market: 0, lounge: 0 },
+      manifestMix: { diner: 0.25, shopper: 0.25, lounger: 0.25, rusher: 0.25 },
+      hospitalityDemand: { meal: 0, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 },
+      inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+      outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+      berthTimeSec: 240,
+      projectedSpend: 0,
+      riskLabel: 'guarded' as const,
+      assignedBerthAnchor: null
+    };
+    s.trafficOffers = [
+      {
+        ...common,
+        id: 9001,
+        callsign: 'F-901',
+        shipName: 'Helios Bunker',
+        lane: 'east',
+        shipType: 'industrial',
+        offerKind: 'freight',
+        arrivesAt: 5,
+        fuelSupply: 48,
+        fuelRequest: 0,
+        fuelProcurementCostCredits: 108,
+        requestedServices: [],
+        dockingFee: 70
+      },
+      {
+        ...common,
+        id: 9002,
+        callsign: 'F-902',
+        shipName: 'Wayfarer Meridian',
+        lane: 'south',
+        shipType: 'trader',
+        offerKind: 'freight',
+        arrivesAt: 9,
+        fuelSupply: 0,
+        fuelRequest: 36,
+        fuelProcurementCostCredits: 0,
+        requestedServices: ['fuel'],
+        dockingFee: 65
+      }
+    ];
+    s.shipSpawnCounter = 9003;
+    s.portOps.offerSequenceIndex = 3;
+    s.portOps.firstOfferShownAt = 0;
+    s.controls.manualTrafficAdmission = true;
+    s.controls.portAutoAdmitEnabled = false;
+    s.controls.materialAutoImportEnabled = false;
+    s.controls.paused = true;
+    s.controls.simSpeed = 1;
+  },
+
   'reputation-slice': (s) => {
     unlockThrough(s, 3);
     completeSpecialtyForScenario(s, 'sanitation-program');

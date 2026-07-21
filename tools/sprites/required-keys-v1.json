@@ -87,6 +87,8 @@
   "module.gangway",
   "module.customs_counter",
   "module.cargo_arm",
+  "module.fuel_tank",
+  "module.fuel_pump",
   "module.fire_extinguisher",
   "module.vent",
   "module.insulation_panel",

@@ -1,5 +1,6 @@
 import {
   ModuleType,
+  ResidentState,
   RoomType,
   TILE_SIZE,
   TileType,
@@ -40,6 +41,7 @@ import {
   getReputationZoneScores,
   getRoomEnvironmentTileDiagnostic,
   getThermalTileDiagnostic,
+  isCrewHoldingProtectedPost,
   resolveWallLightFacing,
   hasUtilityUnderlay,
   utilityUnderlayNeighborMask,
@@ -215,6 +217,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'g',
   [ModuleType.CustomsCounter]: 'c',
   [ModuleType.CargoArm]: 'X',
+  [ModuleType.FuelTank]: 'F',
+  [ModuleType.FuelPump]: 'P',
   [ModuleType.SecurityCamera]: 'o',
   [ModuleType.AccessGate]: '|',
   [ModuleType.FireExtinguisher]: 'F',
@@ -229,12 +233,13 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Plant]: '*'
 };
 
-const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'fuel', 'body'];
 const itemFillColor: Record<ItemType | 'none', string> = {
   rawMeal: 'rgba(118, 218, 132, 0.55)',
   meal: 'rgba(255, 216, 120, 0.58)',
   rawMaterial: 'rgba(214, 183, 132, 0.55)',
   tradeGood: 'rgba(128, 188, 255, 0.58)',
+  fuel: 'rgba(85, 235, 185, 0.62)',
   body: 'rgba(227, 110, 110, 0.6)',
   none: 'rgba(151, 170, 192, 0.42)'
 };
@@ -243,6 +248,7 @@ const itemShortCode: Record<ItemType, string> = {
   meal: 'ME',
   rawMaterial: 'MAT',
   tradeGood: 'TG',
+  fuel: 'FL',
   body: 'BD'
 };
 const RESIDENT_MARK_COLOR = '#35d98a';
@@ -1282,22 +1288,30 @@ function pickFloorOverlayKey(state: StationState, tileIndex: number): string | n
   const tileType = state.tiles[tileIndex];
   if (!isFloorWeatherEligible(tileType)) return null;
   const dirt = state.dirtByTile[tileIndex] ?? 0;
-  if (dirt >= 25) {
+  // Sanitation is a live system, so visible grime starts while a space is
+  // merely becoming neglected instead of appearing only after it is filthy.
+  // Decorative weathering uses the separate wear sprites below; a grime
+  // sprite now always means actual dirt the player can clean.
+  if (dirt >= 12) {
     const hash = hashWeatherSeed(tileIndex, state.rooms[tileIndex], state.topologyVersion);
     return FLOOR_GRIME_SPRITE_KEYS[(hash >>> (dirt >= 70 ? 2 : 4)) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
   }
   const roomType = state.rooms[tileIndex];
-  if (suppressFloorWeather(roomType)) return null;
+  if (suppressFloorWeather(roomType) || roomWeatherBias(roomType) <= 0) return null;
   const hash = hashWeatherSeed(tileIndex, roomType, state.topologyVersion);
   const roll = hash % 100;
   const bias = roomWeatherBias(roomType);
   const noOverlayThreshold = Math.max(15, 45 - bias);
   const wearThreshold = Math.min(95, 85 + Math.round(bias * 0.6));
   if (roll < noOverlayThreshold) return null;
-  if (roll >= wearThreshold) {
-    return FLOOR_WEAR_SPRITE_KEYS[(hash >>> 8) % FLOOR_WEAR_SPRITE_KEYS.length] ?? null;
-  }
-  return FLOOR_GRIME_SPRITE_KEYS[(hash >>> 4) % FLOOR_GRIME_SPRITE_KEYS.length] ?? null;
+  if (roll >= wearThreshold) return FLOOR_WEAR_SPRITE_KEYS[(hash >>> 8) % FLOOR_WEAR_SPRITE_KEYS.length] ?? null;
+  return null;
+}
+
+function floorOverlayAlpha(state: StationState, tileIndex: number): number {
+  const dirt = state.dirtByTile[tileIndex] ?? 0;
+  if (dirt < 12) return 0.38;
+  return 0.22 + clamp01((dirt - 12) / 70) * 0.62;
 }
 
 function sanitationRenderSignature(state: StationState): string {
@@ -1313,8 +1327,67 @@ function sanitationRenderSignature(state: StationState): string {
   return `${dirty}:${filthy}:${maxBucket}`;
 }
 
+function moduleConditionRenderSignature(state: StationState): string {
+  let worn = 0;
+  let strained = 0;
+  let worstBucket = 0;
+  for (const debt of state.maintenanceDebts) {
+    if (debt.moduleId === undefined || debt.debt < 12) continue;
+    const bucket = Math.floor(debt.debt / 10);
+    worn += 1;
+    if (bucket >= 6) strained += 1;
+    worstBucket = Math.max(worstBucket, bucket);
+  }
+  return `${worn}:${strained}:${worstBucket}`;
+}
+
+function drawModuleConditionDecal(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  debt: number
+): void {
+  if (debt < 12) return;
+  const origin = fromIndex(module.originTile, state.width);
+  const x = origin.x * TILE_SIZE;
+  const y = origin.y * TILE_SIZE;
+  const w = module.width * TILE_SIZE;
+  const h = module.height * TILE_SIZE;
+  const t = clamp01((debt - 12) / 88);
+  const seed = hashWeatherSeed(module.id, state.rooms[module.originTile], Math.floor(debt / 10));
+
+  ctx.save();
+  ctx.strokeStyle = debt >= 65
+    ? `rgba(255, 102, 82, ${0.42 + t * 0.34})`
+    : `rgba(196, 142, 78, ${0.28 + t * 0.32})`;
+  ctx.lineWidth = Math.max(1, Math.round(PX * (0.8 + t)));
+  ctx.lineCap = 'round';
+  const marks = debt >= 65 ? 6 : debt >= 35 ? 4 : 2;
+  for (let i = 0; i < marks; i++) {
+    const hx = ((seed >>> ((i * 3) % 21)) & 31) / 31;
+    const hy = ((seed >>> ((i * 5 + 7) % 21)) & 31) / 31;
+    const sx = x + w * (0.12 + hx * 0.7);
+    const sy = y + h * (0.16 + hy * 0.66);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx + w * (0.06 + t * 0.06), sy + h * (i % 2 === 0 ? 0.08 : -0.07));
+    ctx.stroke();
+  }
+  if (debt >= 35) {
+    ctx.fillStyle = debt >= 65 ? 'rgba(126, 30, 28, 0.32)' : 'rgba(100, 68, 35, 0.24)';
+    ctx.fillRect(x + w * 0.08, y + h * 0.77, w * Math.min(0.76, 0.22 + t * 0.54), Math.max(2, h * 0.07));
+  }
+  ctx.restore();
+}
+
 function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationState['moduleInstances'][number], px: number, py: number, w: number, h: number): boolean {
-  if (module.type !== ModuleType.Gangway && module.type !== ModuleType.CustomsCounter && module.type !== ModuleType.CargoArm) {
+  if (
+    module.type !== ModuleType.Gangway &&
+    module.type !== ModuleType.CustomsCounter &&
+    module.type !== ModuleType.CargoArm &&
+    module.type !== ModuleType.FuelTank &&
+    module.type !== ModuleType.FuelPump
+  ) {
     return false;
   }
   ctx.save();
@@ -1347,6 +1420,30 @@ function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationSta
     ctx.moveTo(px + w * 0.22, py + h * 0.56);
     ctx.lineTo(px + w * 0.78, py + h * 0.56);
     ctx.stroke();
+  } else if (module.type === ModuleType.FuelTank) {
+    ctx.fillStyle = 'rgba(30, 56, 62, 0.98)';
+    ctx.fillRect(px + w * 0.1, py + h * 0.12, w * 0.8, h * 0.76);
+    ctx.strokeStyle = 'rgba(86, 226, 190, 0.9)';
+    ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.28, py + h * 0.16);
+    ctx.lineTo(px + w * 0.28, py + h * 0.84);
+    ctx.moveTo(px + w * 0.72, py + h * 0.16);
+    ctx.lineTo(px + w * 0.72, py + h * 0.84);
+    ctx.stroke();
+    ctx.fillStyle = '#63f0b2';
+    ctx.fillRect(px + w * 0.4, py + h * 0.36, w * 0.2, h * 0.28);
+  } else if (module.type === ModuleType.FuelPump) {
+    ctx.fillStyle = 'rgba(38, 48, 56, 0.98)';
+    ctx.fillRect(px + w * 0.12, py + h * 0.18, w * 0.44, h * 0.64);
+    ctx.strokeStyle = 'rgba(99, 240, 178, 0.9)';
+    ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.54, py + h * 0.34);
+    ctx.quadraticCurveTo(px + w * 0.78, py + h * 0.28, px + w * 0.84, py + h * 0.68);
+    ctx.stroke();
+    ctx.fillStyle = '#ffd36a';
+    ctx.fillRect(px + w * 0.24, py + h * 0.3, w * 0.18, h * 0.12);
   } else {
     ctx.fillStyle = 'rgba(42, 48, 58, 0.98)';
     ctx.fillRect(px + w * 0.1, py + h * 0.12, w * 0.28, h * 0.24);
@@ -2573,6 +2670,7 @@ function ensureDecorativeLayer(
     state.moduleVersion,
     state.dockVersion,
     sanitationRenderSignature(state),
+    moduleConditionRenderSignature(state),
     useSprites ? 1 : 0,
     spriteAtlas.version
   ].join('|');
@@ -2586,12 +2684,28 @@ function ensureDecorativeLayer(
       const overlayKey = pickFloorOverlayKey(state, i);
       if (!overlayKey) continue;
       const { x, y } = fromIndex(i, state.width);
-      drawSpriteByKey(ctx, spriteAtlas, overlayKey, x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        overlayKey,
+        x * TILE_SIZE,
+        y * TILE_SIZE,
+        TILE_SIZE,
+        TILE_SIZE,
+        0,
+        floorOverlayAlpha(state, i)
+      );
     }
   }
 
+  const moduleDebtById = new Map<number, number>();
+  for (const debt of state.maintenanceDebts) {
+    if (debt.moduleId === undefined) continue;
+    moduleDebtById.set(debt.moduleId, Math.max(moduleDebtById.get(debt.moduleId) ?? 0, debt.debt));
+  }
   for (const module of state.moduleInstances) {
     drawModuleVisual(ctx, state, module, spriteAtlas, useSprites);
+    drawModuleConditionDecal(ctx, state, module, moduleDebtById.get(module.id) ?? 0);
   }
 
   return layer;
@@ -2894,6 +3008,15 @@ function residentWorldThought(state: StationState, resident: StationState['resid
     Math.floor(resident.tileIndex / state.width)
   );
   if (sanitation?.severity === 'filthy') return 'This place is filthy';
+  if (resident.state === ResidentState.Eating) return 'Having a meal';
+  if (resident.state === ResidentState.ToCafeteria) {
+    return resident.carryingMeal ? 'Looking for a seat' : resident.serveTimer !== undefined ? 'Getting a meal' : 'Waiting for a meal';
+  }
+  if (resident.state === ResidentState.Sleeping) return 'Sleeping';
+  if (resident.state === ResidentState.ToDorm) return 'Heading to my bunk';
+  if (resident.state === ResidentState.Cleaning) return 'Using the facilities';
+  if (resident.state === ResidentState.ToHygiene) return 'Waiting for the facilities';
+  if (resident.state === ResidentState.Leisure) return 'Unwinding';
   if (resident.hunger < 35) return "I'm hungry";
   if (resident.hygiene < 30) return 'I need a wash';
   if (resident.safety < 35) return "I don't feel safe";
@@ -2903,12 +3026,19 @@ function residentWorldThought(state: StationState, resident: StationState['resid
   return null;
 }
 
-function crewWorldThought(crew: StationState['crewMembers'][number]): string | null {
+function crewWorldThought(state: StationState, crew: StationState['crewMembers'][number]): string | null {
   if (crew.healthState === 'critical') return 'I need help!';
   if (crew.healthState === 'distressed') return 'The air feels wrong';
   if (crew.resignationNoticeAt !== null) return "I can't keep working like this";
   if (crew.missedPayrollCycles > 0) return "I haven't been paid";
+  if (isCrewHoldingProtectedPost(state, crew) && Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < 48) {
+    return 'Holding post until relief arrives';
+  }
   if (crew.morale < 30) return 'Morale is awful';
+  if (crew.eating || crew.carryingMeal) {
+    return crew.eatSessionActive ? 'Meal break' : crew.carryingMeal ? 'Looking for a seat' : 'Getting a meal';
+  }
+  if (crew.hunger < 48) return "I'm hungry";
   if (crew.toileting) {
     return crew.toiletSessionActive ? 'Using the restroom' : crew.path.length > 0 ? 'Heading to the restroom' : 'Finding a restroom';
   }
@@ -4104,6 +4234,91 @@ function drawIncidentMarkers(
   }
 }
 
+function drawLocalAirWarnings(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const occupied = new Set<number>();
+  for (const actor of state.visitors) occupied.add(actor.tileIndex);
+  for (const actor of state.residents) occupied.add(actor.tileIndex);
+  for (const actor of state.crewMembers) occupied.add(actor.tileIndex);
+
+  const candidates: Array<{ tile: number; air: number; occupied: boolean }> = [];
+  for (let y = visibleTiles.minY; y <= visibleTiles.maxY; y++) {
+    for (let x = visibleTiles.minX; x <= visibleTiles.maxX; x++) {
+      const tile = y * state.width + x;
+      if (!isWalkable(state.tiles[tile])) continue;
+      const air = state.airQualityByTile[tile];
+      if (!Number.isFinite(air) || air >= 55) continue;
+      const hasActor = occupied.has(tile);
+      // Unoccupied warnings are deliberately sparse. They communicate that a
+      // room is becoming unsafe without turning the normal view into an air map.
+      if (!hasActor && hashWeatherSeed(tile, state.rooms[tile], 0) % 9 !== 0) continue;
+      candidates.push({ tile, air, occupied: hasActor });
+    }
+  }
+  candidates.sort((a, b) => Number(b.occupied) - Number(a.occupied) || a.air - b.air);
+
+  ctx.save();
+  for (const candidate of candidates.slice(0, 24)) {
+    const p = fromIndex(candidate.tile, state.width);
+    const severity = clamp01((55 - candidate.air) / 55);
+    const pulse = 0.72 + Math.sin(state.now * 2.2 + candidate.tile * 0.37) * 0.16;
+    const alpha = (candidate.occupied ? 0.34 : 0.18) + severity * 0.26;
+    const drew = useSprites && drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      FX_SPRITE_KEYS.lowOxygen,
+      p.x * TILE_SIZE,
+      p.y * TILE_SIZE,
+      TILE_SIZE,
+      TILE_SIZE,
+      0,
+      alpha * pulse
+    );
+    if (!drew) {
+      ctx.strokeStyle = `rgba(132, 214, 232, ${alpha * pulse})`;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05);
+      for (let i = 0; i < 2; i++) {
+        const y = (p.y + 0.35 + i * 0.24) * TILE_SIZE;
+        ctx.beginPath();
+        ctx.arc((p.x + 0.44 + i * 0.12) * TILE_SIZE, y, TILE_SIZE * (0.18 + severity * 0.08), Math.PI * 0.1, Math.PI * 0.9);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawAgentStatusPip(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  code: string,
+  color: string
+): void {
+  const radius = Math.max(5, TILE_SIZE * 0.18);
+  const x = cx + TILE_SIZE * 0.29;
+  const y = cy - TILE_SIZE * 0.35;
+  ctx.save();
+  ctx.fillStyle = 'rgba(5, 10, 16, 0.9)';
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = `bold ${Math.max(7, Math.round(TILE_SIZE * 0.3))}px Consolas, Menlo, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(code, x, y + 0.5);
+  ctx.restore();
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -4391,6 +4606,7 @@ export function renderWorld(
     }
   }
 
+  drawLocalAirWarnings(ctx, state, spriteAtlas, useSprites, visibleTiles);
   drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
   drawIncidentMarkers(ctx, state, visibleTiles);
 
@@ -4473,6 +4689,9 @@ export function renderWorld(
       ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
       ctx.fill();
     }
+    if (v.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
+    else if (v.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if ((v.serviceBlockedSince ?? state.now) < state.now - 8) drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62');
     // Crowd-loop v1 (B3): storm-offs read as angry at a glance...
     if (angry) {
       ctx.save();
@@ -4549,6 +4768,9 @@ export function renderWorld(
       ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
       ctx.stroke();
     }
+    if (r.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
+    else if (r.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if (r.leaveIntent >= 70 || (r.agitation ?? 0) >= 75) drawAgentStatusPip(ctx, cx, cy, '!', '#ff9d5c');
     const thought = residentWorldThought(state, r);
     const urgent = r.healthState === 'critical' || inConfrontation;
     if (thought && shouldDrawThought(r.id, cx, cy, urgent)) drawWorldThought(ctx, thought, cx, cy, urgent);
@@ -4556,7 +4778,7 @@ export function renderWorld(
 
   for (const c of state.crewMembers) {
     if (!actorInVisibleRange(c.x, c.y)) continue;
-    const o = agentOffset(c.id);
+    const o = c.eatSessionActive ? seatedAgentOffset(state, c.tileIndex, c.id) : agentOffset(c.id);
     const cx = (c.x + o.x) * TILE_SIZE;
     const cy = (c.y + o.y) * TILE_SIZE;
     const spriteKey = STAFF_ROLE_SPRITE_KEYS[c.staffRole] ?? pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, c.id);
@@ -4607,7 +4829,11 @@ export function renderWorld(
       ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
       ctx.fill();
     }
-    const thought = crewWorldThought(c);
+    if (c.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
+    else if (c.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if (c.resignationNoticeAt !== null || c.missedPayrollCycles > 0) drawAgentStatusPip(ctx, cx, cy, '$', '#ff9d5c');
+    else if (c.energy < 28) drawAgentStatusPip(ctx, cx, cy, 'Z', '#a9b8ff');
+    const thought = crewWorldThought(state, c);
     const urgent = c.healthState === 'critical';
     if (thought && shouldDrawThought(c.id + 10000, cx, cy, urgent)) {
       drawWorldThought(ctx, thought, cx, cy, urgent);

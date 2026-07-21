@@ -173,6 +173,22 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Berth],
     itemNodeCapacity: 64
   },
+  [ModuleType.FuelTank]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Storage, RoomType.Berth],
+    itemNodeCapacity: 160
+  },
+  [ModuleType.FuelPump]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Berth],
+    // The small buffer is only a handoff point. Fuel is consumed by the ship
+    // as soon as a logistics delivery reaches the pump.
+    itemNodeCapacity: 8
+  },
   [ModuleType.SecurityCamera]: {
     width: 1,
     height: 1,

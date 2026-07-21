@@ -56,6 +56,8 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.gangway': { w: 1, h: 1 },
   'module.customs_counter': { w: 1, h: 1 },
   'module.cargo_arm': { w: 2, h: 2 },
+  'module.fuel_tank': { w: 2, h: 2 },
+  'module.fuel_pump': { w: 2, h: 1 },
   'module.fire_extinguisher': { w: 1, h: 1 },
   'module.vent': { w: 1, h: 1 },
   'module.insulation_panel': { w: 1, h: 1 },

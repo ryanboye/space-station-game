@@ -83,6 +83,26 @@ const assets = {
       <rect x="84" y="54" width="22" height="18" fill="#9aa7b8" stroke="#1a2230" stroke-width="4"/>
       <rect x="94" y="70" width="8" height="24" fill="#6fd8ff"/>`
   },
+  'module.fuel_tank': {
+    size: [128, 128],
+    body: `${panel(16, 18, 96, 92, '#20383d', '#63f0b2')}
+      <rect x="26" y="28" width="30" height="70" rx="12" fill="#284d52" stroke="#10252a" stroke-width="5"/>
+      <rect x="72" y="28" width="30" height="70" rx="12" fill="#284d52" stroke="#10252a" stroke-width="5"/>
+      <path d="M40 24v-8h48v8M40 102v10h48v-10" fill="none" stroke="#8aa5ad" stroke-width="6"/>
+      <rect x="53" y="50" width="22" height="28" fill="#12272c" stroke="#63f0b2" stroke-width="4"/>
+      <rect x="58" y="58" width="12" height="12" fill="#63f0b2"/>
+      <path d="M23 44h36M69 44h36M23 84h36M69 84h36" stroke="#d3a64e" stroke-width="4"/>`
+  },
+  'module.fuel_pump': {
+    size: [128, 64],
+    body: `${panel(12, 10, 104, 44, '#26343d', '#63f0b2')}
+      <rect x="22" y="18" width="42" height="30" fill="#314b52" stroke="#12242a" stroke-width="4"/>
+      <rect x="30" y="24" width="20" height="10" fill="#10272d" stroke="#63f0b2" stroke-width="3"/>
+      <rect x="36" y="27" width="8" height="4" fill="#ffd36a"/>
+      <path d="M62 24 C82 12 98 20 98 38" fill="none" stroke="#63f0b2" stroke-width="7"/>
+      <rect x="92" y="34" width="12" height="14" fill="#9aa7b8" stroke="#15202a" stroke-width="3"/>
+      <path d="M18 50h92" stroke="#d3a64e" stroke-width="4" stroke-dasharray="10 6"/>`
+  },
   'module.fire_extinguisher': {
     size: [96, 96],
     body: `${panel(32, 18, 32, 60, '#293340', '#90a9c4')}

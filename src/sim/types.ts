@@ -225,7 +225,7 @@ export enum RoomType {
 // Berth capability tags drive ship→berth matching in v0.
 // Each tag is contributed by a specific module type placed inside the berth.
 // v1: add 'military_bridge' and 'refuel' tags + their modules.
-export type CapabilityTag = 'gangway' | 'customs' | 'cargo';
+export type CapabilityTag = 'gangway' | 'customs' | 'cargo' | 'refuel';
 
 // Berth size class derived from tile count when the berth cluster is
 // identified. Thresholds: S >= 9, M >= 20, L >= 42 tiles. Stored
@@ -286,6 +286,8 @@ export enum ModuleType {
   Gangway = 'gangway',
   CustomsCounter = 'customs-counter',
   CargoArm = 'cargo-arm',
+  FuelTank = 'fuel-tank',
+  FuelPump = 'fuel-pump',
   // SecurityCamera: wall-mounted low-friction surveillance. Adds local
   // control and lowers opacity without the full prestige hit of guards/gates.
   SecurityCamera = 'security-camera',
@@ -479,6 +481,12 @@ export interface Resident {
   role: ResidentRole;
   roleAffinity: Partial<Record<RoomType, number>>;
   state: ResidentState;
+  /** Meal service is two physical legs: serving station, then a seat. */
+  carryingMeal?: boolean;
+  /** Serving fixture held during the pickup leg. */
+  reservedServingTile?: number | null;
+  /** Timed counter interaction so meal throughput is visible. */
+  serveTimer?: number;
   actionTimer: number;
   retargetAt: number;
   reservedTargetTile: number | null;
@@ -507,6 +515,9 @@ export type CrewIdleReason =
   | 'idle_waiting_reassign';
 export type CrewWorkLane = 'food' | 'sanitation' | 'engineering' | 'logistics' | 'construction-eva' | 'flex';
 export type CrewShiftTargets = Record<CrewWorkLane, number>;
+export type CrewWatchIndex = 0 | 1 | 2;
+export type CrewWatchStatus = 'on-duty' | 'reserve' | 'off-duty';
+export type TrafficBankKind = 'passenger-bank' | 'cargo-bank' | 'maintenance-window';
 export type StaffRole =
   | 'captain'
   | 'sanitation-officer'
@@ -831,6 +842,7 @@ export interface CrewMember {
   targetTile: number | null;
   retargetAt: number;
   energy: number;
+  hunger: number;
   hygiene: number;
   // Short-cycle bladder need. Triggers a brief physical Toilet visit at the
   // threshold and remains visible in the agent inspector.
@@ -843,6 +855,8 @@ export interface CrewMember {
   needsStrainSec: number;
   resignationNoticeAt: number | null;
   resting: boolean;
+  eating: boolean;
+  carryingMeal: boolean;
   cleaning: boolean;
   toileting: boolean;
   drinking: boolean;
@@ -853,6 +867,8 @@ export interface CrewMember {
   blockedTicks: number;
   idleReason: CrewIdleReason;
   restSessionActive: boolean;
+  eatSessionActive: boolean;
+  eatUntil: number;
   cleanSessionActive: boolean;
   toiletSessionActive: boolean;
   drinkSessionActive: boolean;
@@ -878,7 +894,7 @@ export interface CrewMember {
   lastRouteExposure?: RouteExposure;
 }
 
-export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body';
+export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'fuel' | 'body';
 export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook' | 'sanitize' | 'inspect';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
@@ -930,6 +946,8 @@ export interface TransportJob {
   portCargoLotId?: number;
   /** Cargo moved toward a ship is consumed into its manifest, not stored at the arm. */
   portCargoDirection?: 'inbound' | 'outbound';
+  /** Logical fuel node when the crew stands on an adjacent pump handoff tile. */
+  portFuelNodeTile?: number;
 }
 
 export type ReservationOwnerKind = 'visitor' | 'resident' | 'crew' | 'job' | 'room' | 'system';
@@ -1052,7 +1070,8 @@ export type ShipServiceTag =
   | 'hygiene'
   | 'housing'
   | 'clinic'
-  | 'recreation';
+  | 'recreation'
+  | 'fuel';
 export interface ShipProfile {
   type: ShipType;
   serviceTags: ShipServiceTag[];
@@ -1083,6 +1102,8 @@ export interface PortTurnaround {
   inboundUnloaded: number;
   outboundRequired: { rawMaterial: number; meal: number; tradeGood: number };
   outboundLoaded: { rawMaterial: number; meal: number; tradeGood: number };
+  fuelRequired: number;
+  fuelDelivered: number;
   loadingDeadlineAt: number;
   payoutCredits: number;
   fulfillmentRatio: number;
@@ -1263,6 +1284,8 @@ export type PortPromiseKind =
   | 'passengers-returned'
   | 'freight-unloaded'
   | 'freight-loaded'
+  | 'fuel-received'
+  | 'fuel-delivered'
   | 'inspection'
   | 'condition';
 export type PortContractStatus = 'accepted' | 'active' | 'boarding' | 'settled' | 'departed';
@@ -1290,6 +1313,7 @@ export interface PortContract {
   status: PortContractStatus;
   promises: PortPromiseComponent[];
   passengerSpendingCredits: number;
+  procurementCostCredits: number;
   settlementId: number | null;
 }
 
@@ -1315,6 +1339,7 @@ export interface PortSettlement {
   promises: PortPromiseComponent[];
   payoutCredits: number;
   passengerSpendingCredits: number;
+  procurementCostCredits: number;
   notes: string[];
 }
 
@@ -1333,6 +1358,10 @@ export interface PortOpsTelemetry {
   mealsCompleted: number;
   freightTarget: number;
   freightCompleted: number;
+  fuelPurchased: number;
+  fuelSold: number;
+  fuelTarget: number;
+  fuelCompleted: number;
 }
 
 export interface PortOpsState {
@@ -1378,6 +1407,9 @@ export interface TrafficOffer {
   hospitalityDemand?: HospitalityDemand;
   inboundCargo: { rawMaterial: number; rawMeal: number; tradeGood: number };
   outboundRequest: { rawMaterial: number; meal: number; tradeGood: number };
+  fuelSupply?: number;
+  fuelRequest?: number;
+  fuelProcurementCostCredits?: number;
   requestedServices: ShipServiceTag[];
   berthTimeSec: number;
   dockingFee: number;
@@ -1868,7 +1900,7 @@ export type AgentHealthState = 'healthy' | 'distressed' | 'critical';
 export type VisitorDesire = 'eat' | 'toilet' | 'leisure' | 'exit_station';
 export type ResidentDominantNeed = 'hunger' | 'energy' | 'hygiene' | 'none';
 export type ResidentDesire = 'return_home_ship' | 'sleep' | 'hygiene' | 'eat' | 'socialize' | 'seek_safety' | 'wander';
-export type CrewDesire = 'rest' | 'clean' | 'toilet' | 'drink' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
+export type CrewDesire = 'rest' | 'eat' | 'clean' | 'toilet' | 'drink' | 'leisure' | 'social' | 'logistics' | 'staff_post' | 'idle';
 
 export interface AgentInspectorBase {
   id: number;
@@ -1941,6 +1973,7 @@ export interface CrewInspector extends AgentInspectorBase {
   assignedSystem: CrewPrioritySystem | null;
   lastSystem: CrewPrioritySystem | null;
   energy: number;
+  hunger: number;
   hygiene: number;
   bladder: number;
   thirst: number;
@@ -1949,6 +1982,8 @@ export interface CrewInspector extends AgentInspectorBase {
   needsStrainSec: number;
   resignationNoticeAt: number | null;
   resting: boolean;
+  eating: boolean;
+  carryingMeal: boolean;
   cleaning: boolean;
   toileting: boolean;
   drinking: boolean;
@@ -2105,6 +2140,10 @@ export interface Controls {
   crewPriorityWeights: CrewPriorityWeights;
   /** Player-set minimum headcount by visible work shift. Zero leaves a lane on automatic dispatch. */
   crewShiftTargets: CrewShiftTargets;
+  /** Department targets for Alpha, Beta, and Gamma watches. */
+  crewWatchTargets: [CrewShiftTargets, CrewShiftTargets, CrewShiftTargets];
+  /** Emergency recall temporarily makes every watch dispatchable at a needs cost. */
+  emergencyRecallUntil: number;
 }
 
 export interface StationState {

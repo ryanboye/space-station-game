@@ -1349,6 +1349,23 @@ h2 {
 .shift-roster-head div { display: grid; gap: 2px; }
 .shift-roster-head small, .shift-roster-row small { color: #8ea2bd; font-weight: 400; }
 .shift-roster-head > span { color: #6edb8f; white-space: nowrap; }
+.watch-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin-bottom: 8px;
+}
+.watch-selector button { padding: 6px; }
+.watch-selector button.active {
+  border-color: #70c6e8;
+  color: #e7f8ff;
+  background: rgba(37, 100, 132, 0.46);
+}
+.watch-selector button.is-current::after {
+  content: ' LIVE';
+  color: #75dda0;
+  font-size: 9px;
+}
 .shift-roster-grid { display: grid; gap: 5px; }
 .shift-roster-row {
   display: grid;
@@ -1707,6 +1724,34 @@ h2 {
   color: #f0f2ed;
   font-size: 13px;
   line-height: 1.25;
+}
+
+.operating-rhythm {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+}
+.operating-rhythm-head {
+  display: flex;
+  justify-content: space-between;
+  color: #8fc9e4;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.operating-rhythm-bank {
+  color: #f0f5fa;
+  font-weight: 700;
+  font-size: 12px;
+}
+.operating-rhythm small { color: #8fa7bc; }
+.operating-rhythm .mini-action-btn {
+  width: 100%;
+  margin-top: 3px;
+}
+.operating-rhythm .mini-action-btn.active {
+  border-color: #f3bd62;
+  color: #ffe0a3;
+  background: rgba(125, 82, 22, 0.45);
 }
 
 .station-goal-items {

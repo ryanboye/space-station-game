@@ -39,6 +39,8 @@ import {
   getEligibleBerthsForOffer,
   getCrewInspectorById,
   getCrewSustainabilitySummary,
+  getCrewWatchStatus,
+  getOperatingSchedule,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
@@ -52,6 +54,7 @@ import {
   getRoomEnvironmentTileDiagnostic,
   getRoomInspectorAt,
   getThermalTileDiagnostic,
+  getUnlockRequirement,
   getUnlockTier,
   getResidentHousingReadiness,
   getResidentInspectorById,
@@ -60,6 +63,7 @@ import {
   getDockByTile,
   getSanitationTileDiagnostic,
   isModuleUnlocked,
+  isCrewHoldingProtectedPost,
   isPortAutoAdmitUnlocked,
   isCrewAutoStaffUnlocked,
   isRoomUnlocked,
@@ -94,6 +98,8 @@ import {
   setSecurityPosture,
   setCrewManualWorkLane,
   setCrewShiftTarget,
+  setCrewWatchTarget,
+  setEmergencyRecall,
   setZone,
   tick,
   setTile,
@@ -114,6 +120,7 @@ import {
   type CrewPriorityPreset,
   type CrewPrioritySystem,
   type CrewWorkLane,
+  type CrewWatchIndex,
   type DiagnosticOverlay,
   type DockPurpose,
   type BerthScreeningLevel,
@@ -134,6 +141,7 @@ import {
   type SpecialtyId,
   type UtilityUnderlayKind,
   ModuleType,
+  ResidentState,
   RoomType,
   VisitorState,
   TILE_SIZE,
@@ -264,6 +272,12 @@ app.innerHTML = `
           <span class="station-tier-chevron" aria-hidden="true">›</span>
         </button>
       </section>
+      <section id="operating-rhythm" class="hud-card operating-rhythm" aria-live="polite">
+        <div class="operating-rhythm-head"><span id="watch-name">ALPHA WATCH</span><strong id="watch-countdown">2:15</strong></div>
+        <div id="traffic-bank-now" class="operating-rhythm-bank">Passenger bank</div>
+        <small id="traffic-bank-next">Next: cargo bank</small>
+        <button id="emergency-recall" class="mini-action-btn" type="button">Recall off-duty crew</button>
+      </section>
       <details class="hud-card task-card overlay-card legacy-ui">
         <summary class="hud-card-title">Tasks</summary>
         <div id="quest-bar" aria-live="polite"></div>
@@ -327,6 +341,7 @@ app.innerHTML = `
         </div>
         <small id="shift-quick-total" class="shift-quick-total">0 assigned · 0 flexible</small>
         <div class="row compact list-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
+        <div class="row compact list-row"><span>Fuel</span><span class="value" id="fuel-status">No tanks</span></div>
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
         <div class="row compact list-row hidden"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Kitchen 0/0 | Life Support 0/0</span></div>
@@ -491,6 +506,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
         <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
         <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
+        <button class="tool-btn" data-tool-module="fuel-tank" title="Place Fuel Tank (T2+, Storage or Berth) — stores imported propellant"><span class="tool-key">·</span>Fuel tank</button>
+        <button class="tool-btn" data-tool-module="fuel-pump" title="Place Fuel Pump (T2+, Berth-only) — enables physical refueling service"><span class="tool-key">·</span>Fuel pump</button>
         <button class="tool-btn" data-tool-module="security-camera" title="Place wall Security Camera (T3+) — lowers local opacity and improves detection/control"><span class="tool-key">·</span>Camera</button>
         <button class="tool-btn" data-tool-module="access-gate" title="Place Access Gate (T3+) — staffed checkpoint control; needs Security Guards"><span class="tool-key">·</span>Gate</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place wall Fire Extinguisher — suppresses nearby fires from an adjacent service tile"><span class="tool-key">·</span>Fire Ext</button>
@@ -716,6 +733,11 @@ app.innerHTML = `
       <div class="shift-roster-head">
         <div><strong>Shift Roster</strong><small>Reserve real crew for the work that keeps ships and guests moving.</small></div>
         <span id="shift-roster-total">0 assigned · 0 flexible</span>
+      </div>
+      <div class="watch-selector" aria-label="Watch to configure">
+        <button type="button" data-watch-edit="0">Alpha</button>
+        <button type="button" data-watch-edit="1">Beta</button>
+        <button type="button" data-watch-edit="2">Gamma</button>
       </div>
       <button id="toggle-crew-auto" class="secondary-command automation-toggle">Auto-staffing locked</button>
       <small id="crew-auto-status" class="automation-status">Available when the station employs 10 crew.</small>
@@ -1063,6 +1085,7 @@ const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!
 const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
 const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
+const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
 const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
@@ -1727,6 +1750,12 @@ const shiftRosterNoteEl = document.querySelector<HTMLElement>('#shift-roster-not
 const shiftQuickTotalEl = document.querySelector<HTMLElement>('#shift-quick-total')!;
 const crewAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-crew-auto')!;
 const crewAutoStatusEl = document.querySelector<HTMLElement>('#crew-auto-status')!;
+const watchNameEl = document.querySelector<HTMLElement>('#watch-name')!;
+const watchCountdownEl = document.querySelector<HTMLElement>('#watch-countdown')!;
+const trafficBankNowEl = document.querySelector<HTMLElement>('#traffic-bank-now')!;
+const trafficBankNextEl = document.querySelector<HTMLElement>('#traffic-bank-next')!;
+const emergencyRecallEl = document.querySelector<HTMLButtonElement>('#emergency-recall')!;
+let selectedRosterWatch: CrewWatchIndex = getOperatingSchedule(state).watch;
 for (const system of prioritySystems) {
   const input = document.querySelector<HTMLInputElement>(`input[data-priority="${system}"]`);
   const valueEl = document.querySelector<HTMLElement>(`#prio-${system}`);
@@ -1902,17 +1931,16 @@ function departmentTone(department: StaffDepartment): 'default' | 'ok' | 'warn' 
 }
 
 function roomLockedMessage(room: RoomType): string {
-  const tier = ROOM_UNLOCK_TIER[room];
-  return `${friendlyName(room)} locked until Tier ${tier}. ${unlockRequirementText(tier)}`;
+  const requirement = getUnlockRequirement(state, { kind: 'room', room });
+  return `${friendlyName(room)} locked until Tier ${requirement.tier}. ${unlockRequirementText(requirement.tier)}`;
 }
 
 function moduleLockedMessage(module: ModuleType): string {
-  const specialty = specialtyForUnlockedModule(module);
-  if (specialty && !state.command.completedSpecialties.includes(specialty.id)) {
-    return `${friendlyName(module)} belongs to the ${departmentLabel(specialty.department)} Department. Complete ${specialty.label} to build it.`;
+  const requirement = getUnlockRequirement(state, { kind: 'module', module });
+  if (requirement.specialtyId && !requirement.unlocked) {
+    return `${friendlyName(module)} belongs to the ${departmentLabel(requirement.specialtyDepartment!)} Department. Complete ${requirement.specialtyLabel} to build it.`;
   }
-  const tier = MODULE_UNLOCK_TIER[module];
-  return `${friendlyName(module)} locked until Tier ${tier}. ${unlockRequirementText(tier)}`;
+  return `${friendlyName(module)} locked until Tier ${requirement.tier}. ${unlockRequirementText(requirement.tier)}`;
 }
 
 function selectRoomTool(room: RoomType): void {
@@ -2239,6 +2267,8 @@ function offerPromisePreview(offer: StationState['trafficOffers'][number]): stri
   const outbound = Object.values(offer.outboundRequest).reduce((sum, amount) => sum + amount, 0);
   if (inbound > 0) promises.push(`${inbound} freight in`);
   if (outbound > 0) promises.push(`${outbound} freight out`);
+  if ((offer.fuelSupply ?? 0) > 0) promises.push(`buy ${offer.fuelSupply} fuel`);
+  if ((offer.fuelRequest ?? 0) > 0) promises.push(`sell ${offer.fuelRequest} fuel`);
   return promises.join(' · ') || 'berth access only';
 }
 
@@ -2267,6 +2297,12 @@ function offerFacilityVerdict(offer: StationState['trafficOffers'][number]): { l
     hasModule([ModuleType.GameStation], RoomType.Lounge) ||
     hasModule([ModuleType.Telescope], RoomType.Observatory)
   )) missing.push('premium comfort');
+  if ((offer.fuelSupply ?? 0) > 0 && !state.moduleInstances.some((module) => module.type === ModuleType.FuelTank)) {
+    missing.push('fuel tank');
+  }
+  if ((offer.fuelRequest ?? 0) > 0 && !state.moduleInstances.some((module) => module.type === ModuleType.FuelPump)) {
+    missing.push('berth fuel pump');
+  }
   return missing.length === 0
     ? { label: 'FACILITIES READY', ready: true }
     : { label: `MISSING ${missing.join(' + ')}`, ready: false };
@@ -2280,6 +2316,8 @@ function offerCrewPlan(offer: StationState['trafficOffers'][number]): { service:
 
 function offerOperatingPlan(offer: StationState['trafficOffers'][number]): string {
   const plan = offerCrewPlan(offer);
+  if ((offer.fuelSupply ?? 0) > 0) return `${plan.cargo} Cargo · arm → fuel tank`;
+  if ((offer.fuelRequest ?? 0) > 0) return `${Math.max(2, plan.cargo)} Cargo · fuel tank → berth pump`;
   if (offer.offerKind === 'passenger') return `${plan.service} Service · protect the food line`;
   if (offer.offerKind === 'freight') return `${plan.cargo} Cargo · clear arm → storage`;
   return `${plan.service} Service + ${plan.cargo} Cargo · both routes compete`;
@@ -2308,6 +2346,8 @@ function promiseIntervention(kind: StationState['portOps']['contracts'][number][
   if (kind === 'comfort-served') return 'Add a Game Station or Observatory Telescope.';
   if (kind === 'passengers-returned') return 'Protect the public route and leave boarding slack.';
   if (kind === 'freight-unloaded' || kind === 'freight-loaded') return 'Move flexible crew to Cargo and clear the storage route.';
+  if (kind === 'fuel-received') return 'Add free Fuel Tank capacity and keep the cargo route staffed.';
+  if (kind === 'fuel-delivered') return 'Stock fuel, staff Cargo, and clear the route from tank to berth pump.';
   return 'Protect the work needed by this promise.';
 }
 
@@ -2378,7 +2418,12 @@ function refreshSettlementSummary(): void {
     : settlements.find((entry) => entry.id === state.portOps.selectedSettlementId) ?? settlements[settlements.length - 1] ?? null;
   const renderKey = JSON.stringify({
     selectedSettlementId: state.portOps.selectedSettlementId,
-    settlements: settlements.map((entry) => [entry.id, entry.payoutCredits, entry.passengerSpendingCredits])
+    settlements: settlements.map((entry) => [
+      entry.id,
+      entry.payoutCredits,
+      entry.passengerSpendingCredits,
+      entry.procurementCostCredits
+    ])
   });
   if (renderKey === lastSettlementRenderKey) return;
   lastSettlementRenderKey = renderKey;
@@ -2398,7 +2443,17 @@ function refreshSettlementSummary(): void {
       .filter((promise) => promise.completed + 0.01 < promise.target)
       .map((promise) => promise.kind)
   );
-  const adaptation = failedKinds.has('freight-unloaded') || failedKinds.has('freight-loaded')
+  const adaptation = failedKinds.has('fuel-received')
+    ? {
+        text: 'Adapt: add fuel-tank capacity, protect Cargo labor, or shorten the supplier route.',
+        tile: state.moduleInstances.find((module) => module.type === ModuleType.FuelTank)?.originTile ?? null
+      }
+    : failedKinds.has('fuel-delivered')
+      ? {
+          text: 'Adapt: stock more fuel, protect Cargo labor, or move a tank closer to the berth pump.',
+          tile: state.moduleInstances.find((module) => module.type === ModuleType.FuelPump)?.originTile ?? null
+        }
+      : failedKinds.has('freight-unloaded') || failedKinds.has('freight-loaded')
     ? {
         text: 'Adapt: protect Cargo labor, shorten the storage route, or add spare handling capacity.',
         tile: state.moduleInstances.find((module) => module.type === ModuleType.CargoArm)?.originTile ?? null
@@ -2419,8 +2474,13 @@ function refreshSettlementSummary(): void {
       ? `<small class="settlement-adaptation">${escapeHtml(adaptation.text)}</small>`
       : `<button class="settlement-adaptation" data-port-focus="${adaptation.tile}">${escapeHtml(adaptation.text)}</button>`
     : '<small class="settlement-adaptation complete">Ready for a tighter overlap or a more demanding manifest.</small>';
+  const grossCredits = settlement.payoutCredits + settlement.passengerSpendingCredits;
+  const netCredits = grossCredits - settlement.procurementCostCredits;
+  const economics = settlement.procurementCostCredits > 0
+    ? `+${grossCredits}c gross · -${settlement.procurementCostCredits}c supply · ${netCredits >= 0 ? '+' : ''}${netCredits}c net`
+    : `+${grossCredits}c earned`;
   settlementSummaryEl.innerHTML = `
-    <div class="settlement-head"><b>${settlement.callsign}</b><span>+${settlement.payoutCredits}c contract · +${settlement.passengerSpendingCredits}c guests</span><button class="settlement-dismiss" data-dismiss-settlement aria-label="Dismiss turnaround report" title="Dismiss report">&times;</button></div>
+    <div class="settlement-head"><b>${settlement.callsign}</b><span>${economics}</span><button class="settlement-dismiss" data-dismiss-settlement aria-label="Dismiss turnaround report" title="Dismiss report">&times;</button></div>
     ${rows}
     <small>${settlement.notes.join(' · ')}</small>
     ${adaptationHtml}
@@ -2432,7 +2492,8 @@ function renderSettlementHistory(settlements: StationState['portOps']['settlemen
   if (settlements.length === 0) return '';
   const rows = settlements.slice(-5).reverse().map((entry) => {
     const completed = entry.promises.filter((promise) => promise.completed + 0.01 >= promise.target).length;
-    return `<div class="settlement-history-row"><span>${escapeHtml(entry.callsign)}</span><span>${completed}/${entry.promises.length} promises</span><b>+${entry.payoutCredits + entry.passengerSpendingCredits}c</b></div>`;
+    const netCredits = entry.payoutCredits + entry.passengerSpendingCredits - entry.procurementCostCredits;
+    return `<div class="settlement-history-row"><span>${escapeHtml(entry.callsign)}</span><span>${completed}/${entry.promises.length} promises</span><b>${netCredits >= 0 ? '+' : ''}${netCredits}c net</b></div>`;
   }).join('');
   return `<details class="settlement-history"><summary>Recent turnarounds</summary>${rows}</details>`;
 }
@@ -2448,6 +2509,18 @@ function refreshTrafficOffers(): void {
       : `FAULT · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
     : `${cargoOps.cargoArmStatus === 'warning' ? 'Strained' : 'Ready'} · ${Math.round(cargoOps.cargoArmStrain)}% strain${cargoArmCount >= 2 ? ` · ${cargoArmCount} arms` : ''}`;
   cargoArmStatusEl.className = `value cargo-arm-${cargoOps.cargoArmStatus}`;
+  const fuelTankNodes = state.moduleInstances
+    .filter((module) => module.type === ModuleType.FuelTank)
+    .map((module) => state.itemNodes.find((node) => node.tileIndex === module.originTile))
+    .filter((node): node is NonNullable<typeof node> => node !== undefined);
+  const fuelStock = fuelTankNodes.reduce((sum, node) => sum + (node.items.fuel ?? 0), 0);
+  const fuelCapacity = fuelTankNodes.reduce((sum, node) => sum + node.capacity, 0);
+  const fuelJobs = state.jobs.filter(
+    (job) => job.itemType === 'fuel' && job.state !== 'done' && job.state !== 'expired'
+  );
+  fuelStatusEl.textContent = fuelTankNodes.length <= 0
+    ? 'No tanks'
+    : `${Math.floor(fuelStock)}/${fuelCapacity} · ${fuelJobs.length} load${fuelJobs.length === 1 ? '' : 's'} moving`;
   if (!state.controls.manualTrafficAdmission) {
     trafficOfferListEl.innerHTML = '';
     berthOpsWidgetEl.classList.add('hidden');
@@ -2508,13 +2581,16 @@ function refreshTrafficOffers(): void {
     const crewVerdict = crewPlanVerdict(offer);
     const facilityVerdict = offerFacilityVerdict(offer);
     const maxReturn = offer.dockingFee + offer.projectedSpend;
+    const economicLine = (offer.fuelSupply ?? 0) > 0
+      ? `pay ${offer.fuelProcurementCostCredits ?? 0}c · receive ${offer.fuelSupply} fuel + up to ${maxReturn}c`
+      : `up to ${maxReturn}c`;
     return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
       <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} · ${offer.size} ${offer.shipType} · ${offer.riskLabel} risk</div>
       <div class="traffic-offer-line"><b>Goal</b> ${offerPromisePreview(offer)}</div>
       <div class="traffic-offer-line"><b>Plan</b> ${offerOperatingPlan(offer)} <span class="crew-plan-verdict ${crewVerdict.ready ? 'ready' : 'short'}">${crewVerdict.label}</span></div>
       <div class="traffic-offer-line"><b>Facilities</b> <span class="crew-plan-verdict ${facilityVerdict.ready ? 'ready' : 'short'}">${facilityVerdict.label}</span></div>
-      <div class="traffic-offer-line"><b>Win</b> up to ${maxReturn}c · ${offer.berthTimeSec}s</div>
+      <div class="traffic-offer-line"><b>Economy</b> ${economicLine} · ${offer.berthTimeSec}s</div>
       <div class="traffic-offer-actions">
         <span class="traffic-readiness ${eligible > 0 ? 'ready' : 'blocked'}">${berthText}</span>
         <button data-traffic-action="assign" data-offer-id="${offer.id}" ${cleared || eligible <= 0 ? 'disabled' : ''}>${cleared ? 'Assigned' : ready ? 'Assign' : 'Reserve'}</button>
@@ -2566,26 +2642,166 @@ function drawPortTurnaroundCallouts(): void {
   }
   const serving = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation);
   const activeGuests = state.visitors.filter((visitor) => visitor.state !== VisitorState.ToDock).length;
-  if (serving && activeGuests > 0) {
+  const activeCrewMeals = state.crewMembers.filter((crew) => crew.eating || crew.carryingMeal).length;
+  if (serving && (activeGuests > 0 || activeCrewMeals > 0)) {
     const p = fromIndex(serving.originTile, state.width);
     const queue = state.metrics.cafeteriaQueueingCount;
     const mealStock = Math.floor(state.metrics.mealStock);
     const activeServiceCrew = state.crewMembers.filter(
       (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
     ).length;
+    const crewMealDemand = state.crewMembers.filter((crew) => crew.eating && !crew.eatSessionActive).length;
+    const totalQueue = queue + crewMealDemand;
     const label = mealStock <= 0
-      ? `MESS · NO MEALS · LINE ${queue}`
-      : activeServiceCrew <= 0 && queue > 0
-        ? `MESS · SELF-SERVICE · LINE ${queue}`
-        : `MESS · ${activeServiceCrew} SERVICE · ${mealStock} MEALS${queue > 0 ? ` · LINE ${queue}` : ''}`;
-    const color = mealStock <= 0 ? '#ff6868' : activeServiceCrew <= 0 && queue > 0 ? '#ff9f5f' : queue >= 5 ? '#f3bd62' : '#63d6a0';
+      ? `MESS · NO MEALS · LINE ${totalQueue}`
+      : activeServiceCrew <= 0 && totalQueue > 0
+        ? `MESS · SELF-SERVICE · LINE ${totalQueue}`
+        : `MESS · ${activeServiceCrew} SERVICE · ${mealStock} MEALS${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
+    const color = mealStock <= 0 ? '#ff6868' : activeServiceCrew <= 0 && totalQueue > 0 ? '#ff9f5f' : totalQueue >= 5 ? '#f3bd62' : '#63d6a0';
     drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
   }
+
+  const drawFacilityLoad = (
+    room: RoomType,
+    anchorTypes: ModuleType[],
+    label: string,
+    capacity: number,
+    using: number,
+    waiting: number
+  ): void => {
+    if (using + waiting <= 0) return;
+    const anchor = state.moduleInstances.find(
+      (module) => anchorTypes.includes(module.type) && state.rooms[module.originTile] === room
+    );
+    if (!anchor) return;
+    const p = fromIndex(anchor.originTile, state.width);
+    const full = capacity <= 0 || using >= capacity;
+    const text = `${label} · ${using}/${capacity} IN USE${waiting > 0 ? ` · ${waiting} WAITING` : ''}`;
+    drawLabel(text, (p.x + anchor.width * 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, full && waiting > 0 ? '#ff8066' : waiting > 0 ? '#f3bd62' : '#63d6a0');
+  };
+
+  const sleepModules = state.moduleInstances.filter(
+    (module) => (module.type === ModuleType.Bed || module.type === ModuleType.Bunk) && state.rooms[module.originTile] === RoomType.Dorm
+  );
+  const sleepCapacity = sleepModules.reduce((sum, module) => sum + (module.type === ModuleType.Bunk ? 2 : 1), 0);
+  const sleepingCrew = state.crewMembers.filter((crew) => crew.restSessionActive).length;
+  const sleepingResidents = state.residents.filter((resident) => resident.state === ResidentState.Sleeping).length;
+  const waitingForSleep = state.crewMembers.filter((crew) => crew.resting && !crew.restSessionActive).length +
+    state.residents.filter((resident) => resident.state === ResidentState.ToDorm).length;
+  drawFacilityLoad(RoomType.Dorm, [ModuleType.Bed, ModuleType.Bunk], 'QUARTERS', sleepCapacity, sleepingCrew + sleepingResidents, waitingForSleep);
+
+  const toiletCapacity = state.moduleInstances.filter(
+    (module) => module.type === ModuleType.Toilet && state.rooms[module.originTile] === RoomType.Hygiene
+  ).length;
+  const toiletUsers = state.crewMembers.filter((crew) => crew.toiletSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'restroom' && visitor.state === VisitorState.Leisure).length +
+    state.residents.filter(
+      (resident) => resident.state === ResidentState.Cleaning && state.modules[resident.tileIndex] === ModuleType.Toilet
+    ).length;
+  const toiletWaiting = state.crewMembers.filter((crew) => crew.toileting && !crew.toiletSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'restroom' && visitor.state === VisitorState.ToLeisure).length +
+    state.residents.filter(
+      (resident) => resident.state === ResidentState.ToHygiene && resident.reservedTargetTile !== null && state.modules[resident.reservedTargetTile] === ModuleType.Toilet
+    ).length;
+  drawFacilityLoad(RoomType.Hygiene, [ModuleType.Toilet], 'RESTROOM', toiletCapacity, toiletUsers, toiletWaiting);
+
+  const drinkModules = state.moduleInstances.filter(
+    (module) => (module.type === ModuleType.BarCounter || module.type === ModuleType.WaterFountain) &&
+      (state.rooms[module.originTile] === RoomType.Cantina || state.rooms[module.originTile] === RoomType.Cafeteria)
+  );
+  const drinkCapacity = drinkModules.reduce((sum, module) => sum + (module.type === ModuleType.BarCounter ? 2 : 1), 0);
+  const drinkUsers = state.crewMembers.filter((crew) => crew.drinkSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.Leisure).length;
+  const drinkWaiting = state.crewMembers.filter((crew) => crew.drinking && !crew.drinkSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.ToLeisure && !visitor.carryingDrink).length;
+  const drinkRoom = drinkModules.some((module) => state.rooms[module.originTile] === RoomType.Cantina) ? RoomType.Cantina : RoomType.Cafeteria;
+  drawFacilityLoad(drinkRoom, [ModuleType.BarCounter, ModuleType.WaterFountain], 'DRINKS', drinkCapacity, drinkUsers, drinkWaiting);
+
+  const leisureModules = state.moduleInstances.filter(
+    (module) => (module.type === ModuleType.Couch || module.type === ModuleType.Bench || module.type === ModuleType.GameStation) &&
+      state.rooms[module.originTile] === RoomType.Lounge
+  );
+  const leisureCapacity = leisureModules.reduce(
+    (sum, module) => sum + (module.type === ModuleType.Couch || module.type === ModuleType.Bench ? 2 : 1),
+    0
+  );
+  const leisureUsers = state.crewMembers.filter((crew) => crew.leisureSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'leisure' && visitor.state === VisitorState.Leisure).length +
+    state.residents.filter((resident) => resident.state === ResidentState.Leisure && state.rooms[resident.tileIndex] === RoomType.Lounge).length;
+  const leisureWaiting = state.crewMembers.filter((crew) => crew.leisure && !crew.leisureSessionActive).length +
+    state.visitors.filter((visitor) => visitor.activeService === 'leisure' && visitor.state === VisitorState.ToLeisure).length +
+    state.residents.filter(
+      (resident) => resident.state === ResidentState.ToLeisure && resident.reservedTargetTile !== null && state.rooms[resident.reservedTargetTile] === RoomType.Lounge
+    ).length;
+  drawFacilityLoad(RoomType.Lounge, [ModuleType.Couch, ModuleType.Bench, ModuleType.GameStation], 'LOUNGE', leisureCapacity, leisureUsers, leisureWaiting);
+
+  const protectedSystemsShown = new Set<string>();
+  for (const crew of state.crewMembers) {
+    if (!isCrewHoldingProtectedPost(state, crew) || crew.assignedSystem === null) continue;
+    if (Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) >= 48) continue;
+    if (protectedSystemsShown.has(crew.assignedSystem)) continue;
+    protectedSystemsShown.add(crew.assignedSystem);
+    const roomBySystem: Partial<Record<CrewPrioritySystem, RoomType>> = {
+      reactor: RoomType.Reactor,
+      'life-support': RoomType.LifeSupport,
+      hydroponics: RoomType.Hydroponics,
+      kitchen: RoomType.Kitchen,
+      cafeteria: RoomType.Cafeteria,
+      security: RoomType.Security
+    };
+    const room = roomBySystem[crew.assignedSystem];
+    if (!room) continue;
+    const anchorTile = state.rooms.findIndex((candidate) => candidate === room);
+    if (anchorTile < 0) continue;
+    const p = fromIndex(anchorTile, state.width);
+    drawLabel(`${friendlyName(room).toUpperCase()} · MINIMUM STAFF HELD`, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, '#f3bd62');
+  }
+
   const cargoArm = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm);
   if (cargoArm && state.portOps.cargoArmStatus !== 'ready') {
     const p = fromIndex(cargoArm.originTile, state.width);
     const label = state.portOps.cargoArmStatus === 'fault' ? 'ARM FAULT' : `ARM ${Math.round(state.portOps.cargoArmStrain)}%`;
     drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, state.portOps.cargoArmStatus === 'fault' ? '#ff6868' : '#f3bd62');
+  }
+  const fuelTanks = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
+  const activeFuelWork = state.arrivingShips.some(
+    (ship) => ship.stage !== 'depart' && ((ship.portManifest?.fuelSupply ?? 0) > 0 || (ship.portManifest?.fuelRequest ?? 0) > 0)
+  );
+  if (activeFuelWork && fuelTanks.length > 0) {
+    const stock = fuelTanks.reduce(
+      (sum, tank) => sum + (state.itemNodes.find((node) => node.tileIndex === tank.originTile)?.items.fuel ?? 0),
+      0
+    );
+    const capacity = fuelTanks.reduce(
+      (sum, tank) => sum + (state.itemNodes.find((node) => node.tileIndex === tank.originTile)?.capacity ?? 0),
+      0
+    );
+    const p = fromIndex(fuelTanks[0].originTile, state.width);
+    drawLabel(
+      `FUEL ${Math.floor(stock)}/${capacity}${stock <= 0 ? ' · EMPTY' : ''}`,
+      (p.x + 0.5) * TILE_SIZE,
+      p.y * TILE_SIZE - 6,
+      stock <= 0 ? '#ff6868' : stock < capacity * 0.2 ? '#f3bd62' : '#63d6a0'
+    );
+  }
+  for (const ship of state.arrivingShips) {
+    const turn = ship.portTurnaround;
+    if (ship.stage === 'depart' || !turn || turn.fuelRequired <= 0) continue;
+    const pump = state.moduleInstances.find(
+      (module) => module.type === ModuleType.FuelPump && ship.bayTiles.includes(module.originTile)
+    );
+    if (!pump) continue;
+    const pending = state.jobs.filter(
+      (job) => job.portShipId === ship.id && job.itemType === 'fuel' && job.state !== 'done' && job.state !== 'expired'
+    );
+    const blocked = pending.some((job) => !!job.blockedReason || job.stallReason && job.stallReason !== 'none');
+    const p = fromIndex(pump.originTile, state.width);
+    drawLabel(
+      `PUMP ${Math.floor(turn.fuelDelivered)}/${Math.floor(turn.fuelRequired)}${blocked ? ' · BLOCKED' : pending.length > 0 ? ` · ${pending.length} LOADS` : ''}`,
+      (p.x + 0.5) * TILE_SIZE,
+      p.y * TILE_SIZE - 6,
+      blocked ? '#ff6868' : turn.fuelDelivered >= turn.fuelRequired - 0.05 ? '#63d6a0' : '#75b8e8'
+    );
   }
   const activeCargoShip = state.arrivingShips.some((ship) => ship.portManifest && ship.stage !== 'depart');
   const storageNodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === RoomType.Storage);
@@ -2707,6 +2923,7 @@ const ITEM_LABELS: Record<ItemType, string> = {
   meal: 'Meals',
   rawMaterial: 'Supplies',
   tradeGood: 'Trade goods',
+  fuel: 'Fuel',
   body: 'Bodies'
 };
 
@@ -2899,6 +3116,7 @@ function criticalStaffingText(): string {
   const crew = getCrewSustainabilitySummary(state);
   const needs = [
     crew.tiredCrew > 0 ? `${crew.tiredCrew} tired` : '',
+    crew.hungryCrew > 0 ? `${crew.hungryCrew} hungry` : '',
     crew.thirstyCrew > 0 ? `${crew.thirstyCrew} need drinks` : '',
     crew.restroomNeedsCrew > 0 ? `${crew.restroomNeedsCrew} need toilets` : '',
     crew.hygieneNeedsCrew > 0 ? `${crew.hygieneNeedsCrew} need washing` : ''
@@ -3309,12 +3527,13 @@ function refreshAlertPanel(): void {
     } else if (crewSustainability.criticalNeedsCrew > 0) {
       const pressure = [
         crewSustainability.tiredCrew > 0 ? `${crewSustainability.tiredCrew} tired` : '',
+        crewSustainability.hungryCrew > 0 ? `${crewSustainability.hungryCrew} hungry` : '',
         crewSustainability.thirstyCrew > 0 ? `${crewSustainability.thirstyCrew} need drinks` : '',
         crewSustainability.restroomNeedsCrew > 0 ? `${crewSustainability.restroomNeedsCrew} need toilets` : '',
         crewSustainability.hygieneNeedsCrew > 0 ? `${crewSustainability.hygieneNeedsCrew} need washing` : ''
       ].filter(Boolean).join(' · ');
       const mostStrainedCrew = state.crewMembers.reduce((worst, crew) =>
-        Math.min(crew.energy, crew.hygiene, crew.bladder, crew.thirst) < Math.min(worst.energy, worst.hygiene, worst.bladder, worst.thirst)
+        Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < Math.min(worst.energy, worst.hunger, worst.hygiene, worst.bladder, worst.thirst)
           ? crew
           : worst
       );
@@ -3717,6 +3936,8 @@ function formatCrewSelectionHtml(crewId: number): string {
 
   const roleLabel = inspector.resting
     ? 'Resting'
+    : inspector.eating
+      ? 'Meal break'
     : inspector.toileting
       ? 'Toilet'
       : inspector.drinking
@@ -3729,6 +3950,7 @@ function formatCrewSelectionHtml(crewId: number): string {
   const workLabel = inspector.activeJobId !== null ? `job #${inspector.activeJobId}` : inspector.currentAction;
 
   const energyHint = `rests at <${CREW_REST_THRESHOLD_UI}, critical at <${CREW_REST_CRITICAL_UI}, returns at 86`;
+  const hungerHint = 'seeks a prepared meal below 38, then needs a cafeteria seat';
   const hygieneHint = `cleans at <${CREW_CLEAN_THRESHOLD_UI}`;
   const bladderHint = `seeks toilet at <${CREW_TOILET_THRESHOLD_UI}`;
   const thirstHint = `seeks drink at <${CREW_THIRST_THRESHOLD_UI} (Cafeteria, Cantina, or Water Fountain)`;
@@ -3746,6 +3968,7 @@ function formatCrewSelectionHtml(crewId: number): string {
   parts.push(`<div class="agent-card__needs">
     ${needBarHtml('Morale', inspector.morale, 35, 22, 'low morale slows work; sustained critical needs or missed pay can trigger resignation')}
     ${needBarHtml('Energy', inspector.energy, CREW_REST_THRESHOLD_UI, CREW_REST_CRITICAL_UI, energyHint)}
+    ${needBarHtml('Hunger', inspector.hunger, 38, 18, hungerHint)}
     ${needBarHtml('Hygiene', inspector.hygiene, CREW_CLEAN_THRESHOLD_UI, null, hygieneHint)}
     ${needBarHtml('Bladder', inspector.bladder, CREW_TOILET_THRESHOLD_UI, null, bladderHint)}
     ${needBarHtml('Thirst', inspector.thirst, CREW_THIRST_THRESHOLD_UI, null, thirstHint)}
@@ -5006,7 +5229,8 @@ function refreshPriorityUi(): void {
     input.value = String(value);
     valueEl.textContent = String(value);
   }
-  const configured = state.controls.crewShiftTargets;
+  const activeWatch = getOperatingSchedule(state).watch;
+  const configured = state.controls.crewWatchTargets[selectedRosterWatch] ?? state.controls.crewShiftTargets;
   const autoUnlocked = isCrewAutoStaffUnlocked(state);
   crewAutoToggleEl.disabled = !autoUnlocked;
   crewAutoToggleEl.textContent = !autoUnlocked
@@ -5021,20 +5245,49 @@ function refreshPriorityUi(): void {
   document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
     button.disabled = state.controls.crewAutoStaffEnabled;
   });
+  priorityModal.querySelectorAll<HTMLButtonElement>('button[data-watch-edit]').forEach((button) => {
+    const watch = Number(button.dataset.watchEdit) as CrewWatchIndex;
+    button.classList.toggle('active', watch === selectedRosterWatch);
+    button.classList.toggle('is-current', watch === activeWatch);
+  });
   let rostered = 0;
   for (const lane of workforceLaneOrder) {
     const count = configured?.[lane] ?? 0;
     rostered += count;
-    document.querySelectorAll<HTMLElement>(`[data-shift-count="${lane}"]`).forEach((el) => {
+    priorityModal.querySelectorAll<HTMLElement>(`[data-shift-count="${lane}"]`).forEach((el) => {
       el.textContent = String(count);
+    });
+    const activeCount = state.controls.crewShiftTargets?.[lane] ?? 0;
+    document.querySelectorAll<HTMLElement>(`#bottom-dock [data-shift-count="${lane}"]`).forEach((el) => {
+      el.textContent = String(activeCount);
     });
   }
   const availableCrew = Math.max(state.crew.total, state.crewMembers.length);
   shiftRosterTotalEl.textContent = `${rostered} assigned · ${Math.max(0, availableCrew - rostered)} flexible`;
-  const buildAssigned = configured?.['construction-eva'] ?? 0;
-  shiftQuickTotalEl.textContent = `${rostered}/${availableCrew} assigned · ${Math.max(0, availableCrew - rostered)} flexible${buildAssigned > 0 ? ` · Build/EVA ${buildAssigned}` : ''}`;
+  const activeRostered = workforceLaneOrder.reduce((sum, lane) => sum + (state.controls.crewShiftTargets?.[lane] ?? 0), 0);
+  const buildAssigned = state.controls.crewShiftTargets?.['construction-eva'] ?? 0;
+  shiftQuickTotalEl.textContent = `${activeRostered}/${availableCrew} assigned · ${Math.max(0, availableCrew - activeRostered)} flexible${buildAssigned > 0 ? ` · Build/EVA ${buildAssigned}` : ''}`;
+}
+
+function refreshOperatingRhythm(): void {
+  const schedule = getOperatingSchedule(state);
+  const bankLabel = (bank: ReturnType<typeof getOperatingSchedule>['trafficBank']): string =>
+    bank === 'passenger-bank' ? 'Passenger arrival bank' : bank === 'cargo-bank' ? 'Cargo arrival bank' : 'Quiet maintenance window';
+  watchNameEl.textContent = `${schedule.watchName} WATCH`;
+  const seconds = Math.ceil(schedule.secondsRemaining);
+  watchCountdownEl.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  trafficBankNowEl.textContent = `${bankLabel(schedule.trafficBank)} · next ${bankLabel(schedule.nextTrafficBank).toLowerCase()}`;
+  const watchCounts = { 'on-duty': 0, reserve: 0, 'off-duty': 0 };
+  for (const crew of state.crewMembers) watchCounts[getCrewWatchStatus(state, crew)] += 1;
+  trafficBankNextEl.textContent = schedule.recallActive
+    ? `Emergency recall · ${watchCounts['on-duty']} crew available`
+    : `${watchCounts['on-duty']} on · ${watchCounts.reserve} reserve · ${watchCounts['off-duty']} off · next ${schedule.nextWatchName.toLowerCase()}`;
+  trafficBankNextEl.title = `Next traffic: ${bankLabel(schedule.nextTrafficBank)}`;
+  emergencyRecallEl.textContent = schedule.recallActive ? 'End emergency recall' : 'Recall off-duty crew';
+  emergencyRecallEl.classList.toggle('active', schedule.recallActive);
 }
 refreshPriorityUi();
+refreshOperatingRhythm();
 // Initialize prev-tier tracker to current (prevents flash on cold-load /
 // save-restore). Then install the progression click handlers + paint
 // initial states.
@@ -5131,6 +5384,8 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   gangway: ModuleType.Gangway,
   'customs-counter': ModuleType.CustomsCounter,
   'cargo-arm': ModuleType.CargoArm,
+  'fuel-tank': ModuleType.FuelTank,
+  'fuel-pump': ModuleType.FuelPump,
   'security-camera': ModuleType.SecurityCamera,
   'access-gate': ModuleType.AccessGate,
   'fire-extinguisher': ModuleType.FireExtinguisher,
@@ -5193,6 +5448,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Gangway]: 'GW',
   [ModuleType.CustomsCounter]: 'CC',
   [ModuleType.CargoArm]: 'CA',
+  [ModuleType.FuelTank]: 'FT',
+  [ModuleType.FuelPump]: 'FP',
   [ModuleType.SecurityCamera]: 'CM',
   [ModuleType.AccessGate]: 'GT',
   [ModuleType.FireExtinguisher]: 'FX',
@@ -6255,7 +6512,7 @@ function refreshAgentModal(): boolean {
     agentResidentDetailsEl.textContent = 'Resident: n/a';
     agentCrewDetailsEl.textContent =
       `Crew: role ${inspector.role} | action ${inspector.currentAction} | ` +
-      `energy ${inspector.energy.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | resting ${inspector.resting ? 'yes' : 'no'} | ` +
+      `energy ${inspector.energy.toFixed(1)} | hunger ${inspector.hunger.toFixed(1)} | hygiene ${inspector.hygiene.toFixed(1)} | resting ${inspector.resting ? 'yes' : 'no'} | ` +
       `cleaning ${inspector.cleaning ? 'yes' : 'no'} | leisure ${inspector.leisure ? 'yes' : 'no'} | job ${inspector.activeJobId ?? 'none'} | ` +
       `carrying ${inspector.carryingItemType ?? 'none'} ${inspector.carryingAmount.toFixed(1)} | idle ${inspector.idleReason}`;
     return true;
@@ -7583,7 +7840,15 @@ openProgressionSummaryBtn.addEventListener('click', () => {
   progressionModal.querySelector<HTMLElement>('.modal-card')?.scrollTo({ top: 0 });
   progressionModal.classList.remove('hidden');
 });
-wireModal({ modal: priorityModal, openBtn: openOpsModalBtn, closeBtn: closePriorityBtn, beforeOpen: refreshPriorityUi });
+wireModal({
+  modal: priorityModal,
+  openBtn: openOpsModalBtn,
+  closeBtn: closePriorityBtn,
+  beforeOpen: () => {
+    selectedRosterWatch = getOperatingSchedule(state).watch;
+    refreshPriorityUi();
+  }
+});
 editPrioritiesBtn.addEventListener('click', () => {
   refreshPriorityUi();
   priorityModal.classList.remove('hidden');
@@ -7658,8 +7923,12 @@ document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach(
   button.addEventListener('click', () => {
     const lane = button.dataset.shiftStep as CrewWorkLane;
     const delta = Number(button.dataset.delta ?? 0);
-    const current = state.controls.crewShiftTargets?.[lane] ?? 0;
-    const changed = setCrewShiftTarget(state, lane, current + delta);
+    const modalControl = button.closest('#priority-modal') !== null;
+    const watch = modalControl ? selectedRosterWatch : getOperatingSchedule(state).watch;
+    const current = state.controls.crewWatchTargets[watch]?.[lane] ?? state.controls.crewShiftTargets?.[lane] ?? 0;
+    const changed = modalControl
+      ? setCrewWatchTarget(state, watch, lane, current + delta)
+      : setCrewShiftTarget(state, lane, current + delta);
     shiftRosterNoteEl.textContent = changed
       ? `${workforceLaneLabels[lane]} shift set to ${current + delta}. Crew will change over at the next dispatch.`
       : `No flexible crew left. Reduce another shift or hire another assistant.`;
@@ -7676,6 +7945,19 @@ document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach(
     }
     refreshPriorityUi();
   });
+});
+
+priorityModal.querySelectorAll<HTMLButtonElement>('button[data-watch-edit]').forEach((button) => {
+  button.addEventListener('click', () => {
+    selectedRosterWatch = Number(button.dataset.watchEdit) as CrewWatchIndex;
+    refreshPriorityUi();
+  });
+});
+
+emergencyRecallEl.addEventListener('click', () => {
+  const active = getOperatingSchedule(state).recallActive;
+  setEmergencyRecall(state, !active);
+  refreshOperatingRhythm();
 });
 
 const DOCK_MODAL_SHIP_TYPE_CHECKBOXES: Array<[HTMLInputElement, ShipType]> = [
@@ -8248,6 +8530,7 @@ function frame(now: number): void {
   if (!priorityModal.classList.contains('hidden')) refreshPriorityUi();
   refreshAlertPanel();
   refreshIncidentList();
+  refreshOperatingRhythm();
   refreshStationGoal();
   refreshTierChecklist();
   refreshSelectionSummary();

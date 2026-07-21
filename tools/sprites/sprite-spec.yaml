@@ -318,6 +318,12 @@ sprites:
     prompt: "Top-down pixel art station module sprite: robotic cargo loading arm. 2x2
       footprint, transparent background, readable at 36x36."
     rotation: 0
+  module.fuel_tank:
+    prompt: "Top-down pixel art station module sprite: paired industrial propellant tanks with teal status light and amber hazard bands. 2x2 footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.fuel_pump:
+    prompt: "Top-down pixel art station module sprite: compact berth refueling pump with flexible teal hose and amber hazard stripe. 2x1 footprint, transparent background, readable at 36x18."
+    rotation: 0
   module.fire_extinguisher:
     prompt: "Top-down pixel art station module sprite: wall mounted fire extinguisher. 1x1
       footprint, transparent background, readable at 18x18."

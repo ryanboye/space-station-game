@@ -63,7 +63,7 @@ import {
 } from './content/command';
 
 const SAVE_SCHEMA_VERSION = 3 as const;
-const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'body'];
+const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'fuel', 'body'];
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
@@ -86,6 +86,8 @@ const PORT_PROMISE_KINDS: PortPromiseKind[] = [
   'passengers-returned',
   'freight-unloaded',
   'freight-loaded',
+  'fuel-received',
+  'fuel-delivered',
   'inspection',
   'condition'
 ];
@@ -165,6 +167,7 @@ export interface StationSnapshotV1 {
       id: number;
       name: string;
       energy: number;
+      hunger?: number;
       hygiene: number;
       bladder: number;
       thirst: number;
@@ -198,6 +201,8 @@ export interface StationSnapshotV1 {
     materialImportBatchSize?: number;
     securityPosture?: SecurityPosture;
     crewShiftTargets?: Partial<CrewShiftTargets>;
+    crewWatchTargets?: [Partial<CrewShiftTargets>, Partial<CrewShiftTargets>, Partial<CrewShiftTargets>];
+    emergencyRecallUntil?: number;
   };
   unlocks: {
     tier: UnlockTier;
@@ -464,6 +469,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         id: crew.id,
         name: crew.name,
         energy: crew.energy,
+        hunger: crew.hunger,
         hygiene: crew.hygiene,
         bladder: crew.bladder,
         thirst: crew.thirst,
@@ -498,7 +504,13 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       materialTargetStock: state.controls.materialTargetStock,
       materialImportBatchSize: state.controls.materialImportBatchSize,
       securityPosture: state.controls.securityPosture,
-      crewShiftTargets: { ...state.controls.crewShiftTargets }
+      crewShiftTargets: { ...state.controls.crewShiftTargets },
+      crewWatchTargets: state.controls.crewWatchTargets.map((targets) => ({ ...targets })) as [
+        CrewShiftTargets,
+        CrewShiftTargets,
+        CrewShiftTargets
+      ],
+      emergencyRecallUntil: state.controls.emergencyRecallUntil
     },
     unlocks: {
       tier: state.unlocks.tier,
@@ -654,6 +666,7 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
         status: entry.status,
         promises: promisesFrom(entry.promises),
         passengerSpendingCredits: Math.max(0, asFiniteNumber(entry.passengerSpendingCredits, 0)),
+        procurementCostCredits: Math.max(0, asFiniteNumber(entry.procurementCostCredits, 0)),
         settlementId: typeof entry.settlementId === 'number' ? Math.max(1, Math.floor(entry.settlementId)) : null
       });
     }
@@ -699,6 +712,7 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
         promises: promisesFrom(entry.promises),
         payoutCredits: Math.max(0, asFiniteNumber(entry.payoutCredits, 0)),
         passengerSpendingCredits: Math.max(0, asFiniteNumber(entry.passengerSpendingCredits, 0)),
+        procurementCostCredits: Math.max(0, asFiniteNumber(entry.procurementCostCredits, 0)),
         notes: Array.isArray(entry.notes) ? entry.notes.filter((note): note is string => typeof note === 'string') : []
       });
     }
@@ -750,7 +764,11 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
       mealTarget: Math.max(0, asFiniteNumber(telemetryRaw.mealTarget, 0)),
       mealsCompleted: Math.max(0, asFiniteNumber(telemetryRaw.mealsCompleted, 0)),
       freightTarget: Math.max(0, asFiniteNumber(telemetryRaw.freightTarget, 0)),
-      freightCompleted: Math.max(0, asFiniteNumber(telemetryRaw.freightCompleted, 0))
+      freightCompleted: Math.max(0, asFiniteNumber(telemetryRaw.freightCompleted, 0)),
+      fuelPurchased: Math.max(0, asFiniteNumber(telemetryRaw.fuelPurchased, 0)),
+      fuelSold: Math.max(0, asFiniteNumber(telemetryRaw.fuelSold, 0)),
+      fuelTarget: Math.max(0, asFiniteNumber(telemetryRaw.fuelTarget, 0)),
+      fuelCompleted: Math.max(0, asFiniteNumber(telemetryRaw.fuelCompleted, 0))
     }
   };
 }
@@ -997,6 +1015,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         id,
         name: typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name.trim().slice(0, 48) : `Crew ${id + 1}`,
         energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
+        hunger: clamp(asFiniteNumber(entry.hunger, 82), 0, 100),
         hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
         bladder: clamp(asFiniteNumber(entry.bladder, 100), 0, 100),
         thirst: clamp(asFiniteNumber(entry.thirst, 100), 0, 100),
@@ -1087,6 +1106,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   let materialAutoImportEnabled = defaultState.controls.materialAutoImportEnabled;
   let materialTargetStock = defaultState.controls.materialTargetStock;
   let crewShiftTargets = { ...defaultState.controls.crewShiftTargets };
+  let crewWatchTargets = defaultState.controls.crewWatchTargets.map((targets) => ({ ...targets })) as [
+    CrewShiftTargets,
+    CrewShiftTargets,
+    CrewShiftTargets
+  ];
+  let emergencyRecallUntil = defaultState.controls.emergencyRecallUntil;
   let materialImportBatchSize = defaultState.controls.materialImportBatchSize;
   let securityPosture = defaultState.controls.securityPosture;
   if (isRecord(snapshotRaw.controls)) {
@@ -1106,6 +1131,26 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         crewShiftTargets[lane] = clamp(Math.round(asFiniteNumber(snapshotRaw.controls.crewShiftTargets[lane], crewShiftTargets[lane])), 0, 99);
       }
     }
+    const rawWatchTargets = snapshotRaw.controls.crewWatchTargets;
+    if (Array.isArray(rawWatchTargets) && rawWatchTargets.length === 3) {
+      crewWatchTargets = crewWatchTargets.map((fallback, watch) => {
+        const raw = rawWatchTargets[watch];
+        const parsed = { ...fallback };
+        if (isRecord(raw)) {
+          for (const lane of ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva', 'flex'] as const) {
+            parsed[lane] = clamp(Math.round(asFiniteNumber(raw[lane], parsed[lane])), 0, 99);
+          }
+        }
+        return parsed;
+      }) as [CrewShiftTargets, CrewShiftTargets, CrewShiftTargets];
+    } else {
+      crewWatchTargets = [
+        { ...crewShiftTargets },
+        { ...crewShiftTargets },
+        { ...crewShiftTargets }
+      ];
+    }
+    emergencyRecallUntil = Math.max(0, asFiniteNumber(snapshotRaw.controls.emergencyRecallUntil, emergencyRecallUntil));
     materialImportBatchSize = clamp(asFiniteNumber(snapshotRaw.controls.materialImportBatchSize, materialImportBatchSize), 1, 160);
     if (isOneOf(snapshotRaw.controls.securityPosture, SECURITY_POSTURES)) {
       securityPosture = snapshotRaw.controls.securityPosture;
@@ -1351,7 +1396,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       materialTargetStock,
       materialImportBatchSize,
       securityPosture,
-      crewShiftTargets
+      crewShiftTargets,
+      crewWatchTargets,
+      emergencyRecallUntil
     },
     unlocks: {
       tier: unlockTier,
@@ -1768,6 +1815,19 @@ export function hydrateStateFromSave(
   if (snapshot.controls.crewShiftTargets) {
     next.controls.crewShiftTargets = { ...next.controls.crewShiftTargets, ...snapshot.controls.crewShiftTargets };
   }
+  if (snapshot.controls.crewWatchTargets) {
+    next.controls.crewWatchTargets = snapshot.controls.crewWatchTargets.map((targets) => ({
+      ...next.controls.crewShiftTargets,
+      ...targets
+    })) as [CrewShiftTargets, CrewShiftTargets, CrewShiftTargets];
+  } else {
+    next.controls.crewWatchTargets = [
+      { ...next.controls.crewShiftTargets },
+      { ...next.controls.crewShiftTargets },
+      { ...next.controls.crewShiftTargets }
+    ];
+  }
+  next.controls.emergencyRecallUntil = Math.max(0, snapshot.controls.emergencyRecallUntil ?? 0);
   next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
   next.controls.securityPosture = snapshot.controls.securityPosture ?? next.controls.securityPosture;
   next.portOps = {
@@ -1802,7 +1862,9 @@ export function hydrateStateFromSave(
         ...savedShip.portTurnaround,
         clearanceJobId: null,
         outboundRequired: { ...savedShip.portTurnaround.outboundRequired },
-        outboundLoaded: { ...savedShip.portTurnaround.outboundLoaded }
+        outboundLoaded: { ...savedShip.portTurnaround.outboundLoaded },
+        fuelRequired: Math.max(0, savedShip.portTurnaround.fuelRequired ?? 0),
+        fuelDelivered: Math.max(0, savedShip.portTurnaround.fuelDelivered ?? 0)
       } : undefined
     };
     const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
@@ -1834,6 +1896,9 @@ export function hydrateStateFromSave(
     roleAffinity: { ...resident.roleAffinity },
     state: resident.state === ResidentState.ToHomeShip ? ResidentState.Idle : resident.state,
     reservedTargetTile: null,
+    carryingMeal: resident.carryingMeal ?? false,
+    reservedServingTile: null,
+    serveTimer: undefined,
     homeShipId: null,
     activeIncidentId: null,
     lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
@@ -1851,6 +1916,7 @@ export function hydrateStateFromSave(
     if (!saved) continue;
     crew.name = saved.name;
     crew.energy = saved.energy;
+    crew.hunger = saved.hunger ?? 82;
     crew.hygiene = saved.hygiene;
     crew.bladder = saved.bladder;
     crew.thirst = saved.thirst;
