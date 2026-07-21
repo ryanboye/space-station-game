@@ -10285,6 +10285,12 @@ export function getCrewSustainabilitySummary(state: StationState): {
     const morale = crew.morale < 25 ? 0.72 : crew.morale < 45 ? 0.88 : 1;
     return fatigue * morale;
   };
+  const hasCriticalNeed = (crew: CrewMember): boolean =>
+    crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD ||
+    crew.hunger < 18 ||
+    crew.hygiene < 18 ||
+    crew.bladder < 8 ||
+    crew.thirst < 8;
   return {
     sleepSlots: targets.length,
     occupiedSleepSlots,
@@ -10300,7 +10306,11 @@ export function getCrewSustainabilitySummary(state: StationState): {
     hygieneNeedsCrew: state.crewMembers.filter((crew) => crew.hygiene < 50).length,
     restroomNeedsCrew: state.crewMembers.filter((crew) => crew.bladder < 50).length,
     thirstyCrew: state.crewMembers.filter((crew) => crew.thirst < 50).length,
-    criticalNeedsCrew: state.crewMembers.filter((crew) => Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < 25).length,
+    // Routine self-care starts well before these values. Reserve the red
+    // "critical" surface for crew who have crossed the actual severe-speed
+    // and resignation-strain thresholds instead of alarming on every normal
+    // restroom or meal trip.
+    criticalNeedsCrew: state.crewMembers.filter(hasCriticalNeed).length,
     averageMoveSpeedPct: state.crewMembers.length > 0
       ? Math.round(state.crewMembers.reduce((sum, crew) => sum + crewMoveMultiplier(crew), 0) / state.crewMembers.length * 100)
       : 100,
@@ -10314,8 +10324,8 @@ function preferredHygieneTargets(state: StationState): number[] {
   const allowed = (idx: number): boolean =>
     state.roomHousingPolicies[idx] === 'crew' || state.roomHousingPolicies[idx] === 'visitor';
   const showers = activeModuleUsageTargets(state, [ModuleType.Shower], [RoomType.Hygiene]).filter(allowed);
-  if (showers.length > 0) return showers;
-  return activeModuleUsageTargets(state, [ModuleType.Sink], [RoomType.Hygiene]).filter(allowed);
+  const sinks = activeModuleUsageTargets(state, [ModuleType.Sink], [RoomType.Hygiene]).filter(allowed);
+  return [...showers, ...sinks];
 }
 
 function preferredToiletTargets(state: StationState): number[] {
@@ -19363,13 +19373,18 @@ export function tick(state: StationState, frameDt: number): void {
     state.controls.crewShiftTargets = cloneShiftTargets(
       state.controls.crewWatchTargets[getOperatingSchedule(state).watch]
     );
+    // Save hydration restores the aggregate roster before its final paused
+    // tick, then applies the persisted per-crew needs to this pool. Keep pool
+    // reconstruction outside the derived-metrics cadence gate so a paused
+    // load cannot return early with an empty roster and silently discard the
+    // saved crew state.
+    ensureCrewPool(state);
+    ensureResidentPopulation(state);
+    ensureDockEntitiesUpToDate(state);
     if (!shouldRefreshDerivedMetrics(state)) {
       state.metrics.tickMs = perfNowMs() - tickStarted;
       return;
     }
-    ensureCrewPool(state);
-    ensureResidentPopulation(state);
-    ensureDockEntitiesUpToDate(state);
     ensureDockByTileCache(state);
     ensureItemNodeByTileCache(state);
     ensurePressurizationUpToDate(state);

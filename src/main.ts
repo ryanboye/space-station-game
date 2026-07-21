@@ -540,10 +540,10 @@ app.innerHTML = `
         <span class="tool-row-label">Optional city lenses</span>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="none" title="Return to the normal station view">Normal View</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show oxygen quality and life-support coverage across the station">Air Coverage</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show which public spaces visitors enjoy or avoid">Visitor Needs</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show which public spaces visitors enjoy or avoid">Guest Appeal</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, cleaning pressure, and its source">Cleanliness</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show visitor, crew, and freight routes plus conflicts">Foot Traffic</button>
-        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show local control, notoriety, value, and crime pressure">Security</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show local control, notoriety, value, and crime pressure">Security & Risk</button>
         <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Storage: OFF</button>
         <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Reach: OFF</button>
         <button id="toggle-zones" class="tool-btn overlay-toggle">Zones: OFF</button>
@@ -1120,14 +1120,14 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   'life-support': 'Air Coverage',
   'utility-underlay': 'Air Network',
   thermal: 'Thermal',
-  'visitor-status': 'Visitor Needs',
+  'visitor-status': 'Guest Appeal',
   'resident-comfort': 'Resident Comfort',
   'service-noise': 'Service Noise',
   maintenance: 'Maintenance',
   sanitation: 'Cleanliness',
   'map-conditions': 'Map Conditions',
   'route-pressure': 'Foot Traffic',
-  reputation: 'Security'
+  reputation: 'Security & Risk'
 };
 const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
@@ -1261,7 +1261,7 @@ function diagnosticReadoutText(): string {
   const diagnostic = getRoomEnvironmentTileDiagnostic(state, p.x, p.y);
   if (!diagnostic || diagnostic.sampledTiles <= 0) return `${diagnosticHoverPrefix()}: no room environment sample.`;
   if (overlay === 'visitor-status') {
-    return `Visitor Status: avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m\n${diagnosticHoverPrefix()}: score ${diagnostic.visitorStatus.toFixed(1)}, discomfort ${diagnostic.visitorDiscomfort.toFixed(1)}; affects rating/service appeal.`;
+    return `Guest Appeal: avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m\n${diagnosticHoverPrefix()}: score ${diagnostic.visitorStatus.toFixed(1)}, discomfort ${diagnostic.visitorDiscomfort.toFixed(1)}; affects rating/service appeal.`;
   }
   if (overlay === 'resident-comfort') {
     return `Resident Comfort: avg ${state.metrics.residentComfortAvg.toFixed(1)} | stress ${state.metrics.residentEnvironmentStressPerMin.toFixed(1)}/m\n${diagnosticHoverPrefix()}: comfort ${diagnostic.residentialComfort.toFixed(1)}, stress ${diagnostic.residentDiscomfort.toFixed(1)}; affects satisfaction.`;
@@ -1306,7 +1306,7 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
     }
     case 'visitor-status':
       return {
-        title: 'Visitor Status',
+        title: 'Guest Appeal',
         stats: `avg ${state.metrics.visitorStatusAvg.toFixed(1)} | env penalty ${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`,
         rows: [
           { color: '#52d1a7', label: 'Appealing public-facing space' },
@@ -1393,7 +1393,7 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
     }
     case 'reputation':
       return {
-        title: 'Reputation',
+        title: 'Security & Reputation',
         stats: `prestige ${state.metrics.reputationPrestigeAvg.toFixed(0)} | notoriety ${state.metrics.reputationNotorietyAvg.toFixed(0)} | risk ${state.metrics.reputationCrimePressureAvg.toFixed(0)} | high-risk ${state.metrics.reputationHighRiskZones}`,
         rows: [
           { color: '#52d1a7', label: 'Prestige and property value' },
@@ -3539,7 +3539,7 @@ function refreshAlertPanel(): void {
       );
       portAlerts.push({
         tone: 'danger',
-        text: `Crew needs critical: ${pressure}`,
+        text: `Crew needs critical: ${crewSustainability.criticalNeedsCrew} in crisis · ${pressure}`,
         tile: mostStrainedCrew.tileIndex
       });
     } else if (crewSustainability.sleepSlots < state.crew.total) {
@@ -3547,6 +3547,16 @@ function refreshAlertPanel(): void {
         tone: 'warn',
         text: `Crew quarters short: ${crewSustainability.sleepSlots}/${state.crew.total} sleep slots · add bunks or beds`,
         tile: state.moduleInstances.find((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)?.originTile ?? null
+      });
+    } else if (
+      crewSustainability.strainedCrew >= Math.max(6, Math.ceil(state.crew.total * 0.6)) ||
+      state.metrics.idleCrewByReason.idle_waiting_fixture >= Math.max(4, Math.ceil(state.crew.total * 0.2))
+    ) {
+      const fixtureWait = state.metrics.idleCrewByReason.idle_waiting_fixture;
+      portAlerts.push({
+        tone: 'warn',
+        text: `Crew needs building: ${crewSustainability.strainedCrew} strained · ${crewSustainability.occupiedSleepSlots} sleeping${fixtureWait > 0 ? ` · ${fixtureWait} waiting for fixtures` : ''}`,
+        tile: state.crewMembers.find((crew) => Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < 50)?.tileIndex ?? null
       });
     }
     const cargoArmTile = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm)?.originTile ?? null;

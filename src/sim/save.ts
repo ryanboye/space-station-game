@@ -43,7 +43,9 @@ import {
   TileType,
   type StationState,
   type VisitorArchetype,
-  ZoneType
+  ZoneType,
+  fromIndex,
+  isWalkable
 } from './types';
 import { ensureBerthConfig, setBerthCustomsPolicy } from './dock-controls';
 import {
@@ -166,6 +168,7 @@ export interface StationSnapshotV1 {
     members?: Array<{
       id: number;
       name: string;
+      tileIndex?: number;
       energy: number;
       hunger?: number;
       hygiene: number;
@@ -468,6 +471,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       members: state.crewMembers.map((crew) => ({
         id: crew.id,
         name: crew.name,
+        tileIndex: crew.tileIndex,
         energy: crew.energy,
         hunger: crew.hunger,
         hygiene: crew.hygiene,
@@ -1014,6 +1018,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       crewMembers.push({
         id,
         name: typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name.trim().slice(0, 48) : `Crew ${id + 1}`,
+        tileIndex: Number.isFinite(entry.tileIndex)
+          ? clamp(Math.floor(asFiniteNumber(entry.tileIndex, 0)), 0, expectedLength - 1)
+          : undefined,
         energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
         hunger: clamp(asFiniteNumber(entry.hunger, 82), 0, 100),
         hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
@@ -1911,10 +1918,37 @@ export function hydrateStateFromSave(
   tick(next, 0);
 
   const savedCrewById = new Map((snapshot.crew.members ?? []).map((member) => [member.id, member]));
-  for (const crew of next.crewMembers) {
+  const legacyCrewSpawnTiles = [
+    ...next.moduleInstances
+      .filter((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)
+      .flatMap((module) => module.tiles)
+      .filter((tile) => isWalkable(next.tiles[tile])),
+    ...next.tiles
+      .map((tile, index) => ({ tile, index }))
+      .filter(({ tile, index }) =>
+        isWalkable(tile) &&
+        next.rooms[index] !== RoomType.Berth &&
+        next.moduleOccupancyByTile[index] === null
+      )
+      .map(({ index }) => index)
+  ];
+  const uniqueLegacyCrewSpawnTiles = [...new Set(legacyCrewSpawnTiles)];
+  for (const [crewIndex, crew] of next.crewMembers.entries()) {
     const saved = savedCrewById.get(crew.id);
     if (!saved) continue;
     crew.name = saved.name;
+    const savedTile = saved.tileIndex;
+    const restoredTile = savedTile !== undefined && isWalkable(next.tiles[savedTile])
+      ? savedTile
+      : uniqueLegacyCrewSpawnTiles[crewIndex % Math.max(1, uniqueLegacyCrewSpawnTiles.length)];
+    if (restoredTile !== undefined) {
+      const position = fromIndex(restoredTile, next.width);
+      crew.tileIndex = restoredTile;
+      crew.x = position.x + 0.5;
+      crew.y = position.y + 0.5;
+      crew.path = [];
+      crew.targetTile = null;
+    }
     crew.energy = saved.energy;
     crew.hunger = saved.hunger ?? 82;
     crew.hygiene = saved.hygiene;

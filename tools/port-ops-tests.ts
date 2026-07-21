@@ -185,6 +185,7 @@ function testPortOpsSaveRoundTrip(): void {
   strainedCrew.thirst = 23;
   strainedCrew.morale = 41;
   strainedCrew.needsStrainSec = 37;
+  const savedCrewTile = strainedCrew.tileIndex;
   const text = serializeSave('Port Ops smoke', state, 'test');
   const parsed = parseAndMigrateSave(text);
   assert(parsed.ok, parsed.ok ? '' : parsed.error);
@@ -197,6 +198,7 @@ function testPortOpsSaveRoundTrip(): void {
   assert(loadedCrew?.energy === 19, `Crew fatigue reset on load (${loadedCrew?.energy ?? 'missing'}).`);
   assert(loadedCrew.thirst === 23 && loadedCrew.morale === 41, 'Crew needs reset on load.');
   assert(loadedCrew.needsStrainSec === 37, 'Crew need consequences reset on load.');
+  assert(loadedCrew.tileIndex === savedCrewTile, 'Crew position reset to the shared fallback tile on load.');
   const loadedContract = loaded.portOps.contracts[0];
   advance(loaded, Math.max(0, loadedContract.hardDepartureAt - loaded.now) + 12);
   assert(loaded.portOps.settlements.length === 1, 'Resumed contract did not settle exactly once.');
