@@ -8082,11 +8082,79 @@ let lastTime = performance.now();
 const UI_REFRESH_INTERVAL_MS = 125;
 const HOVER_DIAGNOSTIC_REFRESH_INTERVAL_MS = 250;
 const TARGET_FRAME_MS = 1000 / 60;
-const MAX_FRAME_DT_SEC = 1 / 30;
+const SIMULATION_STEP_SEC = 1 / 15;
+const SIMULATION_INTERVAL_MS = SIMULATION_STEP_SEC * 1000;
 let nextUiRefreshAt = 0;
 let nextHoverDiagnosticRefreshAt = 0;
 let lastHoverDiagnosticTile: number | null = null;
 let cachedHoverDiagnostic: ReturnType<typeof getRoomDiagnosticAt> = null;
+type ActorPositionSnapshot = {
+  crew: Map<number, { x: number; y: number }>;
+  visitors: Map<number, { x: number; y: number }>;
+  residents: Map<number, { x: number; y: number }>;
+};
+let simulationTimer: ReturnType<typeof setInterval> | null = null;
+let lastSimulationStepAt = performance.now();
+
+function captureActorPositions(): ActorPositionSnapshot {
+  return {
+    crew: new Map(state.crewMembers.map((actor) => [actor.id, { x: actor.x, y: actor.y }])),
+    visitors: new Map(state.visitors.map((actor) => [actor.id, { x: actor.x, y: actor.y }])),
+    residents: new Map(state.residents.map((actor) => [actor.id, { x: actor.x, y: actor.y }]))
+  };
+}
+
+let previousActorPositions = captureActorPositions();
+
+function resetActorInterpolation(): void {
+  previousActorPositions = captureActorPositions();
+  lastSimulationStepAt = performance.now();
+}
+
+function actorPresentationUnit(id: number, salt: number): number {
+  const value = Math.sin(id * 12.9898 + salt * 78.233) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function applyInterpolatedActorPositions(alpha: number): () => void {
+  const restores: Array<{ actor: { x: number; y: number }; x: number; y: number }> = [];
+  const interpolateGroup = (
+    actors: Array<{ id: number; x: number; y: number }>,
+    previous: Map<number, { x: number; y: number }>,
+    presentationSalt: number
+  ): void => {
+    for (const actor of actors) {
+      const prior = previous.get(actor.id);
+      if (!prior) continue;
+      const currentX = actor.x;
+      const currentY = actor.y;
+      restores.push({ actor, x: currentX, y: currentY });
+      const dx = currentX - prior.x;
+      const dy = currentY - prior.y;
+      if (Math.abs(dx) + Math.abs(dy) < 0.001) continue;
+
+      // Actors still arrive on the exact simulation tick, but their visual
+      // pace through a tile varies slightly so crowds do not march in lockstep.
+      const paceBias = (actorPresentationUnit(actor.id, presentationSalt) - 0.5) * 0.2;
+      const visualAlpha = Math.min(1, Math.max(0, alpha + paceBias * Math.sin(Math.PI * alpha)));
+      const laneSign = actorPresentationUnit(actor.id, presentationSalt + 1) < 0.5 ? -1 : 1;
+      const laneAmount = laneSign * (0.025 + actorPresentationUnit(actor.id, presentationSalt + 2) * 0.035);
+      const laneOffset = laneAmount * Math.sin(Math.PI * visualAlpha);
+      const segmentLength = Math.max(0.001, Math.hypot(dx, dy));
+      actor.x = prior.x + dx * visualAlpha + (-dy / segmentLength) * laneOffset;
+      actor.y = prior.y + dy * visualAlpha + (dx / segmentLength) * laneOffset;
+    }
+  };
+  interpolateGroup(state.crewMembers, previousActorPositions.crew, 31);
+  interpolateGroup(state.visitors, previousActorPositions.visitors, 47);
+  interpolateGroup(state.residents, previousActorPositions.residents, 61);
+  return () => {
+    for (const restore of restores) {
+      restore.actor.x = restore.x;
+      restore.actor.y = restore.y;
+    }
+  };
+}
 // Key-cache rather than the PR #48 handler-push pattern because
 // `spriteAtlas.ready` flips inside the async atlas-loader resolution, not
 // at a sync click. Lazy detection is simpler than plumbing calls into that.
@@ -8109,31 +8177,38 @@ function refreshSpriteStatus(): void {
     spriteStatusEl.style.color = '#6edb8f';
   }
 }
+
+function runSimulationSlice(): void {
+  previousActorPositions = captureActorPositions();
+  tick(state, state.controls.paused ? 0 : SIMULATION_STEP_SEC);
+  lastSimulationStepAt = performance.now();
+  if (!state.controls.paused) markDirty();
+}
+
 function frame(now: number): void {
   const frameMs = now - lastTime;
-  const dt = Math.min(frameMs / 1000, MAX_FRAME_DT_SEC);
   lastTime = now;
   state.metrics.frameMs = frameMs;
   state.metrics.rafJankMs = Math.max(0, frameMs - TARGET_FRAME_MS);
   state.metrics.rafDroppedFrames = Math.max(0, Math.round(frameMs / TARGET_FRAME_MS) - 1);
 
-  // Tag autosave-dirty whenever the sim advances OR the player acted
-  // since the last tick. Simpler than wiring every mutation site; a tick
-  // of dt>0 means something about the world changed. Autosave's first
-  // successful write still only fires after this flag flips true, so a
-  // refresh-then-walk-away doesn't overwrite a meaningful prior record.
-  if (dt > 0) markDirty();
-
-  tick(state, dt);
   const renderViewport = getRenderViewport();
   prepareViewportRender(renderViewport);
   const renderStart = performance.now();
-  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
-  drawPortTurnaroundCallouts();
-  drawSelectedAgentRoute(ctx);
-  drawActiveIncidentHints(ctx);
-  drawSelectedIncidentRoutes(ctx);
-  drawSelectedIncidentCallouts(ctx);
+  const interpolationAlpha = state.controls.paused
+    ? 1
+    : Math.min(1, Math.max(0, (now - lastSimulationStepAt) / SIMULATION_INTERVAL_MS));
+  const restoreActorPositions = applyInterpolatedActorPositions(interpolationAlpha);
+  try {
+    renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+    drawPortTurnaroundCallouts();
+    drawSelectedAgentRoute(ctx);
+    drawActiveIncidentHints(ctx);
+    drawSelectedIncidentRoutes(ctx);
+    drawSelectedIncidentCallouts(ctx);
+  } finally {
+    restoreActorPositions();
+  }
   state.metrics.renderMs = performance.now() - renderStart;
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
@@ -8277,10 +8352,23 @@ function frame(now: number): void {
   laneQueuesEl.textContent = `Lane queues N/E/S/W: ${state.metrics.dockQueueLengthByLane.north}/${state.metrics.dockQueueLengthByLane.east}/${state.metrics.dockQueueLengthByLane.south}/${state.metrics.dockQueueLengthByLane.west}`;
   walkStatsEl.textContent = `Visitor route avg: ${state.metrics.avgVisitorWalkDistance.toFixed(1)} | skipped docks ${state.metrics.shipsSkippedNoEligibleDock} | queue timeouts ${state.metrics.shipsTimedOutInQueue}`;
   const frameBudgetMs = state.metrics.tickMs + state.metrics.renderMs;
+  const hottestSimPhases = Object.entries(state.metrics.simPhaseMs ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([name, ms]) => `${name} ${ms.toFixed(1)}`)
+    .join(' + ');
+  const busiestPathPhases = Object.entries(state.metrics.simPhasePathCalls ?? {})
+    .filter(([, calls]) => calls > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([name, calls]) => `${name} ${calls}`)
+    .join(' + ');
   perfStatsEl.textContent =
     `Perf: rAF ${state.metrics.frameMs.toFixed(1)}ms (drop ${state.metrics.rafDroppedFrames}) | ` +
-    `sim ${state.metrics.tickMs.toFixed(1)}ms | render ${state.metrics.renderMs.toFixed(1)}ms | ` +
-    `path ${state.metrics.pathMs.toFixed(1)}ms/${state.metrics.pathCallsPerTick} | work ${frameBudgetMs.toFixed(1)}ms`;
+    `sim last ${state.metrics.tickMs.toFixed(1)}ms | render ${state.metrics.renderMs.toFixed(1)}ms | ` +
+    `path ${state.metrics.pathMs.toFixed(1)}ms/${state.metrics.pathCallsPerTick} | work ${frameBudgetMs.toFixed(1)}ms` +
+    (hottestSimPhases ? ` | hot ${hottestSimPhases}` : '') +
+    (busiestPathPhases ? ` | routes ${busiestPathPhases}` : '');
   perfStatsEl.style.color = state.metrics.rafDroppedFrames > 0 || frameBudgetMs > TARGET_FRAME_MS ? '#ffcf6e' : '#8ea2bd';
   berthSummaryEl.textContent =
     `Berths: visitor ${state.metrics.visitorBerthsOccupied}/${state.metrics.visitorBerthsTotal} | ` +
@@ -8440,6 +8528,7 @@ function applyHydratedState(nextState: StationState): void {
   nextState.controls.manualTrafficAdmission = true;
   nextState.trafficOffers ??= [];
   Object.assign(state, nextState);
+  resetActorInterpolation();
   applyCanvasSize();
   updateStageLayout();
   fitStationToViewport();
@@ -8545,6 +8634,8 @@ function startGameLoop(): void {
   offerAutosaveLoadOnColdStart();
   if (autosaveTimer !== null) clearInterval(autosaveTimer);
   autosaveTimer = setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
+  if (simulationTimer !== null) clearInterval(simulationTimer);
+  simulationTimer = setInterval(runSimulationSlice, SIMULATION_INTERVAL_MS);
   requestAnimationFrame(frame);
 }
 

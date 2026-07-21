@@ -382,7 +382,10 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
     minTiles: 6,
     requiredModules: [],
     requiredAnyOf: [],
-    activationChecks: { door: true, path: true, pressurization: true },
+    // Life support must be able to commission a sealed, connected expansion.
+    // Requiring pressure here creates a circular dependency: the room cannot
+    // supply air until the room already has air.
+    activationChecks: { door: true, path: true, pressurization: false },
     staffedPostMode: 'none'
   },
   [RoomType.Lounge]: {

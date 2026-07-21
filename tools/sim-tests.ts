@@ -4047,6 +4047,14 @@ function testFreeHousingAndResidentialBerthAttractMoveIn(): void {
   assertCondition(dock.occupiedByShipId === homeShip!.id, 'Residential berth should be claimed by the resident home ship.');
   assertCondition(resident.homeDockId === residentialDockId, 'Moved-in resident should track their residential berth.');
   assertCondition(state.usageTotals.residentConversionSuccesses === 1, 'Move-in should count as one resident acquisition success.');
+
+  runFor(state, 8);
+  assertCondition(
+    !state.arrivingShips.some((ship) => ship.id === homeShip!.id),
+    'Move-in shuttle should depart after dropping off the resident.'
+  );
+  assertCondition(dockByIdOrThrow(state, residentialDockId).occupiedByShipId === null, 'Residential berth should reopen after drop-off.');
+  assertCondition(state.residents.length === 1, 'Resident should remain after their arrival shuttle leaves.');
 }
 
 function testResidentLeaveIntentDoesNotDespawnResident(): void {
@@ -4079,17 +4087,13 @@ function testResidentLeaveIntentDoesNotDespawnResident(): void {
   const residentAfterReset = state.residents[0];
   assertCondition(residentAfterReset.state !== ResidentState.ToHomeShip, 'Legacy return-home state should reset instead of despawning.');
   const shipAfterResidentReset = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
-  assertCondition(!!shipAfterResidentReset, 'Resident home ship should remain while the resident lives in the station.');
-  assertCondition(
-    shipAfterResidentReset!.residentIds.includes(residentAfterReset.id) && shipAfterResidentReset!.stage === 'docked',
-    'Resident home ship should stay docked and keep its resident link.'
-  );
+  assertCondition(!!shipAfterResidentReset, 'Arrival shuttle should still be present during its brief dwell window.');
   runFor(state, 8);
   const shipAfterWait = state.arrivingShips.find((s) => s.id === ship.id) ?? null;
-  assertCondition(shipAfterWait !== null, 'Resident home ship should not leave just because leave intent was high.');
+  assertCondition(shipAfterWait === null, 'Arrival shuttle should leave without despawning its resident.');
   assertCondition(
-    dockByIdOrThrow(state, residentialDockId).occupiedByShipId === ship.id,
-    'Residential berth occupancy should remain claimed by the resident home ship.'
+    dockByIdOrThrow(state, residentialDockId).occupiedByShipId === null,
+    'Residential berth should be free after the arrival shuttle departs.'
   );
   assertCondition(state.usageTotals.residentDepartures === 0, 'Resident departure counter should not increment.');
 }

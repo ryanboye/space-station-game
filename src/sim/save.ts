@@ -24,6 +24,8 @@ import {
   type PortOfferKind,
   type PortOpsState,
   type PortPromiseKind,
+  type Resident,
+  ResidentState,
   type SpecialtyId,
   type SpecialtyProgress,
   type StaffRole,
@@ -174,6 +176,7 @@ export interface StationSnapshotV1 {
       healthState: 'healthy' | 'distressed' | 'critical';
     }>;
   };
+  residents?: Resident[];
   command?: {
     selectedSpecialty: SpecialtyId | null;
     completedSpecialties: SpecialtyId[];
@@ -472,6 +475,12 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         healthState: crew.healthState
       }))
     },
+    residents: state.residents.map((resident) => ({
+      ...resident,
+      path: [...resident.path],
+      roleAffinity: { ...resident.roleAffinity },
+      lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
+    })),
     command: {
       selectedSpecialty: state.command.selectedSpecialty,
       completedSpecialties: [...state.command.completedSpecialties],
@@ -1297,6 +1306,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         return [entry as unknown as ArrivingShip];
       })
     : [];
+  const residents: Resident[] = Array.isArray(snapshotRaw.residents)
+    ? snapshotRaw.residents.flatMap((entry) => {
+        if (!isRecord(entry) || !Number.isFinite(entry.id) || !Number.isFinite(entry.tileIndex)) return [];
+        return [entry as unknown as Resident];
+      })
+    : [];
 
   return {
     simTime,
@@ -1323,6 +1338,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       roleCounts,
       members: crewMembers
     },
+    residents,
     command,
     inventoryByTile,
     controls: {
@@ -1810,6 +1826,21 @@ export function hydrateStateFromSave(
   next.shipSpawnCounter = Math.max(
     next.shipSpawnCounter,
     next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1)
+  );
+  next.residents = (snapshot.residents ?? []).map((resident) => ({
+    ...resident,
+    tileIndex: clamp(Math.floor(resident.tileIndex), 0, next.tiles.length - 1),
+    path: [],
+    roleAffinity: { ...resident.roleAffinity },
+    state: resident.state === ResidentState.ToHomeShip ? ResidentState.Idle : resident.state,
+    reservedTargetTile: null,
+    homeShipId: null,
+    activeIncidentId: null,
+    lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
+  }));
+  next.residentSpawnCounter = Math.max(
+    next.residentSpawnCounter,
+    next.residents.reduce((max, resident) => Math.max(max, resident.id + 1), 1)
   );
   next.controls.paused = true;
   tick(next, 0);

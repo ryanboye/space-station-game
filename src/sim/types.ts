@@ -441,6 +441,8 @@ export interface Visitor {
   // provider slot stays held for its duration — service takes TIME, which is
   // what makes a second serving station a real decision and lines physical.
   serveTimer?: number;
+  /** Short retry cooldown after a route auction cannot produce a usable path. */
+  nextPathRetryAt?: number;
 }
 
 export enum ResidentState {
@@ -1420,6 +1422,8 @@ export interface Metrics {
   pathMs: number;
   pathCallsPerTick: number;
   derivedRecomputeMs: number;
+  simPhaseMs?: Record<string, number>;
+  simPhasePathCalls?: Record<string, number>;
   visitorsCount: number;
   residentsCount: number;
   incidentsTotal: number;
@@ -2268,6 +2272,7 @@ export interface StationState {
     residentTaxesCollected: number;
     residentConversionAttempts: number;
     residentConversionSuccesses: number;
+    residentConversionFailureStreak?: number;
     residentConversionLastResult: string;
     residentConversionLastChancePct: number;
     residentConversionLastShip: string;

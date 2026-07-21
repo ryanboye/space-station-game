@@ -295,9 +295,14 @@ const VISITOR_BLOCKED_QUEUE_REROUTE_TICKS = 18;
 const VISITOR_BLOCKED_FULL_REASSIGN_TICKS = 34;
 const MAX_USERS_PER_USAGE_TILE = 1;
 const MAX_PENDING_FOOD_JOBS = 10;
+const PATH_TARGET_SHORTLIST_SIZE = 4;
+const JOB_ASSIGNMENT_SHORTLIST_SIZE = 6;
 export const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
 const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const JOB_BOARD_CADENCE_SEC = 0.35;
+const DERIVED_METRICS_CADENCE_MS = 250;
+const ROOM_OPS_CADENCE_MS = 250;
+const LOCAL_AIR_CADENCE_MS = 250;
 const AIR_DISTRESS_THRESHOLD = 15;
 const AIR_CRITICAL_THRESHOLD = 8;
 const AIR_DISTRESS_EXPOSURE_SEC = 18;
@@ -310,7 +315,10 @@ const BODY_CLEAR_MATERIAL_COST = 6;
 const TRUSS_EXPANSION_FLOOR_COST = 1;
 const TRUSS_EXPANSION_PERIMETER_COST = 1;
 const RESIDENT_CONVERSION_BASE_CHANCE = 0.03;
-const RESIDENT_MOVE_IN_CADENCE_SEC = 20;
+const RESIDENT_CONVERSION_PITY_PER_FAILURE = 0.18;
+const RESIDENT_CONVERSION_PITY_MAX = 0.78;
+const RESIDENT_MOVE_IN_CADENCE_SEC = 8;
+const RESIDENT_SHUTTLE_DWELL_SEC = 6;
 const RESIDENT_MOVE_IN_MIN_RATING = 50;
 const RESIDENT_TAX_PERIOD = 24;
 const RESIDENT_TAX_PER_HEAD = 0.42;
@@ -718,7 +726,10 @@ function chooseNearestPath(
 ): number[] | null {
   let best: number[] | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const target of targets) {
+  const candidates = shortlistPathTargets(state, start, targets, (target) =>
+    targetChoiceJitter(jitterSeed, target, 11)
+  );
+  for (const target of candidates) {
     const path = findPath(state, start, target, { allowRestricted, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
     if (!path) continue;
     const score = path.length + targetChoiceJitter(jitterSeed, target, 11);
@@ -729,7 +740,7 @@ function chooseNearestPath(
   }
   // Fallback: if strict zoning blocks all routes, allow restricted traversal.
   if (!best && !allowRestricted) {
-    for (const target of targets) {
+    for (const target of candidates) {
       const path = findPath(state, start, target, { allowRestricted: true, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
       if (!path) continue;
       const score = path.length + targetChoiceJitter(jitterSeed, target, 12);
@@ -742,22 +753,48 @@ function chooseNearestPath(
   return best;
 }
 
+function tileManhattanDistance(state: StationState, from: number, to: number): number {
+  const a = fromIndex(from, state.width);
+  const b = fromIndex(to, state.width);
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function shortlistPathTargets(
+  state: StationState,
+  start: number,
+  targets: number[],
+  extraScore: (target: number) => number = () => 0,
+  limit = PATH_TARGET_SHORTLIST_SIZE
+): number[] {
+  if (targets.length <= limit) return [...new Set(targets)];
+  return [...new Set(targets)]
+    .map((target) => ({ target, score: tileManhattanDistance(state, start, target) + extraScore(target) }))
+    .sort((a, b) => a.score - b.score || a.target - b.target)
+    .slice(0, limit)
+    .map(({ target }) => target);
+}
+
 function chooseCrewRestPath(
   state: StationState,
   crew: CrewMember,
   targets: number[],
-  occupancyByTile: Map<number, number>
-): number[] | null {
-  let best: { path: number[]; score: number } | null = null;
-  for (const target of targets) {
+  occupancyByTile: Map<number, number>,
+  restingTargetLoad: Map<number, number>
+): { path: number[]; target: number } | null {
+  let best: { path: number[]; target: number; score: number } | null = null;
+  const availableTargets = targets.filter((target) => {
     const occupied = occupancyByTile.get(target) ?? 0;
-    if (target !== crew.tileIndex && occupied >= MAX_OCCUPANTS_PER_TILE) continue;
-    const restTargetLoad = state.crewMembers.reduce((sum, other) => {
-      if (other.id === crew.id || !other.resting) return sum;
-      const plannedTarget = other.path.length > 0 ? other.path[other.path.length - 1] : other.tileIndex;
-      return plannedTarget === target ? sum + 1 : sum;
-    }, 0);
-    if (restTargetLoad >= 1 && target !== crew.tileIndex) continue;
+    const restTargetLoad = restingTargetLoad.get(target) ?? 0;
+    return target === crew.tileIndex || (occupied < MAX_OCCUPANTS_PER_TILE && restTargetLoad < 1);
+  });
+  const candidates = shortlistPathTargets(state, crew.tileIndex, availableTargets, (target) => {
+    const occupied = occupancyByTile.get(target) ?? 0;
+    const restTargetLoad = restingTargetLoad.get(target) ?? 0;
+    return restTargetLoad * 18 + occupied * 10;
+  });
+  for (const target of candidates) {
+    const occupied = occupancyByTile.get(target) ?? 0;
+    const restTargetLoad = restingTargetLoad.get(target) ?? 0;
     const path =
       findPath(state, crew.tileIndex, target, { allowRestricted: false, intent: 'crew', routeSeed: crew.id }, occupancyByTile) ??
       findPath(state, crew.tileIndex, target, { allowRestricted: true, intent: 'crew', routeSeed: crew.id }, occupancyByTile);
@@ -765,9 +802,9 @@ function chooseCrewRestPath(
     const nextTile = path[0] ?? target;
     const nextOccupancy = occupancyByTile.get(nextTile) ?? 0;
     const score = path.length + restTargetLoad * 18 + occupied * 10 + nextOccupancy * 5;
-    if (!best || score < best.score) best = { path, score };
+    if (!best || score < best.score) best = { path, target, score };
   }
-  return best?.path ?? null;
+  return best ? { path: best.path, target: best.target } : null;
 }
 
 function collectTiles(state: StationState, tile: TileType): number[] {
@@ -1092,6 +1129,9 @@ type SimCadenceTimers = {
 };
 
 const simCadenceTimers = new WeakMap<StationState, SimCadenceTimers>();
+const nextDerivedMetricsAt = new WeakMap<StationState, number>();
+const roomOpsCadenceByState = new WeakMap<StationState, { nextAt: number; lastSimAt: number }>();
+const localAirCadenceByState = new WeakMap<StationState, { nextAt: number; lastSimAt: number }>();
 
 function cadenceTimersFor(state: StationState): SimCadenceTimers {
   let timers = simCadenceTimers.get(state);
@@ -1111,6 +1151,32 @@ function cadenceTimersFor(state: StationState): SimCadenceTimers {
 function consumeCadence(now: number, nextAt: number, intervalSec: number): { due: boolean; nextAt: number } {
   if (now < nextAt) return { due: false, nextAt };
   return { due: true, nextAt: now + intervalSec };
+}
+
+function shouldRefreshDerivedMetrics(state: StationState): boolean {
+  const now = perfNowMs();
+  const nextAt = nextDerivedMetricsAt.get(state) ?? Number.NEGATIVE_INFINITY;
+  if (now < nextAt) return false;
+  nextDerivedMetricsAt.set(state, now + DERIVED_METRICS_CADENCE_MS);
+  return true;
+}
+
+function roomOpsRefreshDt(state: StationState): number | null {
+  const wallNow = perfNowMs();
+  const cadence = roomOpsCadenceByState.get(state);
+  if (cadence && wallNow < cadence.nextAt) return null;
+  const elapsedSim = cadence ? Math.max(0, state.now - cadence.lastSimAt) : 0;
+  roomOpsCadenceByState.set(state, { nextAt: wallNow + ROOM_OPS_CADENCE_MS, lastSimAt: state.now });
+  return elapsedSim;
+}
+
+function localAirRefreshDt(state: StationState): number | null {
+  const wallNow = perfNowMs();
+  const cadence = localAirCadenceByState.get(state);
+  if (cadence && wallNow < cadence.nextAt) return null;
+  const elapsedSim = cadence ? Math.max(0, state.now - cadence.lastSimAt) : 0;
+  localAirCadenceByState.set(state, { nextAt: wallNow + LOCAL_AIR_CADENCE_MS, lastSimAt: state.now });
+  return elapsedSim;
 }
 
 function pathCacheKey(
@@ -4663,7 +4729,10 @@ function chooseNearestTargetPath(
   jitterSeed: number | null = null
 ): { target: number; path: number[] } | null {
   let best: { target: number; path: number[]; score: number } | null = null;
-  for (const target of targets) {
+  const candidates = shortlistPathTargets(state, start, targets, (target) =>
+    targetChoiceJitter(jitterSeed, target, 17)
+  );
+  for (const target of candidates) {
     const path = findPath(state, start, target, { allowRestricted, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
     if (!path) continue;
     const score = path.length + targetChoiceJitter(jitterSeed, target, 17);
@@ -6100,6 +6169,29 @@ function moveShipToDock(state: StationState, ship: ArrivingShip, dock: DockEntit
   ship.lane = dock.lane;
 }
 
+function residentConversionFailureStreak(state: StationState): number {
+  const savedStreak = state.usageTotals.residentConversionFailureStreak;
+  if (Number.isFinite(savedStreak)) return Math.max(0, Math.floor(savedStreak ?? 0));
+  // Older saves predate the explicit streak. Preserve their accumulated bad
+  // luck instead of making a nearly-complete habitation milestone start over.
+  return Math.max(0, state.usageTotals.residentConversionAttempts - state.usageTotals.residentConversionSuccesses);
+}
+
+function residentConversionPityBonus(state: StationState): number {
+  return Math.min(
+    RESIDENT_CONVERSION_PITY_MAX,
+    residentConversionFailureStreak(state) * RESIDENT_CONVERSION_PITY_PER_FAILURE
+  );
+}
+
+function recordResidentConversionFailure(state: StationState): void {
+  state.usageTotals.residentConversionFailureStreak = residentConversionFailureStreak(state) + 1;
+}
+
+function recordResidentConversionSuccess(state: StationState): void {
+  state.usageTotals.residentConversionFailureStreak = 0;
+}
+
 function maybeMoveInResident(state: StationState): void {
   const dock = pickResidentMoveInDock(state);
   if (!dock) {
@@ -6123,10 +6215,16 @@ function maybeMoveInResident(state: StationState): void {
   const housingReputationFactor = reputationHousingConversionMultiplierAt(state, housing.unit.cabinTile);
   const vacancyBonus = clamp(freeBedCount, 1, 4) * 0.05;
   const firstResidentBonus = state.residents.length === 0 ? 0.25 : 0;
-  const chance = clamp((0.16 + ratingFactor * 0.48 + vacancyBonus + firstResidentBonus) * housingReputationFactor, 0.14, 0.94);
+  const pityBonus = residentConversionPityBonus(state);
+  const chance = clamp(
+    (0.16 + ratingFactor * 0.48 + vacancyBonus + firstResidentBonus) * housingReputationFactor + pityBonus,
+    0.14,
+    0.94
+  );
   const chancePct = chance * 100;
   if (state.rng() > chance) {
-    noteResidentConversionResult(state, 'move-in roll failed', chancePct);
+    recordResidentConversionFailure(state);
+    noteResidentConversionResult(state, `move-in roll failed; pity ${residentConversionFailureStreak(state)}`, chancePct);
     return;
   }
 
@@ -6146,6 +6244,7 @@ function maybeMoveInResident(state: StationState): void {
   setResidentPath(state, resident, housing.pathToBed);
   state.residents.push(resident);
   state.usageTotals.residentConversionSuccesses += 1;
+  recordResidentConversionSuccess(state);
   state.metrics.residentsConvertedLifetime += 1;
   noteResidentConversionResult(state, 'moved in', chancePct, ship);
 }
@@ -6190,14 +6289,16 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   const housingReputationFactor = reputationHousingConversionMultiplierAt(state, housing.unit.cabinTile);
   const shipProfile = SHIP_PROFILES[ship.shipType];
   const conversionMultiplier = shipProfile?.conversionChanceMultiplier ?? 1;
+  const pityBonus = residentConversionPityBonus(state);
   const chance = clamp(
-    RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor * conversionMultiplier * housingReputationFactor,
+    RESIDENT_CONVERSION_BASE_CHANCE * ratingFactor * comfortFactor * conversionMultiplier * housingReputationFactor + pityBonus,
     0.01,
-    0.35
+    0.85
   );
   const chancePct = chance * 100;
   if (state.rng() > chance) {
-    noteResidentConversionResult(state, 'failed roll', chancePct, ship);
+    recordResidentConversionFailure(state);
+    noteResidentConversionResult(state, `failed roll; pity ${residentConversionFailureStreak(state)}`, chancePct, ship);
     return null;
   }
 
@@ -6223,6 +6324,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
   state.residents.push(resident);
   ship.residentIds.push(resident.id);
   state.usageTotals.residentConversionSuccesses += 1;
+  recordResidentConversionSuccess(state);
   state.metrics.residentsConvertedLifetime += 1;
   noteResidentConversionResult(state, 'converted', chancePct, ship);
   return resident;
@@ -6632,18 +6734,14 @@ function inspectRoomCluster(
   staffByTile: Map<number, number>
 ): ClusterInspection {
   const definition = ROOM_DEFINITIONS[room] ?? ROOM_DEFINITIONS[RoomType.None];
-  let pressurizedCount = 0;
   let doorCount = 0;
   let staffCount = 0;
   for (const tile of cluster) {
     const hasDoor = hasAdjacentDoor(state, tile);
     if (hasDoor) doorCount += 1;
-    if (state.pressurized[tile]) pressurizedCount += 1;
     staffCount += staffByTile.get(tile) ?? 0;
   }
   const minTilesMet = cluster.length >= definition.minTiles;
-  const pressurizedPct = cluster.length > 0 ? (pressurizedCount / cluster.length) * 100 : 0;
-  const pressurizedEnough = pressurizedPct >= 70;
 
   const moduleCounts = moduleCountsForCluster(state, cluster);
   const moduleProgress = definition.requiredModules.map((req) => ({
@@ -6661,6 +6759,13 @@ function inspectRoomCluster(
       ? collectServiceTargets(state, room).filter((tile) => cluster.includes(tile))
       : [...cluster];
   const serviceNodeCount = serviceTargets.length;
+  // A room is safe to operate when the fixtures people actually occupy are
+  // pressurized. Airlocked corridors can legitimately be on the vacuum side
+  // of a door while beds, toilets, counters, and workstations remain sealed.
+  const pressureTargets = serviceTargets.length > 0 ? serviceTargets : cluster;
+  const pressurizedCount = pressureTargets.filter((tile) => state.pressurized[tile]).length;
+  const pressurizedPct = pressureTargets.length > 0 ? (pressurizedCount / pressureTargets.length) * 100 : 0;
+  const pressurizedEnough = pressurizedPct >= 70;
 
   // Reachability is a pure connectivity question ("can an entering actor
   // reach this cluster's service tiles?"). It used to run a full A* from
@@ -7918,7 +8023,17 @@ function chooseLeastLoadedPath(
   reservedCounts = countReservedServiceTargets(state),
   jitterSeed: number | null = null
 ): { path: number[]; target: number } | null {
-  const visitTargets = targets.filter((target, index) => targets.indexOf(target) === index);
+  const availableTargets = [...new Set(targets)].filter((target) => {
+    const reserved = reservedCounts.get(target) ?? 0;
+    return reserved < leisureTargetCapacity(state, target);
+  });
+  const visitTargets = shortlistPathTargets(state, start, availableTargets, (target) => {
+    const reserved = reservedCounts.get(target) ?? 0;
+    const occupancy = state.pathOccupancyByTile.get(target) ?? 0;
+    const capacity = leisureTargetCapacity(state, target);
+    const overCapacity = Math.max(0, reserved + occupancy - capacity);
+    return reserved * 5 + occupancy * 3 + overCapacity * 18 + targetChoiceJitter(jitterSeed, target, 404, 1.8);
+  });
   const scan = (
     restricted: boolean,
     current: { path: number[]; target: number; score: number } | null
@@ -8005,7 +8120,13 @@ function pickLeastLoadedCafeteriaPath(
   let bestPath: number[] | null = null;
   let bestTarget: number | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const target of cafeterias) {
+  const candidates = shortlistPathTargets(state, start, cafeterias, (target) => {
+    const demand = demandByTile.get(target) ?? 0;
+    const reserved = reservedByTile.get(target) ?? 0;
+    const occupancy = state.pathOccupancyByTile.get(target) ?? 0;
+    return demand * 14 + reserved * 6 + occupancy * 3 + targetChoiceJitter(jitterSeed, target, 401, 2.4);
+  });
+  for (const target of candidates) {
     if ((reservedByTile.get(target) ?? 0) >= MAX_USERS_PER_USAGE_TILE) continue;
     const seated = dinersOnTile(state, target);
     const path = findPath(state, start, target, { allowRestricted: false, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
@@ -8079,8 +8200,13 @@ function pickQueueSpotPath(
   const queuePressure = countQueuePressureByTile(state);
   let bestPath: number[] | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
+  const candidates = shortlistPathTargets(state, start, spots, (spot) => {
+    const queued = queuePressure.get(spot) ?? 0;
+    const occupancy = state.pathOccupancyByTile.get(spot) ?? 0;
+    return queued * 9 + occupancy * 4 + targetChoiceJitter(jitterSeed, spot, 403, 2.2);
+  });
   for (const allowRestricted of [false, true]) {
-    for (const spot of spots) {
+    for (const spot of candidates) {
       const path = findPath(state, start, spot, { allowRestricted, intent, routeSeed: jitterSeed ?? undefined }, state.pathOccupancyByTile);
       if (!path) continue;
       const queued = queuePressure.get(spot) ?? 0;
@@ -9506,8 +9632,11 @@ function updateArrivingShips(state: StationState, dt: number): void {
       }
     }
 
-    if (ship.kind === 'resident_home' && ship.stage === 'depart' && ship.residentIds.length > 0) {
-      ship.stage = 'docked';
+    // Residential docks are arrival infrastructure, not permanent parking.
+    // A single berth must be able to satisfy the Tier 5 promise of housing
+    // multiple residents instead of being consumed forever by the first pod.
+    if (ship.kind === 'resident_home' && ship.stage === 'docked' && ship.stageTime >= RESIDENT_SHUTTLE_DWELL_SEC) {
+      ship.stage = 'depart';
       ship.stageTime = 0;
     }
 
@@ -9756,33 +9885,48 @@ function moveAlongPath(
 }
 
 function preferredDormTargets(state: StationState): number[] {
-  const dorms = activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm]).filter((idx) =>
-    state.roomHousingPolicies[idx] === 'crew' || state.roomHousingPolicies[idx] === 'visitor'
+  const dorms = activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm]);
+  const dedicatedCrew = dorms.filter((idx) => state.roomHousingPolicies[idx] === 'crew');
+  const restrictedShared = dorms.filter(
+    (idx) => state.roomHousingPolicies[idx] === 'visitor' && state.zones[idx] === ZoneType.Restricted
   );
-  const restricted = dorms.filter((idx) => state.zones[idx] === ZoneType.Restricted);
-  return restricted.length > 0 ? restricted : dorms;
+  return [...dedicatedCrew, ...restrictedShared];
+}
+
+type CrewQuartersSnapshot = {
+  targets: number[];
+  qualityByTile: Map<number, number>;
+  averageQuality: number;
+};
+
+function buildCrewQuartersSnapshot(state: StationState, targets = preferredDormTargets(state)): CrewQuartersSnapshot {
+  const qualityByTile = new Map<number, number>();
+  if (targets.length === 0) return { targets, qualityByTile, averageQuality: 0 };
+  const roomTiles = new Set(activeRoomClusterTiles(state, RoomType.Dorm));
+  const lockerCount = state.moduleInstances.reduce(
+    (count, module) => count + (module.type === ModuleType.Locker && roomTiles.has(module.originTile) ? 1 : 0),
+    0
+  );
+  const lockerBonus = Math.min(10, (lockerCount / Math.max(1, targets.length)) * 18);
+  let qualityTotal = 0;
+  for (const tileIndex of targets) {
+    const moduleType = state.modules[tileIndex];
+    const environment = roomEnvironmentScoreAt(state, tileIndex);
+    const noisePenalty = Math.max(0, environment.serviceNoise) * 8;
+    const furnitureBase = moduleType === ModuleType.Bed ? 82 : moduleType === ModuleType.Bunk ? 62 : 35;
+    const quality = clamp(furnitureBase + lockerBonus - noisePenalty, 20, 100);
+    qualityByTile.set(tileIndex, quality);
+    qualityTotal += quality;
+  }
+  return { targets, qualityByTile, averageQuality: qualityTotal / targets.length };
 }
 
 function dormSleepQualityAt(state: StationState, tileIndex: number): number {
-  const moduleType = state.modules[tileIndex];
-  const roomTiles = activeRoomClusterTiles(state, RoomType.Dorm);
-  const lockerCount = state.moduleInstances.filter(
-    (module) => module.type === ModuleType.Locker && roomTiles.includes(module.originTile)
-  ).length;
-  const sleepSlots = Math.max(1, preferredDormTargets(state).length);
-  const lockerBonus = Math.min(10, (lockerCount / sleepSlots) * 18);
-  const environment = roomEnvironmentScoreAt(state, tileIndex);
-  const noisePenalty = Math.max(0, environment.serviceNoise) * 8;
-  const furnitureBase = moduleType === ModuleType.Bed ? 82 : moduleType === ModuleType.Bunk ? 62 : 35;
-  return clamp(furnitureBase + lockerBonus - noisePenalty, 20, 100);
+  return buildCrewQuartersSnapshot(state).qualityByTile.get(tileIndex) ?? 35;
 }
 
-function crewMoraleTarget(state: StationState, crew: CrewMember): number {
+function crewMoraleTarget(state: StationState, crew: CrewMember, quartersScore: number): number {
   const needAverage = (crew.energy + crew.hygiene + crew.bladder + crew.thirst) / 4;
-  const dormTargets = preferredDormTargets(state);
-  const quartersScore = dormTargets.length <= 0
-    ? 28
-    : dormTargets.reduce((sum, tile) => sum + dormSleepQualityAt(state, tile), 0) / dormTargets.length;
   const airScore = clamp(operationalAirAt(state, crew.tileIndex), 0, 100);
   return clamp(
     needAverage * 0.52 + quartersScore * 0.22 + airScore * 0.16 + 10 - crew.missedPayrollCycles * 24,
@@ -9813,13 +9957,12 @@ export function getCrewSustainabilitySummary(state: StationState): {
 } {
   const bedSlots = activeModuleUsageTargets(state, [ModuleType.Bed], [RoomType.Dorm]).length;
   const bunkSlots = activeModuleUsageTargets(state, [ModuleType.Bunk], [RoomType.Dorm]).length;
-  const targets = preferredDormTargets(state);
+  const quarters = buildCrewQuartersSnapshot(state);
+  const targets = quarters.targets;
   const occupiedSleepSlots = state.crewMembers.filter(
     (crew) => crew.resting && targets.includes(crew.tileIndex)
   ).length;
-  const quartersQuality = targets.length > 0
-    ? targets.reduce((sum, tile) => sum + dormSleepQualityAt(state, tile), 0) / targets.length
-    : 0;
+  const quartersQuality = quarters.averageQuality;
   const crewMoveMultiplier = (crew: CrewMember): number => {
     const fatigue =
       crew.energy < 25 || crew.hygiene < 25 || crew.bladder < 8 || crew.thirst < 8
@@ -9932,10 +10075,13 @@ function ensureCrewUsageTarget(
     return crew.targetTile;
   }
 
+  if (state.now < crew.retargetAt) return null;
+
   releaseCrewUsageTarget(state, crew, 'replaced');
   const choice = chooseLeastLoadedPath(state, crew.tileIndex, targets, false, 'crew', undefined, crew.id);
   if (!choice) {
     setCrewPath(state, crew, []);
+    crew.retargetAt = state.now + 1.5 + deterministicUnit(crew.id, 811);
     return null;
   }
   const reservation = tryCreateReservation(state, {
@@ -9951,6 +10097,7 @@ function ensureCrewUsageTarget(
   });
   if (!reservation.ok) {
     setCrewPath(state, crew, []);
+    crew.retargetAt = state.now + 1.5 + deterministicUnit(crew.id, 812);
     return null;
   }
   crew.targetTile = choice.target;
@@ -11112,12 +11259,17 @@ function dispatchTransportJobs(
   if (sources.length === 0 || destinations.length === 0) return;
   if (config.openCount >= config.cap) return;
 
-  // Path graph is stable within a single tick; cache findPath results across iterations.
+  // Rank the full pair set with Manhattan distance, then validate only the pair
+  // we are about to commit. Large stations expose many more candidate pairs
+  // than jobs, so eager A* here scales poorly.
   const pathLenCache = new Map<number, number | null>();
-  const getPathLen = (from: number, to: number): number | null => {
+  const blockedPairs = new Set<number>();
+  const validatePathLen = (from: number, to: number): number | null => {
     const key = from * state.tiles.length + to;
     if (pathLenCache.has(key)) return pathLenCache.get(key) ?? null;
-    const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' }, state.pathOccupancyByTile);
+    // This only verifies permanent station connectivity. The assigned crew
+    // handles transient actor occupancy when they execute the job.
+    const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' });
     const len = path ? path.length : null;
     pathLenCache.set(key, len);
     return len;
@@ -11136,13 +11288,14 @@ function dispatchTransportJobs(
         (tickFromReserved.get(from) ?? 0);
       if (supply <= 0.3) continue;
       for (const to of destinations) {
+        const pairKey = from * state.tiles.length + to;
+        if (blockedPairs.has(pairKey)) continue;
         const tickTo = tickToReserved.get(to) ?? 0;
         const projectedStock =
           itemStockAtNode(state, to, itemType) + openJobAmountToTile(state, to, itemType) + tickTo;
         if (projectedStock >= config.targetStock - 0.3) continue;
         if (itemNodeUnreservedCapacity(state, to, itemType) - tickTo <= 0.3) continue;
-        const dist = getPathLen(from, to);
-        if (dist === null) continue;
+        const dist = tileManhattanDistance(state, from, to);
         const better =
           !best ||
           supply > best.supply + 0.5 ||
@@ -11151,6 +11304,14 @@ function dispatchTransportJobs(
       }
     }
     if (!best) break;
+
+    const pairKey = best.from * state.tiles.length + best.to;
+    const validatedDistance = validatePathLen(best.from, best.to);
+    if (validatedDistance === null) {
+      blockedPairs.add(pairKey);
+      continue;
+    }
+    best.dist = validatedDistance;
 
     const tickFrom = tickFromReserved.get(best.from) ?? 0;
     const tickTo = tickToReserved.get(best.to) ?? 0;
@@ -11992,6 +12153,8 @@ function assignJobsToIdleCrew(state: StationState): void {
   const pendingJobs = state.jobs.filter((j) => j.state === 'pending');
   const openJobs = state.jobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
   const nonRestingCrew = state.crewMembers.filter((c) => !c.resting);
+  const constructionSiteById = new Map(state.constructionSites.map((site) => [site.id, site]));
+  const hasActiveAirlock = activeAirlockTiles(state).length > 0;
   const pendingByLane = createWorkforceLaneMetrics();
   for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
   const targets = deriveWorkLaneTargets(state, openJobs, nonRestingCrew);
@@ -12130,21 +12293,43 @@ function assignJobsToIdleCrew(state: StationState): void {
       let bestJob: (typeof pendingJobs)[number] | null = null;
       let bestPath: number[] | null = null;
       let bestScore = Number.NEGATIVE_INFINITY;
+      const rankedJobs: Array<{
+        job: (typeof pendingJobs)[number];
+        site: StationState['constructionSites'][number] | null;
+        approximateScore: number;
+      }> = [];
       for (const job of pendingJobs) {
         if (job.state !== 'pending') continue;
         if (jobWorkLane(state, job) !== lane) continue;
         if (crewNeedsFoodOverride && !isFoodServiceJob(job)) continue;
         const site =
           job.type === 'construct' && job.constructionSiteId !== undefined
-            ? state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId) ?? null
+            ? constructionSiteById.get(job.constructionSiteId) ?? null
             : null;
         if (job.type === 'construct' && !site) continue;
-        if (site?.requiresEva && activeAirlockTiles(state).length <= 0) {
+        if (site?.requiresEva && !hasActiveAirlock) {
           site.state = 'blocked';
           site.blockedReason = 'no airlock for EVA';
           pendingByLane[lane].blocked += 1;
           continue;
         }
+        const age = Math.max(0, state.now - job.createdAt);
+        const laneBonus = ownLane ? 45 : flex ? 18 : emergencyBorrow ? -8 : -24;
+        const suitability = crewSuitabilityForJob(crew, job);
+        const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
+        const approximateDistance = tileManhattanDistance(state, crew.tileIndex, jobWorkTile(state, job));
+        const approximateScore =
+          logisticsJobPriority(state, job) * 100 +
+          laneBonus +
+          suitability +
+          Math.min(30, age / 6) -
+          approximateDistance -
+          needsPenalty;
+        rankedJobs.push({ job, site, approximateScore });
+      }
+
+      rankedJobs.sort((a, b) => b.approximateScore - a.approximateScore || a.job.id - b.job.id);
+      for (const { job, site } of rankedJobs.slice(0, JOB_ASSIGNMENT_SHORTLIST_SIZE)) {
         let path =
           job.type === 'construct' && job.constructionMode === 'build' && site
             ? findConstructionPath(state, crew.tileIndex, site)
@@ -12167,7 +12352,7 @@ function assignJobsToIdleCrew(state: StationState): void {
         }
         if (!path) {
           if (job.type === 'repair' && job.repairExterior) {
-            job.blockedReason = activeAirlockTiles(state).length <= 0 ? 'no airlock for EVA repair' : 'no airlock EVA route';
+            job.blockedReason = !hasActiveAirlock ? 'no airlock for EVA repair' : 'no airlock EVA route';
             markJobStall(state, job, 'stalled_unreachable_source');
             pendingByLane[lane].blocked += 1;
           }
@@ -12624,6 +12809,12 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   purgeDeadCrewFromAir(state, dt, occupancyByTile);
   processCrewResignations(state, occupancyByTile);
   const idleTargets = collectIdleWalkTiles(state);
+  const dormTargets = preferredDormTargets(state);
+  const hygieneTargets = preferredHygieneTargets(state);
+  const toiletTargets = preferredToiletTargets(state);
+  const drinkTargets = crewDrinkTargets(state);
+  const leisureTargets = crewLeisureTargets(state);
+  const quarters = buildCrewQuartersSnapshot(state, dormTargets);
   const passengerServiceNeeded =
     state.portOps.contracts.some((contract) => {
       if (contract.status !== 'accepted' && contract.status !== 'active') return false;
@@ -12654,6 +12845,14 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   const totalCrew = Math.max(1, state.crewMembers.length);
   const maxResting = Math.max(1, Math.ceil(totalCrew * CREW_MAX_RESTING_RATIO));
   let currentResting = state.crewMembers.filter((c) => c.resting).length;
+  const restingTargetLoad = new Map<number, number>();
+  for (const restingCrew of state.crewMembers) {
+    if (!restingCrew.resting) continue;
+    const plannedTarget = restingCrew.path.length > 0
+      ? restingCrew.targetTile ?? restingCrew.path[restingCrew.path.length - 1]
+      : restingCrew.tileIndex;
+    restingTargetLoad.set(plannedTarget, (restingTargetLoad.get(plannedTarget) ?? 0) + 1);
+  }
   const shiftBucketNow = Math.floor(state.now / CREW_SHIFT_WINDOW_SEC) % CREW_SHIFT_BUCKET_COUNT;
   state.metrics.crewRestCap = maxResting;
   state.metrics.crewRestingNow = currentResting;
@@ -12688,7 +12887,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     crew.needsStrainSec = criticalNeed
       ? Math.min(240, crew.needsStrainSec + dt)
       : Math.max(0, crew.needsStrainSec - dt * 1.6);
-    const moraleTarget = crewMoraleTarget(state, crew);
+    const moraleTarget = crewMoraleTarget(state, crew, dormTargets.length > 0 ? quarters.averageQuality : 28);
     crew.morale = clamp(crew.morale + (moraleTarget - crew.morale) * Math.min(1, dt * 0.035), 0, 100);
     if (crew.resignationNoticeAt !== null && crew.missedPayrollCycles === 0 && crew.morale >= 55) {
       crew.resignationNoticeAt = null;
@@ -12831,7 +13030,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         state.metrics.crewRestingNow = currentResting;
       } else if (crew.activeJobId === null && crew.bladder < CREW_BLADDER_TOILET_THRESHOLD) {
         // Bladder is short-cycle: toilet interrupts cleaning/leisure but not active jobs or rest.
-        const toiletTargets = preferredToiletTargets(state);
         if (toiletTargets.length > 0 && !airEmergency) {
           crew.toileting = true;
           crew.toiletSessionActive = false;
@@ -12854,7 +13052,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       } else if (crew.activeJobId === null && crew.thirst < CREW_THIRST_DRINK_THRESHOLD) {
         // Thirst: route to a dedicated provider or basic cafeteria water.
         // Drinking is brief and yields if a higher-priority need spikes.
-        const drinkTargets = crewDrinkTargets(state);
         if (drinkTargets.length > 0 && !airEmergency) {
           crew.drinking = true;
           crew.drinkSessionActive = false;
@@ -12867,7 +13064,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           clearCrewLeisure(state, crew);
         }
       } else if (crew.activeJobId === null && crew.hygiene < CREW_CLEAN_HYGIENE_THRESHOLD) {
-        const hygieneTargets = preferredHygieneTargets(state);
         if (hygieneTargets.length > 0 && !airEmergency) {
           crew.cleaning = true;
           crew.cleanSessionActive = false;
@@ -12889,9 +13085,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.hygiene >= 58 &&
         state.now >= crew.retargetAt
       ) {
-        const targets = crewLeisureTargets(state);
         const shouldSeekLeisure =
-          targets.length > 0 &&
+          leisureTargets.length > 0 &&
           (state.metrics.morale < 72 || state.metrics.crewIdleAvailable > 2 || state.rng() < 0.28);
         if (shouldSeekLeisure) {
           crew.leisure = true;
@@ -12907,7 +13102,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
 
     if (crew.cleaning && !crew.resting) {
-      const hygieneTargets = preferredHygieneTargets(state);
       if (hygieneTargets.length === 0) {
         crew.cleaning = false;
         crew.cleanSessionActive = false;
@@ -12915,7 +13109,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       }
     }
     if (crew.cleaning && !crew.resting) {
-      const hygieneTargets = preferredHygieneTargets(state);
       const hygieneTarget = ensureCrewUsageTarget(state, crew, hygieneTargets, 'wash');
       if (hygieneTarget === null) {
         crew.idleReason = 'idle_waiting_fixture';
@@ -12949,7 +13142,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     // Toilets are physical one-user providers. Crew distribute across fixtures
     // rather than receiving bladder relief from any tile painted as a Bathroom.
     if (crew.toileting && !crew.resting) {
-      const toiletTargets = preferredToiletTargets(state);
       if (toiletTargets.length === 0) {
         crew.toileting = false;
         crew.toiletSessionActive = false;
@@ -12989,7 +13181,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     // Drinking: route to a Cantina, WaterFountain, or the basic water service
     // available at a cafeteria serving station.
     if (crew.drinking && !crew.resting) {
-      const drinkTargets = crewDrinkTargets(state);
       if (drinkTargets.length === 0) {
         crew.drinking = false;
         crew.drinkSessionActive = false;
@@ -13036,10 +13227,15 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
 
     if (crew.resting) {
       crew.idleReason = 'idle_resting';
-      const dormTargets = preferredDormTargets(state);
       if (dormTargets.length > 0 && !dormTargets.includes(crew.tileIndex)) {
-        if (crew.path.length === 0) {
-          setCrewPath(state, crew, chooseCrewRestPath(state, crew, dormTargets, occupancyByTile) ?? []);
+        if (crew.path.length === 0 && state.now >= crew.retargetAt) {
+          const restChoice = chooseCrewRestPath(state, crew, dormTargets, occupancyByTile, restingTargetLoad);
+          crew.targetTile = restChoice?.target ?? null;
+          setCrewPath(state, crew, restChoice?.path ?? []);
+          crew.retargetAt = state.now + 1.5 + deterministicUnit(crew.id, 813);
+          if (restChoice) {
+            restingTargetLoad.set(restChoice.target, (restingTargetLoad.get(restChoice.target) ?? 0) + 1);
+          }
           if (crew.path.length === 0) {
             crew.idleReason = 'idle_waiting_fixture';
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
@@ -13060,7 +13256,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           crew.restSessionActive = true;
           state.usageTotals.dorm += 1;
         }
-        const quality = dormSleepQualityAt(state, crew.tileIndex);
+        const quality = quarters.qualityByTile.get(crew.tileIndex) ?? 35;
         const restRate = state.modules[crew.tileIndex] === ModuleType.Bed
           ? 17 + quality * 0.07
           : 9 + quality * 0.07;
@@ -13086,11 +13282,10 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
 
     if (crew.leisure && !crew.resting && !crew.cleaning && crew.activeJobId === null) {
-      const targets = crewLeisureTargets(state);
-      if (targets.length === 0) {
+      if (leisureTargets.length === 0) {
         clearCrewLeisure(state, crew);
       } else {
-        const leisureTarget = ensureCrewUsageTarget(state, crew, targets, 'leisure');
+        const leisureTarget = ensureCrewUsageTarget(state, crew, leisureTargets, 'leisure');
         if (leisureTarget === null) {
           crew.idleReason = 'idle_waiting_fixture';
           continue;
@@ -13852,6 +14047,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
 }
 
 function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
+  scheduleVisitorPathRetry(state, visitor);
   if (visitor.carryingMeal) {
     assignPathToTable(state, visitor);
     visitor.state = VisitorState.ToCafeteria;
@@ -13898,6 +14094,7 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
 }
 
 function repathVisitorToReservedCafeteriaTarget(state: StationState, visitor: Visitor): boolean {
+  scheduleVisitorPathRetry(state, visitor);
   if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
     const path = findPath(
       state,
@@ -13949,12 +14146,21 @@ function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
 }
 
 function assignPathToDock(state: StationState, visitor: Visitor): void {
+  scheduleVisitorPathRetry(state, visitor);
   const docks = visitorDockTargets(state, visitor);
   visitor.reservedTargetTile = null;
   visitor.reservedServingTile = null;
   releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed');
   visitor.carryingMeal = false;
   setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, docks, false, 'visitor', visitor.id) ?? []);
+}
+
+function visitorPathRetryReady(state: StationState, visitor: Visitor): boolean {
+  return state.now >= (visitor.nextPathRetryAt ?? 0);
+}
+
+function scheduleVisitorPathRetry(state: StationState, visitor: Visitor): void {
+  visitor.nextPathRetryAt = state.now + 1 + deterministicUnit(visitor.id, 814) * 0.8;
 }
 
 function visitorWalkDistanceFromDock(state: StationState, tileIndex: number): number {
@@ -14470,6 +14676,7 @@ function updateVisitorLogic(
           if (
             !inServingLine &&
             visitor.path.length === 0 &&
+            visitorPathRetryReady(state, visitor) &&
             (visitor.reservedServingTile === null ||
               !servingTargets.includes(visitor.reservedServingTile))
           ) {
@@ -14479,7 +14686,7 @@ function updateVisitorLogic(
           assignPathToTable(state, visitor);
         }
 
-        if (visitor.path.length === 0) {
+        if (visitor.path.length === 0 && visitorPathRetryReady(state, visitor)) {
           repathVisitorToReservedCafeteriaTarget(state, visitor);
         }
         const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
@@ -14543,7 +14750,7 @@ function updateVisitorLogic(
             const qpos = queuePositionOf(state, visitor.id);
             if (qpos === null) {
               enterServingLineOrBail(state, visitor);
-            } else if (qpos.index <= 1 && hasUnreservedServingMeal(state)) {
+            } else if (qpos.index <= 1 && hasUnreservedServingMeal(state) && visitorPathRetryReady(state, visitor)) {
               assignPathToCafeteria(state, visitor);
             } else {
               addVisitorFailurePenalty(state, 0.014 * dt, 'patienceBail');
@@ -14604,7 +14811,8 @@ function updateVisitorLogic(
       }
     } else if (visitor.state === VisitorState.ToLeisure) {
       const waitingForClinicCare = visitor.healthState !== 'healthy' && state.rooms[visitor.tileIndex] === RoomType.Clinic;
-      if (visitor.path.length === 0 && !waitingForClinicCare) {
+      if (visitor.path.length === 0 && !waitingForClinicCare && visitorPathRetryReady(state, visitor)) {
+        scheduleVisitorPathRetry(state, visitor);
         if (!assignPathToLeisure(state, visitor)) {
           if (visitor.activeService !== null) {
             visitor.serviceBlockedSince ??= state.now;
@@ -14849,7 +15057,7 @@ function updateVisitorLogic(
         }
       }
     } else {
-      if (visitor.path.length === 0) {
+      if (visitor.path.length === 0 && visitorPathRetryReady(state, visitor)) {
         assignPathToDock(state, visitor);
       }
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
@@ -16428,7 +16636,8 @@ function updateResources(state: StationState, dt: number): void {
   // Local air: each tile's quality is the global average shaped by life-support
   // coverage distance, fire proximity, and pressurization. Read by exposure
   // checks so a sealed wing or burning room becomes locally lethal.
-  updateLocalAirQuality(state, dt);
+  const localAirDt = localAirRefreshDt(state);
+  if (localAirDt !== null) updateLocalAirQuality(state, Math.max(dt, localAirDt));
 
   if (state.metrics.airQuality <= 10 && lifeSupportPotentialAirPerSec > 0 && lifeSupportActiveAirPerSec <= 0) {
     state.metrics.airBlockedLowAirSec += dt;
@@ -16696,8 +16905,6 @@ function computeMetrics(state: StationState): void {
 
   const unmetNeedPressure = averageNeedDeficit * 0.42;
   const healthPressure = distressedResidents * 0.35 + criticalResidents * 0.8;
-
-  state.incidentHeat = Math.max(0, state.incidentHeat - 0.08);
 
   const load =
     visitorsCount +
@@ -18523,23 +18730,40 @@ export {
 
 export function tick(state: StationState, frameDt: number): void {
   const tickStarted = perfNowMs();
+  const phaseMs: Record<string, number> = {};
+  const phasePathCalls: Record<string, number> = {};
+  let phaseStarted = tickStarted;
+  let phasePathCallsStarted = 0;
+  const finishPhase = (name: string): void => {
+    const now = perfNowMs();
+    phaseMs[name] = now - phaseStarted;
+    phasePathCalls[name] = state.metrics.pathCallsPerTick - phasePathCallsStarted;
+    phaseStarted = now;
+    phasePathCallsStarted = state.metrics.pathCallsPerTick;
+  };
   state.metrics.pathMs = 0;
   state.metrics.pathCallsPerTick = 0;
   state.metrics.derivedRecomputeMs = 0;
 
-  ensureCrewPool(state);
-  ensureResidentPopulation(state);
-  ensureDockEntitiesUpToDate(state);
-  ensureDockByTileCache(state);
-  ensureItemNodeByTileCache(state);
-  ensurePressurizationUpToDate(state);
-  refreshRoomOpsTotals(state);
-  refreshRoomOpsFromCrewPresence(state, 0, false);
-  state.effects.securityAuraByTile = computeSecurityAuraMap(state);
-  state.pathOccupancyByTile = buildOccupancyMap(state);
-  clearLegacyCrewPostAssignments(state);
-
   if (state.controls.paused) {
+    if (!shouldRefreshDerivedMetrics(state)) {
+      state.metrics.tickMs = perfNowMs() - tickStarted;
+      return;
+    }
+    ensureCrewPool(state);
+    ensureResidentPopulation(state);
+    ensureDockEntitiesUpToDate(state);
+    ensureDockByTileCache(state);
+    ensureItemNodeByTileCache(state);
+    ensurePressurizationUpToDate(state);
+    const roomOpsDt = roomOpsRefreshDt(state);
+    if (roomOpsDt !== null) {
+      refreshRoomOpsTotals(state);
+      refreshRoomOpsFromCrewPresence(state, roomOpsDt, false);
+    }
+    state.effects.securityAuraByTile = computeSecurityAuraMap(state);
+    state.pathOccupancyByTile = buildOccupancyMap(state);
+    clearLegacyCrewPostAssignments(state);
     cleanupExpiredReservations(state);
     releaseClosedJobReservations(state);
     refreshReservationMetrics(state);
@@ -18553,6 +18777,15 @@ export function tick(state: StationState, frameDt: number): void {
 
   const dt = frameDt * state.controls.simSpeed;
   state.now += dt;
+  state.incidentHeat = Math.max(0, state.incidentHeat - 4.8 * dt);
+  ensureCrewPool(state);
+  ensureResidentPopulation(state);
+  ensureDockEntitiesUpToDate(state);
+  ensureDockByTileCache(state);
+  ensureItemNodeByTileCache(state);
+  ensurePressurizationUpToDate(state);
+  state.pathOccupancyByTile = buildOccupancyMap(state);
+  clearLegacyCrewPostAssignments(state);
   const cadence = cadenceTimersFor(state);
   const jobBoardCadence = consumeCadence(state.now, cadence.nextJobBoardAt, JOB_BOARD_CADENCE_SEC);
   cadence.nextJobBoardAt = jobBoardCadence.nextAt;
@@ -18564,6 +18797,7 @@ export function tick(state: StationState, frameDt: number): void {
   cadence.nextThermalDriftAt = thermalDriftCadence.nextAt;
   const hasLiveJobs = state.jobs.some((job) => job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress');
   const refreshJobBoard = jobBoardCadence.due || frameDt <= 0 || !hasLiveJobs;
+  finishPhase('setup');
 
   updateTrafficArrivalSchedule(state);
   updateCrewAutoStaff(state);
@@ -18590,9 +18824,13 @@ export function tick(state: StationState, frameDt: number): void {
   requeueStalledJobs(state);
   expireJobs(state);
   if (jobBoardCadence.due) pruneTerminalJobHistory(state);
+  finishPhase('trafficJobs');
   ensurePressurizationUpToDate(state);
-  refreshRoomOpsTotals(state);
-  refreshRoomOpsFromCrewPresence(state, dt, true);
+  const roomOpsDt = roomOpsRefreshDt(state);
+  if (roomOpsDt !== null) {
+    refreshRoomOpsTotals(state);
+    refreshRoomOpsFromCrewPresence(state, Math.max(dt, roomOpsDt), true);
+  }
   if (thermalDriftCadence.due) {
     const thermalDt = Math.max(dt, state.now - cadence.lastThermalDriftAt);
     cadence.lastThermalDriftAt = state.now;
@@ -18602,10 +18840,12 @@ export function tick(state: StationState, frameDt: number): void {
   updateFires(state, dt);
   updateResources(state, dt);
   maybeCreateTier3Patient(state, dt);
+  finishPhase('roomsResources');
 
   const occupancyByTile = buildOccupancyMap(state);
   state.pathOccupancyByTile = occupancyByTile;
   updateCrewLogic(state, dt, occupancyByTile);
+  finishPhase('crew');
   updateCargoArmException(state, dt);
   state.effects.securityAuraByTile = computeSecurityAuraMap(state);
   const securityAuraByTile = state.effects.securityAuraByTile;
@@ -18614,6 +18854,7 @@ export function tick(state: StationState, frameDt: number): void {
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   maybeCreateTheftIncident(state, dt);
   decayIncidentMemory(state);
+  finishPhase('residentsSecurity');
   maintainCafeteriaQueues(state);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
   const queuedPassengers = state.visitors.filter((visitor) => visitor.state === VisitorState.Queueing).length;
@@ -18622,18 +18863,25 @@ export function tick(state: StationState, frameDt: number): void {
     queuedPassengers
   );
   state.portOps.telemetry.passengerQueuePersonSeconds += queuedPassengers * dt;
+  finishPhase('visitors');
   updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);
   updateIncidentPipeline(state, dt, occupancyByTile);
   cleanupConstructionSites(state);
+  finishPhase('worldPost');
 
   releaseClosedJobReservations(state);
   refreshReservationMetrics(state);
   refreshJobMetrics(state);
   ensureDerivedUpToDate(state);
-  computeMetrics(state);
-  updateUnlockProgress(state);
+  if (shouldRefreshDerivedMetrics(state)) {
+    computeMetrics(state);
+    updateUnlockProgress(state);
+  }
   updateCommandProgress(state, dt);
+  finishPhase('derived');
+  state.metrics.simPhaseMs = phaseMs;
+  state.metrics.simPhasePathCalls = phasePathCalls;
   state.metrics.tickMs = perfNowMs() - tickStarted;
   if (!loggedPathBudgetBreach && state.metrics.pathCallsPerTick > PATH_CALLS_PER_TICK_BUDGET) {
     loggedPathBudgetBreach = true;

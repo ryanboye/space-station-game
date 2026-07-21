@@ -122,8 +122,8 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
     description: 'Station identity roadmap. Marks completion of the current progression track.',
     trigger: {
       // T6 is the "tutorial complete" marker — gated on reaching T5.
-      predicate: (_m: Metrics) => false,
-      progress: (_m: Metrics) => 0,
+      predicate: (m: Metrics) => m.unlockTier >= TIER6_ELIGIBLE_TIER,
+      progress: (m: Metrics) => progressTo(m.unlockTier, TIER6_ELIGIBLE_TIER),
       tooltip: 'Complete the health-loop tier to unlock station specialization.',
     },
   },
