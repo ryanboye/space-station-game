@@ -41,7 +41,7 @@ function testStarterShellAndOpeningOffer(): void {
   const state = freshPortState();
   advance(state, 4);
   assert(state.crewMembers.length === 8, `Expected 8 starter crew, got ${state.crewMembers.length}.`);
-  assert(state.controls.paused, 'Expected the opening manifest choice to pause once.');
+  assert(!state.controls.paused, 'Opening manifests should not interrupt play by pausing the simulation.');
   assert(state.controls.crewShiftTargets.food === 1, 'Starter should leave Service capacity uncommitted.');
   assert(state.controls.crewShiftTargets.logistics === 1, 'Starter should leave Cargo capacity uncommitted.');
   assert(state.controls.crewShiftTargets.engineering === 1, 'Starter should retain one Maintenance responder.');
@@ -102,11 +102,23 @@ function testLegacyCoreTileIsBuildable(): void {
 
 function testPreparedMealImport(): void {
   const state = freshPortState();
+  const servingNodes = state.itemNodes.filter((node) => state.modules[node.tileIndex] === ModuleType.ServingStation);
+  assert(servingNodes.length > 0, 'Starter station has no serving counter for the prepared-meal test.');
+  for (const node of servingNodes) {
+    node.items.meal = 0;
+    node.items.cleanTray = 0;
+  }
+  state.metrics.mealStock = 0;
+  state.metrics.cleanTrayStock = 0;
   const mealsBefore = state.metrics.mealStock;
+  const traysBefore = state.metrics.cleanTrayStock;
   const creditsBefore = state.metrics.credits;
+  const trafficBefore = state.trafficOffers.length;
   assert(buyPreparedMeals(state), 'Expected prepared-meal import to fit the starter counter.');
   assert(state.metrics.mealStock === mealsBefore + 12, 'Prepared-meal import did not reach the service buffer.');
+  assert(state.metrics.cleanTrayStock === traysBefore + 12, 'Prepared-meal import did not include clean serving trays.');
   assert(state.metrics.credits === creditsBefore - 36, 'Prepared-meal import charged the wrong amount.');
+  assert(state.trafficOffers.length === trafficBefore, 'Prepared-meal purchase incorrectly spawned a freight contract.');
 }
 
 function testImportedMarketGoodsNeedNoWorkshop(): void {

@@ -21006,7 +21006,19 @@ export function orderFoodSupply(
 }
 
 export function buyPreparedMeals(state: StationState, creditCost = 36, mealGain = 12): boolean {
-  return orderFoodSupply(state, creditCost, Math.max(24, mealGain * 3)).ok;
+  rebuildItemNodes(state);
+  const destinations = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation)
+    .map((module) => module.originTile);
+  if (destinations.length === 0 || state.metrics.credits < creditCost) return false;
+  if (totalItemCapacityAtTargets(state, destinations) + 0.01 < mealGain * 2) return false;
+  const addedMeals = addItemAcrossTargets(state, destinations, 'meal', mealGain, destinations[0]);
+  const addedTrays = addItemAcrossTargets(state, destinations, 'cleanTray', mealGain, destinations[0]);
+  if (addedMeals + 0.01 < mealGain || addedTrays + 0.01 < mealGain) return false;
+  state.metrics.credits -= creditCost;
+  state.metrics.mealStock += addedMeals;
+  state.metrics.cleanTrayStock += addedTrays;
+  return true;
 }
 
 export function buyImportedTradeGoods(state: StationState, creditCost = 30, goodsGain = 12): boolean {

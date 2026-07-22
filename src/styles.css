@@ -2993,7 +2993,6 @@ h2 {
 }
 
 [data-palette-section="structure"] [data-tool-tile="airlock"],
-[data-palette-section="structure"] [data-tool-utility-underlay],
 [data-palette-section="structure"] [data-tool-cancel-construction] {
   display: none;
 }
@@ -3172,12 +3171,12 @@ h2 {
   font-weight: 700;
 }
 
-.hud-item-action {
+#hud-status .hud-item-action {
   display: grid;
   grid-template-columns: 1fr 22px;
 }
 
-.hud-item-action .hud-label {
+#hud-status .hud-item-action .hud-label {
   grid-column: 1 / -1;
 }
 
@@ -4328,7 +4327,6 @@ button.alert-item {
 }
 
 [data-palette-section="structure"] [data-tool-tile="airlock"],
-[data-palette-section="structure"] [data-tool-utility-underlay],
 [data-palette-section="structure"] [data-tool-cancel-construction] {
   display: none !important;
 }

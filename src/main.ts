@@ -47,6 +47,7 @@ import {
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
+  getWaterPipeNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getMaintenanceTileDiagnostic,
   getReputationTileDiagnostic,
@@ -183,7 +184,7 @@ app.innerHTML = `
       </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
-      <span class="hud-item hud-item-action"><span class="hud-label">Food Orders</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Order food supply for 36 credits" title="Order food supply for 36 credits">+</button></span>
+      <span class="hud-item hud-item-action"><span class="hud-label">Prepared Meals</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Buy 12 prepared meals for 36 credits" title="Buy 12 prepared meals for 36 credits">+</button></span>
       <button id="open-rating-modal" class="hud-item hud-rating-button" type="button" title="Open station rating factors">
         <span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span>
       </button>
@@ -447,7 +448,7 @@ app.innerHTML = `
     </div>
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="structure">
-        <span class="tool-row-label">Structure</span>
+        <span class="tool-row-label">Structure & Utilities</span>
         <button class="tool-btn" data-tool-deselect="1" title="Inspect / no build tool (Esc)"><span class="tool-key">Esc</span>Inspect</button>
         <button class="tool-btn" data-tool-room-copy="1" title="Copy station stamp — drag over floors, walls, rooms, and furniture"><span class="tool-key">⧉</span>Copy</button>
         <button class="tool-btn" data-tool-room-paste="1" title="Paste copied station stamp — tiles, room settings, zones, docks, and fresh furniture"><span class="tool-key">▣</span>Paste</button>
@@ -1155,7 +1156,7 @@ const spriteStatusEl = document.querySelector<HTMLElement>('#sprite-status')!;
 const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   none: 'Normal View',
   'life-support': 'Air Coverage',
-  'utility-underlay': 'Air Network',
+  'utility-underlay': 'Utility Networks',
   thermal: 'Thermal',
   'visitor-status': 'Guest Appeal',
   'resident-comfort': 'Resident Comfort',
@@ -1221,8 +1222,14 @@ function diagnosticReadoutText(): string {
   }
   if (overlay === 'utility-underlay') {
     const air = getAirDuctNetworkDiagnostics(state);
-    const globalLine = `Air Network: air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered | poor ${state.metrics.poorLifeSupportTiles} | ${air.networkCount} networks | powered vents ${state.metrics.airNetworkPoweredVents} | unpowered ${state.metrics.airNetworkUnpoweredVents} | disconnected duct ${air.disconnectedTileCount}`;
-    if (hoveredTile === null) return `${globalLine}\nAir reach is tinted underneath the ducts. Draw Air Ducts from active Life Support to wall Vent service tiles.`;
+    const water = getWaterPipeNetworkDiagnostics(state);
+    const globalLine =
+      `Utilities: air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered · ${air.networkCount} duct networks | ` +
+      `water ${state.metrics.potableNetworkPoweredFixtures} fixtures · ${water.disconnectedTileCount} disconnected | ` +
+      `leaks ${state.metrics.activePlumbingLeaks}`;
+    if (hoveredTile === null) {
+      return `${globalLine}\nDraw Air Ducts from Life Support to Vents, or Water Pipes from Life Support beneath toilets, sinks, showers, and dishwashers.`;
+    }
     const p = fromIndex(hoveredTile, state.width);
     const diagnostic = getUtilityUnderlayTileDiagnostic(state, p.x, p.y);
     if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no utility sample.`;
@@ -1329,15 +1336,20 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
       };
     case 'utility-underlay': {
       const air = getAirDuctNetworkDiagnostics(state);
+      const water = getWaterPipeNetworkDiagnostics(state);
       return {
-        title: 'Air Network',
-        stats: `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | poor ${state.metrics.poorLifeSupportTiles} | networks ${air.networkCount} | powered vents ${state.metrics.airNetworkPoweredVents}`,
+        title: 'Utility Networks',
+        stats:
+          `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | duct networks ${air.networkCount} | ` +
+          `water networks ${water.networkCount} | supplied fixtures ${state.metrics.potableNetworkPoweredFixtures} | leaks ${state.metrics.activePlumbingLeaks}`,
         rows: [
           { color: '#37d3e6', label: 'Air reach tint underneath' },
           { color: '#6edb8f', label: 'Life Support source duct' },
           { color: '#61c8ff', label: 'Powered Air Duct' },
+          { color: '#54c4ff', label: 'Connected Water Pipe' },
+          { color: '#86ecff', label: 'Flooded or leaking pipe' },
           { color: '#a7f3ff', label: 'Wall Vent output connection' },
-          { color: '#ee4f4f', label: 'Disconnected duct or unpowered vent' }
+          { color: '#ee4f4f', label: 'Disconnected utility or unpowered fixture' }
         ]
       };
     }
@@ -2068,6 +2080,36 @@ function refreshUnlockLegendAndHotkeys(): void {
  * Uses simple red/yellow/green thresholds matching the existing sidebar
  * treatments so the HUD reads the same at a glance.
  */
+function preparedMealServiceSnapshot(): {
+  readyServings: number;
+  counterMeals: number;
+  counterTrays: number;
+  counterCount: number;
+} {
+  const servingTiles = new Set(
+    state.moduleInstances
+      .filter((module) => module.type === ModuleType.ServingStation)
+      .map((module) => module.originTile)
+  );
+  let readyServings = 0;
+  let counterMeals = 0;
+  let counterTrays = 0;
+  for (const node of state.itemNodes) {
+    if (!servingTiles.has(node.tileIndex)) continue;
+    const meals = Math.max(0, node.items.meal ?? 0);
+    const trays = Math.max(0, node.items.cleanTray ?? 0);
+    counterMeals += meals;
+    counterTrays += trays;
+    readyServings += Math.min(meals, trays);
+  }
+  return {
+    readyServings: Math.floor(readyServings),
+    counterMeals: Math.floor(counterMeals),
+    counterTrays: Math.floor(counterTrays),
+    counterCount: servingTiles.size
+  };
+}
+
 function refreshHudStatus(): void {
   const powerDemand = state.metrics.powerDemand;
   const powerSupply = state.metrics.powerSupply;
@@ -2129,7 +2171,17 @@ function refreshHudStatus(): void {
   hudCrewEl.parentElement!.title = `Mood ${Math.round(state.metrics.morale)}% · sleep ${crewSustainability.sleepSlots}/${state.crew.total} · payroll ${Math.ceil(crewSustainability.payrollPerCycle)}c in ${Math.ceil(crewSustainability.secondsToPayroll)}s`;
   hudMaterialsEl.textContent = String(Math.round(state.metrics.materials));
   hudWaterEl.textContent = String(Math.round(state.metrics.waterStock));
-  hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
+  const preparedMeals = preparedMealServiceSnapshot();
+  hudFoodEl.textContent = String(preparedMeals.readyServings);
+  hudFoodEl.style.color = preparedMeals.readyServings <= 0
+    ? 'var(--danger)'
+    : preparedMeals.readyServings < 12
+      ? 'var(--warn)'
+      : '';
+  hudFoodEl.parentElement!.title =
+    `${preparedMeals.readyServings} servings ready at ${preparedMeals.counterCount} counter${preparedMeals.counterCount === 1 ? '' : 's'} · ` +
+    `${preparedMeals.counterMeals} meals and ${preparedMeals.counterTrays} clean trays at counters · ` +
+    `${Math.floor(state.metrics.mealStock)} cooked meals station-wide. Buy 12 prepared meals with clean trays for 36 credits.`;
   hudRatingEl.textContent = String(Math.round(state.metrics.stationRating));
   hudRatingEl.style.color = ratingToneColor();
   const ratingButton = hudRatingEl.parentElement;
@@ -2756,18 +2808,23 @@ function drawPortTurnaroundCallouts(): void {
   if (serving && (activeGuests > 0 || activeCrewMeals > 0)) {
     const p = fromIndex(serving.originTile, state.width);
     const queue = state.metrics.cafeteriaQueueingCount;
-    const mealStock = Math.floor(state.metrics.mealStock);
+    const servingNode = state.itemNodes.find((node) => node.tileIndex === serving.originTile);
+    const mealStock = Math.floor(Math.max(0, servingNode?.items.meal ?? 0));
+    const cleanTrays = Math.floor(Math.max(0, servingNode?.items.cleanTray ?? 0));
+    const readyServings = Math.min(mealStock, cleanTrays);
     const activeServiceCrew = state.crewMembers.filter(
       (crew) => !crew.resting && crew.assignedSystem === 'cafeteria' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
     ).length;
     const crewMealDemand = state.crewMembers.filter((crew) => crew.eating && !crew.eatSessionActive).length;
     const totalQueue = queue + crewMealDemand;
-    const label = mealStock <= 0
+    const label = readyServings <= 0 && mealStock > 0
+      ? `MESS · NO CLEAN TRAYS · LINE ${totalQueue}`
+      : readyServings <= 0
       ? `MESS · NO MEALS · LINE ${totalQueue}`
       : activeServiceCrew <= 0 && totalQueue > 0
         ? `MESS · SELF-SERVICE · LINE ${totalQueue}`
-        : `MESS · ${activeServiceCrew} COUNTER · ${mealStock} MEALS${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
-    const color = mealStock <= 0 ? '#ff6868' : activeServiceCrew <= 0 && totalQueue > 0 ? '#ff9f5f' : totalQueue >= 5 ? '#f3bd62' : '#63d6a0';
+        : `MESS · ${activeServiceCrew} COUNTER · ${readyServings} READY${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
+    const color = readyServings <= 0 ? '#ff6868' : activeServiceCrew <= 0 && totalQueue > 0 ? '#ff9f5f' : totalQueue >= 5 ? '#f3bd62' : '#63d6a0';
     drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
   }
 
@@ -7515,15 +7572,20 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
     let changed = 0;
     let blocked = 0;
     for (const idx of paintTiles) {
-      const ok = currentTool.utilityErase
-        ? clearUtilityUnderlayAt(state, idx, kind)
-        : canPlaceUtilityUnderlay(state, kind, idx) && setUtilityUnderlayTile(state, kind, idx, true);
+      let ok = false;
+      if (currentTool.utilityErase) {
+        const erasedAir = clearUtilityUnderlayAt(state, idx, 'air-duct');
+        const erasedWater = clearUtilityUnderlayAt(state, idx, 'water-pipe');
+        ok = erasedAir || erasedWater;
+      } else {
+        ok = canPlaceUtilityUnderlay(state, kind, idx) && setUtilityUnderlayTile(state, kind, idx, true);
+      }
       if (ok) changed++;
       else if (!currentTool.utilityErase && !canPlaceUtilityUnderlay(state, kind, idx)) blocked++;
     }
     state.controls.diagnosticOverlay = 'utility-underlay';
     if (changed > 0) {
-      toolLockMessage = `${currentTool.utilityErase ? 'Erased' : 'Drew'} ${changed} ${kind} tile${changed === 1 ? '' : 's'}.`;
+      toolLockMessage = `${currentTool.utilityErase ? 'Erased' : 'Drew'} ${changed} ${currentTool.utilityErase ? 'utility' : kind} tile${changed === 1 ? '' : 's'}.`;
     } else if (blocked > 0) {
       toolLockMessage = `${kind} can only be drawn under walkable station tiles.`;
     }
@@ -8070,11 +8132,11 @@ buyPreparedMealsBtn.addEventListener('click', () => {
   const purchased = buyPreparedMeals(state);
   buyPreparedMealsBtn.classList.toggle('purchase-failed', !purchased);
   buyPreparedMealsBtn.title = purchased
-    ? 'Food supply relay ordered'
-    : 'Need 36 credits, intake/cold storage, and a compatible cargo berth';
+    ? 'Bought 12 prepared meals with clean trays'
+    : 'Need 36 credits, a serving station, and room for 12 meals and trays';
   window.setTimeout(() => {
     buyPreparedMealsBtn.classList.remove('purchase-failed');
-    buyPreparedMealsBtn.title = 'Order food supply for 36 credits';
+    buyPreparedMealsBtn.title = 'Buy 12 prepared meals for 36 credits';
   }, 1200);
 });
 

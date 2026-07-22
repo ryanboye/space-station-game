@@ -36,6 +36,7 @@ export {
   getCrewPriorityPresetWeights,
   getDockByTile,
   getAirDuctNetworkDiagnostics,
+  getWaterPipeNetworkDiagnostics,
   getHousingInspectorAt,
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
