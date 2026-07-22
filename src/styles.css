@@ -2085,7 +2085,6 @@ h2 {
   .commercial-tenant-hero { grid-template-columns: 76px minmax(0, 1fr); }
   .commercial-tenant-metrics { grid-template-columns: 1fr; }
 }
-
 .watch-roster-column {
   min-width: 0;
   border: 1px solid rgba(125, 177, 207, 0.18);

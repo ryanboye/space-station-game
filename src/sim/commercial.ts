@@ -216,13 +216,17 @@ function buildFitout(
 
 export function generateCommercialOffers(context: OfferContext): CommercialOffer[] {
   const anchor = Math.min(...context.tiles);
-  const start = hashInt(anchor + context.tiles.length * 31) % TEMPLATES.length;
+  // A new application round must be genuinely new. The shell anchor keeps
+  // proposals deterministic for a given save, while the generated offer id
+  // range gives rerolls a stable but different tenant/layout mix.
+  const proposalSeed = anchor + context.tiles.length * 31 + context.firstOfferId * 17;
+  const start = hashInt(proposalSeed) % TEMPLATES.length;
   const ordered = TEMPLATES.map((_, index) => TEMPLATES[(start + index) % TEMPLATES.length]);
   const offers: CommercialOffer[] = [];
   for (const template of ordered) {
-    const fixtures = buildFitout(context.width, context.tiles, template, anchor + offers.length * 211);
+    const fixtures = buildFitout(context.width, context.tiles, template, proposalSeed + offers.length * 211);
     if (!fixtures) continue;
-    const tenantIndex = hashInt(anchor + template.kind.length * 101) % template.tenants.length;
+    const tenantIndex = hashInt(proposalSeed + template.kind.length * 101) % template.tenants.length;
     const [tenantName, brandName, concept] = template.tenants[tenantIndex];
     const sizeBonus = Math.max(0, context.tiles.length - template.minTiles);
     offers.push({

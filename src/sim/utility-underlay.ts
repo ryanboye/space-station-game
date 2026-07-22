@@ -20,7 +20,7 @@ export const UTILITY_UNDERLAY_KINDS: readonly UtilityUnderlayKind[] = [
   'data-conduit'
 ] as const;
 
-export const IMPLEMENTED_UTILITY_UNDERLAY_KINDS: readonly UtilityUnderlayKind[] = ['air-duct'] as const;
+export const IMPLEMENTED_UTILITY_UNDERLAY_KINDS: readonly UtilityUnderlayKind[] = ['air-duct', 'water-pipe'] as const;
 
 export function isUtilityUnderlayKind(value: string | undefined): value is UtilityUnderlayKind {
   return (UTILITY_UNDERLAY_KINDS as readonly string[]).includes(value ?? '');

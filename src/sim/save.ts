@@ -67,7 +67,18 @@ import {
 } from './content/command';
 
 const SAVE_SCHEMA_VERSION = 3 as const;
-const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'fuel', 'body'];
+const ITEM_TYPES: ItemType[] = [
+  'rawMeal',
+  'preppedMeal',
+  'meal',
+  'cleanTray',
+  'dirtyTray',
+  'drink',
+  'rawMaterial',
+  'tradeGood',
+  'fuel',
+  'body'
+];
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
@@ -78,8 +89,8 @@ const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
 const COMMERCIAL_KINDS = ['market-stall', 'cantina', 'restaurant', 'gift-shop'] as const;
 const COMMERCIAL_PHASES = ['vacant', 'offers', 'fitting-out', 'open', 'closed'] as const;
-const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
-const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction'];
+const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent', 'plumbing'];
+const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction', 'plumbing'];
 const PORT_OFFER_KINDS: PortOfferKind[] = ['passenger', 'freight', 'mixed'];
 const PORT_PROMISE_KINDS: PortPromiseKind[] = [
   'dock',
@@ -178,6 +189,7 @@ export interface StationSnapshotV1 {
       shiftBucket?: number;
       recalledUntil?: number;
       homeWorkplaceTile?: number | null;
+      assignedSleepTile?: number | null;
       energy: number;
       hunger?: number;
       hygiene: number;
@@ -247,6 +259,20 @@ export interface StationSnapshotV1 {
   utilityUnderlay?: {
     version: number;
     layers: Partial<Record<UtilityUnderlayKind, number[]>>;
+  };
+  plumbing?: {
+    version: number;
+    floodByTile: number[];
+    leaks: Array<{
+      id: number;
+      tileIndex: number;
+      fixtureTile: number;
+      severity: number;
+      createdAt: number;
+      isolated: boolean;
+      repairJobId: number | null;
+    }>;
+    nextLeakId: number;
   };
   maintenance?: {
     debts: Array<{
@@ -503,6 +529,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         shiftBucket: crew.shiftBucket,
         recalledUntil: crew.recalledUntil,
         homeWorkplaceTile: crew.homeWorkplaceTile,
+        assignedSleepTile: crew.assignedSleepTile,
         energy: crew.energy,
         hunger: crew.hunger,
         hygiene: crew.hygiene,
@@ -587,6 +614,12 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       }
       return { version: utility.version, layers };
     })(),
+    plumbing: {
+      version: state.plumbing.version,
+      floodByTile: Array.from(state.plumbing.floodByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
+      leaks: state.plumbing.leaks.map((leak) => ({ ...leak })),
+      nextLeakId: state.plumbing.nextLeakId
+    },
     maintenance: {
       debts: state.maintenanceDebts
         .filter((entry) => entry.debt > 0.05)
@@ -1150,6 +1183,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
           : Number.isFinite(entry.homeWorkplaceTile)
             ? clamp(Math.floor(asFiniteNumber(entry.homeWorkplaceTile, 0)), 0, expectedLength - 1)
             : undefined,
+        assignedSleepTile: entry.assignedSleepTile === null
+          ? null
+          : Number.isFinite(entry.assignedSleepTile)
+            ? clamp(Math.floor(asFiniteNumber(entry.assignedSleepTile, 0)), 0, expectedLength - 1)
+            : undefined,
         energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
         hunger: clamp(asFiniteNumber(entry.hunger, 82), 0, 100),
         hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
@@ -1435,6 +1473,57 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     warnings.push('utilityUnderlay malformed; defaulted.');
   }
 
+  const plumbingRaw = isRecord(snapshotRaw.plumbing) ? snapshotRaw.plumbing : null;
+  let plumbingVersion = 1;
+  const plumbingFloodByTile = new Array<number>(expectedLength).fill(0);
+  const plumbingLeaks: NonNullable<StationSnapshotV1['plumbing']>['leaks'] = [];
+  let plumbingNextLeakId = 1;
+  if (plumbingRaw) {
+    plumbingVersion = Math.max(1, Math.floor(asFiniteNumber(plumbingRaw.version, 1)));
+    if (Array.isArray(plumbingRaw.floodByTile)) {
+      const len = Math.min(expectedLength, plumbingRaw.floodByTile.length);
+      for (let i = 0; i < len; i++) {
+        plumbingFloodByTile[i] = clamp(asFiniteNumber(plumbingRaw.floodByTile[i], 0), 0, 100);
+      }
+      if (plumbingRaw.floodByTile.length !== expectedLength) {
+        warnings.push(`plumbing.floodByTile length ${plumbingRaw.floodByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+    if (Array.isArray(plumbingRaw.leaks)) {
+      const seenLeakIds = new Set<number>();
+      for (let i = 0; i < plumbingRaw.leaks.length; i++) {
+        const entry = plumbingRaw.leaks[i];
+        if (!isRecord(entry)) {
+          warnings.push(`plumbing.leaks[${i}] invalid; skipped.`);
+          continue;
+        }
+        const id = Math.max(1, Math.floor(asFiniteNumber(entry.id, i + 1)));
+        const tileIndex = Math.floor(asFiniteNumber(entry.tileIndex, -1));
+        const fixtureTile = Math.floor(asFiniteNumber(entry.fixtureTile, tileIndex));
+        if (seenLeakIds.has(id) || tileIndex < 0 || tileIndex >= expectedLength || fixtureTile < 0 || fixtureTile >= expectedLength) {
+          warnings.push(`plumbing.leaks[${i}] has invalid id/tile; skipped.`);
+          continue;
+        }
+        seenLeakIds.add(id);
+        plumbingLeaks.push({
+          id,
+          tileIndex,
+          fixtureTile,
+          severity: clamp(asFiniteNumber(entry.severity, 20), 0, 100),
+          createdAt: Math.max(0, asFiniteNumber(entry.createdAt, simTime)),
+          isolated: entry.isolated === true,
+          repairJobId: Number.isFinite(entry.repairJobId)
+            ? Math.max(1, Math.floor(asFiniteNumber(entry.repairJobId, 1)))
+            : null
+        });
+      }
+    }
+    const highestLeakId = plumbingLeaks.reduce((max, leak) => Math.max(max, leak.id), 0);
+    plumbingNextLeakId = Math.max(highestLeakId + 1, Math.floor(asFiniteNumber(plumbingRaw.nextLeakId, highestLeakId + 1)));
+  } else if (isRecord(snapshotRaw.plumbing)) {
+    warnings.push('plumbing malformed; defaulted.');
+  }
+
   const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
   const maintenanceDebts: NonNullable<StationSnapshotV1['maintenance']>['debts'] = [];
   if (maintenanceRaw && Array.isArray(maintenanceRaw.debts)) {
@@ -1564,6 +1653,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     utilityUnderlay: {
       version: utilityUnderlayVersion,
       layers: utilityUnderlayLayers
+    },
+    plumbing: {
+      version: plumbingVersion,
+      floodByTile: plumbingFloodByTile,
+      leaks: plumbingLeaks,
+      nextLeakId: plumbingNextLeakId
     },
     maintenance: {
       debts: maintenanceDebts
@@ -1701,17 +1796,29 @@ function clearTransientState(state: StationState): void {
 
 function refreshBasicInventoryMetrics(state: StationState): void {
   let rawMeal = 0;
+  let preppedMeal = 0;
   let meal = 0;
+  let cleanTray = 0;
+  let dirtyTray = 0;
+  let drink = 0;
   let rawMaterial = 0;
   let tradeGood = 0;
   for (const node of state.itemNodes) {
     rawMeal += Math.max(0, node.items.rawMeal ?? 0);
+    preppedMeal += Math.max(0, node.items.preppedMeal ?? 0);
     meal += Math.max(0, node.items.meal ?? 0);
+    cleanTray += Math.max(0, node.items.cleanTray ?? 0);
+    dirtyTray += Math.max(0, node.items.dirtyTray ?? 0);
+    drink += Math.max(0, node.items.drink ?? 0);
     rawMaterial += Math.max(0, node.items.rawMaterial ?? 0);
     tradeGood += Math.max(0, node.items.tradeGood ?? 0);
   }
   state.metrics.rawFoodStock = rawMeal;
+  state.metrics.preppedMealStock = preppedMeal;
   state.metrics.mealStock = meal;
+  state.metrics.cleanTrayStock = cleanTray;
+  state.metrics.dirtyTrayStock = dirtyTray;
+  state.metrics.drinkStock = drink;
   state.metrics.marketTradeGoodStock = tradeGood;
   state.metrics.materials = Math.max(0, state.legacyMaterialStock + rawMaterial);
 }
@@ -1755,6 +1862,12 @@ export function hydrateStateFromSave(
   );
   next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
   next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
+  next.plumbing = {
+    version: snapshot.plumbing?.version ?? 1,
+    floodByTile: new Float32Array(snapshot.plumbing?.floodByTile ?? new Array(expectedLength).fill(0)),
+    leaks: (snapshot.plumbing?.leaks ?? []).map((leak) => ({ ...leak })),
+    nextLeakId: snapshot.plumbing?.nextLeakId ?? 1
+  };
   next.maintenanceDebts = (snapshot.maintenance?.debts ?? []).map((entry) => ({
     ...entry,
     domain: entry.domain ?? (entry.system ? 'utility' : 'module'),
@@ -2091,7 +2204,8 @@ export function hydrateStateFromSave(
   next.controls.paused = true;
   tick(next, 0);
 
-  const savedCrewById = new Map((snapshot.crew.members ?? []).map((member) => [member.id, member]));
+  const savedCrewMembers = snapshot.crew.members ?? [];
+  const savedCrewById = new Map(savedCrewMembers.map((member) => [member.id, member]));
   const legacyCrewSpawnTiles = [
     ...next.moduleInstances
       .filter((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)
@@ -2108,13 +2222,18 @@ export function hydrateStateFromSave(
   ];
   const uniqueLegacyCrewSpawnTiles = [...new Set(legacyCrewSpawnTiles)];
   for (const [crewIndex, crew] of next.crewMembers.entries()) {
-    const saved = savedCrewById.get(crew.id);
+    // A hydrated initial state allocates fresh 1..N ids before this point.
+    // Saved crews can have gaps after resignations/firings, so roster order is
+    // the stable fallback used to put their original identities back.
+    const saved = savedCrewById.get(crew.id) ?? savedCrewMembers[crewIndex];
     if (!saved) continue;
+    crew.id = saved.id;
     crew.name = saved.name;
     if (saved.staffRole !== undefined) crew.staffRole = saved.staffRole;
     if (saved.shiftBucket !== undefined) crew.shiftBucket = saved.shiftBucket;
     if (saved.recalledUntil !== undefined) crew.recalledUntil = saved.recalledUntil;
     if (saved.homeWorkplaceTile !== undefined) crew.homeWorkplaceTile = saved.homeWorkplaceTile;
+    if (saved.assignedSleepTile !== undefined) crew.assignedSleepTile = saved.assignedSleepTile;
     const savedTile = saved.tileIndex;
     const restoredTile = savedTile !== undefined && isWalkable(next.tiles[savedTile])
       ? savedTile
@@ -2139,7 +2258,20 @@ export function hydrateStateFromSave(
     crew.airExposureSec = saved.airExposureSec;
     crew.healthState = saved.healthState;
   }
+  next.crewSpawnCounter = Math.max(
+    next.crewSpawnCounter,
+    next.crewMembers.reduce((max, crew) => Math.max(max, crew.id + 1), 1)
+  );
   tick(next, 0);
+
+  // The final reconciliation tick refreshes derived facility state, but it
+  // also eagerly reallocates sleep slots before the restored crew records are
+  // visible. Put the persisted assignment back afterward; the ordinary next
+  // simulation tick remains responsible for repairing a genuinely stale slot.
+  for (const crew of next.crewMembers) {
+    const saved = savedCrewById.get(crew.id);
+    if (saved?.assignedSleepTile !== undefined) crew.assignedSleepTile = saved.assignedSleepTile;
+  }
 
   return {
     state: next,

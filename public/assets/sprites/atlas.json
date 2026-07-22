@@ -1226,12 +1226,12 @@
     }
   },
   "alphas": {
-    "overlay.floor.grime.1": 0.18,
-    "overlay.floor.grime.2": 0.18,
-    "overlay.floor.grime.3": 0.18,
-    "overlay.floor.grime.4": 0.18,
-    "overlay.floor.grime.5": 0.18,
-    "overlay.floor.grime.6": 0.18,
+    "overlay.floor.grime.1": 0.65,
+    "overlay.floor.grime.2": 0.65,
+    "overlay.floor.grime.3": 0.65,
+    "overlay.floor.grime.4": 0.65,
+    "overlay.floor.grime.5": 0.65,
+    "overlay.floor.grime.6": 0.65,
     "overlay.floor.wear.1": 0.24,
     "overlay.floor.wear.2": 0.24,
     "overlay.floor.wear.3": 0.24,

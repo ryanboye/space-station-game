@@ -183,7 +183,7 @@ app.innerHTML = `
       </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
-      <span class="hud-item hud-item-action"><span class="hud-label">Prepared Meals</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Import 12 prepared meals for 36 credits" title="Import 12 prepared meals for 36 credits">+</button></span>
+      <span class="hud-item hud-item-action"><span class="hud-label">Food Orders</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Order food supply for 36 credits" title="Order food supply for 36 credits">+</button></span>
       <button id="open-rating-modal" class="hud-item hud-rating-button" type="button" title="Open station rating factors">
         <span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span>
       </button>
@@ -458,7 +458,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
         <button class="tool-btn" data-tool-utility-underlay="air-duct" title="Draw underfloor Air Ducts — connect Life Support to wall Vents"><span class="tool-key">·</span>Air Duct</button>
-        <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Duct</button>
+        <button class="tool-btn" data-tool-utility-underlay="water-pipe" title="Draw underfloor Water Pipes — connect hygiene and kitchen fixtures"><span class="tool-key">·</span>Water Pipe</button>
+        <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Utility</button>
         <button class="tool-btn" data-tool-cancel-construction="1" title="Cancel build orders by dragging over blueprints"><span class="tool-key">·</span>Cancel Build</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
@@ -500,11 +501,18 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="locker" title="Place Locker — improves crew quarters quality"><span class="tool-key">·</span>Locker</button>
         <button class="tool-btn" data-tool-module="table" title="Place Dining Table (T) — includes four visible seats"><span class="tool-key">T</span>Table + 4 seats</button>
         <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
+        <button class="tool-btn" data-tool-module="fridge" title="Place Fridge — cold ingredient buffer"><span class="tool-key">·</span>Fridge</button>
+        <button class="tool-btn" data-tool-module="cold-store" title="Place Cold Store — large raw-food buffer"><span class="tool-key">·</span>Cold</button>
+        <button class="tool-btn" data-tool-module="prep-counter" title="Place Prep Counter — staffed ingredient prep"><span class="tool-key">·</span>Prep</button>
         <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
+        <button class="tool-btn" data-tool-module="tray-return" title="Place Tray Return — dirty tray dropoff"><span class="tool-key">·</span>Tray</button>
+        <button class="tool-btn" data-tool-module="dishwasher" title="Place Dishwasher — staffed tray washing"><span class="tool-key">·</span>Wash</button>
         <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
         <button class="tool-btn" data-tool-module="toilet" title="Place Toilet (Bathroom-only) — relieves bladder, one user at a time"><span class="tool-key">·</span>Toilet</button>
         <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
         <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
+        <button class="tool-btn" data-tool-module="floor-drain" title="Place Floor Drain — flood relief"><span class="tool-key">·</span>Drain</button>
+        <button class="tool-btn" data-tool-module="water-valve" title="Place Water Valve — local pipe isolation"><span class="tool-key">·</span>Valve</button>
         <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
         <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
         <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
@@ -2807,17 +2815,51 @@ function drawPortTurnaroundCallouts(): void {
     ).length;
   drawFacilityLoad(RoomType.Hygiene, [ModuleType.Toilet], 'RESTROOM', toiletCapacity, toiletUsers, toiletWaiting);
 
-  const drinkModules = state.moduleInstances.filter(
-    (module) => (module.type === ModuleType.BarCounter || module.type === ModuleType.WaterFountain) &&
-      (state.rooms[module.originTile] === RoomType.Cantina || state.rooms[module.originTile] === RoomType.Cafeteria)
+  const cantinaBars = state.moduleInstances.filter(
+    (module) => module.type === ModuleType.BarCounter && state.rooms[module.originTile] === RoomType.Cantina
   );
-  const drinkCapacity = drinkModules.reduce((sum, module) => sum + (module.type === ModuleType.BarCounter ? 2 : 1), 0);
-  const drinkUsers = state.crewMembers.filter((crew) => crew.drinkSessionActive).length +
-    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.Leisure).length;
-  const drinkWaiting = state.crewMembers.filter((crew) => crew.drinking && !crew.drinkSessionActive).length +
-    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.ToLeisure && !visitor.carryingDrink).length;
-  const drinkRoom = drinkModules.some((module) => state.rooms[module.originTile] === RoomType.Cantina) ? RoomType.Cantina : RoomType.Cafeteria;
-  drawFacilityLoad(drinkRoom, [ModuleType.BarCounter, ModuleType.WaterFountain], 'DRINKS', drinkCapacity, drinkUsers, drinkWaiting);
+  if (cantinaBars.length > 0) {
+    const barAnchors = new Set(cantinaBars.map((module) => module.originTile));
+    let line = 0;
+    for (const [anchor, members] of state.derived.queueTheater.membersByAnchor) {
+      if (barAnchors.has(anchor)) line += members.length;
+    }
+    const cantinaSeats = state.moduleInstances
+      .filter((module) => module.type === ModuleType.Bench && state.rooms[module.originTile] === RoomType.Cantina)
+      .flatMap((module) => module.tiles.slice(0, 2));
+    const seatSet = new Set(cantinaSeats);
+    const seatsUsed =
+      state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && seatSet.has(visitor.tileIndex)).length +
+      state.residents.filter((resident) => resident.state === ResidentState.Leisure && seatSet.has(resident.tileIndex)).length +
+      state.crewMembers.filter((crew) => crew.leisureSessionActive && seatSet.has(crew.tileIndex)).length;
+    const waitingForSeat = state.visitors.filter(
+      (visitor) => visitor.activeService === 'drink' && visitor.carryingDrink && visitor.state === VisitorState.ToLeisure
+    ).length;
+    const ordering = state.reservations.reduce((total, reservation) => {
+      if (reservation.releaseReason !== null || reservation.expiresAt <= state.now) return total;
+      if (reservation.ownerKind !== 'visitor' || reservation.kind !== 'provider-slot') return total;
+      if (reservation.targetTile === null || !barAnchors.has(reservation.targetTile)) return total;
+      if (!reservation.targetId?.startsWith('drink-pickup:')) return total;
+      return total + reservation.amount;
+    }, 0);
+    const stewardCount = state.crewMembers.filter(
+      (crew) =>
+        !crew.resting &&
+        String(crew.staffRole) === 'steward' &&
+        crew.assignedSystem === 'lounge' &&
+        state.rooms[crew.tileIndex] === RoomType.Cantina
+    ).length;
+    if (line + ordering + waitingForSeat + seatsUsed > 0) {
+      const anchor = cantinaBars[0];
+      const p = fromIndex(anchor.originTile, state.width);
+      const text = `CANTINA · LINE ${line} · SEATS ${seatsUsed}/${cantinaSeats.length} · ${stewardCount} STEWARD${waitingForSeat > 0 ? ` · ${waitingForSeat} WAIT SEAT` : ''}`;
+      const color =
+        stewardCount <= 0 && (line > 0 || ordering > 0) ? '#ff8066' :
+        waitingForSeat > 0 || line >= Math.max(3, cantinaBars.length * 3) ? '#f3bd62' :
+        '#63d6a0';
+      drawLabel(text, (p.x + anchor.width * 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
+    }
+  }
 
   const leisureModules = state.moduleInstances.filter(
     (module) => (module.type === ModuleType.Couch || module.type === ModuleType.Bench || module.type === ModuleType.GameStation) &&
@@ -3046,7 +3088,11 @@ const JOB_STALL_LABELS: Record<JobStallReason, string> = {
 
 const ITEM_LABELS: Record<ItemType, string> = {
   rawMeal: 'Raw food',
+  preppedMeal: 'Prepped food',
   meal: 'Meals',
+  cleanTray: 'Clean trays',
+  dirtyTray: 'Dirty trays',
+  drink: 'Drinks',
   rawMaterial: 'Supplies',
   tradeGood: 'Trade goods',
   fuel: 'Fuel',
@@ -4437,7 +4483,7 @@ function refreshSelectionSummary(): void {
       selectionSummaryEl.textContent = `${room === RoomType.Storage ? 'Storage' : 'Intake'}: ${Math.floor(used)}/${capacity} station stock | ${Math.floor(freightHandled)}/${Math.floor(freightTotal)} consigned freight | ${availableCargoHandlers} Cargo Handlers available`;
     } else if (room === RoomType.Dorm) {
       const crewSustainability = getCrewSustainabilitySummary(state);
-      selectionSummaryEl.textContent = `Crew quarters: ${crewSustainability.occupiedSleepSlots}/${crewSustainability.sleepSlots} occupied | ${crewSustainability.bunkSlots} bunk slots, ${crewSustainability.bedSlots} bed slots | ${crewSustainability.lockers} lockers | quality ${Math.round(crewSustainability.quartersQuality)}%`;
+      selectionSummaryEl.textContent = `Crew quarters: ${crewSustainability.occupiedSleepSlots}/${crewSustainability.sleepSlots} occupied | assigned ${crewSustainability.assignedSleepSlots}/${state.crewMembers.length} | ${crewSustainability.bunkSlots} bunk, ${crewSustainability.bedSlots} bed | improvised ${crewSustainability.improvisedRestingCrew} | quality ${Math.round(crewSustainability.quartersQuality)}%`;
     } else if (room === RoomType.Hygiene) {
       const toilets = state.moduleInstances.filter((module) => module.type === ModuleType.Toilet).length;
       const showers = state.moduleInstances.filter((module) => module.type === ModuleType.Shower).length;
@@ -5286,9 +5332,9 @@ function refreshMarketUi(): void {
   sellSmallBtn.textContent = `Sell -25 Supplies (+${market.sellMat25Gain}c)`;
   buyLargeBtn.textContent = `Buy +80 Supplies (${market.buyMat80Cost}c)`;
   sellLargeBtn.textContent = `Sell -80 Supplies (+${market.sellMat80Gain}c)`;
-  buyFoodSmallBtn.textContent = `Buy +20 Raw Food (${market.buyFood20Cost}c)`;
+  buyFoodSmallBtn.textContent = `Order +20 Raw Food (${market.buyFood20Cost}c)`;
   sellFoodSmallBtn.textContent = `Sell -20 Raw Food (+${market.sellFood20Gain}c)`;
-  buyFoodLargeBtn.textContent = `Buy +60 Raw Food (${market.buyFood60Cost}c)`;
+  buyFoodLargeBtn.textContent = `Order +60 Raw Food (${market.buyFood60Cost}c)`;
   sellFoodLargeBtn.textContent = `Sell -60 Raw Food (+${market.sellFood60Gain}c)`;
   buyMarketGoodsBtn.textContent = `Import +12 Market Goods (${market.buyGoods12Cost}c)`;
   marketCrewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
@@ -5689,7 +5735,8 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
   restricted: ZoneType.Restricted,
 };
 const TOOLBAR_UTILITY_UNDERLAY_MAP: Record<string, UtilityUnderlayKind> = {
-  'air-duct': 'air-duct'
+  'air-duct': 'air-duct',
+  'water-pipe': 'water-pipe'
 };
 const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   bridge: RoomType.Bridge,
@@ -5739,11 +5786,18 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   locker: ModuleType.Locker,
   table: ModuleType.Table,
   'serving-station': ModuleType.ServingStation,
+  fridge: ModuleType.Fridge,
+  'cold-store': ModuleType.ColdStore,
+  'prep-counter': ModuleType.PrepCounter,
   stove: ModuleType.Stove,
+  'tray-return': ModuleType.TrayReturn,
+  dishwasher: ModuleType.Dishwasher,
   'grow-station': ModuleType.GrowStation,
   toilet: ModuleType.Toilet,
   shower: ModuleType.Shower,
   sink: ModuleType.Sink,
+  'floor-drain': ModuleType.FloorDrain,
+  'water-valve': ModuleType.WaterValve,
   'wall-light': ModuleType.WallLight,
   couch: ModuleType.Couch,
   'game-station': ModuleType.GameStation,
@@ -5804,7 +5858,12 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Locker]: 'LK',
   [ModuleType.Table]: 'TB',
   [ModuleType.ServingStation]: 'SV',
+  [ModuleType.Fridge]: 'FR',
+  [ModuleType.ColdStore]: 'CS',
+  [ModuleType.PrepCounter]: 'PR',
   [ModuleType.Stove]: 'ST',
+  [ModuleType.TrayReturn]: 'TR',
+  [ModuleType.Dishwasher]: 'DW',
   [ModuleType.Workbench]: 'WB',
   [ModuleType.MedBed]: 'MD',
   [ModuleType.CellConsole]: 'CL',
@@ -5816,6 +5875,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Toilet]: 'WC',
   [ModuleType.Shower]: 'SH',
   [ModuleType.Sink]: 'SK',
+  [ModuleType.FloorDrain]: 'DR',
+  [ModuleType.WaterValve]: 'WV',
   [ModuleType.MarketStall]: 'MK',
   [ModuleType.IntakePallet]: 'IN',
   [ModuleType.StorageRack]: 'SR',
@@ -6740,7 +6801,15 @@ function refreshCommercialLeasePanel(room: RoomType, clusterSize: number): void 
 function refreshRoomModal(): void {
   if (selectedRoomTile === null) return;
   nextRoomModalRefreshAt = performance.now() + ROOM_MODAL_REFRESH_INTERVAL_MS;
-  const inspector = getRoomInspectorAt(state, selectedRoomTile);
+  let inspector = getRoomInspectorAt(state, selectedRoomTile);
+  if (!inspector) {
+    const selectedCommercialUnit = getCommercialUnitAt(state, selectedRoomTile);
+    const fallbackTile = selectedCommercialUnit?.tiles.find((tile) => getRoomInspectorAt(state, tile) !== null);
+    if (fallbackTile !== undefined) {
+      selectedRoomTile = fallbackTile;
+      inspector = getRoomInspectorAt(state, fallbackTile);
+    }
+  }
   if (!inspector) {
     roomModal.classList.add('hidden');
     selectedRoomTile = null;
@@ -6753,7 +6822,9 @@ function refreshRoomModal(): void {
   roomModalDoorsEl.textContent = String(inspector.doorCount);
   roomModalPressureEl.textContent = `${inspector.pressurizedPct.toFixed(0)}%`;
   roomModalStaffEl.textContent = `${inspector.staffCount}/${inspector.requiredStaff}`;
-  const commercialMode = inspector.room === RoomType.CommercialUnit || getCommercialUnitAt(state, selectedRoomTile) !== null;
+  const commercialUnit = getCommercialUnitAt(state, selectedRoomTile);
+  const commercialMode = inspector.room === RoomType.CommercialUnit &&
+    (!commercialUnit || commercialUnit.phase === 'vacant' || commercialUnit.phase === 'offers' || commercialUnit.phase === 'closed');
   roomModalCardEl.classList.toggle('commercial-room-mode', commercialMode);
   refreshCommercialLeasePanel(inspector.room, inspector.clusterSize);
   if (inspector.workplace) {
@@ -6768,7 +6839,14 @@ function refreshRoomModal(): void {
     roomModalWorkplaceEl.classList.remove('hidden');
     roomModalWorkplaceNameEl.textContent = workplace.label;
     roomModalWorkplaceRolesEl.textContent = `${workplace.positions} positions · ${roles}`;
-    roomModalWorkplaceStatusEl.textContent = `Home crew: ${assigned} · on post: ${active}`;
+    const tenantManaged = workplace.tenantManaged;
+    roomModalWorkplaceStatusEl.textContent = tenantManaged
+      ? workplace.tenantStaff > 0
+        ? `Tenant staff: ${workplace.tenantStaff} · station crew not required`
+        : `Tenant fit-out: ${workplace.tenantStaffExpected} staff arrive when open`
+      : `Home crew: ${assigned} · on post: ${active}`;
+    roomModalPlanWorkplaceBtn.classList.toggle('hidden', tenantManaged);
+    roomModalSurgeWorkplaceBtn.classList.toggle('hidden', tenantManaged);
     roomModalPlanWorkplaceBtn.dataset.workplaceAnchor = String(workplace.anchorTile);
     const surgeable = workplace.assignedCrew.filter((assignedCrew) => {
       const crew = state.crewMembers.find((candidate) => candidate.id === assignedCrew.id);
@@ -6782,6 +6860,8 @@ function refreshRoomModal(): void {
       : 'No off-duty or reserve home crew to recall';
   } else {
     roomModalWorkplaceEl.classList.add('hidden');
+    roomModalPlanWorkplaceBtn.classList.remove('hidden');
+    roomModalSurgeWorkplaceBtn.classList.remove('hidden');
     roomModalPlanWorkplaceBtn.removeAttribute('data-workplace-anchor');
     roomModalSurgeWorkplaceBtn.removeAttribute('data-workplace-anchor');
   }
@@ -6796,9 +6876,13 @@ function refreshRoomModal(): void {
     `reachable ${inspector.reachableServiceNodeCount} | unreachable ${inspector.unreachableServiceNodeCount} | ` +
     `modules ${moduleProgressText}${anyOfText}`;
   if (inspector.inventory) {
-    const itemOrder: Array<{ key: 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'body'; label: string }> = [
+    const itemOrder: Array<{ key: 'rawMeal' | 'preppedMeal' | 'meal' | 'cleanTray' | 'dirtyTray' | 'drink' | 'rawMaterial' | 'tradeGood' | 'body'; label: string }> = [
       { key: 'rawMeal', label: 'rawMeal' },
+      { key: 'preppedMeal', label: 'prepped' },
       { key: 'meal', label: 'meal' },
+      { key: 'cleanTray', label: 'clean trays' },
+      { key: 'dirtyTray', label: 'dirty trays' },
+      { key: 'drink', label: 'drinks' },
       { key: 'rawMaterial', label: 'rawMaterial' },
       { key: 'tradeGood', label: 'tradeGood' },
       { key: 'body', label: 'body' }
@@ -6844,9 +6928,15 @@ function refreshRoomModal(): void {
   if (inspector.room === 'cafeteria' && inspector.cafeteriaLoad) {
     const load = inspector.cafeteriaLoad;
     roomModalCapacityEl.textContent =
-      `Capacity: seats ${load.tableNodes} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
+      `Capacity: seats ${load.tableNodes * 4} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | service staff ${load.serviceStaff}${load.tenantStaff > 0 ? ` (${load.tenantStaff} tenant)` : ''} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
     roomModalCapacityEl.style.color =
       load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
+  } else if (inspector.room === RoomType.Cantina && inspector.cantinaLoad) {
+    const load = inspector.cantinaLoad;
+    roomModalCapacityEl.textContent =
+      `Capacity: pickup ${load.pickupSlots} | line ${load.lineVisitors} | ordering ${load.orderingVisitors} | seats ${load.seatsUsed}/${load.seatsCapacity} | waiting for seat ${load.waitingForSeat} | stewards ${load.stewardCount} | taps ${load.taps} | pressure ${load.pressure}`;
+    roomModalCapacityEl.style.color =
+      load.unstaffed || load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
   } else {
     roomModalCapacityEl.textContent = 'Capacity: n/a';
     roomModalCapacityEl.style.color = '#8ea2bd';
@@ -7980,11 +8070,11 @@ buyPreparedMealsBtn.addEventListener('click', () => {
   const purchased = buyPreparedMeals(state);
   buyPreparedMealsBtn.classList.toggle('purchase-failed', !purchased);
   buyPreparedMealsBtn.title = purchased
-    ? 'Imported 12 prepared meals'
-    : 'Need 36 credits and 12 free counter-storage capacity';
+    ? 'Food supply relay ordered'
+    : 'Need 36 credits, intake/cold storage, and a compatible cargo berth';
   window.setTimeout(() => {
     buyPreparedMealsBtn.classList.remove('purchase-failed');
-    buyPreparedMealsBtn.title = 'Import 12 prepared meals for 36 credits';
+    buyPreparedMealsBtn.title = 'Order food supply for 36 credits';
   }, 1200);
 });
 
@@ -8922,23 +9012,27 @@ materialImportBatchInput.addEventListener('change', () => {
 buyFoodSmallBtn.addEventListener('click', () => {
   const result = buyRawFoodDetailed(state, market.buyFood20Cost, 20);
   marketNoteEl.textContent = result.ok
-    ? 'Purchased +20 raw food'
+    ? 'Ordered +20 raw food relay'
     : result.reason === 'insufficient_credits'
       ? 'Not enough credits'
       : result.reason === 'no_food_destinations'
-        ? 'Need Hydroponics/Kitchen nodes'
-        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+        ? 'Need Intake Pallet, Cold Store, Fridge, or Storage'
+        : result.reason === 'no_compatible_berth'
+          ? 'Need a compatible cargo berth for the supplier'
+          : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 buyFoodLargeBtn.addEventListener('click', () => {
   const result = buyRawFoodDetailed(state, market.buyFood60Cost, 60);
   marketNoteEl.textContent = result.ok
-    ? 'Purchased +60 raw food'
+    ? 'Ordered +60 raw food relay'
     : result.reason === 'insufficient_credits'
       ? 'Not enough credits'
       : result.reason === 'no_food_destinations'
-        ? 'Need Hydroponics/Kitchen nodes'
-        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+        ? 'Need Intake Pallet, Cold Store, Fridge, or Storage'
+        : result.reason === 'no_compatible_berth'
+          ? 'Need a compatible cargo berth for the supplier'
+          : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 sellFoodSmallBtn.addEventListener('click', () => {

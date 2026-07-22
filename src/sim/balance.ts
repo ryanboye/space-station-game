@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
+import { ModuleType, RoomType, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -7,6 +7,8 @@ export type ModuleDefinition = {
   allowedRooms: RoomType[] | null;
   mount?: 'floor' | 'wall';
   itemNodeCapacity?: number;
+  storageClass?: 'intake' | 'cold' | 'prep' | 'cooking' | 'serving' | 'dish' | 'ambient' | 'fuel' | 'port';
+  facilityActivities?: FacilityActivityKind[];
   visitorCapacity?: number;
   residentCapacity?: number;
   reservationCapacity?: number;
@@ -83,14 +85,61 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Cafeteria],
-    itemNodeCapacity: 48
+    itemNodeCapacity: 60,
+    storageClass: 'serving',
+    facilityActivities: ['serve']
+  },
+  [ModuleType.Fridge]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Kitchen, RoomType.Storage],
+    itemNodeCapacity: 42,
+    storageClass: 'cold'
+  },
+  [ModuleType.ColdStore]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Kitchen, RoomType.Storage],
+    itemNodeCapacity: 132,
+    storageClass: 'cold'
+  },
+  [ModuleType.PrepCounter]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Kitchen],
+    itemNodeCapacity: 18,
+    storageClass: 'prep',
+    facilityActivities: ['prep']
   },
   [ModuleType.Stove]: {
     width: 2,
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Kitchen],
-    itemNodeCapacity: 16
+    itemNodeCapacity: 20,
+    storageClass: 'cooking',
+    facilityActivities: ['cook']
+  },
+  [ModuleType.TrayReturn]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Cafeteria],
+    itemNodeCapacity: 30,
+    storageClass: 'dish',
+    facilityActivities: ['dishwash']
+  },
+  [ModuleType.Dishwasher]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Kitchen, RoomType.Cafeteria],
+    itemNodeCapacity: 36,
+    storageClass: 'dish',
+    facilityActivities: ['dishwash']
   },
   [ModuleType.Workbench]: {
     width: 2,
@@ -127,9 +176,21 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
   [ModuleType.Terminal]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Security] },
   [ModuleType.Couch]: { width: 2, height: 1, rotatable: true, allowedRooms: [RoomType.Lounge] },
   [ModuleType.GameStation]: { width: 2, height: 2, rotatable: false, allowedRooms: [RoomType.Lounge] },
-  [ModuleType.Toilet]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
-  [ModuleType.Shower]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
-  [ModuleType.Sink]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene] },
+  [ModuleType.Toilet]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene], facilityActivities: ['toilet'] },
+  [ModuleType.Shower]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene], facilityActivities: ['shower'] },
+  [ModuleType.Sink]: { width: 1, height: 1, rotatable: false, allowedRooms: [RoomType.Hygiene, RoomType.Kitchen], facilityActivities: ['wash'] },
+  [ModuleType.FloorDrain]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Hygiene, RoomType.Kitchen, RoomType.Cafeteria]
+  },
+  [ModuleType.WaterValve]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Hygiene, RoomType.Kitchen, RoomType.LifeSupport]
+  },
   [ModuleType.MarketStall]: {
     width: 2,
     height: 1,
@@ -142,14 +203,16 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 2,
     rotatable: false,
     allowedRooms: [RoomType.LogisticsStock],
-    itemNodeCapacity: 40
+    itemNodeCapacity: 48,
+    storageClass: 'intake'
   },
   [ModuleType.StorageRack]: {
     width: 2,
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Storage],
-    itemNodeCapacity: 108
+    itemNodeCapacity: 108,
+    storageClass: 'ambient'
   },
   // Dock-migration v0: Berth capability modules. Footprints per scope.
   // T0 in v0 for testing — production wants Gangway T0, Customs T1,
@@ -171,14 +234,16 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 2,
     rotatable: false,
     allowedRooms: [RoomType.Berth],
-    itemNodeCapacity: 64
+    itemNodeCapacity: 64,
+    storageClass: 'port'
   },
   [ModuleType.FuelTank]: {
     width: 2,
     height: 2,
     rotatable: false,
     allowedRooms: [RoomType.Storage, RoomType.Berth],
-    itemNodeCapacity: 160
+    itemNodeCapacity: 160,
+    storageClass: 'fuel'
   },
   [ModuleType.FuelPump]: {
     width: 2,
@@ -187,7 +252,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Berth],
     // The small buffer is only a handoff point. Fuel is consumed by the ship
     // as soon as a logistics delivery reaches the pump.
-    itemNodeCapacity: 8
+    itemNodeCapacity: 8,
+    storageClass: 'fuel'
   },
   [ModuleType.SecurityCamera]: {
     width: 1,

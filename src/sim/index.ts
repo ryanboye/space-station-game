@@ -71,6 +71,7 @@ export {
   isShipTypeUnlocked,
   isUtilityUnderlayKind,
   openCommercialUnitForOffers,
+  orderFoodSupply,
   planModuleConstruction,
   planTileConstruction,
   previewCommercialOffer,

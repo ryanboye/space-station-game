@@ -109,6 +109,34 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
     };
   }
   if (visitor.state === VisitorState.ToLeisure) {
+    if (visitor.activeService === 'drink') {
+      const linePos = queuePositionOf(state, visitor.id);
+      if (linePos !== null && state.rooms[linePos.anchor] === RoomType.Cantina) {
+        return {
+          currentAction: 'standing in bar line',
+          actionReason:
+            linePos.index === 0
+              ? 'next up for a cantina drink'
+              : `position ${linePos.index + 1} in bar line${visitor.path.length > 0 ? ' (walking to their spot)' : ''}`
+        };
+      }
+      if (visitor.carryingDrink) {
+        return {
+          currentAction: visitor.path.length > 0 ? 'carrying drink to a seat' : 'looking for cantina seat',
+          actionReason:
+            visitor.reservedTargetTile !== null
+              ? `bench seat reserved at tile ${visitor.reservedTargetTile}`
+              : 'waiting for an open cantina bench'
+        };
+      }
+      return {
+        currentAction: visitor.path.length > 0 ? 'walking to bar counter' : 'waiting for bar service',
+        actionReason:
+          visitor.reservedTargetTile !== null
+            ? `drink pickup reserved at tile ${visitor.reservedTargetTile}`
+            : 'joining the cantina pickup line'
+      };
+    }
     const need = visitorLeisureNeedLabel(state, visitor);
     const target = visitor.reservedTargetTile ?? -1;
     const targetRoom = target >= 0 && target < state.rooms.length ? state.rooms[target] : RoomType.None;
@@ -133,6 +161,18 @@ function visitorInspectorAction(state: StationState, visitor: Visitor): { curren
   if (visitor.state === VisitorState.Leisure) {
     const need = visitorLeisureNeedLabel(state, visitor);
     const room = state.rooms[visitor.tileIndex];
+    if (visitor.activeService === 'drink' && !visitor.carryingDrink && room === RoomType.Cantina) {
+      return {
+        currentAction: 'ordering drink',
+        actionReason: `bar service timer ${visitor.eatTimer.toFixed(1)}s remaining`
+      };
+    }
+    if (visitor.activeService === 'drink' && visitor.carryingDrink && room === RoomType.Cantina) {
+      return {
+        currentAction: 'having a drink',
+        actionReason: `drink timer ${visitor.eatTimer.toFixed(1)}s remaining`
+      };
+    }
     const verb =
       need === 'toilet' ? 'using hygiene service' :
       room === RoomType.Market ? 'browsing market stalls' :
