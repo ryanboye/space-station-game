@@ -1225,7 +1225,7 @@ function diagnosticReadoutText(): string {
     const water = getWaterPipeNetworkDiagnostics(state);
     const globalLine =
       `Utilities: air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered · ${air.networkCount} duct networks | ` +
-      `water ${state.metrics.potableNetworkPoweredFixtures} fixtures · ${water.disconnectedTileCount} disconnected | ` +
+      `water ${water.poweredSinkCount}/${water.sinkCount} fixtures · ${water.sourceCount} sources · ${water.disconnectedTileCount} disconnected | ` +
       `leaks ${state.metrics.activePlumbingLeaks}`;
     if (hoveredTile === null) {
       return `${globalLine}\nDraw Air Ducts from Life Support to Vents, or Water Pipes from Life Support beneath toilets, sinks, showers, and dishwashers.`;
@@ -1341,7 +1341,8 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
         title: 'Utility Networks',
         stats:
           `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | duct networks ${air.networkCount} | ` +
-          `water networks ${water.networkCount} | supplied fixtures ${state.metrics.potableNetworkPoweredFixtures} | leaks ${state.metrics.activePlumbingLeaks}`,
+          `water networks ${water.poweredNetworkCount}/${water.networkCount} supplied | ` +
+          `fixtures ${water.poweredSinkCount}/${water.sinkCount} | sources ${water.sourceCount} | leaks ${state.metrics.activePlumbingLeaks}`,
         rows: [
           { color: '#37d3e6', label: 'Air reach tint underneath' },
           { color: '#6edb8f', label: 'Life Support source duct' },

@@ -32,6 +32,7 @@ import {
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
+  getWaterPipeNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getSanitationTileDiagnostic,
   mapConditionSamplesAt,
@@ -3653,6 +3654,7 @@ function drawUtilityUnderlayDuct(
 }
 
 function drawWaterPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
+  const diagnostics = getWaterPipeNetworkDiagnostics(state);
   ctx.save();
   for (let i = 0; i < state.tiles.length; i++) {
     if (!hasUtilityUnderlay(state, 'water-pipe', i)) continue;
@@ -3660,11 +3662,32 @@ function drawWaterPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: Station
     const px = x * TILE_SIZE;
     const py = y * TILE_SIZE;
     const flood = clamp01((state.plumbing.floodByTile[i] ?? 0) / 60);
+    const componentId = diagnostics.componentIdByTile[i];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+    const powered = component?.powered ?? false;
+    const source = component?.sourceTiles.includes(i) ?? false;
+    const sink = component?.sinkTiles.includes(i) ?? false;
     ctx.fillStyle = flood > 0
       ? `rgba(84, 196, 255, ${0.16 + flood * 0.24})`
-      : 'rgba(84, 196, 255, 0.13)';
+      : powered
+        ? 'rgba(84, 196, 255, 0.16)'
+        : 'rgba(238, 79, 79, 0.18)';
     ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
-    drawUtilityUnderlayDuct(ctx, state, i, 'water-pipe', flood > 0 ? '#86ecff' : '#54c4ff', '#e6fbff', null, false);
+    drawUtilityUnderlayDuct(
+      ctx,
+      state,
+      i,
+      'water-pipe',
+      flood > 0 ? '#86ecff' : powered ? '#54c4ff' : '#ee4f4f',
+      powered ? '#e6fbff' : '#ffd1d1',
+      null,
+      false
+    );
+    if (source || sink) {
+      ctx.strokeStyle = source ? '#6edb8f' : powered ? '#e6fbff' : '#ff8b80';
+      ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+      ctx.strokeRect(px + Math.round(4 * PX) + 0.5, py + Math.round(4 * PX) + 0.5, TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX));
+    }
   }
   for (const leak of state.plumbing.leaks) {
     const { x, y } = fromIndex(leak.tileIndex, state.width);
@@ -3702,6 +3725,7 @@ function drawUtilityUnderlayOverlayLayer(
   useSprites: boolean
 ): void {
   drawAirCoverageUnderlayLayer(ctx, state);
+  drawWaterPipeOverlayLayer(ctx, state);
   const diagnostics = getAirDuctNetworkDiagnostics(state);
   if (diagnostics.tileCount <= 0) return;
   const sourceTiles = new Set<number>();
@@ -3746,7 +3770,6 @@ function drawUtilityUnderlayOverlayLayer(
       }
     }
   }
-  drawWaterPipeOverlayLayer(ctx, state);
   for (const module of state.moduleInstances) {
     if (module.type !== ModuleType.Vent) continue;
     const serviceTile = wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile;
