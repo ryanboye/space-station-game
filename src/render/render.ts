@@ -11,6 +11,7 @@ import {
   type ShipSize,
   type ShipType,
   type SpaceLane,
+  type UtilityUnderlayKind,
   VisitorState,
   ZoneType,
   inBounds,
@@ -197,7 +198,12 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Locker]: 'LK',
   [ModuleType.Table]: 'T',
   [ModuleType.ServingStation]: 'S',
+  [ModuleType.Fridge]: 'FR',
+  [ModuleType.ColdStore]: 'CS',
+  [ModuleType.PrepCounter]: 'P',
   [ModuleType.Stove]: 'V',
+  [ModuleType.TrayReturn]: 'TR',
+  [ModuleType.Dishwasher]: 'DW',
   [ModuleType.Workbench]: 'W',
   [ModuleType.MedBed]: '+',
   [ModuleType.CellConsole]: 'G',
@@ -209,6 +215,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Toilet]: 'WC',
   [ModuleType.Shower]: 'H',
   [ModuleType.Sink]: 'I',
+  [ModuleType.FloorDrain]: 'D',
+  [ModuleType.WaterValve]: 'WV',
   [ModuleType.MarketStall]: '$',
   [ModuleType.IntakePallet]: 'P',
   [ModuleType.StorageRack]: 'R',
@@ -233,10 +241,25 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Plant]: '*'
 };
 
-const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'fuel', 'body'];
+const ITEM_TYPES: ItemType[] = [
+  'rawMeal',
+  'preppedMeal',
+  'meal',
+  'cleanTray',
+  'dirtyTray',
+  'drink',
+  'rawMaterial',
+  'tradeGood',
+  'fuel',
+  'body'
+];
 const itemFillColor: Record<ItemType | 'none', string> = {
   rawMeal: 'rgba(118, 218, 132, 0.55)',
+  preppedMeal: 'rgba(151, 236, 158, 0.58)',
   meal: 'rgba(255, 216, 120, 0.58)',
+  cleanTray: 'rgba(224, 235, 245, 0.58)',
+  dirtyTray: 'rgba(170, 130, 95, 0.58)',
+  drink: 'rgba(98, 206, 255, 0.6)',
   rawMaterial: 'rgba(214, 183, 132, 0.55)',
   tradeGood: 'rgba(128, 188, 255, 0.58)',
   fuel: 'rgba(85, 235, 185, 0.62)',
@@ -245,7 +268,11 @@ const itemFillColor: Record<ItemType | 'none', string> = {
 };
 const itemShortCode: Record<ItemType, string> = {
   rawMeal: 'RM',
+  preppedMeal: 'PR',
   meal: 'ME',
+  cleanTray: 'CT',
+  dirtyTray: 'DT',
+  drink: 'DR',
   rawMaterial: 'MAT',
   tradeGood: 'TG',
   fuel: 'FL',
@@ -441,7 +468,7 @@ function clipToVisibleSpaceTiles(
 function renderMassivePlanetBackdrop(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  spriteAtlas: SpriteAtlas,
+  spriteAtlas: SpriteAtlas | null,
   useSprites: boolean,
   viewport: RenderViewport | null
 ): void {
@@ -455,14 +482,14 @@ function renderMassivePlanetBackdrop(
     return;
   }
   const alpha = 0.38;
-  if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
+  if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
   drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
 }
 
 function renderDebrisBackdrop(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  spriteAtlas: SpriteAtlas,
+  spriteAtlas: SpriteAtlas | null,
   useSprites: boolean,
   viewport: RenderViewport | null
 ): void {
@@ -503,7 +530,7 @@ function renderDebrisBackdrop(
     const rotation = Math.sin(orbit * 0.43 + phase) * layer.rotation + state.now * (0.12 + layer.rotation * 0.012) * (variant > 0.5 ? 1 : -1);
     const dx = x - size * 0.5;
     const dy = y - size * 0.5;
-    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, rotation, alpha)) continue;
+    if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, rotation, alpha)) continue;
     drawDebrisFallback(
       ctx,
       dx + size * 0.5,
@@ -543,7 +570,7 @@ function renderDebrisBackdrop(
       const size = TILE_SIZE * layer.scale * (0.78 + debris * 0.9 + renderHash01(state.seedAtCreation + target, j, 32) * 0.72);
       const alpha = clampRender((0.3 + debris * 0.42) * layer.alpha, 0.22, 0.78);
       const rotation = Math.sin(orbit) * layer.rotation + state.now * 0.28 * (j % 2 === 0 ? 1 : -1);
-      if (useSprites && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
+      if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
       drawDebrisFallback(ctx, x, y, size, j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock', alpha);
     }
   }
@@ -582,7 +609,7 @@ function exteriorImpactPoint(state: StationState, targetTile: number): { x: numb
 function renderMaintenanceImpacts(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  spriteAtlas: SpriteAtlas,
+  spriteAtlas: SpriteAtlas | null,
   useSprites: boolean,
   viewport: RenderViewport | null
 ): void {
@@ -626,6 +653,7 @@ function renderMaintenanceImpacts(
     const projectileAngle = (Math.atan2(cy - impact.sy, cx - impact.sx) * 180) / Math.PI + 45;
     if (
       useSprites &&
+      spriteAtlas &&
       drawSpriteByKey(
         ctx,
         spriteAtlas,
@@ -646,7 +674,7 @@ function renderMaintenanceImpacts(
     const sparkT = (t - 0.42) / 0.58;
     const sparkSize = size * (1 - sparkT * 0.36);
     const sparkAlpha = alpha * (1 - sparkT * 0.7);
-    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, FX_SPRITE_KEYS.repairSpark, cx - sparkSize * 0.5, cy - sparkSize * 0.5, sparkSize, sparkSize, 0, sparkAlpha)) continue;
+    if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, FX_SPRITE_KEYS.repairSpark, cx - sparkSize * 0.5, cy - sparkSize * 0.5, sparkSize, sparkSize, 0, sparkAlpha)) continue;
     drawDebrisFallback(ctx, cx, cy, sparkSize, 'spark', sparkAlpha);
   }
 }
@@ -1318,13 +1346,39 @@ function sanitationRenderSignature(state: StationState): string {
   let dirty = 0;
   let filthy = 0;
   let maxBucket = 0;
+  let spatialHash = 2166136261;
   for (let i = 0; i < state.dirtByTile.length; i++) {
-    const bucket = Math.floor((state.dirtByTile[i] ?? 0) / 10);
+    const bucket = Math.floor((state.dirtByTile[i] ?? 0) / 5);
     if (bucket > 0) dirty += 1;
-    if (bucket >= 7) filthy += 1;
+    if (bucket >= 14) filthy += 1;
     if (bucket > maxBucket) maxBucket = bucket;
+    if (bucket > 0) {
+      spatialHash ^= i + 1;
+      spatialHash = Math.imul(spatialHash, 16777619);
+      spatialHash ^= bucket;
+      spatialHash = Math.imul(spatialHash, 16777619);
+    }
   }
-  return `${dirty}:${filthy}:${maxBucket}`;
+  return `${dirty}:${filthy}:${maxBucket}:${spatialHash >>> 0}`;
+}
+
+function plumbingRenderSignature(state: StationState): string {
+  let flooded = 0;
+  let maxBucket = 0;
+  let spatialHash = 2166136261;
+  const floodByTile = state.plumbing?.floodByTile;
+  if (!floodByTile) return '0:0:0';
+  for (let i = 0; i < floodByTile.length; i++) {
+    const bucket = Math.floor((floodByTile[i] ?? 0) / 4);
+    if (bucket <= 0) continue;
+    flooded += 1;
+    maxBucket = Math.max(maxBucket, bucket);
+    spatialHash ^= i + 1;
+    spatialHash = Math.imul(spatialHash, 16777619);
+    spatialHash ^= bucket;
+    spatialHash = Math.imul(spatialHash, 16777619);
+  }
+  return `${flooded}:${maxBucket}:${spatialHash >>> 0}`;
 }
 
 function moduleConditionRenderSignature(state: StationState): string {
@@ -2670,6 +2724,7 @@ function ensureDecorativeLayer(
     state.moduleVersion,
     state.dockVersion,
     sanitationRenderSignature(state),
+    plumbingRenderSignature(state),
     moduleConditionRenderSignature(state),
     useSprites ? 1 : 0,
     spriteAtlas.version
@@ -2695,6 +2750,32 @@ function ensureDecorativeLayer(
         0,
         floorOverlayAlpha(state, i)
       );
+    }
+  }
+
+  for (let i = 0; i < state.tiles.length; i++) {
+    const flood = state.plumbing?.floodByTile[i] ?? 0;
+    if (flood < 1) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    const strength = clamp01(flood / 45);
+    ctx.fillStyle = `rgba(66, 190, 240, ${0.12 + strength * 0.28})`;
+    ctx.beginPath();
+    ctx.ellipse(
+      px + TILE_SIZE * 0.5,
+      py + TILE_SIZE * 0.58,
+      TILE_SIZE * (0.28 + strength * 0.2),
+      TILE_SIZE * (0.16 + strength * 0.14),
+      0,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    if (flood >= 12) {
+      ctx.strokeStyle = `rgba(203, 246, 255, ${0.2 + strength * 0.35})`;
+      ctx.lineWidth = Math.max(1, PX);
+      ctx.stroke();
     }
   }
 
@@ -3493,9 +3574,10 @@ function drawUtilityUnderlayDuct(
   ctx: CanvasRenderingContext2D,
   state: StationState,
   tileIndex: number,
+  kind: UtilityUnderlayKind,
   color: string,
   accentColor: string,
-  spriteAtlas: SpriteAtlas,
+  spriteAtlas: SpriteAtlas | null,
   useSprites: boolean
 ): void {
   const { x, y } = fromIndex(tileIndex, state.width);
@@ -3503,10 +3585,10 @@ function drawUtilityUnderlayDuct(
   const py = y * TILE_SIZE;
   const centerX = px + TILE_SIZE * 0.5;
   const centerY = py + TILE_SIZE * 0.5;
-  const mask = utilityUnderlayNeighborMask(state, 'air-duct', tileIndex);
+  const mask = utilityUnderlayNeighborMask(state, kind, tileIndex);
   const lineWidth = Math.max(5, Math.round(6 * PX));
   ctx.save();
-  if (useSprites) {
+  if (useSprites && kind === 'air-duct' && spriteAtlas) {
     drawSpriteByKey(ctx, spriteAtlas, UTILITY_UNDERLAY_SPRITE_KEYS.airDuctTile, px, py, TILE_SIZE, TILE_SIZE, 0, 0.56);
   }
   ctx.lineWidth = lineWidth + Math.max(2, Math.round(2 * PX));
@@ -3564,6 +3646,33 @@ function drawUtilityUnderlayDuct(
     ctx.fill();
   } else {
     ctx.fillRect(centerX - TILE_SIZE * 0.08, centerY - TILE_SIZE * 0.08, TILE_SIZE * 0.16, TILE_SIZE * 0.16);
+  }
+  ctx.restore();
+}
+
+function drawWaterPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
+  ctx.save();
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (!hasUtilityUnderlay(state, 'water-pipe', i)) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    const flood = clamp01((state.plumbing.floodByTile[i] ?? 0) / 60);
+    ctx.fillStyle = flood > 0
+      ? `rgba(84, 196, 255, ${0.16 + flood * 0.24})`
+      : 'rgba(84, 196, 255, 0.13)';
+    ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    drawUtilityUnderlayDuct(ctx, state, i, 'water-pipe', flood > 0 ? '#86ecff' : '#54c4ff', '#e6fbff', null, false);
+  }
+  for (const leak of state.plumbing.leaks) {
+    const { x, y } = fromIndex(leak.tileIndex, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    ctx.strokeStyle = leak.isolated ? '#ffd65c' : '#ee4f4f';
+    ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+    ctx.beginPath();
+    ctx.arc(px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.5, TILE_SIZE * 0.28, 0, Math.PI * 2);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -3627,7 +3736,7 @@ function drawUtilityUnderlayOverlayLayer(
       const accent = source ? '#e9ffe9' : sink ? '#e6fbff' : disconnected ? '#ffd0c5' : '#bdeeff';
       ctx.fillStyle = fill;
       ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
-      drawUtilityUnderlayDuct(ctx, state, i, stroke, accent, spriteAtlas, useSprites);
+      drawUtilityUnderlayDuct(ctx, state, i, 'air-duct', stroke, accent, spriteAtlas, useSprites);
       if (source || sink) {
         ctx.strokeStyle = source ? '#6edb8f' : powered ? '#a7f3ff' : '#ee4f4f';
         ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
@@ -3635,6 +3744,7 @@ function drawUtilityUnderlayOverlayLayer(
       }
     }
   }
+  drawWaterPipeOverlayLayer(ctx, state);
   for (const module of state.moduleInstances) {
     if (module.type !== ModuleType.Vent) continue;
     const serviceTile = wallMountedModuleServiceTile(state, module.originTile) ?? module.originTile;
@@ -4280,14 +4390,21 @@ function drawLocalAirWarnings(
       alpha * pulse
     );
     if (!drew) {
-      ctx.strokeStyle = `rgba(132, 214, 232, ${alpha * pulse})`;
+      const cx = (p.x + 0.5) * TILE_SIZE;
+      const cy = (p.y + 0.22) * TILE_SIZE;
+      const badgeRadius = TILE_SIZE * (0.22 + severity * 0.04);
+      ctx.fillStyle = `rgba(7, 18, 27, ${0.72 + severity * 0.16})`;
+      ctx.strokeStyle = `rgba(132, 214, 232, ${alpha * pulse + 0.28})`;
       ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05);
-      for (let i = 0; i < 2; i++) {
-        const y = (p.y + 0.35 + i * 0.24) * TILE_SIZE;
-        ctx.beginPath();
-        ctx.arc((p.x + 0.44 + i * 0.12) * TILE_SIZE, y, TILE_SIZE * (0.18 + severity * 0.08), Math.PI * 0.1, Math.PI * 0.9);
-        ctx.stroke();
-      }
+      ctx.beginPath();
+      ctx.arc(cx, cy, badgeRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = `rgba(190, 239, 248, ${0.78 + severity * 0.2})`;
+      ctx.font = `bold ${Math.max(7, Math.round(TILE_SIZE * 0.28))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('O2', cx, cy + Math.max(0.5, TILE_SIZE * 0.01));
     }
   }
   ctx.restore();
@@ -4620,10 +4737,14 @@ export function renderWorld(
   // bodies is the always-on signal; the dashed line is inspection detail
   // (owner feedback: always-on dashes read as debug clutter).
   const queueTheater = state.derived.queueTheater;
-  const hoveringCafeteria = hoveredTile !== null && state.rooms[hoveredTile] === RoomType.Cafeteria;
-  if (queueTheater && hoveringCafeteria && queueTheater.membersByAnchor.size > 0) {
+  const hoveredQueueRoom =
+    hoveredTile !== null && (state.rooms[hoveredTile] === RoomType.Cafeteria || state.rooms[hoveredTile] === RoomType.Cantina)
+      ? state.rooms[hoveredTile]
+      : null;
+  if (queueTheater && hoveredQueueRoom !== null && queueTheater.membersByAnchor.size > 0) {
     ctx.save();
     for (const [anchor, members] of queueTheater.membersByAnchor) {
+      if (state.rooms[anchor] !== hoveredQueueRoom) continue;
       if (members.length < 1) continue;
       const chain = queueTheater.chainsByAnchor.get(anchor);
       if (!chain || chain.length < 2) continue;

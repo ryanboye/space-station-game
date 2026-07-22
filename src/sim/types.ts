@@ -261,7 +261,12 @@ export enum ModuleType {
   Locker = 'locker',
   Table = 'table',
   ServingStation = 'serving-station',
+  Fridge = 'fridge',
+  ColdStore = 'cold-store',
+  PrepCounter = 'prep-counter',
   Stove = 'stove',
+  TrayReturn = 'tray-return',
+  Dishwasher = 'dishwasher',
   Workbench = 'workbench',
   MedBed = 'med-bed',
   CellConsole = 'cell-console',
@@ -275,6 +280,8 @@ export enum ModuleType {
   Toilet = 'toilet',
   Shower = 'shower',
   Sink = 'sink',
+  FloorDrain = 'floor-drain',
+  WaterValve = 'water-valve',
   MarketStall = 'market-stall',
   IntakePallet = 'intake-pallet',
   StorageRack = 'storage-rack',
@@ -434,6 +441,10 @@ export interface Visitor {
   servicePlan: HospitalityServiceKind[];
   completedServices: HospitalityServiceKind[];
   activeService: HospitalityServiceKind | null;
+  /** Optional non-contract repeat drink in progress. Contract drinks still advance promises once. */
+  optionalDrinkActive?: boolean;
+  /** Count of optional repeat drinks completed during this visit. */
+  repeatDrinksServed?: number;
   serviceBlockedSince?: number | null;
   activeIncidentId?: number | null;
   // Crowd-loop v1 theater: set on storm-off/balk; renderer shows red tint + "!"
@@ -528,6 +539,8 @@ export type StaffRole =
   | 'comms-officer'
   | 'medical-officer'
   | 'cook'
+  | 'steward'
+  | 'cargo-handler'
   | 'cleaner'
   | 'janitor'
   | 'botanist'
@@ -618,7 +631,7 @@ export type CrewPrioritySystem =
 export type CrewPriorityWeights = Record<CrewPrioritySystem, number>;
 export type CrewTaskKind = 'critical_post' | 'post' | 'logistics';
 export type MaintenanceSystem = 'reactor' | 'life-support';
-export type MaintenanceDomain = 'utility' | 'module' | 'hull' | 'dock' | 'berth' | 'door' | 'vent';
+export type MaintenanceDomain = 'utility' | 'module' | 'hull' | 'dock' | 'berth' | 'door' | 'vent' | 'plumbing';
 export type MaintenanceSource =
   | 'idle'
   | 'high-load'
@@ -626,7 +639,8 @@ export type MaintenanceSource =
   | 'traffic'
   | 'heat'
   | 'fire-aftermath'
-  | 'construction';
+  | 'construction'
+  | 'plumbing';
 export interface MaintenanceDebt {
   key: string;
   system?: MaintenanceSystem;
@@ -878,6 +892,11 @@ export interface CrewMember {
   restCooldownUntil: number;
   taskLockUntil: number;
   shiftBucket: number;
+  recalledUntil: number;
+  // Optional physical home post/room anchor. Dispatch prefers work at this
+  // workplace but may send the employee elsewhere for emergencies.
+  homeWorkplaceTile: number | null;
+  assignedSleepTile: number | null;
   assignmentStickyUntil: number;
   assignmentHoldUntil: number;
   lastSystem: CrewPrioritySystem | null;
@@ -894,8 +913,28 @@ export interface CrewMember {
   lastRouteExposure?: RouteExposure;
 }
 
-export type ItemType = 'rawMeal' | 'meal' | 'rawMaterial' | 'tradeGood' | 'fuel' | 'body';
-export type JobType = 'pickup' | 'deliver' | 'repair' | 'extinguish' | 'construct' | 'cook' | 'sanitize' | 'inspect';
+export type ItemType =
+  | 'rawMeal'
+  | 'preppedMeal'
+  | 'meal'
+  | 'cleanTray'
+  | 'dirtyTray'
+  | 'drink'
+  | 'rawMaterial'
+  | 'tradeGood'
+  | 'fuel'
+  | 'body';
+export type JobType =
+  | 'pickup'
+  | 'deliver'
+  | 'repair'
+  | 'extinguish'
+  | 'construct'
+  | 'prep'
+  | 'cook'
+  | 'wash'
+  | 'sanitize'
+  | 'inspect';
 export type JobState = 'pending' | 'assigned' | 'in_progress' | 'expired' | 'done';
 export type JobExpiryContext = 'queued' | 'assigned' | 'carrying' | 'unknown';
 export type JobStatusCounts = {
@@ -985,14 +1024,70 @@ export type ProviderKind =
   | 'drink'
   | 'toilet'
   | 'hygiene'
+  | 'prep-work'
+  | 'wash-work'
   | 'stove-work'
   | 'grow-work'
   | 'workshop-work';
 export type ProviderStatus = 'available' | 'reserved' | 'in_use' | 'blocked';
 
+export type FacilityActivityKind =
+  | 'meal'
+  | 'prep'
+  | 'cook'
+  | 'serve'
+  | 'dishwash'
+  | 'comfort'
+  | 'recreation'
+  | 'social'
+  | 'wonder'
+  | 'drink'
+  | 'exercise'
+  | 'toilet'
+  | 'shower'
+  | 'wash'
+  | 'sleep'
+  | 'nap'
+  | 'repair';
+
+export type FacilityReadinessReason =
+  | 'ready'
+  | 'closed-hours'
+  | 'no-staff'
+  | 'no-path'
+  | 'no-input'
+  | 'output-full'
+  | 'fixture-full'
+  | 'no-potable-water'
+  | 'wastewater-blocked'
+  | 'leaking'
+  | 'dirty'
+  | 'too-noisy'
+  | 'too-hot'
+  | 'bad-air';
+
+export interface FacilityReadiness {
+  ready: boolean;
+  reason: FacilityReadinessReason;
+  detail: string;
+  quality: number;
+}
+
+export interface FacilitySession {
+  ownerKind: ReservationOwnerKind;
+  ownerId: number | string;
+  activity: FacilityActivityKind;
+  module: ModuleType;
+  targetTile: number;
+  startedAt: number;
+  endsAt: number;
+  readiness: FacilityReadiness;
+}
+
 export interface ProviderSummary {
   id: string;
   kind: ProviderKind;
+  activity?: FacilityActivityKind;
   module: ModuleType;
   room: RoomType;
   tileIndex: number;
@@ -1002,6 +1097,7 @@ export interface ProviderSummary {
   queued: number;
   status: ProviderStatus;
   blockedReason: string | null;
+  readiness?: FacilityReadiness;
 }
 
 export interface StockTargetSummary {
@@ -1410,6 +1506,8 @@ export interface TrafficOffer {
   fuelSupply?: number;
   fuelRequest?: number;
   fuelProcurementCostCredits?: number;
+  procurementKind?: 'food-supply';
+  stationProcurementCostCredits?: number;
   requestedServices: ShipServiceTag[];
   berthTimeSec: number;
   dockingFee: number;
@@ -1499,6 +1597,22 @@ export interface Metrics {
   pressurizationPct: number;
   leakingTiles: number;
   materials: number;
+  foodSupplyOrdersPlaced: number;
+  foodSupplyUnitsOrdered: number;
+  preppedMealStock: number;
+  cleanTrayStock: number;
+  dirtyTrayStock: number;
+  drinkStock: number;
+  potableNetworkCount: number;
+  potableNetworkPoweredFixtures: number;
+  waterNetworkDisconnectedTiles: number;
+  wastewaterBacklog: number;
+  floodedTiles: number;
+  activePlumbingLeaks: number;
+  assignedSleepSlots: number;
+  improvisedRestingCrew: number;
+  facilityProviderQueries: number;
+  inventoryPairScans: number;
   materialAutoImportStatus: string;
   materialAutoImportLastAdded: number;
   materialAutoImportCreditCost: number;
@@ -1545,6 +1659,7 @@ export interface Metrics {
    *  a follow-up PR; values are 0 at v2 introduction. */
   creditsEarnedLifetime: number;
   archetypesServedLifetime: number;
+  turnaroundsCompletedLifetime: number;
   tradeCyclesCompletedLifetime: number;
   incidentsResolvedLifetime: number;
   actorsTreatedLifetime: number;
@@ -1798,6 +1913,23 @@ export interface QueueTheater {
   eventFeed: Array<{ at: number; tone: 'danger' | 'warn' | 'info'; text: string }>;
 }
 
+export interface PlumbingLeak {
+  id: number;
+  tileIndex: number;
+  fixtureTile: number;
+  severity: number;
+  createdAt: number;
+  isolated: boolean;
+  repairJobId: number | null;
+}
+
+export interface PlumbingState {
+  version: number;
+  floodByTile: Float32Array;
+  leaks: PlumbingLeak[];
+  nextLeakId: number;
+}
+
 export interface DerivedCache {
   serviceTargetsByRoom: Map<RoomType, number[]>;
   queueTargets: number[];
@@ -1843,6 +1975,14 @@ export interface RoomInspector {
   pressurizedPct: number;
   staffCount: number;
   requiredStaff: number;
+  workplace?: {
+    anchorTile: number;
+    label: string;
+    positions: number;
+    eligibleRoles: StaffRole[];
+    assignedCrew: Array<{ id: number; name: string; role: StaffRole }>;
+    activeCrew: Array<{ id: number; name: string; role: StaffRole }>;
+  };
   hasServiceNode: boolean;
   serviceNodeCount: number;
   reachableServiceNodeCount: number;
@@ -1878,6 +2018,19 @@ export interface RoomInspector {
     queueingVisitors: number;
     eatingVisitors: number;
     highPatienceWaiting: number;
+    pressure: 'low' | 'medium' | 'high';
+  };
+  cantinaLoad?: {
+    barCounters: number;
+    pickupSlots: number;
+    lineVisitors: number;
+    orderingVisitors: number;
+    seatsUsed: number;
+    seatsCapacity: number;
+    waitingForSeat: number;
+    stewardCount: number;
+    taps: number;
+    unstaffed: boolean;
     pressure: 'low' | 'medium' | 'high';
   };
   providers?: ProviderSummary[];
@@ -2195,6 +2348,7 @@ export interface StationState {
   // is cleaned or rebuilt.
   dirtByTile: Float32Array;
   dirtSourceByTile: Uint8Array;
+  plumbing: PlumbingState;
   mapConditionVersion: number;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];

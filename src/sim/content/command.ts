@@ -44,6 +44,9 @@ export const SURFACED_STAFF_ROLES: StaffRole[] = [
   'comms-officer',
   'medical-officer',
   'cook',
+  'steward',
+  'cargo-handler',
+  'cleaner',
   'janitor',
   'botanist',
   'technician',
@@ -54,7 +57,6 @@ export const SURFACED_STAFF_ROLES: StaffRole[] = [
 ];
 
 export const DEFERRED_STAFF_ROLES: StaffRole[] = [
-  'cleaner',
   'mechanic',
   'welder',
   'nurse',
@@ -74,6 +76,8 @@ export const STAFF_ROLES: StaffRole[] = [
   'comms-officer',
   'medical-officer',
   'cook',
+  'steward',
+  'cargo-handler',
   'cleaner',
   'janitor',
   'botanist',
@@ -207,12 +211,14 @@ export const STAFF_ROLE_DEFINITIONS: Record<StaffRole, StaffRoleDefinition> = {
     fallback: false
   },
   cook: { id: 'cook', label: 'Cook', department: 'food', cost: 16, payroll: 0.32, officer: false, requiresSpecialty: null, lane: 'food', fallback: false },
-  cleaner: { id: 'cleaner', label: 'Cleaner', department: 'sanitation', cost: 14, payroll: 0.28, officer: false, requiresSpecialty: 'sanitation-program', lane: 'sanitation', fallback: true },
-  janitor: { id: 'janitor', label: 'Janitor', department: 'sanitation', cost: 18, payroll: 0.3, officer: false, requiresSpecialty: 'sanitation-program', lane: 'sanitation', fallback: true },
+  steward: { id: 'steward', label: 'Steward', department: 'food', cost: 16, payroll: 0.3, officer: false, requiresSpecialty: null, lane: 'food', fallback: false },
+  'cargo-handler': { id: 'cargo-handler', label: 'Cargo Handler', department: 'logistics', cost: 18, payroll: 0.32, officer: false, requiresSpecialty: null, lane: 'logistics', fallback: false },
+  cleaner: { id: 'cleaner', label: 'Cleaner', department: 'sanitation', cost: 14, payroll: 0.28, officer: false, requiresSpecialty: null, lane: 'sanitation', fallback: false },
+  janitor: { id: 'janitor', label: 'Janitor', department: 'sanitation', cost: 18, payroll: 0.3, officer: false, requiresSpecialty: 'sanitation-program', lane: 'sanitation', fallback: false },
   botanist: { id: 'botanist', label: 'Botanist', department: 'food', cost: 18, payroll: 0.32, officer: false, requiresSpecialty: null, lane: 'food', fallback: false },
   technician: { id: 'technician', label: 'Technician', department: 'mechanical', cost: 18, payroll: 0.32, officer: false, requiresSpecialty: 'mechanical-maintenance', lane: 'engineering', fallback: true },
-  engineer: { id: 'engineer', label: 'Engineer', department: 'mechanical', cost: 24, payroll: 0.38, officer: false, requiresSpecialty: 'mechanical-maintenance', lane: 'engineering', fallback: true },
-  mechanic: { id: 'mechanic', label: 'Mechanic', department: 'mechanical', cost: 20, payroll: 0.34, officer: false, requiresSpecialty: 'mechanical-maintenance', lane: 'engineering', fallback: true },
+  engineer: { id: 'engineer', label: 'Engineer', department: 'mechanical', cost: 24, payroll: 0.38, officer: false, requiresSpecialty: null, lane: 'engineering', fallback: false },
+  mechanic: { id: 'mechanic', label: 'Mechanic', department: 'mechanical', cost: 20, payroll: 0.34, officer: false, requiresSpecialty: 'mechanical-maintenance', lane: 'engineering', fallback: false },
   welder: { id: 'welder', label: 'Welder', department: 'eva', cost: 24, payroll: 0.38, officer: false, requiresSpecialty: 'mechanical-maintenance', lane: 'construction-eva', fallback: true },
   doctor: { id: 'doctor', label: 'Doctor', department: 'medical', cost: 30, payroll: 0.42, officer: false, requiresSpecialty: 'medical-services', lane: 'sanitation', fallback: false },
   nurse: { id: 'nurse', label: 'Nurse', department: 'medical', cost: 22, payroll: 0.34, officer: false, requiresSpecialty: 'medical-services', lane: 'sanitation', fallback: true },
@@ -389,7 +395,10 @@ export function createEmptyStaffRoleCounts(): StaffRoleCounts {
 
 export function createInitialStaffRoleCounts(): StaffRoleCounts {
   const counts = createEmptyStaffRoleCounts();
-  counts.assistant = 4;
+  counts.cook = 1;
+  counts.steward = 1;
+  counts['cargo-handler'] = 1;
+  counts.engineer = 1;
   return counts;
 }
 

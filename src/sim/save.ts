@@ -65,7 +65,18 @@ import {
 } from './content/command';
 
 const SAVE_SCHEMA_VERSION = 3 as const;
-const ITEM_TYPES: ItemType[] = ['rawMeal', 'meal', 'rawMaterial', 'tradeGood', 'fuel', 'body'];
+const ITEM_TYPES: ItemType[] = [
+  'rawMeal',
+  'preppedMeal',
+  'meal',
+  'cleanTray',
+  'dirtyTray',
+  'drink',
+  'rawMaterial',
+  'tradeGood',
+  'fuel',
+  'body'
+];
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
@@ -74,8 +85,8 @@ const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 
 const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
-const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
-const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction'];
+const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent', 'plumbing'];
+const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction', 'plumbing'];
 const PORT_OFFER_KINDS: PortOfferKind[] = ['passenger', 'freight', 'mixed'];
 const PORT_PROMISE_KINDS: PortPromiseKind[] = [
   'dock',
@@ -169,6 +180,11 @@ export interface StationSnapshotV1 {
       id: number;
       name: string;
       tileIndex?: number;
+      staffRole?: StaffRole;
+      shiftBucket?: number;
+      recalledUntil?: number;
+      homeWorkplaceTile?: number | null;
+      assignedSleepTile?: number | null;
       energy: number;
       hunger?: number;
       hygiene: number;
@@ -219,6 +235,7 @@ export interface StationSnapshotV1 {
     // permanently stuck.
     mealsServedTotal: number;
     creditsEarnedLifetime: number;
+    turnaroundsCompletedLifetime: number;
     tradeCyclesCompletedLifetime: number;
     incidentsResolvedLifetime: number;
     actorsTreatedLifetime: number;
@@ -237,6 +254,20 @@ export interface StationSnapshotV1 {
   utilityUnderlay?: {
     version: number;
     layers: Partial<Record<UtilityUnderlayKind, number[]>>;
+  };
+  plumbing?: {
+    version: number;
+    floodByTile: number[];
+    leaks: Array<{
+      id: number;
+      tileIndex: number;
+      fixtureTile: number;
+      severity: number;
+      createdAt: number;
+      isolated: boolean;
+      repairJobId: number | null;
+    }>;
+    nextLeakId: number;
   };
   maintenance?: {
     debts: Array<{
@@ -472,6 +503,11 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         id: crew.id,
         name: crew.name,
         tileIndex: crew.tileIndex,
+        staffRole: crew.staffRole,
+        shiftBucket: crew.shiftBucket,
+        recalledUntil: crew.recalledUntil,
+        homeWorkplaceTile: crew.homeWorkplaceTile,
+        assignedSleepTile: crew.assignedSleepTile,
         energy: crew.energy,
         hunger: crew.hunger,
         hygiene: crew.hygiene,
@@ -524,6 +560,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     progression: {
       mealsServedTotal: state.metrics.mealsServedTotal,
       creditsEarnedLifetime: state.metrics.creditsEarnedLifetime,
+      turnaroundsCompletedLifetime: state.metrics.turnaroundsCompletedLifetime,
       tradeCyclesCompletedLifetime: state.metrics.tradeCyclesCompletedLifetime,
       incidentsResolvedLifetime: state.metrics.incidentsResolvedLifetime,
       actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
@@ -555,6 +592,12 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       }
       return { version: utility.version, layers };
     })(),
+    plumbing: {
+      version: state.plumbing.version,
+      floodByTile: Array.from(state.plumbing.floodByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
+      leaks: state.plumbing.leaks.map((leak) => ({ ...leak })),
+      nextLeakId: state.plumbing.nextLeakId
+    },
     maintenance: {
       debts: state.maintenanceDebts
         .filter((entry) => entry.debt > 0.05)
@@ -1021,6 +1064,23 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         tileIndex: Number.isFinite(entry.tileIndex)
           ? clamp(Math.floor(asFiniteNumber(entry.tileIndex, 0)), 0, expectedLength - 1)
           : undefined,
+        staffRole: isOneOf(entry.staffRole, STAFF_ROLES) ? entry.staffRole : undefined,
+        shiftBucket: Number.isFinite(entry.shiftBucket)
+          ? clamp(Math.floor(asFiniteNumber(entry.shiftBucket, 0)), 0, 2)
+          : undefined,
+        recalledUntil: Number.isFinite(entry.recalledUntil)
+          ? Math.max(0, asFiniteNumber(entry.recalledUntil, 0))
+          : undefined,
+        homeWorkplaceTile: entry.homeWorkplaceTile === null
+          ? null
+          : Number.isFinite(entry.homeWorkplaceTile)
+            ? clamp(Math.floor(asFiniteNumber(entry.homeWorkplaceTile, 0)), 0, expectedLength - 1)
+            : undefined,
+        assignedSleepTile: entry.assignedSleepTile === null
+          ? null
+          : Number.isFinite(entry.assignedSleepTile)
+            ? clamp(Math.floor(asFiniteNumber(entry.assignedSleepTile, 0)), 0, expectedLength - 1)
+            : undefined,
         energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
         hunger: clamp(asFiniteNumber(entry.hunger, 82), 0, 100),
         hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
@@ -1217,6 +1277,15 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const progression: StationSnapshotV1['progression'] = {
     mealsServedTotal: Math.max(0, Math.floor(asFiniteNumber(progRaw?.mealsServedTotal, 0))),
     creditsEarnedLifetime: Math.max(0, asFiniteNumber(progRaw?.creditsEarnedLifetime, 0)),
+    turnaroundsCompletedLifetime: Math.max(
+      0,
+      Math.floor(
+        asFiniteNumber(
+          progRaw?.turnaroundsCompletedLifetime,
+          asFiniteNumber(progRaw?.dockedShipsCompleted, 0)
+        )
+      )
+    ),
     tradeCyclesCompletedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.tradeCyclesCompletedLifetime, 0))),
     incidentsResolvedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.incidentsResolvedLifetime, 0))),
     actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
@@ -1295,6 +1364,57 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     }
   } else if (isRecord(snapshotRaw.utilityUnderlay)) {
     warnings.push('utilityUnderlay malformed; defaulted.');
+  }
+
+  const plumbingRaw = isRecord(snapshotRaw.plumbing) ? snapshotRaw.plumbing : null;
+  let plumbingVersion = 1;
+  const plumbingFloodByTile = new Array<number>(expectedLength).fill(0);
+  const plumbingLeaks: NonNullable<StationSnapshotV1['plumbing']>['leaks'] = [];
+  let plumbingNextLeakId = 1;
+  if (plumbingRaw) {
+    plumbingVersion = Math.max(1, Math.floor(asFiniteNumber(plumbingRaw.version, 1)));
+    if (Array.isArray(plumbingRaw.floodByTile)) {
+      const len = Math.min(expectedLength, plumbingRaw.floodByTile.length);
+      for (let i = 0; i < len; i++) {
+        plumbingFloodByTile[i] = clamp(asFiniteNumber(plumbingRaw.floodByTile[i], 0), 0, 100);
+      }
+      if (plumbingRaw.floodByTile.length !== expectedLength) {
+        warnings.push(`plumbing.floodByTile length ${plumbingRaw.floodByTile.length} does not match expected ${expectedLength}; adjusted.`);
+      }
+    }
+    if (Array.isArray(plumbingRaw.leaks)) {
+      const seenLeakIds = new Set<number>();
+      for (let i = 0; i < plumbingRaw.leaks.length; i++) {
+        const entry = plumbingRaw.leaks[i];
+        if (!isRecord(entry)) {
+          warnings.push(`plumbing.leaks[${i}] invalid; skipped.`);
+          continue;
+        }
+        const id = Math.max(1, Math.floor(asFiniteNumber(entry.id, i + 1)));
+        const tileIndex = Math.floor(asFiniteNumber(entry.tileIndex, -1));
+        const fixtureTile = Math.floor(asFiniteNumber(entry.fixtureTile, tileIndex));
+        if (seenLeakIds.has(id) || tileIndex < 0 || tileIndex >= expectedLength || fixtureTile < 0 || fixtureTile >= expectedLength) {
+          warnings.push(`plumbing.leaks[${i}] has invalid id/tile; skipped.`);
+          continue;
+        }
+        seenLeakIds.add(id);
+        plumbingLeaks.push({
+          id,
+          tileIndex,
+          fixtureTile,
+          severity: clamp(asFiniteNumber(entry.severity, 20), 0, 100),
+          createdAt: Math.max(0, asFiniteNumber(entry.createdAt, simTime)),
+          isolated: entry.isolated === true,
+          repairJobId: Number.isFinite(entry.repairJobId)
+            ? Math.max(1, Math.floor(asFiniteNumber(entry.repairJobId, 1)))
+            : null
+        });
+      }
+    }
+    const highestLeakId = plumbingLeaks.reduce((max, leak) => Math.max(max, leak.id), 0);
+    plumbingNextLeakId = Math.max(highestLeakId + 1, Math.floor(asFiniteNumber(plumbingRaw.nextLeakId, highestLeakId + 1)));
+  } else if (isRecord(snapshotRaw.plumbing)) {
+    warnings.push('plumbing malformed; defaulted.');
   }
 
   const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
@@ -1424,6 +1544,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     utilityUnderlay: {
       version: utilityUnderlayVersion,
       layers: utilityUnderlayLayers
+    },
+    plumbing: {
+      version: plumbingVersion,
+      floodByTile: plumbingFloodByTile,
+      leaks: plumbingLeaks,
+      nextLeakId: plumbingNextLeakId
     },
     maintenance: {
       debts: maintenanceDebts
@@ -1561,17 +1687,29 @@ function clearTransientState(state: StationState): void {
 
 function refreshBasicInventoryMetrics(state: StationState): void {
   let rawMeal = 0;
+  let preppedMeal = 0;
   let meal = 0;
+  let cleanTray = 0;
+  let dirtyTray = 0;
+  let drink = 0;
   let rawMaterial = 0;
   let tradeGood = 0;
   for (const node of state.itemNodes) {
     rawMeal += Math.max(0, node.items.rawMeal ?? 0);
+    preppedMeal += Math.max(0, node.items.preppedMeal ?? 0);
     meal += Math.max(0, node.items.meal ?? 0);
+    cleanTray += Math.max(0, node.items.cleanTray ?? 0);
+    dirtyTray += Math.max(0, node.items.dirtyTray ?? 0);
+    drink += Math.max(0, node.items.drink ?? 0);
     rawMaterial += Math.max(0, node.items.rawMaterial ?? 0);
     tradeGood += Math.max(0, node.items.tradeGood ?? 0);
   }
   state.metrics.rawFoodStock = rawMeal;
+  state.metrics.preppedMealStock = preppedMeal;
   state.metrics.mealStock = meal;
+  state.metrics.cleanTrayStock = cleanTray;
+  state.metrics.dirtyTrayStock = dirtyTray;
+  state.metrics.drinkStock = drink;
   state.metrics.marketTradeGoodStock = tradeGood;
   state.metrics.materials = Math.max(0, state.legacyMaterialStock + rawMaterial);
 }
@@ -1615,6 +1753,12 @@ export function hydrateStateFromSave(
   );
   next.dirtByTile = new Float32Array(snapshot.sanitation?.dirtByTile ?? new Array(expectedLength).fill(0));
   next.dirtSourceByTile = new Uint8Array(snapshot.sanitation?.dirtSourceByTile ?? new Array(expectedLength).fill(0));
+  next.plumbing = {
+    version: snapshot.plumbing?.version ?? 1,
+    floodByTile: new Float32Array(snapshot.plumbing?.floodByTile ?? new Array(expectedLength).fill(0)),
+    leaks: (snapshot.plumbing?.leaks ?? []).map((leak) => ({ ...leak })),
+    nextLeakId: snapshot.plumbing?.nextLeakId ?? 1
+  };
   next.maintenanceDebts = (snapshot.maintenance?.debts ?? []).map((entry) => ({
     ...entry,
     domain: entry.domain ?? (entry.system ? 'utility' : 'module'),
@@ -1803,6 +1947,7 @@ export function hydrateStateFromSave(
   // the metrics pass, so persisting the set is enough) survives reload.
   next.metrics.mealsServedTotal = snapshot.progression.mealsServedTotal;
   next.metrics.creditsEarnedLifetime = snapshot.progression.creditsEarnedLifetime;
+  next.metrics.turnaroundsCompletedLifetime = snapshot.progression.turnaroundsCompletedLifetime;
   next.metrics.tradeCyclesCompletedLifetime = snapshot.progression.tradeCyclesCompletedLifetime;
   next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
   next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
@@ -1937,6 +2082,11 @@ export function hydrateStateFromSave(
     const saved = savedCrewById.get(crew.id);
     if (!saved) continue;
     crew.name = saved.name;
+    if (saved.staffRole !== undefined) crew.staffRole = saved.staffRole;
+    if (saved.shiftBucket !== undefined) crew.shiftBucket = saved.shiftBucket;
+    if (saved.recalledUntil !== undefined) crew.recalledUntil = saved.recalledUntil;
+    if (saved.homeWorkplaceTile !== undefined) crew.homeWorkplaceTile = saved.homeWorkplaceTile;
+    if (saved.assignedSleepTile !== undefined) crew.assignedSleepTile = saved.assignedSleepTile;
     const savedTile = saved.tileIndex;
     const restoredTile = savedTile !== undefined && isWalkable(next.tiles[savedTile])
       ? savedTile

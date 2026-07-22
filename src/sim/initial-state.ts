@@ -284,7 +284,10 @@ export function createInitialState(options?: {
       // The cafeteria opens with a small visible meal buffer. It prevents the
       // first five passengers from arriving to a dead station while still
       // exhausting quickly enough to expose the production/logistics loop.
-      if (module.type === ModuleType.ServingStation) items.meal = 36;
+      if (module.type === ModuleType.ServingStation) {
+        items.meal = 30;
+        items.cleanTray = 30;
+      }
       return {
         tileIndex: module.originTile,
         capacity,
@@ -295,7 +298,12 @@ export function createInitialState(options?: {
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
   const initialStaffRoleCounts = createInitialStaffRoleCounts();
-  initialStaffRoleCounts.assistant = 8;
+  initialStaffRoleCounts.cook = 1;
+  initialStaffRoleCounts.steward = 1;
+  initialStaffRoleCounts['cargo-handler'] = 2;
+  initialStaffRoleCounts.engineer = 2;
+  initialStaffRoleCounts.cleaner = 1;
+  initialStaffRoleCounts.assistant = 1;
   const initialStaffTotal = totalStaffCount(initialStaffRoleCounts);
 
   return {
@@ -371,6 +379,12 @@ export function createInitialState(options?: {
     utilityUnderlay: createEmptyUtilityUnderlay(GRID_WIDTH * GRID_HEIGHT),
     dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
     dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
+    plumbing: {
+      version: 1,
+      floodByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
+      leaks: [],
+      nextLeakId: 1
+    },
     mapConditionVersion: MAP_CONDITION_VERSION,
     pathOccupancyByTile: new Map(),
     jobs: [],
@@ -451,6 +465,22 @@ export function createInitialState(options?: {
       pressurizationPct: 0,
       leakingTiles: 0,
       materials: STARTING_SUPPLIES,
+      foodSupplyOrdersPlaced: 0,
+      foodSupplyUnitsOrdered: 0,
+      preppedMealStock: 0,
+      cleanTrayStock: 0,
+      dirtyTrayStock: 0,
+      drinkStock: 0,
+      potableNetworkCount: 0,
+      potableNetworkPoweredFixtures: 0,
+      waterNetworkDisconnectedTiles: 0,
+      wastewaterBacklog: 0,
+      floodedTiles: 0,
+      activePlumbingLeaks: 0,
+      assignedSleepSlots: 0,
+      improvisedRestingCrew: 0,
+      facilityProviderQueries: 0,
+      inventoryPairScans: 0,
       materialAutoImportStatus: 'target met',
       materialAutoImportLastAdded: 0,
       materialAutoImportCreditCost: 0,
@@ -495,6 +525,7 @@ export function createInitialState(options?: {
       mealsServedTotal: 0,
       creditsEarnedLifetime: 0,
       archetypesServedLifetime: 0,
+      turnaroundsCompletedLifetime: 0,
       tradeCyclesCompletedLifetime: 0,
       incidentsResolvedLifetime: 0,
       actorsTreatedLifetime: 0,

@@ -645,6 +645,167 @@ small {
   padding: 12px;
 }
 
+.rating-modal-card {
+  width: min(500px, 96vw);
+  max-height: min(760px, 88vh);
+  overflow: auto;
+  border-color: rgba(216, 178, 88, 0.68);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.52);
+}
+
+.rating-modal-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.rating-modal-kicker {
+  color: #d8b258;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rating-modal-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(216, 178, 88, 0.38);
+  border-radius: 6px;
+  background: rgba(37, 33, 22, 0.62);
+}
+
+.rating-modal-score {
+  font-size: 34px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.rating-modal-trend {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rating-modal-summary {
+  margin: 9px 0 0;
+  color: #d6deeb;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.rating-modal-effect {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-left: 2px solid #5cd8ff;
+  color: #b9d2e7;
+  background: rgba(21, 44, 57, 0.46);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.rating-factor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rating-factor-group {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(63, 82, 105, 0.72);
+  border-radius: 5px;
+  background: rgba(10, 16, 23, 0.42);
+}
+
+.rating-factor-group-failures,
+.rating-modal-driver-block {
+  margin-top: 8px;
+}
+
+.rating-factor-group-positive {
+  border-color: rgba(88, 184, 125, 0.42);
+}
+
+.rating-factor-group-negative,
+.rating-factor-group-failures {
+  border-color: rgba(255, 207, 110, 0.42);
+}
+
+.rating-factor-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.rating-factor-heading strong {
+  color: #e8eef6;
+  font-size: 11px;
+}
+
+.rating-factor-heading small {
+  margin: 0;
+  color: #8ea2bd;
+  font-size: 9px;
+  text-align: right;
+}
+
+.rating-driver-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding: 7px 0 0;
+  border-top: 0;
+}
+
+.rating-driver-list::before {
+  display: none;
+}
+
+.rating-driver-list .metric-pill {
+  padding: 5px;
+}
+
+.rating-modal-driver-block {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid rgba(123, 167, 217, 0.32);
+  border-radius: 5px;
+  background: rgba(18, 29, 41, 0.52);
+}
+
+.rating-modal-driver-block > strong {
+  color: #b9d8ef;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.rating-driver-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.rating-driver-note,
+.rating-driver-empty {
+  display: inline-block;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 118, 118, 0.4);
+  border-radius: 4px;
+  color: #ffd0d0;
+  background: rgba(92, 27, 31, 0.35);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.rating-driver-empty {
+  border-color: rgba(110, 219, 143, 0.4);
+  color: #bcebc9;
+  background: rgba(22, 66, 39, 0.3);
+}
+
 .save-modal-card {
   width: min(700px, 96vw);
 }
@@ -655,6 +816,20 @@ small {
 
 .progression-modal-card {
   width: min(860px, 96vw);
+}
+
+.crew-roster-modal-card {
+  width: min(720px, 96vw);
+  overflow: hidden;
+}
+
+.crew-roster-modal-card .modal-head > span {
+  display: grid;
+  gap: 3px;
+}
+
+.crew-roster-modal-card .modal-head small {
+  color: #8da7b8;
 }
 
 .crew-modal-card {
@@ -1336,6 +1511,203 @@ h2 {
   color: var(--text);
 }
 
+.role-coverage-summary {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid rgba(125, 177, 207, 0.22);
+}
+
+.role-coverage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: #a9bdcf;
+  font-size: 10px;
+}
+
+.role-coverage-head > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.role-coverage-head strong { color: #e8f5fc; }
+.role-coverage-head small { color: #83a2b7; }
+
+.role-coverage-chips,
+.bottom-role-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.role-coverage-chip,
+.bottom-role-chip {
+  padding: 3px 5px;
+  border: 1px solid rgba(113, 173, 204, 0.28);
+  border-radius: 4px;
+  background: rgba(15, 30, 42, 0.68);
+  color: #a9c2d1;
+  font-size: 9px;
+}
+
+.role-coverage-chip b,
+.bottom-role-chip b { color: #e7f5fb; }
+.role-coverage-chip.uncovered,
+.bottom-role-chip.uncovered { border-color: rgba(232, 111, 103, 0.55); color: #ffaaa3; }
+
+.named-watch-roster {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: min(58vh, 620px);
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.named-roster-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 5px 6px;
+  border: 1px solid rgba(125, 177, 207, 0.18);
+  border-radius: 4px;
+  background: rgba(7, 17, 27, 0.72);
+  text-align: left;
+}
+
+.named-roster-card:hover { border-color: rgba(111, 197, 229, 0.7); }
+.named-roster-card.selected {
+  border-color: #6fc5e5;
+  background: rgba(29, 76, 99, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(111, 197, 229, 0.25);
+}
+.named-roster-card.incompatible { opacity: 0.5; }
+.named-roster-card .crew-card-portrait { width: 32px; height: 32px; }
+.named-roster-copy { display: grid; gap: 2px; min-width: 0; }
+.named-roster-copy strong { color: #edf6fa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.named-roster-copy small { color: #8fa9ba; }
+.named-roster-copy em {
+  color: #68879a;
+  font-size: 8px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.watch-assignment-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(125, 177, 207, 0.22);
+  border-radius: 4px;
+  background: rgba(11, 24, 35, 0.8);
+}
+
+.watch-assignment-bar > span,
+.watch-assignment-person,
+.watch-assignment-person > span,
+.watch-assignment-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.watch-assignment-bar > span:first-child:not(.watch-assignment-person),
+.watch-assignment-person > span {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.watch-assignment-person .crew-card-portrait { width: 34px; height: 34px; }
+.watch-assignment-bar small { color: #7f9aac; }
+.watch-assignment-actions button { width: auto; min-width: 58px; }
+.watch-assignment-actions button.active {
+  border-color: #6fc5e5;
+  background: rgba(40, 103, 132, 0.58);
+  color: #f1fbff;
+}
+
+.workplace-assignment-context,
+.room-workplace-panel {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid rgba(87, 193, 155, 0.42);
+  border-left: 3px solid #58c58a;
+  border-radius: 4px;
+  background: rgba(12, 38, 37, 0.62);
+}
+
+.workplace-assignment-context,
+.room-workplace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workplace-assignment-context > span:first-child,
+.room-workplace-head > span {
+  display: grid;
+  gap: 2px;
+}
+
+.workplace-assignment-context small,
+.room-workplace-panel small,
+.room-workplace-status { color: #86a9a7; }
+.workplace-context-actions { display: flex; align-items: center; gap: 5px; }
+.workplace-context-actions button,
+.room-workplace-head button { width: auto; }
+.room-workplace-actions { display: flex; gap: 5px; }
+.room-workplace-status { margin-top: 6px; font-size: 9px; }
+
+.watch-roster-column {
+  min-width: 0;
+  border: 1px solid rgba(125, 177, 207, 0.18);
+  border-radius: 4px;
+  background: rgba(6, 15, 24, 0.54);
+}
+
+.watch-roster-column.on-duty { border-top: 3px solid #58c58a; }
+.watch-roster-column.reserve { border-top: 3px solid #d0a858; }
+.watch-roster-column.off-duty { border-top: 3px solid #647b8d; }
+
+.watch-roster-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(125, 177, 207, 0.15);
+}
+
+.watch-roster-heading > span { display: grid; gap: 1px; }
+.watch-roster-heading strong { color: #ecf6fa; }
+.watch-roster-heading small { color: #7693a5; font-size: 8px; text-transform: uppercase; }
+.watch-roster-heading b { color: #9db8c8; }
+.watch-roster-members { display: grid; gap: 5px; padding: 6px; }
+.watch-roster-empty { padding: 10px 4px; color: #657f90; font-size: 9px; text-align: center; }
+
+.roster-rule {
+  display: block;
+  margin-top: 7px;
+  color: #7892a5;
+  line-height: 1.35;
+}
+
+@media (max-width: 660px) {
+  .named-watch-roster { grid-template-columns: 1fr; }
+  .watch-assignment-bar { grid-template-columns: 1fr; }
+  .watch-assignment-actions { flex-wrap: wrap; }
+}
+
 .shift-roster-head {
   display: flex;
   justify-content: space-between;
@@ -1578,6 +1950,21 @@ h2 {
   cursor: pointer;
 }
 
+#hud-status .hud-rating-button {
+  width: auto;
+  min-height: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#hud-status .hud-rating-button:hover,
+#hud-status .hud-rating-button:focus-visible {
+  border-color: rgba(216, 178, 88, 0.9);
+  background: rgba(62, 52, 28, 0.9);
+}
+
 #hud-status .hud-air-control:hover,
 #hud-status .hud-air-control:focus-visible {
   border-color: rgba(123, 167, 217, 0.9);
@@ -1727,6 +2114,8 @@ h2 {
 }
 
 .operating-rhythm {
+  width: min(320px, calc(100vw - 36px));
+  box-sizing: border-box;
   display: grid;
   gap: 4px;
   padding: 9px 10px;
@@ -1743,10 +2132,26 @@ h2 {
   font-weight: 700;
   font-size: 12px;
 }
-.operating-rhythm small { color: #8fa7bc; }
-.operating-rhythm .mini-action-btn {
-  width: 100%;
+.operating-rhythm small {
+  min-width: 0;
+  overflow: hidden;
+  color: #8fa7bc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.operating-rhythm-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 6px;
   margin-top: 3px;
+}
+.operating-rhythm .mini-action-btn {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .operating-rhythm .mini-action-btn.active {
   border-color: #f3bd62;
@@ -2013,9 +2418,64 @@ h2 {
   gap: 10px;
 }
 
+.berth-ops-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .berth-ops-count {
   color: #72ddb5;
   font: 700 10px Consolas, Menlo, monospace;
+}
+
+.panel-collapse-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid rgba(91, 201, 166, 0.42);
+  border-radius: 3px;
+  background: rgba(10, 25, 28, 0.78);
+  color: #b9e9d7;
+}
+
+.panel-collapse-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 120ms ease;
+}
+
+.panel-collapse-button:hover,
+.panel-collapse-button:focus-visible {
+  border-color: #72ddb5;
+  color: #f3fff9;
+}
+
+.berth-ops-widget.collapsed {
+  width: min(235px, calc(100vw - 28px));
+  max-height: none;
+  overflow: hidden;
+}
+
+.berth-ops-widget.collapsed .berth-ops-head {
+  margin-bottom: 0;
+}
+
+.berth-ops-widget.collapsed .berth-ops-list {
+  display: none;
+}
+
+.berth-ops-widget.collapsed .panel-collapse-button svg {
+  transform: rotate(180deg);
 }
 
 .berth-ops-list {
@@ -2025,6 +2485,37 @@ h2 {
 
 .berth-ops-list .traffic-offer {
   margin: 0;
+}
+
+#toggle-ui-panels .panel-visibility-slash {
+  display: none;
+  stroke-width: 2.4;
+}
+
+#toggle-ui-panels.active {
+  border-color: rgba(114, 221, 181, 0.82);
+  color: #72ddb5;
+  background: rgba(20, 58, 48, 0.82);
+}
+
+#toggle-ui-panels.active .panel-visibility-slash {
+  display: block;
+}
+
+#app.ui-panels-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#app.ui-panels-hidden #game-wrap {
+  grid-column: 1 / -1;
+}
+
+#app.ui-panels-hidden #panel,
+#app.ui-panels-hidden .left-stack,
+#app.ui-panels-hidden #berth-ops-widget,
+#app.ui-panels-hidden #agent-side-panel,
+#app.ui-panels-hidden #bottom-dock {
+  display: none !important;
 }
 
 @media (max-width: 760px) {
@@ -2047,7 +2538,7 @@ h2 {
 }
 
 #hud-status {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   max-width: 760px;
 }
 
@@ -2204,6 +2695,15 @@ h2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+  margin-bottom: 7px;
+}
+
+.shift-quick-controls.hidden,
+.shift-quick-total.hidden {
+  display: none;
+}
+
+.bottom-role-coverage {
   margin-bottom: 7px;
 }
 

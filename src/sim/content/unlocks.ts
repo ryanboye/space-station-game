@@ -27,7 +27,7 @@ function progressTo(current: number, threshold: number): number {
 const TIER1_VISITOR_ARRIVAL_THRESHOLD = 1;
 const TIER2_CREDIT_THRESHOLD = 500;
 const TIER2_ARCHETYPE_THRESHOLD = 3;
-const TIER3_TRADE_CYCLES_THRESHOLD = 1;
+const TIER3_TURNAROUNDS_THRESHOLD = 3;
 const TIER4_ACTORS_TREATED_THRESHOLD = 1;
 const TIER4_INCIDENTS_RESOLVED_THRESHOLD = 1;
 const TIER5_RESIDENTS_THRESHOLD = 5;
@@ -71,12 +71,12 @@ export const UNLOCK_DEFINITIONS: UnlockDefinition[] = [
     id: 'tier3_logistics',
     tier: 3,
     name: 'Advanced Operations',
-    description: 'Item-chain loop proven. Unlocks security, brig, clinic, rec hall, and advanced ship families.',
+    description: 'Port operation proven. Unlocks security, brig, clinic, rec hall, and advanced ship families.',
     trigger: {
-      predicate: (m: Metrics) => m.tradeCyclesCompletedLifetime >= TIER3_TRADE_CYCLES_THRESHOLD,
+      predicate: (m: Metrics) => m.turnaroundsCompletedLifetime >= TIER3_TURNAROUNDS_THRESHOLD,
       progress: (m: Metrics) =>
-        progressTo(m.tradeCyclesCompletedLifetime, TIER3_TRADE_CYCLES_THRESHOLD),
-      tooltip: 'Produce a trade good at a workshop and sell it at the market.',
+        progressTo(m.turnaroundsCompletedLifetime, TIER3_TURNAROUNDS_THRESHOLD),
+      tooltip: 'Complete three ship turnarounds.',
     },
   },
   {
@@ -187,7 +187,12 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Locker]: 0,
   [ModuleType.Table]: 0,
   [ModuleType.ServingStation]: 0,
+  [ModuleType.Fridge]: 0,
+  [ModuleType.ColdStore]: 0,
+  [ModuleType.PrepCounter]: 0,
   [ModuleType.Stove]: 0,
+  [ModuleType.TrayReturn]: 0,
+  [ModuleType.Dishwasher]: 0,
   [ModuleType.Workbench]: 2,
   [ModuleType.MedBed]: 3,
   [ModuleType.CellConsole]: 3,
@@ -199,6 +204,8 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Toilet]: 0,
   [ModuleType.Shower]: 0,
   [ModuleType.Sink]: 0,
+  [ModuleType.FloorDrain]: 0,
+  [ModuleType.WaterValve]: 0,
   [ModuleType.MarketStall]: 1,
   [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,

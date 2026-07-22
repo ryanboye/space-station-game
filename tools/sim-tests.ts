@@ -2467,6 +2467,54 @@ function testVisitorCafeteriaReservationSurvivesShortCrowdBlock(): void {
   assertCondition(stateAfterCrowdBlock !== VisitorState.Queueing, 'Crowded service tiles should not immediately demote visitors into queue churn.');
 }
 
+function testServingQueuePromotionIsStrictFifo(): void {
+  const state = createInitialState({ seed: 30052 });
+  buildHabitat(state);
+  setupCoreRooms(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 23, 13);
+  placeModuleOrThrow(state, ModuleType.ServingStation, 16, 11);
+  placeModuleOrThrow(state, ModuleType.Table, 19, 10);
+  state.crew.total = 0;
+
+  const servingTile = toIndex(16, 11, state.width);
+  tick(state, 0);
+  const servingNode = state.itemNodes.find((node) => node.tileIndex === servingTile);
+  assertCondition(!!servingNode, 'FIFO fixture should expose serving inventory.');
+  servingNode!.items.meal = 0;
+
+  for (let i = 0; i < 4; i++) {
+    spawnVisitor(state, 15, 10 + i, 30200 + i);
+    state.visitors[state.visitors.length - 1].patience = 100;
+  }
+  runFor(state, 5);
+
+  const queueEntry = [...state.derived.queueTheater.membersByAnchor.entries()]
+    .find(([, members]) => members.length >= 2);
+  assertCondition(!!queueEntry, 'FIFO fixture should form a physical serving line.');
+  if (!queueEntry) return;
+  const [anchor, members] = queueEntry;
+  const headId = members[0];
+  const secondId = members[1];
+
+  servingNode!.items.meal = 4;
+  for (const visitor of state.visitors) visitor.nextPathRetryAt = state.now;
+  // Process position two before the head to reproduce the old reservation
+  // race. Strict FIFO must make iteration order irrelevant.
+  state.visitors.sort((a, b) =>
+    a.id === secondId ? -1 : b.id === secondId ? 1 : a.id === headId ? 1 : b.id === headId ? -1 : a.id - b.id
+  );
+  tick(state, 0.25);
+
+  const providerReservation = state.reservations.find(
+    (reservation) => reservation.kind === 'provider-slot' && reservation.targetTile === anchor
+  );
+  assertCondition(!!providerReservation, 'The freed counter should be reserved immediately by the queue head.');
+  assertCondition(
+    providerReservation?.ownerKind === 'visitor' && providerReservation.ownerId === headId,
+    `Queue position two stole the counter reservation from the head (${providerReservation?.ownerId ?? 'none'} vs ${headId}).`
+  );
+}
+
 function testMaterialsChainEndToEnd(): void {
   const state = createInitialState({ seed: 3006 });
   buildHabitat(state);
@@ -6805,6 +6853,7 @@ function run(): void {
   testLowFoodUsesJobBoardInsteadOfRoomPosts();
   testServingStarvationQueue();
   testVisitorCafeteriaReservationSurvivesShortCrowdBlock();
+  testServingQueuePromotionIsStrictFifo();
   testMaterialsChainEndToEnd();
   testWorkshopPullsSuppliesBeforeStorageBulkFill();
   testWorkshopCanRunWithoutStorageRoom();

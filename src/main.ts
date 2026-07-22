@@ -65,7 +65,6 @@ import {
   isModuleUnlocked,
   isCrewHoldingProtectedPost,
   isPortAutoAdmitUnlocked,
-  isCrewAutoStaffUnlocked,
   isRoomUnlocked,
   isShipTypeUnlocked,
   isUtilityUnderlayKind,
@@ -77,11 +76,11 @@ import {
   quoteMaterialImportCost,
   removeModuleAtTile,
   refuseTrafficOffer,
-  setCrewPriorityPreset,
-  setCrewPriorityWeight,
   setPortAutoAdmit,
   setPortAutoAdmitPolicy,
-  setCrewAutoStaff,
+  setCrewWatchAssignment,
+  setCrewHomeWorkplace,
+  surgeWorkplace,
   selectSpecialty,
   setDockFacing,
   setDockPurpose,
@@ -95,10 +94,6 @@ import {
   sellRawFood,
   setRoom,
   setRoomHousingPolicy,
-  setSecurityPosture,
-  setCrewManualWorkLane,
-  setCrewShiftTarget,
-  setCrewWatchTarget,
   setEmergencyRecall,
   setZone,
   tick,
@@ -106,7 +101,6 @@ import {
   setUtilityUnderlayTile,
   tryPlaceModuleWithCredits,
   trySetTileWithCredits,
-  getCrewPriorityPresetWeights,
   mapConditionSamplesAt,
   validateDockPlacement
 } from './sim';
@@ -117,16 +111,15 @@ import {
 } from './sim/cold-start-scenarios';
 import {
   type CardinalDirection,
-  type CrewPriorityPreset,
   type CrewPrioritySystem,
   type CrewWorkLane,
   type CrewWatchIndex,
+  type CrewWatchStatus,
   type DiagnosticOverlay,
   type DockPurpose,
   type BerthScreeningLevel,
   type CustomsPolicy,
   type IncidentEntity,
-  type SecurityPosture,
   type SpaceLane,
   type ShipSize,
   type ShipType,
@@ -183,8 +176,10 @@ app.innerHTML = `
       </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
-      <span class="hud-item hud-item-action"><span class="hud-label">Prepared Meals</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Import 12 prepared meals for 36 credits" title="Import 12 prepared meals for 36 credits">+</button></span>
-      <span class="hud-item legacy-ui"><span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span></span>
+      <span class="hud-item hud-item-action"><span class="hud-label">Food Orders</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Order food supply for 36 credits" title="Order food supply for 36 credits">+</button></span>
+      <button id="open-rating-modal" class="hud-item hud-rating-button" type="button" title="Open station rating factors">
+        <span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span>
+      </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
       <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
       <span class="hud-item"><span class="hud-label">Station Stock</span><span class="hud-value" id="hud-materials">--</span></span>
@@ -236,6 +231,14 @@ app.innerHTML = `
           <circle cx="12" cy="12" r="3" />
         </svg>
       </button>
+      <button id="toggle-ui-panels" class="topbar-btn utility-icon" type="button" aria-label="Hide interface panels" title="Hide interface panels" aria-pressed="false" aria-controls="panel bottom-dock berth-ops-widget">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="3" y="4" width="18" height="16" rx="1" />
+          <path d="M8 4v16" />
+          <path d="M8 15h13" />
+          <path class="panel-visibility-slash" d="M4 3l16 18" />
+        </svg>
+      </button>
     </div>
     <div class="sim-controls">
       <span class="sim-clock" id="hud-clock">Cycle 0 | Day 1 | 00:00</span>
@@ -276,7 +279,10 @@ app.innerHTML = `
         <div class="operating-rhythm-head"><span id="watch-name">ALPHA WATCH</span><strong id="watch-countdown">2:15</strong></div>
         <div id="traffic-bank-now" class="operating-rhythm-bank">Passenger bank</div>
         <small id="traffic-bank-next">Next: cargo bank</small>
-        <button id="emergency-recall" class="mini-action-btn" type="button">Recall off-duty crew</button>
+        <div class="operating-rhythm-actions">
+          <button id="open-watch-roster" class="mini-action-btn" type="button" title="Set staffing targets for Alpha, Beta, and Gamma watches">Roster</button>
+          <button id="emergency-recall" class="mini-action-btn" type="button" title="Call the off-duty watch into service for 45 seconds; fatigue and morale costs rise">Emergency Recall</button>
+        </div>
       </section>
       <details class="hud-card task-card overlay-card legacy-ui">
         <summary class="hud-card-title">Tasks</summary>
@@ -301,7 +307,12 @@ app.innerHTML = `
     <section id="berth-ops-widget" class="hud-card berth-ops-widget overlay-card hidden" aria-live="polite">
       <div class="hud-card-title berth-ops-head">
         <span>Live Berth Ops</span>
-        <span id="berth-ops-count" class="berth-ops-count">0 ACTIVE</span>
+        <span class="berth-ops-head-actions">
+          <span id="berth-ops-count" class="berth-ops-count">0 ACTIVE</span>
+          <button id="toggle-berth-ops" class="panel-collapse-button" type="button" aria-label="Collapse live berth operations" title="Collapse ship details" aria-expanded="true" aria-controls="berth-ops-list">
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5 12l5-5 5 5" /></svg>
+          </button>
+        </span>
       </div>
       <div id="berth-ops-list" class="berth-ops-list"></div>
     </section>
@@ -333,13 +344,7 @@ app.innerHTML = `
           <span>Operations</span>
           <button id="open-ops-modal" class="mini-action-btn">Shift Roster</button>
         </div>
-        <div class="shift-quick-controls" aria-label="Shift allocation">
-          <div class="shift-quick-row"><span>Service</span><button data-shift-step="food" data-delta="-1" aria-label="Remove service crew">−</button><b data-shift-count="food">0</b><button data-shift-step="food" data-delta="1" aria-label="Add service crew">+</button></div>
-          <div class="shift-quick-row"><span>Cargo</span><button data-shift-step="logistics" data-delta="-1" aria-label="Remove cargo crew">−</button><b data-shift-count="logistics">0</b><button data-shift-step="logistics" data-delta="1" aria-label="Add cargo crew">+</button></div>
-          <div class="shift-quick-row"><span>Maintenance</span><button data-shift-step="engineering" data-delta="-1" aria-label="Remove maintenance crew">−</button><b data-shift-count="engineering">0</b><button data-shift-step="engineering" data-delta="1" aria-label="Add maintenance crew">+</button></div>
-          <div class="shift-quick-row"><span>Cleaning</span><button data-shift-step="sanitation" data-delta="-1" aria-label="Remove cleaning crew">−</button><b data-shift-count="sanitation">0</b><button data-shift-step="sanitation" data-delta="1" aria-label="Add cleaning crew">+</button></div>
-        </div>
-        <small id="shift-quick-total" class="shift-quick-total">0 assigned · 0 flexible</small>
+        <div id="bottom-role-coverage" class="bottom-role-coverage" aria-live="polite"></div>
         <div class="row compact list-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
         <div class="row compact list-row"><span>Fuel</span><span class="value" id="fuel-status">No tanks</span></div>
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
@@ -446,7 +451,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
         <button class="tool-btn" data-tool-utility-underlay="air-duct" title="Draw underfloor Air Ducts — connect Life Support to wall Vents"><span class="tool-key">·</span>Air Duct</button>
-        <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Duct</button>
+        <button class="tool-btn" data-tool-utility-underlay="water-pipe" title="Draw underfloor Water Pipes — connect hygiene and kitchen fixtures"><span class="tool-key">·</span>Water Pipe</button>
+        <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Utility</button>
         <button class="tool-btn" data-tool-cancel-construction="1" title="Cancel build orders by dragging over blueprints"><span class="tool-key">·</span>Cancel Build</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
         <button class="tool-btn" data-tool-clearroom="1" title="Clear Room (0)"><span class="tool-key">0</span>Clear Room</button>
@@ -487,11 +493,18 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="locker" title="Place Locker — improves crew quarters quality"><span class="tool-key">·</span>Locker</button>
         <button class="tool-btn" data-tool-module="table" title="Place Dining Table (T) — includes four visible seats"><span class="tool-key">T</span>Table + 4 seats</button>
         <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
+        <button class="tool-btn" data-tool-module="fridge" title="Place Fridge — cold ingredient buffer"><span class="tool-key">·</span>Fridge</button>
+        <button class="tool-btn" data-tool-module="cold-store" title="Place Cold Store — large raw-food buffer"><span class="tool-key">·</span>Cold</button>
+        <button class="tool-btn" data-tool-module="prep-counter" title="Place Prep Counter — staffed ingredient prep"><span class="tool-key">·</span>Prep</button>
         <button class="tool-btn" data-tool-module="stove" title="Place Stove (V)"><span class="tool-key">V</span>Stove</button>
+        <button class="tool-btn" data-tool-module="tray-return" title="Place Tray Return — dirty tray dropoff"><span class="tool-key">·</span>Tray</button>
+        <button class="tool-btn" data-tool-module="dishwasher" title="Place Dishwasher — staffed tray washing"><span class="tool-key">·</span>Wash</button>
         <button class="tool-btn" data-tool-module="grow-station" title="Place Grow Station (G)"><span class="tool-key">G</span>Grow</button>
         <button class="tool-btn" data-tool-module="toilet" title="Place Toilet (Bathroom-only) — relieves bladder, one user at a time"><span class="tool-key">·</span>Toilet</button>
         <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
         <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
+        <button class="tool-btn" data-tool-module="floor-drain" title="Place Floor Drain — flood relief"><span class="tool-key">·</span>Drain</button>
+        <button class="tool-btn" data-tool-module="water-valve" title="Place Water Valve — local pipe isolation"><span class="tool-key">·</span>Valve</button>
         <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
         <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
         <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
@@ -594,6 +607,41 @@ app.innerHTML = `
         <small id="approach-reputation-pull" class="approach-reputation-pull">Traffic pull: reputation has no effect yet</small>
         <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
         <small id="traffic-action-note" class="traffic-action-note">Select a manifest to reserve a berth.</small>
+      </div>
+    </div>
+  </div>
+  <div id="rating-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="rating-modal-title">
+    <div class="modal-card rating-modal-card">
+      <div class="modal-head">
+        <div class="rating-modal-heading">
+          <span class="rating-modal-kicker">Station Reputation</span>
+          <h2 id="rating-modal-title">Station Rating</h2>
+        </div>
+        <button id="close-rating-modal" class="ghost-btn icon-close-btn" aria-label="Close station rating" title="Close">&times;</button>
+      </div>
+      <div class="rating-modal-score-row">
+        <strong id="rating-modal-score" class="rating-modal-score">--</strong>
+        <span id="rating-modal-trend" class="rating-modal-trend">--/min</span>
+      </div>
+      <p id="rating-modal-summary" class="rating-modal-summary">Rating factors will appear as the station operates.</p>
+      <div class="rating-modal-effect" id="rating-modal-effect">Reputation affects which traffic finds the station.</div>
+      <div class="rating-factor-grid">
+        <section class="rating-factor-group rating-factor-group-positive">
+          <div class="rating-factor-heading"><strong>Helping now</strong><small>positive rating per minute</small></div>
+          <div id="rating-modal-bonuses" class="metric-list rating-driver-list" data-metric-title="Service"></div>
+        </section>
+        <section class="rating-factor-group rating-factor-group-negative">
+          <div class="rating-factor-heading"><strong>Hurting now</strong><small>negative rating per minute</small></div>
+          <div id="rating-modal-penalties" class="metric-list rating-driver-list" data-metric-title="Pressure"></div>
+        </section>
+      </div>
+      <section class="rating-factor-group rating-factor-group-failures">
+        <div class="rating-factor-heading"><strong>Why service is failing</strong><small>live failure reasons per minute</small></div>
+        <div id="rating-modal-failures" class="metric-list rating-driver-list" data-metric-title="Misses"></div>
+      </section>
+      <div class="rating-modal-driver-block">
+        <strong>Recorded contributors</strong>
+        <div id="rating-modal-drivers" class="rating-driver-notes"></div>
       </div>
     </div>
   </div>
@@ -708,60 +756,16 @@ app.innerHTML = `
     </div>
   </div>
   <div id="priority-modal" class="modal hidden">
-    <div class="modal-card">
+    <div class="modal-card crew-roster-modal-card">
       <div class="modal-head">
-        <h2>Crew Assignments</h2>
+        <span><h2>Crew Roster</h2><small>Plan watches by person. Assign workplaces in the station.</small></span>
         <button id="close-priority" class="ghost-btn">Close</button>
       </div>
-      <div class="row compact list-row">
-        <span>Preset</span>
-        <select id="crew-priority-preset">
-          <option value="balanced">Balanced</option>
-          <option value="life-support">Life Support</option>
-          <option value="food-chain">Food Chain</option>
-          <option value="economy">Economy</option>
-        </select>
-      </div>
-      <div class="row compact list-row">
-        <span>Security Posture</span>
-        <select id="security-posture">
-          <option value="discreet">Discreet</option>
-          <option value="standard">Standard</option>
-          <option value="visible">Visible Patrol</option>
-        </select>
-      </div>
-      <div class="shift-roster-head">
-        <div><strong>Shift Roster</strong><small>Reserve real crew for the work that keeps ships and guests moving.</small></div>
-        <span id="shift-roster-total">0 assigned · 0 flexible</span>
-      </div>
-      <div class="watch-selector" aria-label="Watch to configure">
-        <button type="button" data-watch-edit="0">Alpha</button>
-        <button type="button" data-watch-edit="1">Beta</button>
-        <button type="button" data-watch-edit="2">Gamma</button>
-      </div>
-      <button id="toggle-crew-auto" class="secondary-command automation-toggle">Auto-staffing locked</button>
-      <small id="crew-auto-status" class="automation-status">Available when the station employs 10 crew.</small>
-      <div class="shift-roster-grid">
-        <div class="shift-roster-row"><span><strong>Kitchen + Service</strong><small>Cook meals and keep counters staffed</small></span><button data-shift-step="food" data-delta="-1">−</button><b data-shift-count="food">0</b><button data-shift-step="food" data-delta="1">+</button></div>
-        <div class="shift-roster-row"><span><strong>Customs + Cargo</strong><small>Inspect ships, unload, stock, and export</small></span><button data-shift-step="logistics" data-delta="-1">−</button><b data-shift-count="logistics">0</b><button data-shift-step="logistics" data-delta="1">+</button></div>
-        <div class="shift-roster-row"><span><strong>Engineering</strong><small>Keep reactor and life support staffed</small></span><button data-shift-step="engineering" data-delta="-1">−</button><b data-shift-count="engineering">0</b><button data-shift-step="engineering" data-delta="1">+</button></div>
-        <div class="shift-roster-row"><span><strong>Sanitation</strong><small>Clean public rooms before reputation drops</small></span><button data-shift-step="sanitation" data-delta="-1">−</button><b data-shift-count="sanitation">0</b><button data-shift-step="sanitation" data-delta="1">+</button></div>
-        <div class="shift-roster-row"><span><strong>Construction / EVA</strong><small>Build expansion and repair the hull</small></span><button data-shift-step="construction-eva" data-delta="-1">−</button><b data-shift-count="construction-eva">0</b><button data-shift-step="construction-eva" data-delta="1">+</button></div>
-      </div>
-      <small id="shift-roster-note" class="market-status">Unrostered crew automatically cover pressure elsewhere.</small>
-      <div class="section-title priority-advanced-title">Automatic priority inside each shift</div>
-      <div class="priority-grid">
-        <label class="priority-row">Life Support <input type="range" min="1" max="10" step="1" data-priority="life-support" /><span id="prio-life-support">1</span></label>
-        <label class="priority-row">Reactor <input type="range" min="1" max="10" step="1" data-priority="reactor" /><span id="prio-reactor">1</span></label>
-        <label class="priority-row">Hydroponics <input type="range" min="1" max="10" step="1" data-priority="hydroponics" /><span id="prio-hydroponics">1</span></label>
-        <label class="priority-row">Kitchen <input type="range" min="1" max="10" step="1" data-priority="kitchen" /><span id="prio-kitchen">1</span></label>
-        <label class="priority-row">Workshop <input type="range" min="1" max="10" step="1" data-priority="workshop" /><span id="prio-workshop">1</span></label>
-        <label class="priority-row">Cafeteria <input type="range" min="1" max="10" step="1" data-priority="cafeteria" /><span id="prio-cafeteria">1</span></label>
-        <label class="priority-row">Market <input type="range" min="1" max="10" step="1" data-priority="market" /><span id="prio-market">1</span></label>
-        <label class="priority-row">Lounge <input type="range" min="1" max="10" step="1" data-priority="lounge" /><span id="prio-lounge">1</span></label>
-        <label class="priority-row">Security <input type="range" min="1" max="10" step="1" data-priority="security" /><span id="prio-security">1</span></label>
-        <label class="priority-row">Hygiene <input type="range" min="1" max="10" step="1" data-priority="hygiene" /><span id="prio-hygiene">1</span></label>
-      </div>
+      <div id="role-coverage-summary" class="role-coverage-summary" aria-live="polite"></div>
+      <div id="workplace-assignment-context" class="workplace-assignment-context hidden" aria-live="polite"></div>
+      <div id="watch-assignment-bar" class="watch-assignment-bar" aria-live="polite"></div>
+      <div id="named-watch-roster" class="named-watch-roster"></div>
+      <small class="roster-rule">Role decides what work a person can do. Their watch decides when they are available.</small>
     </div>
   </div>
   <div id="ops-modal" class="modal hidden">
@@ -891,6 +895,10 @@ app.innerHTML = `
       <div class="row compact list-row"><span>Doors</span><span class="value" id="room-modal-doors">0</span></div>
       <div class="row compact list-row"><span>Pressurization</span><span class="value" id="room-modal-pressure">0%</span></div>
       <div class="row compact list-row"><span>Staff</span><span class="value" id="room-modal-staff">0/0</span></div>
+      <section id="room-modal-workplace" class="room-workplace-panel hidden">
+        <div class="room-workplace-head"><span><strong id="room-modal-workplace-name">Workplace</strong><small id="room-modal-workplace-roles">Role</small></span><span class="room-workplace-actions"><button id="room-modal-surge-workplace" type="button">Surge</button><button id="room-modal-plan-workplace" type="button">Plan staff</button></span></div>
+        <div id="room-modal-workplace-status" class="room-workplace-status">No assigned crew.</div>
+      </section>
       <div class="row compact list-row"><span>Service Nodes</span><span class="value" id="room-modal-nodes">0</span></div>
       <small id="room-modal-inventory">Inventory: n/a</small>
       <small id="room-modal-flow">Flow: n/a</small>
@@ -1083,6 +1091,7 @@ const approachReputationPullEl = document.querySelector<HTMLElement>('#approach-
 const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
 const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
 const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
+const toggleBerthOpsBtn = document.querySelector<HTMLButtonElement>('#toggle-berth-ops')!;
 const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
 const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
@@ -1485,8 +1494,6 @@ const foodChainHintEl = document.querySelector<HTMLElement>('#food-chain-hint')!
 const roomWarningsEl = document.querySelector<HTMLElement>('#room-warnings')!;
 const maintenanceStatusEl = document.querySelector<HTMLElement>('#maintenance-status')!;
 const thermalStatusEl = document.querySelector<HTMLElement>('#thermal-status')!;
-const crewPriorityPresetSelect = document.querySelector<HTMLSelectElement>('#crew-priority-preset')!;
-const securityPostureSelect = document.querySelector<HTMLSelectElement>('#security-posture')!;
 const editPrioritiesBtn = document.querySelector<HTMLButtonElement>('#edit-priorities')!;
 const hireCrewBtn = document.querySelector<HTMLButtonElement>('#hire-crew')!;
 const openCrewCommandBtn = document.querySelector<HTMLButtonElement>('#open-crew-command')!;
@@ -1516,6 +1523,7 @@ const materialImportBatchInput = document.querySelector<HTMLInputElement>('#mate
 const materialImportStatusEl = document.querySelector<HTMLElement>('#material-import-status')!;
 const openSaveModalBtn = document.querySelector<HTMLButtonElement>('#open-save-modal')!;
 const cameraResetBtn = document.querySelector<HTMLButtonElement>('#camera-reset')!;
+const toggleUiPanelsBtn = document.querySelector<HTMLButtonElement>('#toggle-ui-panels')!;
 const saveModal = document.querySelector<HTMLDivElement>('#save-modal')!;
 const closeSaveModalBtn = document.querySelector<HTMLButtonElement>('#close-save-modal')!;
 const openMarketBtn = document.querySelector<HTMLButtonElement>('#open-market')!;
@@ -1531,6 +1539,17 @@ const systemMapCanvas = document.querySelector<HTMLCanvasElement>('#system-map-c
 const systemMapSummaryEl = document.querySelector<HTMLElement>('#system-map-summary')!;
 const systemMapFactionsEl = document.querySelector<HTMLElement>('#system-map-factions')!;
 const systemMapLanesEl = document.querySelector<HTMLElement>('#system-map-lanes')!;
+const ratingModal = document.querySelector<HTMLDivElement>('#rating-modal')!;
+const openRatingModalBtn = document.querySelector<HTMLButtonElement>('#open-rating-modal')!;
+const closeRatingModalBtn = document.querySelector<HTMLButtonElement>('#close-rating-modal')!;
+const ratingModalScoreEl = document.querySelector<HTMLElement>('#rating-modal-score')!;
+const ratingModalTrendEl = document.querySelector<HTMLElement>('#rating-modal-trend')!;
+const ratingModalSummaryEl = document.querySelector<HTMLElement>('#rating-modal-summary')!;
+const ratingModalEffectEl = document.querySelector<HTMLElement>('#rating-modal-effect')!;
+const ratingModalBonusesEl = document.querySelector<HTMLElement>('#rating-modal-bonuses')!;
+const ratingModalPenaltiesEl = document.querySelector<HTMLElement>('#rating-modal-penalties')!;
+const ratingModalFailuresEl = document.querySelector<HTMLElement>('#rating-modal-failures')!;
+const ratingModalDriversEl = document.querySelector<HTMLElement>('#rating-modal-drivers')!;
 const priorityModal = document.querySelector<HTMLDivElement>('#priority-modal')!;
 const closePriorityBtn = document.querySelector<HTMLButtonElement>('#close-priority')!;
 const opsModal = document.querySelector<HTMLDivElement>('#ops-modal')!;
@@ -1636,6 +1655,12 @@ const roomModalClusterEl = document.querySelector<HTMLElement>('#room-modal-clus
 const roomModalDoorsEl = document.querySelector<HTMLElement>('#room-modal-doors')!;
 const roomModalPressureEl = document.querySelector<HTMLElement>('#room-modal-pressure')!;
 const roomModalStaffEl = document.querySelector<HTMLElement>('#room-modal-staff')!;
+const roomModalWorkplaceEl = document.querySelector<HTMLElement>('#room-modal-workplace')!;
+const roomModalWorkplaceNameEl = document.querySelector<HTMLElement>('#room-modal-workplace-name')!;
+const roomModalWorkplaceRolesEl = document.querySelector<HTMLElement>('#room-modal-workplace-roles')!;
+const roomModalWorkplaceStatusEl = document.querySelector<HTMLElement>('#room-modal-workplace-status')!;
+const roomModalPlanWorkplaceBtn = document.querySelector<HTMLButtonElement>('#room-modal-plan-workplace')!;
+const roomModalSurgeWorkplaceBtn = document.querySelector<HTMLButtonElement>('#room-modal-surge-workplace')!;
 const roomModalNodesEl = document.querySelector<HTMLElement>('#room-modal-nodes')!;
 const roomModalInventoryEl = document.querySelector<HTMLElement>('#room-modal-inventory')!;
 const roomModalFlowEl = document.querySelector<HTMLElement>('#room-modal-flow')!;
@@ -1722,18 +1747,6 @@ const saveImportTextarea = document.querySelector<HTMLTextAreaElement>('#save-im
 const saveImportBtn = document.querySelector<HTMLButtonElement>('#save-import-btn')!;
 const saveStatusEl = document.querySelector<HTMLElement>('#save-status')!;
 const saveCountEl = document.querySelector<HTMLElement>('#save-count')!;
-const prioritySystems: CrewPrioritySystem[] = [
-  'life-support',
-  'reactor',
-  'hydroponics',
-  'kitchen',
-  'workshop',
-  'cafeteria',
-  'market',
-  'lounge',
-  'security',
-  'hygiene'
-];
 const workforceLaneOrder: CrewWorkLane[] = ['food', 'sanitation', 'engineering', 'logistics', 'construction-eva', 'flex'];
 const workforceLaneLabels: Record<CrewWorkLane, string> = {
   food: 'Food',
@@ -1743,29 +1756,19 @@ const workforceLaneLabels: Record<CrewWorkLane, string> = {
   'construction-eva': 'Construction/EVA',
   flex: 'Flex'
 };
-const priorityInputs = new Map<CrewPrioritySystem, HTMLInputElement>();
-const priorityValueEls = new Map<CrewPrioritySystem, HTMLElement>();
-const shiftRosterTotalEl = document.querySelector<HTMLElement>('#shift-roster-total')!;
-const shiftRosterNoteEl = document.querySelector<HTMLElement>('#shift-roster-note')!;
-const shiftQuickTotalEl = document.querySelector<HTMLElement>('#shift-quick-total')!;
-const crewAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-crew-auto')!;
-const crewAutoStatusEl = document.querySelector<HTMLElement>('#crew-auto-status')!;
+const roleCoverageSummaryEl = document.querySelector<HTMLElement>('#role-coverage-summary')!;
+const namedWatchRosterEl = document.querySelector<HTMLElement>('#named-watch-roster')!;
+const workplaceAssignmentContextEl = document.querySelector<HTMLElement>('#workplace-assignment-context')!;
+const watchAssignmentBarEl = document.querySelector<HTMLElement>('#watch-assignment-bar')!;
+const bottomRoleCoverageEl = document.querySelector<HTMLElement>('#bottom-role-coverage')!;
 const watchNameEl = document.querySelector<HTMLElement>('#watch-name')!;
 const watchCountdownEl = document.querySelector<HTMLElement>('#watch-countdown')!;
 const trafficBankNowEl = document.querySelector<HTMLElement>('#traffic-bank-now')!;
 const trafficBankNextEl = document.querySelector<HTMLElement>('#traffic-bank-next')!;
 const emergencyRecallEl = document.querySelector<HTMLButtonElement>('#emergency-recall')!;
-let selectedRosterWatch: CrewWatchIndex = getOperatingSchedule(state).watch;
-for (const system of prioritySystems) {
-  const input = document.querySelector<HTMLInputElement>(`input[data-priority="${system}"]`);
-  const valueEl = document.querySelector<HTMLElement>(`#prio-${system}`);
-  if (input && valueEl) {
-    priorityInputs.set(system, input);
-    priorityValueEls.set(system, valueEl);
-  }
-}
-crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
-securityPostureSelect.value = state.controls.securityPosture;
+const openWatchRosterEl = document.querySelector<HTMLButtonElement>('#open-watch-roster')!;
+let selectedRosterCrewId: number | null = null;
+let selectedWorkplaceAnchor: number | null = null;
 
 // The Build & Room Legend sidebar panel was removed in the HUD-cleanup
 // pass (awfml's live-game feedback: the top toolbar already surfaces
@@ -1828,12 +1831,12 @@ const TIER_PRESENTATION: Record<UnlockTier, TierPresentation> = {
   },
   2: {
     name: 'Production Logistics',
-    theme: 'Scale supply storage and convert supplies into trade goods.',
+    theme: 'Scale cargo storage and choose whether to enter production.',
     buildings: ['Workshop', 'Storage'],
     citizenNeeds: ['Errands/work loops gain value from reliable logistics'],
-    visitorNeeds: ['Industrial traffic now expects workshop-backed service reliability'],
+    visitorNeeds: ['Industrial traffic values reliable cargo handling and buffers'],
     ships: ['Industrial'],
-    systems: ['Full goods chain: intake -> storage -> workshop -> market stall sale']
+    systems: ['Cargo storage plus optional workshop and market specialization']
   },
   3: {
     name: 'Advanced Operations',
@@ -2099,6 +2102,12 @@ function refreshHudStatus(): void {
   hudFoodEl.textContent = String(Math.round(state.metrics.mealStock));
   hudRatingEl.textContent = String(Math.round(state.metrics.stationRating));
   hudRatingEl.style.color = ratingToneColor();
+  const ratingButton = hudRatingEl.parentElement;
+  if (ratingButton) {
+    const ratingTrend = state.metrics.stationRatingTrendPerMin;
+    ratingButton.title = `Station rating ${Math.round(state.metrics.stationRating)} (${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(1)}/min). Click to inspect factors.`;
+    ratingButton.setAttribute('aria-label', ratingButton.title);
+  }
   hudMoraleEl.textContent = `${Math.round(state.metrics.morale)}%`;
   hudMoraleEl.style.color =
     state.metrics.morale > 65 ? 'var(--ok)' : state.metrics.morale > 40 ? 'var(--warn)' : 'var(--danger)';
@@ -2308,46 +2317,68 @@ function offerFacilityVerdict(offer: StationState['trafficOffers'][number]): { l
     : { label: `MISSING ${missing.join(' + ')}`, ready: false };
 }
 
-function offerCrewPlan(offer: StationState['trafficOffers'][number]): { service: number; cargo: number } {
-  if (offer.offerKind === 'passenger') return { service: 3, cargo: 0 };
-  if (offer.offerKind === 'freight') return { service: 0, cargo: 4 };
-  return { service: 2, cargo: 3 };
+function offerRolePlan(offer: StationState['trafficOffers'][number]): Partial<Record<StaffRole, number>> {
+  const inbound = Object.values(offer.inboundCargo).reduce((sum, amount) => sum + amount, 0);
+  const outbound = Object.values(offer.outboundRequest).reduce((sum, amount) => sum + amount, 0);
+  const freight = inbound + outbound + (offer.fuelSupply ?? 0) + (offer.fuelRequest ?? 0);
+  const plan: Partial<Record<StaffRole, number>> = {};
+  if (offer.passengersTotal > 0) {
+    if (offer.manifestDemand.cafeteria > 0) plan.cook = 1;
+    if (
+      offer.manifestDemand.lounge > 0 ||
+      (offer.hospitalityDemand?.drink ?? 0) > 0 ||
+      (offer.hospitalityDemand?.leisure ?? 0) > 0
+    ) plan.steward = 1;
+  }
+  if (freight > 0) plan['cargo-handler'] = freight >= 48 ? 2 : 1;
+  if ((offer.fuelSupply ?? 0) > 0 || (offer.fuelRequest ?? 0) > 0) plan.engineer = 1;
+  if (offer.riskLabel === 'high') plan['security-guard'] = 1;
+  return plan;
 }
 
 function offerOperatingPlan(offer: StationState['trafficOffers'][number]): string {
-  const plan = offerCrewPlan(offer);
-  if ((offer.fuelSupply ?? 0) > 0) return `${plan.cargo} Cargo · arm → fuel tank`;
-  if ((offer.fuelRequest ?? 0) > 0) return `${Math.max(2, plan.cargo)} Cargo · fuel tank → berth pump`;
-  if (offer.offerKind === 'passenger') return `${plan.service} Service · protect the food line`;
-  if (offer.offerKind === 'freight') return `${plan.cargo} Cargo · clear arm → storage`;
-  return `${plan.service} Service + ${plan.cargo} Cargo · both routes compete`;
+  const roles = Object.entries(offerRolePlan(offer))
+    .filter((entry): entry is [StaffRole, number] => (entry[1] ?? 0) > 0)
+    .map(([role, count]) => `${count} ${STAFF_ROLE_DEFINITIONS[role].label}`);
+  const workstream = (offer.fuelSupply ?? 0) > 0
+    ? 'arm → fuel tank'
+    : (offer.fuelRequest ?? 0) > 0
+      ? 'fuel tank → berth pump'
+      : offer.offerKind === 'passenger'
+        ? 'mess + hospitality'
+        : offer.offerKind === 'freight'
+          ? 'arm → storage'
+          : 'public and cargo routes overlap';
+  return `${roles.join(' + ') || 'No specialist posts'} · ${workstream}`;
 }
 
 function crewPlanVerdict(offer: StationState['trafficOffers'][number]): { label: string; ready: boolean } {
-  const plan = offerCrewPlan(offer);
-  const targets = state.controls.crewShiftTargets;
-  const serviceGap = Math.max(0, plan.service - (targets.food ?? 0));
-  const cargoGap = Math.max(0, plan.cargo - (targets.logistics ?? 0));
-  const gaps = [
-    serviceGap > 0 ? `${serviceGap} Service` : '',
-    cargoGap > 0 ? `${cargoGap} Cargo` : ''
-  ].filter(Boolean);
+  const gaps = Object.entries(offerRolePlan(offer))
+    .filter((entry): entry is [StaffRole, number] => (entry[1] ?? 0) > 0)
+    .map(([role, needed]) => {
+      const available = state.crewMembers.filter(
+        (crew) => crewMatchesCoverageRole(crew.staffRole, role) && getCrewWatchStatus(state, crew) !== 'off-duty'
+      ).length;
+      const gap = Math.max(0, needed - available);
+      return gap > 0 ? `${gap} ${STAFF_ROLE_DEFINITIONS[role].label}` : '';
+    })
+    .filter(Boolean);
   return gaps.length === 0
     ? { label: 'CREW READY', ready: true }
     : { label: `SHORT ${gaps.join(' + ')}`, ready: false };
 }
 
 function promiseIntervention(kind: StationState['portOps']['contracts'][number]['promises'][number]['kind']): string {
-  if (kind === 'passengers-served') return 'Move flexible crew to Service or add counter throughput.';
+  if (kind === 'passengers-served') return 'Assign a Cook or Steward to the mess, or add counter throughput.';
   if (kind === 'drinks-served') return 'Open a Cantina with a Bar Counter; Taps shorten drink service.';
   if (kind === 'leisure-served') return 'Add Lounge seating and protect the public route.';
   if (kind === 'restroom-served') return 'Add visitor-zoned Toilets; every fixture serves one person.';
   if (kind === 'hygiene-served') return 'Add visitor-zoned Showers or Sinks.';
   if (kind === 'comfort-served') return 'Add a Game Station or Observatory Telescope.';
   if (kind === 'passengers-returned') return 'Protect the public route and leave boarding slack.';
-  if (kind === 'freight-unloaded' || kind === 'freight-loaded') return 'Move flexible crew to Cargo and clear the storage route.';
+  if (kind === 'freight-unloaded' || kind === 'freight-loaded') return 'Assign Cargo Handlers to the berth or storage and clear their route.';
   if (kind === 'fuel-received') return 'Add free Fuel Tank capacity and keep the cargo route staffed.';
-  if (kind === 'fuel-delivered') return 'Stock fuel, staff Cargo, and clear the route from tank to berth pump.';
+  if (kind === 'fuel-delivered') return 'Stock fuel, assign a Cargo Handler, and clear the route from tank to berth pump.';
   return 'Protect the work needed by this promise.';
 }
 
@@ -2382,10 +2413,9 @@ function refreshShiftBrief(activeTurnarounds: StationState['arrivingShips']): vo
   if (accepted) {
     const offer = state.trafficOffers.find((entry) => entry.id === accepted.offerId);
     if (offer) {
-      const plan = offerCrewPlan(offer);
       const verdict = crewPlanVerdict(offer);
       shiftBriefEl.className = verdict.ready ? 'shift-brief is-ready' : 'shift-brief is-urgent';
-      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Prepare · arrives in ${Math.max(1, Math.ceil(accepted.arrivesAt - state.now))}s</span><strong>${escapeHtml(accepted.callsign)} needs ${plan.service} Service · ${plan.cargo} Cargo</strong><span>${verdict.ready ? 'Safe plan ready. Press Play, or reserve a second manifest to risk an overlap.' : `${verdict.label}. Reassign the flexible crew before arrival.`}</span>`;
+      shiftBriefEl.innerHTML = `<span class="shift-brief-kicker">Prepare · arrives in ${Math.max(1, Math.ceil(accepted.arrivesAt - state.now))}s</span><strong>${escapeHtml(accepted.callsign)} · ${escapeHtml(offerOperatingPlan(offer))}</strong><span>${verdict.ready ? 'Required roles are available. Press Play, or accept an overlap that competes for the same people and routes.' : `${verdict.label}. Hire the role, adjust its watch, or hold this arrival.`}</span>`;
       return;
     }
   }
@@ -2405,7 +2435,7 @@ function refreshShiftBrief(activeTurnarounds: StationState['arrivingShips']): vo
   shiftBriefEl.innerHTML = openOffers.length > 0
     ? '<span class="shift-brief-kicker">Choose this shift\'s work</span><strong>Reserve one manifest, then staff its promise</strong><span>Passenger work needs Service. Freight needs Cargo. Overlap competes for the same eight crew.</span>'
     : state.portOps.firstOfferShownAt === null
-      ? '<span class="shift-brief-kicker">Start the shift</span><strong>Press Play to receive the first manifests</strong><span>Dispatch pauses when the choices arrive, so you can compare them before committing.</span>'
+      ? '<span class="shift-brief-kicker">Start the shift</span><strong>Press Play to receive the first manifests</strong><span>Approach Control will announce arrivals without interrupting station operations.</span>'
       : '<span class="shift-brief-kicker">Waiting for traffic</span><strong>Keep the station ready</strong><span>Review the roster, meal buffer, storage route, and cargo-arm condition.</span>';
 }
 
@@ -2602,6 +2632,9 @@ function refreshTrafficOffers(): void {
   trafficOfferListEl.innerHTML = offersHtml;
 }
 
+let routeConflictCalloutSampledAt = Number.NEGATIVE_INFINITY;
+let routeConflictCallout: { tileIndex: number; label: string } | null = null;
+
 function drawPortTurnaroundCallouts(): void {
   const drawLabel = (label: string, cx: number, cy: number, color: string): void => {
     const width = Math.max(54, ctx.measureText(label).width + 18);
@@ -2630,7 +2663,24 @@ function drawPortTurnaroundCallouts(): void {
     const quantity = incomplete && seconds !== null && seconds <= 28
       ? ` · ${Math.floor(incomplete.completed)}/${Math.floor(incomplete.target)}`
       : '';
-    const label = `${ship.stage === 'approach' ? 'INBOUND' : (turn?.phase ?? 'BERTHING').toUpperCase()}${seconds === null ? '' : ` ${seconds}s`}${quantity}`;
+    const requiredRole = incomplete?.kind === 'freight-unloaded' || incomplete?.kind === 'freight-loaded' || incomplete?.kind === 'fuel-received' || incomplete?.kind === 'fuel-delivered'
+      ? 'cargo-handler'
+      : incomplete?.kind === 'drinks-served'
+        ? 'steward'
+        : incomplete?.kind === 'passengers-served'
+          ? 'hospitality'
+          : null;
+    const roleAvailable = requiredRole === 'hospitality'
+      ? state.crewMembers.some((crew) =>
+          (crew.staffRole === 'cook' || crew.staffRole === 'steward') && getCrewWatchStatus(state, crew) !== 'off-duty'
+        )
+      : requiredRole === null
+        ? true
+        : state.crewMembers.some((crew) => crew.staffRole === requiredRole && getCrewWatchStatus(state, crew) !== 'off-duty');
+    const roleWarning = roleAvailable || requiredRole === null
+      ? ''
+      : requiredRole === 'cargo-handler' ? ' · NO CARGO HANDLER' : requiredRole === 'steward' ? ' · NO STEWARD' : ' · NO COOK/STEWARD';
+    const label = `${ship.stage === 'approach' ? 'INBOUND' : (turn?.phase ?? 'BERTHING').toUpperCase()}${seconds === null ? '' : ` ${seconds}s`}${quantity}${roleWarning}`;
     const cx = x * TILE_SIZE + TILE_SIZE * 0.5;
     const cy = y * TILE_SIZE - 9;
     const color = seconds !== null && incomplete && seconds <= 12
@@ -2640,6 +2690,36 @@ function drawPortTurnaroundCallouts(): void {
         : turn?.phase === 'open' ? '#63d6a0' : '#75b8e8';
     drawLabel(label, cx, cy, color);
   }
+  if (state.now - routeConflictCalloutSampledAt >= 1 || state.now < routeConflictCalloutSampledAt) {
+    routeConflictCalloutSampledAt = state.now;
+    routeConflictCallout = null;
+    const diagnostics = getRoutePressureDiagnostics(state);
+    let bestScore = 0;
+    for (let tileIndex = 0; tileIndex < state.tiles.length; tileIndex++) {
+      const publicFlow = diagnostics.visitorByTile[tileIndex] + diagnostics.residentByTile[tileIndex];
+      const serviceFlow = diagnostics.crewByTile[tileIndex] + diagnostics.logisticsByTile[tileIndex];
+      if (publicFlow <= 0 || serviceFlow <= 0) continue;
+      const tile = getRoutePressureTileDiagnostic(
+        state,
+        tileIndex % state.width,
+        Math.floor(tileIndex / state.width),
+        diagnostics
+      );
+      if (!tile || tile.conflictScore <= 0) continue;
+      const score = tile.conflictScore * 10 + tile.totalCount;
+      if (score <= bestScore) continue;
+      bestScore = score;
+      routeConflictCallout = {
+        tileIndex,
+        label: tile.logisticsCount > 0 ? 'PUBLIC / CARGO CONFLICT' : 'PUBLIC / CREW CONFLICT'
+      };
+    }
+  }
+  if (routeConflictCallout) {
+    const x = routeConflictCallout.tileIndex % state.width;
+    const y = Math.floor(routeConflictCallout.tileIndex / state.width);
+    drawLabel(routeConflictCallout.label, (x + 0.5) * TILE_SIZE, y * TILE_SIZE - 7, '#f3bd62');
+  }
   const serving = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation);
   const activeGuests = state.visitors.filter((visitor) => visitor.state !== VisitorState.ToDock).length;
   const activeCrewMeals = state.crewMembers.filter((crew) => crew.eating || crew.carryingMeal).length;
@@ -2648,7 +2728,7 @@ function drawPortTurnaroundCallouts(): void {
     const queue = state.metrics.cafeteriaQueueingCount;
     const mealStock = Math.floor(state.metrics.mealStock);
     const activeServiceCrew = state.crewMembers.filter(
-      (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+      (crew) => !crew.resting && crew.assignedSystem === 'cafeteria' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
     ).length;
     const crewMealDemand = state.crewMembers.filter((crew) => crew.eating && !crew.eatSessionActive).length;
     const totalQueue = queue + crewMealDemand;
@@ -2656,7 +2736,7 @@ function drawPortTurnaroundCallouts(): void {
       ? `MESS · NO MEALS · LINE ${totalQueue}`
       : activeServiceCrew <= 0 && totalQueue > 0
         ? `MESS · SELF-SERVICE · LINE ${totalQueue}`
-        : `MESS · ${activeServiceCrew} SERVICE · ${mealStock} MEALS${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
+        : `MESS · ${activeServiceCrew} COUNTER · ${mealStock} MEALS${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
     const color = mealStock <= 0 ? '#ff6868' : activeServiceCrew <= 0 && totalQueue > 0 ? '#ff9f5f' : totalQueue >= 5 ? '#f3bd62' : '#63d6a0';
     drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
   }
@@ -2705,17 +2785,51 @@ function drawPortTurnaroundCallouts(): void {
     ).length;
   drawFacilityLoad(RoomType.Hygiene, [ModuleType.Toilet], 'RESTROOM', toiletCapacity, toiletUsers, toiletWaiting);
 
-  const drinkModules = state.moduleInstances.filter(
-    (module) => (module.type === ModuleType.BarCounter || module.type === ModuleType.WaterFountain) &&
-      (state.rooms[module.originTile] === RoomType.Cantina || state.rooms[module.originTile] === RoomType.Cafeteria)
+  const cantinaBars = state.moduleInstances.filter(
+    (module) => module.type === ModuleType.BarCounter && state.rooms[module.originTile] === RoomType.Cantina
   );
-  const drinkCapacity = drinkModules.reduce((sum, module) => sum + (module.type === ModuleType.BarCounter ? 2 : 1), 0);
-  const drinkUsers = state.crewMembers.filter((crew) => crew.drinkSessionActive).length +
-    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.Leisure).length;
-  const drinkWaiting = state.crewMembers.filter((crew) => crew.drinking && !crew.drinkSessionActive).length +
-    state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.state === VisitorState.ToLeisure && !visitor.carryingDrink).length;
-  const drinkRoom = drinkModules.some((module) => state.rooms[module.originTile] === RoomType.Cantina) ? RoomType.Cantina : RoomType.Cafeteria;
-  drawFacilityLoad(drinkRoom, [ModuleType.BarCounter, ModuleType.WaterFountain], 'DRINKS', drinkCapacity, drinkUsers, drinkWaiting);
+  if (cantinaBars.length > 0) {
+    const barAnchors = new Set(cantinaBars.map((module) => module.originTile));
+    let line = 0;
+    for (const [anchor, members] of state.derived.queueTheater.membersByAnchor) {
+      if (barAnchors.has(anchor)) line += members.length;
+    }
+    const cantinaSeats = state.moduleInstances
+      .filter((module) => module.type === ModuleType.Bench && state.rooms[module.originTile] === RoomType.Cantina)
+      .flatMap((module) => module.tiles.slice(0, 2));
+    const seatSet = new Set(cantinaSeats);
+    const seatsUsed =
+      state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && seatSet.has(visitor.tileIndex)).length +
+      state.residents.filter((resident) => resident.state === ResidentState.Leisure && seatSet.has(resident.tileIndex)).length +
+      state.crewMembers.filter((crew) => crew.leisureSessionActive && seatSet.has(crew.tileIndex)).length;
+    const waitingForSeat = state.visitors.filter(
+      (visitor) => visitor.activeService === 'drink' && visitor.carryingDrink && visitor.state === VisitorState.ToLeisure
+    ).length;
+    const ordering = state.reservations.reduce((total, reservation) => {
+      if (reservation.releaseReason !== null || reservation.expiresAt <= state.now) return total;
+      if (reservation.ownerKind !== 'visitor' || reservation.kind !== 'provider-slot') return total;
+      if (reservation.targetTile === null || !barAnchors.has(reservation.targetTile)) return total;
+      if (!reservation.targetId?.startsWith('drink-pickup:')) return total;
+      return total + reservation.amount;
+    }, 0);
+    const stewardCount = state.crewMembers.filter(
+      (crew) =>
+        !crew.resting &&
+        String(crew.staffRole) === 'steward' &&
+        crew.assignedSystem === 'lounge' &&
+        state.rooms[crew.tileIndex] === RoomType.Cantina
+    ).length;
+    if (line + ordering + waitingForSeat + seatsUsed > 0) {
+      const anchor = cantinaBars[0];
+      const p = fromIndex(anchor.originTile, state.width);
+      const text = `CANTINA · LINE ${line} · SEATS ${seatsUsed}/${cantinaSeats.length} · ${stewardCount} STEWARD${waitingForSeat > 0 ? ` · ${waitingForSeat} WAIT SEAT` : ''}`;
+      const color =
+        stewardCount <= 0 && (line > 0 || ordering > 0) ? '#ff8066' :
+        waitingForSeat > 0 || line >= Math.max(3, cantinaBars.length * 3) ? '#f3bd62' :
+        '#63d6a0';
+      drawLabel(text, (p.x + anchor.width * 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
+    }
+  }
 
   const leisureModules = state.moduleInstances.filter(
     (module) => (module.type === ModuleType.Couch || module.type === ModuleType.Bench || module.type === ModuleType.GameStation) &&
@@ -2883,6 +2997,11 @@ function setMetricList(el: HTMLElement, items: OpsMetricItem[]): void {
   el.replaceChildren(...nodes);
 }
 
+function setActiveRatingMetricList(el: HTMLElement, items: OpsMetricItem[]): void {
+  const active = items.filter((item) => Number.parseFloat(String(item.value)) > 0);
+  setMetricList(el, active.length > 0 ? active : [{ label: 'None', value: '0.0/m', tone: 'default' }]);
+}
+
 function setDetailList(el: HTMLElement, items: OpsDetailItem[], emptyText = 'None'): void {
   const shown = items.filter((item) => String(item.value) !== '0' && String(item.value) !== '');
   const nodes = shown.length > 0
@@ -2910,6 +3029,25 @@ function setDetailList(el: HTMLElement, items: OpsDetailItem[], emptyText = 'Non
   el.replaceChildren(...nodes);
 }
 
+function setRatingDriverList(el: HTMLElement, drivers: string[]): void {
+  const activeDrivers = drivers.filter((driver) => driver !== 'none');
+  if (activeDrivers.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'rating-driver-empty';
+    empty.textContent = 'No active pressure';
+    el.replaceChildren(empty);
+    return;
+  }
+  el.replaceChildren(
+    ...activeDrivers.map((driver) => {
+      const row = document.createElement('span');
+      row.className = 'rating-driver-note';
+      row.textContent = driver;
+      return row;
+    })
+  );
+}
+
 const JOB_STALL_LABELS: Record<JobStallReason, string> = {
   none: 'Timed Out',
   stalled_path_blocked: 'Path',
@@ -2920,7 +3058,11 @@ const JOB_STALL_LABELS: Record<JobStallReason, string> = {
 
 const ITEM_LABELS: Record<ItemType, string> = {
   rawMeal: 'Raw food',
+  preppedMeal: 'Prepped food',
   meal: 'Meals',
+  cleanTray: 'Clean trays',
+  dirtyTray: 'Dirty trays',
+  drink: 'Drinks',
   rawMaterial: 'Supplies',
   tradeGood: 'Trade goods',
   fuel: 'Fuel',
@@ -3004,6 +3146,45 @@ function ratingToneColor(): string {
 function ratingSummaryText(): string {
   const trend = state.metrics.stationRatingTrendPerMin;
   return `${Math.round(state.metrics.stationRating)} (${trend >= 0 ? '+' : ''}${trend.toFixed(1)}/min)`;
+}
+
+function refreshRatingModal(): void {
+  const rating = Math.round(state.metrics.stationRating);
+  const trend = state.metrics.stationRatingTrendPerMin;
+  const drivers = state.metrics.stationRatingDrivers.filter((driver) => driver !== 'none');
+  ratingModalScoreEl.textContent = String(rating);
+  ratingModalScoreEl.style.color = ratingToneColor();
+  ratingModalTrendEl.textContent = `${trend >= 0 ? '+' : ''}${trend.toFixed(2)}/min`;
+  ratingModalTrendEl.style.color = trend > 0.01 ? 'var(--ok)' : trend < -0.01 ? 'var(--danger)' : 'var(--muted)';
+  ratingModalSummaryEl.textContent = drivers.length > 0
+    ? `The largest recorded drag is ${drivers[0]}. The live rows below show what is changing the score now.`
+    : 'No active rating penalties. Successful service will keep the station moving upward.';
+  ratingModalEffectEl.textContent =
+    `Traffic pull: premium +${Math.round(state.metrics.reputationPremiumDemandBonusPct)}% · ` +
+    `higher-risk +${Math.round(state.metrics.reputationRiskyDemandBonusPct)}%`;
+  setActiveRatingMetricList(ratingModalBonusesEl, [
+    { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
+    { label: 'Leisure', value: `${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.leisureService > 0 ? 'ok' : 'default' },
+    { label: 'Exits', value: `${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.successfulExit > 0 ? 'ok' : 'default' },
+    { label: 'Residents', value: `${state.metrics.stationRatingBonusPerMin.residentRetention.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.residentRetention > 0 ? 'ok' : 'default' },
+  ]);
+  setActiveRatingMetricList(ratingModalPenaltiesEl, [
+    { label: 'Queue timeouts', value: `${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.queueTimeout > 0 ? 'danger' : 'default' },
+    { label: 'No eligible dock', value: `${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.noEligibleDock > 0 ? 'warn' : 'default' },
+    { label: 'Service failures', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
+    { label: 'Long routes', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
+    { label: 'Bad routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
+    { label: 'Environment', value: `${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.environment > 0 ? 'warn' : 'default' },
+    { label: 'Sanitation', value: `${state.metrics.sanitationPenaltyPerMin.toFixed(1)}/m`, tone: state.metrics.sanitationPenaltyPerMin > 0 ? 'warn' : 'default' },
+  ]);
+  setActiveRatingMetricList(ratingModalFailuresEl, [
+    { label: 'No leisure path', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath > 0 ? 'warn' : 'default' },
+    { label: 'Missing ship services', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing > 0 ? 'warn' : 'default' },
+    { label: 'Patience bail', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail > 0 ? 'warn' : 'default' },
+    { label: 'Dock timeout', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout > 0 ? 'danger' : 'default' },
+    { label: 'Trespass', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.trespass.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.trespass > 0 ? 'danger' : 'default' },
+  ]);
+  setRatingDriverList(ratingModalDriversEl, drivers);
 }
 
 function maintenanceStatusText(): string {
@@ -3508,6 +3689,37 @@ function refreshOpsModal(): void {
 
 let lastPortAlertRenderKey = '';
 
+function cafeteriaStaffingSnapshot(): {
+  active: number;
+  rostered: number;
+  assigned: number;
+  selfCare: number;
+  diagnosis: string;
+} {
+  const eligible = state.crewMembers.filter(
+    (crew) =>
+      (crew.staffRole === 'cook' || crew.staffRole === 'steward') &&
+      getCrewWatchStatus(state, crew) !== 'off-duty'
+  );
+  const active = eligible.filter(
+    (crew) => !crew.resting && crew.assignedSystem === 'cafeteria' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+  ).length;
+  const assigned = eligible.filter((crew) => !crew.resting && crew.assignedSystem === 'cafeteria').length;
+  const selfCare = eligible.filter(
+    (crew) => crew.resting || crew.cleaning || crew.toileting || crew.drinking || crew.eating || crew.leisure
+  ).length;
+  const diagnosis = active > 0
+    ? `${active} at counter`
+    : eligible.length === 0
+      ? 'no Cook or Steward on this watch'
+      : selfCare > 0
+        ? `${selfCare} rostered ${selfCare === 1 ? 'worker is' : 'workers are'} meeting personal needs`
+        : assigned > 0
+          ? `${assigned} ${assigned === 1 ? 'worker is' : 'workers are'} walking to the counter`
+          : `${eligible.length} rostered ${eligible.length === 1 ? 'worker is' : 'workers are'} not posted`;
+  return { active, rostered: eligible.length, assigned, selfCare, diagnosis };
+}
+
 function refreshAlertPanel(): void {
   if (state.controls.manualTrafficAdmission) {
     const portAlerts: Array<{ tone: 'danger' | 'warn'; text: string; tile: number | null; incidentId?: number }> = [];
@@ -3607,13 +3819,12 @@ function refreshAlertPanel(): void {
       });
     }
     const servingTile = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation)?.originTile ?? null;
-    const activeServiceCrew = state.crewMembers.filter(
-      (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
-    ).length;
+    const cafeteriaStaffing = cafeteriaStaffingSnapshot();
+    const activeServiceCrew = cafeteriaStaffing.active;
     if (state.metrics.mealStock < 8) {
       portAlerts.push({
         tone: 'danger',
-        text: `Meal buffer empty: ${Math.floor(state.metrics.mealStock)} left · import meals or staff Service`,
+        text: `Meal buffer empty: ${Math.floor(state.metrics.mealStock)} left · import meals or put a Cook on food production`,
         tile: servingTile
       });
     } else if (state.metrics.mealStock < 20) {
@@ -3632,8 +3843,8 @@ function refreshAlertPanel(): void {
       portAlerts.push({
         tone: state.metrics.cafeteriaQueueingCount >= 7 ? 'danger' : 'warn',
         text: activeServiceCrew <= 0
-          ? `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · counter is on slow self-service; get Service crew into the cafeteria${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`
-          : `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · ${activeServiceCrew} Service active; add crew or another counter${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`,
+          ? `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · slow self-service because ${cafeteriaStaffing.diagnosis}${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`
+          : `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · ${activeServiceCrew} counter staff; assign another Cook/Steward or build another counter${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`,
         tile: servingTile
       });
     }
@@ -4010,19 +4221,13 @@ function formatCrewSelectionHtml(crewId: number): string {
   }
   parts.push(`<div class="agent-card__route">Target ${escapeHtml(inspector.providerTarget ?? 'none')} · reservation ${escapeHtml(inspector.reservationSummary)}</div>`);
   if (crew) {
-    const activeLane = crew.manualWorkLane ?? crew.workLane;
-    const laneButtons: Array<[CrewWorkLane, string]> = [
-      ['food', 'Service'],
-      ['logistics', 'Cargo'],
-      ['engineering', 'Maintenance'],
-      ['flex', 'Flex']
-    ];
+    const roleName = STAFF_ROLE_DEFINITIONS[crew.staffRole].label;
+    const watch = ['Alpha', 'Beta', 'Gamma'][((crew.shiftBucket % 3) + 3) % 3];
+    const homeRoom = crew.homeWorkplaceTile === null ? null : state.rooms[crew.homeWorkplaceTile];
+    const homeName = homeRoom && homeRoom !== RoomType.None ? homeRoom.replace(/-/g, ' ') : 'floating';
     parts.push(`<div class="agent-card__lane">
-      <small>${crew.manualWorkLane == null ? `Shift controlled · ${escapeHtml(activeLane)}` : `Manual override · ${escapeHtml(activeLane)}`}</small>
-      <div class="agent-card__lane-actions">
-        ${laneButtons.map(([lane, label]) => `<button data-crew-lane="${lane}" data-crew-id="${crew.id}" class="${activeLane === lane ? 'active' : ''}">${label}</button>`).join('')}
-        <button data-crew-lane="auto" data-crew-id="${crew.id}" ${crew.manualWorkLane == null ? 'disabled' : ''}>Release</button>
-      </div>
+      <strong>${escapeHtml(roleName)}</strong>
+      <small>${escapeHtml(watch)} watch · home ${escapeHtml(homeName)}</small>
     </div>`);
   }
   if (inspector.blockedReason) {
@@ -4216,42 +4421,52 @@ function refreshSelectionSummary(): void {
     return;
   }
   if (selectedRoomTile !== null) {
-    const inspector = getRoomInspectorAt(state, selectedRoomTile);
-    if (!inspector) {
+    const room = state.rooms[selectedRoomTile];
+    const diagnostic = getRoomDiagnosticAt(state, selectedRoomTile);
+    const clusterMeta = state.derived.clusterByTile.get(selectedRoomTile);
+    const cluster = clusterMeta?.cluster ?? [selectedRoomTile];
+    const clusterSet = new Set(cluster);
+    if (room === undefined || room === RoomType.None || !diagnostic) {
       selectionSummaryEl.textContent = 'Selected room is no longer available.';
-    } else if (inspector.room === RoomType.Cafeteria) {
+    } else if (room === RoomType.Cafeteria) {
       const nextDeadline = state.portOps.contracts
         .filter((contract) => (contract.status === 'active' || contract.status === 'boarding') && contract.promises.some((promise) => promise.kind === 'passengers-served'))
         .map((contract) => Math.max(0, Math.ceil(contract.hardDepartureAt - state.now)))
         .sort((a, b) => a - b)[0];
-      const activeServiceCrew = state.crewMembers.filter(
-        (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+      const cafeteriaStaffing = cafeteriaStaffingSnapshot();
+      const activeServiceCrew = cafeteriaStaffing.active;
+      const servingStations = state.moduleInstances.filter(
+        (module) => module.type === ModuleType.ServingStation && clusterSet.has(module.originTile)
       ).length;
-      selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${Math.floor(state.metrics.mealStock)} ready | Service ${activeServiceCrew}/${state.controls.crewShiftTargets.food} on station${activeServiceCrew <= 0 ? ' (slow self-service)' : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
-    } else if (inspector.room === RoomType.Storage || inspector.room === RoomType.LogisticsStock) {
-      const nodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === inspector.room);
+      const positions = Math.max(1, servingStations * 2);
+      selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${Math.floor(state.metrics.mealStock)} ready | Counter staff ${activeServiceCrew}/${positions}${activeServiceCrew <= 0 ? ` (slow: ${cafeteriaStaffing.diagnosis})` : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
+    } else if (room === RoomType.Storage || room === RoomType.LogisticsStock) {
+      const nodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === room);
       const capacity = nodes.reduce((sum, node) => sum + node.capacity, 0);
       const used = nodes.reduce((sum, node) => sum + Object.values(node.items).reduce((nodeSum, amount) => nodeSum + (amount ?? 0), 0), 0);
       const activeLots = state.portOps.cargoLots.filter((lot) => lot.location !== 'closed' && lot.location !== 'delivered');
       const freightHandled = activeLots.reduce((sum, lot) => sum + lot.handledQuantity, 0);
       const freightTotal = activeLots.reduce((sum, lot) => sum + lot.quantity, 0);
-      selectionSummaryEl.textContent = `${inspector.room === RoomType.Storage ? 'Storage' : 'Intake'}: ${Math.floor(used)}/${capacity} station stock | ${Math.floor(freightHandled)}/${Math.floor(freightTotal)} consigned freight | ${state.controls.crewShiftTargets.logistics} Cargo`;
-    } else if (inspector.room === RoomType.Dorm) {
+      const availableCargoHandlers = state.crewMembers.filter(
+        (crew) => crewMatchesCoverageRole(crew.staffRole, 'cargo-handler') && getCrewWatchStatus(state, crew) !== 'off-duty'
+      ).length;
+      selectionSummaryEl.textContent = `${room === RoomType.Storage ? 'Storage' : 'Intake'}: ${Math.floor(used)}/${capacity} station stock | ${Math.floor(freightHandled)}/${Math.floor(freightTotal)} consigned freight | ${availableCargoHandlers} Cargo Handlers available`;
+    } else if (room === RoomType.Dorm) {
       const crewSustainability = getCrewSustainabilitySummary(state);
-      selectionSummaryEl.textContent = `Crew quarters: ${crewSustainability.occupiedSleepSlots}/${crewSustainability.sleepSlots} occupied | ${crewSustainability.bunkSlots} bunk slots, ${crewSustainability.bedSlots} bed slots | ${crewSustainability.lockers} lockers | quality ${Math.round(crewSustainability.quartersQuality)}%`;
-    } else if (inspector.room === RoomType.Hygiene) {
+      selectionSummaryEl.textContent = `Crew quarters: ${crewSustainability.occupiedSleepSlots}/${crewSustainability.sleepSlots} occupied | assigned ${crewSustainability.assignedSleepSlots}/${state.crewMembers.length} | improvised ${crewSustainability.improvisedRestingCrew} | ${crewSustainability.lockers} lockers | quality ${Math.round(crewSustainability.quartersQuality)}%`;
+    } else if (room === RoomType.Hygiene) {
       const toilets = state.moduleInstances.filter((module) => module.type === ModuleType.Toilet).length;
       const showers = state.moduleInstances.filter((module) => module.type === ModuleType.Shower).length;
       const sinks = state.moduleInstances.filter((module) => module.type === ModuleType.Sink).length;
       const crewUsers = state.crewMembers.filter((crew) => crew.toileting || crew.cleaning).length;
       const visitorUsers = state.visitors.filter((visitor) => state.rooms[visitor.tileIndex] === RoomType.Hygiene).length;
-      selectionSummaryEl.textContent = `Bathroom (${inspector.housingPolicy ?? 'visitor'}): ${crewUsers} crew + ${visitorUsers} visitors using | ${toilets} toilets, ${showers} showers, ${sinks} sinks | toilet handles restroom; shower is the fastest wash`;
-    } else if (inspector.room === RoomType.Lounge || inspector.room === RoomType.RecHall) {
+      selectionSummaryEl.textContent = `Bathroom (${state.roomHousingPolicies[selectedRoomTile] ?? 'visitor'}): ${crewUsers} crew + ${visitorUsers} visitors using | ${toilets} toilets, ${showers} showers, ${sinks} sinks | toilet handles restroom; shower is the fastest wash`;
+    } else if (room === RoomType.Lounge || room === RoomType.RecHall) {
       const seats = state.moduleInstances.filter((module) => module.type === ModuleType.Couch || module.type === ModuleType.Bench || module.type === ModuleType.RecUnit).reduce((sum, module) => sum + Math.min(module.tiles.length, module.type === ModuleType.RecUnit ? 3 : 2), 0);
       const premium = state.moduleInstances.filter((module) => module.type === ModuleType.GameStation || module.type === ModuleType.Telescope).reduce((sum, module) => sum + Math.min(module.tiles.length, 3), 0);
       const users = state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && (state.rooms[visitor.tileIndex] === RoomType.Lounge || state.rooms[visitor.tileIndex] === RoomType.RecHall)).length;
       selectionSummaryEl.textContent = `Lounge: ${users} visitors using | ${seats} social seats fulfill leisure | ${premium} premium positions fulfill comfort`;
-    } else if (inspector.room === RoomType.Cantina) {
+    } else if (room === RoomType.Cantina) {
       const bars = state.moduleInstances.filter((module) => module.type === ModuleType.BarCounter).length;
       const taps = state.moduleInstances.filter((module) => module.type === ModuleType.Tap).length;
       const drinkers = state.visitors.filter((visitor) => visitor.state === VisitorState.Leisure && state.rooms[visitor.tileIndex] === RoomType.Cantina).length;
@@ -4261,7 +4476,20 @@ function refreshSelectionSummary(): void {
       const waitingForSeat = state.visitors.filter((visitor) => visitor.activeService === 'drink' && visitor.carryingDrink && visitor.state === VisitorState.ToLeisure).length;
       selectionSummaryEl.textContent = `Cantina: ${drinkers}/${seats} seated · ${waitingForSeat} waiting for a seat | ${bars * 2} bar positions | ${taps} taps (${Math.round((1 + taps * 0.28) * 100)}% pickup speed)`;
     } else {
-      selectionSummaryEl.textContent = `${inspector.room}: ${inspector.active ? 'active' : 'inactive'} | staff ${inspector.staffCount}/${inspector.requiredStaff} | pressure ${inspector.pressurizedPct.toFixed(0)}%`;
+      const assignedCrew = clusterMeta
+        ? state.crewMembers.filter((crew) => crew.homeWorkplaceTile === clusterMeta.anchor).length
+        : 0;
+      if (room === RoomType.Berth) {
+        const installedPosts = state.moduleInstances.filter(
+          (module) => clusterSet.has(module.originTile) &&
+            (module.type === ModuleType.CargoArm || module.type === ModuleType.CustomsCounter || module.type === ModuleType.FuelPump)
+        ).length;
+        selectionSummaryEl.textContent = `Berth: ${diagnostic.active ? 'active' : 'inactive'} | ${assignedCrew}/${Math.max(1, installedPosts)} assigned crew | vacuum ship interface`;
+      } else {
+        const pressurizedTiles = cluster.reduce((sum, tile) => sum + (state.pressurized[tile] ? 1 : 0), 0);
+        const pressurePct = cluster.length > 0 ? (pressurizedTiles / cluster.length) * 100 : 0;
+        selectionSummaryEl.textContent = `${room}: ${diagnostic.active ? 'active' : 'inactive'} | ${assignedCrew} assigned crew | pressure ${pressurePct.toFixed(0)}%`;
+      }
     }
     return;
   }
@@ -4758,8 +4986,8 @@ function tierChecklistItems(): Array<{ label: string; value: string; done: boole
     ];
   }
   if (nextTier === 3) {
-    const trades = checklistRatio(state.metrics.tradeCyclesCompletedLifetime, 1);
-    return [{ label: 'Workshop to market trade', value: trades.label, done: trades.done }];
+    const turnarounds = checklistRatio(state.metrics.turnaroundsCompletedLifetime, 3);
+    return [{ label: 'Complete ship turnarounds', value: turnarounds.label, done: turnarounds.done }];
   }
   if (nextTier === 4) {
     const treated = checklistRatio(state.metrics.actorsTreatedLifetime, 1);
@@ -5008,6 +5236,39 @@ let panStartClientX = 0;
 let panStartClientY = 0;
 let panStartScrollLeft = 0;
 let panStartScrollTop = 0;
+let uiPanelsHidden = false;
+let berthOpsCollapsed = false;
+
+function syncPanelVisibility(): void {
+  app!.classList.toggle('ui-panels-hidden', uiPanelsHidden);
+  toggleUiPanelsBtn.classList.toggle('active', uiPanelsHidden);
+  toggleUiPanelsBtn.setAttribute('aria-pressed', String(uiPanelsHidden));
+  toggleUiPanelsBtn.setAttribute('aria-label', uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels');
+  toggleUiPanelsBtn.title = uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels';
+
+  berthOpsWidgetEl.classList.toggle('collapsed', berthOpsCollapsed);
+  toggleBerthOpsBtn.setAttribute('aria-expanded', String(!berthOpsCollapsed));
+  toggleBerthOpsBtn.setAttribute('aria-label', berthOpsCollapsed ? 'Expand live berth operations' : 'Collapse live berth operations');
+  toggleBerthOpsBtn.title = berthOpsCollapsed ? 'Show ship details' : 'Collapse ship details';
+}
+
+toggleUiPanelsBtn.addEventListener('click', () => {
+  const center = getViewportCenterWorldPx();
+  uiPanelsHidden = !uiPanelsHidden;
+  syncPanelVisibility();
+  requestAnimationFrame(() => {
+    applyCanvasSize();
+    updateStageLayout();
+    centerViewportOnWorldPx(center.x, center.y);
+  });
+});
+
+toggleBerthOpsBtn.addEventListener('click', () => {
+  berthOpsCollapsed = !berthOpsCollapsed;
+  syncPanelVisibility();
+});
+
+syncPanelVisibility();
 
 function refreshTransportUi(): void {
   speedLabel.textContent = `${state.controls.simSpeed}x`;
@@ -5041,9 +5302,9 @@ function refreshMarketUi(): void {
   sellSmallBtn.textContent = `Sell -25 Supplies (+${market.sellMat25Gain}c)`;
   buyLargeBtn.textContent = `Buy +80 Supplies (${market.buyMat80Cost}c)`;
   sellLargeBtn.textContent = `Sell -80 Supplies (+${market.sellMat80Gain}c)`;
-  buyFoodSmallBtn.textContent = `Buy +20 Raw Food (${market.buyFood20Cost}c)`;
+  buyFoodSmallBtn.textContent = `Order +20 Raw Food (${market.buyFood20Cost}c)`;
   sellFoodSmallBtn.textContent = `Sell -20 Raw Food (+${market.sellFood20Gain}c)`;
-  buyFoodLargeBtn.textContent = `Buy +60 Raw Food (${market.buyFood60Cost}c)`;
+  buyFoodLargeBtn.textContent = `Order +60 Raw Food (${market.buyFood60Cost}c)`;
   sellFoodLargeBtn.textContent = `Sell -60 Raw Food (+${market.sellFood60Gain}c)`;
   buyMarketGoodsBtn.textContent = `Import +12 Market Goods (${market.buyGoods12Cost}c)`;
   marketCrewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
@@ -5229,54 +5490,141 @@ function materialBuyStatusText(
   return 'Intake full; add pallets or let haulers move supplies into storage';
 }
 
+const CORE_ROLE_COVERAGE: StaffRole[] = [
+  'cook',
+  'steward',
+  'cargo-handler',
+  'engineer',
+  'cleaner',
+  'security-guard',
+  'assistant'
+];
+
+function crewMatchesCoverageRole(actual: StaffRole, coverageRole: StaffRole): boolean {
+  if (coverageRole === 'cargo-handler') {
+    return actual === 'cargo-handler' || actual === 'industrial-officer' || actual === 'docking-officer';
+  }
+  if (coverageRole === 'engineer') {
+    return actual === 'engineer' || actual === 'mechanic' || actual === 'technician' || actual === 'welder' ||
+      actual === 'eva-engineer' || actual === 'mechanic-officer';
+  }
+  if (coverageRole === 'cleaner') {
+    return actual === 'cleaner' || actual === 'janitor' || actual === 'sanitation-officer';
+  }
+  if (coverageRole === 'security-guard') {
+    return actual === 'security-guard' || actual === 'security-officer';
+  }
+  return actual === coverageRole;
+}
+
+function currentRoleCoverage(): Array<{ role: StaffRole; available: number; total: number }> {
+  return CORE_ROLE_COVERAGE.map((role) => {
+    const members = state.crewMembers.filter((crew) => crewMatchesCoverageRole(crew.staffRole, role));
+    const available = members.filter((crew) => getCrewWatchStatus(state, crew) !== 'off-duty').length;
+    return { role, available, total: members.length };
+  });
+}
+
+let lastBottomRoleCoverageKey = '';
+function refreshBottomRoleCoverage(): void {
+  const coverage = currentRoleCoverage();
+  const key = coverage.map(({ role, available, total }) => `${role}:${available}:${total}`).join('|');
+  if (key === lastBottomRoleCoverageKey) return;
+  lastBottomRoleCoverageKey = key;
+  bottomRoleCoverageEl.innerHTML = coverage.map(({ role, available, total }) =>
+    `<span class="bottom-role-chip${available === 0 ? ' uncovered' : ''}" title="${escapeHtml(STAFF_ROLE_DEFINITIONS[role].label)} available this watch">${escapeHtml(STAFF_ROLE_DEFINITIONS[role].label)} <b>${available}/${total}</b></span>`
+  ).join('');
+}
+
+function refreshNamedWatchRoster(): void {
+  const schedule = getOperatingSchedule(state);
+  const statusLabel: Record<CrewWatchStatus, string> = {
+    'on-duty': 'On duty',
+    reserve: 'Reserve',
+    'off-duty': 'Off duty'
+  };
+  const watchNames = ['Alpha', 'Beta', 'Gamma'] as const;
+  const coverage = currentRoleCoverage();
+  const bankName = schedule.trafficBank === 'passenger-bank'
+    ? 'Passenger bank'
+    : schedule.trafficBank === 'cargo-bank'
+      ? 'Cargo bank'
+      : 'Maintenance window';
+  roleCoverageSummaryEl.innerHTML = `
+    <div class="role-coverage-head">
+      <span><strong>${escapeHtml(schedule.watchName)} watch</strong><small>${escapeHtml(bankName)}</small></span>
+      <span>${state.crewMembers.length} named crew</span>
+    </div>
+    <div class="role-coverage-chips">${coverage.map(({ role, available, total }) =>
+      `<span class="role-coverage-chip${available === 0 ? ' uncovered' : ''}"><b>${escapeHtml(STAFF_ROLE_DEFINITIONS[role].label)}</b> ${available}/${total}</span>`
+    ).join('')}</div>`;
+  refreshBottomRoleCoverage();
+
+  const roster = [...state.crewMembers].sort((a, b) => {
+    const roleOrder = CORE_ROLE_COVERAGE.indexOf(a.staffRole) - CORE_ROLE_COVERAGE.indexOf(b.staffRole);
+    return roleOrder !== 0 ? roleOrder : a.name.localeCompare(b.name);
+  });
+  const selectedCrew = selectedRosterCrewId === null
+    ? null
+    : roster.find((crew) => crew.id === selectedRosterCrewId) ?? null;
+  if (selectedRosterCrewId !== null && !selectedCrew) selectedRosterCrewId = null;
+  const workplaceInspector = selectedWorkplaceAnchor === null
+    ? null
+    : getRoomInspectorAt(state, selectedWorkplaceAnchor)?.workplace ?? null;
+  if (selectedWorkplaceAnchor !== null && !workplaceInspector) selectedWorkplaceAnchor = null;
+  if (workplaceInspector) {
+    const roleLabels = workplaceInspector.eligibleRoles.map((role) => STAFF_ROLE_DEFINITIONS[role].label).join(' or ');
+    const compatible = selectedCrew !== null && workplaceInspector.eligibleRoles.includes(selectedCrew.staffRole);
+    const alreadyAssigned = selectedCrew?.homeWorkplaceTile === workplaceInspector.anchorTile;
+    workplaceAssignmentContextEl.classList.remove('hidden');
+    workplaceAssignmentContextEl.innerHTML = `
+      <span><strong>${escapeHtml(workplaceInspector.label)}</strong><small>${workplaceInspector.positions} positions · ${escapeHtml(roleLabels)}</small></span>
+      <span class="workplace-context-actions">
+        ${selectedCrew ? `<button type="button" data-confirm-workplace ${compatible && !alreadyAssigned ? '' : 'disabled'}>${alreadyAssigned ? 'Assigned' : compatible ? `Assign ${escapeHtml(selectedCrew.name)}` : 'Wrong role'}</button>` : '<small>Select a compatible crew member</small>'}
+        <button type="button" data-cancel-workplace class="ghost-btn" aria-label="Cancel workplace assignment">Cancel</button>
+      </span>`;
+  } else {
+    workplaceAssignmentContextEl.classList.add('hidden');
+    workplaceAssignmentContextEl.innerHTML = '';
+  }
+  watchAssignmentBarEl.innerHTML = selectedCrew
+    ? `<span class="watch-assignment-person">${roleSpriteMarkup(selectedCrew.staffRole)}<span><strong>${escapeHtml(selectedCrew.name)}</strong><small>${escapeHtml(STAFF_ROLE_DEFINITIONS[selectedCrew.staffRole].label)}</small></span></span>
+      <span class="watch-assignment-actions"><small>Assign to</small>${watchNames.map((name, watch) => `<button type="button" data-crew-watch="${watch}" data-crew-id="${selectedCrew.id}" class="${selectedCrew.shiftBucket === watch ? 'active' : ''}" ${selectedCrew.shiftBucket === watch ? 'disabled' : ''}>${name}</button>`).join('')}</span>`
+    : '<span><strong>Select a crew member</strong><small>Then choose the watch they should join.</small></span>';
+
+  namedWatchRosterEl.innerHTML = watchNames.map((watchName, watch) => {
+    const members = roster.filter((crew) => ((crew.shiftBucket % 3) + 3) % 3 === watch);
+    const representative = members[0];
+    const status = representative
+      ? getCrewWatchStatus(state, representative)
+      : watch === schedule.watch ? 'on-duty' : watch === schedule.nextWatch ? 'reserve' : 'off-duty';
+    return `<section class="watch-roster-column ${status}">
+      <header class="watch-roster-heading">
+        <span><strong>${watchName}</strong><small>${statusLabel[status]}</small></span>
+        <b>${members.length}</b>
+      </header>
+      <div class="watch-roster-members">${members.length > 0 ? members.map((crew) => {
+        const selected = crew.id === selectedRosterCrewId;
+        const homeRoom = crew.homeWorkplaceTile === null ? null : state.rooms[crew.homeWorkplaceTile];
+        const assignment = crew.assignedSystem
+          ? crew.assignedSystem.replace(/-/g, ' ')
+          : homeRoom && homeRoom !== RoomType.None ? `home: ${homeRoom.replace(/-/g, ' ')}` : crew.resting ? 'resting' : crew.activeJobId !== null ? 'working' : 'available';
+        const incompatible = !!workplaceInspector && !workplaceInspector.eligibleRoles.includes(crew.staffRole);
+        return `<button type="button" class="named-roster-card${selected ? ' selected' : ''}${incompatible ? ' incompatible' : ''}" data-roster-crew-id="${crew.id}" aria-pressed="${selected}" ${incompatible ? `title="${escapeHtml(STAFF_ROLE_DEFINITIONS[crew.staffRole].label)} cannot staff ${escapeHtml(workplaceInspector!.label)}"` : ''}>
+          ${roleSpriteMarkup(crew.staffRole)}
+          <span class="named-roster-copy">
+            <strong>${escapeHtml(crew.name)}</strong>
+            <small>${escapeHtml(STAFF_ROLE_DEFINITIONS[crew.staffRole].label)}</small>
+            <em>${escapeHtml(assignment)}</em>
+          </span>
+        </button>`;
+      }).join('') : '<span class="watch-roster-empty">No crew assigned</span>'}</div>
+    </section>`;
+  }).join('');
+}
+
 function refreshPriorityUi(): void {
-  securityPostureSelect.value = state.controls.securityPosture;
-  for (const system of prioritySystems) {
-    const input = priorityInputs.get(system);
-    const valueEl = priorityValueEls.get(system);
-    if (!input || !valueEl) continue;
-    const value = state.controls.crewPriorityWeights[system];
-    input.value = String(value);
-    valueEl.textContent = String(value);
-  }
-  const activeWatch = getOperatingSchedule(state).watch;
-  const configured = state.controls.crewWatchTargets[selectedRosterWatch] ?? state.controls.crewShiftTargets;
-  const autoUnlocked = isCrewAutoStaffUnlocked(state);
-  crewAutoToggleEl.disabled = !autoUnlocked;
-  crewAutoToggleEl.textContent = !autoUnlocked
-    ? 'Auto-staffing locked'
-    : state.controls.crewAutoStaffEnabled ? 'Auto-staffing: ON' : 'Auto-staffing: OFF';
-  crewAutoToggleEl.classList.toggle('active', state.controls.crewAutoStaffEnabled);
-  crewAutoStatusEl.textContent = !autoUnlocked
-    ? `${Math.min(state.dockedShipsCompleted, 3)}/3 turnarounds · operate this shift before delegating it`
-    : state.controls.crewAutoStaffEnabled
-      ? 'Duty control rebalances survival, food, customs, cleaning, and construction; one responder stays flexible.'
-      : 'Manual shift minimums active. Enable when roster changes become repetitive.';
-  document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
-    button.disabled = state.controls.crewAutoStaffEnabled;
-  });
-  priorityModal.querySelectorAll<HTMLButtonElement>('button[data-watch-edit]').forEach((button) => {
-    const watch = Number(button.dataset.watchEdit) as CrewWatchIndex;
-    button.classList.toggle('active', watch === selectedRosterWatch);
-    button.classList.toggle('is-current', watch === activeWatch);
-  });
-  let rostered = 0;
-  for (const lane of workforceLaneOrder) {
-    const count = configured?.[lane] ?? 0;
-    rostered += count;
-    priorityModal.querySelectorAll<HTMLElement>(`[data-shift-count="${lane}"]`).forEach((el) => {
-      el.textContent = String(count);
-    });
-    const activeCount = state.controls.crewShiftTargets?.[lane] ?? 0;
-    document.querySelectorAll<HTMLElement>(`#bottom-dock [data-shift-count="${lane}"]`).forEach((el) => {
-      el.textContent = String(activeCount);
-    });
-  }
-  const availableCrew = Math.max(state.crew.total, state.crewMembers.length);
-  shiftRosterTotalEl.textContent = `${rostered} assigned · ${Math.max(0, availableCrew - rostered)} flexible`;
-  const activeRostered = workforceLaneOrder.reduce((sum, lane) => sum + (state.controls.crewShiftTargets?.[lane] ?? 0), 0);
-  const buildAssigned = state.controls.crewShiftTargets?.['construction-eva'] ?? 0;
-  shiftQuickTotalEl.textContent = `${activeRostered}/${availableCrew} assigned · ${Math.max(0, availableCrew - activeRostered)} flexible${buildAssigned > 0 ? ` · Build/EVA ${buildAssigned}` : ''}`;
+  refreshNamedWatchRoster();
 }
 
 function refreshOperatingRhythm(): void {
@@ -5286,14 +5634,45 @@ function refreshOperatingRhythm(): void {
   watchNameEl.textContent = `${schedule.watchName} WATCH`;
   const seconds = Math.ceil(schedule.secondsRemaining);
   watchCountdownEl.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  trafficBankNowEl.textContent = `${bankLabel(schedule.trafficBank)} · next ${bankLabel(schedule.nextTrafficBank).toLowerCase()}`;
+  const relevantOfferIds = new Set(
+    state.portOps.contracts
+      .filter((contract) => contract.status === 'accepted' || contract.status === 'active' || contract.status === 'boarding')
+      .map((contract) => contract.offerId)
+  );
+  const forecastOffers = state.trafficOffers
+    .filter((offer) =>
+      relevantOfferIds.has(offer.id) ||
+      offer.status === 'forecast' ||
+      offer.status === 'holding' ||
+      offer.status === 'cleared'
+    )
+    .sort((a, b) => a.arrivesAt - b.arrivesAt)
+    .slice(0, 3);
+  const roleDemand = new Map<StaffRole, number>();
+  for (const offer of forecastOffers) {
+    for (const [role, count] of Object.entries(offerRolePlan(offer)) as Array<[StaffRole, number]>) {
+      roleDemand.set(role, (roleDemand.get(role) ?? 0) + count);
+    }
+  }
+  const demandText = [...roleDemand.entries()]
+    .map(([role, count]) => `${STAFF_ROLE_DEFINITIONS[role].label} ${count}`)
+    .join(' · ');
+  trafficBankNowEl.textContent = forecastOffers.length > 0
+    ? `${bankLabel(schedule.trafficBank)} · ${forecastOffers.length} inbound · ${demandText || 'no specialist demand'}`
+    : `${bankLabel(schedule.trafficBank)} · next ${bankLabel(schedule.nextTrafficBank).toLowerCase()}`;
   const watchCounts = { 'on-duty': 0, reserve: 0, 'off-duty': 0 };
   for (const crew of state.crewMembers) watchCounts[getCrewWatchStatus(state, crew)] += 1;
   trafficBankNextEl.textContent = schedule.recallActive
     ? `Emergency recall · ${watchCounts['on-duty']} crew available`
-    : `${watchCounts['on-duty']} on · ${watchCounts.reserve} reserve · ${watchCounts['off-duty']} off · next ${schedule.nextWatchName.toLowerCase()}`;
+    : `${watchCounts['on-duty']} on · ${watchCounts.reserve} reserve · ${watchCounts['off-duty']} off${forecastOffers.length > 0 ? ` · ${forecastOffers[0].callsign} next` : ` · next ${schedule.nextWatchName.toLowerCase()}`}`;
   trafficBankNextEl.title = `Next traffic: ${bankLabel(schedule.nextTrafficBank)}`;
-  emergencyRecallEl.textContent = schedule.recallActive ? 'End emergency recall' : 'Recall off-duty crew';
+  emergencyRecallEl.textContent = schedule.recallActive ? 'End Recall' : 'Emergency Recall';
+  emergencyRecallEl.setAttribute(
+    'aria-label',
+    schedule.recallActive
+      ? 'End emergency crew recall'
+      : 'Call the off-duty watch into service for 45 seconds; fatigue and morale costs rise'
+  );
   emergencyRecallEl.classList.toggle('active', schedule.recallActive);
 }
 refreshPriorityUi();
@@ -5326,7 +5705,8 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
   restricted: ZoneType.Restricted,
 };
 const TOOLBAR_UTILITY_UNDERLAY_MAP: Record<string, UtilityUnderlayKind> = {
-  'air-duct': 'air-duct'
+  'air-duct': 'air-duct',
+  'water-pipe': 'water-pipe'
 };
 const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   bridge: RoomType.Bridge,
@@ -5375,11 +5755,18 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   locker: ModuleType.Locker,
   table: ModuleType.Table,
   'serving-station': ModuleType.ServingStation,
+  fridge: ModuleType.Fridge,
+  'cold-store': ModuleType.ColdStore,
+  'prep-counter': ModuleType.PrepCounter,
   stove: ModuleType.Stove,
+  'tray-return': ModuleType.TrayReturn,
+  dishwasher: ModuleType.Dishwasher,
   'grow-station': ModuleType.GrowStation,
   toilet: ModuleType.Toilet,
   shower: ModuleType.Shower,
   sink: ModuleType.Sink,
+  'floor-drain': ModuleType.FloorDrain,
+  'water-valve': ModuleType.WaterValve,
   'wall-light': ModuleType.WallLight,
   couch: ModuleType.Couch,
   'game-station': ModuleType.GameStation,
@@ -5440,7 +5827,12 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Locker]: 'LK',
   [ModuleType.Table]: 'TB',
   [ModuleType.ServingStation]: 'SV',
+  [ModuleType.Fridge]: 'FR',
+  [ModuleType.ColdStore]: 'CS',
+  [ModuleType.PrepCounter]: 'PR',
   [ModuleType.Stove]: 'ST',
+  [ModuleType.TrayReturn]: 'TR',
+  [ModuleType.Dishwasher]: 'DW',
   [ModuleType.Workbench]: 'WB',
   [ModuleType.MedBed]: 'MD',
   [ModuleType.CellConsole]: 'CL',
@@ -5452,6 +5844,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Toilet]: 'WC',
   [ModuleType.Shower]: 'SH',
   [ModuleType.Sink]: 'SK',
+  [ModuleType.FloorDrain]: 'DR',
+  [ModuleType.WaterValve]: 'WV',
   [ModuleType.MarketStall]: 'MK',
   [ModuleType.IntakePallet]: 'IN',
   [ModuleType.StorageRack]: 'SR',
@@ -5559,6 +5953,7 @@ function setPaletteSection(section: PaletteSection): void {
   document.querySelectorAll<HTMLElement>('#toolbar .palette-section').forEach((row) => {
     row.classList.toggle('active', row.dataset.paletteSection === section);
   });
+  if (section === 'crew') refreshCrewPanel();
 }
 
 function refreshPaletteMenu(): void {
@@ -6139,8 +6534,6 @@ function syncControlsToUiFromState(): void {
   const taxPercent = Math.round(clamp(state.controls.taxRate, 0, 0.5) * 100);
   taxInput.value = String(taxPercent);
   taxLabel.textContent = `${taxPercent}%`;
-  crewPriorityPresetSelect.value = state.controls.crewPriorityPreset;
-  securityPostureSelect.value = state.controls.securityPosture;
   refreshPriorityUi();
   refreshTransportUi();
 }
@@ -6212,6 +6605,7 @@ function refreshDockModal(): void {
 
 function refreshRoomModal(): void {
   if (selectedRoomTile === null) return;
+  nextRoomModalRefreshAt = performance.now() + ROOM_MODAL_REFRESH_INTERVAL_MS;
   const inspector = getRoomInspectorAt(state, selectedRoomTile);
   if (!inspector) {
     roomModal.classList.add('hidden');
@@ -6225,6 +6619,35 @@ function refreshRoomModal(): void {
   roomModalDoorsEl.textContent = String(inspector.doorCount);
   roomModalPressureEl.textContent = `${inspector.pressurizedPct.toFixed(0)}%`;
   roomModalStaffEl.textContent = `${inspector.staffCount}/${inspector.requiredStaff}`;
+  if (inspector.workplace) {
+    const workplace = inspector.workplace;
+    const roles = workplace.eligibleRoles.map((role) => STAFF_ROLE_DEFINITIONS[role].label).join(' or ');
+    const assigned = workplace.assignedCrew.length > 0
+      ? workplace.assignedCrew.map((crew) => crew.name).join(', ')
+      : 'none';
+    const active = workplace.activeCrew.length > 0
+      ? workplace.activeCrew.map((crew) => crew.name).join(', ')
+      : 'none';
+    roomModalWorkplaceEl.classList.remove('hidden');
+    roomModalWorkplaceNameEl.textContent = workplace.label;
+    roomModalWorkplaceRolesEl.textContent = `${workplace.positions} positions · ${roles}`;
+    roomModalWorkplaceStatusEl.textContent = `Home crew: ${assigned} · on post: ${active}`;
+    roomModalPlanWorkplaceBtn.dataset.workplaceAnchor = String(workplace.anchorTile);
+    const surgeable = workplace.assignedCrew.filter((assignedCrew) => {
+      const crew = state.crewMembers.find((candidate) => candidate.id === assignedCrew.id);
+      return crew ? getCrewWatchStatus(state, crew) !== 'on-duty' : false;
+    }).length;
+    roomModalSurgeWorkplaceBtn.dataset.workplaceAnchor = String(workplace.anchorTile);
+    roomModalSurgeWorkplaceBtn.disabled = surgeable <= 0;
+    roomModalSurgeWorkplaceBtn.textContent = surgeable > 0 ? `Surge ${surgeable}` : 'Surge';
+    roomModalSurgeWorkplaceBtn.title = surgeable > 0
+      ? `Recall ${surgeable} assigned crew for 45 seconds; costs energy and morale`
+      : 'No off-duty or reserve home crew to recall';
+  } else {
+    roomModalWorkplaceEl.classList.add('hidden');
+    roomModalPlanWorkplaceBtn.removeAttribute('data-workplace-anchor');
+    roomModalSurgeWorkplaceBtn.removeAttribute('data-workplace-anchor');
+  }
   const moduleProgressText = inspector.moduleProgress.length > 0
     ? inspector.moduleProgress.map((p) => `${p.module} ${p.have}/${p.need}`).join(' | ')
     : 'none';
@@ -6287,6 +6710,12 @@ function refreshRoomModal(): void {
       `Capacity: seats ${load.tableNodes} | queue nodes ${load.queueNodes} | waiting ${load.queueingVisitors} | eating ${load.eatingVisitors} | high-patience wait ${load.highPatienceWaiting} | pressure ${load.pressure}`;
     roomModalCapacityEl.style.color =
       load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
+  } else if (inspector.room === RoomType.Cantina && inspector.cantinaLoad) {
+    const load = inspector.cantinaLoad;
+    roomModalCapacityEl.textContent =
+      `Capacity: pickup ${load.pickupSlots} | line ${load.lineVisitors} | ordering ${load.orderingVisitors} | seats ${load.seatsUsed}/${load.seatsCapacity} | waiting for seat ${load.waitingForSeat} | stewards ${load.stewardCount} | taps ${load.taps} | pressure ${load.pressure}`;
+    roomModalCapacityEl.style.color =
+      load.unstaffed || load.pressure === 'high' ? '#ff7676' : load.pressure === 'medium' ? '#ffcf6e' : '#8ea2bd';
   } else {
     roomModalCapacityEl.textContent = 'Capacity: n/a';
     roomModalCapacityEl.style.color = '#8ea2bd';
@@ -7361,11 +7790,11 @@ buyPreparedMealsBtn.addEventListener('click', () => {
   const purchased = buyPreparedMeals(state);
   buyPreparedMealsBtn.classList.toggle('purchase-failed', !purchased);
   buyPreparedMealsBtn.title = purchased
-    ? 'Imported 12 prepared meals'
-    : 'Need 36 credits and 12 free counter-storage capacity';
+    ? 'Food supply relay ordered'
+    : 'Need 36 credits, intake/cold storage, and a compatible cargo berth';
   window.setTimeout(() => {
     buyPreparedMealsBtn.classList.remove('purchase-failed');
-    buyPreparedMealsBtn.title = 'Import 12 prepared meals for 36 credits';
+    buyPreparedMealsBtn.title = 'Order food supply for 36 credits';
   }, 1200);
 });
 
@@ -7466,20 +7895,6 @@ expandEastBtn.addEventListener('click', () => handleExpandDirection('east'));
 expandSouthBtn.addEventListener('click', () => handleExpandDirection('south'));
 expandWestBtn.addEventListener('click', () => handleExpandDirection('west'));
 
-crewPriorityPresetSelect.addEventListener('change', () => {
-  const preset = crewPriorityPresetSelect.value as CrewPriorityPreset;
-  setCrewPriorityPreset(state, preset);
-  const presetWeights = getCrewPriorityPresetWeights(preset);
-  for (const system of prioritySystems) {
-    state.controls.crewPriorityWeights[system] = presetWeights[system];
-  }
-  refreshPriorityUi();
-});
-
-securityPostureSelect.addEventListener('change', () => {
-  setSecurityPosture(state, securityPostureSelect.value as SecurityPosture);
-  refreshPriorityUi();
-});
 
 playBtn.addEventListener('click', () => {
   if (pendingAutosaveLoad) {
@@ -7823,7 +8238,16 @@ function openCrewPalette(): void {
 }
 
 wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
-wireModal({ modal: marketModal, openBtn: openMarketBtn, closeBtn: closeMarketBtn });
+wireModal({ modal: ratingModal, openBtn: openRatingModalBtn, closeBtn: closeRatingModalBtn, beforeOpen: refreshRatingModal });
+wireModal({
+  modal: marketModal,
+  openBtn: openMarketBtn,
+  closeBtn: closeMarketBtn,
+  beforeOpen: () => {
+    updateMarketRates();
+    refreshMarketUi();
+  }
+});
 openCrewCommandBtn.addEventListener('click', openCrewPalette);
 openCrewPanelBtn.addEventListener('click', () => {
   marketModal.classList.add('hidden');
@@ -7855,11 +8279,12 @@ wireModal({
   openBtn: openOpsModalBtn,
   closeBtn: closePriorityBtn,
   beforeOpen: () => {
-    selectedRosterWatch = getOperatingSchedule(state).watch;
+    selectedWorkplaceAnchor = null;
     refreshPriorityUi();
   }
 });
 editPrioritiesBtn.addEventListener('click', () => {
+  selectedWorkplaceAnchor = null;
   refreshPriorityUi();
   priorityModal.classList.remove('hidden');
 });
@@ -7895,73 +8320,64 @@ closeAgentSideBtn.addEventListener('click', () => {
   agentModal.classList.add('hidden');
 });
 
-agentSideBodyEl.addEventListener('click', (event) => {
-  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-crew-lane]');
+namedWatchRosterEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-roster-crew-id]');
   if (!button) return;
-  const crewId = Number(button.dataset.crewId);
-  const rawLane = button.dataset.crewLane;
-  const lane = rawLane === 'auto' ? null : rawLane as CrewWorkLane;
-  if (!Number.isFinite(crewId) || !setCrewManualWorkLane(state, crewId, lane)) return;
-  refreshAgentSidePanel();
+  const crewId = Number(button.dataset.rosterCrewId);
+  if (!Number.isFinite(crewId)) return;
+  selectedRosterCrewId = selectedRosterCrewId === crewId ? null : crewId;
+  refreshNamedWatchRoster();
+});
+
+workplaceAssignmentContextEl.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+  if (target.closest('[data-cancel-workplace]')) {
+    selectedWorkplaceAnchor = null;
+    refreshNamedWatchRoster();
+    return;
+  }
+  const confirm = target.closest<HTMLButtonElement>('button[data-confirm-workplace]');
+  if (!confirm || selectedRosterCrewId === null || selectedWorkplaceAnchor === null) return;
+  if (!setCrewHomeWorkplace(state, selectedRosterCrewId, selectedWorkplaceAnchor)) return;
+  refreshNamedWatchRoster();
   refreshSelectionSummary();
 });
 
-for (const system of prioritySystems) {
-  const input = priorityInputs.get(system);
-  const valueEl = priorityValueEls.get(system);
-  if (!input || !valueEl) continue;
-  input.addEventListener('input', () => {
-    const value = clamp(parseInt(input.value, 10), 1, 10);
-    valueEl.textContent = String(value);
-    setCrewPriorityWeight(state, system, value);
-  });
-}
-
-crewAutoToggleEl.addEventListener('click', () => {
-  const next = !state.controls.crewAutoStaffEnabled;
-  const changed = setCrewAutoStaff(state, next);
-  shiftRosterNoteEl.textContent = changed
-    ? next
-      ? 'Duty control is balancing shifts against live station pressure.'
-      : 'Manual shift control restored.'
-    : 'Auto-staffing unlocks at 10 crew.';
-  shiftRosterNoteEl.style.color = changed ? '#8ee6ad' : '#ffcf6e';
+watchAssignmentBarEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-crew-watch]');
+  if (!button) return;
+  const crewId = Number(button.dataset.crewId);
+  const watch = Number(button.dataset.crewWatch) as CrewWatchIndex;
+  if (!Number.isFinite(crewId) || watch < 0 || watch > 2) return;
+  if (!setCrewWatchAssignment(state, crewId, watch)) return;
   refreshPriorityUi();
+  refreshOperatingRhythm();
 });
 
-document.querySelectorAll<HTMLButtonElement>('button[data-shift-step]').forEach((button) => {
-  button.addEventListener('click', () => {
-    const lane = button.dataset.shiftStep as CrewWorkLane;
-    const delta = Number(button.dataset.delta ?? 0);
-    const modalControl = button.closest('#priority-modal') !== null;
-    const watch = modalControl ? selectedRosterWatch : getOperatingSchedule(state).watch;
-    const current = state.controls.crewWatchTargets[watch]?.[lane] ?? state.controls.crewShiftTargets?.[lane] ?? 0;
-    const changed = modalControl
-      ? setCrewWatchTarget(state, watch, lane, current + delta)
-      : setCrewShiftTarget(state, lane, current + delta);
-    shiftRosterNoteEl.textContent = changed
-      ? `${workforceLaneLabels[lane]} shift set to ${current + delta}. Crew will change over at the next dispatch.`
-      : `No flexible crew left. Reduce another shift or hire another assistant.`;
-    shiftRosterNoteEl.style.color = changed ? '#8ee6ad' : '#ffcf6e';
-    if (!changed) {
-      const buildAssigned = state.controls.crewShiftTargets?.['construction-eva'] ?? 0;
-      shiftQuickTotalEl.textContent = `No flexible crew${buildAssigned > 0 ? ` · Build/EVA has ${buildAssigned}` : ''} · open Shift Roster`;
-      shiftQuickTotalEl.classList.add('warn');
-      window.setTimeout(() => {
-        shiftQuickTotalEl.classList.remove('warn');
-        refreshPriorityUi();
-      }, 2600);
-      return;
-    }
-    refreshPriorityUi();
-  });
+openWatchRosterEl.addEventListener('click', () => {
+  selectedWorkplaceAnchor = null;
+  refreshPriorityUi();
+  priorityModal.classList.remove('hidden');
 });
 
-priorityModal.querySelectorAll<HTMLButtonElement>('button[data-watch-edit]').forEach((button) => {
-  button.addEventListener('click', () => {
-    selectedRosterWatch = Number(button.dataset.watchEdit) as CrewWatchIndex;
-    refreshPriorityUi();
-  });
+roomModalPlanWorkplaceBtn.addEventListener('click', () => {
+  const anchor = Number(roomModalPlanWorkplaceBtn.dataset.workplaceAnchor);
+  if (!Number.isFinite(anchor)) return;
+  selectedWorkplaceAnchor = anchor;
+  selectedRosterCrewId = null;
+  roomModal.classList.add('hidden');
+  refreshPriorityUi();
+  priorityModal.classList.remove('hidden');
+});
+
+roomModalSurgeWorkplaceBtn.addEventListener('click', () => {
+  const anchor = Number(roomModalSurgeWorkplaceBtn.dataset.workplaceAnchor);
+  if (!Number.isFinite(anchor)) return;
+  const recalled = surgeWorkplace(state, anchor);
+  roomModalWorkplaceStatusEl.textContent = recalled > 0
+    ? `${recalled} assigned crew recalled for 45s · energy -4 · morale -3`
+    : 'No reserve or off-duty home crew available.';
+  window.setTimeout(refreshRoomModal, 900);
 });
 
 emergencyRecallEl.addEventListener('click', () => {
@@ -8316,23 +8732,27 @@ materialImportBatchInput.addEventListener('change', () => {
 buyFoodSmallBtn.addEventListener('click', () => {
   const result = buyRawFoodDetailed(state, market.buyFood20Cost, 20);
   marketNoteEl.textContent = result.ok
-    ? 'Purchased +20 raw food'
+    ? 'Ordered +20 raw food relay'
     : result.reason === 'insufficient_credits'
       ? 'Not enough credits'
       : result.reason === 'no_food_destinations'
-        ? 'Need Hydroponics/Kitchen nodes'
-        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+        ? 'Need Intake Pallet, Cold Store, Fridge, or Storage'
+        : result.reason === 'no_compatible_berth'
+          ? 'Need a compatible cargo berth for the supplier'
+          : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 buyFoodLargeBtn.addEventListener('click', () => {
   const result = buyRawFoodDetailed(state, market.buyFood60Cost, 60);
   marketNoteEl.textContent = result.ok
-    ? 'Purchased +60 raw food'
+    ? 'Ordered +60 raw food relay'
     : result.reason === 'insufficient_credits'
       ? 'Not enough credits'
       : result.reason === 'no_food_destinations'
-        ? 'Need Hydroponics/Kitchen nodes'
-        : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
+        ? 'Need Intake Pallet, Cold Store, Fridge, or Storage'
+        : result.reason === 'no_compatible_berth'
+          ? 'Need a compatible cargo berth for the supplier'
+          : `Not enough food capacity (free ${result.freeCapacity.toFixed(1)}, need ${result.requiredAmount.toFixed(1)})`;
 });
 
 sellFoodSmallBtn.addEventListener('click', () => {
@@ -8372,12 +8792,15 @@ alertListEl.addEventListener('click', (event) => {
 
 let lastTime = performance.now();
 const UI_REFRESH_INTERVAL_MS = 125;
+const ROOM_MODAL_REFRESH_INTERVAL_MS = 500;
 const HOVER_DIAGNOSTIC_REFRESH_INTERVAL_MS = 250;
 const TARGET_FRAME_MS = 1000 / 60;
 const SIMULATION_STEP_SEC = 1 / 15;
 const SIMULATION_INTERVAL_MS = SIMULATION_STEP_SEC * 1000;
 let nextUiRefreshAt = 0;
+let nextRoomModalRefreshAt = 0;
 let nextHoverDiagnosticRefreshAt = 0;
+let lastUiRefreshMs = 0;
 let lastHoverDiagnosticTile: number | null = null;
 let cachedHoverDiagnostic: ReturnType<typeof getRoomDiagnosticAt> = null;
 type ActorPositionSnapshot = {
@@ -8528,6 +8951,7 @@ function frame(now: number): void {
   const shouldRefreshUi = now >= nextUiRefreshAt;
   if (shouldRefreshUi) {
     nextUiRefreshAt = now + UI_REFRESH_INTERVAL_MS;
+    const uiRefreshStarted = performance.now();
 
   refreshToolbar();
   refreshSpriteStatus();
@@ -8537,6 +8961,7 @@ function frame(now: number): void {
   refreshTrafficStatus();
   refreshTrafficOffers();
   refreshSettlementSummary();
+  refreshBottomRoleCoverage();
   if (!priorityModal.classList.contains('hidden')) refreshPriorityUi();
   refreshAlertPanel();
   refreshIncidentList();
@@ -8589,8 +9014,8 @@ function frame(now: number): void {
     `Mil ${state.metrics.shipsByTypePerMin.military.toFixed(1)} | ` +
     `Col ${state.metrics.shipsByTypePerMin.colonist.toFixed(1)}`;
   refreshUnlockLegendAndHotkeys();
-  refreshProgressionModal();
-  refreshCrewPanel();
+  if (!progressionModal.classList.contains('hidden')) refreshProgressionModal();
+  if (activePaletteSection === 'crew') refreshCrewPanel();
   roomUsageEl.textContent = roomUsageText();
   roomFlowEl.textContent = roomFlowText();
   resourcesEl.textContent = `Raw Meal ${Math.round(state.metrics.rawFoodStock)} -> Meals ${Math.round(state.metrics.mealStock)} | Water ${Math.round(state.metrics.waterStock)} | Air ${Math.round(state.metrics.airQuality)}%`;
@@ -8607,8 +9032,8 @@ function frame(now: number): void {
   foodChainHintEl.textContent = foodChainHintText();
   roomWarningsEl.textContent = `Room warnings: ${state.metrics.topRoomWarnings.join(' | ') || 'none'}`;
   updateMarketRates();
-  refreshMarketUi();
-  refreshExpansionUi();
+  if (!marketModal.classList.contains('hidden')) refreshMarketUi();
+  if (!expansionModal.classList.contains('hidden')) refreshExpansionUi();
   hireCrewBtn.disabled = state.metrics.credits < market.hireCost || state.crew.total >= 60;
   buySmallBtn.disabled = state.metrics.credits < market.buyMat25Cost;
   buyLargeBtn.disabled = state.metrics.credits < market.buyMat80Cost;
@@ -8659,7 +9084,7 @@ function frame(now: number): void {
   perfStatsEl.textContent =
     `Perf: rAF ${state.metrics.frameMs.toFixed(1)}ms (drop ${state.metrics.rafDroppedFrames}) | ` +
     `sim last ${state.metrics.tickMs.toFixed(1)}ms | render ${state.metrics.renderMs.toFixed(1)}ms | ` +
-    `path ${state.metrics.pathMs.toFixed(1)}ms/${state.metrics.pathCallsPerTick} | work ${frameBudgetMs.toFixed(1)}ms` +
+    `ui ${lastUiRefreshMs.toFixed(1)}ms | path ${state.metrics.pathMs.toFixed(1)}ms/${state.metrics.pathCallsPerTick} | work ${frameBudgetMs.toFixed(1)}ms` +
     (hottestSimPhases ? ` | hot ${hottestSimPhases}` : '') +
     (busiestPathPhases ? ` | routes ${busiestPathPhases}` : '');
   perfStatsEl.style.color = state.metrics.rafDroppedFrames > 0 || frameBudgetMs > TARGET_FRAME_MS ? '#ffcf6e' : '#8ea2bd';
@@ -8741,13 +9166,14 @@ function frame(now: number): void {
     agentModal.classList.add('hidden');
     agentSidePanel.classList.add('hidden');
   }
+  if (!ratingModal.classList.contains('hidden')) refreshRatingModal();
   if (!opsModal.classList.contains('hidden')) refreshOpsModal();
   if (selectedDockId !== null) {
     const dock = state.docks.find((d) => d.id === selectedDockId) ?? null;
     if (dock) {
       dockInfoEl.textContent = `Dock #${dock.id}: ${dock.purpose} berth | ${dock.lane} facing ${dock.facing} | area ${dock.area} | type ${dock.allowedShipTypes.join(', ')} | size ${dock.allowedShipSizes.join(', ')}`;
       dockInfoEl.classList.remove('hidden');
-      refreshDockModal();
+      if (!dockModal.classList.contains('hidden')) refreshDockModal();
     } else {
       dockInfoEl.textContent = '';
       dockInfoEl.classList.add('hidden');
@@ -8759,14 +9185,12 @@ function frame(now: number): void {
     dockInfoEl.classList.add('hidden');
     dockModal.classList.add('hidden');
   }
-  if (selectedRoomTile !== null) {
-    const inspector = getRoomInspectorAt(state, selectedRoomTile);
-    if (inspector) {
-      refreshRoomModal();
-    } else {
-      selectedRoomTile = null;
-      roomModal.classList.add('hidden');
-    }
+  if (
+    selectedRoomTile !== null &&
+    !roomModal.classList.contains('hidden') &&
+    now >= nextRoomModalRefreshAt
+  ) {
+    refreshRoomModal();
   }
   if (currentTool.kind === 'tile' && currentTool.tile === TileType.Dock && hoveredTile !== null) {
     const preview = validateDockPlacement(state, hoveredTile);
@@ -8786,6 +9210,7 @@ function frame(now: number): void {
   // `cachedHoverDiagnostic` and `toolLockMessage` are still updated by
   // other sites (modal inspector, locked-tool toasts) so we just stop
   // writing them to the deleted sidebar spans.
+  lastUiRefreshMs = performance.now() - uiRefreshStarted;
   }
 
   requestAnimationFrame(frame);
