@@ -295,7 +295,12 @@ export function createInitialState(options?: {
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
   const initialStaffRoleCounts = createInitialStaffRoleCounts();
-  initialStaffRoleCounts.assistant = 8;
+  initialStaffRoleCounts.cook = 1;
+  initialStaffRoleCounts.steward = 1;
+  initialStaffRoleCounts['cargo-handler'] = 2;
+  initialStaffRoleCounts.engineer = 2;
+  initialStaffRoleCounts.cleaner = 1;
+  initialStaffRoleCounts.assistant = 1;
   const initialStaffTotal = totalStaffCount(initialStaffRoleCounts);
 
   return {
@@ -308,6 +313,7 @@ export function createInitialState(options?: {
     modules,
     moduleInstances,
     moduleOccupancyByTile,
+    commercialUnits: [],
     core: {
       centerTile: toIndex(coreX, coreY, GRID_WIDTH),
       serviceTile: toIndex(coreX, coreY, GRID_WIDTH),
@@ -495,6 +501,7 @@ export function createInitialState(options?: {
       mealsServedTotal: 0,
       creditsEarnedLifetime: 0,
       archetypesServedLifetime: 0,
+      turnaroundsCompletedLifetime: 0,
       tradeCyclesCompletedLifetime: 0,
       incidentsResolvedLifetime: 0,
       actorsTreatedLifetime: 0,
@@ -840,6 +847,8 @@ export function createInitialState(options?: {
     residentSpawnCounter: 1,
     lastResidentSpawnAt: -999,
     moduleSpawnCounter: initialModuleSpawnCounter,
+    commercialUnitSpawnCounter: 1,
+    commercialOfferSpawnCounter: 1,
     jobSpawnCounter: 1,
     reservationSpawnCounter: 1,
     constructionSiteSpawnCounter: 1,

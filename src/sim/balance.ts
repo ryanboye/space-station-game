@@ -293,6 +293,7 @@ export const ROOM_ENVIRONMENT_TRAITS: Record<RoomType, RoomEnvironmentTraits> = 
   [RoomType.Storage]: { visitorStatus: -1.15, residentialComfort: -0.6, serviceNoise: 1.1, publicAppeal: -0.65 },
   [RoomType.Berth]: { visitorStatus: -0.2, residentialComfort: -0.45, serviceNoise: 0.85, publicAppeal: 0.15 },
   [RoomType.Cantina]: { visitorStatus: 1.5, residentialComfort: 0.55, serviceNoise: 0.5, publicAppeal: 1.65 },
+  [RoomType.CommercialUnit]: { visitorStatus: 0.1, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0.2 },
   [RoomType.Observatory]: { visitorStatus: 1.7, residentialComfort: 1.1, serviceNoise: 0.05, publicAppeal: 1.6 }
 };
 
@@ -450,6 +451,13 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   [RoomType.Cantina]: {
     minTiles: 8,
     requiredModules: [{ module: ModuleType.BarCounter, count: 1 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'none'
+  },
+  [RoomType.CommercialUnit]: {
+    minTiles: 10,
+    requiredModules: [],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'

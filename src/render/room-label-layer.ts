@@ -23,6 +23,7 @@ const ROOM_LABELS: Record<RoomType, string> = {
   [RoomType.Storage]: 'STORAGE',
   [RoomType.Berth]: 'BERTH',
   [RoomType.Cantina]: 'CANTINA',
+  [RoomType.CommercialUnit]: 'AVAILABLE',
   [RoomType.Observatory]: 'OBSERVATORY'
 };
 

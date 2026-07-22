@@ -33,6 +33,8 @@ export const STAFF_ROLE_SPRITE_KEYS = {
   'comms-officer': 'agent.crew.comms_officer',
   'medical-officer': 'agent.crew.medical_officer',
   cook: 'agent.crew.cook',
+  steward: 'agent.crew.assistant',
+  'cargo-handler': 'agent.crew.industrial_officer',
   cleaner: 'agent.crew.cleaner',
   janitor: 'agent.crew.janitor',
   botanist: 'agent.crew.botanist',

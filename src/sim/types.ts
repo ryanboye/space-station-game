@@ -217,6 +217,10 @@ export enum RoomType {
   // higher per-visitor revenue, social environment. Modules: BarCounter, Tap.
   // Visitors and crew route here for drinks during leisure circuits.
   Cantina = 'cantina',
+  // CommercialUnit is a vacant, player-built shell. Accepting a tenant offer
+  // converts the shell to the business's real operating room type while the
+  // CommercialUnit entity retains ownership of the exact tiles and fixtures.
+  CommercialUnit = 'commercial-unit',
   // Observatory: passive wonder room. Visitors gain a "wonder" leisure boost
   // (longer dwell, higher rating contribution). Modules: Telescope.
   Observatory = 'observatory'
@@ -342,6 +346,57 @@ export interface ModuleInstance {
   legacyForced?: boolean;
 }
 
+export type CommercialBusinessKind = 'market-stall' | 'cantina' | 'restaurant' | 'gift-shop';
+export type CommercialUnitPhase = 'vacant' | 'offers' | 'fitting-out' | 'open' | 'closed';
+
+export interface CommercialFitoutPlacement {
+  module: ModuleType;
+  originTile: number;
+  rotation: ModuleRotation;
+}
+
+export interface CommercialOffer {
+  id: number;
+  kind: CommercialBusinessKind;
+  tenantName: string;
+  brandName: string;
+  concept: string;
+  targetRoom: RoomType;
+  fixtures: CommercialFitoutPlacement[];
+  baseRentPerCycle: number;
+  revenueShare: number;
+  fitoutDurationSec: number;
+  expectedCustomersPerCycle: number;
+  suppliedStaff: number;
+  stockPolicy: string;
+}
+
+export interface CommercialUnit {
+  id: number;
+  anchorTile: number;
+  tiles: number[];
+  phase: CommercialUnitPhase;
+  offers: CommercialOffer[];
+  previewOfferId: number | null;
+  selectedOffer: CommercialOffer | null;
+  fittedModuleIds: number[];
+  installedFixtureCount: number;
+  createdAt: number;
+  fitoutStartedAt: number | null;
+  fitoutCompleteAt: number | null;
+  nextFixtureAt: number | null;
+  nextRentAt: number | null;
+  nextRestockAt: number | null;
+  grossSalesAccrued: number;
+  rentCollected: number;
+  revenueShareCollected: number;
+  customersServed: number;
+  currentCustomers: number;
+  presentCustomerIds: number[];
+  tenantStaffTiles: number[];
+  statusReason: string;
+}
+
 export interface ModuleRequirement {
   module: ModuleType;
   count: number;
@@ -443,6 +498,8 @@ export interface Visitor {
   // provider slot stays held for its duration — service takes TIME, which is
   // what makes a second serving station a real decision and lines physical.
   serveTimer?: number;
+  /** Lease attribution for the restaurant where this visitor last ate. */
+  commercialMealUnitId?: number | null;
   /** Short retry cooldown after a route auction cannot produce a usable path. */
   nextPathRetryAt?: number;
 }
@@ -528,6 +585,8 @@ export type StaffRole =
   | 'comms-officer'
   | 'medical-officer'
   | 'cook'
+  | 'steward'
+  | 'cargo-handler'
   | 'cleaner'
   | 'janitor'
   | 'botanist'
@@ -878,6 +937,10 @@ export interface CrewMember {
   restCooldownUntil: number;
   taskLockUntil: number;
   shiftBucket: number;
+  recalledUntil: number;
+  // Optional physical home post/room anchor. Dispatch prefers work at this
+  // workplace but may send the employee elsewhere for emergencies.
+  homeWorkplaceTile: number | null;
   assignmentStickyUntil: number;
   assignmentHoldUntil: number;
   lastSystem: CrewPrioritySystem | null;
@@ -1545,6 +1608,7 @@ export interface Metrics {
    *  a follow-up PR; values are 0 at v2 introduction. */
   creditsEarnedLifetime: number;
   archetypesServedLifetime: number;
+  turnaroundsCompletedLifetime: number;
   tradeCyclesCompletedLifetime: number;
   incidentsResolvedLifetime: number;
   actorsTreatedLifetime: number;
@@ -1843,6 +1907,14 @@ export interface RoomInspector {
   pressurizedPct: number;
   staffCount: number;
   requiredStaff: number;
+  workplace?: {
+    anchorTile: number;
+    label: string;
+    positions: number;
+    eligibleRoles: StaffRole[];
+    assignedCrew: Array<{ id: number; name: string; role: StaffRole }>;
+    activeCrew: Array<{ id: number; name: string; role: StaffRole }>;
+  };
   hasServiceNode: boolean;
   serviceNodeCount: number;
   reachableServiceNodeCount: number;
@@ -2156,6 +2228,7 @@ export interface StationState {
   modules: ModuleType[];
   moduleInstances: ModuleInstance[];
   moduleOccupancyByTile: Array<number | null>;
+  commercialUnits: CommercialUnit[];
   core: CoreState;
   docks: DockEntity[];
   // Dock-migration v0 follow-up: per-berth player-set filters. See
@@ -2229,6 +2302,8 @@ export interface StationState {
   residentSpawnCounter: number;
   lastResidentSpawnAt: number;
   moduleSpawnCounter: number;
+  commercialUnitSpawnCounter: number;
+  commercialOfferSpawnCounter: number;
   jobSpawnCounter: number;
   reservationSpawnCounter: number;
   constructionSiteSpawnCounter: number;

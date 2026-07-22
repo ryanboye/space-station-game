@@ -35,10 +35,13 @@ import {
 } from './content/unlocks';
 import { MAP_CONDITION_VERSION, mapConditionAt, mapConditionSamplesAt } from './map-conditions';
 import { generateSystemMap, laneWeightsFromSystem } from './system-map';
+import { generateCommercialOffers } from './commercial';
 import {
   type ArrivingShip,
   type BerthSizeClass,
   type CapabilityTag,
+  type CommercialOffer,
+  type CommercialUnit,
   type CardinalDirection,
   type CrewIdleReason,
   type CrewDesire,
@@ -196,7 +199,7 @@ const TRAFFIC_ARRIVAL_MIN_DELAY_SEC = 3.5;
 const TRAFFIC_ARRIVAL_MAX_DELAY_SEC = 28;
 const MAX_OCCUPANTS_PER_TILE = 4;
 
-const CREW_PER_CAFETERIA = 1;
+const CREW_PER_CAFETERIA = 2;
 const CREW_PER_KITCHEN = 1;
 const CREW_PER_WORKSHOP = 1;
 const CREW_PER_CLINIC = 1;
@@ -209,6 +212,229 @@ const CREW_PER_HYDROPONICS = 1;
 const CREW_PER_LIFE_SUPPORT = 1;
 const CREW_PER_LOUNGE = 1;
 const CREW_PER_MARKET = 1;
+
+const COMMERCIAL_RENT_INTERVAL_SEC = 60;
+const COMMERCIAL_RESTOCK_INTERVAL_SEC = 18;
+
+export function getCommercialUnitAt(state: StationState, tileIndex: number): CommercialUnit | null {
+  return state.commercialUnits.find((unit) => unit.tiles.includes(tileIndex)) ?? null;
+}
+
+function vacantCommercialClusterAt(state: StationState, tileIndex: number): number[] | null {
+  ensureRoomClustersCache(state);
+  const cluster = state.derived.clusterByTile.get(tileIndex);
+  if (!cluster || cluster.room !== RoomType.CommercialUnit) return null;
+  if (cluster.cluster.length < ROOM_DEFINITIONS[RoomType.CommercialUnit].minTiles) return null;
+  if (state.moduleInstances.some((module) => module.tiles.some((tile) => cluster.cluster.includes(tile)))) return null;
+  return [...cluster.cluster].sort((a, b) => a - b);
+}
+
+export function openCommercialUnitForOffers(
+  state: StationState,
+  tileIndex: number
+): { ok: boolean; unit?: CommercialUnit; reason?: string } {
+  const tiles = vacantCommercialClusterAt(state, tileIndex);
+  if (!tiles) {
+    return { ok: false, reason: 'Commercial shells need at least 10 clear, connected floor tiles' };
+  }
+  const pressure = tiles.filter((tile) => state.pressurized[tile]).length / Math.max(1, tiles.length);
+  if (pressure < 0.8) return { ok: false, reason: 'Commercial shell must be enclosed and pressurized' };
+  let unit = state.commercialUnits.find((candidate) =>
+    candidate.phase !== 'open' && candidate.tiles.some((tile) => tiles.includes(tile))
+  );
+  if (!unit) {
+    unit = {
+      id: state.commercialUnitSpawnCounter++,
+      anchorTile: tiles[0],
+      tiles,
+      phase: 'vacant',
+      offers: [],
+      previewOfferId: null,
+      selectedOffer: null,
+      fittedModuleIds: [],
+      installedFixtureCount: 0,
+      createdAt: state.now,
+      fitoutStartedAt: null,
+      fitoutCompleteAt: null,
+      nextFixtureAt: null,
+      nextRentAt: null,
+      nextRestockAt: null,
+      grossSalesAccrued: 0,
+      rentCollected: 0,
+      revenueShareCollected: 0,
+      customersServed: 0,
+      currentCustomers: 0,
+      presentCustomerIds: [],
+      tenantStaffTiles: [],
+      statusReason: 'Ready for tenant applications'
+    };
+    state.commercialUnits.push(unit);
+  }
+  const offers = generateCommercialOffers({
+    width: state.width,
+    tiles,
+    firstOfferId: state.commercialOfferSpawnCounter
+  });
+  if (offers.length < 3) {
+    return { ok: false, reason: 'Shell is too cramped for three viable tenant layouts; enlarge or reshape it' };
+  }
+  state.commercialOfferSpawnCounter += offers.length;
+  unit.tiles = tiles;
+  unit.anchorTile = tiles[0];
+  unit.offers = offers;
+  unit.previewOfferId = offers[0]?.id ?? null;
+  unit.selectedOffer = null;
+  unit.phase = 'offers';
+  unit.statusReason = 'Comparing tenant proposals';
+  return { ok: true, unit };
+}
+
+export function previewCommercialOffer(state: StationState, unitId: number, offerId: number): boolean {
+  const unit = state.commercialUnits.find((candidate) => candidate.id === unitId);
+  if (!unit || unit.phase !== 'offers' || !unit.offers.some((offer) => offer.id === offerId)) return false;
+  unit.previewOfferId = offerId;
+  return true;
+}
+
+export function acceptCommercialOffer(
+  state: StationState,
+  unitId: number,
+  offerId: number
+): { ok: boolean; reason?: string } {
+  const unit = state.commercialUnits.find((candidate) => candidate.id === unitId);
+  if (!unit || unit.phase !== 'offers') return { ok: false, reason: 'Commercial unit is not accepting offers' };
+  const offer = unit.offers.find((candidate) => candidate.id === offerId);
+  if (!offer) return { ok: false, reason: 'Tenant offer is no longer available' };
+  if (unit.tiles.some((tile) => state.moduleOccupancyByTile[tile] !== null)) {
+    return { ok: false, reason: 'Clear the shell before accepting a tenant fit-out' };
+  }
+  unit.selectedOffer = offer;
+  unit.offers = [];
+  unit.previewOfferId = null;
+  unit.phase = 'fitting-out';
+  unit.installedFixtureCount = 0;
+  unit.fittedModuleIds = [];
+  unit.fitoutStartedAt = state.now;
+  unit.fitoutCompleteAt = state.now + offer.fitoutDurationSec;
+  unit.nextFixtureAt = state.now + 0.8;
+  unit.nextRentAt = null;
+  unit.nextRestockAt = null;
+  unit.tenantStaffTiles = [];
+  unit.statusReason = 'Tenant fixtures are arriving';
+  for (const tile of unit.tiles) {
+    state.rooms[tile] = offer.targetRoom;
+    state.roomHousingPolicies[tile] = 'visitor';
+  }
+  bumpRoomVersion(state);
+  return { ok: true };
+}
+
+export function closeCommercialUnit(
+  state: StationState,
+  unitId: number
+): { ok: boolean; reason?: string } {
+  const unit = state.commercialUnits.find((candidate) => candidate.id === unitId);
+  if (!unit) return { ok: false, reason: 'Commercial unit not found' };
+  for (const moduleId of [...unit.fittedModuleIds]) removeModuleById(state, moduleId);
+  for (const tile of unit.tiles) {
+    state.rooms[tile] = RoomType.CommercialUnit;
+    state.roomHousingPolicies[tile] = 'visitor';
+  }
+  unit.phase = 'vacant';
+  unit.offers = [];
+  unit.previewOfferId = null;
+  unit.selectedOffer = null;
+  unit.fittedModuleIds = [];
+  unit.installedFixtureCount = 0;
+  unit.fitoutStartedAt = null;
+  unit.fitoutCompleteAt = null;
+  unit.nextFixtureAt = null;
+  unit.nextRentAt = null;
+  unit.nextRestockAt = null;
+  unit.currentCustomers = 0;
+  unit.presentCustomerIds = [];
+  unit.tenantStaffTiles = [];
+  unit.statusReason = 'Vacant shell';
+  bumpRoomVersion(state);
+  return { ok: true };
+}
+
+function restockCommercialUnit(state: StationState, unit: CommercialUnit): void {
+  const offer = unit.selectedOffer;
+  if (!offer) return;
+  const modules = state.moduleInstances.filter((module) => unit.fittedModuleIds.includes(module.id));
+  for (const module of modules) {
+    if (module.type === ModuleType.MarketStall) {
+      const stock = itemStockAtNode(state, module.originTile, 'tradeGood');
+      if (stock < 8) addItemStockAtNode(state, module.originTile, 'tradeGood', 16 - stock);
+    } else if (module.type === ModuleType.ServingStation) {
+      const stock = itemStockAtNode(state, module.originTile, 'meal');
+      if (stock < 16) addItemStockAtNode(state, module.originTile, 'meal', 32 - stock);
+    }
+  }
+}
+
+function updateCommercialUnits(state: StationState): void {
+  for (const unit of state.commercialUnits) {
+    const offer = unit.selectedOffer;
+    if (unit.phase === 'fitting-out' && offer && unit.nextFixtureAt !== null && state.now >= unit.nextFixtureAt) {
+      const placement = offer.fixtures[unit.installedFixtureCount];
+      if (placement) {
+        const placed = tryPlaceModule(state, placement.module, placement.originTile, placement.rotation);
+        if (!placed.ok) {
+          unit.phase = 'closed';
+          unit.statusReason = `Fit-out blocked: ${placed.reason ?? 'fixture placement failed'}`;
+          unit.nextFixtureAt = null;
+          continue;
+        }
+        unit.fittedModuleIds.push(state.moduleSpawnCounter - 1);
+        unit.installedFixtureCount += 1;
+        unit.nextFixtureAt = state.now + Math.max(0.7, offer.fitoutDurationSec / Math.max(1, offer.fixtures.length));
+      }
+      if (unit.installedFixtureCount >= offer.fixtures.length) {
+        unit.phase = 'open';
+        unit.fitoutCompleteAt = state.now;
+        unit.nextFixtureAt = null;
+        unit.nextRentAt = state.now + COMMERCIAL_RENT_INTERVAL_SEC;
+        unit.nextRestockAt = state.now;
+        unit.tenantStaffTiles = state.moduleInstances
+          .filter((module) => unit.fittedModuleIds.includes(module.id))
+          .slice(0, offer.suppliedStaff)
+          .map((module) => module.originTile);
+        unit.statusReason = 'Open for business';
+      }
+    }
+    if (unit.phase !== 'open' || !offer) continue;
+    const customerIds = state.visitors.filter((visitor) => unit.tiles.includes(visitor.tileIndex)).map((visitor) => visitor.id);
+    const previous = new Set(unit.presentCustomerIds);
+    unit.customersServed += customerIds.filter((id) => !previous.has(id)).length;
+    unit.presentCustomerIds = customerIds;
+    unit.currentCustomers = customerIds.length;
+    if (unit.nextRestockAt !== null && state.now >= unit.nextRestockAt) {
+      restockCommercialUnit(state, unit);
+      unit.nextRestockAt = state.now + COMMERCIAL_RESTOCK_INTERVAL_SEC;
+    }
+    if (unit.nextRentAt !== null && state.now >= unit.nextRentAt) {
+      state.metrics.credits += offer.baseRentPerCycle;
+      state.metrics.creditsEarnedLifetime += offer.baseRentPerCycle;
+      unit.rentCollected += offer.baseRentPerCycle;
+      unit.nextRentAt += COMMERCIAL_RENT_INTERVAL_SEC;
+      unit.statusReason = unit.currentCustomers > 0 ? 'Open · serving customers' : 'Open · waiting for foot traffic';
+    }
+  }
+}
+
+function recordCommercialSaleForUnit(state: StationState, unit: CommercialUnit | null, gross: number): number {
+  if (!unit || unit.phase !== 'open' || !unit.selectedOffer) return gross;
+  const stationShare = gross * unit.selectedOffer.revenueShare;
+  unit.grossSalesAccrued += gross;
+  unit.revenueShareCollected += stationShare;
+  return stationShare;
+}
+
+function recordCommercialSaleAtTile(state: StationState, tileIndex: number, gross: number): number {
+  return recordCommercialSaleForUnit(state, getCommercialUnitAt(state, tileIndex), gross);
+}
 
 const BASE_POWER_SUPPLY = 14;
 const POWER_PER_REACTOR = 22;
@@ -358,7 +584,7 @@ const RESIDENT_SOCIAL_DECAY_PER_SEC = 0.95;
 const RESIDENT_SOCIAL_RECOVERY_PER_SEC = 2.6;
 const RESIDENT_SAFETY_DECAY_PER_SEC = 1.1;
 const RESIDENT_SAFETY_RECOVERY_PER_SEC = 1.8;
-export const CREW_REST_ENERGY_THRESHOLD = 42;
+export const CREW_REST_ENERGY_THRESHOLD = 58;
 const CREW_REST_EXIT_ENERGY_THRESHOLD = 86;
 const CREW_REST_CRITICAL_ENERGY_THRESHOLD = 18;
 const CREW_REST_EMERGENCY_WAKE_MIN_ENERGY = 30;
@@ -413,10 +639,37 @@ export function getOperatingSchedule(state: StationState): {
 
 export function getCrewWatchStatus(state: StationState, crew: CrewMember): CrewWatchStatus {
   const schedule = getOperatingSchedule(state);
-  if (schedule.recallActive) return 'on-duty';
-  if (crew.shiftBucket === schedule.watch) return 'off-duty';
+  if (schedule.recallActive || (crew.recalledUntil ?? 0) > state.now) return 'on-duty';
+  if (crew.shiftBucket === schedule.watch) return 'on-duty';
   if (crew.shiftBucket === (schedule.watch + 1) % 3) return 'reserve';
-  return 'on-duty';
+  return 'off-duty';
+}
+
+export function setCrewWatchAssignment(state: StationState, crewId: number, watch: CrewWatchIndex): boolean {
+  const crew = state.crewMembers.find((candidate) => candidate.id === crewId);
+  if (!crew) return false;
+  crew.shiftBucket = watch;
+  crew.retargetAt = state.now;
+  return true;
+}
+
+export function surgeWorkplace(state: StationState, tileIndex: number, durationSec = 45): number {
+  ensureRoomClustersCache(state);
+  const cluster = state.derived.clusterByTile.get(tileIndex);
+  if (!cluster || !physicalWorkplaceDefinition(cluster.room)) return 0;
+  let recalled = 0;
+  for (const crew of state.crewMembers) {
+    if (crew.homeWorkplaceTile !== cluster.anchor) continue;
+    if (getCrewWatchStatus(state, crew) === 'on-duty') continue;
+    crew.recalledUntil = Math.max(crew.recalledUntil ?? 0, state.now + Math.max(5, durationSec));
+    crew.energy = Math.max(0, crew.energy - 4);
+    crew.morale = Math.max(0, crew.morale - 3);
+    crew.resting = false;
+    crew.restSessionActive = false;
+    crew.retargetAt = state.now;
+    recalled += 1;
+  }
+  return recalled;
 }
 
 export function setEmergencyRecall(state: StationState, active: boolean): void {
@@ -1147,6 +1400,7 @@ const SERVICE_NODE_OVERLAY_ROOMS: RoomType[] = [
   RoomType.Lounge,
   RoomType.Market,
   RoomType.Cantina,
+  RoomType.CommercialUnit,
   RoomType.Observatory,
   RoomType.LogisticsStock,
   RoomType.Storage
@@ -1186,6 +1440,7 @@ const CACHED_ROOM_TYPES: RoomType[] = [
   // type=none, cluster=0 tiles, all defaults).
   RoomType.Berth,
   RoomType.Cantina,
+  RoomType.CommercialUnit,
   RoomType.Observatory
 ];
 
@@ -1432,12 +1687,11 @@ function reachabilityVersionKey(state: StationState): string {
   return `${serviceTargetVersionKey(state)}:${state.dockVersion}`;
 }
 
-function activeRoomsVersionKey(state: StationState): string {
-  return `${state.now}:${state.roomVersion}:${state.moduleVersion}:${state.topologyVersion}`;
-}
-
 function diagnosticsVersionKey(state: StationState): string {
-  return `${state.now}:${state.roomVersion}:${state.moduleVersion}:${state.topologyVersion}`;
+  // Room activation depends on physical layout and installed modules. Including
+  // simulation time here forced every room cluster to be reinspected on every
+  // 15 Hz tick, even while the station topology was unchanged.
+  return `${state.roomVersion}:${state.moduleVersion}:${state.topologyVersion}:${state.width}x${state.height}`;
 }
 
 export function ensureRoomClustersCache(state: StationState): void {
@@ -1838,21 +2092,51 @@ function roleForSystem(system: CrewPrioritySystem): CrewRole {
   return 'cafeteria';
 }
 
+function serviceWorkPosts(
+  state: StationState,
+  room: RoomType,
+  postsPerServiceNode = 1
+): number[] {
+  const serviceTargets = collectServiceTargets(state, room);
+  if (serviceTargets.length === 0) return [];
+  const openRoomTiles = collectRooms(state, room).filter(
+    (tile) =>
+      isWalkable(state.tiles[tile]) &&
+      state.pressurized[tile] !== false &&
+      state.moduleOccupancyByTile[tile] === null
+  );
+  const claimed = new Set<number>();
+  const posts: number[] = [];
+  for (const serviceTile of serviceTargets) {
+    const candidates = openRoomTiles
+      .filter((tile) => !claimed.has(tile))
+      .sort((a, b) => {
+        const distance = tileManhattanDistance(state, a, serviceTile) - tileManhattanDistance(state, b, serviceTile);
+        return distance || a - b;
+      });
+    for (const tile of candidates.slice(0, postsPerServiceNode)) {
+      claimed.add(tile);
+      posts.push(tile);
+    }
+  }
+  return posts;
+}
+
 function dutyAnchorsForSystem(state: StationState, system: CrewPrioritySystem): number[] {
   if (system === 'reactor') return roomClusterAnchors(state, RoomType.Reactor);
   if (system === 'life-support') return roomClusterAnchors(state, RoomType.LifeSupport);
-  if (system === 'hydroponics') return roomClusterAnchors(state, RoomType.Hydroponics);
-  if (system === 'kitchen') return roomClusterAnchors(state, RoomType.Kitchen);
-  if (system === 'workshop') return roomClusterAnchors(state, RoomType.Workshop);
-  if (system === 'cafeteria') return roomClusterAnchors(state, RoomType.Cafeteria);
+  if (system === 'hydroponics') return serviceWorkPosts(state, RoomType.Hydroponics);
+  if (system === 'kitchen') return serviceWorkPosts(state, RoomType.Kitchen);
+  if (system === 'workshop') return serviceWorkPosts(state, RoomType.Workshop);
+  if (system === 'cafeteria') return serviceWorkPosts(state, RoomType.Cafeteria, CREW_PER_CAFETERIA);
   if (system === 'security') {
-    return [...roomClusterAnchors(state, RoomType.Security), ...roomClusterAnchors(state, RoomType.Brig)].sort(
+    return [...serviceWorkPosts(state, RoomType.Security), ...serviceWorkPosts(state, RoomType.Brig)].sort(
       (a, b) => a - b
     );
   }
   if (system === 'hygiene') return roomClusterAnchors(state, RoomType.Hygiene);
-  if (system === 'lounge') return roomClusterAnchors(state, RoomType.Lounge);
-  if (system === 'market') return roomClusterAnchors(state, RoomType.Market);
+  if (system === 'lounge') return serviceWorkPosts(state, RoomType.Cantina);
+  if (system === 'market') return serviceWorkPosts(state, RoomType.Market);
   return [];
 }
 
@@ -1871,7 +2155,86 @@ function systemRoomType(system: CrewPrioritySystem): RoomType {
 
 function roomMatchesCrewSystem(system: CrewPrioritySystem, room: RoomType): boolean {
   if (system === 'security') return room === RoomType.Security || room === RoomType.Brig;
+  if (system === 'lounge') return room === RoomType.Lounge || room === RoomType.Cantina;
   return room === systemRoomType(system);
+}
+
+type PhysicalWorkplaceDefinition = {
+  label: string;
+  eligibleRoles: StaffRole[];
+};
+
+function physicalWorkplaceDefinition(room: RoomType): PhysicalWorkplaceDefinition | null {
+  if (room === RoomType.Kitchen) return { label: 'Kitchen', eligibleRoles: ['cook'] };
+  if (room === RoomType.Cafeteria) return { label: 'Mess service', eligibleRoles: ['cook', 'steward'] };
+  if (room === RoomType.Cantina) return { label: 'Cantina', eligibleRoles: ['steward'] };
+  if (room === RoomType.Market) return { label: 'Market', eligibleRoles: ['steward'] };
+  if (room === RoomType.LogisticsStock || room === RoomType.Storage) {
+    return {
+      label: room === RoomType.Storage ? 'Storage' : 'Intake',
+      eligibleRoles: ['cargo-handler', 'industrial-officer', 'docking-officer']
+    };
+  }
+  if (room === RoomType.Berth) {
+    return {
+      label: 'Berth operations',
+      eligibleRoles: ['cargo-handler', 'industrial-officer', 'docking-officer', 'security-guard', 'security-officer']
+    };
+  }
+  if (room === RoomType.Reactor || room === RoomType.LifeSupport || room === RoomType.Workshop) {
+    return {
+      label: room === RoomType.Reactor ? 'Reactor' : room === RoomType.LifeSupport ? 'Life support' : 'Workshop',
+      eligibleRoles: ['engineer', 'mechanic', 'technician', 'welder', 'eva-engineer', 'mechanic-officer']
+    };
+  }
+  if (room === RoomType.Security || room === RoomType.Brig) {
+    return { label: room === RoomType.Security ? 'Security post' : 'Brig', eligibleRoles: ['security-guard', 'security-officer'] };
+  }
+  if (room === RoomType.Hygiene) return { label: 'Sanitation area', eligibleRoles: ['cleaner', 'janitor', 'sanitation-officer'] };
+  return null;
+}
+
+function physicalWorkplacePositions(state: StationState, room: RoomType, cluster: readonly number[]): number {
+  const clusterSet = new Set(cluster);
+  const serviceNodes = collectServiceTargets(state, room).filter((tile) => clusterSet.has(tile)).length;
+  if (room === RoomType.Cafeteria) return Math.max(1, serviceNodes * CREW_PER_CAFETERIA);
+  if (room === RoomType.Berth) {
+    const installedPosts = state.moduleInstances.filter((module) =>
+      clusterSet.has(module.originTile) &&
+      (module.type === ModuleType.CargoArm || module.type === ModuleType.CustomsCounter || module.type === ModuleType.FuelPump)
+    ).length;
+    return Math.max(1, installedPosts);
+  }
+  return Math.max(1, serviceNodes);
+}
+
+function homeWorkplaceMatchesTarget(state: StationState, crew: CrewMember, targetTile: number): boolean {
+  if (crew.homeWorkplaceTile === null) return false;
+  ensureRoomClustersCache(state);
+  const home = state.derived.clusterByTile.get(crew.homeWorkplaceTile);
+  const target = state.derived.clusterByTile.get(targetTile);
+  return !!home && !!target && home.anchor === target.anchor && home.room === target.room;
+}
+
+export function setCrewHomeWorkplace(state: StationState, crewId: number, tileIndex: number | null): boolean {
+  const crew = state.crewMembers.find((candidate) => candidate.id === crewId);
+  if (!crew) return false;
+  if (tileIndex === null) {
+    crew.homeWorkplaceTile = null;
+    crew.retargetAt = state.now;
+    return true;
+  }
+  if (tileIndex < 0 || tileIndex >= state.rooms.length) return false;
+  ensureRoomClustersCache(state);
+  const cluster = state.derived.clusterByTile.get(tileIndex);
+  if (!cluster) return false;
+  const definition = physicalWorkplaceDefinition(cluster.room);
+  if (!definition || !definition.eligibleRoles.includes(crew.staffRole)) return false;
+  crew.homeWorkplaceTile = cluster.anchor;
+  crew.assignmentStickyUntil = 0;
+  crew.assignmentHoldUntil = 0;
+  crew.retargetAt = state.now;
+  return true;
 }
 
 export function maintenanceKey(system: MaintenanceSystem, anchorTile: number): string {
@@ -2520,8 +2883,11 @@ function nearbyModuleEffect(
   return best;
 }
 
-function connectedVentReliefAt(state: StationState, tileIndex: number): number {
-  const runtime = computeAirDuctRuntime(state);
+function connectedVentReliefAt(
+  state: StationState,
+  tileIndex: number,
+  runtime: ReturnType<typeof computeAirDuctRuntime> = computeAirDuctRuntime(state)
+): number {
   if (!runtime.ductMode) return nearbyModuleEffect(state, tileIndex, ModuleType.Vent, THERMAL_VENT_RADIUS);
   const pos = fromIndex(tileIndex, state.width);
   let best = 0;
@@ -2540,7 +2906,8 @@ function connectedVentReliefAt(state: StationState, tileIndex: number): number {
 function thermalTileDiagnosticAt(
   state: StationState,
   tileIndex: number,
-  coverage: LifeSupportCoverageDiagnostic = getLifeSupportCoverageDiagnostics(state)
+  coverage: LifeSupportCoverageDiagnostic = getLifeSupportCoverageDiagnostics(state),
+  airDuctRuntime: ReturnType<typeof computeAirDuctRuntime> = computeAirDuctRuntime(state)
 ): ThermalTileDiagnostic | null {
   if (tileIndex < 0 || tileIndex >= state.tiles.length || !isWalkable(state.tiles[tileIndex])) return null;
   const heat = clamp(state.heatByTile[tileIndex] ?? 42, 0, 100);
@@ -2548,7 +2915,7 @@ function thermalTileDiagnosticAt(
   const sunlight = mapConditionAt(state, 'sunlight', tileIndex);
   const thermalSink = mapConditionAt(state, 'thermal-sink', tileIndex);
   const insulation = nearbyModuleEffect(state, tileIndex, ModuleType.InsulationPanel, THERMAL_INSULATION_RADIUS);
-  const ventRelief = connectedVentReliefAt(state, tileIndex);
+  const ventRelief = connectedVentReliefAt(state, tileIndex, airDuctRuntime);
   const rawDistance = coverage.distanceByTile[tileIndex];
   const lifeSupportDistance = rawDistance >= 0 ? rawDistance : null;
   const fire = state.effects.fires.find((entry) => entry.anchorTile === tileIndex);
@@ -2596,6 +2963,7 @@ function thermalRoomDiagnosticForCluster(
   anchorTile: number
 ): ThermalRoomDiagnostic {
   const coverage = getLifeSupportCoverageDiagnostics(state);
+  const airDuctRuntime = computeAirDuctRuntime(state);
   let heatTotal = 0;
   let staleTotal = 0;
   let maxHeat = 0;
@@ -2603,7 +2971,7 @@ function thermalRoomDiagnosticForCluster(
   const causeWeights = new Map<string, number>();
   let samples = 0;
   for (const tile of cluster) {
-    const diagnostic = thermalTileDiagnosticAt(state, tile, coverage);
+    const diagnostic = thermalTileDiagnosticAt(state, tile, coverage, airDuctRuntime);
     if (!diagnostic) continue;
     heatTotal += diagnostic.heat;
     staleTotal += diagnostic.staleAir;
@@ -2617,7 +2985,7 @@ function thermalRoomDiagnosticForCluster(
   const severity = thermalSeverityFor(maxHeat, maxStaleAir);
   const dominantCause = [...causeWeights.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'neutral conditions';
   const sampleDiagnostic =
-    thermalTileDiagnosticAt(state, anchorTile, coverage) ??
+    thermalTileDiagnosticAt(state, anchorTile, coverage, airDuctRuntime) ??
     ({
       heat: averageHeat,
       staleAir: averageStaleAir,
@@ -3529,9 +3897,14 @@ export function getReputationZoneScores(state: StationState): ReputationZoneScor
 
 function reputationZoneForTile(state: StationState, tileIndex: number): ReputationZoneScore | null {
   const room = state.rooms[tileIndex];
-  if (room === RoomType.None) return null;
-  const zone = getReputationZoneScores(state).find((entry) => entry.tiles.includes(tileIndex));
-  return zone ?? null;
+  if (room === RoomType.None || !REPUTATION_ROOMS.includes(room)) return null;
+  ensureRoomClustersCache(state);
+  const cluster = state.derived.clusterByTile.get(tileIndex);
+  if (!cluster || cluster.room !== room) return null;
+  // Tile inspection only needs its own district. Building every reputation
+  // district in the station here made an open room panel scale with the total
+  // station, and the panel asks for this value repeatedly while visible.
+  return reputationScoreForCluster(state, room, cluster.cluster);
 }
 
 export function getReputationTileDiagnostic(state: StationState, x: number, y: number): ReputationTileDiagnostic | null {
@@ -5349,6 +5722,8 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     restCooldownUntil: 0,
     taskLockUntil: 0,
     shiftBucket: id % CREW_SHIFT_BUCKET_COUNT,
+    recalledUntil: 0,
+    homeWorkplaceTile: null,
     assignmentStickyUntil: 0,
     assignmentHoldUntil: 0,
     lastSystem: null,
@@ -6489,7 +6864,7 @@ function assignCrewJobs(state: StationState): void {
     hydroponics: CREW_PER_HYDROPONICS,
     kitchen: CREW_PER_KITCHEN,
     workshop: CREW_PER_WORKSHOP,
-    cafeteria: CREW_PER_CAFETERIA,
+    cafeteria: 1,
     security: CREW_PER_SECURITY,
     hygiene: CREW_PER_HYGIENE,
     lounge: CREW_PER_LOUNGE,
@@ -6518,7 +6893,10 @@ function assignCrewJobs(state: StationState): void {
     const anchors = targetBySystem[system];
     const tasks: CrewTaskCandidate[] = [];
     const room = systemRoomType(system);
-    const requiresPost = ROOM_DEFINITIONS[room]?.staffedPostMode === 'required';
+    const requiresPost =
+      ROOM_DEFINITIONS[room]?.staffedPostMode === 'required' ||
+      system === 'lounge' ||
+      system === 'market';
     const requiredPosts = requiredMinimum.get(system) ?? 0;
     if (!requiresPost && requiredPosts <= 0) {
       jobsBySystem.set(system, tasks);
@@ -6603,6 +6981,7 @@ function assignCrewJobs(state: StationState): void {
 
   const isCurrentAssignmentValid = (crew: CrewMember): boolean => {
     if (crew.assignedSystem === null || crew.targetTile === null) return false;
+    if (!crewCanCoverSystem(state, crew, crew.assignedSystem)) return false;
     const key = `${crew.assignedSystem}:${crew.targetTile}`;
     if (!taskByKey.has(key)) return false;
     if (!roomMatchesCrewSystem(crew.assignedSystem, state.rooms[crew.targetTile])) return false;
@@ -6674,6 +7053,7 @@ function assignCrewJobs(state: StationState): void {
 
     let best: CrewTaskCandidate | null = null;
     for (const system of CREW_SYSTEMS) {
+      if (!crewCanCoverSystem(state, crew, system)) continue;
       const tasks = jobsBySystem.get(system) ?? [];
       if (tasks.length === 0) continue;
       const remainingCritical = criticalRemaining.get(system) ?? 0;
@@ -6692,7 +7072,8 @@ function assignCrewJobs(state: StationState): void {
         const criticalUrgency = remainingCritical > 0 ? 4 : 1;
         const baseUrgency = airEmergency && (system === 'life-support' || system === 'reactor') ? 2.4 : 1;
         const diminishing = 1 / (1 + 0.75 * systemAssigned);
-        const score = weight * criticalUrgency * baseUrgency * diminishing - path.length * ASSIGNMENT_PATH_COST_WEIGHT;
+        const workplaceBonus = homeWorkplaceMatchesTarget(state, crew, task.tileIndex) ? 14 : 0;
+        const score = weight * criticalUrgency * baseUrgency * diminishing + workplaceBonus - path.length * ASSIGNMENT_PATH_COST_WEIGHT;
         if (!best || score > best.score) {
           best = { ...task, score, critical: remainingCritical > 0, protectedMinimum: remainingCritical > 0 };
         }
@@ -7864,6 +8245,30 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   const inspection = inspectRoomCluster(state, room, cluster, countStaffAtAssignedTiles(state));
   const clusterSet = new Set(cluster);
   const serviceTargetsInCluster = collectServiceTargets(state, room).filter((t) => clusterSet.has(t));
+  const workplaceDefinition = physicalWorkplaceDefinition(room);
+  const workplace = workplaceDefinition
+    ? (() => {
+        const assignedCrew = state.crewMembers
+          .filter((crew) => crew.homeWorkplaceTile === clusterMeta.anchor)
+          .map((crew) => ({ id: crew.id, name: crew.name, role: crew.staffRole }));
+        const activeCrew = state.crewMembers
+          .filter((crew) => {
+            if (crew.resting || !workplaceDefinition.eligibleRoles.includes(crew.staffRole)) return false;
+            const targetInCluster = crew.targetTile !== null && clusterSet.has(crew.targetTile);
+            const workingInCluster = crew.activeJobId !== null && clusterSet.has(crew.tileIndex);
+            return targetInCluster || workingInCluster;
+          })
+          .map((crew) => ({ id: crew.id, name: crew.name, role: crew.staffRole }));
+        return {
+          anchorTile: clusterMeta.anchor,
+          label: workplaceDefinition.label,
+          positions: physicalWorkplacePositions(state, room, cluster),
+          eligibleRoles: workplaceDefinition.eligibleRoles,
+          assignedCrew,
+          activeCrew
+        };
+      })()
+    : undefined;
   const globalReachability = collectServiceNodeReachability(state);
   const unreachableSet = new Set(globalReachability.unreachableNodeTiles);
   const unreachableTiles = serviceTargetsInCluster.filter((tile) => unreachableSet.has(tile));
@@ -7879,6 +8284,9 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   const sanitation = sanitationRoomDiagnosticForCluster(state, room, clusterMeta.anchor, cluster);
 
   const warnings = [...inspection.warnings];
+  if (workplace && workplace.assignedCrew.length <= 0) {
+    warnings.push(`${workplace.label.toLowerCase()} has no home crew`);
+  }
   if (sanitation.maxDirt >= SANITATION_FILTHY_THRESHOLD) {
     warnings.push(`sanitation filthy: ${sanitation.dominantSource}`);
   } else if (sanitation.maxDirt >= SANITATION_DIRTY_THRESHOLD) {
@@ -8116,8 +8524,9 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
     minTilesMet: inspection.minTilesMet,
     doorCount: inspection.doorCount,
     pressurizedPct: inspection.pressurizedPct,
-    staffCount: inspection.staffCount,
-    requiredStaff: inspection.requiredStaff,
+    staffCount: workplace?.activeCrew.length ?? inspection.staffCount,
+    requiredStaff: workplace?.positions ?? inspection.requiredStaff,
+    workplace,
     hasServiceNode: inspection.hasServiceNode,
     serviceNodeCount: inspection.serviceNodeCount,
     reachableServiceNodeCount: serviceNodeReachability.reachableCount,
@@ -8236,6 +8645,21 @@ function countReservedServingTargets(state: StationState): Map<number, number> {
     counts.set(reservation.targetTile, (counts.get(reservation.targetTile) ?? 0) + reservation.amount);
   }
   return counts;
+}
+
+function hasActiveMealPickupReservation(
+  state: StationState,
+  ownerKind: 'visitor' | 'resident',
+  ownerId: number,
+  targetTile: number
+): boolean {
+  const targetId = `meal-pickup:${targetTile}`;
+  return reservationsForOwner(state, ownerKind, ownerId).some(
+    (reservation) =>
+      reservation.kind === 'provider-slot' &&
+      reservation.targetTile === targetTile &&
+      reservation.targetId === targetId
+  );
 }
 
 const SERVE_INTERACTION_SEC = 2.4;
@@ -9060,6 +9484,7 @@ function settlePortContract(state: StationState, ship: ArrivingShip): void {
     notes: notes.length > 0 ? notes : ['All promises fulfilled']
   };
   state.portOps.settlements.push(settlement);
+  state.metrics.turnaroundsCompletedLifetime += 1;
   const fullSettlement = contract.promises.every((promise) => promise.completed + 0.001 >= promise.target);
   state.portOps.telemetry.settlements += 1;
   state.portOps.telemetry.fullSettlements += fullSettlement ? 1 : 0;
@@ -9132,7 +9557,6 @@ function scheduleManualTrafficOffer(state: StationState): void {
     }
     state.portOps.offerSequenceIndex = PORT_ONBOARDING_OFFERS.length;
     state.portOps.firstOfferShownAt = state.now;
-    state.controls.paused = true;
     return;
   }
   const onboardingTemplate = onboardingOfferTemplate(state.portOps.offerSequenceIndex);
@@ -10409,7 +10833,10 @@ function ensureCrewUsageTarget(
   reservationKind: 'provider-slot' | 'seat-use-slot' = 'provider-slot'
 ): number | null {
   const activeTargetReservation = reservationsForOwner(state, 'crew', crew.id).find(
-    (reservation) => reservation.kind === reservationKind && reservation.targetTile === crew.targetTile
+    (reservation) =>
+      reservation.kind === reservationKind &&
+      reservation.targetTile === crew.targetTile &&
+      reservation.targetId === `${targetKind}:${crew.targetTile}`
   );
   if (crew.targetTile !== null && targets.includes(crew.targetTile) && activeTargetReservation) {
     return crew.targetTile;
@@ -10454,6 +10881,13 @@ function clearCrewMeal(
   crew: CrewMember,
   reason: NonNullable<Reservation['releaseReason']> = 'replaced'
 ): void {
+  // A meal is consumed from station stock at pickup. Once it is in a crew
+  // member's hands, duty changes and fatigue cannot silently delete it before
+  // the crew member reaches a seat and eats it.
+  if (crew.carryingMeal && reason !== 'completed') {
+    crew.eating = true;
+    return;
+  }
   const wasEating = crew.eating || crew.carryingMeal;
   crew.eating = false;
   crew.carryingMeal = false;
@@ -12037,6 +12471,59 @@ function staffRoleWorkLane(role: StaffRole): CrewWorkLane {
   return STAFF_ROLE_DEFINITIONS[role]?.lane ?? 'logistics';
 }
 
+const ENGINEERING_ROLES = new Set<StaffRole>([
+  'mechanic-officer',
+  'technician',
+  'engineer',
+  'mechanic',
+  'welder',
+  'eva-engineer'
+]);
+
+function hasRoleForSystem(state: StationState, system: CrewPrioritySystem): boolean {
+  return state.crewMembers.some((crew) => crew.staffRole !== 'assistant' && crewCanStaffSystem(crew.staffRole, system));
+}
+
+function crewCanStaffSystem(role: StaffRole, system: CrewPrioritySystem): boolean {
+  if (system === 'kitchen') return role === 'cook';
+  if (system === 'cafeteria') return role === 'cook' || role === 'steward';
+  if (system === 'hydroponics') return role === 'botanist';
+  if (system === 'reactor' || system === 'life-support' || system === 'workshop') return ENGINEERING_ROLES.has(role);
+  if (system === 'security') return role === 'security-guard' || role === 'security-officer';
+  if (system === 'market' || system === 'lounge') return role === 'steward';
+  if (system === 'hygiene') return role === 'cleaner' || role === 'janitor' || role === 'sanitation-officer';
+  return false;
+}
+
+function crewCanCoverSystem(state: StationState, crew: CrewMember, system: CrewPrioritySystem): boolean {
+  if (crewCanStaffSystem(crew.staffRole, system)) return true;
+  // Legacy assistant-heavy saves keep survival coverage until the player can
+  // hire the physical role. Assistants never displace a real specialist.
+  return crew.staffRole === 'assistant' && !hasRoleForSystem(state, system) && (system === 'reactor' || system === 'life-support');
+}
+
+function crewCanPerformJob(state: StationState, crew: CrewMember, job: StationState['jobs'][number]): boolean {
+  const role = crew.staffRole;
+  if (job.type === 'inspect') return role === 'security-guard' || role === 'security-officer' || role === 'cargo-handler';
+  if (job.type === 'sanitize') return role === 'cleaner' || role === 'janitor' || role === 'sanitation-officer';
+  if (job.type === 'repair') return ENGINEERING_ROLES.has(role);
+  if (job.type === 'cook') return role === 'cook';
+  if (job.type === 'extinguish') return ENGINEERING_ROLES.has(role) || role === 'security-guard' || role === 'assistant';
+  if (job.type === 'construct') {
+    return role === 'assistant' || role === 'welder' || role === 'eva-specialist' || role === 'eva-engineer';
+  }
+  if (job.type === 'deliver' || job.type === 'pickup') {
+    if (job.portCargoDirection || job.portShipId !== undefined || job.itemType === 'fuel') {
+      return role === 'cargo-handler' || role === 'industrial-officer' || role === 'docking-officer';
+    }
+    if (job.itemType === 'meal') return role === 'cook' || role === 'steward';
+    if (job.itemType === 'rawMeal') return role === 'cook' || role === 'botanist';
+    return role === 'cargo-handler' || role === 'assistant' || role === 'industrial-officer';
+  }
+  void state;
+  return false;
+}
+
 function staffRoleAllowsFallback(role: StaffRole): boolean {
   return STAFF_ROLE_DEFINITIONS[role]?.fallback ?? true;
 }
@@ -12336,14 +12823,6 @@ function deriveWorkLaneTargets(
     flex: 0
   };
   if (total <= 0) return targets;
-  const configuredTargets = state.controls.crewShiftTargets ?? {
-    food: 0,
-    sanitation: 0,
-    engineering: 0,
-    logistics: 0,
-    'construction-eva': 0,
-    flex: 0
-  };
   const pendingByLane = createWorkforceLaneMetrics();
   for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
   ensureCommandState(state);
@@ -12365,14 +12844,6 @@ function deriveWorkLaneTargets(
       while (overflow > 0 && targets[lane] > 0) {
         targets[lane] -= 1;
         overflow -= 1;
-      }
-    }
-    for (const lane of CREW_WORK_LANES) targets[lane] = Math.max(targets[lane], configuredTargets[lane] ?? 0);
-    let configuredOverflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
-    for (const lane of ['flex', 'construction-eva', 'sanitation', 'engineering', 'food', 'logistics'] as CrewWorkLane[]) {
-      while (configuredOverflow > 0 && targets[lane] > (configuredTargets[lane] ?? 0)) {
-        targets[lane] -= 1;
-        configuredOverflow -= 1;
       }
     }
     return targets;
@@ -12426,14 +12897,6 @@ function deriveWorkLaneTargets(
       overflow -= 1;
     }
   }
-  for (const lane of CREW_WORK_LANES) targets[lane] = Math.max(targets[lane], configuredTargets[lane] ?? 0);
-  overflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
-  for (const lane of ['flex', 'construction-eva', 'sanitation', 'engineering', 'food', 'logistics'] as CrewWorkLane[]) {
-    while (overflow > 0 && targets[lane] > (configuredTargets[lane] ?? 0)) {
-      targets[lane] -= 1;
-      overflow -= 1;
-    }
-  }
   return targets;
 }
 
@@ -12472,8 +12935,10 @@ function assignCrewWorkLanes(
   for (const crew of nonResting) {
     normalizeCrewWorkLane(crew, state.now);
     if (isCrewReservedForCommandDuty(state, crew)) continue;
-    if (crew.manualWorkLane != null) crew.workLane = crew.manualWorkLane;
-    else if (crew.activeJobId === null) crew.workLane = staffRoleWorkLane(crew.staffRole);
+    // Work lanes are now an internal projection of the permanent role. Old
+    // save/manual overrides are tolerated on load but no longer direct labor.
+    crew.manualWorkLane = null;
+    if (crew.activeJobId === null) crew.workLane = staffRoleWorkLane(crew.staffRole);
     counts[crew.workLane] += 1;
   }
 
@@ -12495,7 +12960,6 @@ function assignCrewWorkLanes(
 
   for (const crew of nonResting) {
     if (isCrewReservedForCommandDuty(state, crew)) continue;
-    if (crew.manualWorkLane != null) continue;
     if (crew.activeJobId !== null) continue;
     const current = crew.workLane;
     const homeLane = staffRoleWorkLane(crew.staffRole);
@@ -12604,14 +13068,6 @@ function assignJobsToIdleCrew(state: StationState): void {
   const pendingByLane = createWorkforceLaneMetrics();
   for (const job of pendingJobs) pendingByLane[jobWorkLane(state, job)].pending += 1;
   const targets = deriveWorkLaneTargets(state, openJobs, nonRestingCrew);
-  // Scrappy-operator shifts are direct orders. The old dispatcher treated
-  // these values as floors and silently borrowed idle staff, which made a
-  // player-entered zero meaningless during a live turnaround.
-  targets.food = state.controls.crewShiftTargets.food;
-  targets.logistics = state.controls.crewShiftTargets.logistics;
-  targets.sanitation = state.controls.crewShiftTargets.sanitation;
-  targets.engineering = state.controls.crewShiftTargets.engineering;
-  targets['construction-eva'] = state.controls.crewShiftTargets['construction-eva'];
   assignCrewWorkLanes(state, targets, pendingByLane);
 
   const pendingPressure = clamp(pendingJobs.length / 6, 0, 1);
@@ -12654,6 +13110,7 @@ function assignJobsToIdleCrew(state: StationState): void {
   const canInterruptSelfCareForFood = (crew: CrewMember): boolean =>
     hasUrgentFoodWork &&
     crew.energy > CREW_REST_ENERGY_THRESHOLD + 8 &&
+    !crew.carryingMeal &&
     !crew.cleanSessionActive &&
     !crew.toiletSessionActive &&
     !crew.drinkSessionActive &&
@@ -12681,13 +13138,14 @@ function assignJobsToIdleCrew(state: StationState): void {
     crew.hygiene > CREW_CLEAN_HYGIENE_THRESHOLD - 12 &&
     crew.bladder > CREW_BLADDER_TOILET_THRESHOLD - 12 &&
     crew.hunger > CREW_HUNGER_MEAL_THRESHOLD - 10 &&
+    !crew.carryingMeal &&
     !crew.cleanSessionActive &&
     !crew.toiletSessionActive &&
     !crew.drinkSessionActive &&
     !crew.eatSessionActive;
 
   const candidates = state.crewMembers
-    .filter((crew) => !crew.resting && crew.activeJobId === null)
+    .filter((crew) => !crew.resting && crew.activeJobId === null && !crew.carryingMeal)
     .filter(
       (crew) =>
         getCrewWatchStatus(state, crew) !== 'off-duty' ||
@@ -12760,6 +13218,7 @@ function assignJobsToIdleCrew(state: StationState): void {
       for (const job of pendingJobs) {
         if (job.state !== 'pending') continue;
         if (jobWorkLane(state, job) !== lane) continue;
+        if (!crewCanPerformJob(state, crew, job)) continue;
         if (crewNeedsFoodOverride && !isFoodServiceJob(job)) continue;
         const site =
           job.type === 'construct' && job.constructionSiteId !== undefined
@@ -12777,10 +13236,12 @@ function assignJobsToIdleCrew(state: StationState): void {
         const suitability = crewSuitabilityForJob(crew, job);
         const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
         const approximateDistance = tileManhattanDistance(state, crew.tileIndex, jobWorkTile(state, job));
+        const workplaceBonus = homeWorkplaceMatchesTarget(state, crew, jobWorkTile(state, job)) ? 32 : 0;
         const approximateScore =
           logisticsJobPriority(state, job) * 100 +
           laneBonus +
           suitability +
+          workplaceBonus +
           Math.min(30, age / 6) -
           approximateDistance -
           needsPenalty;
@@ -12821,7 +13282,8 @@ function assignJobsToIdleCrew(state: StationState): void {
         const laneBonus = ownLane ? 45 : flex ? 18 : emergencyBorrow ? -8 : -24;
         const suitability = crewSuitabilityForJob(crew, job);
         const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
-        const score = logisticsJobPriority(state, job) * 100 + laneBonus + suitability + Math.min(30, age / 6) - path.length - needsPenalty;
+        const workplaceBonus = homeWorkplaceMatchesTarget(state, crew, jobWorkTile(state, job)) ? 32 : 0;
+        const score = logisticsJobPriority(state, job) * 100 + laneBonus + suitability + workplaceBonus + Math.min(30, age / 6) - path.length - needsPenalty;
         if (score > bestScore) {
           bestScore = score;
           bestJob = job;
@@ -13288,10 +13750,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         !visitor.servedMeal &&
         (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing)
     );
-  const cafeteriaCrewPosts = state.rooms
-    .map((room, tile) => ({ room, tile }))
-    .filter(({ room, tile }) => room === RoomType.Cafeteria && isWalkable(state.tiles[tile]) && state.moduleOccupancyByTile[tile] === null)
-    .map(({ tile }) => tile);
+  const cafeteriaCrewPosts = dutyAnchorsForSystem(state, 'cafeteria');
   const cargoServiceShips = state.arrivingShips.filter(
     (ship) => ship.stage === 'docked' && ship.portTurnaround?.phase === 'unloading'
   );
@@ -13344,13 +13803,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   };
   for (const crew of state.crewMembers) {
     crew.idleReason = 'idle_available';
-    const watchStatus: CrewWatchStatus = operatingSchedule.recallActive
-      ? 'on-duty'
-      : crew.shiftBucket === operatingSchedule.watch
-        ? 'off-duty'
-        : crew.shiftBucket === (operatingSchedule.watch + 1) % 3
-          ? 'reserve'
-          : 'on-duty';
+    const watchStatus: CrewWatchStatus = getCrewWatchStatus(state, crew);
     const routineSelfCareAllowed = watchStatus !== 'on-duty';
     if (operatingSchedule.recallActive && crew.shiftBucket === operatingSchedule.watch) {
       crew.energy = clamp(crew.energy - dt * 0.1, 0, 100);
@@ -13500,6 +13953,12 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       const cooldownReady = state.now >= crew.restCooldownUntil && state.now >= crew.taskLockUntil;
       const shouldRest =
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        !crew.toileting &&
+        !crew.drinking &&
+        !crew.eating &&
+        !crew.cleaning &&
+        !crew.leisure &&
         crew.energy < CREW_REST_ENERGY_THRESHOLD &&
         cooldownReady &&
         canRestByShift &&
@@ -13524,6 +13983,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         state.metrics.crewRestingNow = currentResting;
       } else if (
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        !crew.toileting &&
+        !crew.eating &&
         crew.bladder < (routineSelfCareAllowed ? CREW_BLADDER_TOILET_THRESHOLD : 12)
       ) {
         // Bladder is short-cycle: toilet interrupts cleaning/leisure but not active jobs or rest.
@@ -13548,6 +14010,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         }
       } else if (
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        !crew.toileting &&
+        !crew.drinking &&
+        !crew.eating &&
+        !crew.cleaning &&
         crew.thirst < (routineSelfCareAllowed ? CREW_THIRST_DRINK_THRESHOLD : 16)
       ) {
         // Thirst: route to a dedicated provider or basic cafeteria water.
@@ -13565,6 +14032,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         }
       } else if (
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        !crew.toileting &&
+        !crew.drinking &&
+        !crew.eating &&
+        !crew.cleaning &&
         crew.hunger < (routineSelfCareAllowed ? CREW_HUNGER_MEAL_THRESHOLD : 22)
       ) {
         crew.eating = true;
@@ -13580,6 +14052,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         clearCrewLeisure(state, crew);
       } else if (
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        !crew.toileting &&
+        !crew.drinking &&
+        !crew.eating &&
+        !crew.cleaning &&
         crew.hygiene < (routineSelfCareAllowed ? CREW_CLEAN_HYGIENE_THRESHOLD : 22)
       ) {
         if (hygieneTargets.length > 0 && !airEmergency) {
@@ -13595,6 +14072,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         }
       } else if (
         crew.activeJobId === null &&
+        !crew.carryingMeal &&
         crew.role === 'idle' &&
         !crew.cleaning &&
         !crew.leisure &&
@@ -13850,8 +14328,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         }
         const quality = quarters.qualityByTile.get(crew.tileIndex) ?? 35;
         const restRate = state.modules[crew.tileIndex] === ModuleType.Bed
-          ? 17 + quality * 0.07
-          : 9 + quality * 0.07;
+          ? 2.4 + quality * 0.018
+          : 1.4 + quality * 0.014;
         crew.energy = clamp(crew.energy + dt * restRate, 0, 100);
         crew.morale = clamp(crew.morale + dt * Math.max(-0.08, (quality - 55) * 0.006), 0, 100);
       } else {
@@ -14696,6 +15174,11 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
   if (visitor.path.length > 0 || visitor.tileIndex === nextServing.target) {
     return;
   }
+  // The provider was reservable but is not physically reachable from this
+  // actor's tile. Never carry that reservation back into the line: doing so
+  // blocks the counter for every visitor while its owner waits in the queue.
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot']);
+  visitor.reservedServingTile = null;
   const queuePath = pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id);
   setVisitorPath(state, visitor, queuePath);
   visitor.state = VisitorState.Queueing;
@@ -15208,9 +15691,13 @@ function updateVisitorLogic(
   const keep: Visitor[] = [];
   let marketTradeGoodsUsed = 0;
   const activeServiceCrew = state.crewMembers.filter(
-    (crew) => !crew.resting && crew.workLane === 'food' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
+    (crew) =>
+      !crew.resting &&
+      (crew.staffRole === 'cook' || crew.staffRole === 'steward') &&
+      crew.assignedSystem === 'cafeteria' &&
+      state.rooms[crew.tileIndex] === RoomType.Cafeteria
   ).length;
-  // An unattended counter is slow self-service, not a hard lock. Service crew
+  // An unattended counter is slow self-service, not a hard lock. Counter staff
   // still provide the large throughput gain, but a worker taking a break or
   // failing to reach the cafeteria cannot permanently pin the whole food line.
   const serviceRate = activeServiceCrew <= 0
@@ -15337,6 +15824,19 @@ function updateVisitorLogic(
 
         if (!visitor.carryingMeal) {
           const servingTile = visitor.reservedServingTile;
+          if (
+            servingTile !== null &&
+            !hasActiveMealPickupReservation(state, 'visitor', visitor.id, servingTile)
+          ) {
+            // A counter can be replaced or expire while a visitor is walking
+            // there. Never let that stale route consume stock belonging to a
+            // different visitor, especially when several counters are active.
+            visitor.serveTimer = undefined;
+            visitor.reservedServingTile = null;
+            releaseReservationsForOwner(state, 'visitor', visitor.id, 'expired', ['provider-slot']);
+            assignPathToCafeteria(state, visitor);
+            continue;
+          }
           // Crowd-loop v1 (B2): being served takes SERVE_INTERACTION_SEC while
           // the provider slot stays held — the counter is a rate limiter, so
           // a passenger pulse beyond its rate forms a physical line.
@@ -15373,7 +15873,11 @@ function updateVisitorLogic(
             const qpos = queuePositionOf(state, visitor.id);
             if (qpos === null) {
               enterServingLineOrBail(state, visitor);
-            } else if (qpos.index <= 1 && hasUnreservedServingMeal(state) && visitorPathRetryReady(state, visitor)) {
+            } else if (qpos.index === 0 && hasUnreservedServingMeal(state)) {
+              // Strict FIFO matters physically: allowing position two to win
+              // the reservation can make it path through the head of the line,
+              // leaving the head blocked and the counter reserved behind it.
+              visitor.nextPathRetryAt = state.now;
               assignPathToCafeteria(state, visitor);
             } else {
               addVisitorFailurePenalty(state, 0.014 * dt, 'patienceBail');
@@ -15388,6 +15892,7 @@ function updateVisitorLogic(
           dinersOnTile(state, visitor.tileIndex) < MAX_USERS_PER_USAGE_TILE
         ) {
           visitor.state = VisitorState.Eating;
+          visitor.commercialMealUnitId = getCommercialUnitAt(state, visitor.tileIndex)?.id ?? null;
           const eatBase = TASK_TIMINGS.visitorEatBaseSec[visitor.archetype];
           visitor.eatTimer = eatBase + state.rng() * TASK_TIMINGS.visitorEatJitterSec;
           const traitDirt = visitor.trait === 'messy' ? 1.75 : visitor.trait === 'tidy' ? 0.55 : 1;
@@ -15575,9 +16080,10 @@ function updateVisitorLogic(
       // stall trade-good loop below when both apply.
       if (state.modules[visitor.tileIndex] === ModuleType.VendingMachine) {
         const vendSpend = dt * 0.15 * clamp(visitor.spendMultiplier, 0.7, 1.6); // Crowd-loop v1: passive drip trimmed
-        state.metrics.credits += vendSpend;
+        const stationSpend = recordCommercialSaleAtTile(state, visitor.tileIndex, vendSpend);
+        state.metrics.credits += stationSpend;
         recordVisitorPortSpending(state, visitor, vendSpend);
-        state.metrics.creditsEarnedLifetime += vendSpend;
+        state.metrics.creditsEarnedLifetime += stationSpend;
         state.usageTotals.creditsMarketGross += vendSpend;
       }
       // Cantina drinks: visitors in a Cantina (at the bar counter or anywhere
@@ -15598,9 +16104,10 @@ function updateVisitorLogic(
           }
         }
         const drinkSpend = dt * 0.30 * tapBonus * clamp(visitor.spendMultiplier, 0.6, 1.7); // Crowd-loop v1: passive drip trimmed
-        state.metrics.credits += drinkSpend;
+        const stationSpend = recordCommercialSaleAtTile(state, visitor.tileIndex, drinkSpend);
+        state.metrics.credits += stationSpend;
         recordVisitorPortSpending(state, visitor, drinkSpend);
-        state.metrics.creditsEarnedLifetime += drinkSpend;
+        state.metrics.creditsEarnedLifetime += stationSpend;
         state.usageTotals.creditsMarketGross += drinkSpend;
       }
       if (state.rooms[visitor.tileIndex] === RoomType.Clinic) {
@@ -15629,9 +16136,10 @@ function updateVisitorLogic(
         );
         spendMultiplier *= clamp(1 + marketStatus * 0.06, 0.85, 1.15);
         const spend = dt * marketSpendPerSec(state, visitor) * spendMultiplier;
-        state.metrics.credits += spend;
+        const stationSpend = recordCommercialSaleAtTile(state, visitor.tileIndex, spend);
+        state.metrics.credits += stationSpend;
         recordVisitorPortSpending(state, visitor, spend);
-        state.metrics.creditsEarnedLifetime += spend;
+        state.metrics.creditsEarnedLifetime += stationSpend;
         state.usageTotals.creditsMarketGross += spend;
         state.usageTotals.creditsTradeGoodsGross += spend * (consumedGoods > 0 ? 1 : 0);
       }
@@ -15702,9 +16210,13 @@ function updateVisitorLogic(
           visitorSuccessRatingBonus(state, visitor.servedMeal ? 0.03 : 0.015, 'successfulExit');
           if (visitor.servedMeal) {
             const payout = mealExitPayout(state, visitor);
-            state.metrics.credits += payout;
+            const commercialUnit = visitor.commercialMealUnitId == null
+              ? null
+              : state.commercialUnits.find((unit) => unit.id === visitor.commercialMealUnitId) ?? null;
+            const stationPayout = recordCommercialSaleForUnit(state, commercialUnit, payout);
+            state.metrics.credits += stationPayout;
             recordVisitorPortSpending(state, visitor, payout);
-            state.metrics.creditsEarnedLifetime += payout;
+            state.metrics.creditsEarnedLifetime += stationPayout;
             state.usageTotals.creditsMealPayoutGross += payout;
           }
           state.recentExitTimes.push(state.now);
@@ -16989,7 +17501,15 @@ function updateResidentLogic(
 
       if (resident.state === ResidentState.ToCafeteria && !resident.carryingMeal) {
         const servingTile = resident.reservedServingTile ?? null;
-        if (servingTile !== null && resident.tileIndex === servingTile) {
+        if (
+          servingTile !== null &&
+          !hasActiveMealPickupReservation(state, 'resident', resident.id, servingTile)
+        ) {
+          resident.serveTimer = undefined;
+          resident.reservedServingTile = null;
+          releaseReservationsForOwner(state, 'resident', resident.id, 'expired', ['provider-slot']);
+          assignResidentMealPath(state, resident);
+        } else if (servingTile !== null && resident.tileIndex === servingTile) {
           resident.serveTimer ??= SERVE_INTERACTION_SEC;
           resident.serveTimer -= dt;
           if (resident.serveTimer <= 0) {
@@ -19440,6 +19960,7 @@ export function tick(state: StationState, frameDt: number): void {
 
   updateSpawns(state);
   updateArrivingShips(state, dt);
+  updateCommercialUnits(state);
   if (residentMoveInCadence.due) maybeMoveInResident(state);
   expireEffects(state);
   cleanupExpiredReservations(state);

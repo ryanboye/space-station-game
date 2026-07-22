@@ -143,6 +143,7 @@ const roomOverlay: Record<RoomType, string> = {
   // Berth floor sprite lands.
   [RoomType.Berth]: 'rgba(120, 170, 220, 0.22)',
   [RoomType.Cantina]: 'rgba(229, 138, 207, 0.24)',
+  [RoomType.CommercialUnit]: 'rgba(77, 211, 183, 0.22)',
   [RoomType.Observatory]: 'rgba(140, 184, 255, 0.24)'
 };
 
@@ -167,6 +168,7 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Storage]: 'B',
   [RoomType.Berth]: 'E',
   [RoomType.Cantina]: 'X',
+  [RoomType.CommercialUnit]: '$',
   [RoomType.Observatory]: 'O'
 };
 
@@ -1318,13 +1320,20 @@ function sanitationRenderSignature(state: StationState): string {
   let dirty = 0;
   let filthy = 0;
   let maxBucket = 0;
+  let spatialHash = 2166136261;
   for (let i = 0; i < state.dirtByTile.length; i++) {
-    const bucket = Math.floor((state.dirtByTile[i] ?? 0) / 10);
+    const bucket = Math.floor((state.dirtByTile[i] ?? 0) / 5);
     if (bucket > 0) dirty += 1;
-    if (bucket >= 7) filthy += 1;
+    if (bucket >= 14) filthy += 1;
     if (bucket > maxBucket) maxBucket = bucket;
+    if (bucket > 0) {
+      spatialHash ^= i + 1;
+      spatialHash = Math.imul(spatialHash, 16777619);
+      spatialHash ^= bucket;
+      spatialHash = Math.imul(spatialHash, 16777619);
+    }
   }
-  return `${dirty}:${filthy}:${maxBucket}`;
+  return `${dirty}:${filthy}:${maxBucket}:${spatialHash >>> 0}`;
 }
 
 function moduleConditionRenderSignature(state: StationState): string {
@@ -4170,6 +4179,251 @@ function drawCrewHireGhost(
   ctx.restore();
 }
 
+function commercialPreviewModule(
+  state: StationState,
+  placement: StationState['commercialUnits'][number]['offers'][number]['fixtures'][number],
+  id: number
+): StationState['moduleInstances'][number] | null {
+  const definition = MODULE_DEFINITIONS[placement.module];
+  if (!definition) return null;
+  const rotation = placement.rotation === 90 && definition.rotatable ? 90 : 0;
+  const width = rotation === 90 ? definition.height : definition.width;
+  const height = rotation === 90 ? definition.width : definition.height;
+  const origin = fromIndex(placement.originTile, state.width);
+  const tiles: number[] = [];
+  for (let dy = 0; dy < height; dy++) {
+    for (let dx = 0; dx < width; dx++) {
+      const x = origin.x + dx;
+      const y = origin.y + dy;
+      if (inBounds(x, y, state.width, state.height)) tiles.push(toIndex(x, y, state.width));
+    }
+  }
+  return {
+    id,
+    type: placement.module,
+    originTile: placement.originTile,
+    rotation,
+    width,
+    height,
+    tiles
+  };
+}
+
+function drawCommercialOfferPreviews(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  for (const unit of state.commercialUnits) {
+    if (unit.phase !== 'offers' || unit.previewOfferId === null) continue;
+    const offer = unit.offers.find((candidate) => candidate.id === unit.previewOfferId);
+    if (!offer) continue;
+    const pulse = 0.46 + Math.sin(state.now * 2.2 + unit.id) * 0.05;
+    for (let index = 0; index < offer.fixtures.length; index++) {
+      const module = commercialPreviewModule(state, offer.fixtures[index], -(offer.id * 100 + index + 1));
+      if (!module || !module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+      const origin = fromIndex(module.originTile, state.width);
+      const px = origin.x * TILE_SIZE;
+      const py = origin.y * TILE_SIZE;
+      const width = module.width * TILE_SIZE;
+      const height = module.height * TILE_SIZE;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(77, 211, 183, 0.16)';
+      ctx.fillRect(px + 1, py + 1, width - 2, height - 2);
+      ctx.globalAlpha = pulse;
+      drawModuleVisual(ctx, state, module, spriteAtlas, useSprites);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(112, 241, 210, 0.94)';
+      ctx.lineWidth = Math.max(1, Math.round(1.25 * PX));
+      ctx.setLineDash([Math.max(2, Math.round(4 * PX)), Math.max(2, Math.round(3 * PX))]);
+      ctx.strokeRect(px + 1.5, py + 1.5, width - 3, height - 3);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+}
+
+function fitCommercialChipText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let fitted = text;
+  while (fitted.length > 3 && ctx.measureText(`${fitted}...`).width > maxWidth) fitted = fitted.slice(0, -1);
+  return `${fitted.trimEnd()}...`;
+}
+
+function commercialChipCopy(unit: StationState['commercialUnits'][number]): {
+  heading: string;
+  detail: string;
+  accent: string;
+} {
+  if (unit.phase === 'vacant') {
+    return { heading: 'VACANT', detail: 'READY FOR TENANT', accent: '#9cb4c8' };
+  }
+  if (unit.phase === 'offers') {
+    return {
+      heading: 'APPLICANTS',
+      detail: `${unit.offers.length} ${unit.offers.length === 1 ? 'OFFER' : 'OFFERS'} TO REVIEW`,
+      accent: '#ffd36a'
+    };
+  }
+  if (unit.phase === 'fitting-out') {
+    const fixtureTotal = unit.selectedOffer?.fixtures.length ?? 0;
+    return {
+      heading: 'FITTING OUT',
+      detail: `${Math.min(unit.installedFixtureCount, fixtureTotal)}/${fixtureTotal} FIXTURES`,
+      accent: '#72bff2'
+    };
+  }
+  if (unit.phase === 'open') {
+    const brand = unit.selectedOffer?.brandName?.toUpperCase() ?? 'TENANT';
+    return {
+      heading: 'OPEN',
+      detail: `${brand} | ${unit.currentCustomers} IN`,
+      accent: '#71e5a0'
+    };
+  }
+  return {
+    heading: 'CLOSED',
+    detail: unit.statusReason.toUpperCase() || 'NOT OPERATING',
+    accent: '#ff7a76'
+  };
+}
+
+function drawCommercialUnitStatusChips(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const occupied: BerthChipRect[] = [];
+  const headingFont = Math.max(8, Math.round(TILE_SIZE * 0.34));
+  const detailFont = Math.max(7, Math.round(TILE_SIZE * 0.29));
+  const chipHeight = Math.max(20, TILE_SIZE * 0.9);
+  const maxChipWidth = TILE_SIZE * 7.5;
+  const padX = Math.max(7, TILE_SIZE * 0.35);
+
+  for (const unit of state.commercialUnits) {
+    if (!unit.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const copy = commercialChipCopy(unit);
+    ctx.save();
+    ctx.font = `bold ${headingFont}px monospace`;
+    const headingWidth = ctx.measureText(copy.heading).width;
+    ctx.font = `${detailFont}px monospace`;
+    const detailWidth = ctx.measureText(copy.detail).width;
+    const width = Math.min(maxChipWidth, Math.max(TILE_SIZE * 3.2, headingWidth, detailWidth) + padX * 2);
+    const rect = placeBerthChip(state, unit.tiles, width, chipHeight, occupied);
+    if (!rect) {
+      ctx.restore();
+      continue;
+    }
+
+    const anchor = fromIndex(unit.anchorTile, state.width);
+    const anchorX = (anchor.x + 0.5) * TILE_SIZE;
+    const anchorY = (anchor.y + 0.5) * TILE_SIZE;
+    const joinX = Math.max(rect.x, Math.min(rect.x + rect.w, anchorX));
+    const joinY = Math.max(rect.y, Math.min(rect.y + rect.h, anchorY));
+    ctx.strokeStyle = copy.accent;
+    ctx.globalAlpha = 0.62;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+    ctx.beginPath();
+    ctx.moveTo(anchorX, anchorY);
+    ctx.lineTo(joinX, joinY);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = 'rgba(5, 12, 20, 0.93)';
+    ctx.strokeStyle = copy.accent;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.beginPath();
+    ctx.roundRect(rect.x, rect.y, rect.w, rect.h, Math.max(2, TILE_SIZE * 0.1));
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = copy.accent;
+    ctx.fillRect(rect.x, rect.y, Math.max(2, TILE_SIZE * 0.12), rect.h);
+
+    const textX = rect.x + padX;
+    const textWidth = rect.w - padX * 1.5;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${headingFont}px monospace`;
+    ctx.fillStyle = '#eff7ff';
+    ctx.fillText(fitCommercialChipText(ctx, copy.heading, textWidth), textX, rect.y + rect.h * 0.32);
+    ctx.font = `${detailFont}px monospace`;
+    ctx.fillStyle = copy.accent;
+    ctx.fillText(fitCommercialChipText(ctx, copy.detail, textWidth), textX, rect.y + rect.h * 0.72);
+    ctx.restore();
+  }
+}
+
+function drawCommercialTenantStaff(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const accent = '#56e2bd';
+  for (const unit of state.commercialUnits) {
+    if (unit.phase !== 'open') continue;
+    for (let index = 0; index < unit.tenantStaffTiles.length; index++) {
+      const tile = unit.tenantStaffTiles[index];
+      if (!tileInRange(tile, state, visibleTiles)) continue;
+      const p = fromIndex(tile, state.width);
+      const offset = agentOffset(unit.id * 101 + index * 17);
+      const cx = (p.x + 0.5 + offset.x * 0.55) * TILE_SIZE;
+      const cy = (p.y + 0.5 + offset.y * 0.55) * TILE_SIZE;
+      const spriteKey = pickAgentVariant(AGENT_SPRITE_VARIANTS.crew, unit.id * 7 + index);
+      const drewSprite = useSprites && drawTintedAgentSprite(
+        ctx,
+        spriteAtlas,
+        spriteKey,
+        cx,
+        cy,
+        TILE_SIZE * AGENT_SPRITE_SCALE,
+        accent,
+        0.38
+      );
+
+      ctx.save();
+      if (!drewSprite) {
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(cx, cy, TILE_SIZE * 0.19, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const radius = TILE_SIZE * AGENT_SPRITE_SCALE * 0.5;
+      ctx.strokeStyle = 'rgba(5, 12, 20, 0.92)';
+      ctx.lineWidth = Math.max(3, TILE_SIZE * 0.11);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.052);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const label = 'TENANT';
+      const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.26));
+      ctx.font = `bold ${fontSize}px monospace`;
+      const labelWidth = ctx.measureText(label).width + Math.max(5, TILE_SIZE * 0.24);
+      const labelHeight = Math.max(10, TILE_SIZE * 0.42);
+      const labelY = cy + radius * 0.72;
+      ctx.fillStyle = 'rgba(5, 12, 20, 0.92)';
+      ctx.fillRect(cx - labelWidth * 0.5, labelY, labelWidth, labelHeight);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx - labelWidth * 0.5, labelY, labelWidth, labelHeight);
+      ctx.fillStyle = accent;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, cx, labelY + labelHeight * 0.52);
+      ctx.restore();
+    }
+  }
+}
+
 function drawIncidentMarkers(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -4280,14 +4534,21 @@ function drawLocalAirWarnings(
       alpha * pulse
     );
     if (!drew) {
-      ctx.strokeStyle = `rgba(132, 214, 232, ${alpha * pulse})`;
+      const cx = (p.x + 0.5) * TILE_SIZE;
+      const cy = (p.y + 0.22) * TILE_SIZE;
+      const badgeRadius = TILE_SIZE * (0.22 + severity * 0.04);
+      ctx.fillStyle = `rgba(7, 18, 27, ${0.72 + severity * 0.16})`;
+      ctx.strokeStyle = `rgba(132, 214, 232, ${alpha * pulse + 0.28})`;
       ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05);
-      for (let i = 0; i < 2; i++) {
-        const y = (p.y + 0.35 + i * 0.24) * TILE_SIZE;
-        ctx.beginPath();
-        ctx.arc((p.x + 0.44 + i * 0.12) * TILE_SIZE, y, TILE_SIZE * (0.18 + severity * 0.08), Math.PI * 0.1, Math.PI * 0.9);
-        ctx.stroke();
-      }
+      ctx.beginPath();
+      ctx.arc(cx, cy, badgeRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = `rgba(190, 239, 248, ${0.78 + severity * 0.2})`;
+      ctx.font = `bold ${Math.max(7, Math.round(TILE_SIZE * 0.28))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('O2', cx, cy + Math.max(0.5, TILE_SIZE * 0.01));
     }
   }
   ctx.restore();
@@ -4502,6 +4763,8 @@ export function renderWorld(
     }
   }
 
+  drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
+
   for (const site of state.constructionSites) {
     if (!tileInRange(site.tileIndex, state, visibleTiles)) continue;
     const p = fromIndex(site.tileIndex, state.width);
@@ -4609,6 +4872,7 @@ export function renderWorld(
   drawLocalAirWarnings(ctx, state, spriteAtlas, useSprites, visibleTiles);
   drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
   drawIncidentMarkers(ctx, state, visibleTiles);
+  drawCommercialUnitStatusChips(ctx, state, visibleTiles);
 
   const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
     x >= visibleTiles.minX - marginTiles &&
@@ -4839,6 +5103,8 @@ export function renderWorld(
       drawWorldThought(ctx, thought, cx, cy, urgent);
     }
   }
+
+  drawCommercialTenantStaff(ctx, state, spriteAtlas, useSprites, visibleTiles);
 
   // Crowd-loop v1 (B3): floating lost-sale coins / death notices.
   const crowdFloaters = state.derived.queueTheater?.floaters ?? [];

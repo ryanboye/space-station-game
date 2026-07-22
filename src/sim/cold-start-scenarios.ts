@@ -18,7 +18,7 @@ import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
 import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
-import { buyMaterials, buyRawFood, mapConditionAt, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import { buyMaterials, buyRawFood, mapConditionAt, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -378,6 +378,20 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.metrics.credits = 5000;
     s.metrics.materials = 500;
     applyDemoStationOverlay(s);
+  },
+
+  // Commercial-unit prototype: a mature station with one large vacant shell
+  // ready for the player to solicit and compare tenant proposals.
+  'commercial-units': (s) => {
+    unlockThrough(s, 3);
+    s.metrics.credits = 3000;
+    s.metrics.materials = 500;
+    applyDemoStationOverlay(s);
+    for (let y = 20; y < 29; y++) {
+      for (let x = 45; x < 54; x++) removeModuleAtTile(s, y * GRID_WIDTH + x);
+    }
+    paintRoom(s, 45, 20, 54, 29, RoomType.CommercialUnit, 'south');
+    s.controls.paused = true;
   },
 
   // Focused Stage 4 fixture: one supplier and one customer, with two

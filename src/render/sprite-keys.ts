@@ -57,6 +57,7 @@ export const ROOM_SPRITE_KEYS: Record<RoomType, string> = {
   [RoomType.Storage]: 'room.storage',
   [RoomType.Berth]: 'room.berth',
   [RoomType.Cantina]: 'room.cantina',
+  [RoomType.CommercialUnit]: 'room.commercial_unit',
   [RoomType.Observatory]: 'room.observatory'
 };
 

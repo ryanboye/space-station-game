@@ -15,6 +15,8 @@ import {
   type BerthScreeningLevel,
   type CustomsPolicy,
   type CrewShiftTargets,
+  type CommercialUnit,
+  type CommercialOffer,
   type HousingPolicy,
   type ItemType,
   type ArrivingShip,
@@ -74,6 +76,8 @@ const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 
 const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
 const SPACE_LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 const HOUSING_POLICIES: HousingPolicy[] = ['crew', 'visitor', 'resident', 'private_resident'];
+const COMMERCIAL_KINDS = ['market-stall', 'cantina', 'restaurant', 'gift-shop'] as const;
+const COMMERCIAL_PHASES = ['vacant', 'offers', 'fitting-out', 'open', 'closed'] as const;
 const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent'];
 const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction'];
 const PORT_OFFER_KINDS: PortOfferKind[] = ['passenger', 'freight', 'mixed'];
@@ -125,6 +129,7 @@ export interface StationSnapshotV1 {
     originTile: number;
     rotation: ModuleRotation;
   }>;
+  commercialUnits?: CommercialUnit[];
   constructionSites: Array<{
     kind: 'tile' | 'module';
     tileIndex: number;
@@ -169,6 +174,10 @@ export interface StationSnapshotV1 {
       id: number;
       name: string;
       tileIndex?: number;
+      staffRole?: StaffRole;
+      shiftBucket?: number;
+      recalledUntil?: number;
+      homeWorkplaceTile?: number | null;
       energy: number;
       hunger?: number;
       hygiene: number;
@@ -219,6 +228,7 @@ export interface StationSnapshotV1 {
     // permanently stuck.
     mealsServedTotal: number;
     creditsEarnedLifetime: number;
+    turnaroundsCompletedLifetime: number;
     tradeCyclesCompletedLifetime: number;
     incidentsResolvedLifetime: number;
     actorsTreatedLifetime: number;
@@ -423,6 +433,23 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         rotation: module.rotation
       }))
       .sort((a, b) => a.originTile - b.originTile || a.type.localeCompare(b.type)),
+    commercialUnits: state.commercialUnits.map((unit) => ({
+      ...unit,
+      tiles: [...unit.tiles],
+      offers: unit.offers.map((offer) => ({
+        ...offer,
+        fixtures: offer.fixtures.map((fixture) => ({ ...fixture }))
+      })),
+      selectedOffer: unit.selectedOffer
+        ? {
+            ...unit.selectedOffer,
+            fixtures: unit.selectedOffer.fixtures.map((fixture) => ({ ...fixture }))
+          }
+        : null,
+      fittedModuleIds: [...unit.fittedModuleIds],
+      presentCustomerIds: [...unit.presentCustomerIds],
+      tenantStaffTiles: [...unit.tenantStaffTiles]
+    })),
     constructionSites: state.constructionSites
       .filter((site) => site.state !== 'done')
       .map((site) => ({
@@ -472,6 +499,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         id: crew.id,
         name: crew.name,
         tileIndex: crew.tileIndex,
+        staffRole: crew.staffRole,
+        shiftBucket: crew.shiftBucket,
+        recalledUntil: crew.recalledUntil,
+        homeWorkplaceTile: crew.homeWorkplaceTile,
         energy: crew.energy,
         hunger: crew.hunger,
         hygiene: crew.hygiene,
@@ -524,6 +555,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     progression: {
       mealsServedTotal: state.metrics.mealsServedTotal,
       creditsEarnedLifetime: state.metrics.creditsEarnedLifetime,
+      turnaroundsCompletedLifetime: state.metrics.turnaroundsCompletedLifetime,
       tradeCyclesCompletedLifetime: state.metrics.tradeCyclesCompletedLifetime,
       incidentsResolvedLifetime: state.metrics.incidentsResolvedLifetime,
       actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
@@ -777,6 +809,91 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
   };
 }
 
+function normalizeCommercialOffer(raw: unknown, expectedLength: number): CommercialOffer | null {
+  if (!isRecord(raw) || !isOneOf(raw.kind, COMMERCIAL_KINDS)) return null;
+  const targetRoom = isOneOf(raw.targetRoom, [RoomType.Market, RoomType.Cantina, RoomType.Cafeteria] as const)
+    ? raw.targetRoom
+    : null;
+  if (!targetRoom) return null;
+  const fixtures: CommercialOffer['fixtures'] = [];
+  if (Array.isArray(raw.fixtures)) {
+    for (const entry of raw.fixtures) {
+      if (!isRecord(entry) || !isOneOf(entry.module, Object.values(ModuleType)) || entry.module === ModuleType.None) continue;
+      const originTile = Math.floor(asFiniteNumber(entry.originTile, -1));
+      if (originTile < 0 || originTile >= expectedLength) continue;
+      fixtures.push({
+        module: entry.module,
+        originTile,
+        rotation: Math.round(asFiniteNumber(entry.rotation, 0)) === 90 ? 90 : 0
+      });
+    }
+  }
+  if (fixtures.length === 0) return null;
+  return {
+    id: Math.max(1, Math.floor(asFiniteNumber(raw.id, 1))),
+    kind: raw.kind,
+    tenantName: typeof raw.tenantName === 'string' ? raw.tenantName : 'Independent operator',
+    brandName: typeof raw.brandName === 'string' ? raw.brandName : 'Unnamed business',
+    concept: typeof raw.concept === 'string' ? raw.concept : 'Commercial tenant',
+    targetRoom,
+    fixtures,
+    baseRentPerCycle: Math.max(0, asFiniteNumber(raw.baseRentPerCycle, 0)),
+    revenueShare: clamp(asFiniteNumber(raw.revenueShare, 0.1), 0, 1),
+    fitoutDurationSec: Math.max(1, asFiniteNumber(raw.fitoutDurationSec, 8)),
+    expectedCustomersPerCycle: Math.max(0, asFiniteNumber(raw.expectedCustomersPerCycle, 0)),
+    suppliedStaff: Math.max(0, Math.floor(asFiniteNumber(raw.suppliedStaff, 0))),
+    stockPolicy: typeof raw.stockPolicy === 'string' ? raw.stockPolicy : 'Tenant supplied'
+  };
+}
+
+function normalizeCommercialUnits(raw: unknown, expectedLength: number, warnings: string[]): CommercialUnit[] {
+  if (!Array.isArray(raw)) return [];
+  const units: CommercialUnit[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || !isOneOf(entry.phase, COMMERCIAL_PHASES)) continue;
+    const tiles = Array.isArray(entry.tiles)
+      ? entry.tiles
+          .filter((tile): tile is number => typeof tile === 'number' && Number.isFinite(tile))
+          .map((tile) => Math.floor(tile))
+          .filter((tile) => tile >= 0 && tile < expectedLength)
+      : [];
+    if (tiles.length === 0) continue;
+    const offers = Array.isArray(entry.offers)
+      ? entry.offers.map((offer) => normalizeCommercialOffer(offer, expectedLength)).filter((offer): offer is CommercialOffer => !!offer)
+      : [];
+    const selectedOffer = normalizeCommercialOffer(entry.selectedOffer, expectedLength);
+    units.push({
+      id: Math.max(1, Math.floor(asFiniteNumber(entry.id, units.length + 1))),
+      anchorTile: Math.min(...tiles),
+      tiles: [...new Set(tiles)].sort((a, b) => a - b),
+      phase: entry.phase,
+      offers,
+      previewOfferId: typeof entry.previewOfferId === 'number' ? Math.max(1, Math.floor(entry.previewOfferId)) : null,
+      selectedOffer,
+      fittedModuleIds: [],
+      installedFixtureCount: Math.max(0, Math.floor(asFiniteNumber(entry.installedFixtureCount, 0))),
+      createdAt: Math.max(0, asFiniteNumber(entry.createdAt, 0)),
+      fitoutStartedAt: typeof entry.fitoutStartedAt === 'number' ? Math.max(0, entry.fitoutStartedAt) : null,
+      fitoutCompleteAt: typeof entry.fitoutCompleteAt === 'number' ? Math.max(0, entry.fitoutCompleteAt) : null,
+      nextFixtureAt: typeof entry.nextFixtureAt === 'number' ? Math.max(0, entry.nextFixtureAt) : null,
+      nextRentAt: typeof entry.nextRentAt === 'number' ? Math.max(0, entry.nextRentAt) : null,
+      nextRestockAt: typeof entry.nextRestockAt === 'number' ? Math.max(0, entry.nextRestockAt) : null,
+      grossSalesAccrued: Math.max(0, asFiniteNumber(entry.grossSalesAccrued, 0)),
+      rentCollected: Math.max(0, asFiniteNumber(entry.rentCollected, 0)),
+      revenueShareCollected: Math.max(0, asFiniteNumber(entry.revenueShareCollected, 0)),
+      customersServed: Math.max(0, Math.floor(asFiniteNumber(entry.customersServed, 0))),
+      currentCustomers: 0,
+      presentCustomerIds: [],
+      tenantStaffTiles: Array.isArray(entry.tenantStaffTiles)
+        ? entry.tenantStaffTiles.filter((tile): tile is number => typeof tile === 'number' && tile >= 0 && tile < expectedLength)
+        : [],
+      statusReason: typeof entry.statusReason === 'string' ? entry.statusReason : 'Loaded from save'
+    });
+  }
+  if (units.length !== raw.length) warnings.push('Some invalid commercial units were skipped.');
+  return units;
+}
+
 function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: string[]): StationSnapshotV1 | null {
   const defaultState = createInitialState();
   const simTime = Math.max(0, asFiniteNumber(snapshotRaw.simTime, 0));
@@ -1021,6 +1138,18 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         tileIndex: Number.isFinite(entry.tileIndex)
           ? clamp(Math.floor(asFiniteNumber(entry.tileIndex, 0)), 0, expectedLength - 1)
           : undefined,
+        staffRole: isOneOf(entry.staffRole, STAFF_ROLES) ? entry.staffRole : undefined,
+        shiftBucket: Number.isFinite(entry.shiftBucket)
+          ? clamp(Math.floor(asFiniteNumber(entry.shiftBucket, 0)), 0, 2)
+          : undefined,
+        recalledUntil: Number.isFinite(entry.recalledUntil)
+          ? Math.max(0, asFiniteNumber(entry.recalledUntil, 0))
+          : undefined,
+        homeWorkplaceTile: entry.homeWorkplaceTile === null
+          ? null
+          : Number.isFinite(entry.homeWorkplaceTile)
+            ? clamp(Math.floor(asFiniteNumber(entry.homeWorkplaceTile, 0)), 0, expectedLength - 1)
+            : undefined,
         energy: clamp(asFiniteNumber(entry.energy, 100), 0, 100),
         hunger: clamp(asFiniteNumber(entry.hunger, 82), 0, 100),
         hygiene: clamp(asFiniteNumber(entry.hygiene, 100), 0, 100),
@@ -1217,6 +1346,15 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const progression: StationSnapshotV1['progression'] = {
     mealsServedTotal: Math.max(0, Math.floor(asFiniteNumber(progRaw?.mealsServedTotal, 0))),
     creditsEarnedLifetime: Math.max(0, asFiniteNumber(progRaw?.creditsEarnedLifetime, 0)),
+    turnaroundsCompletedLifetime: Math.max(
+      0,
+      Math.floor(
+        asFiniteNumber(
+          progRaw?.turnaroundsCompletedLifetime,
+          asFiniteNumber(progRaw?.dockedShipsCompleted, 0)
+        )
+      )
+    ),
     tradeCyclesCompletedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.tradeCyclesCompletedLifetime, 0))),
     incidentsResolvedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.incidentsResolvedLifetime, 0))),
     actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
@@ -1364,6 +1502,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         return [entry as unknown as Resident];
       })
     : [];
+  const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
 
   return {
     simTime,
@@ -1376,6 +1515,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     rooms,
     roomHousingPolicies,
     modules,
+    commercialUnits,
     constructionSites,
     dockConfigs,
     berthConfigs,
@@ -1650,6 +1790,39 @@ export function hydrateStateFromSave(
       warnings.push(`Module ${index} (${module.type} @ ${module.originTile}) skipped: ${result.reason ?? 'invalid'}.`);
     }
   }
+  next.commercialUnits = (snapshot.commercialUnits ?? []).map((unit) => {
+    const selectedFixtures = unit.selectedOffer?.fixtures ?? [];
+    const fittedModuleIds = next.moduleInstances
+      .filter((module) =>
+        unit.tiles.includes(module.originTile) &&
+        selectedFixtures.some((fixture) => fixture.module === module.type && fixture.originTile === module.originTile)
+      )
+      .map((module) => module.id);
+    return {
+      ...unit,
+      tiles: [...unit.tiles],
+      offers: unit.offers.map((offer) => ({ ...offer, fixtures: offer.fixtures.map((fixture) => ({ ...fixture })) })),
+      selectedOffer: unit.selectedOffer
+        ? { ...unit.selectedOffer, fixtures: unit.selectedOffer.fixtures.map((fixture) => ({ ...fixture })) }
+        : null,
+      fittedModuleIds,
+      installedFixtureCount: fittedModuleIds.length,
+      currentCustomers: 0,
+      presentCustomerIds: [],
+      tenantStaffTiles: [...unit.tenantStaffTiles]
+    };
+  });
+  next.commercialUnitSpawnCounter = Math.max(
+    1,
+    next.commercialUnits.reduce((max, unit) => Math.max(max, unit.id + 1), 1)
+  );
+  next.commercialOfferSpawnCounter = Math.max(
+    1,
+    next.commercialUnits.reduce((max, unit) => {
+      const ids = [...unit.offers, ...(unit.selectedOffer ? [unit.selectedOffer] : [])].map((offer) => offer.id + 1);
+      return Math.max(max, ...ids, 1);
+    }, 1)
+  );
   next.constructionSites = snapshot.constructionSites.map((site) => ({
     id: next.constructionSiteSpawnCounter++,
     kind: site.kind,
@@ -1803,6 +1976,7 @@ export function hydrateStateFromSave(
   // the metrics pass, so persisting the set is enough) survives reload.
   next.metrics.mealsServedTotal = snapshot.progression.mealsServedTotal;
   next.metrics.creditsEarnedLifetime = snapshot.progression.creditsEarnedLifetime;
+  next.metrics.turnaroundsCompletedLifetime = snapshot.progression.turnaroundsCompletedLifetime;
   next.metrics.tradeCyclesCompletedLifetime = snapshot.progression.tradeCyclesCompletedLifetime;
   next.metrics.incidentsResolvedLifetime = snapshot.progression.incidentsResolvedLifetime;
   next.metrics.actorsTreatedLifetime = snapshot.progression.actorsTreatedLifetime;
@@ -1937,6 +2111,10 @@ export function hydrateStateFromSave(
     const saved = savedCrewById.get(crew.id);
     if (!saved) continue;
     crew.name = saved.name;
+    if (saved.staffRole !== undefined) crew.staffRole = saved.staffRole;
+    if (saved.shiftBucket !== undefined) crew.shiftBucket = saved.shiftBucket;
+    if (saved.recalledUntil !== undefined) crew.recalledUntil = saved.recalledUntil;
+    if (saved.homeWorkplaceTile !== undefined) crew.homeWorkplaceTile = saved.homeWorkplaceTile;
     const savedTile = saved.tileIndex;
     const restoredTile = savedTile !== undefined && isWalkable(next.tiles[savedTile])
       ? savedTile

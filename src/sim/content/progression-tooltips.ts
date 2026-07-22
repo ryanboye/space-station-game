@@ -43,7 +43,7 @@ export const PROGRESSION_TOOLTIP_COPY: Record<UnlockTier, ProgressionTooltipCopy
   3: {
     name: 'Advanced Operations',
     theme: 'Add security, health, recreation, and advanced traffic controls.',
-    trigger: 'Unlocks when you complete one workshop → market trade cycle.',
+    trigger: 'Unlocks when you complete three ship turnarounds.',
   },
   4: {
     name: 'Permanent Habitation',
