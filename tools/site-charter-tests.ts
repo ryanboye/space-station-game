@@ -4,6 +4,8 @@
 
 import { generateSystemMap } from '../src/sim/system-map';
 import { computeSiteProfile } from '../src/sim/site-charter';
+import { createInitialState } from '../src/sim/initial-state';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import type { SpaceLane, SystemMap } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -117,6 +119,48 @@ function testLegacyFieldsRegression(): void {
   );
 }
 
+function testCreateInitialStateStoresCharter(): void {
+  // createInitialState with a charter must store it verbatim on state.site.
+  const map = generateSystemMap(1337);
+  const charter = computeSiteProfile(map, 0.5, 0.34);
+  const state = createInitialState({ seed: 1337, charter });
+  assert(state.site !== undefined, 'createInitialState dropped the provided charter.');
+  assert(
+    JSON.stringify(state.site) === JSON.stringify(charter),
+    'Stored charter diverged from the one passed to createInitialState.'
+  );
+}
+
+function testCreateInitialStateNoCharter(): void {
+  // Absent charter (default starts, harness fixtures) leaves site undefined.
+  const state = createInitialState({ seed: 1337 });
+  assert(state.site === undefined, `Un-chartered start had a defined site (${JSON.stringify(state.site)}).`);
+}
+
+function testSaveLoadRoundTripsSite(): void {
+  // A chartered site must survive a full serialize → parse → hydrate cycle,
+  // and an un-chartered save must restore site as undefined.
+  const map = generateSystemMap(1337);
+  const charter = computeSiteProfile(map, 0.62, 0.28);
+  const chartered = createInitialState({ seed: 1337, charter });
+  const text = serializeSave('charter-roundtrip', chartered, 'test');
+  const parsed = parseAndMigrateSave(text);
+  assert(parsed.ok, `Chartered save failed to parse: ${parsed.ok ? '' : parsed.error}`);
+  const restored = hydrateStateFromSave(parsed.save).state;
+  assert(restored.site !== undefined, 'Charter was lost across save/load.');
+  assert(
+    JSON.stringify(restored.site) === JSON.stringify(charter),
+    'Charter mutated across save/load round-trip.'
+  );
+
+  const plain = createInitialState({ seed: 1337 });
+  const plainText = serializeSave('plain-roundtrip', plain, 'test');
+  const plainParsed = parseAndMigrateSave(plainText);
+  assert(plainParsed.ok, `Un-chartered save failed to parse: ${plainParsed.ok ? '' : plainParsed.error}`);
+  const plainRestored = hydrateStateFromSave(plainParsed.save).state;
+  assert(plainRestored.site === undefined, 'Un-chartered save restored a defined site.');
+}
+
 // Golden snapshot of the legacy (pre-laneRoutes) fields for seed 1337.
 const LEGACY_SNAPSHOT_1337 = '{"factions":[{"id":"faction-0-free-port","templateId":"free-port","displayName":"Port Bellwether","color":"#4ab3d6","shipBias":{"trader":0.4,"tourist":0.3,"industrial":0.15,"colonist":0.15}},{"id":"faction-1-industrial-combine","templateId":"industrial-combine","displayName":"Tantalus Smelting Bloc","color":"#9c8b7a","shipBias":{"industrial":0.7,"trader":0.2,"military":0.05,"colonist":0.05}},{"id":"faction-2-trader-guild","templateId":"trader-guild","displayName":"Sirian Coin Confederacy","color":"#f5b94a","shipBias":{"trader":0.65,"tourist":0.2,"industrial":0.1,"colonist":0.05}},{"id":"faction-3-pleasure-syndicate","templateId":"pleasure-syndicate","displayName":"Sapphire Tides Concordat","color":"#d167b8","shipBias":{"tourist":0.7,"trader":0.15,"colonist":0.1,"military":0.05}},{"id":"faction-4-colonial-authority","templateId":"colonial-authority","displayName":"Heartwood Colonial Office","color":"#5fb874","shipBias":{"colonist":0.65,"trader":0.15,"tourist":0.1,"industrial":0.1}}],"planets":[{"id":"planet-0","factionId":"faction-0-free-port","displayName":"Tessen","orbitRadius":0.19197210597340017,"orbitAngle":0.31577282278269436,"bodyType":"ice"},{"id":"planet-1","factionId":"faction-2-trader-guild","displayName":"Inara","orbitRadius":0.4328621489306291,"orbitAngle":1.822560142774103,"bodyType":"gas"},{"id":"planet-2","factionId":"faction-2-trader-guild","displayName":"Ulmar","orbitRadius":0.6614564454058806,"orbitAngle":2.887523361006803,"bodyType":"gas"},{"id":"planet-3","factionId":"faction-0-free-port","displayName":"Khaeris","orbitRadius":0.8592090816237031,"orbitAngle":4.423259034881919,"bodyType":"gas"}],"asteroidBelts":[{"id":"belt-0","innerRadius":0.492997169510927,"outerRadius":0.562894436607603,"resourceType":"gas","factionClaim":null},{"id":"belt-1","innerRadius":0.3880656786775216,"outerRadius":0.47147373803425574,"resourceType":"metal","factionClaim":"faction-3-pleasure-syndicate"},{"id":"belt-2","innerRadius":0.24140100059332326,"outerRadius":0.331384873862844,"resourceType":"ice","factionClaim":"faction-0-free-port"}],"laneSectors":{"north":{"factionIds":["faction-1-industrial-combine","faction-2-trader-guild","faction-4-colonial-authority"],"dominantFactionId":"faction-1-industrial-combine"},"east":{"factionIds":["faction-3-pleasure-syndicate","faction-2-trader-guild"],"dominantFactionId":"faction-3-pleasure-syndicate"},"south":{"factionIds":["faction-2-trader-guild","faction-4-colonial-authority"],"dominantFactionId":"faction-2-trader-guild"},"west":{"factionIds":["faction-2-trader-guild","faction-3-pleasure-syndicate"],"dominantFactionId":"faction-2-trader-guild"}},"seedAtCreation":1337}';
 
@@ -126,7 +170,10 @@ const tests: Array<[string, () => void]> = [
   ['lane ceiling', testLaneCeiling],
   ['belt flavor correctness', testBeltFlavor],
   ['far corner has no flavor', testFarCornerHasNoFlavor],
-  ['legacy fields regression', testLegacyFieldsRegression]
+  ['legacy fields regression', testLegacyFieldsRegression],
+  ['createInitialState stores charter', testCreateInitialStateStoresCharter],
+  ['createInitialState without charter', testCreateInitialStateNoCharter],
+  ['save/load round-trips site', testSaveLoadRoundTripsSite]
 ];
 
 const runtimeProcess = (globalThis as typeof globalThis & {

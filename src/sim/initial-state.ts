@@ -51,6 +51,7 @@ import {
   type ModuleRotation,
   ModuleType,
   RoomType,
+  type SiteCharter,
   type StationState,
   TileType,
   ZoneType,
@@ -62,6 +63,7 @@ export function createInitialState(options?: {
   seed?: number;
   physicalStarterInventory?: boolean;
   manualTrafficAdmission?: boolean;
+  charter?: SiteCharter;
 }): StationState {
   const seed = options?.seed ?? 1337;
   const rng = makeRng(seed);
@@ -325,6 +327,9 @@ export function createInitialState(options?: {
     docks: [],
     berthConfigs: [],
     system,
+    // Absent charter (default starts, harness fixtures) leaves site undefined,
+    // which every downstream system treats as current default behavior.
+    site: options?.charter,
     seedAtCreation: seed,
     mapWorldOriginX: 0,
     mapWorldOriginY: 0,

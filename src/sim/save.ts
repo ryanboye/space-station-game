@@ -28,6 +28,7 @@ import {
   type PortPromiseKind,
   type Resident,
   ResidentState,
+  type SiteCharter,
   type SpecialtyId,
   type SpecialtyProgress,
   type StaffRole,
@@ -295,6 +296,9 @@ export interface StationSnapshotV1 {
   };
   portOps: PortOpsState;
   activePortShips: ArrivingShip[];
+  // Optional on the wire — legacy saves and un-chartered starts predate this
+  // slot. Absent → state.site stays undefined → current default behavior.
+  site?: SiteCharter;
 }
 
 export interface StationSaveEnvelopeV1 {
@@ -322,6 +326,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+// Tolerant restore of an optional chartered site profile. Absent or malformed
+// → undefined (legacy / un-chartered start = current default behavior).
+function normalizeSite(raw: unknown): SiteCharter | undefined {
+  if (!isRecord(raw)) return undefined;
+  const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+  const lanes: SpaceLane[] = ['north', 'east', 'south', 'west'];
+  const rawLanes = isRecord(raw.laneTrafficFactor) ? raw.laneTrafficFactor : {};
+  const laneTrafficFactor = {
+    north: asFiniteNumber(rawLanes.north, 1),
+    east: asFiniteNumber(rawLanes.east, 1),
+    south: asFiniteNumber(rawLanes.south, 1),
+    west: asFiniteNumber(rawLanes.west, 1)
+  } as Record<SpaceLane, number>;
+  for (const lane of lanes) laneTrafficFactor[lane] = Math.max(0, laneTrafficFactor[lane]);
+  const resourceType = raw.resourceType === 'metal' || raw.resourceType === 'ice' || raw.resourceType === 'gas'
+    ? raw.resourceType
+    : null;
+  return {
+    version: 1,
+    x: clamp01(asFiniteNumber(raw.x, 0.5)),
+    y: clamp01(asFiniteNumber(raw.y, 0.5)),
+    sunFactor: clamp01(asFiniteNumber(raw.sunFactor, 0)),
+    debrisFactor: clamp01(asFiniteNumber(raw.debrisFactor, 0)),
+    resourceType,
+    laneTrafficFactor
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -672,7 +704,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           outboundRequired: { ...ship.portTurnaround.outboundRequired },
           outboundLoaded: { ...ship.portTurnaround.outboundLoaded }
         } : undefined
-      }))
+      })),
+    // Chartered site profile, if any. undefined on un-chartered starts, and
+    // JSON.stringify drops it so legacy save shape is unchanged.
+    site: state.site ? { ...state.site, laneTrafficFactor: { ...state.site.laneTrafficFactor } } : undefined
   };
 }
 
@@ -1664,7 +1699,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       debts: maintenanceDebts
     },
     portOps,
-    activePortShips
+    activePortShips,
+    site: normalizeSite(snapshotRaw.site)
   };
 }
 
@@ -1831,6 +1867,8 @@ export function hydrateStateFromSave(
   const warnings: string[] = [];
   const snapshot = save.snapshot;
   next.now = snapshot.simTime;
+  // Restore the chartered site profile if present (absent on legacy saves).
+  next.site = snapshot.site;
 
   if (snapshot.width !== next.width || snapshot.height !== next.height) {
     throw new Error(
