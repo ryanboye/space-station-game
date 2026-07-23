@@ -246,9 +246,24 @@ sprites:
     prompt: "Top-down pixel art station module sprite: serving station. 2x1
       footprint, transparent background, readable at 36x18."
     rotation: 0
+  module.fridge:
+    prompt: "Top-down pixel art station module sprite: compact commercial refrigerator with cold-blue status light. 1x1 footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.cold_store:
+    prompt: "Top-down pixel art station module sprite: large refrigerated storage cabinet with frosted doors and cooling pipes. 2x2 footprint, transparent background, readable at 36x36."
+    rotation: 0
+  module.prep_counter:
+    prompt: "Top-down pixel art station module sprite: commercial kitchen preparation counter with ingredient trays and cutting board. 2x1 footprint, transparent background, readable at 36x18."
+    rotation: 0
   module.stove:
     prompt: "Top-down pixel art station module sprite: stove. 2x1 footprint,
       transparent background, readable at 36x18."
+    rotation: 0
+  module.tray_return:
+    prompt: "Top-down pixel art station module sprite: compact cafeteria tray return with tray slot and recycle indicator. 1x1 footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.dishwasher:
+    prompt: "Top-down pixel art station module sprite: commercial dishwasher with two wash bays and blue water jets. 2x1 footprint, transparent background, readable at 36x18."
     rotation: 0
   module.workbench:
     prompt: "Top-down pixel art station module sprite: workbench. 2x1 footprint,
@@ -293,6 +308,12 @@ sprites:
   module.sink:
     prompt: "Top-down pixel art station module sprite: sink. 1x1 footprint,
       transparent background, readable at 18x18."
+    rotation: 0
+  module.floor_drain:
+    prompt: "Top-down pixel art station module sprite: industrial floor drain with steel grate and cyan maintenance lights. 1x1 footprint, transparent background, readable at 18x18."
+    rotation: 0
+  module.water_valve:
+    prompt: "Top-down pixel art station module sprite: plumbing valve manifold with cyan handwheel and pressure gauge. 1x1 footprint, transparent background, readable at 18x18."
     rotation: 0
   module.market_stall:
     prompt: "Top-down pixel art station module sprite: market stall. 2x1 footprint,

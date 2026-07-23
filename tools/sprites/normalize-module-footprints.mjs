@@ -12,7 +12,12 @@ const FOOTPRINTS = {
   'module.bed': { w: 2, h: 1 },
   'module.table': { w: 2, h: 2 },
   'module.serving_station': { w: 2, h: 1 },
+  'module.fridge': { w: 1, h: 1 },
+  'module.cold_store': { w: 2, h: 2 },
+  'module.prep_counter': { w: 2, h: 1 },
   'module.stove': { w: 2, h: 1 },
+  'module.tray_return': { w: 1, h: 1 },
+  'module.dishwasher': { w: 2, h: 1 },
   'module.workbench': { w: 2, h: 1 },
   'module.med_bed': { w: 2, h: 1 },
   'module.cell_console': { w: 1, h: 1 },
@@ -23,9 +28,13 @@ const FOOTPRINTS = {
   'module.game_station': { w: 2, h: 2 },
   'module.shower': { w: 1, h: 1 },
   'module.sink': { w: 1, h: 1 },
+  'module.toilet': { w: 1, h: 1 },
+  'module.floor_drain': { w: 1, h: 1 },
+  'module.water_valve': { w: 1, h: 1 },
   'module.market_stall': { w: 2, h: 1 },
   'module.intake_pallet': { w: 2, h: 2 },
-  'module.storage_rack': { w: 2, h: 1 }
+  'module.storage_rack': { w: 2, h: 1 },
+  'module.bar_counter': { w: 2, h: 1 }
 };
 
 const BASE = 64;
@@ -35,7 +44,11 @@ const PADDING_BY_KEY = {
   'module.grow_station': 4,
   'module.intake_pallet': 2,
   'module.market_stall': 3,
-  'module.storage_rack': 3
+  'module.storage_rack': 3,
+  'module.cold_store': 3,
+  'module.prep_counter': 3,
+  'module.dishwasher': 3,
+  'module.bar_counter': 3
 };
 
 function keyToFileName(key) {
@@ -113,9 +126,19 @@ async function normalizeOne(key, footprint) {
   return `${key}: ${meta.info.width}x${meta.info.height} -> ${frameWidth}x${frameHeight}`;
 }
 
+function selectedKeys(argv) {
+  const keysIndex = argv.indexOf('--keys');
+  if (keysIndex < 0 || !argv[keysIndex + 1]) return Object.keys(FOOTPRINTS);
+  const requested = argv[keysIndex + 1].split(',').map((key) => key.trim()).filter(Boolean);
+  const invalid = requested.filter((key) => !FOOTPRINTS[key]);
+  if (invalid.length > 0) throw new Error(`Unknown module sprite keys: ${invalid.join(', ')}`);
+  return requested;
+}
+
 async function main() {
   const results = [];
-  for (const [key, footprint] of Object.entries(FOOTPRINTS)) {
+  for (const key of selectedKeys(process.argv.slice(2))) {
+    const footprint = FOOTPRINTS[key];
     const result = await normalizeOne(key, footprint);
     if (result) results.push(result);
   }
