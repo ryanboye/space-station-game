@@ -166,15 +166,27 @@ export function createInitialState(options?: {
     rooms[door] = room;
   };
 
+  // A compact maintenance room sits directly beneath the fuel Pod Dock. The
+  // tank is deliberately local: its underfloor fuel line reaches the hull
+  // coupler without crossing the public concourse or the cargo store.
+  paintEnclosedRoom(RoomType.Maintenance, coreX - 2, coreY - 2, coreX + 1, coreY, coreX, coreY + 1);
+  const fuelPodDockServiceDoor = toIndex(coreX - 2, coreY - 3, GRID_WIDTH);
+  tiles[fuelPodDockServiceDoor] = TileType.Door;
+  rooms[fuelPodDockServiceDoor] = RoomType.Maintenance;
+  const fuelCouplerServiceDoor = toIndex(coreX, coreY - 3, GRID_WIDTH);
+  tiles[fuelCouplerServiceDoor] = TileType.Door;
+  rooms[fuelCouplerServiceDoor] = RoomType.Maintenance;
+  addStarterModule(ModuleType.FuelTank, coreX - 1, coreY - 2, 0);
+
   // Cargo intake and storage face the south service gallery. Life support,
   // command and power are baseline hull services in this validation slice;
   // they do not consume the first screen with rooms the player cannot use.
   paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX, coreY + 5);
   addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
   paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 5, coreY + 5);
-  addStarterModule(ModuleType.StorageRack, coreX + 6, coreY + 4, 0);
-  addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 4, 0);
-  addStarterModule(ModuleType.StorageRack, coreX + 7, coreY + 5, 0);
+  addStarterModule(ModuleType.StorageRack, coreX + 9, coreY + 4, 90);
+  addStarterModule(ModuleType.StorageRack, coreX + 6, coreY + 6, 0);
+  addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 6, 0);
 
   // Prepared meals arrive as station stock. The cafeteria is the first public
   // service; Kitchen and Hydroponics return later as optional margin choices.
@@ -182,6 +194,12 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
   addStarterModule(ModuleType.Table, coreX + 7, coreY, 0);
   addStarterModule(ModuleType.Table, coreX + 9, coreY, 0);
+
+  // The market is a small, station-run counter rather than a later tenant
+  // unlock. Its east-hull annex also makes the first screen read as a stop
+  // with separate reasons to visit, without spending the berth expansion.
+  paintEnclosedRoom(RoomType.Market, coreX + 12, coreY - 3, coreX + 15, coreY - 1, coreX + 11, coreY - 2);
+  addStarterModule(ModuleType.MarketStall, coreX + 12, coreY - 3, 0);
 
   // The starter crew has functional but deliberately ramshackle support.
   // Four double bunks cover the initial shift at low comfort; beds and
@@ -200,9 +218,8 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.Bunk, coreX - 6, coreY - 1, 0);
   addStarterModule(ModuleType.Locker, coreX - 4, coreY - 2, 0);
 
-  // Leave a one-tile public passage between the two pods. It turns south from
-  // the west Berth door, then east toward the concourse without entering crew
-  // quarters or opening either occupied room to vacuum.
+  // Visitor hygiene remains a sealed pod off the public deck, with a short
+  // approach that does not cut through crew quarters or cargo handling.
   paintEnclosedRoom(RoomType.Hygiene, coreX - 9, coreY + 3, coreX - 6, coreY + 5, coreX - 8, coreY + 2);
   for (let y = coreY + 3; y <= coreY + 5; y++) {
     for (let x = coreX - 9; x <= coreX - 6; x++) {
@@ -214,53 +231,15 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.Shower, coreX - 9, coreY + 5, 0);
   addStarterModule(ModuleType.Sink, coreX - 7, coreY + 5, 0);
 
-  // The berth is a hull-side work deck: walls on three sides, a sealed
-  // station door to the west, and an open east edge where ships physically
-  // meet the station. It is deliberately separate from the intake room.
-  const berthMinX = starterWallMaxX + 1;
-  const berthMaxX = berthMinX + 5;
-  const berthMinY = coreY - 2;
-  const berthMaxY = coreY + 2;
-  for (let x = berthMinX - 1; x <= berthMaxX; x++) {
-    tiles[toIndex(x, berthMinY - 1, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, berthMaxY + 1, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let y = berthMinY; y <= berthMaxY; y++) {
-    for (let x = berthMinX; x <= berthMaxX; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      tiles[idx] = TileType.Dock;
-      rooms[idx] = RoomType.Berth;
-    }
-  }
-  const berthDoor = toIndex(berthMinX - 1, coreY, GRID_WIDTH);
-  tiles[berthDoor] = TileType.Door;
-  rooms[berthDoor] = RoomType.Berth;
-  addStarterModule(ModuleType.CustomsCounter, berthMinX + 1, berthMinY + 1, 0);
-  addStarterModule(ModuleType.CargoArm, berthMaxX - 1, berthMaxY - 1, 0);
-  addStarterModule(ModuleType.Gangway, berthMaxX, coreY, 0);
-
-  // The west berth is passenger-first: a gangway and short public approach,
-  // but no cargo arm. Together the two berths create a meaningful first-shift
-  // choice instead of one generic dock that does everything.
-  const passengerBerthMaxX = starterWallMinX - 1;
-  const passengerBerthMinX = passengerBerthMaxX - 5;
-  const passengerBerthMinY = coreY - 2;
-  const passengerBerthMaxY = coreY + 2;
-  for (let x = passengerBerthMinX; x <= passengerBerthMaxX + 1; x++) {
-    tiles[toIndex(x, passengerBerthMinY - 1, GRID_WIDTH)] = TileType.Wall;
-    tiles[toIndex(x, passengerBerthMaxY + 1, GRID_WIDTH)] = TileType.Wall;
-  }
-  for (let y = passengerBerthMinY; y <= passengerBerthMaxY; y++) {
-    for (let x = passengerBerthMinX; x <= passengerBerthMaxX; x++) {
-      const idx = toIndex(x, y, GRID_WIDTH);
-      tiles[idx] = TileType.Dock;
-      rooms[idx] = RoomType.Berth;
-    }
-  }
-  const passengerBerthDoor = toIndex(passengerBerthMaxX + 1, coreY, GRID_WIDTH);
-  tiles[passengerBerthDoor] = TileType.Door;
-  rooms[passengerBerthDoor] = RoomType.Berth;
-  addStarterModule(ModuleType.Gangway, passengerBerthMinX, coreY, 0);
+  // The opening station is dock-first. Both mounts span two north-hull wall
+  // tiles and open directly into the pressurized public deck. The service
+  // attachments sit on the same face with unambiguous ownership: fuel on the
+  // west dock, freight on the east dock. East and west hull runs remain clear
+  // as the two obvious future berth-expansion edges.
+  addStarterModule(ModuleType.PodDock, coreX - 2, starterWallMinY, 0);
+  addStarterModule(ModuleType.FuelCoupler, coreX, starterWallMinY, 0);
+  addStarterModule(ModuleType.PodDock, coreX + 3, starterWallMinY, 0);
+  addStarterModule(ModuleType.FreightLocker, coreX + 5, starterWallMinY, 0);
 
   // Construction stock begins as physical inventory in the authored intake
   // and store rooms. The old invisible global pool remains only as a save
@@ -272,8 +251,7 @@ export function createInitialState(options?: {
     .map((module) => {
       const capacity = MODULE_DEFINITIONS[module.type].itemNodeCapacity ?? 0;
       // Starter construction stock belongs in Intake / Storage. Seeding every
-      // item node used to fill the berth cargo arm before the first ship and
-      // silently discarded its manifest cargo.
+      // item node would mix build material into the opening visitor services.
       const starterStockNode = module.type === ModuleType.IntakePallet || module.type === ModuleType.StorageRack;
       const rawMaterial = options?.physicalStarterInventory && starterStockNode
         ? Math.min(capacity, starterMaterialsRemaining)
@@ -288,12 +266,28 @@ export function createInitialState(options?: {
         items.meal = 30;
         items.cleanTray = 30;
       }
+      if (module.type === ModuleType.MarketStall) {
+        items.tradeGood = 16;
+      }
+      if (module.type === ModuleType.FuelTank) {
+        items.fuel = 40;
+      }
       return {
         tileIndex: module.originTile,
         capacity,
         items
       };
     });
+
+  const utilityUnderlay = createEmptyUtilityUnderlay(GRID_WIDTH * GRID_HEIGHT);
+  for (const [x, y] of [
+    [coreX - 1, coreY - 2],
+    [coreX - 1, coreY - 3],
+    [coreX, coreY - 3]
+  ] as const) {
+    utilityUnderlay.layers['fuel-pipe'][toIndex(x, y, GRID_WIDTH)] = 1;
+  }
+  utilityUnderlay.version = 1;
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
   const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
@@ -377,7 +371,7 @@ export function createInitialState(options?: {
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),
     heatByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(42),
     staleAirByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
-    utilityUnderlay: createEmptyUtilityUnderlay(GRID_WIDTH * GRID_HEIGHT),
+    utilityUnderlay,
     dirtByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT),
     dirtSourceByTile: new Uint8Array(GRID_WIDTH * GRID_HEIGHT),
     plumbing: {

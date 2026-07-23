@@ -150,9 +150,12 @@ export const ROOM_UNLOCK_TIER: Record<RoomType, UnlockTier> = {
   [RoomType.Hydroponics]: 0,
   [RoomType.LifeSupport]: 0,
   [RoomType.Lounge]: 1,
-  [RoomType.Market]: 1,
+  // The starter market is a staffed, stocked opening service rather than a
+  // delayed build option. Its later upgrades remain affordability choices.
+  [RoomType.Market]: 0,
   [RoomType.LogisticsStock]: 0,
   [RoomType.Storage]: 2,
+  [RoomType.Maintenance]: 0,
   // Dock-migration v0: Berth available from T0 for testing.
   // v1: production probably wants T0 still, but worth re-evaluating.
   [RoomType.Berth]: 0,
@@ -207,7 +210,7 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Sink]: 0,
   [ModuleType.FloorDrain]: 0,
   [ModuleType.WaterValve]: 0,
-  [ModuleType.MarketStall]: 1,
+  [ModuleType.MarketStall]: 0,
   [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,
   // Dock-migration v0: capability modules at T0 for testing.
@@ -215,8 +218,16 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Gangway]: 0,
   [ModuleType.CustomsCounter]: 0,
   [ModuleType.CargoArm]: 0,
-  [ModuleType.FuelTank]: 2,
+  // Small-craft fuel storage is an opening capital/supply choice. The berth
+  // transfer pump remains later infrastructure.
+  [ModuleType.FuelTank]: 0,
   [ModuleType.FuelPump]: 2,
+  [ModuleType.PodDock]: 0,
+  [ModuleType.FuelCoupler]: 0,
+  [ModuleType.FreightLocker]: 0,
+  [ModuleType.MaintenanceSocket]: 0,
+  [ModuleType.BerthControl]: 0,
+  [ModuleType.DockingClamp]: 0,
   [ModuleType.SecurityCamera]: 3,
   [ModuleType.AccessGate]: 3,
   [ModuleType.FireExtinguisher]: 0,

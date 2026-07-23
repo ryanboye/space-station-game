@@ -133,7 +133,20 @@ export function createEmptySpriteAtlas(version = 'missing'): SpriteAtlas {
 // stays render-free. Re-exported here for renderer callers that pull
 // types from this module.
 export type { SpritePipeline } from '../sim/types';
-import type { SpritePipeline } from '../sim/types';
+import { ModuleType, type SpritePipeline } from '../sim/types';
+
+// Kept next to the atlas contract so renderer consumers can opt into newly
+// authored infrastructure without waiting for every palette surface to update.
+export const PORT_INFRASTRUCTURE_SPRITE_KEYS: Partial<Record<ModuleType, string>> = {
+  [ModuleType.PodDock]: 'module.pod_dock',
+  [ModuleType.FuelCoupler]: 'module.fuel_coupler',
+  [ModuleType.FreightLocker]: 'module.freight_locker',
+  [ModuleType.MaintenanceSocket]: 'module.maintenance_socket',
+  [ModuleType.BerthControl]: 'module.berth_control',
+  [ModuleType.DockingClamp]: 'module.docking_clamp',
+  [ModuleType.Gangway]: 'module.gangway',
+  [ModuleType.CargoArm]: 'module.cargo_arm'
+};
 
 function manifestPathForPipeline(_pipeline: SpritePipeline): string {
   // Single atlas for now; kept as a function so a future pipeline alt

@@ -21,6 +21,7 @@ const ROOM_LABELS: Record<RoomType, string> = {
   [RoomType.Market]: 'MARKET',
   [RoomType.LogisticsStock]: 'LOGISTICS',
   [RoomType.Storage]: 'STORAGE',
+  [RoomType.Maintenance]: 'MAINTENANCE',
   [RoomType.Berth]: 'BERTH',
   [RoomType.Cantina]: 'CANTINA',
   [RoomType.CommercialUnit]: 'AVAILABLE',

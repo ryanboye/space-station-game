@@ -47,6 +47,7 @@ import {
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
+  getFuelPipeNetworkDiagnostics,
   getWaterPipeNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getMaintenanceTileDiagnostic,
@@ -65,6 +66,7 @@ import {
   getVisitorInspectorById,
   getNextExpansionCost,
   getDockByTile,
+  getPodDockFuelSupplyView,
   getSanitationTileDiagnostic,
   isModuleUnlocked,
   isCrewHoldingProtectedPost,
@@ -111,6 +113,7 @@ import {
   validateDockPlacement
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
+import { MODULE_DEFINITIONS } from './sim/balance';
 import {
   applyColdStartScenario,
   COLD_START_SCENARIO_NAMES
@@ -180,7 +183,7 @@ app.innerHTML = `
     <div id="hud-status" aria-label="Station status">
       <span class="hud-item"><span class="hud-label">Crew</span><span class="hud-value" id="hud-crew">--</span></span>
       <button id="hud-air-control" class="hud-item hud-air-control" type="button" title="Open the Air Coverage overlay">
-        <span class="hud-label">Oxygen</span><span class="hud-value" id="hud-oxygen">--</span>
+        <span class="hud-label">O2 Reserve</span><span class="hud-value" id="hud-oxygen">--</span>
       </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
@@ -460,6 +463,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
         <button class="tool-btn" data-tool-utility-underlay="air-duct" title="Draw underfloor Air Ducts — connect Life Support to wall Vents"><span class="tool-key">·</span>Air Duct</button>
         <button class="tool-btn" data-tool-utility-underlay="water-pipe" title="Draw underfloor Water Pipes — connect hygiene and kitchen fixtures"><span class="tool-key">·</span>Water Pipe</button>
+        <button class="tool-btn" data-tool-utility-underlay="fuel-pipe" title="Draw underfloor Fuel Pipes — connect Maintenance Fuel Tanks to hull Fuel Couplers"><span class="tool-key">·</span>Fuel Pipe</button>
         <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Utility</button>
         <button class="tool-btn" data-tool-cancel-construction="1" title="Cancel build orders by dragging over blueprints"><span class="tool-key">·</span>Cancel Build</button>
         <button class="tool-btn" data-tool-tile="erase" title="Erase (7)"><span class="tool-key">7</span>Erase</button>
@@ -479,6 +483,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="market" title="Build Market (K)"><span class="tool-key">K</span>Market</button>
         <button class="tool-btn" data-tool-room="workshop" title="Build Workshop (W)"><span class="tool-key">W</span>Workshop</button>
         <button class="tool-btn" data-tool-room="storage" title="Build Storage (B)"><span class="tool-key">B</span>Storage</button>
+        <button class="tool-btn" data-tool-room="maintenance" title="Build Maintenance — Fuel Tanks and utility equipment"><span class="tool-key">·</span>Maintenance</button>
         <button class="tool-btn" data-tool-room="logistics-stock" title="Build Logistics Stock (N)"><span class="tool-key">N</span>Logistics</button>
         <button class="tool-btn" data-tool-room="security" title="Build Security (S)"><span class="tool-key">S</span>Security</button>
         <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
@@ -490,6 +495,21 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="observatory" title="Build Observatory (T3+) — premium leisure with wonder bonus"><span class="tool-key">·</span>Observ.</button>
       </div>
       <div class="tool-row palette-section" data-palette-section="modules" data-tool-section="modules">
+        <span class="tool-row-label">Port Infrastructure</span>
+        <span class="tool-group-label">Pod Dock</span>
+        <button class="tool-btn" data-tool-module="pod-dock" title="Place Pod Dock · ${MODULE_DEFINITIONS[ModuleType.PodDock].capitalCost}c — requires an exterior hull wall"><span class="tool-key">·</span>Pod Dock · ${MODULE_DEFINITIONS[ModuleType.PodDock].capitalCost}c</button>
+        <span class="tool-group-label">Dock Services</span>
+        <button class="tool-btn" data-tool-module="fuel-coupler" title="Place Fuel Coupler · ${MODULE_DEFINITIONS[ModuleType.FuelCoupler].capitalCost}c — connect it to a Maintenance Fuel Tank with Fuel Pipe"><span class="tool-key">·</span>Fuel Coupler · ${MODULE_DEFINITIONS[ModuleType.FuelCoupler].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="freight-locker" title="Place Freight Locker · ${MODULE_DEFINITIONS[ModuleType.FreightLocker].capitalCost}c — requires an exterior hull wall near a Pod Dock"><span class="tool-key">·</span>Freight Locker · ${MODULE_DEFINITIONS[ModuleType.FreightLocker].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="maintenance-socket" title="Place Maintenance Socket · ${MODULE_DEFINITIONS[ModuleType.MaintenanceSocket].capitalCost}c — requires an exterior hull wall near a Pod Dock"><span class="tool-key">·</span>Maint. Socket · ${MODULE_DEFINITIONS[ModuleType.MaintenanceSocket].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="fuel-tank" title="Place Fuel Tank · ${MODULE_DEFINITIONS[ModuleType.FuelTank].capitalCost}c — stores propellant in a Maintenance room"><span class="tool-key">·</span>Fuel Tank · ${MODULE_DEFINITIONS[ModuleType.FuelTank].capitalCost}c</button>
+        <span class="tool-group-label" data-berth-hardware>Berth Hardware</span>
+        <button class="tool-btn" data-tool-module="berth-control" data-berth-hardware title="Place Berth Control · ${MODULE_DEFINITIONS[ModuleType.BerthControl].capitalCost}c — berth-only traffic control"><span class="tool-key">·</span>Berth Control · ${MODULE_DEFINITIONS[ModuleType.BerthControl].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="docking-clamp" data-berth-hardware title="Place Docking Clamp · ${MODULE_DEFINITIONS[ModuleType.DockingClamp].capitalCost}c — berth service rail"><span class="tool-key">·</span>Dock Clamp · ${MODULE_DEFINITIONS[ModuleType.DockingClamp].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="gangway" data-berth-hardware title="Place Gangway · ${MODULE_DEFINITIONS[ModuleType.Gangway].capitalCost}c — berth passenger access"><span class="tool-key">·</span>Gangway · ${MODULE_DEFINITIONS[ModuleType.Gangway].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="customs-counter" data-berth-hardware title="Place Customs Counter · ${MODULE_DEFINITIONS[ModuleType.CustomsCounter].capitalCost}c — berth screening"><span class="tool-key">·</span>Customs · ${MODULE_DEFINITIONS[ModuleType.CustomsCounter].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="cargo-arm" data-berth-hardware title="Place Cargo Arm · ${MODULE_DEFINITIONS[ModuleType.CargoArm].capitalCost}c — heavy berth freight"><span class="tool-key">·</span>Cargo Arm · ${MODULE_DEFINITIONS[ModuleType.CargoArm].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="fuel-pump" data-berth-hardware title="Place Fuel Pump · ${MODULE_DEFINITIONS[ModuleType.FuelPump].capitalCost}c (T2+) — large-berth refueling"><span class="tool-key">·</span>Fuel Pump · ${MODULE_DEFINITIONS[ModuleType.FuelPump].capitalCost}c</button>
         <span class="tool-row-label">Furniture</span>
         <button class="tool-btn" data-tool-module="captain-console" title="Place Captain's Console"><span class="tool-key">·</span>Captain</button>
         <button class="tool-btn" data-tool-module="sanitation-terminal" title="Place Sanitation Terminal"><span class="tool-key">·</span>Sanit.</button>
@@ -525,11 +545,6 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="cell-console" title="Place Cell Console (/)"><span class="tool-key">/</span>Cell</button>
         <button class="tool-btn" data-tool-module="rec-unit" title="Place Rec Unit (\\)"><span class="tool-key">\\</span>Rec</button>
         <button class="tool-btn" data-tool-module="med-bed" title="Place Med Bed (Z)"><span class="tool-key">Z</span>Med Bed</button>
-        <button class="tool-btn" data-tool-module="gangway" title="Place Gangway (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Gangway</button>
-        <button class="tool-btn" data-tool-module="customs-counter" title="Place Customs Counter (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Customs</button>
-        <button class="tool-btn" data-tool-module="cargo-arm" title="Place Cargo Arm (Berth-only) — dock-migration v0"><span class="tool-key">·</span>Cargo</button>
-        <button class="tool-btn" data-tool-module="fuel-tank" title="Place Fuel Tank (T2+, Storage or Berth) — stores imported propellant"><span class="tool-key">·</span>Fuel tank</button>
-        <button class="tool-btn" data-tool-module="fuel-pump" title="Place Fuel Pump (T2+, Berth-only) — enables physical refueling service"><span class="tool-key">·</span>Fuel pump</button>
         <button class="tool-btn" data-tool-module="security-camera" title="Place wall Security Camera (T3+) — lowers local opacity and improves detection/control"><span class="tool-key">·</span>Camera</button>
         <button class="tool-btn" data-tool-module="access-gate" title="Place Access Gate (T3+) — staffed checkpoint control; needs Security Guards"><span class="tool-key">·</span>Gate</button>
         <button class="tool-btn" data-tool-module="fire-extinguisher" title="Place wall Fire Extinguisher — suppresses nearby fires from an adjacent service tile"><span class="tool-key">·</span>Fire Ext</button>
@@ -861,12 +876,21 @@ app.innerHTML = `
   <div id="dock-modal" class="modal hidden">
     <div class="modal-card">
       <div class="modal-head">
-        <h2>Dock Config</h2>
+        <h2 id="dock-modal-title">Dock Config</h2>
         <button id="close-dock" class="ghost-btn">Close</button>
       </div>
       <div class="row compact list-row"><span>Dock</span><span class="value" id="dock-modal-id">none</span></div>
-      <div class="row compact list-row"><span>Zone Area</span><span class="value" id="dock-modal-area">0</span></div>
-      <div class="row compact list-row"><span>Max Size</span><span class="value" id="dock-modal-max-size">small</span></div>
+      <div class="row compact list-row"><span id="dock-modal-area-label">Zone Area</span><span class="value" id="dock-modal-area">0</span></div>
+      <div class="row compact list-row"><span id="dock-modal-size-label">Max Size</span><span class="value" id="dock-modal-max-size">small</span></div>
+      <section id="dock-modal-inspection" class="port-inspection hidden" aria-live="polite">
+        <div class="section-title">Pod Dock Inspection</div>
+        <div id="dock-modal-capabilities" class="port-chip-row"></div>
+        <div id="dock-modal-craft" class="port-inspection-note">No craft in position.</div>
+        <div id="dock-modal-services" class="port-service-list"></div>
+        <div id="dock-modal-stock" class="port-inspection-note"></div>
+        <div id="dock-modal-blocker" class="port-inspection-blocker"></div>
+      </section>
+      <section id="dock-modal-routing">
       <div class="row" style="margin-top:8px;"><span>Purpose</span><span class="value" id="dock-modal-purpose-label">Visitor</span></div>
       <select id="dock-modal-purpose">
         <option value="visitor">Visitor Berth</option>
@@ -890,6 +914,7 @@ app.innerHTML = `
       <label><input type="checkbox" id="dock-modal-small" checked /> Small</label>
       <label><input type="checkbox" id="dock-modal-medium" checked /> Medium</label>
       <label><input type="checkbox" id="dock-modal-large" checked /> Large</label>
+      </section>
     </div>
   </div>
   <div id="room-modal" class="modal hidden">
@@ -923,6 +948,11 @@ app.innerHTML = `
       </select>
       <small id="room-modal-housing">Housing: n/a</small>
       <small id="room-modal-berth">Berth: n/a</small>
+      <section id="room-modal-berth-readiness" class="port-inspection hidden" aria-live="polite">
+        <div class="section-title">Facility Readiness</div>
+        <div id="room-modal-berth-readiness-rows" class="port-readiness-grid"></div>
+        <div id="room-modal-berth-readiness-reason" class="port-inspection-blocker"></div>
+      </section>
       <div id="room-modal-berth-config" class="hidden">
         <div class="section-title" style="margin-top:10px;">Berth Config</div>
         <div class="row compact list-row"><span>Purpose</span><span class="value" id="room-modal-berth-purpose">Visitor</span></div>
@@ -1223,15 +1253,20 @@ function diagnosticReadoutText(): string {
   if (overlay === 'utility-underlay') {
     const air = getAirDuctNetworkDiagnostics(state);
     const water = getWaterPipeNetworkDiagnostics(state);
+    const fuel = getFuelPipeNetworkDiagnostics(state);
     const globalLine =
       `Utilities: air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% covered · ${air.networkCount} duct networks | ` +
       `water ${water.poweredSinkCount}/${water.sinkCount} fixtures · ${water.sourceCount} sources · ${water.disconnectedTileCount} disconnected | ` +
+      `fuel ${fuel.poweredSinkCount}/${fuel.sinkCount} couplers · ${fuel.sourceCount} tanks · ${fuel.disconnectedTileCount} disconnected | ` +
       `leaks ${state.metrics.activePlumbingLeaks}`;
     if (hoveredTile === null) {
-      return `${globalLine}\nDraw Air Ducts from Life Support to Vents, or Water Pipes from Life Support beneath toilets, sinks, showers, and dishwashers.`;
+      return `${globalLine}\nDraw Air Ducts to Vents, Water Pipes to wet fixtures, or Fuel Pipes from Maintenance Fuel Tanks to Fuel Couplers.`;
     }
     const p = fromIndex(hoveredTile, state.width);
-    const diagnostic = getUtilityUnderlayTileDiagnostic(state, p.x, p.y);
+    const diagnosticKind = currentTool.kind === 'utility-underlay' && !currentTool.utilityErase
+      ? currentTool.utilityKind
+      : undefined;
+    const diagnostic = getUtilityUnderlayTileDiagnostic(state, p.x, p.y, diagnosticKind);
     if (!diagnostic) return `${globalLine}\n${diagnosticHoverPrefix()}: no utility sample.`;
     const network = diagnostic.componentId !== null ? `network ${diagnostic.componentId}` : 'no network';
     return `${globalLine}\n${diagnosticHoverPrefix()}: ${diagnostic.reason}; ${network}; ${diagnostic.effect}; fix: ${diagnostic.fix}.`;
@@ -1337,18 +1372,22 @@ function diagnosticKeyModel(): DiagnosticKeyModel | null {
     case 'utility-underlay': {
       const air = getAirDuctNetworkDiagnostics(state);
       const water = getWaterPipeNetworkDiagnostics(state);
+      const fuel = getFuelPipeNetworkDiagnostics(state);
       return {
         title: 'Utility Networks',
         stats:
           `air ${state.metrics.lifeSupportCoveragePct.toFixed(0)}% | duct networks ${air.networkCount} | ` +
           `water networks ${water.poweredNetworkCount}/${water.networkCount} supplied | ` +
-          `fixtures ${water.poweredSinkCount}/${water.sinkCount} | sources ${water.sourceCount} | leaks ${state.metrics.activePlumbingLeaks}`,
+          `fixtures ${water.poweredSinkCount}/${water.sinkCount} | ` +
+          `fuel ${fuel.poweredSinkCount}/${fuel.sinkCount} couplers · ${fuel.sourceCount} tanks | leaks ${state.metrics.activePlumbingLeaks}`,
         rows: [
           { color: '#37d3e6', label: 'Air reach tint underneath' },
           { color: '#6edb8f', label: 'Life Support source duct' },
           { color: '#61c8ff', label: 'Powered Air Duct' },
           { color: '#54c4ff', label: 'Connected Water Pipe' },
           { color: '#86ecff', label: 'Flooded or leaking pipe' },
+          { color: '#f2a84b', label: 'Connected Fuel Pipe' },
+          { color: '#74dda0', label: 'Maintenance Fuel Tank source' },
           { color: '#a7f3ff', label: 'Wall Vent output connection' },
           { color: '#ee4f4f', label: 'Disconnected utility or unpowered fixture' }
         ]
@@ -1675,6 +1714,16 @@ const closeDockBtn = document.querySelector<HTMLButtonElement>('#close-dock')!;
 const dockModalIdEl = document.querySelector<HTMLElement>('#dock-modal-id')!;
 const dockModalAreaEl = document.querySelector<HTMLElement>('#dock-modal-area')!;
 const dockModalMaxSizeEl = document.querySelector<HTMLElement>('#dock-modal-max-size')!;
+const dockModalInspectionEl = document.querySelector<HTMLElement>('#dock-modal-inspection')!;
+const dockModalRoutingEl = document.querySelector<HTMLElement>('#dock-modal-routing')!;
+const dockModalTitleEl = document.querySelector<HTMLElement>('#dock-modal-title')!;
+const dockModalAreaLabelEl = document.querySelector<HTMLElement>('#dock-modal-area-label')!;
+const dockModalSizeLabelEl = document.querySelector<HTMLElement>('#dock-modal-size-label')!;
+const dockModalCapabilitiesEl = document.querySelector<HTMLElement>('#dock-modal-capabilities')!;
+const dockModalCraftEl = document.querySelector<HTMLElement>('#dock-modal-craft')!;
+const dockModalServicesEl = document.querySelector<HTMLElement>('#dock-modal-services')!;
+const dockModalStockEl = document.querySelector<HTMLElement>('#dock-modal-stock')!;
+const dockModalBlockerEl = document.querySelector<HTMLElement>('#dock-modal-blocker')!;
 const dockModalPurposeSelect = document.querySelector<HTMLSelectElement>('#dock-modal-purpose')!;
 const dockModalPurposeLabelEl = document.querySelector<HTMLElement>('#dock-modal-purpose-label')!;
 const dockModalFacingSelect = document.querySelector<HTMLSelectElement>('#dock-modal-facing')!;
@@ -1721,6 +1770,9 @@ const roomModalSanitationSourceEl = document.querySelector<HTMLElement>('#room-m
 const roomModalSanitationEffectEl = document.querySelector<HTMLElement>('#room-modal-sanitation-effect')!;
 const roomModalSanitationFixEl = document.querySelector<HTMLElement>('#room-modal-sanitation-fix')!;
 const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth')!;
+const roomModalBerthReadinessEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness')!;
+const roomModalBerthReadinessRowsEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness-rows')!;
+const roomModalBerthReadinessReasonEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness-reason')!;
 const roomModalBerthConfigEl = document.querySelector<HTMLDivElement>('#room-modal-berth-config')!;
 const roomModalBerthPurposeEl = document.querySelector<HTMLElement>('#room-modal-berth-purpose')!;
 const roomModalBerthFacingEl = document.querySelector<HTMLElement>('#room-modal-berth-facing')!;
@@ -2004,7 +2056,11 @@ function selectModuleTool(module: ModuleType): void {
     return;
   }
   currentTool = { kind: 'module', module };
-  toolLockMessage = '';
+  toolLockMessage = module === ModuleType.PodDock
+    ? 'Pod Dock: place on an exterior hull wall.'
+    : module === ModuleType.FuelCoupler || module === ModuleType.FreightLocker || module === ModuleType.MaintenanceSocket
+      ? 'Dock attachment: place on an exterior hull wall near a Pod Dock.'
+      : '';
 }
 
 function selectRoomCopyTool(): void {
@@ -2146,12 +2202,12 @@ function refreshHudStatus(): void {
   }
   const trendText = `${state.metrics.airTrendPerSec >= 0 ? '+' : ''}${state.metrics.airTrendPerSec.toFixed(2)}%/s`;
   const airStatusText = !airWarning
-    ? `Oxygen stable: ${oxygen}% (${trendText})`
+    ? `Air reserve stable: ${oxygen}% (${trendText})`
     : airFalling
       ? `Oxygen falling: ${oxygen}% (${trendText}) - ${airAction}`
       : oxygen < 70 || state.metrics.airBlockedWarningActive
         ? `Oxygen low: ${oxygen}% - ${airAction}`
-        : `Air coverage uneven: ${oxygen}% oxygen - ${airAction}`;
+        : `Air reserve: ${oxygen}% station-wide; local coverage uneven - ${airAction}`;
   hudAirControlEl.title = `${airStatusText}. Click to open Air Coverage.`;
   hudAirControlEl.setAttribute('aria-label', hudAirControlEl.title);
   airEmergencyIndicatorEl.classList.toggle('hidden', !airWarning);
@@ -2227,6 +2283,7 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
 }
 
 function openPortDispatch(): void {
+  if (!state.rooms.includes(RoomType.Berth)) return;
   portDispatchModal.classList.remove('hidden');
   openPortDispatchBtn.setAttribute('aria-expanded', 'true');
 }
@@ -2241,6 +2298,13 @@ function refreshDispatchTrigger(): void {
   const clearedOffers = state.trafficOffers.filter((offer) => offer.status === 'cleared');
   const activeShips = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
   const holdingCount = openOffers.filter((offer) => offer.status === 'holding').length;
+  const hasBerthCapacity = state.rooms.includes(RoomType.Berth);
+
+  openPortDispatchBtn.classList.toggle('hidden', !hasBerthCapacity);
+  if (!hasBerthCapacity) {
+    closePortDispatch();
+    return;
+  }
 
   dispatchTriggerCountEl.textContent = String(openOffers.length);
   dispatchTriggerCountEl.classList.toggle('hidden', openOffers.length === 0);
@@ -2466,6 +2530,15 @@ function promiseIntervention(kind: StationState['portOps']['contracts'][number][
 }
 
 function refreshShiftBrief(activeTurnarounds: StationState['arrivingShips']): void {
+  if (!state.rooms.includes(RoomType.Berth)) {
+    const activePodVisits = state.arrivingShips.filter((ship) => ship.smallCraftVisit && ship.stage !== 'depart').length;
+    shiftBriefEl.className = activePodVisits > 0 ? 'shift-brief is-active' : 'shift-brief';
+    shiftBriefEl.innerHTML = activePodVisits > 0
+      ? `<span class="shift-brief-kicker">Walk-in traffic</span><strong>${activePodVisits} Pod Dock visit${activePodVisits === 1 ? '' : 's'} in progress</strong><span>Passengers use station services while dock attachments handle their craft automatically.</span>`
+      : '<span class="shift-brief-kicker">Pod Docks</span><strong>Walk-in traffic arrives automatically</strong><span>Keep food, shopping, fuel, and dock attachments available. Build a berth when you are ready for contracts.</span>';
+    return;
+  }
+
   const activeShip = activeTurnarounds
     .map((ship) => ({ ship, contract: ship.portContractId == null ? null : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null }))
     .filter((entry) => entry.contract !== null)
@@ -2634,14 +2707,29 @@ function refreshTrafficOffers(): void {
   fuelStatusEl.textContent = fuelTankNodes.length <= 0
     ? 'No tanks'
     : `${Math.floor(fuelStock)}/${fuelCapacity} · ${fuelJobs.length} load${fuelJobs.length === 1 ? '' : 's'} moving`;
-  if (!state.controls.manualTrafficAdmission) {
-    trafficOfferListEl.innerHTML = '';
-    berthOpsWidgetEl.classList.add('hidden');
-    return;
-  }
-  const activeTurnarounds = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
-  refreshShiftBrief(activeTurnarounds);
+  const activeTurnarounds = state.arrivingShips.filter((ship) =>
+    ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
+  );
+  refreshShiftBrief(activeTurnarounds.filter((ship) => ship.portManifest && !ship.smallCraftVisit));
   const activeHtml = activeTurnarounds.map((ship) => {
+    if (ship.smallCraftVisit) {
+      const dock = ship.assignedDockId === null ? null : state.docks.find((entry) => entry.id === ship.assignedDockId) ?? null;
+      const services = ship.smallCraftVisit.services;
+      const progress = services.length > 0
+        ? Math.round((services.reduce((sum, service) => sum + clamp(service.progress, 0, 1), 0) / services.length) * 100)
+        : 0;
+      const firstBlocked = services.find((service) => service.status === 'blocked' && service.blockedReason)?.blockedReason ?? null;
+      const serviceSummary = services.map((service) =>
+        `${podDockServiceLabel(service.kind, service.freightDirection)} ${service.status.toUpperCase()} ${Math.round(service.progress * 100)}%`
+      ).join(' · ');
+      return `<article class="traffic-offer port-turnaround small-craft-turnaround">
+        <div class="traffic-offer-head"><strong>${escapeHtml(ship.portManifest?.callsign ?? `POD ${ship.id}`)} · POD DOCK</strong><span>${ship.stage.toUpperCase()} · ${progress}%</span></div>
+        <div class="traffic-offer-meta">${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'} · ${ship.passengersTotal} GUEST${ship.passengersTotal === 1 ? '' : 'S'}</div>
+        <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
+        <div class="small-craft-service-summary">${escapeHtml(serviceSummary)}</div>
+        ${firstBlocked ? `<small class="small-craft-blocked">Action: ${escapeHtml(firstBlocked)}</small>` : ''}
+      </article>`;
+    }
     const offer = ship.portManifest!;
     const turn = ship.portTurnaround;
     const berthStanding = ship.assignedBerthAnchor == null ? null : getBerthInspectorAt(state, ship.assignedBerthAnchor);
@@ -2664,6 +2752,10 @@ function refreshTrafficOffers(): void {
   berthOpsWidgetEl.classList.toggle('hidden', activeTurnarounds.length === 0);
   berthOpsCountEl.textContent = `${activeTurnarounds.length} ACTIVE`;
   berthOpsListEl.innerHTML = activeHtml;
+  if (!state.controls.manualTrafficAdmission) {
+    trafficOfferListEl.innerHTML = '';
+    return;
+  }
   const offerRenderKey = JSON.stringify({
     now: Math.floor(state.now),
     dockVersion: state.dockVersion,
@@ -2803,29 +2895,36 @@ function drawPortTurnaroundCallouts(): void {
     const y = Math.floor(routeConflictCallout.tileIndex / state.width);
     drawLabel(routeConflictCallout.label, (x + 0.5) * TILE_SIZE, y * TILE_SIZE - 7, '#f3bd62');
   }
-  const serving = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation);
+  const servingStations = state.moduleInstances.filter((module) => module.type === ModuleType.ServingStation);
+  const serving = servingStations[0];
   const activeGuests = state.visitors.filter((visitor) => visitor.state !== VisitorState.ToDock).length;
   const activeCrewMeals = state.crewMembers.filter((crew) => crew.eating || crew.carryingMeal).length;
   if (serving && (activeGuests > 0 || activeCrewMeals > 0)) {
     const p = fromIndex(serving.originTile, state.width);
     const queue = state.metrics.cafeteriaQueueingCount;
-    const servingNode = state.itemNodes.find((node) => node.tileIndex === serving.originTile);
-    const mealStock = Math.floor(Math.max(0, servingNode?.items.meal ?? 0));
-    const cleanTrays = Math.floor(Math.max(0, servingNode?.items.cleanTray ?? 0));
-    const readyServings = Math.min(mealStock, cleanTrays);
-    const activeServiceCrew = state.crewMembers.filter(
-      (crew) => !crew.resting && crew.assignedSystem === 'cafeteria' && state.rooms[crew.tileIndex] === RoomType.Cafeteria
-    ).length;
-    const crewMealDemand = state.crewMembers.filter((crew) => crew.eating && !crew.eatSessionActive).length;
-    const totalQueue = queue + crewMealDemand;
+    // A 2x1 serving station has two physical pickup positions but one shared
+    // item node. Summarize every station here; using the first node made a
+    // stocked mess hall claim "NO CLEAN TRAYS" when only one counter was dry.
+    const inventoryByTile = new Map(state.itemNodes.map((node) => [node.tileIndex, node]));
+    const mealStock = servingStations.reduce(
+      (total, module) => total + Math.max(0, inventoryByTile.get(module.originTile)?.items.meal ?? 0),
+      0
+    );
+    const cleanTrays = servingStations.reduce(
+      (total, module) => total + Math.max(0, inventoryByTile.get(module.originTile)?.items.cleanTray ?? 0),
+      0
+    );
+    const readyServings = servingStations.reduce((total, module) => {
+      const items = inventoryByTile.get(module.originTile)?.items;
+      return total + Math.min(Math.max(0, items?.meal ?? 0), Math.max(0, items?.cleanTray ?? 0));
+    }, 0);
+    const pickupSlots = servingStations.length * 2;
     const label = readyServings <= 0 && mealStock > 0
-      ? `MESS · NO CLEAN TRAYS · LINE ${totalQueue}`
+      ? `MESS · NO CLEAN TRAYS · LINE ${queue}`
       : readyServings <= 0
-      ? `MESS · NO MEALS · LINE ${totalQueue}`
-      : activeServiceCrew <= 0 && totalQueue > 0
-        ? `MESS · SELF-SERVICE · LINE ${totalQueue}`
-        : `MESS · ${activeServiceCrew} COUNTER · ${readyServings} READY${totalQueue > 0 ? ` · LINE ${totalQueue}` : ''}`;
-    const color = readyServings <= 0 ? '#ff6868' : activeServiceCrew <= 0 && totalQueue > 0 ? '#ff9f5f' : totalQueue >= 5 ? '#f3bd62' : '#63d6a0';
+      ? `MESS · NO MEALS · LINE ${queue}`
+      : `MESS · ${pickupSlots} PICKUP SLOTS · ${Math.floor(readyServings)} READY${queue > 0 ? ` · LINE ${queue}` : ''}`;
+    const color = readyServings <= 0 ? '#ff6868' : queue >= 5 ? '#f3bd62' : '#63d6a0';
     drawLabel(label, (p.x + 0.5) * TILE_SIZE, p.y * TILE_SIZE - 6, color);
   }
 
@@ -3030,7 +3129,7 @@ function drawPortTurnaroundCallouts(): void {
   for (const dock of state.docks) {
     if (dock.purpose !== 'visitor' || dock.occupiedByShipId === null) continue;
     const ship = state.arrivingShips.find((candidate) => candidate.id === dock.occupiedByShipId);
-    if (!ship || ship.portManifest || ship.stage === 'depart') continue;
+    if (!ship || ship.portManifest || ship.smallCraftVisit || ship.stage === 'depart') continue;
     const guests = state.visitors.filter((visitor) => visitor.originShipId === ship.id).length;
     const p = fromIndex(dock.anchorTile, state.width);
     const label = ship.stage === 'docked' ? `POD · ${guests} GUEST${guests === 1 ? '' : 'S'}` : 'POD · INBOUND';
@@ -3228,6 +3327,7 @@ function ratingWhyText(): string {
 }
 
 function ratingToneColor(): string {
+  if (state.metrics.stationRating <= 0.01) return 'var(--muted)';
   return state.metrics.stationRating > 70 ? 'var(--ok)' : state.metrics.stationRating > 40 ? 'var(--warn)' : 'var(--danger)';
 }
 
@@ -3244,9 +3344,15 @@ function refreshRatingModal(): void {
   ratingModalScoreEl.style.color = ratingToneColor();
   ratingModalTrendEl.textContent = `${trend >= 0 ? '+' : ''}${trend.toFixed(2)}/min`;
   ratingModalTrendEl.style.color = trend > 0.01 ? 'var(--ok)' : trend < -0.01 ? 'var(--danger)' : 'var(--muted)';
-  ratingModalSummaryEl.textContent = drivers.length > 0
-    ? `The largest recorded drag is ${drivers[0]}. The live rows below show what is changing the score now.`
-    : 'No active rating penalties. Successful service will keep the station moving upward.';
+  const foundation = drivers.find((driver) => driver.includes('foundation'));
+  const drag = drivers.find((driver) => driver.includes(' -'));
+  ratingModalSummaryEl.textContent = rating <= 0
+    ? 'Unknown station. Build trust through reliable service and new operational tiers.'
+    : foundation
+      ? `${foundation} is earned permanently. ${drag ? `Watch ${drag}.` : 'Reliable service keeps building trust.'}`
+      : drag
+        ? `Cumulative reputation is being held back by ${drag}.`
+        : 'Reliable service is building cumulative trust.';
   ratingModalEffectEl.textContent =
     `Traffic pull: premium +${Math.round(state.metrics.reputationPremiumDemandBonusPct)}% · ` +
     `higher-risk +${Math.round(state.metrics.reputationRiskyDemandBonusPct)}%`;
@@ -3907,8 +4013,9 @@ function refreshAlertPanel(): void {
       });
     }
     const servingTile = state.moduleInstances.find((module) => module.type === ModuleType.ServingStation)?.originTile ?? null;
-    const cafeteriaStaffing = cafeteriaStaffingSnapshot();
-    const activeServiceCrew = cafeteriaStaffing.active;
+    const stockedPickupSlots = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.ServingStation
+    ).length * 2;
     if (state.metrics.mealStock < 8) {
       portAlerts.push({
         tone: 'danger',
@@ -3930,9 +4037,7 @@ function refreshAlertPanel(): void {
         .sort((a, b) => a - b)[0];
       portAlerts.push({
         tone: state.metrics.cafeteriaQueueingCount >= 7 ? 'danger' : 'warn',
-        text: activeServiceCrew <= 0
-          ? `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · slow self-service because ${cafeteriaStaffing.diagnosis}${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`
-          : `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · ${activeServiceCrew} counter staff; assign another Cook/Steward or build another counter${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`,
+        text: `Food line: ${state.metrics.cafeteriaQueueingCount} waiting · ${stockedPickupSlots} physical pickup slots${nextPassengerDeadline === undefined ? '' : ` · ${nextPassengerDeadline}s left`}`,
         tile: servingTile
       });
     }
@@ -4528,6 +4633,14 @@ function refreshSelectionSummary(): void {
       ).length;
       const positions = Math.max(1, servingStations * 2);
       selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${Math.floor(state.metrics.mealStock)} ready | Counter staff ${activeServiceCrew}/${positions}${activeServiceCrew <= 0 ? ` (slow: ${cafeteriaStaffing.diagnosis})` : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
+    } else if (room === RoomType.Maintenance) {
+      const nodes = state.itemNodes.filter((node) => clusterSet.has(node.tileIndex) && (node.items.fuel !== undefined || state.modules[node.tileIndex] === ModuleType.FuelTank));
+      const stock = nodes.reduce((sum, node) => sum + Math.max(0, node.items.fuel ?? 0), 0);
+      const capacity = nodes.reduce((sum, node) => sum + Math.max(0, node.capacity), 0);
+      const fuel = getFuelPipeNetworkDiagnostics(state);
+      const connectedSources = new Set(fuel.components.filter((component) => component.powered).flatMap((component) => component.sourceTiles));
+      const connectedTanks = nodes.filter((node) => connectedSources.has(node.tileIndex)).length;
+      selectionSummaryEl.textContent = `Maintenance: ${Math.floor(stock)}/${Math.floor(capacity)} fuel | ${connectedTanks}/${nodes.length} tanks connected | ${fuel.poweredSinkCount}/${fuel.sinkCount} Fuel Couplers supplied`;
     } else if (room === RoomType.Storage || room === RoomType.LogisticsStock) {
       const nodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === room);
       const capacity = nodes.reduce((sum, node) => sum + node.capacity, 0);
@@ -4606,6 +4719,7 @@ function routeTileColor(roomType: RoomType): string {
     case RoomType.Kitchen:
     case RoomType.Hydroponics:
     case RoomType.Bridge:
+    case RoomType.Maintenance:
       return '#5cd8ff'; // service
     case RoomType.Storage:
     case RoomType.LogisticsStock:
@@ -5794,7 +5908,8 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
 };
 const TOOLBAR_UTILITY_UNDERLAY_MAP: Record<string, UtilityUnderlayKind> = {
   'air-duct': 'air-duct',
-  'water-pipe': 'water-pipe'
+  'water-pipe': 'water-pipe',
+  'fuel-pipe': 'fuel-pipe'
 };
 const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   bridge: RoomType.Bridge,
@@ -5814,6 +5929,7 @@ const TOOLBAR_ROOM_MAP: Record<string, RoomType> = {
   market: RoomType.Market,
   'logistics-stock': RoomType.LogisticsStock,
   storage: RoomType.Storage,
+  maintenance: RoomType.Maintenance,
   berth: RoomType.Berth,
   cantina: RoomType.Cantina,
   'commercial-unit': RoomType.CommercialUnit,
@@ -5872,6 +5988,12 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'cargo-arm': ModuleType.CargoArm,
   'fuel-tank': ModuleType.FuelTank,
   'fuel-pump': ModuleType.FuelPump,
+  'pod-dock': ModuleType.PodDock,
+  'fuel-coupler': ModuleType.FuelCoupler,
+  'freight-locker': ModuleType.FreightLocker,
+  'maintenance-socket': ModuleType.MaintenanceSocket,
+  'berth-control': ModuleType.BerthControl,
+  'docking-clamp': ModuleType.DockingClamp,
   'security-camera': ModuleType.SecurityCamera,
   'access-gate': ModuleType.AccessGate,
   'fire-extinguisher': ModuleType.FireExtinguisher,
@@ -5943,6 +6065,12 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.CargoArm]: 'CA',
   [ModuleType.FuelTank]: 'FT',
   [ModuleType.FuelPump]: 'FP',
+  [ModuleType.PodDock]: 'PD',
+  [ModuleType.FuelCoupler]: 'FC',
+  [ModuleType.FreightLocker]: 'FL',
+  [ModuleType.MaintenanceSocket]: 'MS',
+  [ModuleType.BerthControl]: 'BC',
+  [ModuleType.DockingClamp]: 'DC',
   [ModuleType.SecurityCamera]: 'CM',
   [ModuleType.AccessGate]: 'GT',
   [ModuleType.FireExtinguisher]: 'FX',
@@ -6152,6 +6280,10 @@ function wireToolbar(): void {
 }
 function refreshToolbar(): void {
   refreshPaletteMenu();
+  const hasBerth = state.rooms.includes(RoomType.Berth);
+  document.querySelectorAll<HTMLElement>('[data-berth-hardware]').forEach((element) => {
+    element.classList.toggle('hidden', !hasBerth);
+  });
   const toolKind = currentTool.kind;
   gameWrap.classList.toggle('inspect-mode', toolKind === 'none');
   gameWrap.classList.toggle('build-mode', toolKind !== 'none');
@@ -6655,6 +6787,23 @@ function canEnableSize(size: ShipSize, maxSize: ShipSize): boolean {
   return true;
 }
 
+function itemNodeTotals(nodes: StationState['itemNodes'], item: ItemType): { stock: number; capacity: number; free: number } {
+  const stock = nodes.reduce((sum, node) => sum + Math.max(0, node.items[item] ?? 0), 0);
+  const capacity = nodes.reduce((sum, node) => sum + node.capacity, 0);
+  const used = nodes.reduce(
+    (sum, node) => sum + Object.values(node.items).reduce((nodeSum, amount) => nodeSum + Math.max(0, amount ?? 0), 0),
+    0
+  );
+  return { stock, capacity, free: Math.max(0, capacity - used) };
+}
+
+function podDockServiceLabel(kind: 'passenger' | 'refuel' | 'freight' | 'repair', freightDirection?: 'import' | 'export'): string {
+  if (kind === 'passenger') return 'Passenger visit';
+  if (kind === 'refuel') return 'Refuel';
+  if (kind === 'repair') return 'Minor repair';
+  return freightDirection === 'import' ? 'Freight import' : freightDirection === 'export' ? 'Freight export' : 'Freight exchange';
+}
+
 function refreshDockModal(): void {
   if (selectedDockId === null) return;
   const dock = state.docks.find((d) => d.id === selectedDockId);
@@ -6682,6 +6831,52 @@ function refreshDockModal(): void {
   dockModalSmallCheckbox.disabled = !canEnableSize('small', dock.maxSizeByArea);
   dockModalMediumCheckbox.disabled = !canEnableSize('medium', dock.maxSizeByArea);
   dockModalLargeCheckbox.disabled = !canEnableSize('large', dock.maxSizeByArea);
+  const moduleBacked = dock.sourceKind === 'pod-dock-module';
+  dockModalTitleEl.textContent = moduleBacked ? 'Pod Dock' : 'Dock Config';
+  dockModalAreaLabelEl.textContent = moduleBacked ? 'Hull Mount' : 'Zone Area';
+  dockModalSizeLabelEl.textContent = moduleBacked ? 'Craft Class' : 'Max Size';
+  dockModalInspectionEl.classList.toggle('hidden', !moduleBacked);
+  dockModalRoutingEl.classList.toggle('hidden', moduleBacked);
+  if (moduleBacked) {
+    const capabilities = ['Passenger access', ...(dock.podCapabilities ?? []).map((capability) =>
+      capability === 'fuel' ? 'Fuel' : capability === 'freight' ? 'Freight' : 'Maintenance'
+    )];
+    dockModalCapabilitiesEl.innerHTML = capabilities
+      .map((capability) => `<span class="port-status-chip ok">${escapeHtml(capability)}</span>`)
+      .join('');
+    const craft = state.arrivingShips.find((ship) => ship.assignedDockId === dock.id && ship.stage !== 'depart') ?? null;
+    const visit = craft?.smallCraftVisit;
+    const motives = visit?.services.map((service) => podDockServiceLabel(service.kind, service.freightDirection)).join(' + ') ?? 'awaiting traffic';
+    dockModalCraftEl.textContent = craft
+      ? `${craft.portManifest?.callsign ?? `POD ${craft.id}`} · ${craft.passengersTotal} guest${craft.passengersTotal === 1 ? '' : 's'} · ${motives}`
+      : `Ready · ${motives}`;
+    dockModalServicesEl.innerHTML = visit
+      ? visit.services.map((service) => {
+          const status = service.status.toUpperCase();
+          const progress = `${Math.round(clamp(service.progress, 0, 1) * 100)}%`;
+          const reward = `+${service.creditsEarned}c · +${service.ratingDelta.toFixed(2)} rating`;
+          return `<div class="port-service-row ${service.status}"><span>${escapeHtml(podDockServiceLabel(service.kind, service.freightDirection))}</span><b>${status} · ${progress}</b><small>${reward}</small></div>`;
+        }).join('')
+      : '<div class="port-service-row idle"><span>No craft services queued</span><b>READY</b></div>';
+    const materialNodes = state.itemNodes.filter((node) =>
+      state.rooms[node.tileIndex] === RoomType.Storage || state.rooms[node.tileIndex] === RoomType.LogisticsStock
+    );
+    const materials = itemNodeTotals(materialNodes, 'rawMaterial');
+    const stock: string[] = [];
+    if (dock.podCapabilities?.includes('fuel')) {
+      const fuel = getPodDockFuelSupplyView(state, dock.id);
+      stock.push(fuel.connected
+        ? `Fuel network ${Math.floor(fuel.stock)}/${Math.floor(fuel.capacity)} · ${fuel.tankCount} tank${fuel.tankCount === 1 ? '' : 's'} · ${fuel.pipeTiles} pipe tiles`
+        : fuel.reason ?? 'Fuel network disconnected');
+    }
+    if (dock.podCapabilities?.includes('freight') || dock.podCapabilities?.includes('maintenance')) {
+      stock.push(`Materials ${Math.floor(materials.stock)} available · ${Math.floor(materials.free)} free`);
+    }
+    dockModalStockEl.textContent = stock.length > 0 ? `Stock: ${stock.join(' | ')}` : 'Stock: no attached service consumes station stock.';
+    const blocked = visit?.services.find((service) => service.status === 'blocked' && service.blockedReason)?.blockedReason ?? null;
+    dockModalBlockerEl.textContent = blocked ? `Action: ${blocked}` : 'No active service blocker.';
+    dockModalBlockerEl.classList.toggle('clear', blocked === null);
+  }
   if (!isShipTypeUnlocked(state, 'industrial')) {
     dockModalErrorEl.textContent = `Facing status: ok | Industrial locked until Tier ${ROOM_UNLOCK_TIER[RoomType.Workshop]}`;
     dockModalErrorEl.style.color = '#ffcf6e';
@@ -7040,6 +7235,31 @@ function refreshRoomModal(): void {
   if (inspector.room === RoomType.Berth) {
     const berth = getBerthInspectorAt(state, selectedRoomTile!);
     if (berth) {
+      const facility = berth.facility;
+      const geometry = facility.geometry === 'u-shaped'
+        ? 'U-shape ready'
+        : facility.geometry === 'legacy-rectangular'
+          ? 'Legacy adapter'
+          : 'Incomplete geometry';
+      const capabilityText = facility.capabilities.length > 0 ? facility.capabilities.join(', ') : 'none installed';
+      const readinessReason = facility.reasons[0] ??
+        (!facility.legacyCompatibility && facility.clampCapacity < 2
+          ? `needs ${2 - facility.clampCapacity} more clamp${facility.clampCapacity === 1 ? '' : 's'} for medium ships`
+          : facility.clampCapacity < 5
+            ? `needs ${5 - facility.clampCapacity} more clamps for large ships`
+            : 'no physical berth blocker');
+      roomModalBerthReadinessEl.classList.remove('hidden');
+      roomModalBerthReadinessRowsEl.innerHTML = [
+        ['Geometry', geometry, facility.geometryValid ? 'ok' : 'warn'],
+        ['Control', facility.controlModuleId === null ? 'Missing' : 'Installed', facility.controlModuleId === null ? 'warn' : 'ok'],
+        ['Clamps', `${facility.clampCapacity} installed · medium 2 / large 5`, facility.clampCapacity >= 2 ? 'ok' : 'warn'],
+        ['Access', facility.capabilities.includes('gangway') ? 'Gangway installed' : 'No gangway', facility.capabilities.includes('gangway') ? 'ok' : 'warn'],
+        ['Capabilities', capabilityText, facility.capabilities.length > 0 ? 'ok' : 'warn']
+      ].map(([label, value, tone]) =>
+        `<div class="port-readiness-row"><small>${label}</small><strong class="${tone}">${escapeHtml(value)}</strong></div>`
+      ).join('');
+      roomModalBerthReadinessReasonEl.textContent = `First action: ${readinessReason}`;
+      roomModalBerthReadinessReasonEl.classList.toggle('clear', readinessReason === 'no physical berth blocker');
       const caps = berth.capabilities.length > 0 ? berth.capabilities.join(', ') : 'none installed';
       const accepts = berth.acceptedShipTypes.length > 0 ? berth.acceptedShipTypes.join(', ') : 'none yet — install capability modules';
       const exposure = berth.spaceExposed ? 'open to space' : 'sealed inside - expose one edge to space';
@@ -7086,12 +7306,14 @@ function refreshRoomModal(): void {
       roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
       roomModalBerthEl.style.color = '#ff7676';
       selectedBerthAnchor = null;
+      roomModalBerthReadinessEl.classList.add('hidden');
       roomModalBerthConfigEl.classList.add('hidden');
     }
   } else {
     roomModalBerthEl.textContent = 'Berth: n/a';
     roomModalBerthEl.style.color = '#8ea2bd';
     selectedBerthAnchor = null;
+    roomModalBerthReadinessEl.classList.add('hidden');
     roomModalBerthConfigEl.classList.add('hidden');
   }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;
@@ -7577,7 +7799,8 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       if (currentTool.utilityErase) {
         const erasedAir = clearUtilityUnderlayAt(state, idx, 'air-duct');
         const erasedWater = clearUtilityUnderlayAt(state, idx, 'water-pipe');
-        ok = erasedAir || erasedWater;
+        const erasedFuel = clearUtilityUnderlayAt(state, idx, 'fuel-pipe');
+        ok = erasedAir || erasedWater || erasedFuel;
       } else {
         ok = canPlaceUtilityUnderlay(state, kind, idx) && setUtilityUnderlayTile(state, kind, idx, true);
       }

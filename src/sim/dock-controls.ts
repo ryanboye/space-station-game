@@ -50,6 +50,9 @@ export function setDockPurpose(state: StationState, dockId: number, purpose: Doc
 export function setDockFacing(state: StationState, dockId: number, facing: SpaceLane): { ok: boolean; reason?: string } {
   const dock = state.docks.find((d) => d.id === dockId);
   if (!dock) return { ok: false, reason: 'dock not found' };
+  if (dock.sourceKind === 'pod-dock-module') {
+    return { ok: false, reason: 'pod dock facing is fixed by its exterior hull mount' };
+  }
   const check = validateDockPlacementAt(state, dock.anchorTile, facing);
   if (!check.valid) return { ok: false, reason: check.reason };
   dock.facing = facing;

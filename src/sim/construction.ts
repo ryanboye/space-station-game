@@ -23,6 +23,7 @@ import {
   trySetTile,
   tryPlaceModule,
   validateBerthModulePlacement,
+  validatePortModulePlacement,
   validateDockPlacementWithNeighbors,
   wallMountedModuleServiceTile
 } from './sim';
@@ -85,6 +86,8 @@ export function updateEvaSuitForRoute(state: StationState, crew: CrewMember, dt:
 }
 
 export function moduleConstructionCostForDefinition(module: ModuleType, rotation: ModuleRotation): number {
+  const explicit = MODULE_DEFINITIONS[module]?.capitalCost;
+  if (explicit !== undefined) return Math.max(2, explicit);
   const footprint = moduleFootprint(module, rotation);
   const base = module === ModuleType.WallLight ? 2 : footprint.width * footprint.height * 3;
   return Math.max(2, base);
@@ -308,6 +311,8 @@ export function validateModulePlacementForConstruction(
   }
   const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
   if (berthModuleReason) return { ok: false, reason: berthModuleReason };
+  const portModuleReason = validatePortModulePlacement(state, module, originTile);
+  if (portModuleReason) return { ok: false, reason: portModuleReason };
   return { ok: true };
 }
 

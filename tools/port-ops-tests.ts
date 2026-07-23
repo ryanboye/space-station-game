@@ -3,11 +3,19 @@ import {
   buyImportedTradeGoods,
   buyPreparedMeals,
   createInitialState,
+  getBerthFacilityAt,
   getBerthInspectorAt,
+  getDockByTile,
   getEligibleBerthsForOffer,
+  getPodDockAttachmentView,
+  getPodDockFuelSupplyView,
+  getPodDockPlacementView,
   holdTrafficOffer,
   isCrewAutoStaffUnlocked,
+  isModuleUnlocked,
   isPortAutoAdmitUnlocked,
+  moduleCreditBuildCost,
+  removeModuleAtTile,
   refuseTrafficOffer,
   setBerthAllowedShipSize,
   setCrewManualWorkLane,
@@ -15,11 +23,13 @@ import {
   setPortAutoAdmit,
   setRoom,
   setTile,
+  clearUtilityUnderlayAt,
+  setUtilityUnderlayTile,
   tick,
   tryPlaceModule,
   trySetTile
 } from '../src/sim/index';
-import { isWalkable, ModuleType, RoomType, TileType, type StationState } from '../src/sim/types';
+import { isWalkable, ModuleType, RoomType, TileType, type DockEntity, type StationState, type TrafficOffer } from '../src/sim/types';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -37,8 +47,116 @@ function freshPortState(seed = 1337): StationState {
   return createInitialState({ seed, physicalStarterInventory: true, manualTrafficAdmission: true });
 }
 
-function testStarterShellAndOpeningOffer(): void {
+function smallCraftOffer(state: StationState, dock: DockEntity, id: number): TrafficOffer {
+  return {
+    id,
+    callsign: `POD-${id}`,
+    shipName: 'Courier Pod',
+    lane: dock.lane,
+    shipType: 'trader',
+    offerKind: 'passenger',
+    size: 'small',
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 120,
+    passengersTotal: 1,
+    manifestDemand: { cafeteria: 1, market: 0, lounge: 0 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    hospitalityDemand: { meal: 1, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 },
+    inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+    outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    requestedServices: [],
+    berthTimeSec: 50,
+    dockingFee: 0,
+    projectedSpend: 0,
+    riskLabel: 'low'
+  };
+}
+
+function admitSmallCraftAtDock(state: StationState, dock: DockEntity, id: number) {
+  if (!dock.allowedShipTypes.includes('trader')) dock.allowedShipTypes.push('trader');
+  dock.allowedShipSizes = ['small'];
+  for (const candidate of state.docks) {
+    if (candidate.id !== dock.id) candidate.allowedShipTypes = [];
+  }
+  if (!state.trafficOffers.some((offer) => offer.id === id)) state.trafficOffers.push(smallCraftOffer(state, dock, id));
+  const admission = admitTrafficOffer(state, id);
+  assert(admission.ok, admission.reason ?? 'Expected small craft admission.');
+  const ship = state.arrivingShips.find((entry) => entry.id === id);
+  assert(ship, 'Expected admitted small craft.');
+  return ship;
+}
+
+function placeFuelPodDock(state: StationState): { dock: DockEntity; couplerTile: number } {
+  tick(state, 0);
+  const authored = state.docks.find((dock) => dock.sourceKind === 'pod-dock-module' && dock.podCapabilities?.includes('fuel'));
+  if (authored && authored.attachmentModuleIds?.fuel !== undefined) {
+    const coupler = state.moduleInstances.find((module) => module.id === authored.attachmentModuleIds?.fuel);
+    assert(coupler, 'Expected the starter Fuel Coupler module.');
+    return { dock: authored, couplerTile: coupler.originTile };
+  }
+  const mount = state.tiles.findIndex((tile, index) => tile === TileType.Wall && getPodDockPlacementView(state, index).valid);
+  assert(mount >= 0, 'Expected an exterior Pod Dock mount.');
+  assert(tryPlaceModule(state, ModuleType.PodDock, mount).ok, 'Expected Pod Dock placement.');
+  const couplerTile = state.tiles.findIndex((tile, index) =>
+    tile === TileType.Wall && index !== mount && getPodDockAttachmentView(state, ModuleType.FuelCoupler, index).valid
+  );
+  assert(couplerTile >= 0, 'Expected adjacent Fuel Coupler mount.');
+  assert(tryPlaceModule(state, ModuleType.FuelCoupler, couplerTile).ok, 'Expected Fuel Coupler placement.');
+  tick(state, 0);
+  const dock = getDockByTile(state, mount);
+  assert(dock, 'Expected module-backed Pod Dock after placement.');
+  return { dock, couplerTile };
+}
+
+function fuelTankNode(state: StationState) {
+  const fuelTankTiles = new Set(
+    state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank).map((module) => module.originTile)
+  );
+  let node = state.itemNodes.find((candidate) => fuelTankTiles.has(candidate.tileIndex));
+  if (!node) {
+    state.unlocks.tier = 6;
+    let origin = state.rooms.findIndex((room, index) =>
+      room === RoomType.Maintenance &&
+      state.rooms[index + 1] === RoomType.Maintenance &&
+      state.rooms[index + state.width] === RoomType.Maintenance &&
+      state.rooms[index + state.width + 1] === RoomType.Maintenance &&
+      state.moduleOccupancyByTile[index] === null &&
+      state.moduleOccupancyByTile[index + 1] === null &&
+      state.moduleOccupancyByTile[index + state.width] === null &&
+      state.moduleOccupancyByTile[index + state.width + 1] === null
+    );
+    if (origin < 0) {
+      origin = state.tiles.findIndex((tile, index) =>
+        tile === TileType.Floor &&
+        state.tiles[index + 1] === TileType.Floor &&
+        state.tiles[index + state.width] === TileType.Floor &&
+        state.tiles[index + state.width + 1] === TileType.Floor &&
+        state.moduleOccupancyByTile[index] === null &&
+        state.moduleOccupancyByTile[index + 1] === null &&
+        state.moduleOccupancyByTile[index + state.width] === null &&
+        state.moduleOccupancyByTile[index + state.width + 1] === null
+      );
+      if (origin >= 0) {
+        setRoom(state, origin, RoomType.Maintenance);
+        setRoom(state, origin + 1, RoomType.Maintenance);
+        setRoom(state, origin + state.width, RoomType.Maintenance);
+        setRoom(state, origin + state.width + 1, RoomType.Maintenance);
+      }
+    }
+    assert(origin >= 0, 'Expected an empty 2x2 Maintenance area for a Fuel Tank.');
+    assert(tryPlaceModule(state, ModuleType.FuelTank, origin).ok, 'Expected Fuel Tank placement for fuel-service test.');
+    tick(state, 0);
+    node = state.itemNodes.find((candidate) => candidate.tileIndex === origin);
+  }
+  assert(node, 'Expected a Fuel Tank inventory node.');
+  return node;
+}
+
+function testStarterShellAndDockOnlyTraffic(): void {
   const state = freshPortState();
+  const fuelTankVisibleAtStart = isModuleUnlocked(state, ModuleType.FuelTank);
   advance(state, 4);
   assert(state.crewMembers.length === 8, `Expected 8 starter crew, got ${state.crewMembers.length}.`);
   assert(!state.controls.paused, 'Opening manifests should not interrupt play by pausing the simulation.');
@@ -49,19 +167,34 @@ function testStarterShellAndOpeningOffer(): void {
     counts[crew.workLane] = (counts[crew.workLane] ?? 0) + 1;
     return counts;
   }, {});
-  assert(starterLaneCounts.food === 1, `Starter Service target assigned ${starterLaneCounts.food ?? 0} crew instead of 1.`);
-  assert(starterLaneCounts.logistics === 1, `Starter Cargo target assigned ${starterLaneCounts.logistics ?? 0} crew instead of 1.`);
-  assert(starterLaneCounts.engineering === 1, `Starter Maintenance target assigned ${starterLaneCounts.engineering ?? 0} crew instead of 1.`);
-  assert(starterLaneCounts.flex === 5, `Starter should leave five crew unrostered, got ${starterLaneCounts.flex ?? 0}.`);
-  assert(state.trafficOffers.length === 3, `Expected three opening choices within four sim seconds, got ${state.trafficOffers.length}.`);
-  assert(state.trafficOffers.map((offer) => offer.offerKind).join(',') === 'passenger,freight,mixed', 'Expected authored passenger, freight, and mixed choices.');
-  assert(state.trafficOffers.every((offer) => offer.size !== 'small'), 'Small walk-in pods leaked into Berth contracts.');
-  assert(
-    state.docks.every((dock) => dock.tiles.every((tile) => state.rooms[tile] !== RoomType.Berth)),
-    'Berth floor art leaked into the standalone Dock registry.'
-  );
-  const berths = getEligibleBerthsForOffer(state, state.trafficOffers[0].id);
-  assert(berths.length === 2, `Expected two passenger-capable berths, got ${berths.length}.`);
+  assert((starterLaneCounts.food ?? 0) >= 1, 'Starter should staff food and market service.');
+  assert((starterLaneCounts.logistics ?? 0) >= 1, 'Starter should staff cargo handling.');
+  assert((starterLaneCounts.engineering ?? 0) >= 1, 'Starter should retain a maintenance responder.');
+  assert(!state.rooms.includes(RoomType.Berth), 'Fresh starter should not begin with a passenger berth.');
+  const podDocks = state.docks.filter((dock) => dock.sourceKind === 'pod-dock-module');
+  assert(podDocks.length === 2, `Expected two starter Pod Docks, got ${podDocks.length}.`);
+  assert(podDocks.every((dock) => dock.allowedShipSizes.join(',') === 'small'), 'Starter Pod Docks accepted a non-pod ship size.');
+  assert(podDocks.every((dock) => dock.accessTile !== undefined && state.pressurized[dock.accessTile]), 'Starter Pod Dock lacks pressurized interior access.');
+  assert(podDocks.some((dock) => dock.podCapabilities?.includes('fuel')), 'Starter is missing a fuel-capable Pod Dock.');
+  assert(podDocks.some((dock) => dock.podCapabilities?.includes('freight')), 'Starter is missing a freight-capable Pod Dock.');
+  assert(state.modules.includes(ModuleType.MarketStall), 'Starter has no station-operated market stall.');
+  assert(state.ops.marketActive > 0, 'Starter market is locked or otherwise inactive at Tier 0.');
+  const marketStock = state.itemNodes
+    .filter((node) => state.modules[node.tileIndex] === ModuleType.MarketStall)
+    .reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
+  assert(marketStock > 0, 'Starter market has no opening trade goods.');
+  const fuelTanks = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
+  assert(fuelTanks.length === 1, `Expected one starter Fuel Tank, got ${fuelTanks.length}.`);
+  assert(fuelTanks.every((tank) => state.rooms[tank.originTile] === RoomType.Maintenance), 'Starter Fuel Tank is not housed in Maintenance.');
+  const fuelDock = podDocks.find((dock) => dock.podCapabilities?.includes('fuel'));
+  assert(fuelDock, 'Expected a fuel-capable starter Pod Dock.');
+  const fuelSupply = getPodDockFuelSupplyView(state, fuelDock.id);
+  assert(fuelSupply.connected, `Starter Fuel Pipe is disconnected (${fuelSupply.reason ?? 'no reason'}).`);
+  const starterFuel = state.itemNodes
+    .filter((node) => fuelTanks.some((tank) => tank.originTile === node.tileIndex))
+    .reduce((sum, node) => sum + (node.items.fuel ?? 0), 0);
+  assert(starterFuel === 40, `Expected 40 starter fuel, got ${starterFuel}.`);
+  assert(fuelTankVisibleAtStart, 'Fuel Tank is not build-visible at Tier 0.');
   const storageCapacity = state.itemNodes
     .filter((node) => state.rooms[node.tileIndex] === 'storage')
     .reduce((sum, node) => sum + node.capacity, 0);
@@ -70,6 +203,9 @@ function testStarterShellAndOpeningOffer(): void {
     .map((tile, index) => ({ tile, index }))
     .filter(({ tile, index }) => isWalkable(tile) && state.rooms[index] !== RoomType.Berth && !state.pressurized[index]);
   assert(ventedStationTiles.length === 0, `Starter hull has ${ventedStationTiles.length} vented non-berth tiles.`);
+  advance(state, 36);
+  assert(state.trafficOffers.length === 0, 'Dock-only starter generated berth contracts before a berth existed.');
+  assert(state.portOps.offerSequenceIndex === 0, 'Dock-only traffic consumed the berth-contract onboarding sequence.');
 }
 
 function testDockRemainsSmallWalkInSurface(): void {
@@ -82,14 +218,185 @@ function testDockRemainsSmallWalkInSurface(): void {
   assert(state.docks.some((dock) => dock.allowedShipSizes.includes('small')), 'Built Dock did not accept small pods.');
 }
 
-function testBerthPolicyRejectsSmallPods(): void {
-  const state = freshPortState(1442);
-  const berth = getBerthInspectorAt(state, state.rooms.findIndex((room) => room === RoomType.Berth));
-  assert(berth, 'Starter station exposes no Berth inspector.');
-  assert(!berth.allowedShipSizes.includes('small'), 'Berth policy advertised support for small Dock pods.');
-  setBerthAllowedShipSize(state, berth.anchorTile, 'small', true);
-  const updated = getBerthInspectorAt(state, berth.anchorTile);
-  assert(updated && !updated.allowedShipSizes.includes('small'), 'Berth policy allowed a small Dock pod override.');
+function testPodDockModulesOwnSmallCraftAccessAndAttachments(): void {
+  const state = freshPortState(1443);
+  advance(state, 0.2);
+  const podModules = state.moduleInstances.filter((module) => module.type === ModuleType.PodDock);
+  assert(podModules.length === 2, 'Fresh starter did not author two physical Pod Docks.');
+  assert(podModules.every((module) => module.rotation === 0 && module.width === 2 && module.height === 1), 'Starter Pod Dock footprint drifted from horizontal 2x1 hull hardware.');
+  assert(podModules.every((module) => getPodDockPlacementView(state, module.originTile).valid), 'Starter Pod Dock has invalid exterior placement.');
+  assert(podModules.every((module) => {
+    const facing = getPodDockPlacementView(state, module.originTile).facing;
+    return facing !== null && module.tiles.every((tile) =>
+      state.tiles[tile] === TileType.Wall && getPodDockPlacementView(state, tile).facing === facing
+    );
+  }), 'Starter Pod Dock footprint does not lie on one straight exterior wall face.');
+  const fuelCoupler = state.moduleInstances.find((module) => module.type === ModuleType.FuelCoupler);
+  const freightLocker = state.moduleInstances.find((module) => module.type === ModuleType.FreightLocker);
+  assert(fuelCoupler && getPodDockAttachmentView(state, ModuleType.FuelCoupler, fuelCoupler.originTile).valid, 'Starter Fuel Coupler is not attached to a Pod Dock.');
+  assert(freightLocker && freightLocker.rotation === 0 && freightLocker.width === 2 && freightLocker.height === 1, 'Starter Freight Locker footprint drifted from horizontal 2x1 hull hardware.');
+  assert(freightLocker && freightLocker.tiles.every((tile) =>
+    state.tiles[tile] === TileType.Wall &&
+    getPodDockPlacementView(state, tile).facing === getPodDockPlacementView(state, freightLocker.originTile).facing
+  ), 'Starter Freight Locker footprint does not lie on the Pod Dock hull face.');
+  assert(freightLocker && getPodDockAttachmentView(state, ModuleType.FreightLocker, freightLocker.originTile).valid, 'Starter Freight Locker is not attached to a Pod Dock.');
+}
+
+function testPortHardwareCostsAndLegacyBerthAdapter(): void {
+  assert(moduleCreditBuildCost(ModuleType.PodDock) === 110, 'Pod Dock capital cost drifted.');
+  assert(moduleCreditBuildCost(ModuleType.FuelCoupler) === 75, 'Fuel Coupler capital cost drifted.');
+  assert(moduleCreditBuildCost(ModuleType.BerthControl) === 210, 'Berth Control capital cost drifted.');
+  assert(moduleCreditBuildCost(ModuleType.DockingClamp) === 100, 'Docking Clamp capital cost drifted.');
+  assert(moduleCreditBuildCost(ModuleType.Gangway) === 140, 'Gangway should use its explicit berth capital cost.');
+
+  const state = freshPortState(1444);
+  assert(!state.rooms.includes(RoomType.Berth), 'Fresh layout retained a legacy berth instead of reserving expansion space.');
+}
+
+function testPodDockSaveRoundTripRetainsSourceAndAttachmentOwnership(): void {
+  const state = freshPortState(1445);
+  advance(state, 0.2);
+  const mount = state.moduleInstances.find((module) => module.type === ModuleType.PodDock)?.originTile;
+  assert(mount !== undefined, 'Expected authored Pod Dock before save round trip.');
+
+  const parsed = parseAndMigrateSave(serializeSave('Pod dock compatibility', state, 'test'));
+  assert(parsed.ok, parsed.ok ? '' : parsed.error);
+  const loaded = hydrateStateFromSave(parsed.save, { seed: 1445 }).state;
+  const dock = getDockByTile(loaded, mount);
+  assert(dock?.sourceKind === 'pod-dock-module', 'Pod Dock source kind changed after save/load.');
+  assert(dock?.sourceKey.startsWith('pod-dock:'), 'Pod Dock lost its stable source key after save/load.');
+  assert(dock?.podCapabilities?.includes('fuel'), 'Fuel Coupler ownership changed after save/load.');
+}
+
+function testSmallCraftRoutingUsesDocksNotBerths(): void {
+  const state = freshPortState(1446);
+  const placed = state.tiles.some((tile, index) => tile === TileType.Wall && trySetTile(state, index, TileType.Dock));
+  assert(placed, 'Expected a legacy Dock tile for the small-craft route test.');
+  tick(state, 0);
+  const dock = state.docks.find((entry) => entry.sourceKind === 'legacy-tile-cluster');
+  assert(dock, 'Expected a legacy DockEntity.');
+  const offer = smallCraftOffer(state, dock, 9446);
+  state.trafficOffers.push(offer);
+  assert(getEligibleBerthsForOffer(state, offer.id).length === 0, 'Small craft was offered a berth.');
+  const berthAnchor = state.rooms.findIndex((room) => room === RoomType.Berth);
+  assert(!admitTrafficOffer(state, offer.id, berthAnchor).ok, 'Small craft accepted a berth admission.');
+  const ship = admitSmallCraftAtDock(state, dock, offer.id);
+  assert(ship.assignedDockId === dock.id && ship.assignedBerthAnchor === null, 'Small craft did not bind exclusively to its Dock.');
+}
+
+function testSmallCraftMissingAttachmentIsVisible(): void {
+  const state = freshPortState(1447);
+  const { dock, couplerTile } = placeFuelPodDock(state);
+  const ship = admitSmallCraftAtDock(state, dock, 9447);
+  assert(removeModuleAtTile(state, couplerTile), 'Expected Fuel Coupler removal during the test visit.');
+  advance(state, 3);
+  const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(refuel?.status === 'blocked', `Expected visible missing attachment block, got ${refuel?.status ?? 'missing'}.`);
+  assert(refuel.blockedReason === 'missing Fuel Coupler', `Expected Fuel Coupler block reason, got ${refuel.blockedReason ?? 'none'}.`);
+}
+
+function testSmallCraftBlockedServiceCanRecover(): void {
+  const state = freshPortState(1452);
+  const { dock } = placeFuelPodDock(state);
+  const tank = fuelTankNode(state);
+  tank.items.fuel = 0;
+  const ship = admitSmallCraftAtDock(state, dock, 9452);
+  advance(state, 3);
+  const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(refuel?.status === 'blocked', 'Empty fuel stock did not produce a live blocked service.');
+  tank.items.fuel = 12;
+  advance(state, 24);
+  const recovered = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(recovered?.status === 'complete', `Restocking fuel did not recover blocked service (${recovered?.status ?? 'missing'}: ${recovered?.blockedReason ?? 'no reason'}).`);
+}
+
+function testSmallCraftPassengerAndShipServiceProgressConcurrently(): void {
+  const state = freshPortState(1448);
+  const { dock } = placeFuelPodDock(state);
+  fuelTankNode(state).items.fuel = 12;
+  const ship = admitSmallCraftAtDock(state, dock, 9448);
+  advance(state, 6);
+  const visit = ship.smallCraftVisit;
+  const refuel = visit?.services.find((service) => service.kind === 'refuel');
+  assert(state.visitors.some((visitor) => visitor.originShipId === ship.id), 'Passenger activity did not begin while docked.');
+  assert(refuel?.status === 'active' && refuel.progress > 0, 'Refueling did not progress alongside passenger activity.');
+}
+
+function testSmallCraftFuelConsumesStockAndPaysReward(): void {
+  const state = freshPortState(1449);
+  const { dock } = placeFuelPodDock(state);
+  const tank = fuelTankNode(state);
+  tank.items.fuel = 12;
+  const fuelBefore = tank.items.fuel;
+  const localSupply = getPodDockFuelSupplyView(state, dock.id);
+  assert(localSupply.connected, `Starter Fuel Tank is not connected to the Fuel Coupler (${localSupply.reason ?? 'no reason'}).`);
+  assert(localSupply.tankCount > 0, 'Starter Fuel Pipe network has no connected Fuel Tank.');
+  assert(localSupply.pipeTiles > 0, 'Starter Fuel Pipe network has no pipe tiles.');
+  const earnedBefore = state.metrics.creditsEarnedLifetime;
+  const ship = admitSmallCraftAtDock(state, dock, 9449);
+  advance(state, 36);
+  const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(refuel?.status === 'complete', `Fuel service did not complete (${refuel?.status ?? 'missing'}).`);
+  assert((tank.items.fuel ?? 0) <= fuelBefore - 3.9, 'Fuel service did not consume Fuel Tank stock.');
+  assert(state.metrics.creditsEarnedLifetime >= earnedBefore + (refuel?.creditsEarned ?? 0), 'Fuel service did not contribute its earned credits.');
+  assert((refuel?.ratingDelta ?? 0) > 0, 'Fuel service did not retain a rating contribution.');
+}
+
+function testSmallCraftFuelRequiresConnectedPipe(): void {
+  const state = freshPortState(1453);
+  const { dock } = placeFuelPodDock(state);
+  const tank = fuelTankNode(state);
+  tank.items.fuel = 12;
+  const pipeTiles = Array.from(state.utilityUnderlay.layers['fuel-pipe'].entries())
+    .filter(([tileIndex, present]) => present > 0 && tileIndex !== tank.tileIndex)
+    .map(([tileIndex]) => tileIndex);
+  assert(pipeTiles.length > 0, 'Expected an authored Fuel Pipe segment between the tank and coupler.');
+  const brokenPipeTile = pipeTiles[0];
+  assert(clearUtilityUnderlayAt(state, brokenPipeTile, 'fuel-pipe'), 'Expected authored Fuel Pipe segment removal.');
+  const disconnected = getPodDockFuelSupplyView(state, dock.id);
+  assert(!disconnected.connected, 'Removing the Fuel Pipe did not disconnect the Fuel Coupler.');
+  assert(disconnected.reason?.includes('Fuel Pipe') || disconnected.reason?.includes('Maintenance'), `Disconnected fuel network did not provide an actionable reason (${disconnected.reason ?? 'none'}).`);
+  const ship = admitSmallCraftAtDock(state, dock, 9453);
+  advance(state, 3);
+  const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(refuel?.status === 'blocked', 'Broken Fuel Pipe did not block Pod Dock refueling.');
+  assert(refuel.blockedReason?.includes('Fuel Pipe') || refuel.blockedReason?.includes('Maintenance'), `Unexpected fuel-pipe blocker: ${refuel.blockedReason ?? 'none'}.`);
+  assert(setUtilityUnderlayTile(state, 'fuel-pipe', brokenPipeTile, true), 'Expected Fuel Pipe segment restoration.');
+  const restored = getPodDockFuelSupplyView(state, dock.id);
+  assert(restored.connected, `Restored Fuel Pipe did not reconnect the Fuel Coupler (${restored.reason ?? 'no reason'}).`);
+  advance(state, 24);
+  const recovered = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(recovered?.status === 'complete', `Restored Fuel Pipe did not recover refueling (${recovered?.status ?? 'missing'}).`);
+}
+
+function testSmallCraftEventuallyDepartsWhenOptionalServiceBlocks(): void {
+  const state = freshPortState(1450);
+  const { dock } = placeFuelPodDock(state);
+  fuelTankNode(state).items.fuel = 0;
+  const ship = admitSmallCraftAtDock(state, dock, 9450);
+  advance(state, 100);
+  const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
+  assert(refuel?.status === 'blocked', 'Missing fuel did not leave an inspectable blocked service result.');
+  assert(refuel.blockedReason === 'no fuel in Fuel Tank', `Unexpected fuel block reason: ${refuel.blockedReason ?? 'none'}.`);
+  assert(!state.arrivingShips.some((entry) => entry.id === ship.id), 'Blocked optional service pinned the small craft indefinitely.');
+}
+
+function testSmallCraftVisitSaveRoundTrip(): void {
+  const state = freshPortState(1451);
+  const { dock } = placeFuelPodDock(state);
+  fuelTankNode(state).items.fuel = 12;
+  const ship = admitSmallCraftAtDock(state, dock, 9451);
+  advance(state, 5);
+  const saved = serializeSave('Small craft visit', state, 'test');
+  const parsed = parseAndMigrateSave(saved);
+  assert(parsed.ok, parsed.ok ? '' : parsed.error);
+  const loaded = hydrateStateFromSave(parsed.save, { seed: 1451 }).state;
+  const restored = loaded.arrivingShips.find((entry) => entry.id === ship.id);
+  assert(restored?.smallCraftVisit?.services.length === 2, 'Small-craft service state was not restored from save.');
+  assert(
+    restored.smallCraftVisit.services.some((service) => service.kind === 'refuel' && service.progress > 0),
+    'Small-craft refuel progress reset on load.'
+  );
 }
 
 function testLegacyCoreTileIsBuildable(): void {
@@ -138,9 +445,10 @@ function testImportedMarketGoodsNeedNoWorkshop(): void {
   assert(tryPlaceModule(state, ModuleType.MarketStall, origin).ok, 'Expected Market stall placement.');
   assert(!state.rooms.includes(RoomType.Workshop), 'Test station unexpectedly contains a Workshop.');
   const creditsBefore = state.metrics.credits;
+  const goodsBefore = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
   assert(buyImportedTradeGoods(state), 'Expected imported Market goods to fit the stall.');
   const goods = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
-  assert(goods === 12, `Expected 12 imported Market goods, got ${goods}.`);
+  assert(goods === goodsBefore + 12, `Expected imported Market goods to increase by 12, got ${goods - goodsBefore}.`);
   assert(state.metrics.credits === creditsBefore - 30, 'Imported Market goods charged the wrong amount.');
 }
 
@@ -492,9 +800,19 @@ function testHardDepartureWithUnfinishedWork(): void {
 }
 
 const tests: Array<[string, () => void]> = [
-  ['starter shell and opening offer', testStarterShellAndOpeningOffer],
+  ['starter shell and dock-only traffic', testStarterShellAndDockOnlyTraffic],
   ['dock remains small walk-in surface', testDockRemainsSmallWalkInSurface],
-  ['berth policy rejects small pods', testBerthPolicyRejectsSmallPods],
+  ['pod dock module ownership and attachments', testPodDockModulesOwnSmallCraftAccessAndAttachments],
+  ['port hardware costs and legacy berth adapter', testPortHardwareCostsAndLegacyBerthAdapter],
+  ['pod dock save round trip', testPodDockSaveRoundTripRetainsSourceAndAttachmentOwnership],
+  ['small-craft dock-only routing', testSmallCraftRoutingUsesDocksNotBerths],
+  ['small-craft missing attachment', testSmallCraftMissingAttachmentIsVisible],
+  ['small-craft blocked service recovery', testSmallCraftBlockedServiceCanRecover],
+  ['small-craft concurrent passenger and service progress', testSmallCraftPassengerAndShipServiceProgressConcurrently],
+  ['small-craft fuel stock and reward', testSmallCraftFuelConsumesStockAndPaysReward],
+  ['small-craft fuel requires connected pipe', testSmallCraftFuelRequiresConnectedPipe],
+  ['small-craft eventual departure', testSmallCraftEventuallyDepartsWhenOptionalServiceBlocks],
+  ['small-craft save round trip', testSmallCraftVisitSaveRoundTrip],
   ['legacy core tile is buildable', testLegacyCoreTileIsBuildable],
   ['prepared meal import', testPreparedMealImport],
   ['imported market goods need no workshop', testImportedMarketGoodsNeedNoWorkshop],

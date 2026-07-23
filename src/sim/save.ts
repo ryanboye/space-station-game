@@ -20,6 +20,8 @@ import {
   type HousingPolicy,
   type ItemType,
   type ArrivingShip,
+  type SmallCraftService,
+  type SmallCraftVisit,
   type MaintenanceDomain,
   type MaintenanceSource,
   type PortContractStatus,
@@ -82,6 +84,8 @@ const ITEM_TYPES: ItemType[] = [
 const VISITOR_ARCHETYPES: readonly VisitorArchetype[] = ['diner', 'shopper', 'lounger', 'rusher'];
 const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
+const SMALL_CRAFT_SERVICE_KINDS = ['passenger', 'refuel', 'freight', 'repair'] as const;
+const SMALL_CRAFT_SERVICE_STATUSES = ['pending', 'active', 'complete', 'blocked', 'skipped'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
 const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
 const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
@@ -155,6 +159,7 @@ export interface StationSnapshotV1 {
   }>;
   dockConfigs: Array<{
     anchorTile: number;
+    sourceKey?: string;
     purpose: DockPurpose;
     facing: SpaceLane;
     allowedShipTypes: ShipType[];
@@ -332,6 +337,42 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === 'string' && allowed.includes(value as T);
 }
 
+function cloneSmallCraftVisit(visit: SmallCraftVisit | undefined): SmallCraftVisit | undefined {
+  return visit
+    ? { ...visit, services: visit.services.map((service) => ({ ...service })) }
+    : undefined;
+}
+
+function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
+  if (!isRecord(value) || typeof value.dockSourceKey !== 'string' || !Array.isArray(value.services)) return undefined;
+  const services: SmallCraftService[] = [];
+  for (const raw of value.services.slice(0, 2)) {
+    if (!isRecord(raw) || !isOneOf(raw.kind, SMALL_CRAFT_SERVICE_KINDS)) continue;
+    const freightDirection = raw.freightDirection === 'import' || raw.freightDirection === 'export'
+      ? raw.freightDirection
+      : undefined;
+    services.push({
+      kind: raw.kind,
+      status: isOneOf(raw.status, SMALL_CRAFT_SERVICE_STATUSES) ? raw.status : 'pending',
+      progress: clamp(asFiniteNumber(raw.progress, 0), 0, 1),
+      durationSec: Math.max(1, asFiniteNumber(raw.durationSec, 20)),
+      elapsedSec: Math.max(0, asFiniteNumber(raw.elapsedSec, 0)),
+      blockedReason: typeof raw.blockedReason === 'string' ? raw.blockedReason : null,
+      creditsEarned: Math.max(0, asFiniteNumber(raw.creditsEarned, 0)),
+      ratingDelta: Math.max(0, asFiniteNumber(raw.ratingDelta, 0)),
+      transferredUnits: Math.max(0, asFiniteNumber(raw.transferredUnits, 0)),
+      freightDirection
+    });
+  }
+  if (services.length === 0) return undefined;
+  return {
+    dockSourceKey: value.dockSourceKey,
+    startedAt: Math.max(0, asFiniteNumber(value.startedAt, 0)),
+    patienceExpiresAt: Math.max(0, asFiniteNumber(value.patienceExpiresAt, 0)),
+    services
+  };
+}
+
 function defaultHousingPolicyForRoom(room: RoomType): HousingPolicy {
   return room === RoomType.Dorm || room === RoomType.Hygiene ? 'crew' : 'visitor';
 }
@@ -494,6 +535,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     dockConfigs: state.docks
       .map((dock) => ({
         anchorTile: dock.anchorTile,
+        sourceKey: dock.sourceKey,
         purpose: dock.purpose,
         facing: dock.facing,
         allowedShipTypes: [...dock.allowedShipTypes],
@@ -655,7 +697,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       }))
     },
     activePortShips: state.arrivingShips
-      .filter((ship) => ship.kind === 'transient' && ship.portContractId !== undefined)
+      .filter((ship) => ship.kind === 'transient' && (ship.portContractId !== undefined || ship.smallCraftVisit !== undefined))
       .map((ship) => ({
         ...ship,
         bayTiles: [...ship.bayTiles],
@@ -671,7 +713,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           ...ship.portTurnaround,
           outboundRequired: { ...ship.portTurnaround.outboundRequired },
           outboundLoaded: { ...ship.portTurnaround.outboundLoaded }
-        } : undefined
+        } : undefined,
+        smallCraftVisit: cloneSmallCraftVisit(ship.smallCraftVisit)
       }))
   };
 }
@@ -1032,6 +1075,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         continue;
       }
       const purpose: DockPurpose = isOneOf(entry.purpose, ['visitor', 'residential']) ? entry.purpose : 'visitor';
+      const sourceKey = typeof entry.sourceKey === 'string' && entry.sourceKey.length > 0 ? entry.sourceKey : undefined;
       const facing: SpaceLane = isOneOf(entry.facing, SPACE_LANES) ? entry.facing : 'north';
       const allowedShipTypes = Array.isArray(entry.allowedShipTypes)
         ? entry.allowedShipTypes.filter((type): type is ShipType => isOneOf(type, SHIP_TYPES))
@@ -1041,6 +1085,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         : [];
       dockConfigs.push({
         anchorTile,
+        sourceKey,
         purpose,
         facing,
         allowedShipTypes: allowedShipTypes.length > 0 ? [...new Set(allowedShipTypes)] : ['tourist'],
@@ -1578,11 +1623,14 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
           !isRecord(entry) ||
           entry.kind !== 'transient' ||
           typeof entry.id !== 'number' ||
-          typeof entry.portContractId !== 'number' ||
+          (typeof entry.portContractId !== 'number' && normalizeSmallCraftVisit(entry.smallCraftVisit) === undefined) ||
           !Array.isArray(entry.bayTiles) ||
           !isOneOf(entry.stage, ['approach', 'docked', 'depart'] as const)
         ) return [];
-        return [entry as unknown as ArrivingShip];
+        return [{
+          ...(entry as unknown as ArrivingShip),
+          smallCraftVisit: normalizeSmallCraftVisit(entry.smallCraftVisit)
+        }];
       })
     : [];
   const residents: Resident[] = Array.isArray(snapshotRaw.residents)
@@ -1958,7 +2006,8 @@ export function hydrateStateFromSave(
   tick(next, 0);
 
   for (const [index, dockConfig] of snapshot.dockConfigs.entries()) {
-    const dock = next.docks.find((d) => d.anchorTile === dockConfig.anchorTile || d.tiles.includes(dockConfig.anchorTile));
+    const dock = (dockConfig.sourceKey ? next.docks.find((d) => d.sourceKey === dockConfig.sourceKey) : undefined) ??
+      next.docks.find((d) => d.anchorTile === dockConfig.anchorTile || d.tiles.includes(dockConfig.anchorTile));
     if (!dock) {
       warnings.push(`Dock config ${index} (anchor ${dockConfig.anchorTile}) skipped: no matching dock.`);
       continue;
@@ -2159,8 +2208,39 @@ export function hydrateStateFromSave(
         outboundLoaded: { ...savedShip.portTurnaround.outboundLoaded },
         fuelRequired: Math.max(0, savedShip.portTurnaround.fuelRequired ?? 0),
         fuelDelivered: Math.max(0, savedShip.portTurnaround.fuelDelivered ?? 0)
-      } : undefined
+      } : undefined,
+      smallCraftVisit: cloneSmallCraftVisit(savedShip.smallCraftVisit)
     };
+    if (ship.assignedDockId !== null) {
+      const dock = (ship.assignedDockSourceKey
+        ? next.docks.find((entry) => entry.sourceKey === ship.assignedDockSourceKey)
+        : undefined) ??
+        // Older saves do not carry a stable source key. Their runtime id is
+        // accepted only when it still resolves exactly, never substituted by
+        // another nearby dock.
+        next.docks.find((entry) => entry.id === ship.assignedDockId);
+      if (!dock) {
+        warnings.push(`Active ship ${ship.id} could not remap its dock; released unassigned.`);
+        ship.assignedDockId = null;
+        ship.assignedDockSourceKey = null;
+        ship.stage = 'depart';
+        ship.stageTime = 0;
+      } else {
+        const mount = fromIndex(dock.mountTile ?? dock.anchorTile, next.width);
+        ship.assignedDockId = dock.id;
+        ship.originDockId = dock.id;
+        ship.assignedDockSourceKey = dock.sourceKey;
+        ship.bayTiles = dock.accessTile === undefined ? [...dock.tiles] : [dock.accessTile];
+        ship.bayCenterX = mount.x + 0.5;
+        ship.bayCenterY = mount.y + 0.5;
+      }
+    }
+    if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined && next.rooms[ship.assignedBerthAnchor] !== RoomType.Berth) {
+      warnings.push(`Active ship ${ship.id} could not remap its berth; released unassigned.`);
+      ship.assignedBerthAnchor = null;
+      ship.stage = 'depart';
+      ship.stageTime = 0;
+    }
     const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
     if (contract && ship.stage === 'docked') {
       const returned = contract.promises.find((promise) => promise.kind === 'passengers-returned');

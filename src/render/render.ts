@@ -25,13 +25,16 @@ import {
 import { MODULE_DEFINITIONS } from '../sim/balance';
 import {
   collectActiveRoomTiles,
+  airQualityAt,
   collectQueueTargets,
   collectServiceNodeReachability,
   canPlaceUtilityUnderlay,
   getDockByTile,
+  getBerthFacilityAt,
   getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
+  getFuelPipeNetworkDiagnostics,
   getWaterPipeNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getSanitationTileDiagnostic,
@@ -60,7 +63,7 @@ import {
   TILE_SPRITE_KEYS,
   WALL_SPRITE_VARIANT_KEYS
 } from './sprite-keys';
-import type { SpriteAtlas, SpriteFrame } from './sprite-atlas';
+import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
 import {
   AGENT_EVA_SUIT_SPRITE_KEY,
   AGENT_SPRITE_VARIANTS,
@@ -140,6 +143,7 @@ const roomOverlay: Record<RoomType, string> = {
   [RoomType.Market]: 'rgba(255, 188, 120, 0.2)',
   [RoomType.LogisticsStock]: 'rgba(150, 200, 255, 0.2)',
   [RoomType.Storage]: 'rgba(255, 220, 155, 0.22)',
+  [RoomType.Maintenance]: 'rgba(116, 190, 162, 0.22)',
   // Berth: cool steel-blue tint, distinct from Dorm's warmer blue and
   // the cyan dock-tile color. v0 placeholder; revisit when atlas
   // Berth floor sprite lands.
@@ -168,6 +172,7 @@ const roomLetter: Record<RoomType, string> = {
   [RoomType.Market]: 'K',
   [RoomType.LogisticsStock]: 'N',
   [RoomType.Storage]: 'B',
+  [RoomType.Maintenance]: 'M',
   [RoomType.Berth]: 'E',
   [RoomType.Cantina]: 'X',
   [RoomType.CommercialUnit]: '$',
@@ -230,6 +235,12 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.CargoArm]: 'X',
   [ModuleType.FuelTank]: 'F',
   [ModuleType.FuelPump]: 'P',
+  [ModuleType.PodDock]: 'PD',
+  [ModuleType.FuelCoupler]: 'FC',
+  [ModuleType.FreightLocker]: 'FL',
+  [ModuleType.MaintenanceSocket]: 'MS',
+  [ModuleType.BerthControl]: 'BC',
+  [ModuleType.DockingClamp]: 'DC',
   [ModuleType.SecurityCamera]: 'o',
   [ModuleType.AccessGate]: '|',
   [ModuleType.FireExtinguisher]: 'F',
@@ -1443,7 +1454,13 @@ function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationSta
     module.type !== ModuleType.CustomsCounter &&
     module.type !== ModuleType.CargoArm &&
     module.type !== ModuleType.FuelTank &&
-    module.type !== ModuleType.FuelPump
+    module.type !== ModuleType.FuelPump &&
+    module.type !== ModuleType.PodDock &&
+    module.type !== ModuleType.FuelCoupler &&
+    module.type !== ModuleType.FreightLocker &&
+    module.type !== ModuleType.MaintenanceSocket &&
+    module.type !== ModuleType.BerthControl &&
+    module.type !== ModuleType.DockingClamp
   ) {
     return false;
   }
@@ -1454,7 +1471,59 @@ function drawBerthModuleVisual(ctx: CanvasRenderingContext2D, module: StationSta
   ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), w - Math.round(4 * PX), h - Math.round(4 * PX));
   ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), w - Math.round(5 * PX), h - Math.round(5 * PX));
 
-  if (module.type === ModuleType.Gangway) {
+  if (module.type === ModuleType.PodDock) {
+    ctx.fillStyle = 'rgba(26, 56, 77, 0.98)';
+    ctx.fillRect(px + w * 0.08, py + h * 0.19, w * 0.84, h * 0.62);
+    ctx.strokeStyle = 'rgba(123, 213, 242, 0.82)';
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.18, py + h * 0.36);
+    ctx.lineTo(px + w * 0.82, py + h * 0.36);
+    ctx.moveTo(px + w * 0.18, py + h * 0.64);
+    ctx.lineTo(px + w * 0.82, py + h * 0.64);
+    ctx.stroke();
+    ctx.fillStyle = '#63f0b2';
+    ctx.fillRect(px + w * 0.15, py + h * 0.31, Math.max(2, w * 0.08), Math.max(2, h * 0.14));
+  } else if (module.type === ModuleType.FuelCoupler) {
+    ctx.fillStyle = 'rgba(28, 72, 72, 0.98)';
+    ctx.fillRect(px + w * 0.2, py + h * 0.14, w * 0.48, h * 0.72);
+    ctx.strokeStyle = 'rgba(103, 235, 190, 0.85)';
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.66, py + h * 0.32);
+    ctx.quadraticCurveTo(px + w * 0.9, py + h * 0.4, px + w * 0.78, py + h * 0.7);
+    ctx.stroke();
+  } else if (module.type === ModuleType.FreightLocker) {
+    ctx.fillStyle = 'rgba(75, 57, 39, 0.98)';
+    ctx.fillRect(px + w * 0.1, py + h * 0.2, w * 0.8, h * 0.58);
+    ctx.strokeStyle = 'rgba(244, 190, 89, 0.84)';
+    ctx.strokeRect(px + w * 0.16, py + h * 0.27, w * 0.68, h * 0.42);
+  } else if (module.type === ModuleType.MaintenanceSocket) {
+    ctx.fillStyle = 'rgba(47, 52, 70, 0.98)';
+    ctx.fillRect(px + w * 0.08, py + h * 0.22, w * 0.38, h * 0.56);
+    ctx.strokeStyle = 'rgba(244, 186, 74, 0.88)';
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.4, py + h * 0.5);
+    ctx.lineTo(px + w * 0.72, py + h * 0.32);
+    ctx.lineTo(px + w * 0.86, py + h * 0.54);
+    ctx.stroke();
+  } else if (module.type === ModuleType.BerthControl) {
+    ctx.fillStyle = 'rgba(31, 52, 71, 0.98)';
+    ctx.fillRect(px + w * 0.19, py + h * 0.1, w * 0.62, h * 0.8);
+    ctx.fillStyle = '#72dff2';
+    ctx.fillRect(px + w * 0.32, py + h * 0.22, w * 0.36, h * 0.22);
+    ctx.strokeStyle = 'rgba(202, 232, 248, 0.8)';
+    ctx.strokeRect(px + w * 0.26, py + h * 0.16, w * 0.48, h * 0.66);
+  } else if (module.type === ModuleType.DockingClamp) {
+    ctx.fillStyle = 'rgba(59, 66, 76, 0.98)';
+    ctx.fillRect(px + w * 0.18, py + h * 0.16, w * 0.64, h * 0.68);
+    ctx.strokeStyle = 'rgba(218, 234, 244, 0.82)';
+    ctx.beginPath();
+    ctx.moveTo(px + w * 0.28, py + h * 0.3);
+    ctx.lineTo(px + w * 0.64, py + h * 0.3);
+    ctx.lineTo(px + w * 0.72, py + h * 0.5);
+    ctx.lineTo(px + w * 0.64, py + h * 0.7);
+    ctx.lineTo(px + w * 0.28, py + h * 0.7);
+    ctx.stroke();
+  } else if (module.type === ModuleType.Gangway) {
     const cx = px + w * 0.5;
     ctx.fillStyle = 'rgba(45, 67, 84, 0.95)';
     ctx.fillRect(px + w * 0.28, py + h * 0.12, w * 0.44, h * 0.76);
@@ -1533,7 +1602,20 @@ function drawModuleVisual(
   const w = module.width * TILE_SIZE;
   const h = module.height * TILE_SIZE;
   if (useSprites) {
-    const moduleKey = MODULE_SPRITE_KEYS[module.type];
+    const moduleKey = storageVisualKey(state, module) ?? PORT_INFRASTRUCTURE_SPRITE_KEYS[module.type] ?? MODULE_SPRITE_KEYS[module.type];
+    const exteriorGeometry = portExteriorSpriteGeometry(state, module);
+    if (exteriorGeometry && drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      moduleKey,
+      exteriorGeometry.x,
+      exteriorGeometry.y,
+      exteriorGeometry.width,
+      exteriorGeometry.height,
+      exteriorGeometry.rotation
+    )) {
+      return;
+    }
     let rotation = module.rotation === 90 ? 90 : 0;
     if (module.type === ModuleType.WallLight) {
       const drawX = px - TILE_SIZE * 0.5;
@@ -1560,6 +1642,65 @@ function drawModuleVisual(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
+}
+
+type PortExteriorSpriteGeometry = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
+function portExteriorSpriteGeometry(
+  state: StationState,
+  module: StationState['moduleInstances'][number]
+): PortExteriorSpriteGeometry | null {
+  if (
+    module.type !== ModuleType.PodDock &&
+    module.type !== ModuleType.FuelCoupler &&
+    module.type !== ModuleType.FreightLocker &&
+    module.type !== ModuleType.MaintenanceSocket
+  ) {
+    return null;
+  }
+  const serviceTile = wallMountedModuleServiceTile(state, module.originTile);
+  if (serviceTile === null) return null;
+  const origin = fromIndex(module.originTile, state.width);
+  const service = fromIndex(serviceTile, state.width);
+  const outwardX = Math.sign(origin.x - service.x);
+  const outwardY = Math.sign(origin.y - service.y);
+  const rotation = outwardY < 0 ? 0 : outwardX > 0 ? 90 : outwardY > 0 ? 180 : 270;
+  const definition = MODULE_DEFINITIONS[module.type];
+  const scale = module.type === ModuleType.PodDock ? 1.22 : 1.12;
+  const projection = TILE_SIZE * (module.type === ModuleType.PodDock ? 0.38 : 0.24);
+  const sourceWidth = definition.width * TILE_SIZE * scale;
+  const sourceHeight = definition.height * TILE_SIZE * scale;
+  const centerX = (origin.x + module.width * 0.5) * TILE_SIZE + outwardX * projection;
+  const centerY = (origin.y + module.height * 0.5) * TILE_SIZE + outwardY * projection;
+  return {
+    x: centerX - sourceWidth * 0.5,
+    y: centerY - sourceHeight * 0.5,
+    width: sourceWidth,
+    height: sourceHeight,
+    rotation
+  };
+}
+
+function storageVisualKey(
+  state: StationState,
+  module: StationState['moduleInstances'][number]
+): string | null {
+  if (module.type !== ModuleType.IntakePallet && module.type !== ModuleType.StorageRack) return null;
+  const node = state.itemNodes.find((candidate) => candidate.tileIndex === module.originTile);
+  const stored = node
+    ? Object.values(node.items).reduce((total, amount) => total + Math.max(0, amount), 0)
+    : 0;
+  const fillRatio = node && node.capacity > 0 ? stored / node.capacity : 0;
+  const fill = fillRatio < 0.05 ? 'empty' : fillRatio < 0.35 ? 'light' : fillRatio < 0.75 ? 'stocked' : 'full';
+  return module.type === ModuleType.IntakePallet
+    ? `module.intake_pallet.${fill}`
+    : `module.storage_rack.${fill}`;
 }
 
 function drawDockFacadeOverlay(
@@ -2276,6 +2417,10 @@ function drawDockedPodShip(ctx: CanvasRenderingContext2D, state: StationState, s
 function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState, ship: StationState['arrivingShips'][number]): void {
   const bounds = bayTileBounds(state, ship.bayTiles);
   if (!bounds) return;
+  const facility = ship.assignedBerthAnchor === null || ship.assignedBerthAnchor === undefined
+    ? null
+    : getBerthFacilityAt(state, ship.assignedBerthAnchor);
+  const useUShapedEnvelope = facility?.geometry === 'u-shaped';
   const bayRect = {
     x: bounds.minX * TILE_SIZE,
     y: bounds.minY * TILE_SIZE,
@@ -2288,7 +2433,12 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   const inset = Math.max(2, TILE_SIZE * 0.08);
   const targetW = Math.max(TILE_SIZE, bayRect.w - inset * 2);
   const targetH = Math.max(TILE_SIZE, bayRect.h - inset * 2);
-  const bayIsWide = targetW > targetH * 1.18;
+  const visualLane = pickBerthVisualLane(state, ship);
+  // U-shaped bays are a vessel envelope bounded by their service rails, not
+  // a rectangular room to clip. Their open face establishes the ship axis.
+  const bayIsWide = useUShapedEnvelope
+    ? visualLane === 'east' || visualLane === 'west'
+    : targetW > targetH * 1.18;
   const angle = bayIsWide ? Math.PI * 0.5 : 0;
   const imageAspect = sprite
     ? sprite.naturalWidth / Math.max(1, sprite.naturalHeight)
@@ -2311,7 +2461,6 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
     drawH *= grow;
     drawW *= grow;
   }
-  const visualLane = pickBerthVisualLane(state, ship);
   const outward = laneUnitVector(visualLane);
   const center = {
     x: bayRect.x + bayRect.w * 0.5 + outward.x * transit * TILE_SIZE * 1.6,
@@ -2319,9 +2468,13 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   };
 
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(bayRect.x + inset * 0.4, bayRect.y + inset * 0.4, bayRect.w - inset * 0.8, bayRect.h - inset * 0.8);
-  ctx.clip();
+  if (!useUShapedEnvelope) {
+    // Compatibility path: old saves used a painted rectangular berth and
+    // expect the original clipped vessel placement.
+    ctx.beginPath();
+    ctx.rect(bayRect.x + inset * 0.4, bayRect.y + inset * 0.4, bayRect.w - inset * 0.8, bayRect.h - inset * 0.8);
+    ctx.clip();
+  }
   if (sprite) {
     drawRotatedImage(ctx, sprite, center, drawW, drawH, angle);
   } else {
@@ -2434,8 +2587,11 @@ function drawBerthChip(
   ctx.restore();
 }
 
-function drawBerthInformationChips(ctx: CanvasRenderingContext2D, state: StationState): void {
-  const occupied: BerthChipRect[] = [];
+function drawBerthInformationChips(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  occupied: BerthChipRect[] = []
+): BerthChipRect[] {
   const fontSize = Math.max(8, Math.round(TILE_SIZE * 0.38));
   const chipHeight = Math.max(24, TILE_SIZE * 1.18);
   const horizontalPadding = Math.max(14, TILE_SIZE * 0.7);
@@ -2486,6 +2642,261 @@ function drawBerthInformationChips(ctx: CanvasRenderingContext2D, state: Station
     );
     const rect = placeBerthChip(state, cluster, width, chipHeight, occupied);
     if (rect) drawBerthChip(ctx, rect, topLine, bottomLine, accent, alpha);
+  }
+  ctx.restore();
+  return occupied;
+}
+
+type InfrastructureAnimationState = {
+  deployment: number;
+  updatedAt: number;
+};
+
+const infrastructureAnimationByModuleId = new Map<number, InfrastructureAnimationState>();
+
+const ACTIVE_INFRASTRUCTURE_SPRITE_KEYS: Partial<Record<ModuleType, string>> = {
+  [ModuleType.PodDock]: 'module.pod_dock.active',
+  [ModuleType.Gangway]: 'module.gangway.active',
+  [ModuleType.DockingClamp]: 'module.docking_clamp.active'
+};
+
+function renderClockSeconds(): number {
+  return typeof performance === 'undefined' ? Date.now() / 1000 : performance.now() / 1000;
+}
+
+function easedInfrastructureDeployment(moduleId: number, target: number, now: number): number {
+  const existing = infrastructureAnimationByModuleId.get(moduleId);
+  if (!existing) {
+    infrastructureAnimationByModuleId.set(moduleId, { deployment: target, updatedAt: now });
+    return target;
+  }
+  const dt = Math.min(0.12, Math.max(0, now - existing.updatedAt));
+  const rate = target > existing.deployment ? 3.8 : 2.8;
+  const blend = 1 - Math.exp(-rate * dt);
+  existing.deployment += (target - existing.deployment) * blend;
+  existing.updatedAt = now;
+  return existing.deployment;
+}
+
+function moduleFacing(module: StationState['moduleInstances'][number]): SpaceLane {
+  return module.rotation === 90 ? 'south' : 'east';
+}
+
+function shipServiceCompletion(state: StationState, ship: StationState['arrivingShips'][number]): number {
+  const contract = ship.portContractId === undefined
+    ? state.portOps.contracts.find((entry) => entry.shipId === ship.id) ?? null
+    : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null;
+  if (contract) return portPromiseCompletion(contract.promises);
+  if (ship.portTurnaround) return clamp01(ship.portTurnaround.fulfillmentRatio);
+  if (ship.passengersTotal <= 0) return ship.stage === 'docked' ? 0.5 : 0;
+  return clamp01(ship.passengersBoarded / ship.passengersTotal);
+}
+
+function infrastructureTargetForShip(ship: StationState['arrivingShips'][number] | null): number {
+  if (!ship) return 0;
+  if (ship.stage === 'approach') return 0.38;
+  if (ship.stage === 'depart') return 0.16;
+  return 1;
+}
+
+function drawAuthoredInfrastructureState(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  spriteKey: string | undefined,
+  deployment: number
+): void {
+  if (!useSprites || !spriteKey || deployment <= 0.01) return;
+  const exteriorGeometry = portExteriorSpriteGeometry(state, module);
+  if (exteriorGeometry) {
+    drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      spriteKey,
+      exteriorGeometry.x,
+      exteriorGeometry.y,
+      exteriorGeometry.width,
+      exteriorGeometry.height,
+      exteriorGeometry.rotation,
+      deployment
+    );
+    return;
+  }
+  const origin = fromIndex(module.originTile, state.width);
+  const width = module.width * TILE_SIZE;
+  const height = module.height * TILE_SIZE;
+  const rotation = module.rotation === 90 ? 90 : 0;
+  const drawWidth = rotation === 90 ? height : width;
+  const drawHeight = rotation === 90 ? width : height;
+  drawSpriteByKey(
+    ctx,
+    spriteAtlas,
+    spriteKey,
+    origin.x * TILE_SIZE + (width - drawWidth) * 0.5,
+    origin.y * TILE_SIZE + (height - drawHeight) * 0.5,
+    drawWidth,
+    drawHeight,
+    rotation,
+    deployment
+  );
+}
+
+function drawMaintenanceSocketAnimation(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  facing: SpaceLane,
+  deployment: number,
+  active: boolean,
+  now: number
+): void {
+  if (deployment <= 0.02) return;
+  const origin = fromIndex(module.originTile, state.width);
+  const cx = (origin.x + module.width * 0.5) * TILE_SIZE;
+  const cy = (origin.y + module.height * 0.5) * TILE_SIZE;
+  const bend = active ? Math.sin(now * 2.3 + module.id) * TILE_SIZE * 0.06 : 0;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(laneAngleRad(facing));
+  ctx.strokeStyle = `rgba(244, 188, 82, ${0.2 + deployment * 0.48})`;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(-TILE_SIZE * 0.14, 0);
+  ctx.lineTo(TILE_SIZE * 0.13, bend);
+  ctx.lineTo(TILE_SIZE * (0.2 + deployment * 0.3), 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function renderDockInfrastructureAnimationPass(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number },
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): void {
+  const now = renderClockSeconds();
+  const podShipByModuleId = new Map<number, StationState['arrivingShips'][number]>();
+  const berthShipByModuleId = new Map<number, StationState['arrivingShips'][number]>();
+  for (const ship of state.arrivingShips) {
+    if (ship.assignedDockId !== null) {
+      const dock = state.docks.find((entry) => entry.id === ship.assignedDockId);
+      if (dock?.moduleId !== undefined) podShipByModuleId.set(dock.moduleId, ship);
+    }
+    if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+      const facility = getBerthFacilityAt(state, ship.assignedBerthAnchor);
+      if (!facility) continue;
+      for (const ids of Object.values(facility.serviceModuleIds)) {
+        for (const moduleId of ids ?? []) berthShipByModuleId.set(moduleId, ship);
+      }
+    }
+  }
+
+  for (const module of state.moduleInstances) {
+    if (!module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const podShip = podShipByModuleId.get(module.id) ?? null;
+    const berthShip = berthShipByModuleId.get(module.id) ?? null;
+    const ship = podShip ?? berthShip;
+    const target = infrastructureTargetForShip(ship);
+    const deployment = easedInfrastructureDeployment(module.id, target, now);
+
+    if (module.type === ModuleType.PodDock) {
+      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
+    } else if (module.type === ModuleType.Gangway) {
+      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
+    } else if (module.type === ModuleType.DockingClamp) {
+      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
+    } else if (module.type === ModuleType.MaintenanceSocket) {
+      const dock = state.docks.find((entry) => entry.attachmentModuleIds?.maintenance === module.id);
+      const dockShip = dock ? state.arrivingShips.find((ship) => ship.assignedDockId === dock.id) ?? null : null;
+      const dockActive = dockShip?.stage === 'docked' && shipServiceCompletion(state, dockShip) < 0.995;
+      drawMaintenanceSocketAnimation(ctx, state, module, dock?.facing ?? moduleFacing(module), easedInfrastructureDeployment(module.id, infrastructureTargetForShip(dockShip), now), dockActive, now);
+    }
+  }
+}
+
+function drawFuelTankFillGauges(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const nodeByTile = new Map(state.itemNodes.map((node) => [node.tileIndex, node]));
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.FuelTank || !module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const node = nodeByTile.get(module.originTile);
+    const fill = node && node.capacity > 0 ? clamp01((node.items.fuel ?? 0) / node.capacity) : 0;
+    const origin = fromIndex(module.originTile, state.width);
+    const px = origin.x * TILE_SIZE;
+    const py = origin.y * TILE_SIZE;
+    const w = module.width * TILE_SIZE;
+    const h = module.height * TILE_SIZE;
+    const gaugeW = Math.max(5, Math.round(w * 0.09));
+    const gaugeH = Math.max(16, Math.round(h * 0.52));
+    const gaugeX = px + w - Math.round(w * 0.14) - gaugeW;
+    const gaugeY = py + Math.round((h - gaugeH) * 0.5);
+    const inset = Math.max(1, Math.round(PX));
+    const innerH = Math.max(1, gaugeH - inset * 2);
+    const fillH = Math.round(innerH * fill);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(5, 10, 14, 0.88)';
+    ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
+    ctx.strokeStyle = 'rgba(220, 242, 247, 0.9)';
+    ctx.lineWidth = Math.max(1, Math.round(PX));
+    ctx.strokeRect(gaugeX + 0.5, gaugeY + 0.5, gaugeW - 1, gaugeH - 1);
+    if (fillH > 0) {
+      ctx.fillStyle = fill > 0.5 ? '#63f0b2' : fill > 0.2 ? '#ffd36a' : '#ff7676';
+      ctx.fillRect(gaugeX + inset, gaugeY + gaugeH - inset - fillH, gaugeW - inset * 2, fillH);
+    }
+    ctx.strokeStyle = 'rgba(220, 242, 247, 0.35)';
+    ctx.lineWidth = 1;
+    for (const mark of [0.25, 0.5, 0.75]) {
+      const y = gaugeY + inset + innerH * (1 - mark);
+      ctx.beginPath();
+      ctx.moveTo(gaugeX + inset, y);
+      ctx.lineTo(gaugeX + gaugeW - inset, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawPodDockInformationChips(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  occupied: BerthChipRect[]
+): void {
+  const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.31));
+  const chipHeight = Math.max(20, TILE_SIZE * 0.92);
+  const horizontalPadding = Math.max(10, TILE_SIZE * 0.48);
+  ctx.save();
+  ctx.font = `bold ${fontSize}px monospace`;
+  for (const dock of state.docks) {
+    if (dock.sourceKind !== 'pod-dock-module' || dock.occupiedByShipId === null) continue;
+    const ship = state.arrivingShips.find((entry) => entry.id === dock.occupiedByShipId);
+    if (!ship) continue;
+    const callsign = ship.portManifest?.callsign ?? `POD ${ship.id}`;
+    const services = [
+      'PAX',
+      ...(dock.podCapabilities?.includes('fuel') ? ['FUEL'] : []),
+      ...(dock.podCapabilities?.includes('freight') ? ['CARGO'] : []),
+      ...(dock.podCapabilities?.includes('maintenance') ? ['REPAIR'] : [])
+    ].join(' ');
+    const status = ship.stage === 'approach'
+      ? 'DOCKING'
+      : ship.stage === 'depart'
+        ? 'DEPARTING'
+        : `SERVICE ${Math.round(shipServiceCompletion(state, ship) * 100)}%`;
+    const topLine = `${callsign} | ${ship.shipType.toUpperCase()}`;
+    const bottomLine = `${status} | ${services}`;
+    const width = Math.max(
+      TILE_SIZE * 3.6,
+      Math.min(TILE_SIZE * 7.2, Math.max(ctx.measureText(topLine).width, ctx.measureText(bottomLine).width) + horizontalPadding)
+    );
+    const rect = placeBerthChip(state, dock.tiles, width, chipHeight, occupied);
+    if (rect) drawBerthChip(ctx, rect, topLine, bottomLine, ship.stage === 'depart' ? '#ffd36a' : '#72dff2', 0.94);
   }
   ctx.restore();
 }
@@ -3028,7 +3439,9 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
     };
     return { text: requestText[visitor.activeService], tone: blockedFor >= 6 ? 'negative' : 'neutral' };
   }
-  if (visitor.healthState === 'distressed') return { text: 'The air feels wrong', tone: 'negative' };
+  if (visitor.healthState === 'distressed' && airQualityAt(state, visitor.tileIndex) <= 15) {
+    return { text: 'The air feels wrong', tone: 'negative' };
+  }
 
   const environment = getRoomEnvironmentTileDiagnostic(
     state,
@@ -3106,13 +3519,13 @@ function residentWorldThought(state: StationState, resident: StationState['resid
   if (resident.safety < 35) return "I don't feel safe";
   if (resident.stress > 75) return 'This place is stressful';
   if (resident.social < 30) return 'I need somewhere to relax';
-  if (resident.healthState === 'distressed') return 'The air feels wrong';
+  if (resident.healthState === 'distressed' && airQualityAt(state, resident.tileIndex) <= 15) return 'The air feels wrong';
   return null;
 }
 
 function crewWorldThought(state: StationState, crew: StationState['crewMembers'][number]): string | null {
   if (crew.healthState === 'critical') return 'I need help!';
-  if (crew.healthState === 'distressed') return 'The air feels wrong';
+  if (crew.healthState === 'distressed' && airQualityAt(state, crew.tileIndex) <= 15) return 'The air feels wrong';
   if (crew.resignationNoticeAt !== null) return "I can't keep working like this";
   if (crew.missedPayrollCycles > 0) return "I haven't been paid";
   if (isCrewHoldingProtectedPost(state, crew) && Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < 48) {
@@ -3702,6 +4115,40 @@ function drawWaterPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: Station
   ctx.restore();
 }
 
+function drawFuelPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
+  const diagnostics = getFuelPipeNetworkDiagnostics(state);
+  ctx.save();
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (!hasUtilityUnderlay(state, 'fuel-pipe', i)) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    const componentId = diagnostics.componentIdByTile[i];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+    const powered = component?.powered ?? false;
+    const source = component?.sourceTiles.includes(i) ?? false;
+    const sink = component?.sinkTiles.includes(i) ?? false;
+    ctx.fillStyle = powered ? 'rgba(242, 168, 75, 0.18)' : 'rgba(238, 79, 79, 0.18)';
+    ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    drawUtilityUnderlayDuct(
+      ctx,
+      state,
+      i,
+      'fuel-pipe',
+      powered ? '#f2a84b' : '#ee4f4f',
+      powered ? '#fff0bd' : '#ffd1d1',
+      null,
+      false
+    );
+    if (source || sink) {
+      ctx.strokeStyle = source ? '#74dda0' : powered ? '#fff0bd' : '#ff8b80';
+      ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+      ctx.strokeRect(px + Math.round(4 * PX) + 0.5, py + Math.round(4 * PX) + 0.5, TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX));
+    }
+  }
+  ctx.restore();
+}
+
 function drawAirCoverageUnderlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
   const coverage = getLifeSupportCoverageDiagnostics(state);
   ctx.save();
@@ -3726,6 +4173,7 @@ function drawUtilityUnderlayOverlayLayer(
 ): void {
   drawAirCoverageUnderlayLayer(ctx, state);
   drawWaterPipeOverlayLayer(ctx, state);
+  drawFuelPipeOverlayLayer(ctx, state);
   const diagnostics = getAirDuctNetworkDiagnostics(state);
   if (diagnostics.tileCount <= 0) return;
   const sourceTiles = new Set<number>();
@@ -4632,18 +5080,23 @@ function drawLocalAirWarnings(
       const tile = y * state.width + x;
       if (!isWalkable(state.tiles[tile])) continue;
       const air = state.airQualityByTile[tile];
-      if (!Number.isFinite(air) || air >= 55) continue;
+      // This is the normal world view, not the dedicated Air Coverage overlay.
+      // Reserve the floating O2 badge for an actual local emergency; distant
+      // but breathable tiles are explained by the overlay and HUD warning.
+      if (!Number.isFinite(air) || air >= 12) continue;
       const hasActor = occupied.has(tile);
-      // Unoccupied warnings are deliberately sparse. They communicate that a
-      // room is becoming unsafe without turning the normal view into an air map.
-      if (!hasActor && hashWeatherSeed(tile, state.rooms[tile], 0) % 9 !== 0) continue;
+      // Even a real emergency needs only a sample in the world view. The
+      // overlay carries the full map; these badges point the player toward it.
+      const cadence = Math.floor(state.now / 2.5);
+      const sampleEvery = hasActor ? 4 : 12;
+      if (Math.abs(tile * 19 + cadence) % sampleEvery !== 0) continue;
       candidates.push({ tile, air, occupied: hasActor });
     }
   }
   candidates.sort((a, b) => Number(b.occupied) - Number(a.occupied) || a.air - b.air);
 
   ctx.save();
-  for (const candidate of candidates.slice(0, 24)) {
+  for (const candidate of candidates.slice(0, 12)) {
     const p = fromIndex(candidate.tile, state.width);
     const severity = clamp01((55 - candidate.air) / 55);
     const pulse = 0.72 + Math.sin(state.now * 2.2 + candidate.tile * 0.37) * 0.16;
@@ -4706,6 +5159,17 @@ function drawAgentStatusPip(
   ctx.restore();
 }
 
+// Air coverage is already visible through its overlay and station-level alert.
+// Showing an O2 pip over every recovering actor turns a local emergency into
+// permanent visual noise, so only sample people who are still in poor air.
+function shouldDrawAirDistressPip(state: StationState, actorId: number, tileIndex: number): boolean {
+  const localAir = airQualityAt(state, tileIndex);
+  if (localAir > 15) return false;
+  const cadence = Math.floor(state.now / 2.5);
+  const sampleEvery = localAir <= 8 ? 3 : 5;
+  return Math.abs(actorId * 17 + cadence) % sampleEvery === 0;
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -4750,6 +5214,8 @@ export function renderWorld(
   ctx.restore();
   renderHullWearOverlays(ctx, state, spriteAtlas, useSprites, viewport);
   renderMaintenanceImpacts(ctx, state, spriteAtlas, useSprites, viewport);
+  renderDockInfrastructureAnimationPass(ctx, state, visibleTiles, spriteAtlas, useSprites);
+  drawFuelTankFillGauges(ctx, state, visibleTiles);
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);
@@ -4968,13 +5434,16 @@ export function renderWorld(
     const valid =
       currentTool.utilityErase ||
       canPlaceUtilityUnderlay(state, currentTool.utilityKind ?? 'air-duct', hoveredTile);
+    const isFuelPipe = currentTool.utilityKind === 'fuel-pipe';
     ctx.fillStyle = currentTool.utilityErase
       ? 'rgba(255, 188, 82, 0.24)'
       : valid
-        ? 'rgba(97, 200, 255, 0.26)'
+        ? isFuelPipe ? 'rgba(242, 168, 75, 0.28)' : 'rgba(97, 200, 255, 0.26)'
         : 'rgba(238, 79, 79, 0.26)';
     ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
-    ctx.strokeStyle = valid ? 'rgba(167, 243, 255, 0.95)' : 'rgba(238, 79, 79, 0.95)';
+    ctx.strokeStyle = valid
+      ? isFuelPipe ? 'rgba(255, 240, 189, 0.95)' : 'rgba(167, 243, 255, 0.95)'
+      : 'rgba(238, 79, 79, 0.95)';
     ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
   }
 
@@ -5084,7 +5553,9 @@ export function renderWorld(
       ctx.fill();
     }
     if (v.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
-    else if (v.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if (v.healthState === 'distressed' && shouldDrawAirDistressPip(state, v.id, v.tileIndex)) {
+      drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    }
     else if ((v.serviceBlockedSince ?? state.now) < state.now - 8) drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62');
     // Crowd-loop v1 (B3): storm-offs read as angry at a glance...
     if (angry) {
@@ -5163,7 +5634,9 @@ export function renderWorld(
       ctx.stroke();
     }
     if (r.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
-    else if (r.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if (r.healthState === 'distressed' && shouldDrawAirDistressPip(state, r.id, r.tileIndex)) {
+      drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    }
     else if (r.leaveIntent >= 70 || (r.agitation ?? 0) >= 75) drawAgentStatusPip(ctx, cx, cy, '!', '#ff9d5c');
     const thought = residentWorldThought(state, r);
     const urgent = r.healthState === 'critical' || inConfrontation;
@@ -5224,7 +5697,9 @@ export function renderWorld(
       ctx.fill();
     }
     if (c.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
-    else if (c.healthState === 'distressed') drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    else if (c.healthState === 'distressed' && shouldDrawAirDistressPip(state, c.id, c.tileIndex)) {
+      drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    }
     else if (c.resignationNoticeAt !== null || c.missedPayrollCycles > 0) drawAgentStatusPip(ctx, cx, cy, '$', '#ff9d5c');
     else if (c.energy < 28) drawAgentStatusPip(ctx, cx, cy, 'Z', '#a9b8ff');
     const thought = crewWorldThought(state, c);
@@ -5280,7 +5755,8 @@ export function renderWorld(
     drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
   }
 
-  drawBerthInformationChips(ctx, state);
+  const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);
+  drawPodDockInformationChips(ctx, state, occupiedInfrastructureChips);
   drawPortCargoLots(ctx, state);
 
   drawQueuedShips(ctx, state, spriteAtlas, useSprites);

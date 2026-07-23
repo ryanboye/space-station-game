@@ -12,6 +12,8 @@ export type ModuleDefinition = {
   visitorCapacity?: number;
   residentCapacity?: number;
   reservationCapacity?: number;
+  /** Optional capital price. Unspecified modules retain the footprint fallback. */
+  capitalCost?: number;
 };
 
 const BRIDGE_TERMINAL: ModuleDefinition = {
@@ -214,20 +216,21 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     itemNodeCapacity: 108,
     storageClass: 'ambient'
   },
-  // Dock-migration v0: Berth capability modules. Footprints per scope.
-  // T0 in v0 for testing — production wants Gangway T0, Customs T1,
-  // CargoArm T2 (see MODULE_UNLOCK_TIER in sim/content/unlocks.ts).
+  // Berth capability hardware. Room paint stays free; these capital fixtures
+  // make a berth operational and define what it can service.
   [ModuleType.Gangway]: {
     width: 1,
     height: 1,
     rotatable: false,
-    allowedRooms: [RoomType.Berth]
+    allowedRooms: [RoomType.Berth],
+    capitalCost: 140
   },
   [ModuleType.CustomsCounter]: {
     width: 1,
     height: 1,
     rotatable: false,
-    allowedRooms: [RoomType.Berth]
+    allowedRooms: [RoomType.Berth],
+    capitalCost: 90
   },
   [ModuleType.CargoArm]: {
     width: 2,
@@ -235,15 +238,17 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: false,
     allowedRooms: [RoomType.Berth],
     itemNodeCapacity: 64,
-    storageClass: 'port'
+    storageClass: 'port',
+    capitalCost: 270
   },
   [ModuleType.FuelTank]: {
     width: 2,
     height: 2,
     rotatable: false,
-    allowedRooms: [RoomType.Storage, RoomType.Berth],
+    allowedRooms: [RoomType.Maintenance],
     itemNodeCapacity: 160,
-    storageClass: 'fuel'
+    storageClass: 'fuel',
+    capitalCost: 150
   },
   [ModuleType.FuelPump]: {
     width: 2,
@@ -253,7 +258,54 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     // The small buffer is only a handoff point. Fuel is consumed by the ship
     // as soon as a logistics delivery reaches the pump.
     itemNodeCapacity: 8,
-    storageClass: 'fuel'
+    storageClass: 'fuel',
+    capitalCost: 180
+  },
+  [ModuleType.PodDock]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: null,
+    mount: 'wall',
+    capitalCost: 110
+  },
+  [ModuleType.FuelCoupler]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null,
+    mount: 'wall',
+    capitalCost: 75
+  },
+  [ModuleType.FreightLocker]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: null,
+    mount: 'wall',
+    capitalCost: 85
+  },
+  [ModuleType.MaintenanceSocket]: {
+    width: 2,
+    height: 1,
+    rotatable: true,
+    allowedRooms: null,
+    mount: 'wall',
+    capitalCost: 110
+  },
+  [ModuleType.BerthControl]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Berth],
+    capitalCost: 210
+  },
+  [ModuleType.DockingClamp]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: [RoomType.Berth],
+    capitalCost: 100
   },
   [ModuleType.SecurityCamera]: {
     width: 1,
@@ -357,6 +409,7 @@ export const ROOM_ENVIRONMENT_TRAITS: Record<RoomType, RoomEnvironmentTraits> = 
   [RoomType.Market]: { visitorStatus: 1.25, residentialComfort: 0.25, serviceNoise: 0.25, publicAppeal: 1.35 },
   [RoomType.LogisticsStock]: { visitorStatus: -1.45, residentialComfort: -0.8, serviceNoise: 1.55, publicAppeal: -0.9 },
   [RoomType.Storage]: { visitorStatus: -1.15, residentialComfort: -0.6, serviceNoise: 1.1, publicAppeal: -0.65 },
+  [RoomType.Maintenance]: { visitorStatus: -1.5, residentialComfort: -0.95, serviceNoise: 1.7, publicAppeal: -0.9 },
   [RoomType.Berth]: { visitorStatus: -0.2, residentialComfort: -0.45, serviceNoise: 0.85, publicAppeal: 0.15 },
   [RoomType.Cantina]: { visitorStatus: 1.5, residentialComfort: 0.55, serviceNoise: 0.5, publicAppeal: 1.65 },
   [RoomType.CommercialUnit]: { visitorStatus: 0.1, residentialComfort: 0, serviceNoise: 0, publicAppeal: 0.2 },
@@ -495,6 +548,13 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   [RoomType.Storage]: {
     minTiles: 8,
     requiredModules: [{ module: ModuleType.StorageRack, count: 2 }],
+    requiredAnyOf: [],
+    activationChecks: { door: true, path: true, pressurization: true },
+    staffedPostMode: 'none'
+  },
+  [RoomType.Maintenance]: {
+    minTiles: 6,
+    requiredModules: [{ module: ModuleType.FuelTank, count: 1 }],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'

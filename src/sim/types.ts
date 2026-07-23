@@ -80,6 +80,7 @@ export type UtilityUnderlayKind =
   | 'power-conduit'
   | 'coolant-pipe'
   | 'water-pipe'
+  | 'fuel-pipe'
   | 'data-conduit';
 
 export interface UtilityUnderlayState {
@@ -208,6 +209,7 @@ export enum RoomType {
   Market = 'market',
   LogisticsStock = 'logistics-stock',
   Storage = 'storage',
+  Maintenance = 'maintenance',
   // Berth: dock-migration v0. A regular rectangular room paint that ships
   // dock *inside*. Capability tags are derived from contained modules
   // (Gangway/CustomsCounter/CargoArm) — see `computeBerthCapabilities`
@@ -299,6 +301,15 @@ export enum ModuleType {
   CargoArm = 'cargo-arm',
   FuelTank = 'fuel-tank',
   FuelPump = 'fuel-pump',
+  // Port infrastructure. PodDock owns a small-craft position on an exterior
+  // hull wall; adjacent wall fixtures add dock-side capability. Berth paint
+  // remains free, while BerthControl and DockingClamp make a berth operational.
+  PodDock = 'pod-dock',
+  FuelCoupler = 'fuel-coupler',
+  FreightLocker = 'freight-locker',
+  MaintenanceSocket = 'maintenance-socket',
+  BerthControl = 'berth-control',
+  DockingClamp = 'docking-clamp',
   // SecurityCamera: wall-mounted low-friction surveillance. Adds local
   // control and lowers opacity without the full prestige hit of guards/gates.
   SecurityCamera = 'security-camera',
@@ -1243,6 +1254,34 @@ export type ShipSize = 'small' | 'medium' | 'large';
 
 export type ShipStage = 'approach' | 'docked' | 'depart';
 
+/** Compact dock-side work state for an individual tiny-craft visit. */
+export type SmallCraftServiceKind = 'passenger' | 'refuel' | 'freight' | 'repair';
+export type SmallCraftServiceStatus = 'pending' | 'active' | 'complete' | 'blocked' | 'skipped';
+
+export interface SmallCraftService {
+  kind: SmallCraftServiceKind;
+  status: SmallCraftServiceStatus;
+  /** Normalized 0..1 work completion for concise dock/UI inspection. */
+  progress: number;
+  durationSec: number;
+  elapsedSec: number;
+  blockedReason: string | null;
+  /** Credits earned after this specific service finishes. */
+  creditsEarned: number;
+  /** Station-rating contribution earned after this specific service finishes. */
+  ratingDelta: number;
+  /** Physical units transferred or consumed, where applicable. */
+  transferredUnits: number;
+  freightDirection?: 'import' | 'export';
+}
+
+export interface SmallCraftVisit {
+  dockSourceKey: string;
+  startedAt: number;
+  patienceExpiresAt: number;
+  services: SmallCraftService[];
+}
+
 export type PortTurnaroundPhase = 'inspection' | 'unloading' | 'loading' | 'open' | 'departing';
 
 export interface PortTurnaround {
@@ -1276,6 +1315,8 @@ export interface ArrivingShip {
   lane: SpaceLane;
   originDockId: number | null;
   assignedDockId: number | null;
+  /** Stable dock source for save remapping; runtime dock ids are derived. */
+  assignedDockSourceKey?: string | null;
   queueState: 'none' | 'queued';
   stage: ShipStage;
   stageTime: number;
@@ -1294,6 +1335,8 @@ export interface ArrivingShip {
   portTurnaround?: PortTurnaround;
   /** Accepted operational promise tracked in StationState.portOps. */
   portContractId?: number;
+  /** Present only for small dock visits; absent on berth traffic and old saves. */
+  smallCraftVisit?: SmallCraftVisit;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
@@ -1310,6 +1353,10 @@ export interface CoreState {
 
 export interface DockEntity {
   id: number;
+  /** Legacy tile clusters remain valid while module-backed docks roll out. */
+  sourceKind: 'legacy-tile-cluster' | 'pod-dock-module';
+  /** Stable reconstruction key. Runtime ids may change after a topology edit. */
+  sourceKey: string;
   purpose: DockPurpose;
   tiles: number[];
   anchorTile: number;
@@ -1321,6 +1368,52 @@ export interface DockEntity {
   allowedShipSizes: ShipSize[];
   maxSizeByArea: ShipSize;
   occupiedByShipId: number | null;
+  /** Module-backed docks retain their physical wall mount and interior entry. */
+  moduleId?: number;
+  mountTile?: number;
+  accessTile?: number;
+  podCapabilities?: PodDockCapability[];
+  attachmentModuleIds?: Partial<Record<PodDockCapability, number>>;
+}
+
+export type PodDockCapability = 'fuel' | 'freight' | 'maintenance';
+
+export interface PodDockPlacementView {
+  originTile: number;
+  accessTile: number | null;
+  facing: SpaceLane | null;
+  approachTiles: number[];
+  valid: boolean;
+  reason: string | null;
+}
+
+export interface PodDockAttachmentView {
+  originTile: number;
+  attachment: PodDockCapability;
+  dockModuleId: number | null;
+  dockAnchorTile: number | null;
+  valid: boolean;
+  reason: string | null;
+}
+
+export type BerthGeometryKind = 'u-shaped' | 'legacy-rectangular' | 'invalid';
+
+export interface BerthFacility {
+  anchorTile: number;
+  clusterTiles: number[];
+  size: BerthSizeClass;
+  geometry: BerthGeometryKind;
+  geometryValid: boolean;
+  legacyCompatibility: boolean;
+  spaceExposed: boolean;
+  accessReady: boolean;
+  controlModuleId: number | null;
+  clampModuleIds: number[];
+  clampCapacity: number;
+  capabilities: CapabilityTag[];
+  moduleIdsByCapability: Partial<Record<CapabilityTag, number[]>>;
+  serviceModuleIds: Partial<Record<ModuleType, number[]>>;
+  reasons: string[];
 }
 
 export interface DockConfigView {

@@ -63,7 +63,11 @@ import {
   type TrafficBankKind,
   type CriticalCapacityTargets,
   type BerthConfig,
+  type BerthFacility,
   type DockEntity,
+  type PodDockAttachmentView,
+  type PodDockCapability,
+  type PodDockPlacementView,
   type DockPurpose,
   type DockQueueEntry,
   GRID_HEIGHT,
@@ -133,6 +137,9 @@ import {
   type UtilityUnderlayKind,
   type UtilityUnderlayTileDiagnostic,
   type ShipServiceTag,
+  type SmallCraftService,
+  type SmallCraftServiceKind,
+  type SmallCraftVisit,
   type ShipType,
   type UnlockTier,
   type SpaceLane,
@@ -482,11 +489,11 @@ function cafeteriaServiceStaffInCluster(state: StationState, cluster: number[]):
 }
 
 function cafeteriaServiceRateForCounter(state: StationState, counterTile: number): number {
-  const cluster = clusterForRoomTile(state, RoomType.Cafeteria, counterTile);
-  const staff = cafeteriaServiceStaffInCluster(state, cluster);
-  return staff <= 0
-    ? UNSTAFFED_SELF_SERVICE_RATE
-    : 1 + Math.min(1.2, (staff - 1) * 0.35);
+  // Meal pickup is self-service. Crew still matter for cooking, hauling,
+  // tray recovery, and washing, but they do not gate a stocked counter.
+  void state;
+  void counterTile;
+  return 1;
 }
 
 const BASE_POWER_SUPPLY = 14;
@@ -568,6 +575,10 @@ const BERTH_BASE_PASSENGERS: Record<ShipSize, number> = {
 };
 const DOCK_POD_PASSENGER_MIN = 1;
 const DOCK_POD_PASSENGER_MAX = 2;
+const SMALL_CRAFT_PATIENCE_SEC = 80;
+const SMALL_CRAFT_FUEL_UNITS = 4;
+const SMALL_CRAFT_FREIGHT_UNITS = 4;
+const SMALL_CRAFT_REPAIR_MATERIALS = 2;
 const PAYROLL_PERIOD = 30;
 const PAYROLL_PER_CREW = 1.0; // Crowd-loop v1: wages that can lose money
 const HIRE_COST = 40;
@@ -813,7 +824,20 @@ const VISITOR_PREFERENCE_JITTER = 0.22;
 const DOCK_APPROACH_LENGTH = 4;
 const DOCK_QUEUE_MAX_TIME_SEC = TASK_TIMINGS.dockQueueMaxSec;
 const VISITOR_MIN_STAY_SEC = TASK_TIMINGS.visitorMinStaySec;
-export const STATION_RATING_START = 70;
+// Rating is a cumulative institutional record, not a starting grade. New
+// stations are unknown; capability milestones provide a durable reputation
+// foundation while completed service and failures move the score over time.
+export const STATION_RATING_START = 0;
+const STATION_RATING_TIER_FOUNDATION: Record<UnlockTier, number> = {
+  0: 0,
+  1: 8,
+  2: 18,
+  3: 32,
+  4: 48,
+  5: 65,
+  6: 80
+};
+const CREW_STARTUP_SETTLE_SEC = 45;
 const VISITOR_COMFORT_WALK_THRESHOLD = 30;
 const VISITOR_WALK_PENALTY_RATE = 0.006;
 const VISITOR_WALK_PENALTY_MAX_PER_TRIP = 0.1;
@@ -1145,8 +1169,8 @@ function actorSpeed(baseSpeed: number, actorId: number, salt: number, variance =
   return baseSpeed * (1 + offset);
 }
 
-function initialCrewNeed(actorId: number, salt: number, minimum: number, maximum: number): number {
-  return minimum + deterministicUnit(actorId, salt) * (maximum - minimum);
+function stationRatingFoundation(tier: UnlockTier): number {
+  return STATION_RATING_TIER_FOUNDATION[tier];
 }
 
 function targetChoiceJitter(seed: number | null | undefined, target: number, salt: number, amount = 1.8): number {
@@ -1407,6 +1431,7 @@ function moduleUsageSlotCount(moduleType: ModuleType): number {
     case ModuleType.Bench:
     case ModuleType.BarCounter:
     case ModuleType.MarketStall:
+    case ModuleType.ServingStation:
       return 2;
     default:
       return 1;
@@ -1869,6 +1894,21 @@ function collectServingTargets(state: StationState): number[] {
   return collectServiceTargets(state, RoomType.Cafeteria);
 }
 
+// A serving station stores meals at its origin item node, but its two tiles
+// are two distinct physical pickup positions. Keep inventory and occupancy
+// separate so two customers can collect at once without sharing a tile.
+function collectServingPickupTargets(state: StationState): number[] {
+  return collectModuleUsageTargets(state, ModuleType.ServingStation, RoomType.Cafeteria);
+}
+
+function servingInventoryTileForPickup(state: StationState, pickupTile: number): number {
+  const moduleId = state.moduleOccupancyByTile[pickupTile];
+  const module = moduleId === null
+    ? null
+    : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
+  return module?.type === ModuleType.ServingStation ? module.originTile : pickupTile;
+}
+
 function collectColdFoodTargets(state: StationState): number[] {
   const cold = [
     ...collectModuleAnchors(state, ModuleType.ColdStore, RoomType.Kitchen),
@@ -1990,7 +2030,7 @@ export function collectQueueTargets(state: StationState, room: RoomType): number
   if (state.derived.cacheVersions.queueTargetsVersion === version) {
     return state.derived.queueTargets;
   }
-  const serviceTargets = collectServingTargets(state);
+  const serviceTargets = collectServingPickupTargets(state);
   if (serviceTargets.length === 0) {
     state.derived.queueTargets = [];
     state.derived.queueTargetSet.clear();
@@ -2179,16 +2219,20 @@ function roomClusterAnchors(state: StationState, room: RoomType): number[] {
 }
 
 function ensureDockEntitiesUpToDate(state: StationState): void {
-  if (state.derived.cacheVersions.dockEntitiesTopologyVersion === state.topologyVersion) return;
+  const version = state.topologyVersion * 1_000_000 + state.moduleVersion;
+  if (state.derived.cacheVersions.dockEntitiesTopologyVersion === version) return;
   rebuildDockEntities(state);
-  state.derived.cacheVersions.dockEntitiesTopologyVersion = state.topologyVersion;
+  state.derived.cacheVersions.dockEntitiesTopologyVersion = version;
 }
 
 export function ensureDockByTileCache(state: StationState): void {
+  ensureDockEntitiesUpToDate(state);
   if (state.derived.cacheVersions.dockByTileDockVersion === state.dockVersion) return;
   state.derived.dockByTile.clear();
   for (const dock of state.docks) {
     for (const tile of dock.tiles) state.derived.dockByTile.set(tile, dock);
+    if (dock.mountTile !== undefined) state.derived.dockByTile.set(dock.mountTile, dock);
+    if (dock.accessTile !== undefined) state.derived.dockByTile.set(dock.accessTile, dock);
   }
   state.derived.cacheVersions.dockByTileDockVersion = state.dockVersion;
 }
@@ -2803,6 +2847,29 @@ function waterSourceTiles(state: StationState): number[] {
   return [...new Set([...lifeSupportTiles, ...valveTiles])].filter((tile) => hasUtilityUnderlay(state, 'water-pipe', tile));
 }
 
+function fuelTankSourceTiles(state: StationState): number[] {
+  return state.moduleInstances
+    .filter((module) => module.type === ModuleType.FuelTank && state.rooms[module.originTile] === RoomType.Maintenance)
+    .map((module) => module.originTile)
+    .filter((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile));
+}
+
+function fuelCouplerServiceTiles(state: StationState): number[] {
+  return state.moduleInstances
+    .filter((module) => module.type === ModuleType.FuelCoupler)
+    .map((module) => wallMountedModuleServiceTile(state, module.originTile))
+    .filter((tile): tile is number => tile !== null);
+}
+
+export function getFuelPipeNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
+  const sources = fuelTankSourceTiles(state);
+  const sinks = fuelCouplerServiceTiles(state).filter((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile));
+  return discoverUtilityNetworks(state, 'fuel-pipe', {
+    sourceTiles: sources,
+    sinkTiles: sinks
+  });
+}
+
 export function getWaterPipeNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
   const sources = waterSourceTiles(state);
   const sinks = waterFixtureTiles(state).filter((tile) => hasUtilityUnderlay(state, 'water-pipe', tile));
@@ -2857,7 +2924,66 @@ export function getUtilityUnderlayTileDiagnostic(
 ): UtilityUnderlayTileDiagnostic | null {
   if (!inBounds(x, y, state.width, state.height)) return null;
   const tileIndex = toIndex(x, y, state.width);
-  const selectedKind = kind ?? (hasUtilityUnderlay(state, 'water-pipe', tileIndex) && !hasUtilityUnderlay(state, 'air-duct', tileIndex) ? 'water-pipe' : 'air-duct');
+  const selectedKind = kind ?? (
+    hasUtilityUnderlay(state, 'fuel-pipe', tileIndex)
+      ? 'fuel-pipe'
+      : hasUtilityUnderlay(state, 'water-pipe', tileIndex) && !hasUtilityUnderlay(state, 'air-duct', tileIndex)
+        ? 'water-pipe'
+        : 'air-duct'
+  );
+  if (selectedKind === 'fuel-pipe') {
+    const diagnostics = getFuelPipeNetworkDiagnostics(state);
+    const present = hasUtilityUnderlay(state, 'fuel-pipe', tileIndex);
+    const componentId = diagnostics.componentIdByTile[tileIndex];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : null;
+    const source = fuelTankSourceTiles(state).includes(tileIndex);
+    const sink = fuelCouplerServiceTiles(state).includes(tileIndex);
+    const powered = component?.powered ?? false;
+    const buildable = present || canPlaceUtilityUnderlay(state, 'fuel-pipe', tileIndex);
+    let reason = 'empty utility underlay';
+    let effect = 'no fuel line here';
+    let fix = 'draw Fuel Pipe from a Maintenance Fuel Tank to a Fuel Coupler';
+    if (!buildable && !present) {
+      reason = 'not a pipeable underfloor tile';
+      effect = 'fuel lines stay inside the station hull';
+      fix = 'paint Fuel Pipe beneath interior floors and the coupler service tile';
+    } else if (present && source && powered) {
+      reason = 'connected Maintenance Fuel Tank';
+      effect = 'stored propellant can feed this fuel network';
+      fix = 'connect the line to one or more Fuel Couplers';
+    } else if (present && sink && powered) {
+      reason = 'supplied Fuel Coupler connection';
+      effect = 'small craft can refuel at the attached Pod Dock';
+      fix = 'keep the connected Fuel Tank stocked';
+    } else if (present && sink) {
+      reason = 'dry Fuel Coupler connection';
+      effect = 'the coupler has no connected Maintenance Fuel Tank';
+      fix = 'connect this Fuel Pipe back to a tank in a Maintenance room';
+    } else if (present && powered) {
+      reason = 'pressurized fuel segment';
+      effect = 'carries propellant from a Maintenance Fuel Tank';
+      fix = 'extend the line to a Fuel Coupler service tile';
+    } else if (present) {
+      reason = 'disconnected fuel segment';
+      effect = 'no Maintenance Fuel Tank reaches this line';
+      fix = 'connect it to Fuel Pipe beneath a Maintenance Fuel Tank';
+    }
+    return {
+      tileIndex,
+      kind: 'fuel-pipe',
+      present,
+      buildable,
+      neighborMask: utilityUnderlayNeighborMask(state, 'fuel-pipe', tileIndex),
+      componentId: componentId >= 0 ? componentId : null,
+      powered,
+      source,
+      sink,
+      disconnected: present && !powered,
+      reason,
+      effect,
+      fix
+    };
+  }
   if (selectedKind === 'water-pipe') {
     const diagnostics = getWaterPipeNetworkDiagnostics(state);
     const present = hasUtilityUnderlay(state, 'water-pipe', tileIndex);
@@ -4689,6 +4815,109 @@ function dockFacingOutward(state: StationState, tileIndex: number, lane: SpaceLa
   return p.x > 0 && state.tiles[toIndex(p.x - 1, p.y, state.width)] === TileType.Space;
 }
 
+const POD_DOCK_ATTACHMENT_CAPABILITY: Partial<Record<ModuleType, PodDockCapability>> = {
+  [ModuleType.FuelCoupler]: 'fuel',
+  [ModuleType.FreightLocker]: 'freight',
+  [ModuleType.MaintenanceSocket]: 'maintenance'
+};
+
+function oppositeLane(lane: SpaceLane): SpaceLane {
+  if (lane === 'north') return 'south';
+  if (lane === 'south') return 'north';
+  if (lane === 'east') return 'west';
+  return 'east';
+}
+
+function laneNeighbor(state: StationState, tileIndex: number, lane: SpaceLane): number | null {
+  const point = fromIndex(tileIndex, state.width);
+  const step = laneStep(lane);
+  const x = point.x + step.dx;
+  const y = point.y + step.dy;
+  return inBounds(x, y, state.width, state.height) ? toIndex(x, y, state.width) : null;
+}
+
+/**
+ * A Pod Dock has one pressurized-side access tile and one exterior-facing
+ * approach. It is intentionally a wall module rather than a Dock tile so a
+ * later renderer can draw a substantial exterior hull attachment.
+ */
+export function getPodDockPlacementView(state: StationState, originTile: number): PodDockPlacementView {
+  if (originTile < 0 || originTile >= state.tiles.length || state.tiles[originTile] !== TileType.Wall) {
+    return { originTile, accessTile: null, facing: null, approachTiles: [], valid: false, reason: 'pod dock requires an exterior hull wall' };
+  }
+  const outward = (['north', 'east', 'south', 'west'] as SpaceLane[]).filter((lane) => {
+    const neighbor = laneNeighbor(state, originTile, lane);
+    return neighbor === null || state.tiles[neighbor] === TileType.Space;
+  });
+  if (outward.length !== 1) {
+    return { originTile, accessTile: null, facing: null, approachTiles: [], valid: false, reason: 'pod dock needs one unambiguous exterior face' };
+  }
+  const facing = outward[0];
+  const accessTile = laneNeighbor(state, originTile, oppositeLane(facing));
+  if (accessTile === null || !isWalkable(state.tiles[accessTile])) {
+    return { originTile, accessTile: null, facing, approachTiles: [], valid: false, reason: 'pod dock needs a station interior access tile' };
+  }
+  const dockCheck = validateDockPlacementAt(state, originTile, facing);
+  if (!dockCheck.valid) {
+    return { originTile, accessTile, facing, approachTiles: dockCheck.approachTiles, valid: false, reason: dockCheck.reason };
+  }
+  return { originTile, accessTile, facing, approachTiles: dockCheck.approachTiles, valid: true, reason: null };
+}
+
+function podDockAttachmentCandidates(state: StationState, originTile: number): Array<{ moduleId: number; originTile: number; facing: SpaceLane }> {
+  const attachment = getPodDockPlacementView(state, originTile);
+  if (!attachment.valid || attachment.facing === null) return [];
+  const attachmentPoint = fromIndex(originTile, state.width);
+  return state.moduleInstances.flatMap((module) => {
+    if (module.type !== ModuleType.PodDock) return [];
+    const dock = getPodDockPlacementView(state, module.originTile);
+    const facing = dock.facing;
+    if (!dock.valid || facing === null || facing !== attachment.facing) return [];
+    const dockPoint = fromIndex(module.originTile, state.width);
+    const aligned = attachment.facing === 'north' || attachment.facing === 'south'
+      ? dockPoint.y === attachmentPoint.y && Math.abs(dockPoint.x - attachmentPoint.x) <= 2
+      : dockPoint.x === attachmentPoint.x && Math.abs(dockPoint.y - attachmentPoint.y) <= 2;
+    return aligned ? [{ moduleId: module.id, originTile: module.originTile, facing }] : [];
+  });
+}
+
+export function getPodDockAttachmentView(
+  state: StationState,
+  module: ModuleType,
+  originTile: number
+): PodDockAttachmentView {
+  const attachment = POD_DOCK_ATTACHMENT_CAPABILITY[module];
+  if (!attachment) {
+    return { originTile, attachment: 'fuel', dockModuleId: null, dockAnchorTile: null, valid: false, reason: 'module is not a pod dock attachment' };
+  }
+  const candidates = podDockAttachmentCandidates(state, originTile);
+  if (candidates.length !== 1) {
+    return {
+      originTile,
+      attachment,
+      dockModuleId: null,
+      dockAnchorTile: null,
+      valid: false,
+      reason: candidates.length === 0 ? 'attachment needs a nearby pod dock on the same hull face' : 'attachment is ambiguous between pod docks'
+    };
+  }
+  const dock = candidates[0];
+  const duplicate = state.moduleInstances.some((instance) =>
+    instance.type === module && instance.id !== state.moduleOccupancyByTile[originTile] &&
+    podDockAttachmentCandidates(state, instance.originTile).some((candidate) => candidate.moduleId === dock.moduleId)
+  );
+  if (duplicate) {
+    return { originTile, attachment, dockModuleId: dock.moduleId, dockAnchorTile: dock.originTile, valid: false, reason: 'pod dock already has this attachment' };
+  }
+  return { originTile, attachment, dockModuleId: dock.moduleId, dockAnchorTile: dock.originTile, valid: true, reason: null };
+}
+
+export function validatePortModulePlacement(state: StationState, module: ModuleType, originTile: number): string | null {
+  if (module === ModuleType.PodDock) return getPodDockPlacementView(state, originTile).reason;
+  if (POD_DOCK_ATTACHMENT_CAPABILITY[module]) return getPodDockAttachmentView(state, module, originTile).reason;
+  return null;
+}
+
 function isOuterHullTile(state: StationState, tileIndex: number): boolean {
   const p = fromIndex(tileIndex, state.width);
   const deltas = [
@@ -6010,14 +6239,14 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     staffRole: 'assistant',
     targetTile: null,
     retargetAt: 0,
-    // Crew arrive ready for duty, but not on identical biological clocks. This
-    // keeps a hiring batch from creating one synchronized restroom/drink rush.
-    energy: initialCrewNeed(id, 111, 80, 100),
-    hunger: initialCrewNeed(id, 115, 58, 96),
-    hygiene: initialCrewNeed(id, 112, 70, 96),
-    bladder: initialCrewNeed(id, 113, 55, 95),
-    thirst: initialCrewNeed(id, 114, 55, 96),
-    morale: 78,
+    // New hires arrive prepared for a full watch. The opening should let the
+    // player establish the station before ordinary needs create pressure.
+    energy: 100,
+    hunger: 100,
+    hygiene: 100,
+    bladder: 100,
+    thirst: 100,
+    morale: 100,
     missedPayrollCycles: 0,
     needsStrainSec: 0,
     resignationNoticeAt: null,
@@ -6405,9 +6634,15 @@ function ensureResidentPopulation(_state: StationState): void {
 
 export function rebuildDockEntities(state: StationState): void {
   const byAnyTile = new Map<number, DockEntity>();
+  const bySourceKey = new Map<string, DockEntity>();
   const next: DockEntity[] = [];
   for (const dock of state.docks) {
-    for (const tile of dock.tiles) byAnyTile.set(tile, dock);
+    const sourceKind = dock.sourceKind ?? 'legacy-tile-cluster';
+    const sourceKey = dock.sourceKey ?? (sourceKind === 'pod-dock-module' ? `pod-dock:${dock.moduleId ?? dock.anchorTile}` : `legacy-dock:${dock.anchorTile}`);
+    bySourceKey.set(sourceKey, dock);
+    if (sourceKind === 'legacy-tile-cluster') {
+      for (const tile of dock.tiles) byAnyTile.set(tile, dock);
+    }
   }
   let maxId = state.docks.reduce((best, dock) => Math.max(best, dock.id), 0);
   // Track inherited ids that have already been consumed by a new cluster.
@@ -6441,6 +6676,8 @@ export function rebuildDockEntities(state: StationState): void {
     consumedIds.add(newId);
     next.push({
       id: newId,
+      sourceKind: 'legacy-tile-cluster',
+      sourceKey: `legacy-dock:${anchorTile}`,
       purpose: inheritedMeta?.purpose ?? 'visitor',
       tiles: cluster,
       anchorTile,
@@ -6454,8 +6691,62 @@ export function rebuildDockEntities(state: StationState): void {
       occupiedByShipId: inheritedId !== null ? (inheritedMeta?.occupiedByShipId ?? null) : null
     });
   }
+
+  // Module-backed pod docks are intentionally derived alongside, rather than
+  // replacing, the legacy Dock-tile registry. This keeps existing saves and
+  // room stamps live while new stations use physical hull hardware.
+  const podModules = state.moduleInstances
+    .filter((module) => module.type === ModuleType.PodDock)
+    .sort((a, b) => a.id - b.id);
+  for (const module of podModules) {
+    const placement = getPodDockPlacementView(state, module.originTile);
+    if (!placement.valid || placement.facing === null || placement.accessTile === null) continue;
+    const sourceKey = `pod-dock:${module.id}`;
+    const inherited = bySourceKey.get(sourceKey);
+    const inheritedId = inherited && !consumedIds.has(inherited.id) ? inherited.id : null;
+    const newId = inheritedId ?? ++maxId;
+    consumedIds.add(newId);
+    const attachmentModuleIds: Partial<Record<PodDockCapability, number>> = {};
+    for (const attachment of state.moduleInstances) {
+      const capability = POD_DOCK_ATTACHMENT_CAPABILITY[attachment.type];
+      if (!capability) continue;
+      const owner = getPodDockAttachmentView(state, attachment.type, attachment.originTile);
+      if (owner.valid && owner.dockModuleId === module.id) attachmentModuleIds[capability] = attachment.id;
+    }
+    const podCapabilities = Object.keys(attachmentModuleIds) as PodDockCapability[];
+    next.push({
+      id: newId,
+      sourceKind: 'pod-dock-module',
+      sourceKey,
+      purpose: inherited?.purpose ?? 'visitor',
+      tiles: [...module.tiles],
+      anchorTile: module.originTile,
+      area: module.tiles.length,
+      facing: placement.facing,
+      lane: laneFromFacing(placement.facing),
+      approachTiles: placement.approachTiles,
+      allowedShipTypes: inherited?.allowedShipTypes?.length ? [...inherited.allowedShipTypes] : ['tourist', 'trader'],
+      allowedShipSizes: ['small'],
+      maxSizeByArea: 'small',
+      occupiedByShipId: inheritedId !== null ? (inherited?.occupiedByShipId ?? null) : null,
+      moduleId: module.id,
+      mountTile: module.originTile,
+      accessTile: placement.accessTile,
+      podCapabilities,
+      attachmentModuleIds
+    });
+  }
   const existingIds = new Set(next.map((d) => d.id));
-  state.arrivingShips = state.arrivingShips.filter((ship) => ship.assignedDockId === null || existingIds.has(ship.assignedDockId));
+  for (const ship of state.arrivingShips) {
+    if (ship.assignedDockId === null || existingIds.has(ship.assignedDockId)) continue;
+    // A removed module dock must not silently bind a ship to a different hull
+    // mount on the next rebuild. There is no holding stage in this legacy ship
+    // state machine, so release it as an unassigned departure instead.
+    ship.assignedDockId = null;
+    ship.assignedDockSourceKey = null;
+    ship.stage = 'depart';
+    ship.stageTime = 0;
+  }
   state.dockQueue = state.dockQueue.filter((entry) =>
     next.some(
       (d) =>
@@ -6467,7 +6758,7 @@ export function rebuildDockEntities(state: StationState): void {
   );
   state.docks = next;
   bumpDockVersion(state);
-  state.derived.cacheVersions.dockEntitiesTopologyVersion = state.topologyVersion;
+  state.derived.cacheVersions.dockEntitiesTopologyVersion = state.topologyVersion * 1_000_000 + state.moduleVersion;
 }
 
 // ---------------------------------------------------------------------------
@@ -6541,25 +6832,139 @@ export function validateBerthModulePlacement(state: StationState, module: Module
   if (module === ModuleType.FuelPump && !tiles.some((tile) => tileTouchesWallOrSpace(state, tile))) {
     return 'fuel pump must sit on a berth edge';
   }
-  return null;
-}
-
-function computeBerthCapabilities(state: StationState, clusterTiles: number[]): CapabilityTag[] {
-  const tileSet = new Set(clusterTiles);
-  const tags = new Set<CapabilityTag>();
-  for (const m of state.moduleInstances) {
-    const tag = MODULE_CAPABILITY_TAGS[m.type];
-    if (!tag) continue;
-    // Any module footprint tile inside the berth contributes its tag.
-    if (m.tiles.some((t) => tileSet.has(t))) {
-      tags.add(tag);
-    }
+  if (module === ModuleType.DockingClamp && !tiles.some((tile) => tileTouchesWallOrSpace(state, tile))) {
+    return 'docking clamp must sit on a berth service rail';
   }
-  return [...tags];
+  return null;
 }
 
 function berthHasSpaceExposure(state: StationState, clusterTiles: number[]): boolean {
   return clusterTiles.some((tile) => tileTouchesSpace(state, tile));
+}
+
+function berthClusterIsUShaped(state: StationState, clusterTiles: number[]): boolean {
+  if (clusterTiles.length === 0) return false;
+  const facing = deriveBerthFacing(state, clusterTiles);
+  if (facing === null) return false;
+  const points = clusterTiles.map((tile) => fromIndex(tile, state.width));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const horizontalOpening = facing === 'north' || facing === 'south';
+  const breadth = horizontalOpening ? maxX - minX + 1 : maxY - minY + 1;
+  const depth = horizontalOpening ? maxY - minY + 1 : maxX - minX + 1;
+  // Two rear rows make room for the 2x2 Berth Control. The remaining depth
+  // is the open vessel bay bordered by one-tile service rails.
+  if (breadth < 3 || depth < 4) return false;
+  const expected = new Set<number>();
+  const openAtMin = facing === 'north' || facing === 'west';
+  for (let d = 0; d < depth; d++) {
+    const axis = openAtMin ? d : depth - 1 - d;
+    for (let b = 0; b < breadth; b++) {
+      // The rear platform closes the U; the two side rails leave the vessel
+      // bay open while retaining a chunky interior space for control hardware.
+      if (d < depth - 2 && b !== 0 && b !== breadth - 1) continue;
+      const x = horizontalOpening ? minX + b : minX + axis;
+      const y = horizontalOpening ? minY + axis : minY + b;
+      expected.add(toIndex(x, y, state.width));
+    }
+  }
+  return expected.size === clusterTiles.length && clusterTiles.every((tile) => expected.has(tile));
+}
+
+function berthModuleInstances(state: StationState, clusterTiles: number[]) {
+  const cluster = new Set(clusterTiles);
+  return state.moduleInstances.filter((module) => module.tiles.some((tile) => cluster.has(tile)));
+}
+
+function berthAccessReady(state: StationState, clusterTiles: number[]): boolean {
+  const cluster = new Set(clusterTiles);
+  return clusterTiles.some((tile) =>
+    adjacentWalkableTiles(state, tile).some((neighbor) => !cluster.has(neighbor) && state.pressurized[neighbor])
+  );
+}
+
+function deriveBerthFacilityForCluster(state: StationState, clusterTiles: number[]): BerthFacility {
+  const anchorTile = clusterTiles.reduce((best, tile) => Math.min(best, tile), clusterTiles[0] ?? 0);
+  const modules = berthModuleInstances(state, clusterTiles);
+  const capabilities = new Set<CapabilityTag>();
+  const moduleIdsByCapability: Partial<Record<CapabilityTag, number[]>> = {};
+  const serviceModuleIds: Partial<Record<ModuleType, number[]>> = {};
+  for (const module of modules) {
+    serviceModuleIds[module.type] ??= [];
+    serviceModuleIds[module.type]!.push(module.id);
+    const capability = MODULE_CAPABILITY_TAGS[module.type];
+    if (!capability) continue;
+    capabilities.add(capability);
+    moduleIdsByCapability[capability] ??= [];
+    moduleIdsByCapability[capability]!.push(module.id);
+  }
+  const controlModuleId = serviceModuleIds[ModuleType.BerthControl]?.[0] ?? null;
+  const clampModuleIds = [...(serviceModuleIds[ModuleType.DockingClamp] ?? [])];
+  const hasLegacyHardware = modules.some((module) =>
+    module.type === ModuleType.Gangway ||
+    module.type === ModuleType.CustomsCounter ||
+    module.type === ModuleType.CargoArm ||
+    module.type === ModuleType.FuelPump ||
+    module.type === ModuleType.FuelTank
+  );
+  const uShaped = berthClusterIsUShaped(state, clusterTiles);
+  // Old saves do not retain a facility identity or a construction timestamp.
+  // Their authored berth paint is often a clipped rectangle around hull art,
+  // so legacy detection keys off pre-existing berth hardware rather than an
+  // exact tile rectangle. A blank newly painted zone still remains invalid.
+  const legacyCompatibility = !controlModuleId && clampModuleIds.length === 0 && hasLegacyHardware;
+  const geometry: BerthFacility['geometry'] = uShaped
+    ? 'u-shaped'
+    : legacyCompatibility ? 'legacy-rectangular' : 'invalid';
+  const spaceExposed = berthHasSpaceExposure(state, clusterTiles);
+  const accessReady = berthAccessReady(state, clusterTiles);
+  const reasons: string[] = [];
+  if (!spaceExposed) reasons.push('berth needs one edge open to space');
+  if (geometry === 'invalid') reasons.push('berth needs a U-shaped service deck or a legacy rectangular adapter');
+  if (!legacyCompatibility && !accessReady) reasons.push('berth needs a pressurized station-side access route');
+  if (!legacyCompatibility && controlModuleId === null) reasons.push('berth needs a berth control unit');
+  return {
+    anchorTile,
+    clusterTiles: [...clusterTiles],
+    size: berthSizeClassForArea(clusterTiles.length),
+    geometry,
+    geometryValid: geometry !== 'invalid' && spaceExposed && (legacyCompatibility || accessReady),
+    legacyCompatibility,
+    spaceExposed,
+    accessReady,
+    controlModuleId,
+    clampModuleIds,
+    clampCapacity: clampModuleIds.length,
+    capabilities: [...capabilities],
+    moduleIdsByCapability,
+    serviceModuleIds,
+    reasons
+  };
+}
+
+export function getBerthFacilityAt(state: StationState, tileIndex: number): BerthFacility | null {
+  if (tileIndex < 0 || tileIndex >= state.rooms.length || state.rooms[tileIndex] !== RoomType.Berth) return null;
+  ensureRoomClustersCache(state);
+  const meta = state.derived.clusterByTile.get(tileIndex);
+  if (!meta || meta.room !== RoomType.Berth) return null;
+  return deriveBerthFacilityForCluster(state, meta.cluster);
+}
+
+function computeBerthCapabilities(state: StationState, clusterTiles: number[]): CapabilityTag[] {
+  return deriveBerthFacilityForCluster(state, clusterTiles).capabilities;
+}
+
+function berthHardwareReason(facility: BerthFacility, shipSize: ShipSize): string | null {
+  if (!facility.geometryValid) return facility.reasons[0] ?? 'berth geometry is incomplete';
+  if (facility.legacyCompatibility) return null;
+  if (facility.controlModuleId === null) return 'berth needs a berth control unit';
+  const requiredClamps = shipSize === 'large' ? 5 : shipSize === 'medium' ? 2 : 0;
+  if (facility.clampCapacity < requiredClamps) {
+    return `berth needs ${requiredClamps} docking clamps (${facility.clampCapacity} installed)`;
+  }
+  return null;
 }
 
 export interface BerthCandidate {
@@ -6569,6 +6974,7 @@ export interface BerthCandidate {
   spaceExposed: boolean;
   capabilities: CapabilityTag[];
   occupiedByShipId: number | null;
+  facility: BerthFacility;
 }
 
 function listBerthCandidates(state: StationState): BerthCandidate[] {
@@ -6584,13 +6990,15 @@ function listBerthCandidates(state: StationState): BerthCandidate[] {
   for (const cluster of clusters) {
     if (cluster.length === 0) continue;
     const anchor = cluster.reduce((best, t) => (t < best ? t : best), cluster[0]);
+    const facility = deriveBerthFacilityForCluster(state, cluster);
     out.push({
       anchorTile: anchor,
       tiles: cluster,
-      size: berthSizeClassForArea(cluster.length),
-      spaceExposed: berthHasSpaceExposure(state, cluster),
-      capabilities: computeBerthCapabilities(state, cluster),
-      occupiedByShipId: occupiedByAnchor.get(anchor) ?? null
+      size: facility.size,
+      spaceExposed: facility.spaceExposed,
+      capabilities: facility.capabilities,
+      occupiedByShipId: occupiedByAnchor.get(anchor) ?? null,
+      facility
     });
   }
   return out;
@@ -6622,6 +7030,7 @@ export function pickBerthForShip(
     .filter((b) => b.occupiedByShipId === null)
     .filter((b) => shipSizeFitsBerth(shipSize, b.size))
     .filter((b) => b.spaceExposed)
+    .filter((b) => berthHardwareReason(b.facility, shipSize) === null)
     .filter((b) => isCapabilitySuperset(b.capabilities, required))
     // Per-berth player allowlist (dock-modal parity follow-up): a
     // berth with no config row defaults to "all allowed" (legacy
@@ -6684,6 +7093,8 @@ export interface BerthInspector {
   // residential berths for crew-shuttle traffic, at which point this
   // becomes a stored field. UI shows it info-only with the v0 caveat.
   purpose: DockPurpose;
+  /** Full physical readiness view for the modular berth follow-up UI. */
+  facility: BerthFacility;
 }
 
 export function getBerthInspectorAt(state: StationState, tileIndex: number): BerthInspector | null {
@@ -6693,10 +7104,11 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
   const meta = state.derived.clusterByTile.get(tileIndex);
   if (!meta || meta.room !== RoomType.Berth) return null;
   const cluster = meta.cluster;
-  const capabilities = computeBerthCapabilities(state, cluster);
-  const size = berthSizeClassForArea(cluster.length);
-  const anchorTile = cluster.reduce((best, t) => (t < best ? t : best), cluster[0]);
-  const spaceExposed = berthHasSpaceExposure(state, cluster);
+  const facility = deriveBerthFacilityForCluster(state, cluster);
+  const capabilities = facility.capabilities;
+  const size = facility.size;
+  const anchorTile = facility.anchorTile;
+  const spaceExposed = facility.spaceExposed;
   const accepted: ShipType[] = [];
   const rejected: Array<{ shipType: ShipType; missing: CapabilityTag[] }> = [];
   const shipTypes: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
@@ -6742,7 +7154,8 @@ export function getBerthInspectorAt(state: StationState, tileIndex: number): Ber
     serviceLastDelta: cfg?.serviceLastDelta ?? 0,
     servicePayoutMultiplier: berthServicePayoutMultiplier(serviceScore),
     derivedFacing: deriveBerthFacing(state, cluster),
-    purpose: 'visitor'
+    purpose: 'visitor',
+    facility
   };
 }
 
@@ -6799,10 +7212,14 @@ function describeMissingCapabilities(
   if (exposed.length === 0) {
     return `${shipType} ship waiting - berth needs one edge open to space`;
   }
+  const hardwareReady = exposed.filter((candidate) => berthHardwareReason(candidate.facility, shipSize) === null);
+  if (hardwareReady.length === 0) {
+    return `${shipType} ship waiting - ${berthHardwareReason(exposed[0].facility, shipSize) ?? 'berth infrastructure incomplete'}`;
+  }
   if (required.length === 0) return null;
   // Find the closest-by-capability berth and report missing tags.
   let bestMissing: CapabilityTag[] | null = null;
-  for (const cand of exposed) {
+  for (const cand of hardwareReady) {
     const missing = required.filter((t) => !cand.capabilities.includes(t));
     if (bestMissing === null || missing.length < bestMissing.length) {
       bestMissing = missing;
@@ -6958,6 +7375,10 @@ function dockCenter(state: StationState, dock: DockEntity): { x: number; y: numb
   };
 }
 
+function dockAccessTiles(dock: DockEntity): number[] {
+  return dock.accessTile === undefined ? dock.tiles : [dock.accessTile];
+}
+
 function spawnResidentHomeShipAtDock(
   state: StationState,
   dock: DockEntity,
@@ -6972,13 +7393,14 @@ function spawnResidentHomeShipAtDock(
     id: shipId,
     kind: 'resident_home',
     size: 'small',
-    bayTiles: [...dock.tiles],
+    bayTiles: dockAccessTiles(dock),
     bayCenterX: center.x,
     bayCenterY: center.y,
     shipType,
     lane: dock.lane,
     originDockId: dock.id,
     assignedDockId: dock.id,
+    assignedDockSourceKey: dock.sourceKey,
     assignedBerthAnchor: null,
     queueState: 'none',
     stage: 'docked',
@@ -7008,7 +7430,8 @@ function moveShipToDock(state: StationState, ship: ArrivingShip, dock: DockEntit
   dock.occupiedByShipId = ship.id;
   const center = dockCenter(state, dock);
   ship.assignedDockId = dock.id;
-  ship.bayTiles = [...dock.tiles];
+  ship.assignedDockSourceKey = dock.sourceKey;
+  ship.bayTiles = dockAccessTiles(dock);
   ship.bayCenterX = center.x;
   ship.bayCenterY = center.y;
   ship.lane = dock.lane;
@@ -7043,7 +7466,7 @@ function maybeMoveInResident(state: StationState): void {
     noteResidentConversionResult(state, 'blocked: no free residential berth');
     return;
   }
-  const startTile = dock.tiles[0] ?? dock.anchorTile;
+  const startTile = dockAccessTiles(dock)[0] ?? dock.anchorTile;
   const housing = pickPrivateHousingUnitForResident(state, startTile);
   if (!housing) {
     noteResidentConversionResult(state, 'blocked: no available private resident bed with hygiene path');
@@ -9342,10 +9765,9 @@ function hasActiveMealPickupReservation(
   );
 }
 
-const SERVE_INTERACTION_SEC = 2.4;
-const UNSTAFFED_SELF_SERVICE_RATE = 0.35;
-// The provider target is one physical tile. Advertising two simultaneous users
-// here strands the second visitor behind actor occupancy on that same tile.
+// A stocked counter is a quick grab, not a bar-service interaction. Keep a
+// short beat for readability, but never let the animation become the queue.
+const SERVE_INTERACTION_SEC = 0.25;
 const MEAL_PICKUP_PROVIDER_CAPACITY = 1;
 const CANTINA_PICKUP_PROVIDER_CAPACITY = 1;
 const CANTINA_PICKUP_INTERACTION_SEC = 2.8;
@@ -9396,8 +9818,8 @@ function mealPickupCapacityForStock(stock: number): number {
 
 function hasUnreservedServingMeal(state: StationState): boolean {
   const reservedByTile = countReservedServingTargets(state);
-  for (const target of collectServingTargets(state)) {
-    const stock = servableMealsAtNode(state, target);
+  for (const target of collectServingPickupTargets(state)) {
+    const stock = servableMealsAtNode(state, servingInventoryTileForPickup(state, target));
     const reserved = reservedByTile.get(target) ?? 0;
     if (mealPickupCapacityForStock(stock) > reserved) return true;
   }
@@ -9478,7 +9900,7 @@ function pickServingStationPath(
   intent: PathIntent = 'visitor',
   jitterSeed: number | null = null
 ): { path: number[]; target: number | null } {
-  const servingTargets = collectServingTargets(state);
+  const servingTargets = collectServingPickupTargets(state);
   const reservedByTile = countReservedServingTargets(state);
   const queuePressureByTile = countQueuePressureByTile(state);
   let bestPath: number[] | null = null;
@@ -9490,7 +9912,7 @@ function pickServingStationPath(
       if (!path) continue;
       const reserved = reservedByTile.get(target) ?? 0;
       const queued = queuePressureByTile.get(target) ?? 0;
-      const stock = servableMealsAtNode(state, target);
+      const stock = servableMealsAtNode(state, servingInventoryTileForPickup(state, target));
       const pickupCapacity = mealPickupCapacityForStock(stock);
       if (pickupCapacity <= reserved) continue;
       const stockBonus = Math.min(4, Math.max(0, stock - reserved) * 0.35);
@@ -9748,10 +10170,21 @@ function findQueueSlotPath(state: StationState, from: number, slotTile: number, 
 
 function ensureQueueChains(state: StationState): void {
   const theater = state.derived.queueTheater;
+  // Queue membership is a presentation/ordering record, not an authority on
+  // visitor state. Prune anyone who has already been promoted, bailed, or
+  // moved on so a save made before a handoff fix cannot retain a ghost head.
+  for (const [anchor, members] of theater.membersByAnchor) {
+    const activeMembers = members.filter((visitorId) => {
+      const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
+      return visitor?.state === VisitorState.Queueing && !visitor.carryingMeal;
+    });
+    if (activeMembers.length === 0) theater.membersByAnchor.delete(anchor);
+    else if (activeMembers.length !== members.length) theater.membersByAnchor.set(anchor, activeMembers);
+  }
   const version = queueTargetVersionKey(state);
   if (theater.chainsVersion === version) return;
   theater.chainsByAnchor.clear();
-  for (const target of collectServingTargets(state)) {
+  for (const target of collectServingPickupTargets(state)) {
     const chain = buildQueueChain(state, target, RoomType.Cafeteria);
     if (chain.length > 0) theater.chainsByAnchor.set(target, chain);
   }
@@ -9793,7 +10226,7 @@ function removeVisitorFromQueues(state: StationState, visitorId: number, anchors
 function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | 'balked' | 'no-queue' {
   ensureQueueChains(state);
   const theater = state.derived.queueTheater;
-  const servingAnchors = new Set(collectServingTargets(state));
+  const servingAnchors = new Set(collectServingPickupTargets(state));
   if (servingAnchors.size === 0) return 'no-queue';
   const existing = queuePositionOf(state, visitor.id, servingAnchors);
   if (existing !== null) return 'joined';
@@ -9873,7 +10306,7 @@ function maintainCafeteriaQueues(state: StationState): void {
   }
   if (theater.membersByAnchor.size === 0) return;
   ensureQueueChains(state);
-  const servingAnchors = new Set(collectServingTargets(state));
+  const servingAnchors = new Set(collectServingPickupTargets(state));
   const barAnchors = new Set(collectCantinaBarTargets(state));
   const byId = new Map<number, Visitor>();
   for (const v of state.visitors) byId.set(v.id, v);
@@ -10018,14 +10451,82 @@ function generatedHospitalityDemand(
   };
 }
 
-function stationFuelStock(state: StationState): number {
+function fuelTankInventoryTiles(state: StationState): number[] {
   const tankTiles = new Set(
     state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank).map((module) => module.originTile)
   );
-  return state.itemNodes.reduce(
-    (sum, node) => sum + (tankTiles.has(node.tileIndex) ? node.items.fuel ?? 0 : 0),
-    0
-  );
+  return state.itemNodes.filter((node) => tankTiles.has(node.tileIndex)).map((node) => node.tileIndex);
+}
+
+type PodDockFuelSupplyView = {
+  connected: boolean;
+  tankCount: number;
+  stock: number;
+  capacity: number;
+  pipeTiles: number;
+  reason: string | null;
+};
+
+function fuelSupplyForDock(state: StationState, dock: DockEntity): PodDockFuelSupplyView & { tankTiles: number[] } {
+  const couplerId = dock.attachmentModuleIds?.fuel;
+  const coupler = couplerId === undefined
+    ? null
+    : state.moduleInstances.find((module) => module.id === couplerId && module.type === ModuleType.FuelCoupler) ?? null;
+  if (!coupler) {
+    return { connected: false, tankCount: 0, stock: 0, capacity: 0, pipeTiles: 0, reason: 'missing Fuel Coupler', tankTiles: [] };
+  }
+  const sinkTile = wallMountedModuleServiceTile(state, coupler.originTile);
+  if (sinkTile === null) {
+    return { connected: false, tankCount: 0, stock: 0, capacity: 0, pipeTiles: 0, reason: 'Fuel Coupler has no interior service tile', tankTiles: [] };
+  }
+  if (!hasUtilityUnderlay(state, 'fuel-pipe', sinkTile)) {
+    return {
+      connected: false,
+      tankCount: 0,
+      stock: 0,
+      capacity: 0,
+      pipeTiles: 0,
+      reason: 'Fuel Pipe must reach the Fuel Coupler service tile',
+      tankTiles: []
+    };
+  }
+  const diagnostics = getFuelPipeNetworkDiagnostics(state);
+  const componentId = diagnostics.componentIdByTile[sinkTile];
+  const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+  if (!component?.powered) {
+    return {
+      connected: false,
+      tankCount: 0,
+      stock: 0,
+      capacity: 0,
+      pipeTiles: component?.tiles.length ?? 1,
+      reason: 'Fuel Pipe is disconnected from a Fuel Tank in a Maintenance room',
+      tankTiles: []
+    };
+  }
+  const tankOrigins = new Set(component.sourceTiles);
+  const nodes = state.itemNodes.filter((node) => tankOrigins.has(node.tileIndex));
+  const tankTiles = nodes.map((node) => node.tileIndex);
+  return {
+    connected: tankTiles.length > 0,
+    tankCount: tankOrigins.size,
+    stock: nodes.reduce((sum, node) => sum + Math.max(0, node.items.fuel ?? 0), 0),
+    capacity: nodes.reduce((sum, node) => sum + Math.max(0, node.capacity), 0),
+    pipeTiles: component.tiles.length,
+    reason: tankTiles.length > 0 ? null : 'connected Fuel Tank has no storage inventory',
+    tankTiles
+  };
+}
+
+export function getPodDockFuelSupplyView(state: StationState, dockId: number): PodDockFuelSupplyView {
+  const dock = state.docks.find((candidate) => candidate.id === dockId) ?? null;
+  return dock
+    ? fuelSupplyForDock(state, dock)
+    : { connected: false, tankCount: 0, stock: 0, capacity: 0, pipeTiles: 0, reason: 'Pod Dock not found' };
+}
+
+function stationFuelStock(state: StationState): number {
+  return fuelTankInventoryTiles(state).reduce((sum, tile) => sum + itemStockAtNode(state, tile, 'fuel'), 0);
 }
 
 function createTrafficOffer(
@@ -10465,6 +10966,7 @@ export function getEligibleBerthsForOffer(state: StationState, offerId: number):
     .filter((berth) => !reservedAnchors.has(berth.anchorTile))
     .filter((berth) => shipSizeFitsBerth(offer.size, berth.size))
     .filter((berth) => berth.spaceExposed)
+    .filter((berth) => berthHardwareReason(berth.facility, offer.size) === null)
     .filter((berth) => isCapabilitySuperset(berth.capabilities, required))
     .filter((berth) => {
       const config = findBerthConfigByAnchor(state, berth.anchorTile);
@@ -10510,6 +11012,17 @@ export function admitTrafficOffer(
       ? eligibleBerths.find((entry) => entry.anchorTile === offer.assignedBerthAnchor)
       : eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0])
     : eligibleBerths.find((entry) => entry.anchorTile === berthAnchor);
+  if (offer.size === 'small' && state.now < offer.arrivesAt) {
+    const dock = state.docks.find((entry) =>
+      entry.purpose === 'visitor' &&
+      entry.occupiedByShipId === null &&
+      entry.allowedShipTypes.includes(offer.shipType) &&
+      entry.allowedShipSizes.includes('small')
+    );
+    if (!dock) return { ok: false, reason: 'No free Dock accepts this small pod.' };
+    offer.status = 'cleared';
+    return { ok: true, reason: 'Dock reserved. Small pod will dock on arrival.' };
+  }
   if (state.now < offer.arrivesAt) {
     if (!berth) {
       const hint = describeMissingCapabilities(state, offer.shipType, offer.size) ?? `No free ${offer.size} berth accepts this ship.`;
@@ -10692,11 +11205,11 @@ function trySpawnWalkInDockPod(state: StationState): boolean {
 
 function scheduleSporadicArrival(state: StationState): void {
   if (state.controls.manualTrafficAdmission) {
-    const openingManifest = state.portOps.offerSequenceIndex === 0;
-    scheduleManualTrafficOffer(state);
+    const hasBerth = state.rooms.includes(RoomType.Berth);
+    if (hasBerth) scheduleManualTrafficOffer(state);
     // Dock tiles are the low-stakes walk-in channel: tiny tourist/trader
     // pods arrive without a contract while Berths remain deliberate work.
-    if (!openingManifest && state.rng() < 0.62) trySpawnWalkInDockPod(state);
+    if (!hasBerth || state.rng() < 0.62) trySpawnWalkInDockPod(state);
     return;
   }
   // Refresh "no-capability" hint on each traffic check. Stays empty unless
@@ -10884,7 +11397,203 @@ function transientShipVisitorsResolved(state: StationState, ship: ArrivingShip):
   return portWorkComplete && ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) <= 0;
 }
 
+function smallCraftService(
+  kind: SmallCraftServiceKind,
+  freightDirection?: 'import' | 'export'
+): SmallCraftService {
+  const spec = kind === 'passenger'
+    ? { durationSec: 28, creditsEarned: 3, ratingDelta: 0.06 }
+    : kind === 'refuel'
+      ? { durationSec: 18, creditsEarned: 12, ratingDelta: 0.14 }
+      : kind === 'freight'
+        ? { durationSec: 22, creditsEarned: 10, ratingDelta: 0.12 }
+        : { durationSec: 30, creditsEarned: 16, ratingDelta: 0.18 };
+  return {
+    kind,
+    status: 'pending',
+    progress: 0,
+    durationSec: spec.durationSec,
+    elapsedSec: 0,
+    blockedReason: null,
+    creditsEarned: spec.creditsEarned,
+    ratingDelta: spec.ratingDelta,
+    transferredUnits: 0,
+    freightDirection
+  };
+}
+
+function createSmallCraftVisit(state: StationState, dock: DockEntity): SmallCraftVisit {
+  const services = [smallCraftService('passenger')];
+  const advertised = dock.podCapabilities ?? [];
+  if (advertised.length > 0) {
+    const capability = advertised[Math.floor(state.rng() * advertised.length)];
+    const kind: SmallCraftServiceKind = capability === 'fuel'
+      ? 'refuel'
+      : capability === 'freight'
+        ? 'freight'
+        : 'repair';
+    services.push(smallCraftService(kind, kind === 'freight' ? (state.rng() < 0.5 ? 'import' : 'export') : undefined));
+  }
+  return {
+    dockSourceKey: dock.sourceKey,
+    startedAt: state.now,
+    patienceExpiresAt: state.now + SMALL_CRAFT_PATIENCE_SEC,
+    services
+  };
+}
+
+function completeSmallCraftService(state: StationState, service: SmallCraftService): void {
+  service.status = 'complete';
+  service.progress = 1;
+  service.blockedReason = null;
+  state.metrics.credits += service.creditsEarned;
+  state.metrics.creditsEarnedLifetime += service.creditsEarned;
+  state.usageTotals.ratingDelta += service.ratingDelta;
+}
+
+function blockSmallCraftService(service: SmallCraftService, reason: string): void {
+  service.status = 'blocked';
+  service.blockedReason = reason;
+}
+
+function smallCraftDockForShip(state: StationState, ship: ArrivingShip): DockEntity | null {
+  if (ship.assignedDockId === null) return null;
+  return state.docks.find((dock) => dock.id === ship.assignedDockId) ?? null;
+}
+
+function smallCraftMaintenanceRate(state: StationState): number {
+  const mechanics = state.crewMembers.filter((crew) =>
+    !crew.resting &&
+    crew.workLane === 'engineering' &&
+    (crew.staffRole === 'mechanic' ||
+      crew.staffRole === 'mechanic-officer' ||
+      crew.staffRole === 'engineer' ||
+      crew.staffRole === 'technician' ||
+      crew.staffRole === 'welder')
+  ).length;
+  return 0.5 + Math.min(1.5, mechanics * 0.5);
+}
+
+function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: number): void {
+  const visit = ship.smallCraftVisit;
+  if (!visit) return;
+  const dock = smallCraftDockForShip(state, ship);
+  for (const service of visit.services) {
+    if (service.status === 'complete' || service.status === 'skipped') continue;
+    service.status = 'active';
+    service.blockedReason = null;
+    if (service.kind === 'passenger') {
+      service.elapsedSec = Math.min(service.durationSec, service.elapsedSec + dt);
+      service.progress = Math.min(0.95, service.elapsedSec / service.durationSec);
+      if (ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) === 0) {
+        completeSmallCraftService(state, service);
+      }
+      continue;
+    }
+
+    const capability: PodDockCapability = service.kind === 'refuel'
+      ? 'fuel'
+      : service.kind === 'freight'
+        ? 'freight'
+        : 'maintenance';
+    if (!dock || !dock.podCapabilities?.includes(capability)) {
+      blockSmallCraftService(service, `missing ${capability === 'fuel' ? 'Fuel Coupler' : capability === 'freight' ? 'Freight Locker' : 'Maintenance Socket'}`);
+      continue;
+    }
+
+    if (service.kind === 'refuel') {
+      const requested = SMALL_CRAFT_FUEL_UNITS * dt / service.durationSec;
+      const fuelSupply = dock ? fuelSupplyForDock(state, dock) : null;
+      const fuelTiles = fuelSupply?.tankTiles ?? [];
+      if (fuelTiles.length === 0) {
+        blockSmallCraftService(service, fuelSupply?.reason ?? 'Fuel Coupler has no connected fuel supply');
+        continue;
+      }
+      const moved = takeItemAcrossTargets(state, fuelTiles, 'fuel', requested);
+      service.transferredUnits += moved;
+      service.elapsedSec += dt;
+      service.progress = Math.min(1, service.transferredUnits / SMALL_CRAFT_FUEL_UNITS);
+      if (moved + 0.001 < requested) {
+        blockSmallCraftService(service, 'no fuel in Fuel Tank');
+      } else if (service.transferredUnits + 0.001 >= SMALL_CRAFT_FUEL_UNITS) {
+        completeSmallCraftService(state, service);
+      }
+      continue;
+    }
+
+    const workRate = service.kind === 'repair' ? smallCraftMaintenanceRate(state) : 1;
+    service.elapsedSec = Math.min(service.durationSec, service.elapsedSec + dt * workRate);
+    service.progress = Math.min(1, service.elapsedSec / service.durationSec);
+    if (service.elapsedSec + 0.001 < service.durationSec) continue;
+
+    if (service.kind === 'freight') {
+      if (service.freightDirection === 'import') {
+        const remaining = Math.max(0, SMALL_CRAFT_FREIGHT_UNITS - service.transferredUnits);
+        const added = addItemAcrossTargets(state, materialInventoryTiles(state), 'rawMaterial', remaining);
+        service.transferredUnits += added;
+        if (service.transferredUnits + 0.001 < SMALL_CRAFT_FREIGHT_UNITS) {
+          blockSmallCraftService(service, 'station material storage is full');
+          continue;
+        }
+        refreshMaterialMetric(state);
+      } else {
+        if (rawMaterialStockTotal(state) + 0.001 < SMALL_CRAFT_FREIGHT_UNITS) {
+          blockSmallCraftService(service, 'no raw material available for export');
+          continue;
+        }
+        service.transferredUnits = consumeOperationalSupplies(state, SMALL_CRAFT_FREIGHT_UNITS);
+      }
+      completeSmallCraftService(state, service);
+      continue;
+    }
+
+    if (rawMaterialStockTotal(state) + 0.001 < SMALL_CRAFT_REPAIR_MATERIALS) {
+      blockSmallCraftService(service, 'no raw material available for repair');
+      continue;
+    }
+    service.transferredUnits = consumeOperationalSupplies(state, SMALL_CRAFT_REPAIR_MATERIALS);
+    completeSmallCraftService(state, service);
+  }
+}
+
+function smallCraftVisitResolved(ship: ArrivingShip): boolean {
+  return ship.smallCraftVisit?.services.every((service) =>
+    service.status === 'complete' || service.status === 'skipped'
+  ) ?? true;
+}
+
+function expireSmallCraftVisit(state: StationState, ship: ArrivingShip): void {
+  const visit = ship.smallCraftVisit;
+  if (!visit) return;
+  for (const service of visit.services) {
+    if (service.status === 'complete' || service.status === 'blocked' || service.status === 'skipped') continue;
+    service.status = 'skipped';
+    service.blockedReason ??= 'craft patience expired';
+  }
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId === ship.id) releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+  }
+  state.visitors = state.visitors.filter((visitor) => visitor.originShipId !== ship.id);
+}
+
+function berthFacilityForShip(state: StationState, ship: ArrivingShip): BerthFacility | null {
+  return ship.assignedBerthAnchor === null || ship.assignedBerthAnchor === undefined
+    ? null
+    : getBerthFacilityAt(state, ship.assignedBerthAnchor);
+}
+
+function portServiceTiles(state: StationState, ship: ArrivingShip): number[] {
+  return berthFacilityForShip(state, ship)?.clusterTiles ?? ship.bayTiles;
+}
+
 function portModuleTile(state: StationState, ship: ArrivingShip, type: ModuleType): number | null {
+  const facility = berthFacilityForShip(state, ship);
+  if (facility) {
+    const moduleId = facility.serviceModuleIds[type]?.[0];
+    return moduleId === undefined
+      ? null
+      : state.moduleInstances.find((module) => module.id === moduleId)?.originTile ?? null;
+  }
   const berthTiles = new Set(ship.bayTiles);
   return state.moduleInstances.find((module) => module.type === type && berthTiles.has(module.originTile))?.originTile ?? null;
 }
@@ -10926,7 +11635,7 @@ function beginPortTurnaround(state: StationState, ship: ArrivingShip): void {
   const cargoHandoffTile = cargoModuleTile === null
     ? null
     : adjacentWalkableTiles(state, cargoModuleTile).find(
-        (tile) => state.moduleOccupancyByTile[tile] === null && ship.bayTiles.includes(tile)
+        (tile) => state.moduleOccupancyByTile[tile] === null && portServiceTiles(state, ship).includes(tile)
       ) ?? null;
   const cargoTile = cargoHandoffTile ?? cargoModuleTile ?? fuelPumpTile ?? gangwayTile;
   const inboundTotal = Object.values(ship.portManifest.inboundCargo).reduce((sum, amount) => sum + amount, 0);
@@ -11176,6 +11885,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
     if (ship.stage === 'docked' && ship.kind === 'transient') {
       if (ship.portContractId !== undefined) state.portOps.telemetry.berthOccupancySeconds += dt;
       updatePortTurnaround(state, ship, dt);
+      updateSmallCraftVisit(state, ship, dt);
       const contract = portContractForShip(state, ship.id);
       if (
         ship.portManifest &&
@@ -11203,7 +11913,12 @@ function updateArrivingShips(state: StationState, dt: number): void {
           assignPathToDock(state, visitor);
         }
       }
-      if (contract && state.now >= contract.hardDepartureAt) {
+      if (ship.smallCraftVisit && state.now >= ship.smallCraftVisit.patienceExpiresAt) {
+        expireSmallCraftVisit(state, ship);
+        settlePortContract(state, ship);
+        ship.stage = 'depart';
+        ship.stageTime = 0;
+      } else if (contract && state.now >= contract.hardDepartureAt) {
         state.portOps.telemetry.hardDeadlineDepartures += 1;
         for (const visitor of state.visitors) {
           if (visitor.originShipId !== ship.id) continue;
@@ -11228,7 +11943,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         settlePortContract(state, ship);
         ship.stage = 'depart';
         ship.stageTime = 0;
-      } else if (transientShipVisitorsResolved(state, ship)) {
+      } else if (transientShipVisitorsResolved(state, ship) && smallCraftVisitResolved(ship)) {
         settlePortContract(state, ship);
         ship.stage = 'depart';
         ship.stageTime = 0;
@@ -11244,9 +11959,14 @@ function updateArrivingShips(state: StationState, dt: number): void {
     }
 
     if (ship.stage === 'depart' && ship.stageTime >= SHIP_DEPART_TIME) {
-      if (ship.kind === 'transient' && ship.portContractId === undefined && !shipServicesSatisfied(state, ship.shipType)) {
-        const weightedPenalty = 0.25 * (SHIP_SERVICE_WEIGHT_BY_TYPE[ship.shipType] ?? 1);
-        addVisitorFailurePenalty(state, weightedPenalty, 'shipServicesMissing');
+      if (ship.kind === 'transient' && ship.portContractId === undefined) {
+        if (ship.smallCraftVisit) {
+          const failures = ship.smallCraftVisit.services.filter((service) => service.status === 'blocked' || service.status === 'skipped').length;
+          if (failures > 0) addVisitorFailurePenalty(state, Math.min(0.24, failures * 0.08), 'shipServicesMissing');
+        } else if (!shipServicesSatisfied(state, ship.shipType)) {
+          const weightedPenalty = 0.25 * (SHIP_SERVICE_WEIGHT_BY_TYPE[ship.shipType] ?? 1);
+          addVisitorFailurePenalty(state, weightedPenalty, 'shipServicesMissing');
+        }
       }
       if (ship.kind === 'transient' && ship.shipType === 'military') {
         const unresolvedIncidents = state.incidents.filter((incident) => isIncidentActive(incident)).length;
@@ -11345,13 +12065,14 @@ function spawnShipAtDock(
     id: shipId,
     kind: 'transient',
     size,
-    bayTiles: [...dock.tiles],
+    bayTiles: dockAccessTiles(dock),
     bayCenterX: centerX,
     bayCenterY: centerY,
     shipType,
     lane,
     originDockId: dockId,
     assignedDockId: dockId,
+    assignedDockSourceKey: dock.sourceKey,
     assignedBerthAnchor: null,
     queueState: forcedShipId ? 'queued' : 'none',
     stage: 'approach',
@@ -11366,7 +12087,8 @@ function spawnShipAtDock(
     manifestDemand: 'manifestDemand' in manifest ? manifest.manifestDemand : manifest.demand,
     manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
     portManifest: trafficOffer ? { ...trafficOffer } : undefined,
-    portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined
+    portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined,
+    smallCraftVisit: createSmallCraftVisit(state, dock)
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }
@@ -11415,6 +12137,7 @@ function spawnShipAtBerth(
     lane,
     originDockId: null,
     assignedDockId: null,
+    assignedDockSourceKey: null,
     assignedBerthAnchor: berth.anchorTile,
     queueState: forcedShipId ? 'queued' : 'none',
     stage: 'approach',
@@ -13536,7 +14259,7 @@ function createPortFuelTransportJobs(state: StationState): void {
     const pumpTile = portModuleTile(state, ship, ModuleType.FuelPump);
     if (pumpTile === null) continue;
     const handoffTile = adjacentWalkableTiles(state, pumpTile).find(
-      (tile) => state.moduleOccupancyByTile[tile] === null && ship.bayTiles.includes(tile)
+      (tile) => state.moduleOccupancyByTile[tile] === null && portServiceTiles(state, ship).includes(tile)
     );
     if (handoffTile === undefined) continue;
     const open = state.jobs.reduce((sum, job) => {
@@ -15211,6 +15934,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         !crew.cleaning &&
         !crew.leisure &&
         !airEmergency &&
+        state.now >= CREW_STARTUP_SETTLE_SEC &&
         watchStatus === 'off-duty' &&
         crew.energy >= 58 &&
         crew.hygiene >= 58 &&
@@ -16300,7 +17024,9 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
   setVisitorPath(state, visitor, nextServing.path);
   visitor.reservedServingTile = nextServing.target;
   if (nextServing.target !== null) {
-    const stock = servableMealsAtNode(state, nextServing.target);
+    // Pickup targets are physical counter tiles; the 2x1 serving station's
+    // shared meal and tray inventory lives on its origin item node.
+    const stock = servableMealsAtNode(state, servingInventoryTileForPickup(state, nextServing.target));
     const reservation = tryCreateReservation(state, {
       ownerKind: 'visitor',
       ownerId: visitor.id,
@@ -16317,6 +17043,10 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
       enterServingLineOrBail(state, visitor);
       return;
     }
+    // A queue head becomes a counter customer now. Leaving its id in the
+    // queue membership list pins every following visitor behind a stale index
+    // zero, so the line never advances after the first meal is collected.
+    removeVisitorFromQueues(state, visitor.id, new Set(collectServingPickupTargets(state)));
   }
   if (nextServing.target === null) {
     // Crowd-loop v1 (B2): every counter is at service capacity right now —
@@ -16380,7 +17110,7 @@ function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
   }
   const visitorDockTiles = state.docks
     .filter((dock) => dock.purpose === 'visitor')
-    .flatMap((dock) => dock.tiles);
+    .flatMap((dock) => dockAccessTiles(dock));
   if (visitorDockTiles.length > 0) return visitorDockTiles;
   const tileDocks = collectTiles(state, TileType.Dock);
   if (tileDocks.length > 0) return tileDocks;
@@ -17068,7 +17798,7 @@ function updateVisitorLogic(
         }
       } else {
         if (!visitor.carryingMeal) {
-          const servingTargets = collectServingTargets(state);
+          const servingTargets = collectServingPickupTargets(state);
           // Crowd-loop v1 (B2): queue members are managed by the line — the
           // per-tick reassign below would wipe their slot path every frame
           // (assignPathToCafeteria unconditionally setVisitorPath()s), which
@@ -17101,7 +17831,7 @@ function updateVisitorLogic(
           visitor.blockedTicks = 0;
         }
         if (moveResult !== 'moved') {
-          const hasAnyCafeteria = collectServingTargets(state).length > 0;
+          const hasAnyCafeteria = collectServingPickupTargets(state).length > 0;
           addVisitorPatience(state, visitor, hasAnyCafeteria ? dt * 0.35 : dt * 0.08);
         }
 
@@ -17131,9 +17861,8 @@ function updateVisitorLogic(
             assignPathToCafeteria(state, visitor);
             continue;
           }
-          // Crowd-loop v1 (B2): being served takes SERVE_INTERACTION_SEC while
-          // the provider slot stays held — the counter is a rate limiter, so
-          // a passenger pulse beyond its rate forms a physical line.
+          // Meal pickup is a short self-service interaction. The provider slot
+          // still prevents crowd overlap, but staffing does not gate pickup.
           if (servingTile !== null && visitor.tileIndex === servingTile && visitor.serveTimer === undefined) {
             visitor.serveTimer = SERVE_INTERACTION_SEC;
           }
@@ -17142,7 +17871,7 @@ function updateVisitorLogic(
           }
           if (servingTile !== null && visitor.tileIndex === servingTile && (visitor.serveTimer ?? 0) <= 0 && visitor.serveTimer !== undefined) {
             visitor.serveTimer = undefined;
-            const picked = takeServedMealWithTray(state, servingTile);
+            const picked = takeServedMealWithTray(state, servingInventoryTileForPickup(state, servingTile));
             if (picked) {
               visitor.carryingMeal = true;
               releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot']);
@@ -17164,7 +17893,7 @@ function updateVisitorLogic(
             // who somehow isn't in any line yet joins one NOW — even with zero
             // meal stock: waiting on the kitchen happens standing in the line
             // at the cafeteria, never loitering at the dock.
-            const qpos = queuePositionOf(state, visitor.id, new Set(collectServingTargets(state)));
+            const qpos = queuePositionOf(state, visitor.id, new Set(collectServingPickupTargets(state)));
             if (qpos === null) {
               enterServingLineOrBail(state, visitor);
             } else if (qpos.index === 0 && hasUnreservedServingMeal(state)) {
@@ -17614,7 +18343,7 @@ function residentHomeDockTargets(state: StationState, resident: Resident): numbe
   }
   if (resident.homeDockId !== null) {
     const dock = state.docks.find((d) => d.id === resident.homeDockId);
-    if (dock && dock.tiles.length > 0) return dock.tiles;
+    if (dock && dockAccessTiles(dock).length > 0) return dockAccessTiles(dock);
   }
   return collectTiles(state, TileType.Dock);
 }
@@ -17700,7 +18429,7 @@ function assignResidentMealPath(state: StationState, resident: Resident): boolea
 
   const serving = pickServingStationPath(state, resident.tileIndex, 'resident', resident.id);
   if (serving.target === null) return false;
-  const stock = servableMealsAtNode(state, serving.target);
+  const stock = servableMealsAtNode(state, servingInventoryTileForPickup(state, serving.target));
   const reservation = tryCreateReservation(state, {
     ownerKind: 'resident',
     ownerId: resident.id,
@@ -18822,7 +19551,7 @@ function updateResidentLogic(
           resident.serveTimer -= dt;
           if (resident.serveTimer <= 0) {
             resident.serveTimer = undefined;
-            const picked = takeServedMealWithTray(state, servingTile);
+            const picked = takeServedMealWithTray(state, servingInventoryTileForPickup(state, servingTile));
             releaseReservationsForOwner(state, 'resident', resident.id, picked ? 'completed' : 'expired', ['provider-slot']);
             resident.reservedServingTile = null;
             if (picked) {
@@ -19530,7 +20259,8 @@ function computeMetrics(state: StationState): void {
   state.metrics.morale = morale;
   const runMinutes = Math.max(1 / 60, state.now / 60);
   const ratingDeltaPerMin = state.usageTotals.ratingDelta / runMinutes;
-  state.metrics.stationRating = clamp(STATION_RATING_START + state.usageTotals.ratingDelta, 0, 100);
+  const ratingFoundation = stationRatingFoundation(state.unlocks.tier);
+  state.metrics.stationRating = clamp(ratingFoundation + state.usageTotals.ratingDelta, 0, 100);
   state.metrics.stationRatingTrendPerMin = ratingDeltaPerMin;
   state.metrics.dockedShips = dockedShips;
   state.metrics.visitorBerthsTotal = visitorBerths.length + roomBerths.length;
@@ -19974,7 +20704,7 @@ function computeMetrics(state: StationState): void {
     .slice(0, 3)
     .map((p) => `${p.label} ${p.value.toFixed(1)}`);
   state.metrics.crewMoraleDrivers = moraleParts;
-  const ratingParts = [
+  const ratingPenaltyParts = [
     { label: 'queue timeout', value: state.usageTotals.ratingFromShipTimeout },
     { label: 'no eligible dock', value: state.usageTotals.ratingFromShipSkip },
     { label: 'service failure', value: state.usageTotals.ratingFromVisitorFailure },
@@ -19983,11 +20713,13 @@ function computeMetrics(state: StationState): void {
     { label: 'bad environment', value: state.usageTotals.ratingFromEnvironment },
     { label: 'sanitation', value: state.usageTotals.ratingFromSanitation },
     { label: 'resident departures', value: state.usageTotals.ratingFromResidentDeparture }
-  ]
+  ];
+  const ratingParts = ratingPenaltyParts
     .filter((p) => p.value > 0.01)
     .sort((a, b) => b.value - a.value)
-    .slice(0, 3)
+    .slice(0, ratingFoundation > 0 ? 2 : 3)
     .map((p) => `${p.label} -${p.value.toFixed(1)}`);
+  if (ratingFoundation > 0) ratingParts.unshift(`tier ${state.unlocks.tier} foundation +${ratingFoundation.toFixed(1)}`);
   state.metrics.stationRatingDrivers = ratingParts.length > 0 ? ratingParts : ['none'];
   state.metrics.stationRatingPenaltyTotal = {
     queueTimeout: state.usageTotals.ratingFromShipTimeout,
@@ -20644,6 +21376,8 @@ export function tryPlaceModule(
   }
   const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
   if (berthModuleReason) return { ok: false, reason: berthModuleReason };
+  const portModuleReason = validatePortModulePlacement(state, module, originTile);
+  if (portModuleReason) return { ok: false, reason: portModuleReason };
 
   state.moduleInstances.push({
     id: state.moduleSpawnCounter++,
