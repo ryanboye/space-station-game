@@ -20,6 +20,7 @@ import {
   specialtyForUnlockedModule
 } from './sim/content/command';
 import { sigilForFaction } from './sim/system-map';
+import { mountCharterScreen } from './ui/charter-screen';
 import {
   buyImportedTradeGoods,
   buyMaterialsDetailed,
@@ -557,6 +558,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
         <button class="tool-btn" data-tool-module="water-fountain" title="Place Water Fountain — basic crew thirst relief"><span class="tool-key">·</span>Water</button>
         <button class="tool-btn" data-tool-module="plant" title="Place Plant (T1+) — small comfort/appeal bonus"><span class="tool-key">·</span>Plant</button>
+        <button class="tool-btn" data-tool-module="solar-panel" title="Place Solar Panel — passive power scaled by the tile's sunlight; strongest on a sunward charter"><span class="tool-key">·</span>Solar</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -1034,7 +1036,18 @@ const ctxMaybe = canvas.getContext('2d', { alpha: false, desynchronized: true })
 if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
-const state = createInitialState({ physicalStarterInventory: true, manualTrafficAdmission: true });
+// Resolve the world seed once, up front, so the charter screen surveys the
+// exact system the game boots on. createInitialState defaults to 1337; an
+// optional ?seed=<int> overrides it. Because state.system is generated from
+// this same seed and mountCharterScreen renders state.system, the map you
+// charter on is guaranteed to be the map you get.
+const gameSeed = (() => {
+  const raw = new URLSearchParams(location.search).get('seed');
+  if (raw === null) return 1337;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : 1337;
+})();
+const state = createInitialState({ seed: gameSeed, physicalStarterInventory: true, manualTrafficAdmission: true });
 
 // The fresh state now owns a complete, visible Berth room. Keeping starter
 // topology in one factory prevents this UI bootstrap from silently punching
@@ -1065,6 +1078,26 @@ const state = createInitialState({ physicalStarterInventory: true, manualTraffic
       `[scenario] unknown name '${name}'; known: ${COLD_START_SCENARIO_NAMES.join(', ')}`
     );
   }
+})();
+
+// ?charter=1 opt-in: survey the procedurally generated system and charter a
+// station site before play. The game initializes paused underneath; the
+// self-contained overlay (own canvas + DOM) sits on top until the player
+// confirms, then applies the chosen SiteCharter to the live state. Default
+// startup (no param) is byte-for-byte unchanged. ?load/?loadId take
+// precedence — those fully hydrate a saved state, charter included.
+(function applyCharterParam() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('charter') !== '1') return;
+  if (params.has('load') || params.has('loadId')) {
+    console.warn('[charter] ignored — ?load/?loadId takes precedence (full state replacement).');
+    return;
+  }
+  if (!state.system) return;
+  void mountCharterScreen(state.seedAtCreation, state.system).then((charter) => {
+    state.site = charter;
+    console.info('[charter] site chartered', charter);
+  });
 })();
 
 // Commercial showcase helper: keep the normal scenario interactive, while
@@ -6006,6 +6039,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   telescope: ModuleType.Telescope,
   'water-fountain': ModuleType.WaterFountain,
   plant: ModuleType.Plant,
+  'solar-panel': ModuleType.SolarPanel,
   clear: ModuleType.None,
 };
 
@@ -6082,7 +6116,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Tap]: 'TP',
   [ModuleType.Telescope]: 'TE',
   [ModuleType.WaterFountain]: 'WF',
-  [ModuleType.Plant]: 'PL'
+  [ModuleType.Plant]: 'PL',
+  [ModuleType.SolarPanel]: 'SP'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

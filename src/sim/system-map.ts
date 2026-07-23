@@ -22,6 +22,7 @@ import type {
   AsteroidBelt,
   Faction,
   FactionTemplateId,
+  LaneRoute,
   LaneSector,
   Planet,
   ShipType,
@@ -290,13 +291,101 @@ export function generateSystemMap(seed: number): SystemMap {
     };
   }
 
+  // Lane routes — additive traffic geometry for the site charter. Built
+  // after every legacy field so the existing rng sequence is untouched
+  // (generation below is deterministic from planet geometry, no rng draw).
+  const laneRoutes = generateLaneRoutes(planets, factions);
+
   return {
     factions,
     planets,
     asteroidBelts,
     laneSectors,
-    seedAtCreation: seed
+    seedAtCreation: seed,
+    laneRoutes
   };
+}
+
+// Disc-space position (0..1 coords, center 0.5,0.5) of an orbiting body.
+// orbitRadius 0..1 maps to disc radius 0..0.5, so points stay in-bounds.
+function orbitToDisc(orbitRadius: number, orbitAngle: number): { x: number; y: number } {
+  return {
+    x: 0.5 + orbitRadius * 0.5 * Math.cos(orbitAngle),
+    y: 0.5 + orbitRadius * 0.5 * Math.sin(orbitAngle)
+  };
+}
+
+// Commercial vitality of a faction, 0..1 — the share of its traffic that
+// is economic (trade/industry/tourism) rather than military. Drives how
+// busy a route between two bodies reads.
+function factionEconomy(faction: Faction | undefined): number {
+  if (!faction) return 0.6; // unclaimed body / system gate: modest hub traffic
+  const bias = faction.shipBias;
+  const commercial = (bias.trader ?? 0) + (bias.industrial ?? 0) + (bias.tourist ?? 0);
+  return Math.max(0, Math.min(1, commercial));
+}
+
+// Polylines between system bodies (planet chain + 2 system gates), each
+// carrying a 0..1 volume derived from its endpoint factions' economies.
+function generateLaneRoutes(planets: Planet[], factions: Faction[]): LaneRoute[] {
+  const routes: LaneRoute[] = [];
+  const economyOf = (factionId: string): number =>
+    factionEconomy(factions.find((f) => f.id === factionId));
+  const discOf = (p: Planet): { x: number; y: number } => orbitToDisc(p.orbitRadius, p.orbitAngle);
+
+  // Planet-to-planet chain (consecutive by generation order).
+  for (let i = 0; i + 1 < planets.length; i++) {
+    const a = planets[i];
+    const b = planets[i + 1];
+    routes.push({
+      id: `route-${a.id}-${b.id}`,
+      from: a.id,
+      to: b.id,
+      volume: (economyOf(a.factionId) + economyOf(b.factionId)) / 2,
+      points: [discOf(a), discOf(b)]
+    });
+  }
+
+  // Two system gates on the outer disc, positioned relative to the mean
+  // planet angle so they sit on roughly opposite approaches. Each gate
+  // links to its nearest planet — the system's import/export corridors.
+  let meanAngle = 0;
+  if (planets.length > 0) {
+    let sx = 0;
+    let sy = 0;
+    for (const p of planets) {
+      sx += Math.cos(p.orbitAngle);
+      sy += Math.sin(p.orbitAngle);
+    }
+    meanAngle = Math.atan2(sy, sx);
+  }
+  const gateRadius = 0.95;
+  const gateAngles = [meanAngle + Math.PI, meanAngle + Math.PI / 2];
+  for (let g = 0; g < gateAngles.length; g++) {
+    const gatePos = orbitToDisc(gateRadius, gateAngles[g]);
+    // Nearest planet to this gate.
+    let nearest: Planet | null = null;
+    let nearestDist = Infinity;
+    for (const p of planets) {
+      const pd = discOf(p);
+      const d = Math.hypot(pd.x - gatePos.x, pd.y - gatePos.y);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = p;
+      }
+    }
+    if (!nearest) continue;
+    routes.push({
+      id: `route-gate-${g}-${nearest.id}`,
+      from: `gate-${g}`,
+      to: nearest.id,
+      // Gates are trade hubs; blend the fixed gate economy with the planet's.
+      volume: (factionEconomy(undefined) + economyOf(nearest.factionId)) / 2,
+      points: [gatePos, discOf(nearest)]
+    });
+  }
+
+  return routes;
 }
 
 // Compute normalized ship-type weights for a lane from its dominant

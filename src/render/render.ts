@@ -252,7 +252,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Tap]: 't',
   [ModuleType.Telescope]: 'O',
   [ModuleType.WaterFountain]: '~',
-  [ModuleType.Plant]: '*'
+  [ModuleType.Plant]: '*',
+  [ModuleType.SolarPanel]: '☀'
 };
 
 const ITEM_TYPES: ItemType[] = [
@@ -368,7 +369,7 @@ function drawDebrisFallback(
   x: number,
   y: number,
   size: number,
-  tone: 'planet' | 'rock' | 'metal' | 'ice' | 'spark',
+  tone: 'planet' | 'rock' | 'metal' | 'ice' | 'gas' | 'spark',
   alpha: number
 ): void {
   ctx.save();
@@ -391,7 +392,16 @@ function drawDebrisFallback(
     ctx.restore();
     return;
   }
-  const color = tone === 'metal' ? '#9ba6ae' : tone === 'ice' ? '#9ee6ff' : tone === 'planet' ? '#9b856f' : '#7d7468';
+  const color =
+    tone === 'metal'
+      ? '#9ba6ae'
+      : tone === 'ice'
+        ? '#9ee6ff'
+        : tone === 'gas'
+          ? '#d9a86a'
+          : tone === 'planet'
+            ? '#9b856f'
+            : '#7d7468';
   ctx.translate(x, y);
   ctx.rotate(rotation);
   ctx.fillStyle = color;
@@ -403,6 +413,48 @@ function drawDebrisFallback(
   ctx.arc(size * 0.08, size * 0.04, size * 0.12, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+// A chartered belt flavor maps to a debris draw tone. Null resource (or no
+// site) keeps the seeded, sprite-name-derived tone.
+function debrisToneForResource(
+  resource: 'metal' | 'ice' | 'gas' | null | undefined
+): 'metal' | 'ice' | 'gas' | null {
+  return resource === 'metal' || resource === 'ice' || resource === 'gas' ? resource : null;
+}
+
+// Pick the massive backdrop planet sprite from the nearest system-map body's
+// type. Falls back to a neutral dark limb when the type has no dedicated key.
+function massivePlanetKeyForBody(
+  bodyType: 'rocky' | 'gas' | 'ice'
+): (typeof SPACE_MASSIVE_PLANET_SPRITE_KEYS)[number] {
+  if (bodyType === 'gas') return 'space.massive.gas_blue_limb.1';
+  if (bodyType === 'ice') return 'space.massive.moon_ice_limb.1';
+  if (bodyType === 'rocky') return 'space.massive.planet_rust_limb.1';
+  return 'space.massive.moon_dark_limb.1';
+}
+
+// Nearest planet's body type to a disc-coord position (0..1, center 0.5).
+// orbitRadius/orbitAngle map to disc coords the same way system-map does.
+function nearestPlanetBodyType(
+  state: StationState,
+  x: number,
+  y: number
+): 'rocky' | 'gas' | 'ice' | null {
+  const planets = state.system?.planets;
+  if (!planets || planets.length === 0) return null;
+  let best: 'rocky' | 'gas' | 'ice' | null = null;
+  let bestDist = Infinity;
+  for (const planet of planets) {
+    const px = 0.5 + planet.orbitRadius * 0.5 * Math.cos(planet.orbitAngle);
+    const py = 0.5 + planet.orbitRadius * 0.5 * Math.sin(planet.orbitAngle);
+    const dist = (px - x) * (px - x) + (py - y) * (py - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = planet.bodyType;
+    }
+  }
+  return best;
 }
 
 function renderSeededSpaceConditionBackdrop(
@@ -418,12 +470,17 @@ function renderSeededSpaceConditionBackdrop(
   const dy = Math.sin(angle);
   const cx = view.x + view.width * 0.5;
   const cy = view.y + view.height * 0.5;
-  const reach = Math.max(view.width, view.height) * 0.75;
+  // Chartered sunFactor scales the sun's warmth and spread. Absent site keeps
+  // both multipliers at exactly 1 → seeded behavior is bit-identical.
+  const sunFactor = state.site?.sunFactor;
+  const sunWarmth = sunFactor === undefined ? 1 : 0.7 + sunFactor * 0.85;
+  const sunReach = sunFactor === undefined ? 1 : 0.85 + sunFactor * 0.4;
+  const reach = Math.max(view.width, view.height) * 0.75 * sunReach;
 
   ctx.save();
   const light = ctx.createLinearGradient(cx + dx * reach, cy + dy * reach, cx - dx * reach, cy - dy * reach);
-  light.addColorStop(0, 'rgba(255, 203, 105, 0.16)');
-  light.addColorStop(0.36, 'rgba(255, 174, 82, 0.055)');
+  light.addColorStop(0, `rgba(255, 203, 105, ${0.16 * sunWarmth})`);
+  light.addColorStop(0.36, `rgba(255, 174, 82, ${0.055 * sunWarmth})`);
   light.addColorStop(0.64, 'rgba(10, 26, 40, 0.03)');
   light.addColorStop(1, 'rgba(24, 45, 82, 0.18)');
   ctx.fillStyle = light;
@@ -488,7 +545,14 @@ function renderMassivePlanetBackdrop(
 ): void {
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
-  const key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
+  // A chartered site prefers the nearest system-map planet's body type for the
+  // massive backdrop sprite; absent site keeps the seeded pick.
+  const site = state.site;
+  let key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
+  if (site) {
+    const bodyType = nearestPlanetBodyType(state, site.x, site.y);
+    if (bodyType) key = massivePlanetKeyForBody(bodyType);
+  }
   const x = worldW * (0.13 + renderHash01(state.seedAtCreation, 31, 52) * 0.18);
   const y = worldH * (0.82 + renderHash01(state.seedAtCreation, 37, 52) * 0.12);
   const size = Math.max(560, Math.min(worldW, worldH) * (0.92 + renderHash01(state.seedAtCreation, 41, 52) * 0.18));
@@ -509,6 +573,11 @@ function renderDebrisBackdrop(
 ): void {
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
+  // Chartered debris flavor + density. Absent site: densityMul is exactly 1 and
+  // siteTone is null → seeded parallax field is bit-identical.
+  const site = state.site;
+  const densityMul = site ? 1 + site.debrisFactor * 0.9 : 1;
+  const siteTone = debrisToneForResource(site?.resourceType);
   const spriteCount = 520;
   for (let i = 0; i < spriteCount; i++) {
     const layer = DEBRIS_PARALLAX_LAYERS[Math.floor(renderHash01(state.seedAtCreation, i, 0) * DEBRIS_PARALLAX_LAYERS.length)];
@@ -519,7 +588,7 @@ function renderDebrisBackdrop(
     const baseTile = toIndex(baseTileX, baseTileY, state.width);
     if (state.tiles[baseTile] !== TileType.Space && state.tiles[baseTile] !== TileType.Truss) continue;
     const debris = mapConditionSamplesAt(state, baseTile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
-    const keep = renderHash01(state.seedAtCreation, i, 3) < clampRender(0.04 + debris * 1.05, 0.05, 0.98);
+    const keep = renderHash01(state.seedAtCreation, i, 3) < clampRender((0.04 + debris * 1.05) * densityMul, 0.05, 0.98);
     if (!keep) continue;
     const phase = renderHash01(state.seedAtCreation, i, 4) * Math.PI * 2;
     const orbit = (state.now / layer.period) * Math.PI * 2 + phase;
@@ -550,7 +619,7 @@ function renderDebrisBackdrop(
       dx + size * 0.5,
       dy + size * 0.5,
       size,
-      spriteKey.includes('metal') ? 'metal' : spriteKey.includes('ice') ? 'ice' : 'rock',
+      siteTone ?? (spriteKey.includes('metal') ? 'metal' : spriteKey.includes('ice') ? 'ice' : 'rock'),
       alpha
     );
   }
@@ -585,7 +654,7 @@ function renderDebrisBackdrop(
       const alpha = clampRender((0.3 + debris * 0.42) * layer.alpha, 0.22, 0.78);
       const rotation = Math.sin(orbit) * layer.rotation + state.now * 0.28 * (j % 2 === 0 ? 1 : -1);
       if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
-      drawDebrisFallback(ctx, x, y, size, j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock', alpha);
+      drawDebrisFallback(ctx, x, y, size, siteTone ?? (j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock'), alpha);
     }
   }
 }

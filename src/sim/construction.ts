@@ -89,7 +89,12 @@ export function moduleConstructionCostForDefinition(module: ModuleType, rotation
   const explicit = MODULE_DEFINITIONS[module]?.capitalCost;
   if (explicit !== undefined) return Math.max(2, explicit);
   const footprint = moduleFootprint(module, rotation);
-  const base = module === ModuleType.WallLight ? 2 : footprint.width * footprint.height * 3;
+  // Solar panels are a modest power investment: priced well above the 1x1
+  // default (3) so ~3-4 of them is a real spend, but far below a reactor room.
+  const base =
+    module === ModuleType.WallLight ? 2 :
+    module === ModuleType.SolarPanel ? 18 :
+    footprint.width * footprint.height * 3;
   return Math.max(2, base);
 }
 

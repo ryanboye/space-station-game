@@ -498,6 +498,10 @@ function cafeteriaServiceRateForCounter(state: StationState, counterTile: number
 
 const BASE_POWER_SUPPLY = 14;
 const POWER_PER_REACTOR = 22;
+// Per-panel power at full local sunlight (1.0). Tuned so ~4 panels on bright
+// tiles (sunlight ~0.85) rival one reactor's 22 output, while deep-shade
+// panels (sunlight <0.15) contribute almost nothing.
+const POWER_PER_SOLAR = 6;
 const SHIP_APPROACH_TIME = TASK_TIMINGS.shipApproachSec;
 const SHIP_DOCKED_TIME = TASK_TIMINGS.shipDockedPassengerSpawnSec;
 const SHIP_DEPART_TIME = TASK_TIMINGS.shipDepartSec;
@@ -940,7 +944,13 @@ export function generateLaneProfiles(state: StationState): Record<SpaceLane, Lan
   // shifted every later random draw and broke deterministic tests.
   const system = state.system ?? null;
   for (const lane of LANES) {
-    const trafficVolume = clamp(0.6 + state.rng() * 0.8, 0.4, 1.6);
+    // Site-charter traffic modulation: a chartered site scales each lane's
+    // effective volume by its per-lane factor (1 = ambient/default). The
+    // scale is applied AFTER the rng draw + clamp, so the primary rng
+    // sequence is untouched (seeded scenarios keep their draws) and an
+    // absent site (factor 1) yields byte-identical trafficVolume.
+    const laneTrafficFactor = state.site?.laneTrafficFactor[lane] ?? 1;
+    const trafficVolume = clamp(0.6 + state.rng() * 0.8, 0.4, 1.6) * laneTrafficFactor;
     const touristBase = 0.25 + state.rng() * 0.45;
     const traderBase = 0.2 + state.rng() * 0.45;
     const industrialBase = 0.15 + state.rng() * 0.35;
@@ -20065,7 +20075,28 @@ function computeMetrics(state: StationState): void {
   const securityCoveragePct = securableTiles > 0 ? (secureTiles / securableTiles) * 100 : 0;
 
   const reactorMaintenanceMultiplier = maintenanceOutputMultiplierForSystem(state, 'reactor');
-  const powerSupply = BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier;
+  // Solar supply: each placed Solar Panel yields power scaled by the local
+  // map-condition sunlight at its tile, so bright tiles (and a sunward charter,
+  // which lifts the sunlight baseline) make solar genuinely strong while
+  // deep-shade panels contribute almost nothing.
+  let solarSupply = 0;
+  let activeSolarPanels = 0;
+  let solarSunlightSum = 0;
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.SolarPanel) continue;
+    activeSolarPanels += 1;
+    solarSunlightSum += mapConditionAt(state, 'sunlight', module.originTile);
+  }
+  if (activeSolarPanels > 0) {
+    const avgSunlight = solarSunlightSum / activeSolarPanels;
+    solarSupply = activeSolarPanels * POWER_PER_SOLAR * avgSunlight;
+  }
+  const powerSupply =
+    BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier + solarSupply;
+  // Cold heating load: an outer-system charter (low sunFactor) pays more power
+  // to hold heat, the way a sunward charter pays it back in solar. Absent site
+  // → multiplier 1 (unchanged). Weight 0.35 → up to +35% LS draw at the rim.
+  const coldLifeSupportMultiplier = state.site ? 1 + 0.35 * (1 - state.site.sunFactor) : 1;
   const powerDemand =
     9 +
     visitorsCount * 0.35 +
@@ -20079,7 +20110,7 @@ function computeMetrics(state: StationState): void {
     state.ops.securityActive * 1.2 +
     state.ops.hygieneActive * 1.0 +
     state.ops.hydroponicsActive * 1.1 +
-    state.ops.lifeSupportActive * 1.4 +
+    state.ops.lifeSupportActive * 1.4 * coldLifeSupportMultiplier +
     state.ops.loungeActive * 1.0 +
     state.ops.marketActive * 1.1 +
     state.ops.cantinaActive * 1.0 +
