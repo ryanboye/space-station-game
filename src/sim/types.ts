@@ -1415,6 +1415,7 @@ export interface SystemMap {
   asteroidBelts: AsteroidBelt[];
   laneSectors: Record<SpaceLane, LaneSector>;
   seedAtCreation: number;
+  laneRoutes?: LaneRoute[];
 }
 
 export interface DockQueueEntry {
@@ -2386,6 +2387,10 @@ export interface StationState {
   // that pre-date this feature and didn't get re-rolled at hydrate time;
   // generateLaneProfiles falls back to legacy RNG behavior in that case.
   system: SystemMap | null;
+  // Chartered system position + derived environmental baselines. Absent
+  // on legacy saves and un-chartered starts; all consumers must treat
+  // undefined as current default behavior. See SiteCharter (end of file).
+  site?: SiteCharter;
   // The seed used to seed the StationState rng. Stored separately so
   // generateSystemMap can derive a stable sub-seed without depleting
   // state.rng. Mirrored into state.system.seedAtCreation when the
@@ -2677,4 +2682,35 @@ export function makeRng(seed: number): () => number {
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+// --- Site Charter (see docs/29-site-charter-v1-implementation-plan.md) ---
+// Additive, regenerated-from-seed system geometry + a derived per-site
+// environmental profile. Both are optional so legacy saves and every
+// existing test/scenario fixture are byte-for-byte unaffected.
+
+/** A traffic lane rendered on the system map: a polyline between two
+ *  system bodies (planets or gates). Regenerated from seed, never saved. */
+export interface LaneRoute {
+  id: string;
+  from: string; // planet id or 'gate-N'
+  to: string;
+  volume: number; // 0..1
+  points: Array<{ x: number; y: number }>; // polyline, disc coords
+}
+
+/** Chartered system position and its derived environmental baselines.
+ *  Absent on legacy saves and un-chartered starts: all systems must
+ *  treat undefined as "current default behavior". */
+export interface SiteCharter {
+  version: 1;
+  /** Normalized system-map position, 0..1 disc coordinates. */
+  x: number;
+  y: number;
+  /** Derived once at charter time from system geometry. All 0..1. */
+  sunFactor: number;      // raises map-condition 'sunlight' baseline
+  debrisFactor: number;   // raises map-condition 'debris-risk' baseline
+  resourceType: 'metal' | 'ice' | 'gas' | null; // nearest belt flavor
+  /** Per-lane traffic multipliers, 1 = current default volume. */
+  laneTrafficFactor: Record<SpaceLane, number>;
 }
