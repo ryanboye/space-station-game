@@ -1005,7 +1005,18 @@ const ctxMaybe = canvas.getContext('2d', { alpha: false, desynchronized: true })
 if (!ctxMaybe) throw new Error('2d context unavailable');
 const ctx: CanvasRenderingContext2D = ctxMaybe;
 
-const state = createInitialState({ physicalStarterInventory: true, manualTrafficAdmission: true });
+// Resolve the world seed once, up front, so the charter screen surveys the
+// exact system the game boots on. createInitialState defaults to 1337; an
+// optional ?seed=<int> overrides it. Because state.system is generated from
+// this same seed and mountCharterScreen renders state.system, the map you
+// charter on is guaranteed to be the map you get.
+const gameSeed = (() => {
+  const raw = new URLSearchParams(location.search).get('seed');
+  if (raw === null) return 1337;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : 1337;
+})();
+const state = createInitialState({ seed: gameSeed, physicalStarterInventory: true, manualTrafficAdmission: true });
 
 // The fresh state now owns a complete, visible Berth room. Keeping starter
 // topology in one factory prevents this UI bootstrap from silently punching

@@ -298,7 +298,10 @@ export function createInitialState(options?: {
     });
 
   const frameTiles: number[] = [toIndex(coreX, coreY, GRID_WIDTH)];
-  const laneProfiles = generateLaneProfiles({ rng, system } as StationState);
+  // Pass the chartered site (if any) so lane traffic volume is modulated by
+  // the site's per-lane factor at generation time. Absent charter → the stub
+  // has no `site`, so generateLaneProfiles falls back to factor 1 (default).
+  const laneProfiles = generateLaneProfiles({ rng, system, site: options?.charter } as StationState);
   const initialStaffRoleCounts = createInitialStaffRoleCounts();
   initialStaffRoleCounts.cook = 1;
   initialStaffRoleCounts.steward = 1;
