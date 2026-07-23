@@ -241,7 +241,8 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Tap]: 't',
   [ModuleType.Telescope]: 'O',
   [ModuleType.WaterFountain]: '~',
-  [ModuleType.Plant]: '*'
+  [ModuleType.Plant]: '*',
+  [ModuleType.SolarPanel]: '☀'
 };
 
 const ITEM_TYPES: ItemType[] = [

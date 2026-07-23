@@ -126,7 +126,11 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.Tap]: 'module.tap',
   [ModuleType.Telescope]: 'module.telescope',
   [ModuleType.WaterFountain]: 'module.water_fountain',
-  [ModuleType.Plant]: 'module.plant'
+  [ModuleType.Plant]: 'module.plant',
+  // No dedicated atlas art yet: this key misses the atlas, so the renderer
+  // falls back to the vector letter tile (moduleLetter) — the established
+  // path for new modules without sprites.
+  [ModuleType.SolarPanel]: 'module.solar_panel'
 };
 
 export const SHIP_SPRITE_KEYS: Record<ShipType, string> = {

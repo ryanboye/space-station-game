@@ -7,8 +7,8 @@ import { computeSiteProfile } from '../src/sim/site-charter';
 import { createInitialState } from '../src/sim/initial-state';
 import { mapConditionAt } from '../src/sim/map-conditions';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
-import { setRoom, tick } from '../src/sim/index';
-import { GRID_HEIGHT, GRID_WIDTH, RoomType } from '../src/sim/types';
+import { setRoom, tick, tryPlaceModule } from '../src/sim/index';
+import { GRID_HEIGHT, GRID_WIDTH, ModuleType, RoomType, TileType, isWalkable } from '../src/sim/types';
 import type { MapConditionKind, SiteCharter, SpaceLane, StationState, SystemMap } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -411,6 +411,72 @@ function testColdRaisesLifeSupportDemand(): void {
   );
 }
 
+// Collect the first `n` tiles where a floor module can be placed (walkable,
+// unoccupied, not a door). Topology is identical across same-seed states, so
+// the returned indices are valid in every starter built from that seed.
+function placeableFloorTiles(state: StationState, n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < state.tiles.length && out.length < n; i++) {
+    if (!isWalkable(state.tiles[i])) continue;
+    if (state.tiles[i] === TileType.Door) continue;
+    if (state.moduleOccupancyByTile[i] !== null) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+function powerSupplyWithPanels(sunFactor: number, tiles: number[]): number {
+  const state = createInitialState({
+    seed: 1337,
+    manualTrafficAdmission: true,
+    charter: charterWith(sunFactor, 0)
+  });
+  for (const tile of tiles) {
+    const placed = tryPlaceModule(state, ModuleType.SolarPanel, tile);
+    assert(placed.ok, `Failed to place a solar panel at tile ${tile}: ${placed.reason ?? 'unknown'}.`);
+  }
+  advance(state, 1);
+  return state.metrics.powerSupply;
+}
+
+function testSolarPanelsScaleWithSunlight(): void {
+  const panels = 4;
+  // A no-panel sunward station fixes the panel-free power baseline (starter has
+  // no reactor, so this is BASE_POWER_SUPPLY). Same tiles are reused so bright
+  // vs shade differ only in the chartered sunlight, not placement.
+  const layoutProbe = createInitialState({ seed: 1337, manualTrafficAdmission: true });
+  const tiles = placeableFloorTiles(layoutProbe, panels);
+  assert(tiles.length === panels, `Expected ${panels} placeable tiles, found ${tiles.length}.`);
+
+  const baseNoPanels = createInitialState({
+    seed: 1337,
+    manualTrafficAdmission: true,
+    charter: charterWith(0.95, 0)
+  });
+  advance(baseNoPanels, 1);
+  const base = baseNoPanels.metrics.powerSupply;
+
+  const bright = powerSupplyWithPanels(0.95, tiles);
+  const shade = powerSupplyWithPanels(0.0, tiles);
+  const brightGain = bright - base;
+  const shadeGain = shade - base;
+
+  assert(
+    brightGain > panels * 2.5,
+    `Solar panels on a sunward (bright) charter should raise power supply well above the ` +
+      `panel-free baseline (base ${base}, bright ${bright}, gain ${brightGain}).`
+  );
+  assert(
+    shadeGain < brightGain * 0.5,
+    `Deep-shade solar must contribute far less than bright solar ` +
+      `(bright gain ${brightGain}, shade gain ${shadeGain}).`
+  );
+  assert(
+    bright > shade + panels * 2,
+    `Bright-tile solar supply must clearly exceed deep-shade solar (bright ${bright}, shade ${shade}).`
+  );
+}
+
 function testNoSiteTrafficAndPowerNeutral(): void {
   // Absent-site guarantee: the site machinery is a no-op when off. A neutral
   // charter (all lane factors 1, sunFactor 1 → cold multiplier exactly 1) must
@@ -473,6 +539,7 @@ const tests: Array<[string, () => void]> = [
   ['conditions deterministic with site', testConditionsDeterministicWithSite],
   ['high lane traffic raises volume', testHighLaneTrafficRaisesVolume],
   ['cold raises life-support demand', testColdRaisesLifeSupportDemand],
+  ['solar panels scale with sunlight', testSolarPanelsScaleWithSunlight],
   ['no-site traffic and power neutral', testNoSiteTrafficAndPowerNeutral]
 ];
 

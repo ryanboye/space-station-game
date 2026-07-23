@@ -491,6 +491,10 @@ function cafeteriaServiceRateForCounter(state: StationState, counterTile: number
 
 const BASE_POWER_SUPPLY = 14;
 const POWER_PER_REACTOR = 22;
+// Per-panel power at full local sunlight (1.0). Tuned so ~4 panels on bright
+// tiles (sunlight ~0.85) rival one reactor's 22 output, while deep-shade
+// panels (sunlight <0.15) contribute almost nothing.
+const POWER_PER_SOLAR = 6;
 const SHIP_APPROACH_TIME = TASK_TIMINGS.shipApproachSec;
 const SHIP_DOCKED_TIME = TASK_TIMINGS.shipDockedPassengerSpawnSec;
 const SHIP_DEPART_TIME = TASK_TIMINGS.shipDepartSec;
@@ -19342,7 +19346,24 @@ function computeMetrics(state: StationState): void {
   const securityCoveragePct = securableTiles > 0 ? (secureTiles / securableTiles) * 100 : 0;
 
   const reactorMaintenanceMultiplier = maintenanceOutputMultiplierForSystem(state, 'reactor');
-  const powerSupply = BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier;
+  // Solar supply: each placed Solar Panel yields power scaled by the local
+  // map-condition sunlight at its tile, so bright tiles (and a sunward charter,
+  // which lifts the sunlight baseline) make solar genuinely strong while
+  // deep-shade panels contribute almost nothing.
+  let solarSupply = 0;
+  let activeSolarPanels = 0;
+  let solarSunlightSum = 0;
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.SolarPanel) continue;
+    activeSolarPanels += 1;
+    solarSunlightSum += mapConditionAt(state, 'sunlight', module.originTile);
+  }
+  if (activeSolarPanels > 0) {
+    const avgSunlight = solarSunlightSum / activeSolarPanels;
+    solarSupply = activeSolarPanels * POWER_PER_SOLAR * avgSunlight;
+  }
+  const powerSupply =
+    BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier + solarSupply;
   // Cold heating load: an outer-system charter (low sunFactor) pays more power
   // to hold heat, the way a sunward charter pays it back in solar. Absent site
   // → multiplier 1 (unchanged). Weight 0.35 → up to +35% LS draw at the rim.

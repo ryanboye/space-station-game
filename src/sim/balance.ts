@@ -335,6 +335,15 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: false,
     allowedRooms: null
+  },
+  // Solar panel: 1x1, place-on-floor (no wall mount), allowed in any room so
+  // the player can chase bright tiles. Passive power source — see the solar
+  // supply term in sim.ts.
+  [ModuleType.SolarPanel]: {
+    width: 1,
+    height: 1,
+    rotatable: false,
+    allowedRooms: null
   }
 };
 

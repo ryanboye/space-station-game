@@ -543,6 +543,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
         <button class="tool-btn" data-tool-module="water-fountain" title="Place Water Fountain — basic crew thirst relief"><span class="tool-key">·</span>Water</button>
         <button class="tool-btn" data-tool-module="plant" title="Place Plant (T1+) — small comfort/appeal bonus"><span class="tool-key">·</span>Plant</button>
+        <button class="tool-btn" data-tool-module="solar-panel" title="Place Solar Panel — passive power scaled by the tile's sunlight; strongest on a sunward charter"><span class="tool-key">·</span>Solar</button>
         <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
@@ -5916,6 +5917,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   telescope: ModuleType.Telescope,
   'water-fountain': ModuleType.WaterFountain,
   plant: ModuleType.Plant,
+  'solar-panel': ModuleType.SolarPanel,
   clear: ModuleType.None,
 };
 
@@ -5986,7 +5988,8 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Tap]: 'TP',
   [ModuleType.Telescope]: 'TE',
   [ModuleType.WaterFountain]: 'WF',
-  [ModuleType.Plant]: 'PL'
+  [ModuleType.Plant]: 'PL',
+  [ModuleType.SolarPanel]: 'SP'
 };
 
 function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElement, module: ModuleType): void {

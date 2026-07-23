@@ -337,7 +337,12 @@ export enum ModuleType {
   WaterFountain = 'water-fountain',
   // Plant: 1x1 decorative. Allowed anywhere; small public-appeal +
   // residential-comfort bonus to surrounding tiles.
-  Plant = 'plant'
+  Plant = 'plant',
+  // SolarPanel: 1x1 place-on-floor power module. Passive (no crew): each panel
+  // supplies power proportional to the local map-condition 'sunlight' at its
+  // tile, so a sunward charter and bright-tile placement both matter. Weak in
+  // deep shade. See POWER_PER_SOLAR + the powerSupply term in sim.ts.
+  SolarPanel = 'solar-panel'
 }
 
 export type ModuleRotation = 0 | 90;
