@@ -24,6 +24,22 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
   return t * t * (3 - 2 * t);
 }
 
+// How strongly a chartered site pulls its baseline toward the extreme.
+// A high factor lifts the value toward 1 (bright sun / heavy debris); a very
+// low factor (below the shade threshold) pulls it back toward the calm, dark
+// end so outer-system and sheltered charters read distinctly. All pure.
+const SITE_LIFT_WEIGHT = 0.55;
+const SITE_SHADE_THRESHOLD = 0.35;
+const SITE_SHADE_WEIGHT = 0.55;
+
+function blendSiteBaseline(value: number, factor: number): number {
+  const f = clamp(factor, 0, 1);
+  const lifted = value + (1 - value) * f * SITE_LIFT_WEIGHT;
+  if (f >= SITE_SHADE_THRESHOLD) return clamp(lifted, 0, 1);
+  const pull = (SITE_SHADE_THRESHOLD - f) / SITE_SHADE_THRESHOLD;
+  return clamp(lifted - lifted * pull * SITE_SHADE_WEIGHT, 0, 1);
+}
+
 function lowFrequencyNoise(seed: number, x: number, y: number, salt: number): number {
   const sx = x / 18;
   const sy = y / 18;
@@ -53,11 +69,15 @@ export function mapConditionAt(state: StationState, kind: MapConditionKind, tile
   const alongSun = cx * dx + cy * dy;
   const crossSun = cx * -dy + cy * dx;
   const waviness = (lowFrequencyNoise(seed, worldX, worldY, 21) - 0.5) * 0.24;
+  // Chartered position, if any. Absent → every path below is bit-identical to
+  // the legacy behavior (the `value` returned is the exact same expression).
+  const site = state.site;
 
   if (kind === 'sunlight') {
     const band = smoothstep(-0.22, 0.42, alongSun + waviness);
     const occluder = Math.max(0, 1 - Math.abs(crossSun + (hash01(seed, 5, 9, 31) - 0.5) * 0.45) * 5.2);
-    return clamp(band - occluder * 0.34 + lowFrequencyNoise(seed, worldX, worldY, 41) * 0.12, 0, 1);
+    const value = clamp(band - occluder * 0.34 + lowFrequencyNoise(seed, worldX, worldY, 41) * 0.12, 0, 1);
+    return site ? blendSiteBaseline(value, site.sunFactor) : value;
   }
 
   if (kind === 'debris-risk') {
@@ -69,7 +89,8 @@ export function mapConditionAt(state: StationState, kind: MapConditionKind, tile
     const ddy = Math.sin(debrisAngle);
     const lane = cx * ddx + cy * ddy;
     const lobe = smoothstep(-0.15, 0.55, lane + lowFrequencyNoise(seed, worldX, worldY, 61) * 0.28);
-    return clamp(edge * 0.45 + lobe * 0.55 + lowFrequencyNoise(seed, worldX, worldY, 71) * 0.1, 0, 1);
+    const value = clamp(edge * 0.45 + lobe * 0.55 + lowFrequencyNoise(seed, worldX, worldY, 71) * 0.1, 0, 1);
+    return site ? blendSiteBaseline(value, site.debrisFactor) : value;
   }
 
   const shade = 1 - mapConditionAt(state, 'sunlight', tileIndex);
