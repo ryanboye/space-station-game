@@ -14,8 +14,16 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+// Station-owned total, including material a hauler is currently carrying.
+// Counting only settled item nodes makes this dip and recover mid-haul, which
+// would confound the courier-ownership check below with ordinary logistics.
 function stockAt(state: ReturnType<typeof createInitialState>, item: 'tradeGood' | 'rawMaterial'): number {
-  return state.itemNodes.reduce((total, node) => total + (node.items[item] ?? 0), 0);
+  const settled = state.itemNodes.reduce((total, node) => total + (node.items[item] ?? 0), 0);
+  const inFlight = state.crewMembers.reduce(
+    (total, crew) => total + (crew.carryingItemType === item ? crew.carryingAmount : 0),
+    0
+  );
+  return settled + inFlight;
 }
 
 function marketPolicy(state: ReturnType<typeof createInitialState>) {

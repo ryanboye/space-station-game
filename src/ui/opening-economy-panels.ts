@@ -115,6 +115,12 @@ export interface OpeningEconomyPanelsOptions {
   onAction?: (action: OpeningEconomyPanelAction) => void;
   /** Starts with the compact Site Brief visible. Defaults to true. */
   showSiteBrief?: boolean;
+  /**
+   * Optional container that owns the Site Brief's placement. Pass the game's
+   * floating left stack so the brief flows beneath the existing cards instead
+   * of being positioned over whatever else occupies that corner.
+   */
+  siteBriefHost?: HTMLElement | null;
 }
 
 export interface OpeningEconomyPanelsController {
@@ -149,6 +155,7 @@ const STYLE_TEXT = `
   top: 104px;
   right: 350px;
   width: min(302px, calc(100vw - 20px));
+  box-sizing: border-box;
   padding: 9px 10px 10px;
   border: 1px solid rgba(113, 151, 173, 0.68);
   border-radius: 4px;
@@ -157,6 +164,14 @@ const STYLE_TEXT = `
   pointer-events: auto;
 }
 .ui-panels-hidden .oe-site-brief { right: 10px; }
+/* Placed by a host stack: flow with its siblings instead of over them. */
+.oe-site-brief-stacked,
+.ui-panels-hidden .oe-site-brief-stacked {
+  position: static;
+  top: auto;
+  right: auto;
+  width: min(320px, calc(100vw - 36px));
+}
 .oe-site-kicker, .oe-panel-kicker, .oe-metric-label, .oe-event-time {
   display: block;
   color: var(--oe-muted);
@@ -476,6 +491,11 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
   const siteBrief = root.querySelector<HTMLElement>('.oe-site-brief');
   const layer = root.querySelector<HTMLElement>('.oe-panel-layer');
   if (!siteBrief || !layer) throw new Error('Opening economy panel mount failed');
+
+  if (options.siteBriefHost) {
+    siteBrief.classList.add('oe-site-brief-stacked');
+    options.siteBriefHost.appendChild(siteBrief);
+  }
 
   let currentView: OpeningEconomyPanelView | null = null;
   let openPanel: OpeningEconomyPanelName | null = null;

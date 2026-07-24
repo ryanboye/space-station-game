@@ -1086,6 +1086,9 @@ const state = createInitialState({ seed: gameSeed, physicalStarterInventory: tru
 const dockEconomyFeedback = new DockEconomyFeedbackLayer({ resultLifetime: 9, maxVisibleChips: 16 });
 const openingEconomyPanels = mountOpeningEconomyPanels({
   host: app!,
+  // The Site Brief joins the existing floating left stack so it flows under
+  // the goal and watch cards rather than covering the berth ops widget.
+  siteBriefHost: document.querySelector<HTMLElement>('.left-stack'),
   onAction: (action) => {
     if (action.type === 'order-stock') {
       buyImportedTradeGoods(state, 30, 12);

@@ -2558,7 +2558,10 @@ h2 {
 
 .left-stack {
   left: 18px;
-  top: 74px;
+  /* Clears the status bar. The Credits readout is now the button that opens
+     the operating ledger, so overlapping it here swallowed most of its click
+     target. Matches the Site Brief offset in opening-economy-panels. */
+  top: 104px;
   width: min(980px, calc(100vw - 400px));
   display: grid;
   gap: 10px;

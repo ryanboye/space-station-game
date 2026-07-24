@@ -170,6 +170,12 @@ export function createInitialState(options?: {
     rooms[door] = room;
   };
 
+  // Open a connector door through an already-painted hull wall. Unlike a room
+  // door this belongs to no room; it only keeps two corridors on one network.
+  const carveDoor = (x: number, y: number): void => {
+    tiles[toIndex(x, y, GRID_WIDTH)] = TileType.Door;
+  };
+
   // A compact maintenance room sits directly beneath the fuel Pod Dock. The
   // tank is deliberately local: its underfloor fuel line reaches the hull
   // coupler without crossing the public concourse or the cargo store.
@@ -211,6 +217,14 @@ export function createInitialState(options?: {
   // old invisible baseline grid for every newly authored station.
   paintEnclosedRoom(RoomType.Reactor, coreX + 6, coreY - 3, coreX + 7, coreY - 2, coreX + 5, coreY - 2);
   addStarterModule(ModuleType.ReactorCore, coreX + 6, coreY - 3, 0);
+
+  // The reactor pod sits mid-span in the north concourse, so its enclosing
+  // walls would otherwise cut the only route between the second Pod Dock and
+  // the market annex. These two connectors keep every guest-facing room on
+  // one walkable network: west into the service trunk, and south into the
+  // cafeteria, which also gives the market a route from the first Pod Dock.
+  carveDoor(coreX + 2, coreY - 2);
+  carveDoor(coreX + 10, coreY - 1);
 
   // The starter crew has functional but deliberately ramshackle support.
   // Four double bunks cover the initial shift at low comfort; beds and
