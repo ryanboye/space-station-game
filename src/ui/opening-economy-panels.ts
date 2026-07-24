@@ -137,7 +137,7 @@ const STYLE_TEXT = `
   --oe-good: #70d99e;
   --oe-warn: #f2bf65;
   --oe-danger: #ee7777;
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 46;
   pointer-events: none;
@@ -145,9 +145,9 @@ const STYLE_TEXT = `
   font-family: Consolas, Menlo, Monaco, monospace;
 }
 .oe-site-brief {
-  position: absolute;
-  top: 10px;
-  left: 10px;
+  position: fixed;
+  top: 104px;
+  right: 350px;
   width: min(302px, calc(100vw - 20px));
   padding: 9px 10px 10px;
   border: 1px solid rgba(113, 151, 173, 0.68);
@@ -156,12 +156,13 @@ const STYLE_TEXT = `
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
   pointer-events: auto;
 }
+.ui-panels-hidden .oe-site-brief { right: 10px; }
 .oe-site-kicker, .oe-panel-kicker, .oe-metric-label, .oe-event-time {
   display: block;
   color: var(--oe-muted);
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   line-height: 1.25;
   text-transform: uppercase;
 }
@@ -250,7 +251,7 @@ const STYLE_TEXT = `
 .oe-metric.warn { border-left-color: var(--oe-warn); }
 .oe-metric .good { color: var(--oe-good); }
 .oe-metric .warn { color: var(--oe-warn); }
-.oe-section-title { margin: 16px 0 7px; color: #c3d5dd; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.oe-section-title { margin: 16px 0 7px; color: #c3d5dd; font-size: 10px; letter-spacing: 0; text-transform: uppercase; }
 .oe-group-list, .oe-event-list, .oe-project-list { display: grid; gap: 5px; }
 .oe-group, .oe-event {
   display: flex;
@@ -287,7 +288,7 @@ const STYLE_TEXT = `
 .oe-shop-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 11px; }
 .oe-shop-stat { min-width: 0; padding: 8px; border: 1px solid rgba(98, 137, 159, 0.32); background: rgba(6, 13, 19, 0.28); }
 .oe-shop-stat strong { display: block; margin-top: 3px; font-size: 13px; line-height: 1.2; }
-.oe-policy-label { margin: 15px 0 6px; color: #bacbd3; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.oe-policy-label { margin: 15px 0 6px; color: #bacbd3; font-size: 10px; letter-spacing: 0; text-transform: uppercase; }
 .oe-policy-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 .oe-policy {
   min-height: 38px;
@@ -323,7 +324,7 @@ const STYLE_TEXT = `
 }
 .oe-project-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .oe-project h3 { margin: 0; color: #e4edf0; font-size: 12px; line-height: 1.25; }
-.oe-project-state { color: #9ab6c4; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.oe-project-state { color: #9ab6c4; font-size: 9px; letter-spacing: 0; text-transform: uppercase; white-space: nowrap; }
 .oe-project.complete .oe-project-state { color: var(--oe-good); }
 .oe-project p { margin: 5px 0 0; color: #94aab5; font-size: 10px; line-height: 1.4; }
 .oe-project-terms { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 8px; color: #e3c77f; font-size: 10px; }
@@ -334,7 +335,7 @@ const STYLE_TEXT = `
 .oe-project-action:hover, .oe-project-action:focus-visible { border-color: #b8d6e4; background: #244762; }
 .oe-project-action:disabled { border-color: #435560; background: #152029; color: #788992; cursor: default; }
 @media (max-width: 600px) {
-  .oe-site-brief { top: 6px; left: 6px; width: min(270px, calc(100vw - 12px)); }
+  .oe-site-brief { top: 6px; right: 6px; width: min(270px, calc(100vw - 12px)); }
   .oe-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .oe-shop-stats { grid-template-columns: 1fr; }
   .oe-panel-layer { padding: 8px; }
@@ -424,7 +425,7 @@ function renderShop(view: TravelSuppliesShopView): string {
         </div>
         <div class="oe-shop-stats">
           <div class="oe-shop-stat"><span class="oe-metric-label">Wholesale</span><strong>${credits(view.wholesaleUnitCost)} / unit</strong></div>
-          <div class="oe-shop-stat"><span class="oe-metric-label">Sale price</span><strong class="good">${credits(view.saleUnitPrice)} / unit</strong></div>
+          <div class="oe-shop-stat"><span class="oe-metric-label">Baseline sale</span><strong class="good">${credits(view.saleUnitPrice)} / unit</strong></div>
           <div class="oe-shop-stat"><span class="oe-metric-label">Recent margin</span><strong class="${view.recentMargin >= 0 ? 'good' : 'warn'}">${credits(view.recentMargin)} <small>(${Math.max(0, Math.round(view.recentUnitsSold))} sold)</small></strong></div>
         </div>
         <div class="oe-policy-label">Pricing policy</div>
@@ -507,6 +508,8 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
       layer.innerHTML = '';
       return;
     }
+    const previousPanel = layer.querySelector<HTMLElement>('.oe-panel');
+    const previousScrollTop = previousPanel?.scrollTop ?? 0;
     const content = openPanel === 'ledger'
       ? renderLedger(currentView.ledger)
       : openPanel === 'shop'
@@ -514,6 +517,8 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
         : renderProjects(currentView.projects!);
     layer.hidden = false;
     layer.innerHTML = content;
+    const nextPanel = layer.querySelector<HTMLElement>('.oe-panel');
+    if (nextPanel && previousScrollTop > 0) nextPanel.scrollTop = previousScrollTop;
   };
 
   root.addEventListener('click', (event) => {

@@ -26,6 +26,8 @@ import {
 } from './content/command';
 import { createInitialUnlockState } from './content/unlocks';
 import { MAP_CONDITION_VERSION } from './map-conditions';
+import { createCapitalProjectsState } from './capital-projects';
+import { createEconomyLedger } from './opening-economy';
 import { createEmptyUtilityUnderlay } from './utility-underlay';
 import {
   CREW_PRIORITY_PRESET_WEIGHTS,
@@ -410,6 +412,12 @@ export function createInitialState(options?: {
         fuelTarget: 0,
         fuelCompleted: 0
       }
+    },
+    openingEconomy: {
+      ledger: createEconomyLedger(),
+      marketPricingPolicy: 'standard',
+      podFreightOperations: [],
+      capitalProjects: createCapitalProjectsState()
     },
     pressurized: new Array<boolean>(GRID_WIDTH * GRID_HEIGHT).fill(false),
     airQualityByTile: new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(100),

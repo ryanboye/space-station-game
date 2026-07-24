@@ -6386,7 +6386,8 @@ export function renderWorld(
   }
 
   const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);
-  drawPodDockInformationChips(ctx, state, occupiedInfrastructureChips);
+  // Pod demand and transaction summaries are drawn by the opening-economy
+  // layer after renderWorld so one chip owns the complete visit story.
   drawPortCargoLots(ctx, state);
 
   drawQueuedShips(ctx, state, spriteAtlas, useSprites);

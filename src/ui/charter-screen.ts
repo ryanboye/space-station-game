@@ -2,6 +2,7 @@
 // simulation; this module only gives that geometry a readable, tactile view.
 
 import { computeSiteProfile } from '../sim/site-charter';
+import { deriveOpeningEconomyProfile } from '../sim/opening-economy';
 import type { LaneRoute, SiteCharter, SpaceLane, SystemMap } from '../sim/types';
 
 export interface CharterScreenOptions {
@@ -491,7 +492,7 @@ export function mountCharterScreen(
       <span class="charter-key"><i class="key-dot key-warm"></i>WARM ZONE</span><span class="charter-key"><i class="key-gate"></i>GATE</span>
       <span class="charter-key"><i class="key-dot key-hab"></i>HABITABLE</span><span class="charter-key"><i class="key-dot key-cold"></i>COLD ZONE</span>
     </aside>
-    <div class="charter-tooltip" role="status"><div class="tooltip-title" data-field="title">Survey site</div><div class="tooltip-row"><span>Sunlight</span><span data-field="sun"></span></div><div class="tooltip-row"><span>Traffic</span><span data-field="traffic"></span></div><div class="tooltip-row"><span>Debris</span><span data-field="debris"></span></div><div class="tooltip-row"><span>Resource</span><span data-field="resource"></span></div></div>
+    <div class="charter-tooltip" role="status"><div class="tooltip-title" data-field="title">Survey site</div><div class="tooltip-row"><span>Sunlight</span><span data-field="sun"></span></div><div class="tooltip-row"><span>Traffic</span><span data-field="traffic"></span></div><div class="tooltip-row"><span>Debris</span><span data-field="debris"></span></div><div class="tooltip-row"><span>Resource</span><span data-field="resource"></span></div><div class="tooltip-row"><span>Supply cost</span><span data-field="supply-cost"></span></div><div class="tooltip-row"><span>Retail demand</span><span data-field="retail-demand"></span></div><div class="tooltip-row"><span>Repair demand</span><span data-field="repair-demand"></span></div><div class="tooltip-row"><span>Solar yield</span><span data-field="solar-yield"></span></div></div>
     <nav class="charter-actions" aria-label="Charter actions">
       <button type="button" class="charter-recommended">Recommended Site</button>
       <button type="button" class="charter-primary" disabled>Charter This Site</button>
@@ -508,6 +509,10 @@ export function mountCharterScreen(
   const trafficField = root.querySelector<HTMLElement>('[data-field="traffic"]')!;
   const debrisField = root.querySelector<HTMLElement>('[data-field="debris"]')!;
   const resourceField = root.querySelector<HTMLElement>('[data-field="resource"]')!;
+  const supplyCostField = root.querySelector<HTMLElement>('[data-field="supply-cost"]')!;
+  const retailDemandField = root.querySelector<HTMLElement>('[data-field="retail-demand"]')!;
+  const repairDemandField = root.querySelector<HTMLElement>('[data-field="repair-demand"]')!;
+  const solarYieldField = root.querySelector<HTMLElement>('[data-field="solar-yield"]')!;
   const recommendedButton = root.querySelector<HTMLButtonElement>('.charter-recommended')!;
   const charterButton = root.querySelector<HTMLButtonElement>('.charter-primary')!;
   const backButton = root.querySelector<HTMLButtonElement>('.charter-back');
@@ -644,6 +649,7 @@ export function mountCharterScreen(
       return;
     }
     const profile = computeSiteProfile(system, point.x, point.y);
+    const economy = deriveOpeningEconomyProfile(profile);
     const targetName = target.kind === 'planet' ? system.planets.find((planet) => planet.id === target.id)?.displayName
       : target.kind === 'gate' ? 'Trade gate'
         : target.kind === 'outpost' ? landmarks.find((landmark) => landmark.id === target.id)?.label
@@ -654,9 +660,13 @@ export function mountCharterScreen(
     trafficField.textContent = trafficBand(peakTraffic(profile));
     debrisField.textContent = debrisBand(profile.debrisFactor);
     resourceField.textContent = resourceLabel(profile.resourceType);
+    supplyCostField.textContent = `${Math.round(economy.supplyWholesaleMultiplier * 100)}%`;
+    retailDemandField.textContent = `${Math.round(economy.retailDemandMultiplier * 100)}%`;
+    repairDemandField.textContent = `${Math.round(economy.repairDemandMultiplier * 100)}%`;
+    solarYieldField.textContent = `${Math.round(economy.solarYieldMultiplier * 100)}%`;
     const rect = root.getBoundingClientRect();
     const tooltipWidth = tooltip.offsetWidth || 204;
-    const tooltipHeight = tooltip.offsetHeight || 94;
+    const tooltipHeight = tooltip.offsetHeight || 154;
     const left = Math.max(8, Math.min(rect.width - tooltipWidth - 8, clientX - rect.left + 16));
     const top = Math.max(8, Math.min(rect.height - tooltipHeight - 8, clientY - rect.top + 16));
     tooltip.style.left = `${left}px`;

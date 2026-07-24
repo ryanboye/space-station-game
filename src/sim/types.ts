@@ -2520,10 +2520,7 @@ export interface StationState {
   dockQueue: DockQueueEntry[];
   trafficOffers: TrafficOffer[];
   portOps: PortOpsState;
-  // Optional only while fresh-state construction is being migrated. Save
-  // hydration always supplies this field; consumers should retain a neutral
-  // fallback until initial-state owns its authored default.
-  openingEconomy?: OpeningEconomyState;
+  openingEconomy: OpeningEconomyState;
   pressurized: boolean[];
   // Per-tile air quality 0..100. Computed each tick from life-support coverage
   // distance + active source count. Local exposure checks (crew, visitor,

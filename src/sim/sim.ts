@@ -37,6 +37,34 @@ import { MAP_CONDITION_VERSION, mapConditionAt, mapConditionSamplesAt } from './
 import { generateSystemMap, laneWeightsFromSystem } from './system-map';
 import { generateCommercialOffers } from './commercial';
 import {
+  deriveOpeningEconomyProfile,
+  marketPolicyEffect,
+  recordEconomyEvent,
+  summarizeEconomyEvents,
+  type EconomyEventInput,
+  type MarketPricingPolicy
+} from './opening-economy';
+import {
+  acceptCapitalProject,
+  capitalProjectDefinitions,
+  evaluateCapitalProjects,
+  projectProgress,
+  type CapitalProjectFacts,
+  type CapitalProjectId
+} from './capital-projects';
+import {
+  completeCourierHandling,
+  createCourierHandling,
+  createSupplierDelivery,
+  expirePodFreight,
+  markPodFreightArrived,
+  unloadSupplierDelivery,
+  type CourierHandling,
+  type PodFreightEconomyEventIntent,
+  type PodFreightOperation,
+  type SupplierDelivery
+} from './pod-freight';
+import {
   type ArrivingShip,
   type BerthSizeClass,
   type CapabilityTag,
@@ -225,6 +253,133 @@ const CREW_PER_MARKET = 1;
 
 const COMMERCIAL_RENT_INTERVAL_SEC = 60;
 const COMMERCIAL_RESTOCK_INTERVAL_SEC = 18;
+
+const TRAVEL_SUPPLY_ORDER_UNITS = 12;
+const TRAVEL_SUPPLY_BASE_WHOLESALE = 3.5;
+const POD_COURIER_HANDLING_FEE = 2.5;
+
+function applyEconomyTransaction(
+  state: StationState,
+  input: EconomyEventInput,
+  options: { countAsEarned?: boolean } = {}
+): void {
+  state.metrics.credits = Math.max(0, state.metrics.credits + input.credits);
+  if (input.credits > 0 && options.countAsEarned !== false) {
+    state.metrics.creditsEarnedLifetime += input.credits;
+  }
+  recordEconomyEvent(state.openingEconomy.ledger, input);
+}
+
+function recordPodFreightEconomyIntents(
+  state: StationState,
+  intents: readonly PodFreightEconomyEventIntent[],
+  sourceId?: number,
+  tileIndex?: number
+): void {
+  for (const intent of intents) {
+    applyEconomyTransaction(state, {
+      ...intent,
+      at: state.now,
+      sourceId: intent.sourceId ?? sourceId,
+      tileIndex: intent.tileIndex ?? tileIndex,
+      siteTag: 'pod-dock'
+    });
+  }
+}
+
+export function setMarketPricingPolicy(state: StationState, policy: MarketPricingPolicy): void {
+  state.openingEconomy.marketPricingPolicy = policy;
+}
+
+export function getOpeningEconomySummary(state: StationState, windowSec = 120): ReturnType<typeof summarizeEconomyEvents> {
+  const cutoff = Math.max(0, state.now - Math.max(1, windowSec));
+  return summarizeEconomyEvents(state.openingEconomy.ledger.recent.filter((event) => event.at >= cutoff));
+}
+
+function capitalProjectFacts(state: StationState): CapitalProjectFacts {
+  const completedCouriers = state.openingEconomy.podFreightOperations.filter(
+    (operation): operation is CourierHandling => operation.kind === 'courier-handling' && operation.status === 'complete'
+  );
+  const poweredFuelCouplers = state.docks.filter((dock) =>
+    dock.podCapabilities?.includes('fuel') && getPodDockFuelSupplyView(state, dock.id).connected
+  ).length;
+  return {
+    travelersServed: state.openingEconomy.ledger.lifetime['dock-fee'].count,
+    mealsServed: state.metrics.mealsServedTotal,
+    retailSales: state.usageTotals.tradeGoodsSold,
+    freightLockers: state.moduleInstances.filter((module) => module.type === ModuleType.FreightLocker).length,
+    courierTransfers: completedCouriers.length,
+    courierUnitsHandled: completedCouriers.reduce((sum, operation) => sum + operation.completedUnits, 0),
+    poweredFuelCouplers,
+    fuelPipeTiles: utilityUnderlayTileCount(state, 'fuel-pipe'),
+    refuelsCompleted: state.openingEconomy.ledger.lifetime['fuel-sale'].count,
+    marketStalls: state.moduleInstances.filter((module) => module.type === ModuleType.MarketStall).length,
+    stationRating: state.metrics.stationRating
+  };
+}
+
+export function getOpeningCapitalProjects(state: StationState): Array<{
+  id: CapitalProjectId;
+  title: string;
+  summary: string;
+  state: 'available' | 'active' | 'complete';
+  advanceCredits: number;
+  completionCredits: number;
+  conditions: ReturnType<typeof projectProgress>['conditions'];
+}> {
+  const facts = capitalProjectFacts(state);
+  return capitalProjectDefinitions().map((definition) => {
+    const progress = projectProgress(definition.id, facts);
+    const status = state.openingEconomy.capitalProjects.completed.includes(definition.id)
+      ? 'complete'
+      : state.openingEconomy.capitalProjects.active.some((entry) => entry.id === definition.id)
+        ? 'active'
+        : 'available';
+    return {
+      id: definition.id,
+      title: definition.title,
+      summary: definition.summary,
+      state: status,
+      advanceCredits: definition.reward.advanceCredits,
+      completionCredits: definition.reward.completionCredits,
+      conditions: progress.conditions
+    };
+  });
+}
+
+export function acceptOpeningCapitalProject(state: StationState, projectId: CapitalProjectId): boolean {
+  const mutation = acceptCapitalProject(state.openingEconomy.capitalProjects, projectId, state.now);
+  if (!mutation.activated) return false;
+  state.openingEconomy.capitalProjects = mutation.state;
+  if (mutation.creditsAwarded > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'grant-award',
+      credits: mutation.creditsAwarded,
+      costBasis: 0,
+      label: `${capitalProjectDefinitions().find((definition) => definition.id === projectId)?.title ?? 'Project'} advance`
+    });
+  }
+  return true;
+}
+
+function updateOpeningCapitalProjects(state: StationState): void {
+  const mutation = evaluateCapitalProjects(state.openingEconomy.capitalProjects, capitalProjectFacts(state));
+  state.openingEconomy.capitalProjects = mutation.state;
+  if (mutation.creditsAwarded > 0) {
+    const completedNames = mutation.completed.map((id) =>
+      capitalProjectDefinitions().find((definition) => definition.id === id)?.title ?? id
+    );
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'grant-award',
+      credits: mutation.creditsAwarded,
+      costBasis: 0,
+      label: completedNames.length === 1 ? `${completedNames[0]} completed` : 'Capital projects completed'
+    });
+  }
+  if (mutation.ratingAwarded > 0) state.usageTotals.ratingDelta += mutation.ratingAwarded;
+}
 
 export function getCommercialUnitAt(state: StationState, tileIndex: number): CommercialUnit | null {
   return state.commercialUnits.find((unit) => unit.tiles.includes(tileIndex)) ?? null;
@@ -428,8 +583,15 @@ function updateCommercialUnits(state: StationState): void {
       unit.nextRestockAt = state.now + COMMERCIAL_RESTOCK_INTERVAL_SEC;
     }
     if (unit.nextRentAt !== null && state.now >= unit.nextRentAt) {
-      state.metrics.credits += offer.baseRentPerCycle;
-      state.metrics.creditsEarnedLifetime += offer.baseRentPerCycle;
+      applyEconomyTransaction(state, {
+        at: state.now,
+        kind: 'retail-sale',
+        credits: offer.baseRentPerCycle,
+        costBasis: 0,
+        label: `${offer.brandName} rent`,
+        sourceId: unit.id,
+        tileIndex: unit.anchorTile
+      });
       unit.rentCollected += offer.baseRentPerCycle;
       unit.nextRentAt += COMMERCIAL_RENT_INTERVAL_SEC;
       unit.statusReason = unit.currentCustomers > 0 ? 'Open · serving customers' : 'Open · waiting for foot traffic';
@@ -458,12 +620,36 @@ function recordVisitorTransaction(
 ): void {
   if (gross <= 0) return;
   const stationPayout = recordCommercialSaleForUnit(state, commercialUnit, gross);
-  state.metrics.credits += stationPayout;
-  state.metrics.creditsEarnedLifetime += stationPayout;
+  const sourceShipId = visitor.originShipId ?? undefined;
+  const profile = deriveOpeningEconomyProfile(state.site);
+  const costBasis = bucket === 'market'
+    ? TRAVEL_SUPPLY_BASE_WHOLESALE * profile.supplyWholesaleMultiplier
+    : 3;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'retail-sale',
+    credits: stationPayout,
+    costBasis,
+    label: bucket === 'market' ? 'Travel supplies sold' : 'Prepared meal sold',
+    sourceId: sourceShipId,
+    tileIndex: visitor.tileIndex,
+    siteTag: profile.siteTag
+  });
   recordVisitorPortSpending(state, visitor, gross);
   if (commercialUnit) commercialUnit.customersServed += 1;
   if (bucket === 'meal') state.usageTotals.creditsMealPayoutGross += gross;
-  else state.usageTotals.creditsMarketGross += gross;
+  else {
+    state.usageTotals.creditsMarketGross += gross;
+    const pricing = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
+    if (pricing.satisfactionDelta > 0) {
+      visitorSuccessRatingBonus(state, pricing.satisfactionDelta * 0.2, 'leisureService');
+    } else if (
+      pricing.satisfactionDelta < 0 &&
+      state.metrics.stationRating < pricing.ratingRequiredForNeutralSatisfaction
+    ) {
+      addVisitorFailurePenalty(state, Math.abs(pricing.satisfactionDelta) * 0.08, 'shipServicesMissing');
+    }
+  }
 }
 
 function tenantStaffInRoomCluster(state: StationState, room: RoomType, cluster: number[]): number {
@@ -2949,13 +3135,10 @@ function computePowerGridRuntime(state: StationState): PowerGridRuntime {
   const utility = ensureUtilityUnderlay(state);
   const key = `${utility.version}:${state.roomVersion}:${state.moduleVersion}`;
   if (powerGridCache?.state === state && powerGridCache.key === key) return powerGridCache.runtime;
-  // Existing saves that have neither a source nor a commissioned source keep
-  // their historical fallback. A loose cable alone must not silently revoke
-  // that fallback; grid enforcement begins when the player installs a source.
-  const hasInstalledSource = state.moduleInstances.some(
-    (module) => module.type === ModuleType.SolarPanel || module.type === ModuleType.ReactorCore
-  );
-  const gridMode = hasInstalledSource;
+  // A source is commissioned only once a conduit actually reaches it. This
+  // preserves the legacy fallback for old/custom starter templates and means
+  // placing a loose first cable cannot black out an otherwise working station.
+  const gridMode = powerSourceTiles(state).length > 0;
   const diagnostics = discoverUtilityNetworks(state, 'power-conduit', {
     sourceTiles: powerSourceTiles(state),
     sinkTiles: powerSinkTiles(state)
@@ -4829,6 +5012,9 @@ function generateShipManifest(state: StationState, shipType: ShipType): {
   }
   const marketUnlocked = isServiceTagUnlocked(state, 'market');
   const loungeUnlocked = isServiceTagUnlocked(state, 'lounge');
+  const economy = deriveOpeningEconomyProfile(state.site);
+  const pricing = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
+  adjusted.market *= economy.retailDemandMultiplier * pricing.demandMultiplier;
   if (!marketUnlocked) adjusted.market = 0;
   if (!loungeUnlocked) adjusted.lounge = 0;
   if (!marketUnlocked && !loungeUnlocked) {
@@ -4911,7 +5097,10 @@ function pickVisitorPrimaryPreference(
   const profilePreference = ARCHETYPE_PROFILES[archetype].primaryPreference;
   const weighted = {
     cafeteria: base.cafeteria,
-    market: marketUnlocked ? base.market : 0,
+    market: marketUnlocked
+      ? base.market * deriveOpeningEconomyProfile(state.site).retailDemandMultiplier *
+        marketPolicyEffect(state.openingEconomy.marketPricingPolicy).demandMultiplier
+      : 0,
     lounge: loungeUnlocked ? base.lounge : 0
   };
   if (profilePreference === 'cafeteria') weighted.cafeteria += 0.18;
@@ -4979,6 +5168,15 @@ function laneNeighbor(state: StationState, tileIndex: number, lane: SpaceLane): 
   return inBounds(x, y, state.width, state.height) ? toIndex(x, y, state.width) : null;
 }
 
+function exteriorHullFacing(state: StationState, originTile: number): SpaceLane | null {
+  if (originTile < 0 || originTile >= state.tiles.length || state.tiles[originTile] !== TileType.Wall) return null;
+  const outward = (['north', 'east', 'south', 'west'] as SpaceLane[]).filter((lane) => {
+    const neighbor = laneNeighbor(state, originTile, lane);
+    return neighbor === null || state.tiles[neighbor] === TileType.Space;
+  });
+  return outward.length === 1 ? outward[0] : null;
+}
+
 /**
  * A Pod Dock has one pressurized-side access tile and one exterior-facing
  * approach. It is intentionally a wall module rather than a Dock tile so a
@@ -5008,16 +5206,18 @@ export function getPodDockPlacementView(state: StationState, originTile: number)
 }
 
 function podDockAttachmentCandidates(state: StationState, originTile: number): Array<{ moduleId: number; originTile: number; facing: SpaceLane }> {
-  const attachment = getPodDockPlacementView(state, originTile);
-  if (!attachment.valid || attachment.facing === null) return [];
+  // Attachments share the dock's pressurized access; unlike the gangway
+  // itself, a locker/coupler does not need a second walkable tile behind it.
+  const attachmentFacing = exteriorHullFacing(state, originTile);
+  if (attachmentFacing === null) return [];
   const attachmentPoint = fromIndex(originTile, state.width);
   return state.moduleInstances.flatMap((module) => {
     if (module.type !== ModuleType.PodDock) return [];
     const dock = getPodDockPlacementView(state, module.originTile);
     const facing = dock.facing;
-    if (!dock.valid || facing === null || facing !== attachment.facing) return [];
+    if (!dock.valid || facing === null || facing !== attachmentFacing) return [];
     const dockPoint = fromIndex(module.originTile, state.width);
-    const aligned = attachment.facing === 'north' || attachment.facing === 'south'
+    const aligned = attachmentFacing === 'north' || attachmentFacing === 'south'
       ? dockPoint.y === attachmentPoint.y && Math.abs(dockPoint.x - attachmentPoint.x) <= 2
       : dockPoint.x === attachmentPoint.x && Math.abs(dockPoint.y - attachmentPoint.y) <= 2;
     return aligned ? [{ moduleId: module.id, originTile: module.originTile, facing }] : [];
@@ -10543,7 +10743,8 @@ function nextTrafficArrivalDelay(state: StationState): number {
   const jitter = 0.55 + state.rng() * 1.35;
   const bank = getOperatingSchedule(state).trafficBank;
   const bankMultiplier = bank === 'maintenance-window' ? 1.7 : 0.82;
-  return clamp(averageDelay * jitter * bankMultiplier, TRAFFIC_ARRIVAL_MIN_DELAY_SEC, TRAFFIC_ARRIVAL_MAX_DELAY_SEC * 1.7);
+  const siteTraffic = deriveOpeningEconomyProfile(state.site).passengerTrafficMultiplier;
+  return clamp(averageDelay * jitter * bankMultiplier / Math.sqrt(siteTraffic), TRAFFIC_ARRIVAL_MIN_DELAY_SEC, TRAFFIC_ARRIVAL_MAX_DELAY_SEC * 1.7);
 }
 
 function scheduleNextTrafficArrival(state: StationState): void {
@@ -11338,7 +11539,14 @@ function trySpawnWalkInDockPod(state: StationState): boolean {
       )
   );
   if (eligibleDocks.length === 0) return false;
-  const dock = eligibleDocks[Math.floor(state.rng() * eligibleDocks.length)];
+  const supplierWaiting = state.openingEconomy.podFreightOperations.some((operation) =>
+    operation.kind === 'supplier-delivery' && operation.status === 'ordered'
+  );
+  const supplierDocks = supplierWaiting
+    ? eligibleDocks.filter((dock) => dock.podCapabilities?.includes('freight'))
+    : [];
+  const dockPool = supplierDocks.length > 0 ? supplierDocks : eligibleDocks;
+  const dock = dockPool[Math.floor(state.rng() * dockPool.length)];
   const types = dock.allowedShipTypes.filter(
     (type): type is ShipType => (type === 'tourist' || type === 'trader') && isShipTypeUnlocked(state, type)
   );
@@ -11561,7 +11769,7 @@ function smallCraftService(
     : kind === 'refuel'
       ? { durationSec: 18, creditsEarned: 12, ratingDelta: 0.14 }
       : kind === 'freight'
-        ? { durationSec: 22, creditsEarned: 10, ratingDelta: 0.12 }
+        ? { durationSec: 22, creditsEarned: 0, ratingDelta: 0.12 }
         : { durationSec: 30, creditsEarned: 16, ratingDelta: 0.18 };
   return {
     kind,
@@ -11577,17 +11785,81 @@ function smallCraftService(
   };
 }
 
-function createSmallCraftVisit(state: StationState, dock: DockEntity): SmallCraftVisit {
+function replacePodFreightOperation(state: StationState, operation: PodFreightOperation): void {
+  const index = state.openingEconomy.podFreightOperations.findIndex((candidate) => candidate.id === operation.id);
+  if (index >= 0) state.openingEconomy.podFreightOperations[index] = operation;
+  else state.openingEconomy.podFreightOperations.push(operation);
+  if (state.openingEconomy.podFreightOperations.length > 64) {
+    state.openingEconomy.podFreightOperations.splice(0, state.openingEconomy.podFreightOperations.length - 64);
+  }
+}
+
+function activePodFreightAtDock(state: StationState, dockId: number): PodFreightOperation | null {
+  return state.openingEconomy.podFreightOperations.find((operation) =>
+    operation.dockId === dockId &&
+    operation.status !== 'complete' &&
+    operation.status !== 'cancelled' &&
+    operation.status !== 'expired'
+  ) ?? null;
+}
+
+function createSmallCraftVisit(state: StationState, dock: DockEntity, shipId: number): SmallCraftVisit {
   const services = [smallCraftService('passenger')];
   const advertised = dock.podCapabilities ?? [];
   if (advertised.length > 0) {
-    const capability = advertised[Math.floor(state.rng() * advertised.length)];
+    const pendingSupplier = state.openingEconomy.podFreightOperations.find((operation): operation is SupplierDelivery =>
+      operation.kind === 'supplier-delivery' && operation.status === 'ordered'
+    );
+    const profile = deriveOpeningEconomyProfile(state.site);
+    // A paid supplier order owns the next freight-capable pod visit. Random
+    // courier/service demand resumes once that delivery has been attached.
+    let capability: PodDockCapability = advertised[0];
+    if (pendingSupplier && advertised.includes('freight')) {
+      capability = 'freight';
+    } else {
+      const weighted = advertised.map((candidate) => ({
+        candidate,
+        weight: candidate === 'freight'
+          ? profile.courierTrafficMultiplier
+          : candidate === 'maintenance'
+            ? profile.repairDemandMultiplier
+            : 1
+      }));
+      let cursor = state.rng() * weighted.reduce((sum, entry) => sum + entry.weight, 0);
+      for (const entry of weighted) {
+        cursor -= entry.weight;
+        if (cursor <= 0) {
+          capability = entry.candidate;
+          break;
+        }
+      }
+    }
     const kind: SmallCraftServiceKind = capability === 'fuel'
       ? 'refuel'
       : capability === 'freight'
         ? 'freight'
         : 'repair';
-    services.push(smallCraftService(kind, kind === 'freight' ? (state.rng() < 0.5 ? 'import' : 'export') : undefined));
+    if (kind === 'freight') {
+      if (pendingSupplier) {
+        const arrived = markPodFreightArrived(pendingSupplier, dock.id, state.now);
+        replacePodFreightOperation(state, arrived.operation);
+        services.push(smallCraftService('freight', 'import'));
+      } else {
+        const courier = createCourierHandling({
+          id: `courier-${shipId}`,
+          stockKind: 'raw-materials',
+          direction: state.rng() < 0.5 ? 'inbound' : 'outbound',
+          units: SMALL_CRAFT_FREIGHT_UNITS,
+          handlingFeePerUnit: POD_COURIER_HANDLING_FEE,
+          arrivedAt: state.now
+        });
+        courier.dockId = dock.id;
+        replacePodFreightOperation(state, courier);
+        services.push(smallCraftService('freight', courier.direction === 'inbound' ? 'import' : 'export'));
+      }
+    } else {
+      services.push(smallCraftService(kind));
+    }
   }
   return {
     dockSourceKey: dock.sourceKey,
@@ -11597,12 +11869,46 @@ function createSmallCraftVisit(state: StationState, dock: DockEntity): SmallCraf
   };
 }
 
-function completeSmallCraftService(state: StationState, service: SmallCraftService): void {
+function completeSmallCraftService(
+  state: StationState,
+  ship: ArrivingShip,
+  service: SmallCraftService,
+  dock: DockEntity | null
+): void {
   service.status = 'complete';
   service.progress = 1;
   service.blockedReason = null;
-  state.metrics.credits += service.creditsEarned;
-  state.metrics.creditsEarnedLifetime += service.creditsEarned;
+  if (service.creditsEarned > 0) {
+    const kind = service.kind === 'passenger'
+      ? 'dock-fee'
+      : service.kind === 'refuel'
+        ? 'fuel-sale'
+        : 'repair-service';
+    const profile = deriveOpeningEconomyProfile(state.site);
+    const credits = service.kind === 'refuel'
+      ? service.creditsEarned * profile.fuelSaleMultiplier
+      : service.creditsEarned;
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind,
+      credits,
+      costBasis: service.kind === 'refuel'
+        ? SMALL_CRAFT_FUEL_UNITS * 1.5 * profile.fuelWholesaleMultiplier
+        : service.kind === 'repair'
+          ? SMALL_CRAFT_REPAIR_MATERIALS * 0.8
+          : 0,
+      label: service.kind === 'passenger'
+        ? `Pod access · ${ship.passengersTotal} traveler${ship.passengersTotal === 1 ? '' : 's'}`
+        : service.kind === 'refuel'
+          ? `Pod refuel · ${SMALL_CRAFT_FUEL_UNITS} units`
+          : 'Minor ship repair',
+      sourceId: ship.id,
+      tileIndex: dock?.moduleId === undefined
+        ? dock?.tiles[0]
+        : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile,
+      siteTag: 'pod-dock'
+    });
+  }
   state.usageTotals.ratingDelta += service.ratingDelta;
 }
 
@@ -11641,7 +11947,7 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
       service.elapsedSec = Math.min(service.durationSec, service.elapsedSec + dt);
       service.progress = Math.min(0.95, service.elapsedSec / service.durationSec);
       if (ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) === 0) {
-        completeSmallCraftService(state, service);
+        completeSmallCraftService(state, ship, service, dock);
       }
       continue;
     }
@@ -11671,7 +11977,7 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
       if (moved + 0.001 < requested) {
         blockSmallCraftService(service, 'no fuel in Fuel Tank');
       } else if (service.transferredUnits + 0.001 >= SMALL_CRAFT_FUEL_UNITS) {
-        completeSmallCraftService(state, service);
+        completeSmallCraftService(state, ship, service, dock);
       }
       continue;
     }
@@ -11682,23 +11988,56 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
     if (service.elapsedSec + 0.001 < service.durationSec) continue;
 
     if (service.kind === 'freight') {
-      if (service.freightDirection === 'import') {
-        const remaining = Math.max(0, SMALL_CRAFT_FREIGHT_UNITS - service.transferredUnits);
-        const added = addItemAcrossTargets(state, materialInventoryTiles(state), 'rawMaterial', remaining);
-        service.transferredUnits += added;
-        if (service.transferredUnits + 0.001 < SMALL_CRAFT_FREIGHT_UNITS) {
-          blockSmallCraftService(service, 'station material storage is full');
-          continue;
-        }
-        refreshMaterialMetric(state);
-      } else {
-        if (rawMaterialStockTotal(state) + 0.001 < SMALL_CRAFT_FREIGHT_UNITS) {
-          blockSmallCraftService(service, 'no raw material available for export');
-          continue;
-        }
-        service.transferredUnits = consumeOperationalSupplies(state, SMALL_CRAFT_FREIGHT_UNITS);
+      const operation = dock ? activePodFreightAtDock(state, dock.id) : null;
+      if (!operation) {
+        blockSmallCraftService(service, 'freight order could not be identified');
+        continue;
       }
-      completeSmallCraftService(state, service);
+      if (operation.kind === 'supplier-delivery') {
+        const destinations = operation.stockKind === 'travel-supplies'
+          ? state.moduleInstances.filter((module) => module.type === ModuleType.MarketStall).map((module) => module.originTile)
+          : operation.stockKind === 'fuel'
+            ? state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank).map((module) => module.originTile)
+            : operation.stockKind === 'prepared-meals'
+              ? state.moduleInstances.filter((module) => module.type === ModuleType.ServingStation).map((module) => module.originTile)
+              : materialInventoryTiles(state);
+        const itemType: ItemType = operation.stockKind === 'travel-supplies'
+          ? 'tradeGood'
+          : operation.stockKind === 'fuel'
+            ? 'fuel'
+            : operation.stockKind === 'prepared-meals'
+              ? 'meal'
+              : 'rawMaterial';
+        const availableCapacity = totalItemCapacityAtTargets(state, destinations);
+        const transition = unloadSupplierDelivery(operation, Math.max(1, operation.orderedUnits), availableCapacity, state.now);
+        if (transition.ownedInventoryDelta > 0) {
+          addItemAcrossTargets(state, destinations, itemType, transition.ownedInventoryDelta, dock.tiles[0]);
+        }
+        replacePodFreightOperation(state, transition.operation);
+        service.transferredUnits = transition.operation.unloadedUnits;
+        service.progress = transition.operation.unloadedUnits / Math.max(1, transition.operation.orderedUnits);
+        if (transition.operation.status !== 'complete') {
+          blockSmallCraftService(service, transition.operation.blockedReason ?? 'supplier delivery is still unloading');
+          continue;
+        }
+        applyEconomyTransaction(state, {
+          at: state.now,
+          kind: 'passenger-service',
+          credits: 0,
+          costBasis: 0,
+          label: `Supplier delivered ${transition.operation.orderedUnits} travel supplies`,
+          sourceId: ship.id,
+          tileIndex: dock.tiles[0],
+          siteTag: 'pod-dock'
+        }, { countAsEarned: false });
+      } else {
+        const transition = completeCourierHandling(operation, operation.consignedUnits, state.now);
+        replacePodFreightOperation(state, transition.operation);
+        service.transferredUnits = transition.operation.completedUnits;
+        service.progress = transition.operation.completedUnits / Math.max(1, transition.operation.consignedUnits);
+        recordPodFreightEconomyIntents(state, transition.economyEvents, ship.id, dock.tiles[0]);
+      }
+      completeSmallCraftService(state, ship, service, dock);
       continue;
     }
 
@@ -11707,7 +12046,7 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
       continue;
     }
     service.transferredUnits = consumeOperationalSupplies(state, SMALL_CRAFT_REPAIR_MATERIALS);
-    completeSmallCraftService(state, service);
+    completeSmallCraftService(state, ship, service, dock);
   }
 }
 
@@ -11724,6 +12063,40 @@ function expireSmallCraftVisit(state: StationState, ship: ArrivingShip): void {
     if (service.status === 'complete' || service.status === 'blocked' || service.status === 'skipped') continue;
     service.status = 'skipped';
     service.blockedReason ??= 'craft patience expired';
+  }
+  const dock = smallCraftDockForShip(state, ship);
+  if (dock) {
+    const operation = activePodFreightAtDock(state, dock.id);
+    if (operation?.kind === 'supplier-delivery') {
+      // Capacity problems delay owned stock instead of deleting a paid order.
+      replacePodFreightOperation(state, {
+        ...operation,
+        status: 'ordered',
+        arrivedUnits: operation.unloadedUnits,
+        arrivedAt: null,
+        dockId: null,
+        blockedReason: null
+      });
+    } else if (operation) {
+      replacePodFreightOperation(state, expirePodFreight(operation).operation);
+    }
+  }
+  const missed = visit.services
+    .filter((service) => service.status === 'blocked' || service.status === 'skipped')
+    .map((service) => service.kind);
+  if (missed.length > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'passenger-service',
+      credits: 0,
+      costBasis: 0,
+      label: `Missed ${[...new Set(missed)].join(' + ')}`,
+      sourceId: ship.id,
+      tileIndex: dock?.moduleId === undefined
+        ? dock?.tiles[0]
+        : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile,
+      siteTag: 'pod-dock'
+    }, { countAsEarned: false });
   }
   for (const visitor of state.visitors) {
     if (visitor.originShipId === ship.id) releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
@@ -12249,7 +12622,7 @@ function spawnShipAtDock(
     manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
     portManifest: trafficOffer ? { ...trafficOffer } : undefined,
     portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined,
-    smallCraftVisit: createSmallCraftVisit(state, dock)
+    smallCraftVisit: createSmallCraftVisit(state, dock, shipId)
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }
@@ -17708,7 +18081,11 @@ function marketHelperMultiplier(state: StationState): number {
 
 function marketSpendPerSec(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity, 0.35, 1.05);
-  return 0.45 * visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state) * reputationSpendMultiplierAt(state, visitor.tileIndex);
+  const economy = deriveOpeningEconomyProfile(state.site);
+  const pricing = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
+  return 1.15 * pricing.salePriceMultiplier * economy.retailDemandMultiplier *
+    visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state) *
+    reputationSpendMultiplierAt(state, visitor.tileIndex);
 }
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
@@ -20052,7 +20429,13 @@ function applyCrewPayroll(state: StationState): void {
 
   const payroll = state.crew.total * PAYROLL_PER_CREW;
   if (state.metrics.credits >= payroll) {
-    state.metrics.credits -= payroll;
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'wages',
+      credits: -payroll,
+      costBasis: payroll,
+      label: `Crew payroll · ${state.crew.total} staff`
+    }, { countAsEarned: false });
     state.usageTotals.payrollPaid += payroll;
     for (const crew of state.crewMembers) {
       crew.missedPayrollCycles = Math.max(0, crew.missedPayrollCycles - 1);
@@ -20062,8 +20445,17 @@ function applyCrewPayroll(state: StationState): void {
   }
 
   const deficit = payroll - state.metrics.credits;
-  state.usageTotals.payrollPaid += state.metrics.credits;
-  state.metrics.credits = 0;
+  const partialPayment = state.metrics.credits;
+  state.usageTotals.payrollPaid += partialPayment;
+  if (partialPayment > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'wages',
+      credits: -partialPayment,
+      costBasis: partialPayment,
+      label: `Partial payroll · ${state.crew.total} staff`
+    }, { countAsEarned: false });
+  }
   state.incidentHeat += 0.5 + deficit * 0.03;
   for (const crew of state.crewMembers) {
     crew.missedPayrollCycles += 1;
@@ -21225,7 +21617,14 @@ export function trySetTileWithCredits(state: StationState, index: number, tile: 
   if (!isConnectedToCore(state, proposedTiles)) return { ok: false, cost: 0, reason: 'disconnected from core' };
   const cost = tileCreditBuildCost(old, tile);
   if (state.metrics.credits < cost) return { ok: false, cost, reason: `Need ${cost} credits` };
-  state.metrics.credits -= cost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'construction',
+    credits: -cost,
+    costBasis: cost,
+    label: `${tile} construction`,
+    tileIndex: index
+  }, { countAsEarned: false });
   setTile(state, index, tile);
   return { ok: true, cost };
 }
@@ -21598,7 +21997,14 @@ export function tryPlaceModuleWithCredits(
   if (state.metrics.credits < cost) return { ok: false, cost, reason: `Need ${cost} credits` };
   const placed = tryPlaceModule(state, moduleType, originTile, appliedRotation);
   if (!placed.ok) return { ok: false, cost: 0, reason: placed.reason ?? 'module placement failed' };
-  state.metrics.credits -= cost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'construction',
+    credits: -cost,
+    costBasis: cost,
+    label: `${moduleType} installed`,
+    tileIndex: originTile
+  }, { countAsEarned: false });
   const instance = state.moduleInstances[state.moduleInstances.length - 1];
   if (instance) instance.purchaseCost = cost;
   return { ok: true, cost };
@@ -21783,7 +22189,14 @@ export function sellModuleAtTile(state: StationState, tileIndex: number): Module
   if (!removeModuleById(state, module.id)) {
     return { ok: false, reason: 'Module could not be removed', moduleType: module.type, refund: 0 };
   }
-  state.metrics.credits += refund;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'construction',
+    credits: refund,
+    costBasis: 0,
+    label: `${module.type} resale`,
+    tileIndex: module.originTile
+  }, { countAsEarned: false });
   return { ok: true, moduleType: module.type, refund };
 }
 
@@ -22123,23 +22536,53 @@ export function buyPreparedMeals(state: StationState, creditCost = 36, mealGain 
   const addedMeals = addItemAcrossTargets(state, destinations, 'meal', mealGain, destinations[0]);
   const addedTrays = addItemAcrossTargets(state, destinations, 'cleanTray', mealGain, destinations[0]);
   if (addedMeals + 0.01 < mealGain || addedTrays + 0.01 < mealGain) return false;
-  state.metrics.credits -= creditCost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'supplier-purchase',
+    credits: -creditCost,
+    costBasis: creditCost,
+    label: `Prepared meals · ${mealGain} servings`
+  }, { countAsEarned: false });
   state.metrics.mealStock += addedMeals;
   state.metrics.cleanTrayStock += addedTrays;
   return true;
 }
 
-export function buyImportedTradeGoods(state: StationState, creditCost = 30, goodsGain = 12): boolean {
+export function buyImportedTradeGoods(
+  state: StationState,
+  creditCost = 30,
+  goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
+): boolean {
   rebuildItemNodes(state);
   const destinations = state.moduleInstances
     .filter((module) => module.type === ModuleType.MarketStall)
     .map((module) => module.originTile);
   if (destinations.length === 0 || state.metrics.credits < creditCost) return false;
   if (totalItemCapacityAtTargets(state, destinations) < goodsGain) return false;
-  const added = addItemAcrossTargets(state, destinations, 'tradeGood', goodsGain, destinations[0]);
-  if (added + 0.01 < goodsGain) return false;
-  state.metrics.credits -= creditCost;
-  state.metrics.marketTradeGoodStock += added;
+  const hasFreightDock = state.docks.some((dock) =>
+    dock.sourceKind === 'pod-dock-module' && dock.podCapabilities?.includes('freight')
+  );
+  if (!hasFreightDock) return false;
+  if (state.openingEconomy.podFreightOperations.some((operation) =>
+    operation.kind === 'supplier-delivery' &&
+    operation.stockKind === 'travel-supplies' &&
+    operation.status !== 'complete' &&
+    operation.status !== 'cancelled' &&
+    operation.status !== 'expired'
+  )) return false;
+  const profile = deriveOpeningEconomyProfile(state.site);
+  const actualCost = Math.max(1, Math.round(creditCost * profile.supplyWholesaleMultiplier));
+  if (state.metrics.credits < actualCost) return false;
+  const created = createSupplierDelivery({
+    id: `supply-${state.spawnCounter++}`,
+    stockKind: 'travel-supplies',
+    units: goodsGain,
+    landedUnitCost: actualCost / Math.max(1, goodsGain),
+    orderedAt: state.now
+  });
+  replacePodFreightOperation(state, created.operation);
+  recordPodFreightEconomyIntents(state, created.economyEvents);
+  state.lastCycleTime = Math.min(state.lastCycleTime, state.now + 3);
   return true;
 }
 
@@ -22608,6 +23051,7 @@ export function tick(state: StationState, frameDt: number): void {
   if (shouldRefreshDerivedMetrics(state)) {
     computeMetrics(state);
     updateUnlockProgress(state);
+    updateOpeningCapitalProjects(state);
   }
   updateCommandProgress(state, dt);
   finishPhase('derived');

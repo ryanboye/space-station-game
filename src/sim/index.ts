@@ -8,6 +8,7 @@
 // (harness, alt renderer) needs more, add explicitly.
 
 export {
+  acceptOpeningCapitalProject,
   admitTrafficOffer,
   acceptCommercialOffer,
   buyImportedTradeGoods,
@@ -34,6 +35,8 @@ export {
   getCrewSustainabilitySummary,
   getCrewWatchStatus,
   getOperatingSchedule,
+  getOpeningCapitalProjects,
+  getOpeningEconomySummary,
   getCrewPriorityPresetWeights,
   getDockByTile,
   getPodDockAttachmentView,
@@ -69,6 +72,7 @@ export {
   getUnlockRequirement,
   getUnlockTier,
   getVisitorInspectorById,
+  generateLaneProfiles,
   hireCrew,
   hireStaffRole,
   holdTrafficOffer,
@@ -98,6 +102,7 @@ export {
   setCrewPriorityWeight,
   setPortAutoAdmit,
   setPortAutoAdmitPolicy,
+  setMarketPricingPolicy,
   setCrewAutoStaff,
   setCrewManualWorkLane,
   setCrewShiftTarget,

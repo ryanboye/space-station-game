@@ -198,7 +198,9 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 1,
     rotatable: true,
     allowedRooms: [RoomType.Market],
-    itemNodeCapacity: 20
+    // A starter counter can hold its opening display plus one 12-unit pod
+    // delivery, so restocking is a planning choice rather than a capacity trap.
+    itemNodeCapacity: 32
   },
   [ModuleType.IntakePallet]: {
     width: 2,

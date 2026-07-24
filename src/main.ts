@@ -1,5 +1,6 @@
 import './styles.css';
 import { renderWorld, type RenderViewport } from './render/render';
+import { DockEconomyFeedbackLayer, type DockDepartureResult } from './render/dock-economy-feedback';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
 import { STAFF_ROLE_SPRITE_KEYS } from './render/sprite-keys-extended';
@@ -22,7 +23,11 @@ import {
 import { sigilForFaction } from './sim/system-map';
 import { mountCharterScreen } from './ui/charter-screen';
 import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
+import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/opening-economy-panels';
+import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-economy';
+import type { CapitalProjectId } from './sim/capital-projects';
 import {
+  acceptOpeningCapitalProject,
   buyImportedTradeGoods,
   buyMaterialsDetailed,
   buyPreparedMeals,
@@ -46,6 +51,8 @@ import {
   getCrewSustainabilitySummary,
   getCrewWatchStatus,
   getOperatingSchedule,
+  getOpeningCapitalProjects,
+  getOpeningEconomySummary,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
@@ -78,6 +85,7 @@ import {
   isUtilityUnderlayKind,
   hireCrew,
   hireStaffRole,
+  generateLaneProfiles,
   holdTrafficOffer,
   openCommercialUnitForOffers,
   planModuleConstruction,
@@ -88,6 +96,7 @@ import {
   refuseTrafficOffer,
   setPortAutoAdmit,
   setPortAutoAdmitPolicy,
+  setMarketPricingPolicy,
   setCrewWatchAssignment,
   setCrewHomeWorkplace,
   surgeWorkplace,
@@ -170,6 +179,7 @@ import {
 // primary build tools place immediately so other station systems can be tested
 // without early expansion bottlenecking on haul/build jobs.
 const INSTANT_BUILD_PLAYTEST = true;
+const TRAVEL_SUPPLY_UI_BASE_WHOLESALE = 3.5;
 const startupParams = new URLSearchParams(window.location.search);
 const TRUSS_EXPANSION_EXPERIMENT = startupParams.has('truss');
 const STARTER_LAYOUT_DB_NAME = 'starlight-starter-layouts';
@@ -202,7 +212,9 @@ app.innerHTML = `
         <span class="hud-label">Rating</span><span class="hud-value" id="hud-rating">--</span>
       </button>
       <span class="hud-item legacy-ui"><span class="hud-label">Morale</span><span class="hud-value" id="hud-morale">--</span></span>
-      <span class="hud-item"><span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span></span>
+      <button id="open-economy-ledger" class="hud-item hud-rating-button" type="button" title="Open operating ledger">
+        <span class="hud-label">Credits</span><span class="hud-value" id="hud-credits">--</span>
+      </button>
       <span class="hud-item"><span class="hud-label">Station Stock</span><span class="hud-value" id="hud-materials">--</span></span>
     </div>
     <div class="top-actions">
@@ -359,7 +371,9 @@ app.innerHTML = `
       <section class="dock-card command-card legacy-ui">
         <div class="hud-card-title">Command</div>
         <div class="command-actions">
-          <button id="open-market" class="primary-command">Market</button>
+          <button id="open-travel-shop" class="primary-command">Supplies</button>
+          <button id="open-market" class="secondary-command">Trade</button>
+          <button id="open-capital-projects" class="secondary-command">Projects</button>
           <button id="open-crew-command" class="primary-command">Crew</button>
           <button id="open-progression-modal" class="primary-command">Progress</button>
           <button id="edit-priorities" class="secondary-command">Priorities</button>
@@ -754,9 +768,6 @@ app.innerHTML = `
         <button id="buy-food-large">Buy +60 Raw Food (30c)</button>
         <button id="sell-food-large">Sell -60 Raw Food (+15c)</button>
       </div>
-      <div class="button-row">
-        <button id="buy-market-goods">Import +12 Market Goods (30c)</button>
-      </div>
     </div>
   </div>
   <div id="expansion-modal" class="modal hidden">
@@ -1071,6 +1082,211 @@ const gameSeed = (() => {
   return Number.isFinite(parsed) ? parsed : 1337;
 })();
 const state = createInitialState({ seed: gameSeed, physicalStarterInventory: true, manualTrafficAdmission: true });
+const dockEconomyFeedback = new DockEconomyFeedbackLayer({ resultLifetime: 9, maxVisibleChips: 16 });
+const openingEconomyPanels = mountOpeningEconomyPanels({
+  host: app!,
+  onAction: (action) => {
+    if (action.type === 'order-stock') {
+      buyImportedTradeGoods(state, 30, 12);
+    } else if (action.type === 'set-pricing-policy') {
+      setMarketPricingPolicy(state, action.policy);
+    } else if (action.type === 'accept-project') {
+      acceptOpeningCapitalProject(state, action.projectId as CapitalProjectId);
+    }
+    refreshOpeningEconomyPanels();
+  }
+});
+
+function openingEconomyPanelView(): OpeningEconomyPanelView {
+  const profile = deriveOpeningEconomyProfile(state.site);
+  const policy = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
+  const summary = getOpeningEconomySummary(state, 120);
+  const marketTiles = new Set(
+    state.moduleInstances
+      .filter((module) => module.type === ModuleType.MarketStall)
+      .map((module) => module.originTile)
+  );
+  const marketNodes = state.itemNodes.filter((node) => marketTiles.has(node.tileIndex));
+  const stock = marketNodes.reduce((sum, node) => sum + Math.max(0, node.items.tradeGood ?? 0), 0);
+  const capacity = marketNodes.reduce((sum, node) => sum + Math.max(0, node.capacity), 0);
+  const recentRetail = state.openingEconomy.ledger.recent.filter((event) =>
+    event.kind === 'retail-sale' && event.label.includes('Travel supplies') && event.at >= state.now - 120
+  );
+  const recentUnitsSold = recentRetail.length;
+  const recentMargin = recentRetail.reduce((sum, event) => sum + event.credits - event.costBasis, 0);
+  const supplierPending = state.openingEconomy.podFreightOperations.some((operation) =>
+    operation.kind === 'supplier-delivery' &&
+    operation.stockKind === 'travel-supplies' &&
+    operation.status !== 'complete' &&
+    operation.status !== 'cancelled' &&
+    operation.status !== 'expired'
+  );
+  const freightDockAvailable = state.docks.some((dock) => dock.podCapabilities?.includes('freight'));
+  const wholesaleUnitCost = TRAVEL_SUPPLY_UI_BASE_WHOLESALE * profile.supplyWholesaleMultiplier;
+  const orderCost = Math.round(30 * profile.supplyWholesaleMultiplier);
+  const saleUnitPrice = 1.15 * 5.5 * policy.salePriceMultiplier * profile.retailDemandMultiplier;
+  const grouped = [
+    { label: 'Travelers and docking', credits: summary.byKind['dock-fee'].net + summary.byKind['passenger-service'].net },
+    { label: 'Meals and retail', credits: summary.byKind['retail-sale'].net },
+    { label: 'Fuel, repairs, and courier work', credits: summary.byKind['fuel-sale'].net + summary.byKind['repair-service'].net + summary.byKind['courier-fee'].net },
+    { label: 'Stock purchases', credits: summary.byKind['supplier-purchase'].net },
+    { label: 'Payroll and construction', credits: summary.byKind.wages.net + summary.byKind.construction.net }
+  ].filter((group) => Math.abs(group.credits) > 0.01);
+  const projects = getOpeningCapitalProjects(state);
+  return {
+    ledger: {
+      credits: state.metrics.credits,
+      windowLabel: 'Last 2 minutes',
+      revenue: summary.revenue,
+      expenses: summary.expenses,
+      net: summary.net,
+      groups: grouped.map((group) => ({ ...group, tone: group.credits > 0 ? 'good' as const : 'warn' as const })),
+      events: state.openingEconomy.ledger.recent.slice(-12).reverse().map((event) => ({
+        ...event,
+        at: Math.max(0, state.now - event.at)
+      }))
+    },
+    shop: {
+      stock,
+      capacity,
+      wholesaleUnitCost,
+      saleUnitPrice,
+      recentUnitsSold,
+      recentMargin,
+      demandLabel: profile.trafficLabel,
+      demandDetail: `${state.openingEconomy.marketPricingPolicy} pricing · ${Math.round(profile.retailDemandMultiplier * policy.demandMultiplier * 100)}% local demand`,
+      pricingPolicy: state.openingEconomy.marketPricingPolicy,
+      canOrderStock: freightDockAvailable && !supplierPending && capacity - stock >= 12 && state.metrics.credits >= orderCost,
+      orderLabel: supplierPending ? 'Supplier pod en route' : 'Order 12 supplies by pod',
+      orderCost,
+      emptyStockMessage: freightDockAvailable
+        ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
+        : 'Install a Freight Locker beside a Pod Dock to receive shop stock.'
+    },
+    siteBrief: {
+      title: state.site ? 'Chartered site' : 'Standard orbit',
+      primary: profile.trafficLabel,
+      secondary: profile.resourceLabel ?? 'No dominant local resource advantage.',
+      traits: [
+        { label: 'Supplies', detail: `${Math.round(profile.supplyWholesaleMultiplier * 100)}% wholesale`, tone: profile.supplyWholesaleMultiplier <= 0.95 ? 'good' : profile.supplyWholesaleMultiplier >= 1.08 ? 'warn' : 'neutral' },
+        { label: 'Solar', detail: `${Math.round(profile.solarYieldMultiplier * 100)}% yield`, tone: profile.solarYieldMultiplier >= 1.05 ? 'good' : profile.solarYieldMultiplier <= 0.8 ? 'warn' : 'neutral' },
+        { label: 'Repairs', detail: `${Math.round(profile.repairDemandMultiplier * 100)}% demand`, tone: profile.repairDemandMultiplier >= 1.08 ? 'good' : 'neutral' }
+      ]
+    },
+    projects: {
+      maxActive: 2,
+      activeCount: state.openingEconomy.capitalProjects.active.length,
+      projects: projects.map((project) => ({
+        id: project.id,
+        title: project.title,
+        description: project.summary,
+        state: project.state,
+        advance: project.advanceCredits,
+        reward: project.completionCredits,
+        conditions: project.conditions.map((condition) => ({
+          label: condition.label,
+          current: Math.floor(condition.current),
+          target: condition.target
+        }))
+      }))
+    }
+  };
+}
+
+function refreshOpeningEconomyPanels(): void {
+  openingEconomyPanels.render(openingEconomyPanelView());
+}
+
+function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
+  const podShips = state.arrivingShips.filter((ship) => ship.smallCraftVisit);
+  const liveShipIds = new Set(podShips.filter((ship) => ship.stage !== 'depart').map((ship) => ship.id));
+  const arrivals = podShips
+    .filter((ship) => ship.stage !== 'depart' && ship.assignedDockId !== null)
+    .flatMap((ship) => {
+      const dock = state.docks.find((candidate) => candidate.id === ship.assignedDockId);
+      if (!dock) return [];
+      const dockTile = dock.moduleId === undefined
+        ? dock.tiles[0]
+        : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile ?? dock.tiles[0];
+      const freightOperation = state.openingEconomy.podFreightOperations.find((operation) =>
+        operation.dockId === dock.id &&
+        operation.status !== 'complete' &&
+        operation.status !== 'cancelled' &&
+        operation.status !== 'expired'
+      );
+      const wants: string[] = [];
+      if (ship.manifestDemand.cafeteria >= 0.3) wants.push('food');
+      if (ship.manifestDemand.market >= 0.22) wants.push('supplies');
+      for (const service of ship.smallCraftVisit?.services ?? []) {
+        if (service.kind === 'refuel') wants.push('fuel');
+        if (service.kind === 'freight') wants.push('cargo');
+        if (service.kind === 'repair') wants.push('repair');
+      }
+      const remainingFreight = freightOperation?.kind === 'supplier-delivery'
+        ? Math.max(0, freightOperation.orderedUnits - freightOperation.unloadedUnits)
+        : freightOperation?.kind === 'courier-handling'
+          ? Math.max(0, freightOperation.consignedUnits - freightOperation.completedUnits)
+          : 0;
+      return [{
+        visitId: ship.id,
+        dockTileIndex: dockTile,
+        label: freightOperation?.kind === 'supplier-delivery'
+          ? 'Supplier delivery'
+          : freightOperation?.kind === 'courier-handling'
+            ? 'Courier handling'
+            : `Pod ${ship.id}`,
+        demand: freightOperation?.kind === 'supplier-delivery'
+          ? `${remainingFreight} travel supplies for your shop`
+          : freightOperation?.kind === 'courier-handling'
+            ? `${freightOperation.direction} · ${remainingFreight} consigned crates`
+            : `${ship.passengersTotal} traveler${ship.passengersTotal === 1 ? '' : 's'} · ${[...new Set(wants)].join(' + ') || 'quick stop'}`
+      }];
+    });
+
+  const eventsByShip = new Map<number, typeof state.openingEconomy.ledger.recent>();
+  for (const event of state.openingEconomy.ledger.recent) {
+    if (event.siteTag !== 'pod-dock' || event.sourceId === undefined || event.at < state.now - 9) continue;
+    const events = eventsByShip.get(event.sourceId) ?? [];
+    events.push(event);
+    eventsByShip.set(event.sourceId, events);
+  }
+  const departures: DockDepartureResult[] = [];
+  for (const [shipId, events] of eventsByShip) {
+    const ship = podShips.find((candidate) => candidate.id === shipId);
+    if (liveShipIds.has(shipId) && ship?.stage !== 'depart') continue;
+    const tileIndex = events.find((event) => event.tileIndex !== undefined)?.tileIndex;
+    if (tileIndex === undefined) continue;
+    const liveMissed = ship?.smallCraftVisit?.services
+      .filter((service) => service.status === 'blocked' || service.status === 'skipped')
+      .map((service) => service.kind)
+      .join(' + ');
+    const recordedMissed = events
+      .filter((event) => event.label.startsWith('Missed '))
+      .map((event) => event.label.slice('Missed '.length))
+      .join(' + ');
+    const missed = liveMissed || recordedMissed;
+    const resultLabels = events.filter((event) => !event.label.startsWith('Missed '));
+    departures.push({
+      visitId: shipId,
+      dockTileIndex: tileIndex,
+      settledAt: Math.max(...events.map((event) => event.at)),
+      events,
+      serviceSummary: [...new Set(resultLabels.map((event) => event.label))].slice(0, 2).join(' · '),
+      missedOpportunity: missed || undefined,
+      outcome: missed ? 'partial' : 'success'
+    });
+  }
+  dockEconomyFeedback.update({
+    now: state.now,
+    gridWidth: state.width,
+    gridHeight: state.height,
+    tileSize: TILE_SIZE,
+    arrivals,
+    departures,
+    viewport: renderViewport
+  });
+  dockEconomyFeedback.render(ctx);
+}
 
 type StarterLayoutRecord = { savedAt: number; payloadText: string };
 
@@ -1852,7 +2068,6 @@ const buyFoodSmallBtn = document.querySelector<HTMLButtonElement>('#buy-food-sma
 const buyFoodLargeBtn = document.querySelector<HTMLButtonElement>('#buy-food-large')!;
 const sellFoodSmallBtn = document.querySelector<HTMLButtonElement>('#sell-food-small')!;
 const sellFoodLargeBtn = document.querySelector<HTMLButtonElement>('#sell-food-large')!;
-const buyMarketGoodsBtn = document.querySelector<HTMLButtonElement>('#buy-market-goods')!;
 const marketCrewEl = document.querySelector<HTMLSpanElement>('#market-crew')!;
 const marketRateEl = document.querySelector<HTMLSpanElement>('#market-rate')!;
 const materialAutoImportInput = document.querySelector<HTMLInputElement>('#material-auto-import')!;
@@ -1865,6 +2080,8 @@ const toggleUiPanelsBtn = document.querySelector<HTMLButtonElement>('#toggle-ui-
 const saveModal = document.querySelector<HTMLDivElement>('#save-modal')!;
 const closeSaveModalBtn = document.querySelector<HTMLButtonElement>('#close-save-modal')!;
 const openMarketBtn = document.querySelector<HTMLButtonElement>('#open-market')!;
+const openTravelShopBtn = document.querySelector<HTMLButtonElement>('#open-travel-shop')!;
+const openCapitalProjectsBtn = document.querySelector<HTMLButtonElement>('#open-capital-projects')!;
 const closeMarketBtn = document.querySelector<HTMLButtonElement>('#close-market')!;
 const marketModal = document.querySelector<HTMLDivElement>('#market-modal')!;
 const openExpansionModalBtn = document.querySelector<HTMLButtonElement>('#open-expansion-modal')!;
@@ -2067,6 +2284,7 @@ const agentCrewDetailsEl = document.querySelector<HTMLElement>('#agent-crew-deta
 const hudPowerEl = document.querySelector<HTMLElement>('#hud-power')!;
 const hudOxygenEl = document.querySelector<HTMLElement>('#hud-oxygen')!;
 const hudCreditsEl = document.querySelector<HTMLElement>('#hud-credits')!;
+const openEconomyLedgerBtn = document.querySelector<HTMLButtonElement>('#open-economy-ledger')!;
 const hudCrewEl = document.querySelector<HTMLElement>('#hud-crew')!;
 const hudMaterialsEl = document.querySelector<HTMLElement>('#hud-materials')!;
 const hudWaterEl = document.querySelector<HTMLElement>('#hud-water')!;
@@ -2483,6 +2701,9 @@ function refreshHudStatus(): void {
   if (airWarning) airEmergencyIndicatorEl.textContent = airStatusText;
 
   hudCreditsEl.textContent = String(Math.round(state.metrics.credits));
+  const cashFlow = getOpeningEconomySummary(state, 120);
+  openEconomyLedgerBtn.title = `Credits ${Math.round(state.metrics.credits)} · last 2 min ${cashFlow.net >= 0 ? '+' : ''}${Math.round(cashFlow.net)}c. Open operating ledger.`;
+  openEconomyLedgerBtn.setAttribute('aria-label', openEconomyLedgerBtn.title);
   const crewSustainability = getCrewSustainabilitySummary(state);
   hudCrewEl.textContent = crewSustainability.resignationNotices > 0
     ? `${state.crew.total} · ${crewSustainability.resignationNotices}!`
@@ -5628,7 +5849,6 @@ const market = {
   sellFood20Gain: 6,
   buyFood60Cost: 30,
   sellFood60Gain: 15,
-  buyGoods12Cost: 30
 };
 
 const GAME_VERSION = '0.2.0-two-berth-shift';
@@ -5815,6 +6035,7 @@ function syncPanelVisibility(): void {
   toggleUiPanelsBtn.setAttribute('aria-pressed', String(uiPanelsHidden));
   toggleUiPanelsBtn.setAttribute('aria-label', uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels');
   toggleUiPanelsBtn.title = uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels';
+  openingEconomyPanels.setSiteBriefVisible(!uiPanelsHidden);
 
   berthOpsWidgetEl.classList.toggle('collapsed', berthOpsCollapsed);
   toggleBerthOpsBtn.setAttribute('aria-expanded', String(!berthOpsCollapsed));
@@ -5863,7 +6084,6 @@ function updateMarketRates(): void {
   market.sellFood20Gain = Math.max(2, Math.round(12 * sellMultiplier));
   market.buyFood60Cost = Math.max(15, Math.round(28 * buyMultiplier));
   market.sellFood60Gain = Math.max(5, Math.round(30 * sellMultiplier));
-  market.buyGoods12Cost = Math.max(18, Math.round(30 * buyMultiplier));
 }
 
 function refreshMarketUi(): void {
@@ -5876,7 +6096,6 @@ function refreshMarketUi(): void {
   sellFoodSmallBtn.textContent = `Sell -20 Raw Food (+${market.sellFood20Gain}c)`;
   buyFoodLargeBtn.textContent = `Order +60 Raw Food (${market.buyFood60Cost}c)`;
   sellFoodLargeBtn.textContent = `Sell -60 Raw Food (+${market.sellFood60Gain}c)`;
-  buyMarketGoodsBtn.textContent = `Import +12 Market Goods (${market.buyGoods12Cost}c)`;
   marketCrewEl.textContent = `${state.crew.assigned} / ${state.crew.total} (free ${state.crew.free})`;
   materialAutoImportInput.checked = state.controls.materialAutoImportEnabled;
   materialTargetStockInput.value = String(Math.round(state.controls.materialTargetStock));
@@ -9270,6 +9489,18 @@ function openCrewPalette(): void {
 
 wireModal({ modal: saveModal, openBtn: openSaveModalBtn, closeBtn: closeSaveModalBtn, beforeOpen: refreshSaveUi });
 wireModal({ modal: ratingModal, openBtn: openRatingModalBtn, closeBtn: closeRatingModalBtn, beforeOpen: refreshRatingModal });
+openEconomyLedgerBtn.addEventListener('click', () => {
+  refreshOpeningEconomyPanels();
+  openingEconomyPanels.open('ledger');
+});
+openTravelShopBtn.addEventListener('click', () => {
+  refreshOpeningEconomyPanels();
+  openingEconomyPanels.open('shop');
+});
+openCapitalProjectsBtn.addEventListener('click', () => {
+  refreshOpeningEconomyPanels();
+  openingEconomyPanels.open('projects');
+});
 wireModal({
   modal: marketModal,
   openBtn: openMarketBtn,
@@ -9796,13 +10027,6 @@ sellFoodLargeBtn.addEventListener('click', () => {
   marketNoteEl.textContent = ok ? `Sold -60 raw food (+${market.sellFood60Gain}c)` : 'Not enough raw food';
 });
 
-buyMarketGoodsBtn.addEventListener('click', () => {
-  const ok = buyImportedTradeGoods(state, market.buyGoods12Cost, 12);
-  marketNoteEl.textContent = ok
-    ? 'Imported +12 goods directly to Market stalls'
-    : 'Need a Market stall with 12 free capacity and enough credits';
-});
-
 incidentListEl.addEventListener('click', (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const button = target?.closest<HTMLButtonElement>('button[data-incident-select]');
@@ -9948,6 +10172,7 @@ function frame(now: number): void {
   const restoreActorPositions = applyInterpolatedActorPositions(interpolationAlpha);
   try {
     renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+    drawOpeningDockFeedback(renderViewport);
     drawPortTurnaroundCallouts();
     drawSelectedAgentRoute(ctx);
     drawActiveIncidentHints(ctx);
@@ -9990,6 +10215,7 @@ function frame(now: number): void {
   refreshDiagnosticReadout();
   refreshDiagnosticKey();
   refreshHudStatus();
+  refreshOpeningEconomyPanels();
   refreshTrafficStatus();
   refreshTrafficOffers();
   refreshSettlementSummary();
@@ -10075,7 +10301,6 @@ function frame(now: number): void {
   buyFoodLargeBtn.disabled = state.metrics.credits < market.buyFood60Cost;
   sellFoodSmallBtn.disabled = state.metrics.rawFoodStock < 20;
   sellFoodLargeBtn.disabled = state.metrics.rawFoodStock < 60;
-  buyMarketGoodsBtn.disabled = state.metrics.credits < market.buyGoods12Cost || state.ops.marketTotal <= 0;
   foodFlowEl.textContent = foodFlowText();
   powerEl.textContent = `${Math.round(state.metrics.powerDemand)} / ${Math.round(state.metrics.powerSupply)}`;
   powerEl.style.color = state.metrics.powerDemand > state.metrics.powerSupply ? '#ff7676' : '#6edb8f';
@@ -10474,6 +10699,7 @@ window.__harnessPauseAndFlush = () => {
   const renderViewport = getRenderViewport();
   prepareViewportRender(renderViewport);
   renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+  drawOpeningDockFeedback(renderViewport);
   drawPortTurnaroundCallouts();
   drawSelectedAgentRoute(ctx);
   drawActiveIncidentHints(ctx);
@@ -10609,6 +10835,7 @@ async function runPlayerStartup(): Promise<void> {
     const charter = await mountCharterScreen(state.seedAtCreation, state.system, { allowCancel: true });
     if (!charter) continue;
     state.site = charter;
+    state.laneProfiles = generateLaneProfiles(state);
     state.controls.paused = true;
     console.info('[charter] site chartered', charter);
     startGameLoop();
@@ -10636,7 +10863,10 @@ async function bootstrapApp(): Promise<void> {
   if (params.get('charter') === '1') {
     if (state.system) {
       const charter = await mountCharterScreen(state.seedAtCreation, state.system);
-      if (charter) state.site = charter;
+      if (charter) {
+        state.site = charter;
+        state.laneProfiles = generateLaneProfiles(state);
+      }
     }
     startGameLoop();
     return;

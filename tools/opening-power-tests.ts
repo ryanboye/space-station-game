@@ -70,4 +70,26 @@ assertCondition(
   'A first legacy cable without a generator must not cause a blackout.'
 );
 
+// Custom starter templates may already contain a reactor but predate saved
+// utility underlays. They stay on fallback power until a conduit reaches the
+// source, rather than blacking out merely because the reactor sprite exists.
+const customStarter = createInitialState({ seed: 36303 });
+for (let tile = 0; tile < customStarter.modules.length; tile++) {
+  customStarter.utilityUnderlay.layers['power-conduit'][tile] = 0;
+}
+customStarter.utilityUnderlay.version += 1;
+const customCafeteria = roomTiles(customStarter, RoomType.Cafeteria);
+assertCondition(
+  roomClusterHasLocalPower(customStarter, RoomType.Cafeteria, customCafeteria),
+  'A custom starter with an unwired reactor should retain fallback power.'
+);
+assertCondition(
+  setUtilityUnderlayTile(customStarter, 'power-conduit', customCafeteria[0], true),
+  'Expected a loose custom-starter conduit to be placeable.'
+);
+assertCondition(
+  roomClusterHasLocalPower(customStarter, RoomType.Cafeteria, customCafeteria),
+  'A loose cable away from the reactor must not commission strict grid behavior.'
+);
+
 console.log('opening-power-tests: PASS');
