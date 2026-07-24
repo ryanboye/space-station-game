@@ -546,6 +546,11 @@ const SANITATION_JOB_TARGET = 2;
 // standing work rather than a single-frame snap.
 const SANITATION_JOB_RATE_PER_SEC = 7;
 const SANITATION_JOB_PATCH_RADIUS = 2;
+// A single sanitize job is sized against its whole patch, so cap one trip at
+// about a minute of scrubbing. Long enough that the cleared area visibly grows
+// around the cleaner, short enough that a filthy room is several jobs and
+// several cleaners can share it.
+const SANITATION_JOB_MAX_WORK = 420;
 // Traffic smears onto orthogonal neighbours so walking lanes read as tracks
 // instead of isolated specks under chairs.
 const SANITATION_TRAFFIC_NEIGHBOUR_SHARE = 0.35;
@@ -3615,6 +3620,47 @@ export function getSanitationRoomDiagnosticAt(state: StationState, tileIndex: nu
   const clusterMeta = state.derived.clusterByTile.get(tileIndex);
   if (!clusterMeta || clusterMeta.room !== room) return null;
   return sanitationRoomDiagnosticForCluster(state, room, clusterMeta.anchor, clusterMeta.cluster);
+}
+
+/**
+ * What a room's floors look like right now and who is doing something about it.
+ * The severity tiers are the same ones `SanitationTileDiagnostic` uses, so the
+ * room readout and the tile hover never disagree about what "filthy" means.
+ */
+export type RoomSanitationSummary = {
+  severity: SanitationTileDiagnostic['severity'];
+  driftSeverity: SanitationTileDiagnostic['driftSeverity'];
+  dirtyTiles: number;
+  filthyTiles: number;
+  assignedCleaners: number;
+  openJobs: number;
+};
+
+export function getRoomSanitationSummary(state: StationState, tileIndex: number): RoomSanitationSummary | null {
+  const diagnostic = getSanitationRoomDiagnosticAt(state, tileIndex);
+  if (!diagnostic) return null;
+  const clusterMeta = state.derived.clusterByTile.get(tileIndex);
+  const cluster = new Set(clusterMeta?.cluster ?? [tileIndex]);
+  let assignedCleaners = 0;
+  for (const crew of state.crewMembers) {
+    if (crew.activeJobId === null) continue;
+    const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
+    if (!job || job.type !== 'sanitize') continue;
+    if (!cluster.has(job.fromTile)) continue;
+    assignedCleaners += 1;
+  }
+  // A room reads by its worst corner, not by its mean: one filthy square in an
+  // otherwise clean cafeteria is what the player — and the visitors' rating
+  // penalty — actually react to. Same weighting `effectSummary` already uses.
+  const reading = Math.max(diagnostic.averageDirt, diagnostic.maxDirt * 0.72);
+  return {
+    severity: sanitationSeverityFromDirt(reading),
+    driftSeverity: driftSeverityFromDirt(reading),
+    dirtyTiles: diagnostic.dirtyTiles,
+    filthyTiles: diagnostic.filthyTiles,
+    assignedCleaners,
+    openJobs: diagnostic.cleaningJobsOpen
+  };
 }
 
 export function getSanitationTileDiagnostic(
@@ -13317,14 +13363,52 @@ function enqueueExtinguishJob(state: StationState, fireTile: number): void {
   state.metrics.createdJobs += 1;
 }
 
+// Everything one cleaner is being sent to scrub: the anchor tile plus the
+// same-room walkable tiles of its patch that no other job already owns. The job
+// is sized against this, not against the anchor alone — a job worth one tile
+// meant the cleaner walked half the station, wiped a single square and left,
+// which is what made a patch of grime look untouched after a cleaner visited.
+function sanitationPatchTiles(state: StationState, targetTile: number, skipClaimed: boolean): number[] {
+  const p = fromIndex(targetTile, state.width);
+  const room = state.rooms[targetTile];
+  const patch: number[] = [targetTile];
+  for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
+    for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      const tile = toIndex(nx, ny, state.width);
+      if (!isWalkable(state.tiles[tile])) continue;
+      if (state.rooms[tile] !== room) continue;
+      // Patches can still clip each other at the edges after the spacing rule
+      // in `createSanitationJobs`. A tile that is another live job's own anchor
+      // belongs to that job's cleaner; scrubbing it here would have two crew
+      // credit the same work and make the second cleaner look redundant.
+      if (skipClaimed && hasOpenSanitizeJobAt(state, tile)) continue;
+      patch.push(tile);
+    }
+  }
+  return patch;
+}
+
+function sanitationPatchWork(state: StationState, targetTile: number): number {
+  let work = 0;
+  for (const tile of sanitationPatchTiles(state, targetTile, true)) {
+    work += Math.max(0, (state.dirtByTile[tile] ?? 0) - SANITATION_JOB_TARGET);
+  }
+  return clamp(work, 10, SANITATION_JOB_MAX_WORK);
+}
+
 function enqueueSanitizeJob(state: StationState, tileIndex: number, source: SanitationSource): void {
   if (hasOpenSanitizeJobAt(state, tileIndex)) return;
   const workTile = sanitationWorkTileForTarget(state, tileIndex);
+  const patchWork = sanitationPatchWork(state, tileIndex);
   state.jobs.push({
     id: state.jobSpawnCounter++,
     type: 'sanitize',
     itemType: 'rawMaterial',
-    amount: Math.max(10, state.dirtByTile[tileIndex] - SANITATION_JOB_TARGET),
+    amount: patchWork,
     fromTile: tileIndex,
     toTile: workTile,
     assignedCrewId: null,
@@ -13337,13 +13421,27 @@ function enqueueSanitizeJob(state: StationState, tileIndex: number, source: Sani
     stallReason: 'none',
     sanitationSource: source,
     workProgress: 0,
-    workRequired: Math.max(10, state.dirtByTile[tileIndex] - SANITATION_JOB_TARGET)
+    workRequired: patchWork
   });
   state.metrics.createdJobs += 1;
 }
 
 function openSanitizeJobCount(state: StationState): number {
   return state.jobs.filter((job) => job.type === 'sanitize' && job.state !== 'done' && job.state !== 'expired').length;
+}
+
+// The square of tiles a single sanitize job is responsible for. One cleaner
+// works this whole block, so no second job may be anchored inside it.
+function markSanitationPatch(state: StationState, into: Set<number>, tileIndex: number): void {
+  const p = fromIndex(tileIndex, state.width);
+  for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
+    for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
+      const nx = p.x + dx;
+      const ny = p.y + dy;
+      if (!inBounds(nx, ny, state.width, state.height)) continue;
+      into.add(toIndex(nx, ny, state.width));
+    }
+  }
 }
 
 function createSanitationJobs(state: StationState): void {
@@ -13372,20 +13470,22 @@ function createSanitationJobs(state: StationState): void {
   }
   candidates.sort((a, b) => b.dirt + b.roomBonus - (a.dirt + a.roomBonus) || a.tile - b.tile);
   const reservedPatchTiles = new Set<number>();
+  // Seed the reservation with the patches already owned by open jobs. The set
+  // used to start empty every call, so it only spaced out jobs created in the
+  // same pass: the next pass would happily spawn a job one tile from a live one
+  // and two cleaners would scrub the same block, each undoing the other's
+  // measurable progress. Patches claimed by live jobs stay claimed.
+  for (const job of state.jobs) {
+    if (job.type !== 'sanitize') continue;
+    if (job.state === 'done' || job.state === 'expired') continue;
+    markSanitationPatch(state, reservedPatchTiles, job.fromTile);
+  }
   for (const candidate of candidates) {
     if (open >= SANITATION_MAX_OPEN_JOBS) break;
     if (reservedPatchTiles.has(candidate.tile)) continue;
     enqueueSanitizeJob(state, candidate.tile, candidate.source);
     open += 1;
-    const p = fromIndex(candidate.tile, state.width);
-    for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
-      for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
-        const nx = p.x + dx;
-        const ny = p.y + dy;
-        if (!inBounds(nx, ny, state.width, state.height)) continue;
-        reservedPatchTiles.add(toIndex(nx, ny, state.width));
-      }
-    }
+    markSanitationPatch(state, reservedPatchTiles, candidate.tile);
   }
 }
 
@@ -14725,10 +14825,24 @@ function deriveWorkLaneTargets(
     }
     let overflow = Object.values(targets).reduce((sum, value) => sum + value, 0) - total;
     const trimOrder: CrewWorkLane[] = ['logistics', 'construction-eva', 'food', 'sanitation', 'engineering', 'flex'];
-    for (const lane of trimOrder) {
-      while (overflow > 0 && targets[lane] > 0) {
-        targets[lane] -= 1;
-        overflow -= 1;
+    // Targets above are pure headcount — they say nothing about what the lane
+    // has to *do*. The old trim walked `trimOrder` blind, so whenever the hired
+    // roster outran the non-resting headcount (night watches, a rest wave, a
+    // small roster) sanitation could be zeroed while a sanitize backlog sat
+    // pending, and the lane's dispatch slots went with it. Trim idle lanes
+    // first, and hold a floor of one crew on any lane that still has work; only
+    // drop that floor if the station genuinely cannot field anyone else.
+    const idleFirst: CrewWorkLane[] = [
+      ...trimOrder.filter((lane) => pendingByLane[lane].pending <= 0),
+      ...trimOrder.filter((lane) => pendingByLane[lane].pending > 0)
+    ];
+    for (const keepBusyLaneFloor of [true, false]) {
+      for (const lane of idleFirst) {
+        const floor = keepBusyLaneFloor && pendingByLane[lane].pending > 0 ? 1 : 0;
+        while (overflow > 0 && targets[lane] > floor) {
+          targets[lane] -= 1;
+          overflow -= 1;
+        }
       }
     }
     return targets;
@@ -15036,15 +15150,54 @@ function assignJobsToIdleCrew(state: StationState): void {
     !crew.drinkSessionActive &&
     !crew.eatSessionActive;
 
+  // Shift buckets are handed out round-robin by crew id, so a third of every
+  // specialty is off-duty at any moment and dispatch simply skips them. For a
+  // small specialty that is the difference between "I hired three cleaners" and
+  // "one cleaner is ever working": with three sanitation crew the rota fields
+  // one on-duty plus one reserve, and a command terminal pins the officer of
+  // the three to the Bridge, leaving a single janitor against a filthy station.
+  //
+  // A lane whose pending backlog exceeds the crew it can currently field is
+  // surging: its own off-watch specialists get called in, exactly as an air
+  // emergency already overrides the rota. This is deliberately narrow — surged
+  // crew may only work their own lane (see `surgeOnly` in `dispatchLane`), the
+  // self-care and rest guards below still apply, and the surge switches itself
+  // off the moment the lane has enough hands for its backlog. The practical
+  // effect is the one the player expects: hiring the second and third cleaner
+  // puts a second and third cleaner on the floor.
+  const laneOnCallCrewCache = new Map<CrewWorkLane, number>();
+  const laneOnCallCrew = (lane: CrewWorkLane): number => {
+    const cached = laneOnCallCrewCache.get(lane);
+    if (cached !== undefined) return cached;
+    const count = state.crewMembers.filter(
+      (crew) =>
+        !crew.resting &&
+        staffRoleWorkLane(crew.staffRole) === lane &&
+        !isCrewReservedForCommandDuty(state, crew) &&
+        getCrewWatchStatus(state, crew) !== 'off-duty'
+    ).length;
+    laneOnCallCrewCache.set(lane, count);
+    return count;
+  };
+  const laneBacklogSurge = (lane: CrewWorkLane): boolean =>
+    pendingByLane[lane].pending > 0 && pendingByLane[lane].pending > laneOnCallCrew(lane);
+  const surgeOnly = new Set<number>();
+
   const candidates = state.crewMembers
     .filter((crew) => !crew.resting && crew.activeJobId === null && !crew.carryingMeal)
-    .filter(
-      (crew) =>
+    .filter((crew) => {
+      if (
         getCrewWatchStatus(state, crew) !== 'off-duty' ||
         getOperatingSchedule(state).recallActive ||
         airEmergency ||
         criticalAirEmergency
-    )
+      ) {
+        return true;
+      }
+      if (!laneBacklogSurge(staffRoleWorkLane(crew.staffRole))) return false;
+      surgeOnly.add(crew.id);
+      return true;
+    })
     .filter((crew) => !isCrewReservedForCommandDuty(state, crew))
     .filter((crew) => !isCrewHandlingActiveIncident(state, crew.id))
     .filter((crew) => !hasProtectedSelfCare(crew) || canInterruptSelfCareForFood(crew) || canInterruptSelfCareForOwnLane(crew))
@@ -15094,6 +15247,9 @@ function assignJobsToIdleCrew(state: StationState): void {
       if (crew.activeJobId !== null) continue;
       const ownLane = crew.workLane === lane;
       const flex = crew.workLane === 'flex';
+      // Called in off-watch for their own lane's backlog only — never borrowed
+      // sideways into somebody else's queue.
+      if (surgeOnly.has(crew.id) && !ownLane) continue;
       const roleCanFallback = staffRoleAllowsFallback(crew.staffRole);
       const fallback = allowFallback && roleCanFallback && !ownLane && !flex && !laneHasOwnWork(crew.workLane);
       const emergencyBorrow = roleCanFallback && !ownLane && !flex && emergencyLane(lane);
@@ -16657,21 +16813,16 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         } else {
           if (job.state !== 'in_progress') job.state = 'in_progress';
           let remainingWork = SANITATION_JOB_RATE_PER_SEC * dt;
-          const p = fromIndex(targetTile, state.width);
-          const patch: number[] = [targetTile];
-          for (let dy = -SANITATION_JOB_PATCH_RADIUS; dy <= SANITATION_JOB_PATCH_RADIUS; dy++) {
-            for (let dx = -SANITATION_JOB_PATCH_RADIUS; dx <= SANITATION_JOB_PATCH_RADIUS; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const nx = p.x + dx;
-              const ny = p.y + dy;
-              if (!inBounds(nx, ny, state.width, state.height)) continue;
-              const tile = toIndex(nx, ny, state.width);
-              if (!isWalkable(state.tiles[tile])) continue;
-              if (state.rooms[tile] !== state.rooms[targetTile]) continue;
-              patch.push(tile);
-            }
-          }
-          patch.sort((a, b) => (state.dirtByTile[b] ?? 0) - (state.dirtByTile[a] ?? 0));
+          const patch = sanitationPatchTiles(state, targetTile, true);
+          // Nearest-first, dirtiest-as-tiebreak. The spend below is capped at
+          // what the current tile still needs, so the cleaner finishes one tile
+          // before starting the next and the cleared area grows outward from
+          // where they are standing instead of flickering across the patch.
+          patch.sort(
+            (a, b) =>
+              tileManhattanDistance(state, workTile, a) - tileManhattanDistance(state, workTile, b) ||
+              (state.dirtByTile[b] ?? 0) - (state.dirtByTile[a] ?? 0)
+          );
           let cleaned = 0;
           for (const tile of patch) {
             if (remainingWork <= 0) break;
@@ -16680,13 +16831,26 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             const spent = Math.min(remainingWork, before - SANITATION_JOB_TARGET);
             cleaned += reduceDirt(state, tile, spent);
             remainingWork -= spent;
+            job.sanitationWipeTile = tile;
+            // A tile that just crossed under the target is a finished square:
+            // stamp it so the badge can flash a wipe over it. This is what makes
+            // the labor legible tile by tile rather than as one silent block.
+            if ((state.dirtByTile[tile] ?? 0) <= SANITATION_JOB_TARGET) {
+              job.sanitationClearedTile = tile;
+              job.sanitationClearedAt = state.now;
+            }
           }
           job.workProgress = (job.workProgress ?? 0) + cleaned;
           job.lastProgressAt = state.now;
           markJobStall(state, job, 'none');
-          const targetClean = (state.dirtByTile[targetTile] ?? 0) <= SANITATION_JOB_TARGET + 1;
+          // The job owns its whole patch, so it ends when the patch is clear
+          // (or when the crew has put in the work the patch was sized for, which
+          // bounds a single trip in a room that keeps getting dirtier). Ending
+          // on the anchor tile alone is what used to send a cleaner across the
+          // station to wipe one square and walk away from the rest of the mess.
+          const patchClean = patch.every((tile) => (state.dirtByTile[tile] ?? 0) <= SANITATION_JOB_TARGET + 1);
           const progressDone = (job.workProgress ?? 0) >= (job.workRequired ?? job.amount);
-          if (targetClean || progressDone) {
+          if (patchClean || progressDone) {
             job.state = 'done';
             job.completedAt = state.now;
             crew.activeJobId = null;

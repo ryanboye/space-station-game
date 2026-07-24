@@ -9,7 +9,7 @@
 //   3. scrubbing a filthy tile is watchable labor rather than a snap,
 //   4. an isolated speck still fades on its own, but a real patch does not.
 
-import { createInitialState, setRoom, setTile, tick } from '../src/sim/sim';
+import { createInitialState, getRoomSanitationSummary, setRoom, setTile, tick } from '../src/sim/sim';
 import { createEmptyStaffRoleCounts } from '../src/sim/content/command';
 import {
   ModuleType,
@@ -29,6 +29,10 @@ function assert(condition: unknown, message: string): asserts condition {
 // above it is visible to the player; anything below it reads as a clean floor.
 // This is the number the whole slice is calibrated against.
 const RENDER_GRIME_THRESHOLD = 12;
+
+// Mirrors `SANITATION_JOB_PATCH_RADIUS` in src/sim/sim.ts: the square around a
+// sanitize job's anchor tile that one cleaner is responsible for.
+const SANITATION_JOB_PATCH_RADIUS = 2;
 
 function runFor(state: StationState, seconds: number, step = 0.25): void {
   const steps = Math.ceil(seconds / step);
@@ -253,11 +257,180 @@ function testPassiveDecayDrainsSpeckButNotPatch(): void {
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// docs/30 PR 2 — dispatch. PR 1 found that a 171-tile backlog drained at
+// ~0.7 dirt/sec no matter how many sanitation crew the player hired, because
+// only ever one of them was on a sanitize job.
+// ---------------------------------------------------------------------------
+
+// A rectangle of uniformly filthy floor, plus the totals needed to say how much
+// of it a given crew got through.
+function seedFilthyRoom(state: StationState, x0: number, y0: number, x1: number, y1: number, dirt: number): number[] {
+  const tiles: number[] = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const tile = toIndex(x, y, state.width);
+      state.dirtByTile[tile] = dirt;
+      state.dirtSourceByTile[tile] = 2;
+      tiles.push(tile);
+    }
+  }
+  return tiles;
+}
+
+function totalDirtOn(state: StationState, tiles: number[]): number {
+  return tiles.reduce((sum, tile) => sum + (state.dirtByTile[tile] ?? 0), 0);
+}
+
+function runBacklogDrain(cleaners: number, seconds: number): number {
+  const state = freshStation(4405);
+  buildHabitat(state);
+  paintRoom(state, RoomType.Cafeteria, 14, 9, 30, 19);
+  staffWith(state, 'cleaner', cleaners, toIndex(8, 8, state.width));
+  const tiles = seedFilthyRoom(state, 14, 9, 30, 19, 72);
+  const before = totalDirtOn(state, tiles);
+  runFor(state, seconds);
+  return before - totalDirtOn(state, tiles);
+}
+
+// The core regression guard. Crew shift buckets are handed out round-robin by
+// id, so a third of any specialty is off-duty at any moment and dispatch used
+// to simply skip them: a station with three cleaners still fielded one. Hiring
+// has to buy throughput or the whole sanitation loop is theatre.
+function testMoreCleanersClearBacklogFaster(): void {
+  const seconds = 240;
+  const one = runBacklogDrain(1, seconds);
+  const three = runBacklogDrain(3, seconds);
+
+  assert(one > 0, `Setup check: a single cleaner should clear some of the backlog, cleared ${one.toFixed(0)}.`);
+  assert(
+    three >= one * 1.8,
+    `Three cleaners must clear a seeded backlog substantially faster than one. ` +
+      `One cleared ${one.toFixed(0)} dirt in ${seconds}s, three cleared ${three.toFixed(0)} ` +
+      `(${(three / one).toFixed(2)}x) — extra cleaners are not reaching the floor.`
+  );
+}
+
+// The lane target is what hands out dispatch slots, and it is derived from
+// hired headcount with an overflow trim that used to walk its lane order blind.
+// A lane that still has sanitize work queued must never be trimmed out of its
+// slots while it has anyone awake to spend them, and the slots must convert
+// into actual working crew rather than sitting nominal.
+function testSanitationLaneTargetFollowsDemand(): void {
+  const state = freshStation(4406);
+  buildHabitat(state);
+  paintRoom(state, RoomType.Cafeteria, 14, 9, 26, 17);
+  staffWith(state, 'cleaner', 2, toIndex(8, 8, state.width));
+
+  runFor(state, 20);
+  assert(
+    state.metrics.workforceLanes.sanitation.working === 0,
+    'A clean station should not have cleaners on sanitize jobs; the lane invented work.'
+  );
+
+  seedFilthyRoom(state, 14, 9, 26, 17, 74);
+
+  const step = 0.25;
+  let sawTarget = 0;
+  let sawWorking = 0;
+  for (let i = 0; i < Math.ceil(180 / step); i++) {
+    tick(state, step);
+    const lane = state.metrics.workforceLanes.sanitation;
+    sawTarget = Math.max(sawTarget, lane.target);
+    sawWorking = Math.max(sawWorking, lane.working);
+    const awakeCleaners = state.crewMembers.filter((crew) => !crew.resting && crew.staffRole === 'cleaner').length;
+    if (lane.pending > 0 && awakeCleaners > 0) {
+      assert(
+        lane.target >= 1,
+        `The sanitation lane was trimmed to a target of ${lane.target} while ${lane.pending} ` +
+          `sanitize jobs were pending and ${awakeCleaners} cleaners were awake.`
+      );
+    }
+  }
+
+  assert(
+    sawTarget >= 2,
+    `Two hired cleaners should give the sanitation lane two dispatch slots under demand; peaked at ${sawTarget}.`
+  );
+  assert(
+    sawWorking >= 2,
+    `Dispatch slots have to become cleaners on the floor: the lane peaked at ${sawWorking} working.`
+  );
+
+  // The same numbers the room readout shows the player. A room that is visibly
+  // filthy must say so, and must name how many cleaners are actually on it —
+  // "somebody is handling this" is the feedback hiring is supposed to buy.
+  const summary = getRoomSanitationSummary(state, toIndex(20, 13, state.width));
+  assert(summary !== null, 'Expected a room sanitation summary for the seeded cafeteria.');
+  assert(
+    summary!.severity !== 'clean',
+    `The room readout called a cafeteria with ${state.metrics.dirtyTiles} dirty tiles "clean".`
+  );
+  assert(
+    summary!.assignedCleaners === state.metrics.workforceLanes.sanitation.working,
+    `The room readout claims ${summary!.assignedCleaners} cleaners assigned but the lane has ` +
+      `${state.metrics.workforceLanes.sanitation.working} working.`
+  );
+}
+
+// Two cleaners must be cleaning two different places. Sanitize jobs own a patch
+// around their anchor tile, but the patch reservation only applied within a
+// single spawn pass, so the next pass would anchor a job one tile from a live
+// one and both crew would scrub the same squares.
+function testConcurrentCleanersDoNotShareTiles(): void {
+  const state = freshStation(4407);
+  buildHabitat(state);
+  paintRoom(state, RoomType.Cafeteria, 12, 8, 32, 20);
+  staffWith(state, 'cleaner', 4, toIndex(8, 8, state.width));
+  seedFilthyRoom(state, 12, 8, 32, 20, 76);
+
+  const step = 0.25;
+  let sawConcurrentScrubbing = false;
+  for (let i = 0; i < Math.ceil(300 / step); i++) {
+    tick(state, step);
+    const open = state.jobs.filter(
+      (job) => job.type === 'sanitize' && job.state !== 'done' && job.state !== 'expired'
+    );
+    for (let a = 0; a < open.length; a++) {
+      for (let b = a + 1; b < open.length; b++) {
+        const ax = open[a].fromTile % state.width;
+        const ay = Math.floor(open[a].fromTile / state.width);
+        const bx = open[b].fromTile % state.width;
+        const by = Math.floor(open[b].fromTile / state.width);
+        const chebyshev = Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+        assert(
+          chebyshev > SANITATION_JOB_PATCH_RADIUS,
+          `Two open sanitize jobs are ${chebyshev} tiles apart at (${ax},${ay}) and (${bx},${by}); ` +
+            `patches of radius ${SANITATION_JOB_PATCH_RADIUS} overlap, so two cleaners would scrub the same tiles.`
+        );
+      }
+    }
+    const scrubbing = open
+      .filter((job) => job.state === 'in_progress' && job.sanitationWipeTile !== undefined)
+      .map((job) => job.sanitationWipeTile as number);
+    assert(
+      new Set(scrubbing).size === scrubbing.length,
+      `Two cleaners scrubbed the same tile in one tick: ${scrubbing.join(', ')}.`
+    );
+    if (scrubbing.length >= 2) sawConcurrentScrubbing = true;
+  }
+
+  assert(
+    sawConcurrentScrubbing,
+    'Setup check: four cleaners against a filthy cafeteria should have had at least two ' +
+      'scrubbing at once at some point — if not, the concurrency claim is untested.'
+  );
+}
+
 const tests: Array<[string, () => void]> = [
   ['cleaned tile ends below render threshold', testCleanedTileEndsBelowRenderThreshold],
   ['corridor traffic becomes visible', testCorridorTrafficBecomesVisible],
   ['filthy tile takes real work', testFilthyTileTakesRealWork],
-  ['passive decay drains speck not patch', testPassiveDecayDrainsSpeckButNotPatch]
+  ['passive decay drains speck not patch', testPassiveDecayDrainsSpeckButNotPatch],
+  ['more cleaners clear a backlog faster', testMoreCleanersClearBacklogFaster],
+  ['sanitation lane target follows demand', testSanitationLaneTargetFollowsDemand],
+  ['concurrent cleaners do not share tiles', testConcurrentCleanersDoNotShareTiles]
 ];
 
 const runtimeProcess = (globalThis as typeof globalThis & {

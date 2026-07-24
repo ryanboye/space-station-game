@@ -47,6 +47,7 @@ export {
   getLifeSupportTileDiagnostic,
   getUtilityUnderlayTileDiagnostic,
   getSanitationRoomDiagnosticAt,
+  getRoomSanitationSummary,
   getSanitationTileDiagnostic,
   getMaintenanceTileDiagnostic,
   mapConditionAt,

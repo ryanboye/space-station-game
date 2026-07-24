@@ -1049,6 +1049,11 @@ export interface TransportJob {
   repairSupplyChecked?: boolean;
   repairSuppliesUsed?: number;
   sanitationSource?: SanitationSource;
+  /** Tile the cleaner is scrubbing right now — moves the broom badge through the patch. */
+  sanitationWipeTile?: number;
+  /** Last tile this job pushed under the clean target, and when, for the finish sparkle. */
+  sanitationClearedTile?: number;
+  sanitationClearedAt?: number;
   constructionSiteId?: number;
   constructionMode?: 'deliver' | 'build';
   workProgress?: number;
