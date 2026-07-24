@@ -21,6 +21,7 @@ import {
 } from './sim/content/command';
 import { sigilForFaction } from './sim/system-map';
 import { mountCharterScreen } from './ui/charter-screen';
+import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
 import {
   buyImportedTradeGoods,
   buyMaterialsDetailed,
@@ -101,6 +102,7 @@ import {
   setBerthScreeningLevel,
   sellMaterials,
   sellRawFood,
+  sellModuleAtTile,
   setRoom,
   setRoomHousingPolicy,
   setEmergencyRecall,
@@ -109,8 +111,10 @@ import {
   setTile,
   setUtilityUnderlayTile,
   tryPlaceModuleWithCredits,
+  tryMoveModule,
   trySetTileWithCredits,
   mapConditionSamplesAt,
+  MODULE_RESALE_REFUND_RATE,
   validateDockPlacement
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
@@ -166,7 +170,12 @@ import {
 // primary build tools place immediately so other station systems can be tested
 // without early expansion bottlenecking on haul/build jobs.
 const INSTANT_BUILD_PLAYTEST = true;
-const TRUSS_EXPANSION_EXPERIMENT = new URLSearchParams(window.location.search).has('truss');
+const startupParams = new URLSearchParams(window.location.search);
+const TRUSS_EXPANSION_EXPERIMENT = startupParams.has('truss');
+const STARTER_LAYOUT_DB_NAME = 'starlight-starter-layouts';
+const STARTER_LAYOUT_STORE_NAME = 'templates';
+const STARTER_LAYOUT_RECORD_KEY = 'default';
+const starterLayoutEditorMode = startupParams.get('starter-editor') === '1';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root not found');
@@ -186,7 +195,7 @@ app.innerHTML = `
       <button id="hud-air-control" class="hud-item hud-air-control" type="button" title="Open the Air Coverage overlay">
         <span class="hud-label">O2 Reserve</span><span class="hud-value" id="hud-oxygen">--</span>
       </button>
-      <span class="hud-item legacy-ui"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
+      <span class="hud-item"><span class="hud-label">Power</span><span class="hud-value" id="hud-power">--</span></span>
       <span class="hud-item legacy-ui"><span class="hud-label">Water</span><span class="hud-value" id="hud-water">--</span></span>
       <span class="hud-item hud-item-action"><span class="hud-label">Prepared Meals</span><span class="hud-value" id="hud-food">--</span><button id="buy-prepared-meals" class="hud-stock-button" aria-label="Buy 12 prepared meals for 36 credits" title="Buy 12 prepared meals for 36 credits">+</button></span>
       <button id="open-rating-modal" class="hud-item hud-rating-button" type="button" title="Open station rating factors">
@@ -261,6 +270,17 @@ app.innerHTML = `
     </div>
   </div>
   <div id="game-wrap">
+    <div id="starter-layout-editor" class="starter-layout-editor hidden" role="region" aria-label="Starter layout editor" title="Build freely while paused, then save this structure as the default for future New Games.">
+      <div class="starter-layout-editor-copy">
+        <strong>Starter Layout Editor</strong>
+        <span>Paused</span>
+      </div>
+      <div class="starter-layout-editor-actions">
+        <span id="starter-layout-status" aria-live="polite"></span>
+        <button id="save-starter-layout" class="mini-action-btn" type="button">Save Default</button>
+        <button id="reset-starter-layout" class="mini-action-btn" type="button">Reset to Stock</button>
+      </div>
+    </div>
     <canvas id="game"></canvas>
     <div id="dev-tier-overlay" aria-label="Time to tier (dev mode)" hidden></div>
     <button id="air-emergency-indicator" class="air-emergency-indicator hidden" type="button" aria-live="assertive">
@@ -463,6 +483,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
         <button class="tool-btn" data-tool-tile="airlock" title="Airlock — EVA access for exterior construction"><span class="tool-key">·</span>Airlock</button>
         <button class="tool-btn" data-tool-utility-underlay="air-duct" title="Draw underfloor Air Ducts — connect Life Support to wall Vents"><span class="tool-key">·</span>Air Duct</button>
+        <button class="tool-btn" data-tool-utility-underlay="power-conduit" title="Draw underfloor Power Cable — connect Reactor Cores or Solar Panels to powered rooms"><span class="tool-key">·</span>Power Cable</button>
         <button class="tool-btn" data-tool-utility-underlay="water-pipe" title="Draw underfloor Water Pipes — connect hygiene and kitchen fixtures"><span class="tool-key">·</span>Water Pipe</button>
         <button class="tool-btn" data-tool-utility-underlay="fuel-pipe" title="Draw underfloor Fuel Pipes — connect Maintenance Fuel Tanks to hull Fuel Couplers"><span class="tool-key">·</span>Fuel Pipe</button>
         <button class="tool-btn" data-tool-utility-underlay="erase" title="Erase underfloor utility tiles"><span class="tool-key">·</span>Erase Utility</button>
@@ -558,8 +579,10 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
         <button class="tool-btn" data-tool-module="water-fountain" title="Place Water Fountain — basic crew thirst relief"><span class="tool-key">·</span>Water</button>
         <button class="tool-btn" data-tool-module="plant" title="Place Plant (T1+) — small comfort/appeal bonus"><span class="tool-key">·</span>Plant</button>
+        <button class="tool-btn" data-tool-module="reactor-core" title="Place 2×2 Reactor Core in a Reactor room — 22 power when active"><span class="tool-key">·</span>Reactor</button>
         <button class="tool-btn" data-tool-module="solar-panel" title="Place Solar Panel — passive power scaled by the tile's sunlight; strongest on a sunward charter"><span class="tool-key">·</span>Solar</button>
-        <button class="tool-btn" data-tool-module="clear" title="Clear module (X)"><span class="tool-key">X</span>Clear</button>
+        <button class="tool-btn utility-tool" data-tool-module-move="1" title="Move an installed module without repurchasing it"><span class="tool-key">↔</span>Move</button>
+        <button class="tool-btn" data-tool-module="clear" title="Sell or remove module (X) · refund ${Math.round(MODULE_RESALE_REFUND_RATE * 100)}% of purchase price"><span class="tool-key">X</span>Sell</button>
         <button class="tool-btn utility-tool" data-tool-rotate="1" title="Rotate module ([ / ])"><span class="tool-key">[ ]</span>Rotate</button>
         <button class="tool-btn utility-tool" data-tool-deselect="1" title="Deselect tool (Esc)"><span class="tool-key">Esc</span>None</button>
       </div>
@@ -1049,6 +1072,228 @@ const gameSeed = (() => {
 })();
 const state = createInitialState({ seed: gameSeed, physicalStarterInventory: true, manualTrafficAdmission: true });
 
+type StarterLayoutRecord = { savedAt: number; payloadText: string };
+
+function openStarterLayoutDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(STARTER_LAYOUT_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STARTER_LAYOUT_STORE_NAME)) {
+        request.result.createObjectStore(STARTER_LAYOUT_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Could not open starter layout storage.'));
+  });
+}
+
+async function readStarterLayoutRecord(): Promise<StarterLayoutRecord | null> {
+  const database = await openStarterLayoutDatabase();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(STARTER_LAYOUT_STORE_NAME, 'readonly');
+      const request = transaction.objectStore(STARTER_LAYOUT_STORE_NAME).get(STARTER_LAYOUT_RECORD_KEY);
+      request.onsuccess = () => {
+        const record = request.result as Partial<StarterLayoutRecord> | undefined;
+        resolve(typeof record?.savedAt === 'number' && typeof record?.payloadText === 'string'
+          ? { savedAt: record.savedAt, payloadText: record.payloadText }
+          : null);
+      };
+      request.onerror = () => reject(request.error ?? new Error('Could not read the starter layout.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function writeStarterLayoutRecord(record: StarterLayoutRecord): Promise<void> {
+  const database = await openStarterLayoutDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STARTER_LAYOUT_STORE_NAME, 'readwrite');
+      transaction.objectStore(STARTER_LAYOUT_STORE_NAME).put(record, STARTER_LAYOUT_RECORD_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not save the starter layout.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Starter layout save was cancelled.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function deleteStarterLayoutRecord(): Promise<void> {
+  const database = await openStarterLayoutDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STARTER_LAYOUT_STORE_NAME, 'readwrite');
+      transaction.objectStore(STARTER_LAYOUT_STORE_NAME).delete(STARTER_LAYOUT_RECORD_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not reset the starter layout.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+type StarterInventorySource = Pick<StationState, 'itemNodes' | 'moduleInstances' | 'modules' | 'legacyMaterialStock'>;
+
+function moduleTypeAtInventoryNode(source: StarterInventorySource, tileIndex: number): ModuleType {
+  return source.moduleInstances.find((module) => module.originTile === tileIndex)?.type
+    ?? source.modules[tileIndex]
+    ?? ModuleType.None;
+}
+
+function seedFreshStarterInventory(target: StationState, fresh: StarterInventorySource): void {
+  const stockByModule = new Map<ModuleType, Partial<Record<ItemType, number>>>();
+  for (const node of fresh.itemNodes) {
+    const module = moduleTypeAtInventoryNode(fresh, node.tileIndex);
+    const totals = stockByModule.get(module) ?? {};
+    for (const [itemKey, amountValue] of Object.entries(node.items)) {
+      const item = itemKey as ItemType;
+      const amount = Math.max(0, amountValue ?? 0);
+      totals[item] = (totals[item] ?? 0) + amount;
+    }
+    stockByModule.set(module, totals);
+  }
+
+  target.itemNodes = target.itemNodes.map((node) => ({
+    tileIndex: node.tileIndex,
+    capacity: node.capacity,
+    items: {}
+  }));
+  target.legacyMaterialStock = fresh.legacyMaterialStock;
+
+  for (const [module, stock] of stockByModule.entries()) {
+    const nodes = target.itemNodes.filter((node) => moduleTypeAtInventoryNode(target, node.tileIndex) === module);
+    for (const [itemKey, amountValue] of Object.entries(stock)) {
+      const item = itemKey as ItemType;
+      let remaining = Math.max(0, amountValue ?? 0);
+      for (const node of nodes) {
+        const used = Object.values(node.items).reduce((sum, amount) => sum + Math.max(0, amount ?? 0), 0);
+        const accepted = Math.min(remaining, Math.max(0, node.capacity - used));
+        if (accepted > 0) node.items[item] = (node.items[item] ?? 0) + accepted;
+        remaining -= accepted;
+        if (remaining <= 0) break;
+      }
+      if (item === 'rawMaterial' && remaining > 0) target.legacyMaterialStock += remaining;
+    }
+  }
+}
+
+function applyStarterLayout(target: StationState, authored: StationState): void {
+  if (target.width !== authored.width || target.height !== authored.height) {
+    throw new Error(`Starter layout is ${authored.width}x${authored.height}; expected ${target.width}x${target.height}.`);
+  }
+
+  const freshInventory: StarterInventorySource = {
+    itemNodes: target.itemNodes.map((node) => ({ ...node, items: { ...node.items } })),
+    moduleInstances: target.moduleInstances.map((module) => ({ ...module, tiles: [...module.tiles] })),
+    modules: target.modules.slice(),
+    legacyMaterialStock: target.legacyMaterialStock
+  };
+  target.tiles = authored.tiles.slice();
+  target.zones = authored.zones.slice();
+  target.rooms = authored.rooms.slice();
+  target.roomHousingPolicies = authored.roomHousingPolicies.slice();
+  target.modules = authored.modules.slice();
+  target.moduleInstances = authored.moduleInstances.map((module) => ({ ...module, tiles: [...module.tiles] }));
+  target.moduleOccupancyByTile = authored.moduleOccupancyByTile.slice();
+  target.core = { ...authored.core, frameTiles: [...authored.core.frameTiles] };
+  target.docks = authored.docks.map((dock) => ({
+    ...dock,
+    tiles: [...dock.tiles],
+    approachTiles: [...dock.approachTiles],
+    allowedShipTypes: [...dock.allowedShipTypes],
+    allowedShipSizes: [...dock.allowedShipSizes],
+    podCapabilities: dock.podCapabilities ? [...dock.podCapabilities] : undefined,
+    attachmentModuleIds: dock.attachmentModuleIds ? { ...dock.attachmentModuleIds } : undefined,
+    occupiedByShipId: null
+  }));
+  target.berthConfigs = authored.berthConfigs.map((config) => ({
+    ...config,
+    allowedShipTypes: [...config.allowedShipTypes],
+    allowedShipSizes: [...config.allowedShipSizes],
+    serviceScore: 50,
+    serviceVisits: 0,
+    serviceLastDelta: 0
+  }));
+  target.mapWorldOriginX = authored.mapWorldOriginX;
+  target.mapWorldOriginY = authored.mapWorldOriginY;
+  target.utilityUnderlay = {
+    version: authored.utilityUnderlay.version + 1,
+    layers: Object.fromEntries(
+      Object.entries(authored.utilityUnderlay.layers).map(([kind, layer]) => [kind, new Uint8Array(layer)])
+    ) as StationState['utilityUnderlay']['layers']
+  };
+  target.itemNodes = authored.itemNodes;
+  target.moduleSpawnCounter = authored.moduleSpawnCounter;
+  target.commercialUnits = [];
+  target.commercialUnitSpawnCounter = 1;
+  target.commercialOfferSpawnCounter = 1;
+  target.constructionSites = [];
+  target.pressurized = authored.pressurized.slice();
+  target.airQualityByTile = Float32Array.from(target.pressurized, (pressurized) => pressurized ? 100 : 0);
+  target.heatByTile = new Float32Array(target.tiles.length).fill(42);
+  target.staleAirByTile = new Float32Array(target.tiles.length);
+  target.dirtByTile = new Float32Array(target.tiles.length);
+  target.dirtSourceByTile = new Uint8Array(target.tiles.length);
+  target.plumbing = {
+    version: authored.plumbing.version + 1,
+    floodByTile: new Float32Array(target.tiles.length),
+    leaks: [],
+    nextLeakId: 1
+  };
+  target.maintenanceDebts = [];
+  target.pathOccupancyByTile = new Map();
+  target.topologyVersion = Math.max(target.topologyVersion, authored.topologyVersion) + 1;
+  target.roomVersion = Math.max(target.roomVersion, authored.roomVersion) + 1;
+  target.moduleVersion = Math.max(target.moduleVersion, authored.moduleVersion) + 1;
+  target.dockVersion = Math.max(target.dockVersion, authored.dockVersion) + 1;
+  target.mapConditionVersion = Math.max(target.mapConditionVersion, authored.mapConditionVersion) + 1;
+  target.derived = authored.derived;
+  seedFreshStarterInventory(target, freshInventory);
+  target.metrics.materials = target.legacyMaterialStock + target.itemNodes.reduce(
+    (sum, node) => sum + (node.items.rawMaterial ?? 0),
+    0
+  );
+  const walkableTiles = target.tiles
+    .map((tile, tileIndex) => WALKABLE_TILES.has(tile) ? tileIndex : -1)
+    .filter((tileIndex) => tileIndex >= 0);
+  target.crewMembers.forEach((crew, index) => {
+    if (WALKABLE_TILES.has(target.tiles[crew.tileIndex])) return;
+    const tileIndex = walkableTiles[index % Math.max(1, walkableTiles.length)];
+    if (tileIndex === undefined) return;
+    const tile = fromIndex(tileIndex, target.width);
+    crew.tileIndex = tileIndex;
+    crew.x = tile.x + 0.5;
+    crew.y = tile.y + 0.5;
+    crew.path = [];
+    crew.targetTile = null;
+    crew.activeJobId = null;
+  });
+  target.controls.paused = true;
+  tick(target, 0);
+}
+
+async function applySavedStarterLayout(): Promise<void> {
+  if (startupParams.has('load') || startupParams.has('loadId') || startupParams.has('scenario')) return;
+  if (startupParams.get('starter') === 'stock') return;
+  const record = await readStarterLayoutRecord();
+  if (!record) return;
+  const parsed = parseAndMigrateSave(record.payloadText);
+  if (!parsed.ok) {
+    console.warn('[starter-layout] stored template is invalid:', parsed.error);
+    return;
+  }
+  try {
+    const authored = hydrateStateFromSave(parsed.save, { seed: gameSeed }).state;
+    applyStarterLayout(state, authored);
+    console.info(`[starter-layout] applied template saved ${new Date(record.savedAt).toLocaleString()}`);
+  } catch (error) {
+    console.warn('[starter-layout] could not apply stored template:', error);
+  }
+}
+
 // The fresh state now owns a complete, visible Berth room. Keeping starter
 // topology in one factory prevents this UI bootstrap from silently punching
 // unzoned dock tiles through the authored station.
@@ -1078,26 +1323,6 @@ const state = createInitialState({ seed: gameSeed, physicalStarterInventory: tru
       `[scenario] unknown name '${name}'; known: ${COLD_START_SCENARIO_NAMES.join(', ')}`
     );
   }
-})();
-
-// ?charter=1 opt-in: survey the procedurally generated system and charter a
-// station site before play. The game initializes paused underneath; the
-// self-contained overlay (own canvas + DOM) sits on top until the player
-// confirms, then applies the chosen SiteCharter to the live state. Default
-// startup (no param) is byte-for-byte unchanged. ?load/?loadId take
-// precedence — those fully hydrate a saved state, charter included.
-(function applyCharterParam() {
-  const params = new URLSearchParams(location.search);
-  if (params.get('charter') !== '1') return;
-  if (params.has('load') || params.has('loadId')) {
-    console.warn('[charter] ignored — ?load/?loadId takes precedence (full state replacement).');
-    return;
-  }
-  if (!state.system) return;
-  void mountCharterScreen(state.seedAtCreation, state.system).then((charter) => {
-    state.site = charter;
-    console.info('[charter] site chartered', charter);
-  });
 })();
 
 // Commercial showcase helper: keep the normal scenario interactive, while
@@ -2011,6 +2236,8 @@ type TierProgressSnapshot = {
 };
 
 let toolLockMessage = '';
+let lastPresentedToolLockMessage = '';
+let toolLockMessageVisibleUntil = 0;
 
 function unlockRequirementText(tier: number): string {
   // Caller ("X locked until Tier N.") already owns the tier number;
@@ -2075,7 +2302,7 @@ function moduleLockedMessage(module: ModuleType): string {
 }
 
 function selectRoomTool(room: RoomType): void {
-  if (room !== RoomType.None && !isRoomUnlocked(state, room)) {
+  if (!starterLayoutEditorMode && room !== RoomType.None && !isRoomUnlocked(state, room)) {
     toolLockMessage = roomLockedMessage(room);
     return;
   }
@@ -2084,7 +2311,7 @@ function selectRoomTool(room: RoomType): void {
 }
 
 function selectModuleTool(module: ModuleType): void {
-  if (module !== ModuleType.None && !isModuleUnlocked(state, module)) {
+  if (!starterLayoutEditorMode && module !== ModuleType.None && !isModuleUnlocked(state, module)) {
     toolLockMessage = moduleLockedMessage(module);
     return;
   }
@@ -2094,6 +2321,11 @@ function selectModuleTool(module: ModuleType): void {
     : module === ModuleType.FuelCoupler || module === ModuleType.FreightLocker || module === ModuleType.MaintenanceSocket
       ? 'Dock attachment: place on an exterior hull wall near a Pod Dock.'
       : '';
+}
+
+function selectModuleMoveTool(): void {
+  currentTool = { kind: 'move-module' };
+  toolLockMessage = 'Select an installed module to move.';
 }
 
 function selectRoomCopyTool(): void {
@@ -2158,10 +2390,8 @@ function refreshUnlockLegendAndHotkeys(): void {
  * awfml wanted at-a-glance without cracking the sidebar (Starlight-Station
  * dashboard vibe). Pulled from the same state surfaces the sidebar panels
  * use so we stay a read-only render consumer:
- *   - Power: `powerDemand / powerSupply`. `loadPct` is a pre-derived %
- *     but it clamps to 140 and loses the raw supply denominator; the
- *     sidebar already shows the ratio so we keep that here too, plus a
- *     % for quick read.
+ *   - Power: `powerDemand / powerSupply`, shown directly so wiring or adding
+ *     generation produces an immediately legible change.
  *   - Oxygen: `airQuality` (0-100 life-support %, the sim's "oxygen").
  *   - Credits: `state.metrics.credits` (integer station bank).
  *   - Crew: `state.crew.total` (hired head-count).
@@ -2203,10 +2433,14 @@ function preparedMealServiceSnapshot(): {
 function refreshHudStatus(): void {
   const powerDemand = state.metrics.powerDemand;
   const powerSupply = state.metrics.powerSupply;
-  const loadPct = Math.round(state.metrics.loadPct);
-  hudPowerEl.textContent = `${loadPct}%`;
+  const powerLoadPct = (powerDemand / Math.max(0.1, powerSupply)) * 100;
+  hudPowerEl.textContent = `${Math.round(powerDemand)}/${Math.round(powerSupply)}`;
+  hudPowerEl.parentElement?.setAttribute(
+    'title',
+    `Power demand ${powerDemand.toFixed(1)} / supply ${powerSupply.toFixed(1)} (${Math.round(powerLoadPct)}% load)`
+  );
   hudPowerEl.style.color =
-    powerDemand > powerSupply ? 'var(--danger)' : loadPct > 85 ? 'var(--warn)' : 'var(--ok)';
+    powerDemand > powerSupply ? 'var(--danger)' : powerLoadPct > 85 ? 'var(--warn)' : 'var(--ok)';
 
   const oxygen = Math.round(state.metrics.airQuality);
   hudOxygenEl.textContent = `${oxygen}%`;
@@ -5403,6 +5637,89 @@ const AUTOSAVE_KEY = 'spacegame-autosave';
 const AUTOSAVE_INTERVAL_MS = 60_000;
 const QUICKSAVE_ID = 'quicksave';
 const MAX_SAVE_SLOTS = 30;
+// localStorage is commonly capped per origin. Keep enough headroom for the
+// separate autosave and browser bookkeeping as stations grow.
+const MAX_SAVE_STORE_CHARS = 3_500_000;
+
+async function configureStarterLayoutEditor(): Promise<void> {
+  if (!starterLayoutEditorMode) return;
+  const editor = document.querySelector<HTMLElement>('#starter-layout-editor')!;
+  const status = document.querySelector<HTMLElement>('#starter-layout-status')!;
+  const saveButton = document.querySelector<HTMLButtonElement>('#save-starter-layout')!;
+  const resetButton = document.querySelector<HTMLButtonElement>('#reset-starter-layout')!;
+  let existing: StarterLayoutRecord | null = null;
+  try {
+    existing = await readStarterLayoutRecord();
+  } catch (error) {
+    console.warn('[starter-layout] could not inspect saved template:', error);
+  }
+
+  editor.classList.remove('hidden');
+  const positionEditor = () => {
+    const wrapRect = gameWrap.getBoundingClientRect();
+    const width = Math.max(280, Math.min(560, wrapRect.width - 24));
+    editor.style.width = `${width}px`;
+    editor.style.left = `${Math.max(12, wrapRect.right - width - 12)}px`;
+    editor.style.top = `${Math.max(8, wrapRect.top + 8)}px`;
+  };
+  positionEditor();
+  window.addEventListener('resize', positionEditor);
+  document.body.classList.add('starter-layout-editor-mode');
+  state.controls.paused = true;
+  state.controls.simSpeed = 1;
+  state.metrics.credits = 999_999;
+  state.legacyMaterialStock = 999_999;
+  state.metrics.materials = 999_999;
+  playBtn.disabled = true;
+  pauseBtn.disabled = true;
+  speedUpBtn.disabled = true;
+  status.textContent = startupParams.get('starter') === 'stock'
+    ? 'Stock layout loaded'
+    : existing
+      ? `Default from ${formatClock(existing.savedAt)}`
+      : 'No custom default yet';
+
+  saveButton.addEventListener('click', async () => {
+    state.controls.paused = true;
+    try {
+      const record: StarterLayoutRecord = {
+        savedAt: Date.now(),
+        payloadText: serializeSave('__starter_layout__', state, GAME_VERSION)
+      };
+      await writeStarterLayoutRecord(record);
+      status.textContent = `Saved ${formatClock(record.savedAt)}`;
+      saveButton.textContent = 'Saved';
+      window.setTimeout(() => {
+        saveButton.textContent = 'Save Default';
+      }, 1400);
+    } catch (error) {
+      status.textContent = 'Could not save default';
+      console.warn('[starter-layout] save failed:', error);
+    }
+  });
+
+  resetButton.addEventListener('click', async () => {
+    resetButton.disabled = true;
+    try {
+      await deleteStarterLayoutRecord();
+    } catch (error) {
+      resetButton.disabled = false;
+      status.textContent = 'Could not reset default';
+      console.warn('[starter-layout] reset failed:', error);
+      return;
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete('scenario');
+    url.searchParams.delete('load');
+    url.searchParams.delete('loadId');
+    url.searchParams.delete('charter');
+    url.searchParams.set('starter-editor', '1');
+    url.searchParams.set('starter', 'stock');
+    location.assign(url);
+  });
+}
+
+void configureStarterLayoutEditor();
 
 type LocalSaveRecord = {
   id: string;
@@ -5451,6 +5768,7 @@ type RoomClipboard = {
 };
 
 let currentTool: BuildTool = { kind: 'none' };
+let utilityToolPreviousOverlay: DiagnosticOverlay | null = null;
 let roomClipboard: RoomClipboard | null = null;
 let selectedDockId: number | null = null;
 let selectedRoomTile: number | null = null;
@@ -5470,6 +5788,23 @@ let isRightPanning = false;
 let panStartClientX = 0;
 let panStartClientY = 0;
 let panStartScrollLeft = 0;
+
+function selectUtilityUnderlayTool(kind: UtilityUnderlayKind, erase = false): void {
+  if (currentTool.kind !== 'utility-underlay' && utilityToolPreviousOverlay === null) {
+    utilityToolPreviousOverlay = state.controls.diagnosticOverlay;
+  }
+  currentTool = { kind: 'utility-underlay', utilityKind: kind, utilityErase: erase };
+  state.controls.diagnosticOverlay = 'utility-underlay';
+  toolLockMessage = '';
+}
+
+function restoreViewAfterUtilityTool(): void {
+  if (utilityToolPreviousOverlay === null) return;
+  if (state.controls.diagnosticOverlay === 'utility-underlay') {
+    state.controls.diagnosticOverlay = utilityToolPreviousOverlay;
+  }
+  utilityToolPreviousOverlay = null;
+}
 let panStartScrollTop = 0;
 let uiPanelsHidden = false;
 let berthOpsCollapsed = false;
@@ -5941,6 +6276,7 @@ const TOOLBAR_ZONE_MAP: Record<string, ZoneType> = {
 };
 const TOOLBAR_UTILITY_UNDERLAY_MAP: Record<string, UtilityUnderlayKind> = {
   'air-duct': 'air-duct',
+  'power-conduit': 'power-conduit',
   'water-pipe': 'water-pipe',
   'fuel-pipe': 'fuel-pipe'
 };
@@ -6039,6 +6375,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   telescope: ModuleType.Telescope,
   'water-fountain': ModuleType.WaterFountain,
   plant: ModuleType.Plant,
+  'reactor-core': ModuleType.ReactorCore,
   'solar-panel': ModuleType.SolarPanel,
   clear: ModuleType.None,
 };
@@ -6117,6 +6454,7 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.Telescope]: 'TE',
   [ModuleType.WaterFountain]: 'WF',
   [ModuleType.Plant]: 'PL',
+  [ModuleType.ReactorCore]: 'RX',
   [ModuleType.SolarPanel]: 'SP'
 };
 
@@ -6178,7 +6516,7 @@ function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'copy-room' || tool.kind === 'paste-room') return 'structure';
   if (tool.kind === 'utility-underlay') return 'structure';
   if (tool.kind === 'room') return 'rooms';
-  if (tool.kind === 'module') return 'modules';
+  if (tool.kind === 'module' || tool.kind === 'move-module') return 'modules';
   if (tool.kind === 'hire-staff') return 'crew';
   if (tool.kind === 'zone') return 'overlays';
   return 'structure';
@@ -6190,6 +6528,7 @@ function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'copy-room') return 'copy-room';
   if (tool.kind === 'paste-room') return 'paste-room';
   if (tool.kind === 'module') return `module:${tool.module}`;
+  if (tool.kind === 'move-module') return `move-module:${tool.moveSourceModuleId ?? 'select'}`;
   if (tool.kind === 'utility-underlay') return `utility:${tool.utilityKind}:${tool.utilityErase ? 'erase' : 'draw'}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
   if (tool.kind === 'cancel-construction') return 'cancel-construction';
@@ -6258,6 +6597,7 @@ function wireToolbar(): void {
       const roomCopyKey = btn.dataset.toolRoomCopy;
       const roomPasteKey = btn.dataset.toolRoomPaste;
       const moduleKey = btn.dataset.toolModule;
+      const moduleMoveKey = btn.dataset.toolModuleMove;
       const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
       const rotateKey = btn.dataset.toolRotate;
       const deselectKey = btn.dataset.toolDeselect;
@@ -6281,20 +6621,18 @@ function wireToolbar(): void {
         selectRoomCopyTool();
       } else if (roomPasteKey) {
         selectRoomPasteTool();
+      } else if (moduleMoveKey) {
+        selectModuleMoveTool();
       } else if (moduleKey) {
         const module = TOOLBAR_MODULE_MAP[moduleKey];
         if (module !== undefined) selectModuleTool(module);
       } else if (utilityUnderlayKey) {
         if (utilityUnderlayKey === 'erase') {
-          currentTool = { kind: 'utility-underlay', utilityKind: 'air-duct', utilityErase: true };
-          state.controls.diagnosticOverlay = 'utility-underlay';
-          toolLockMessage = '';
+          selectUtilityUnderlayTool('air-duct', true);
         } else {
           const utilityKind = TOOLBAR_UTILITY_UNDERLAY_MAP[utilityUnderlayKey];
           if (utilityKind !== undefined && isUtilityUnderlayKind(utilityKind)) {
-            currentTool = { kind: 'utility-underlay', utilityKind };
-            state.controls.diagnosticOverlay = 'utility-underlay';
-            toolLockMessage = '';
+            selectUtilityUnderlayTool(utilityKind);
           }
         }
       } else if (cancelConstructionKey) {
@@ -6329,6 +6667,7 @@ function refreshToolbar(): void {
     const roomCopyKey = btn.dataset.toolRoomCopy;
     const roomPasteKey = btn.dataset.toolRoomPaste;
     const moduleKey = btn.dataset.toolModule;
+    const moduleMoveKey = btn.dataset.toolModuleMove;
     const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
     const cancelConstructionKey = btn.dataset.toolCancelConstruction;
@@ -6362,11 +6701,13 @@ function refreshToolbar(): void {
       } else {
         btn.title = `Paste ${roomClipboard.label} — tiles, room settings, zones, docks, and fresh furniture`;
       }
+    } else if (moduleMoveKey) {
+      active = toolKind === 'move-module';
     } else if (roomKey) {
       const room = TOOLBAR_ROOM_MAP[roomKey];
       if (room !== undefined) {
         if (toolKind === 'room' && currentTool.room === room) active = true;
-        if (!isRoomUnlocked(state, room)) {
+        if (!starterLayoutEditorMode && !isRoomUnlocked(state, room)) {
           locked = true;
           lockedTitle = roomLockedMessage(room);
         }
@@ -6375,7 +6716,7 @@ function refreshToolbar(): void {
       const module = TOOLBAR_MODULE_MAP[moduleKey];
       if (module !== undefined && module !== ModuleType.None) {
         if (toolKind === 'module' && currentTool.module === module) active = true;
-        if (!isModuleUnlocked(state, module)) {
+        if (!starterLayoutEditorMode && !isModuleUnlocked(state, module)) {
           locked = true;
           lockedTitle = moduleLockedMessage(module);
         }
@@ -6681,27 +7022,49 @@ function readSaveStore(): { store: SaveStore; warnings: string[] } {
   };
 }
 
-function writeSaveStore(store: SaveStore): boolean {
+function writeSaveStore(store: SaveStore, allowAutosaveEviction = false): boolean {
+  const serialized = JSON.stringify(store);
   try {
-    localStorage.setItem(SAVE_STORE_KEY, JSON.stringify(store));
+    localStorage.setItem(SAVE_STORE_KEY, serialized);
     return true;
-  } catch {
-    setSaveStatus('Failed to write localStorage save data.', 'error');
+  } catch (initialError) {
+    if (allowAutosaveEviction) {
+      try {
+        localStorage.removeItem(AUTOSAVE_KEY);
+        localStorage.setItem(SAVE_STORE_KEY, serialized);
+        autosaveStatusEl.classList.add('hidden');
+        return true;
+      } catch {
+        // Report the original write error below. The autosave is expendable
+        // when the player is explicitly saving the same live station.
+      }
+    }
+    const reason = initialError instanceof Error ? ` (${initialError.name})` : '';
+    setSaveStatus(`Save storage is full or unavailable${reason}. Delete or download an old save and try again.`, 'error');
     return false;
   }
 }
 
-function trimSaveStore(saves: LocalSaveRecord[]): { saves: LocalSaveRecord[]; removed: number } {
-  if (saves.length <= MAX_SAVE_SLOTS) return { saves, removed: 0 };
-  const quicksave = saves.find((save) => save.id === QUICKSAVE_ID) ?? null;
-  const nonQuick = saves
-    .filter((save) => save.id !== QUICKSAVE_ID)
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-  const keepNonQuick = nonQuick.slice(0, Math.max(0, MAX_SAVE_SLOTS - (quicksave ? 1 : 0)));
-  const trimmed = quicksave ? [quicksave, ...keepNonQuick] : keepNonQuick;
+function trimSaveStore(saves: LocalSaveRecord[], protectedSaveId?: string): { saves: LocalSaveRecord[]; removed: number } {
+  const ranked = [...saves].sort((a, b) => {
+    if (a.id === protectedSaveId && b.id !== protectedSaveId) return -1;
+    if (a.id !== protectedSaveId && b.id === protectedSaveId) return 1;
+    if (a.id === QUICKSAVE_ID && b.id !== QUICKSAVE_ID) return -1;
+    if (a.id !== QUICKSAVE_ID && b.id === QUICKSAVE_ID) return 1;
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+  const kept: LocalSaveRecord[] = [];
+  for (const save of ranked) {
+    if (kept.length >= MAX_SAVE_SLOTS) continue;
+    const candidate = [...kept, save];
+    const candidateChars = JSON.stringify({ storeVersion: 1, saves: candidate }).length;
+    if (candidateChars <= MAX_SAVE_STORE_CHARS || save.id === protectedSaveId) {
+      kept.push(save);
+    }
+  }
   return {
-    saves: trimmed,
-    removed: saves.length - trimmed.length
+    saves: kept,
+    removed: saves.length - kept.length
   };
 }
 
@@ -7721,7 +8084,7 @@ function pasteRoomStampAt(originX: number, originY: number): void {
       skippedCells++;
       continue;
     }
-    if (cell.room !== RoomType.None && !isRoomUnlocked(state, cell.room)) {
+    if (!starterLayoutEditorMode && cell.room !== RoomType.None && !isRoomUnlocked(state, cell.room)) {
       firstFailure ||= roomLockedMessage(cell.room);
       skippedCells++;
       continue;
@@ -7756,7 +8119,7 @@ function pasteRoomStampAt(originX: number, originY: number): void {
   }
 
   for (const module of roomClipboard.modules) {
-    if (module.type !== ModuleType.None && !isModuleUnlocked(state, module.type)) {
+    if (!starterLayoutEditorMode && module.type !== ModuleType.None && !isModuleUnlocked(state, module.type)) {
       firstFailure ||= moduleLockedMessage(module.type);
       continue;
     }
@@ -7796,12 +8159,49 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
     if (currentTool.staffRole) placeHiredStaffAt(currentTool.staffRole, toIndex(a.x, a.y, state.width));
     return;
   }
-  if (currentTool.kind === 'room' && currentTool.room && currentTool.room !== RoomType.None && !isRoomUnlocked(state, currentTool.room)) {
+  if (!starterLayoutEditorMode && currentTool.kind === 'room' && currentTool.room && currentTool.room !== RoomType.None && !isRoomUnlocked(state, currentTool.room)) {
     toolLockMessage = roomLockedMessage(currentTool.room);
     return;
   }
-  if (currentTool.kind === 'module' && currentTool.module && currentTool.module !== ModuleType.None && !isModuleUnlocked(state, currentTool.module)) {
+  if (!starterLayoutEditorMode && currentTool.kind === 'module' && currentTool.module && currentTool.module !== ModuleType.None && !isModuleUnlocked(state, currentTool.module)) {
     toolLockMessage = moduleLockedMessage(currentTool.module);
+    return;
+  }
+  if (currentTool.kind === 'move-module') {
+    if (a.x !== b.x || a.y !== b.y) {
+      toolLockMessage = 'Move modules one at a time: click a module, then click its new location.';
+      return;
+    }
+    const clickedTile = toIndex(a.x, a.y, state.width);
+    const selectedId = currentTool.moveSourceModuleId;
+    if (selectedId === undefined) {
+      const moduleId = state.moduleOccupancyByTile[clickedTile];
+      const module = moduleId === null ? undefined : state.moduleInstances.find((candidate) => candidate.id === moduleId);
+      if (!module) {
+        toolLockMessage = 'Select an installed module to move.';
+        return;
+      }
+      currentTool = { kind: 'move-module', moveSourceModuleId: module.id, module: module.type };
+      toolLockMessage = `Moving ${friendlyName(module.type)}. Choose its new location.`;
+      return;
+    }
+    const selectedModule = state.moduleInstances.find((candidate) => candidate.id === selectedId);
+    if (!selectedModule) {
+      selectModuleMoveTool();
+      toolLockMessage = 'That module no longer exists. Select another module.';
+      return;
+    }
+    if (selectedModule.tiles.includes(clickedTile)) {
+      selectModuleMoveTool();
+      return;
+    }
+    const moved = tryMoveModule(state, selectedId, clickedTile);
+    if (!moved.ok) {
+      toolLockMessage = `Cannot move ${friendlyName(selectedModule.type)}: ${moved.reason ?? 'invalid destination'}.`;
+      return;
+    }
+    toolLockMessage = `Moved ${friendlyName(selectedModule.type)} at no cost. Select another module to move.`;
+    currentTool = { kind: 'move-module' };
     return;
   }
   const minX = Math.min(a.x, b.x);
@@ -7825,6 +8225,34 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
     }
   }
 
+  if (currentTool.kind === 'module' && currentTool.module === ModuleType.None) {
+    const moduleIds = new Set<number>();
+    for (const tile of paintTiles) {
+      const moduleId = state.moduleOccupancyByTile[tile];
+      if (moduleId !== null) moduleIds.add(moduleId);
+    }
+    let removed = 0;
+    let refund = 0;
+    let firstFailure = '';
+    for (const moduleId of moduleIds) {
+      const module = state.moduleInstances.find((candidate) => candidate.id === moduleId);
+      if (!module) continue;
+      const sold = sellModuleAtTile(state, module.originTile);
+      if (sold.ok) {
+        removed++;
+        refund += sold.refund;
+      } else if (!firstFailure) {
+        firstFailure = sold.reason ?? 'could not remove module';
+      }
+    }
+    if (removed > 0) {
+      toolLockMessage = `Sold ${removed} module${removed === 1 ? '' : 's'} for ${refund} credits (${Math.round(MODULE_RESALE_REFUND_RATE * 100)}% resale).${firstFailure ? ` ${firstFailure}.` : ''}`;
+    } else {
+      toolLockMessage = firstFailure || 'No module here to sell.';
+    }
+    return;
+  }
+
   if (currentTool.kind === 'utility-underlay') {
     const kind = currentTool.utilityKind ?? 'air-duct';
     let changed = 0;
@@ -7833,9 +8261,10 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       let ok = false;
       if (currentTool.utilityErase) {
         const erasedAir = clearUtilityUnderlayAt(state, idx, 'air-duct');
+        const erasedPower = clearUtilityUnderlayAt(state, idx, 'power-conduit');
         const erasedWater = clearUtilityUnderlayAt(state, idx, 'water-pipe');
         const erasedFuel = clearUtilityUnderlayAt(state, idx, 'fuel-pipe');
-        ok = erasedAir || erasedWater || erasedFuel;
+        ok = erasedAir || erasedPower || erasedWater || erasedFuel;
       } else {
         ok = canPlaceUtilityUnderlay(state, kind, idx) && setUtilityUnderlayTile(state, kind, idx, true);
       }
@@ -7904,9 +8333,7 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       } else if (currentTool.kind === 'room' && state.tiles[idx] !== TileType.Space) {
         setRoom(state, idx, currentTool.room!);
       } else if (currentTool.kind === 'module' && state.tiles[idx] !== TileType.Space) {
-        if (currentTool.module === ModuleType.None) {
-          removeModuleAtTile(state, idx);
-        } else {
+        if (currentTool.module !== ModuleType.None) {
           if (INSTANT_BUILD_PLAYTEST) {
             cancelConstructionAtTile(state, idx);
             const placed = tryPlaceModuleWithCredits(state, currentTool.module!, idx, state.controls.moduleRotation);
@@ -8025,7 +8452,7 @@ canvas.addEventListener('mouseup', (e) => {
     const canOpenInspectors = currentTool.kind === 'none';
     const singleClick = paintStart.x === paintCurrent.x && paintStart.y === paintCurrent.y;
     const clickedTile = singleClick ? toIndex(paintStart.x, paintStart.y, state.width) : null;
-    if (singleClick && clickedTile !== null) {
+    if (canOpenInspectors && singleClick && clickedTile !== null) {
       const incident = incidentAtTile(clickedTile);
       if (incident && selectIncident(incident.id)) {
         isPainting = false;
@@ -8332,6 +8759,7 @@ window.addEventListener('keydown', (e) => {
     case ' ':
       e.preventDefault();
       if (e.repeat) break;
+      if (starterLayoutEditorMode) break;
       state.controls.paused = !state.controls.paused;
       refreshTransportUi();
       break;
@@ -8498,6 +8926,7 @@ expandWestBtn.addEventListener('click', () => handleExpandDirection('west'));
 
 
 playBtn.addEventListener('click', () => {
+  if (starterLayoutEditorMode) return;
   if (pendingAutosaveLoad) {
     pendingAutosaveLoad = false;
     loadAutosaveBtn.classList.add('hidden');
@@ -8512,6 +8941,7 @@ pauseBtn.addEventListener('click', () => {
 });
 
 speedUpBtn.addEventListener('click', () => {
+  if (starterLayoutEditorMode) return;
   if (pendingAutosaveLoad) {
     pendingAutosaveLoad = false;
     loadAutosaveBtn.classList.add('hidden');
@@ -9098,6 +9528,7 @@ function saveToSlot(saveName: string, slotId?: string): void {
   const nowIso = new Date().toISOString();
   const { store, warnings } = readSaveStore();
   const saves = [...store.saves];
+  const targetId = slotId ?? generateSaveId();
 
   if (slotId) {
     const existingIndex = saves.findIndex((save) => save.id === slotId);
@@ -9119,7 +9550,7 @@ function saveToSlot(saveName: string, slotId?: string): void {
     }
   } else {
     saves.push({
-      id: generateSaveId(),
+      id: targetId,
       name: saveName,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -9127,11 +9558,10 @@ function saveToSlot(saveName: string, slotId?: string): void {
     });
   }
 
-  const trimmed = trimSaveStore(saves);
-  if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves })) return;
+  const trimmed = trimSaveStore(saves, targetId);
+  if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves }, true)) return;
 
-  const selectedId = slotId ?? trimmed.saves[trimmed.saves.length - 1]?.id;
-  refreshSaveUi(selectedId);
+  refreshSaveUi(targetId);
   const extras: string[] = [];
   if (trimmed.removed > 0) extras.push(`${trimmed.removed} old save(s) evicted`);
   if (warnings.length > 0) extras.push(...warnings);
@@ -9242,20 +9672,20 @@ saveImportBtn.addEventListener('click', () => {
     const payloadText = serializeSave(importName, hydrated.state, parsed.save.gameVersion || GAME_VERSION);
     const nowIso = new Date().toISOString();
     const { store, warnings } = readSaveStore();
+    const importedSaveId = generateSaveId();
     const saves = [
       ...store.saves,
       {
-        id: generateSaveId(),
+        id: importedSaveId,
         name: importName,
         createdAt: nowIso,
         updatedAt: nowIso,
         payloadText
       }
     ];
-    const trimmed = trimSaveStore(saves);
-    if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves })) return;
-    const selectedId = trimmed.saves[trimmed.saves.length - 1]?.id;
-    refreshSaveUi(selectedId);
+    const trimmed = trimSaveStore(saves, importedSaveId);
+    if (!writeSaveStore({ storeVersion: 1, saves: trimmed.saves }, true)) return;
+    refreshSaveUi(importedSaveId);
     const warningCount = warnings.length + parsed.warnings.length + hydrated.warnings.length;
     if (warningCount > 0) {
       setSaveStatus(
@@ -9502,6 +9932,7 @@ function runSimulationSlice(): void {
 }
 
 function frame(now: number): void {
+  if (currentTool.kind !== 'utility-underlay') restoreViewAfterUtilityTool();
   const frameMs = now - lastTime;
   lastTime = now;
   state.metrics.frameMs = frameMs;
@@ -9798,7 +10229,22 @@ function frame(now: number): void {
     dockPreviewEl.textContent = `Dock preview: ${preview.valid ? 'valid' : `invalid (${preview.reason})`}`;
     dockPreviewEl.style.color = preview.valid ? '#6edb8f' : '#ff7676';
     dockPreviewEl.classList.remove('hidden');
+  } else if (toolLockMessage) {
+    if (toolLockMessage !== lastPresentedToolLockMessage) {
+      lastPresentedToolLockMessage = toolLockMessage;
+      toolLockMessageVisibleUntil = now + 4_500;
+    }
+    if (now < toolLockMessageVisibleUntil) {
+      dockPreviewEl.textContent = toolLockMessage;
+      dockPreviewEl.style.color = toolLockMessage.startsWith('Cannot') ? '#ff9a9a' : '#9fdcff';
+      dockPreviewEl.classList.remove('hidden');
+    } else {
+      dockPreviewEl.textContent = '';
+      dockPreviewEl.classList.add('hidden');
+    }
   } else {
+    lastPresentedToolLockMessage = '';
+    toolLockMessageVisibleUntil = 0;
     dockPreviewEl.textContent = '';
     dockPreviewEl.style.color = '#8ea2bd';
     dockPreviewEl.classList.add('hidden');
@@ -9942,7 +10388,11 @@ function offerAutosaveLoadOnColdStart(): void {
   });
 }
 
+let gameLoopStarted = false;
+
 function startGameLoop(): void {
+  if (gameLoopStarted) return;
+  gameLoopStarted = true;
   void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
     spriteAtlas = loaded;
     refreshCrewPanel();
@@ -9950,15 +10400,14 @@ function startGameLoop(): void {
   });
   refreshCrewPanel();
   refreshModulePaletteSprites();
-  offerAutosaveLoadOnColdStart();
+  pendingAutosaveLoad = false;
+  loadAutosaveBtn.classList.add('hidden');
   if (autosaveTimer !== null) clearInterval(autosaveTimer);
-  autosaveTimer = setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
+  autosaveTimer = starterLayoutEditorMode ? null : setInterval(writeAutosave, AUTOSAVE_INTERVAL_MS);
   if (simulationTimer !== null) clearInterval(simulationTimer);
   simulationTimer = setInterval(runSimulationSlice, SIMULATION_INTERVAL_MS);
   requestAnimationFrame(frame);
 }
-
-startGameLoop();
 
 if (new URLSearchParams(location.search).get('inspect-commercial') === '1') {
   selectedRoomTile = 21 * state.width + 46;
@@ -10053,7 +10502,7 @@ window.__harnessReady = true;
 
 // ?load=<base64-JSON> or ?loadId=<localStorageKey> repro URL support.
 // Bots can construct these from failure-state.json to reproduce any failure.
-(function applyLoadParam() {
+function applyLoadParam(): boolean {
   const params = new URLSearchParams(location.search);
   const loadB64 = params.get('load');
   const loadId = params.get('loadId');
@@ -10061,6 +10510,7 @@ window.__harnessReady = true;
     try {
       const json = atob(loadB64);
       window.__harnessLoadSave(json);
+      return true;
     } catch (e) {
       console.error('[harness] ?load= base64 decode failed', e);
     }
@@ -10069,6 +10519,7 @@ window.__harnessReady = true;
       const raw = localStorage.getItem(loadId);
       if (raw) {
         window.__harnessLoadSave(raw);
+        return true;
       } else {
         console.warn('[harness] ?loadId=', loadId, 'not found in localStorage');
       }
@@ -10076,4 +10527,125 @@ window.__harnessReady = true;
       console.error('[harness] ?loadId= read failed', e);
     }
   }
-})();
+  return false;
+}
+
+type ContinueCandidate = {
+  payloadText: string;
+  label: string;
+  savedAt: number;
+};
+
+function getContinueCandidate(): ContinueCandidate | null {
+  const autosave = readAutosaveRecord();
+  if (autosave) {
+    const parsed = parseAndMigrateSave(autosave.payloadText);
+    if (parsed.ok) {
+      return {
+        payloadText: autosave.payloadText,
+        label: 'Last autosave',
+        savedAt: autosave.savedAt
+      };
+    }
+  }
+
+  const { store } = readSaveStore();
+  const saves = [...store.saves].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  for (const save of saves) {
+    const parsed = parseAndMigrateSave(save.payloadText);
+    if (!parsed.ok) continue;
+    return {
+      payloadText: save.payloadText,
+      label: save.name,
+      savedAt: Date.parse(save.updatedAt)
+    };
+  }
+  return null;
+}
+
+function loadContinueCandidate(candidate: ContinueCandidate): boolean {
+  const parsed = parseAndMigrateSave(candidate.payloadText);
+  if (!parsed.ok) return false;
+  try {
+    const hydrated = hydrateStateFromSave(parsed.save);
+    applyHydratedState(hydrated.state);
+    state.controls.paused = true;
+    stateDirty = true;
+    autosaveStatusEl.textContent = `${candidate.label} loaded`;
+    autosaveStatusEl.classList.remove('hidden');
+    return true;
+  } catch (error) {
+    console.error('[startup] continue failed', error);
+    return false;
+  }
+}
+
+function continueInfoFor(candidate: ContinueCandidate | null): TitleContinueInfo {
+  if (!candidate) return { available: false, detail: 'No station on record' };
+  const when = Number.isFinite(candidate.savedAt)
+    ? new Date(candidate.savedAt).toLocaleString()
+    : 'Saved station';
+  return {
+    available: true,
+    title: candidate.label,
+    detail: when
+  };
+}
+
+async function runPlayerStartup(): Promise<void> {
+  while (!gameLoopStarted) {
+    const candidate = getContinueCandidate();
+    const choice = await mountTitleScreen({ continueInfo: continueInfoFor(candidate) });
+    if (choice === 'continue' && candidate && loadContinueCandidate(candidate)) {
+      startGameLoop();
+      return;
+    }
+
+    if (!state.system) {
+      console.warn('[charter] system map unavailable; starting at default site.');
+      startGameLoop();
+      return;
+    }
+    const charter = await mountCharterScreen(state.seedAtCreation, state.system, { allowCancel: true });
+    if (!charter) continue;
+    state.site = charter;
+    state.controls.paused = true;
+    console.info('[charter] site chartered', charter);
+    startGameLoop();
+    return;
+  }
+}
+
+async function bootstrapApp(): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  try {
+    await applySavedStarterLayout();
+  } catch (error) {
+    console.warn('[starter-layout] storage unavailable; using stock layout:', error);
+  }
+  if (params.has('load') || params.has('loadId')) {
+    applyLoadParam();
+    startGameLoop();
+    return;
+  }
+  if (starterLayoutEditorMode) {
+    state.controls.paused = true;
+    startGameLoop();
+    return;
+  }
+  if (params.get('charter') === '1') {
+    if (state.system) {
+      const charter = await mountCharterScreen(state.seedAtCreation, state.system);
+      if (charter) state.site = charter;
+    }
+    startGameLoop();
+    return;
+  }
+  if (params.has('scenario')) {
+    startGameLoop();
+    return;
+  }
+  await runPlayerStartup();
+}
+
+void bootstrapApp();

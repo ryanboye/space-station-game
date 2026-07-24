@@ -240,6 +240,7 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.Telescope]: 3,
   [ModuleType.WaterFountain]: 0,
   [ModuleType.Plant]: 1,
+  [ModuleType.ReactorCore]: 0,
   // Available from the starter palette (tier 0): solar is an early power
   // alternative whose value is set by the chartered site's sunlight.
   [ModuleType.SolarPanel]: 0,

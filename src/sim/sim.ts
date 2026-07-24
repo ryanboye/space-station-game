@@ -171,6 +171,7 @@ import {
   clearUtilityUnderlayAt,
   canPlaceUtilityUnderlay,
   discoverUtilityNetworks,
+  ensureUtilityUnderlay,
   hasUtilityUnderlay,
   setUtilityUnderlayTile,
   utilityUnderlayNeighborMask,
@@ -2889,6 +2890,100 @@ export function getWaterPipeNetworkDiagnostics(state: StationState): UtilityNetw
   });
 }
 
+const POWER_REQUIRED_ROOMS = new Set<RoomType>([
+  RoomType.Bridge,
+  RoomType.Cafeteria,
+  RoomType.Kitchen,
+  RoomType.Workshop,
+  RoomType.Clinic,
+  RoomType.Brig,
+  RoomType.RecHall,
+  RoomType.Security,
+  RoomType.Hygiene,
+  RoomType.Hydroponics,
+  RoomType.LifeSupport,
+  RoomType.Lounge,
+  RoomType.Market,
+  RoomType.Cantina,
+  RoomType.CommercialUnit,
+  RoomType.Observatory
+]);
+
+type PowerGridRuntime = {
+  gridMode: boolean;
+  diagnostics: UtilityNetworkDiagnostics;
+  poweredRoomTiles: Set<number>;
+};
+
+let powerGridCache: {
+  state: StationState;
+  key: string;
+  runtime: PowerGridRuntime;
+} | null = null;
+
+function powerSourceTiles(state: StationState): number[] {
+  const sources = new Set<number>();
+  for (const module of state.moduleInstances) {
+    if (
+      (module.type === ModuleType.SolarPanel || module.type === ModuleType.ReactorCore) &&
+      hasUtilityUnderlay(state, 'power-conduit', module.originTile)
+    ) {
+      sources.add(module.originTile);
+    }
+  }
+  return [...sources];
+}
+
+function powerSinkTiles(state: StationState): number[] {
+  const sinks: number[] = [];
+  for (let tile = 0; tile < state.rooms.length; tile++) {
+    if (POWER_REQUIRED_ROOMS.has(state.rooms[tile]) && hasUtilityUnderlay(state, 'power-conduit', tile)) sinks.push(tile);
+  }
+  return sinks;
+}
+
+function computePowerGridRuntime(state: StationState): PowerGridRuntime {
+  const utility = ensureUtilityUnderlay(state);
+  const key = `${utility.version}:${state.roomVersion}:${state.moduleVersion}`;
+  if (powerGridCache?.state === state && powerGridCache.key === key) return powerGridCache.runtime;
+  const gridMode = utilityUnderlayTileCount(state, 'power-conduit') > 0;
+  const diagnostics = discoverUtilityNetworks(state, 'power-conduit', {
+    sourceTiles: powerSourceTiles(state),
+    sinkTiles: powerSinkTiles(state)
+  });
+  const poweredRoomTiles = new Set<number>();
+  for (const component of diagnostics.components) {
+    if (!component.powered) continue;
+    for (const tile of component.tiles) poweredRoomTiles.add(tile);
+  }
+  const runtime = { gridMode, diagnostics, poweredRoomTiles };
+  powerGridCache = { state, key, runtime };
+  return runtime;
+}
+
+export function getPowerNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
+  return computePowerGridRuntime(state).diagnostics;
+}
+
+export function roomClusterHasLocalPower(state: StationState, room: RoomType, cluster: number[]): boolean {
+  const runtime = computePowerGridRuntime(state);
+  if (!runtime.gridMode || !POWER_REQUIRED_ROOMS.has(room)) return true;
+  return cluster.some((tile) => runtime.poweredRoomTiles.has(tile));
+}
+
+export function getUnpoweredPowerRoomAnchors(state: StationState): number[] {
+  const runtime = computePowerGridRuntime(state);
+  if (!runtime.gridMode) return [];
+  const anchors: number[] = [];
+  for (const room of POWER_REQUIRED_ROOMS) {
+    for (const cluster of roomClusters(state, room)) {
+      if (cluster.some((tile) => runtime.poweredRoomTiles.has(tile))) continue;
+      anchors.push(Math.min(...cluster));
+    }
+  }
+  return anchors.sort((a, b) => a - b);
+}
+
 type WaterPipeRuntime = {
   pipeMode: boolean;
   diagnostics: UtilityNetworkDiagnostics;
@@ -2937,10 +3032,39 @@ export function getUtilityUnderlayTileDiagnostic(
   const selectedKind = kind ?? (
     hasUtilityUnderlay(state, 'fuel-pipe', tileIndex)
       ? 'fuel-pipe'
+      : hasUtilityUnderlay(state, 'power-conduit', tileIndex)
+        ? 'power-conduit'
       : hasUtilityUnderlay(state, 'water-pipe', tileIndex) && !hasUtilityUnderlay(state, 'air-duct', tileIndex)
         ? 'water-pipe'
         : 'air-duct'
   );
+  if (selectedKind === 'power-conduit') {
+    const diagnostics = getPowerNetworkDiagnostics(state);
+    const present = hasUtilityUnderlay(state, 'power-conduit', tileIndex);
+    const componentId = diagnostics.componentIdByTile[tileIndex];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : null;
+    const source = powerSourceTiles(state).includes(tileIndex);
+    const sink = powerSinkTiles(state).includes(tileIndex);
+    const powered = component?.powered ?? false;
+    const buildable = present || canPlaceUtilityUnderlay(state, 'power-conduit', tileIndex);
+    return {
+      tileIndex,
+      kind: 'power-conduit',
+      present,
+      buildable,
+      neighborMask: utilityUnderlayNeighborMask(state, 'power-conduit', tileIndex),
+      componentId: componentId >= 0 ? componentId : null,
+      powered,
+      source,
+      sink,
+      disconnected: present && !powered,
+      reason: !present
+        ? buildable ? 'empty electrical underlay' : 'not a wireable station tile'
+        : source ? 'local power source' : powered ? 'energized conduit' : 'dead conduit',
+      effect: powered ? 'connected rooms can operate' : 'connected rooms receive no power',
+      fix: powered ? 'extend this branch into rooms that need power' : 'connect this cable beneath a Reactor Core or Solar Panel'
+    };
+  }
   if (selectedKind === 'fuel-pipe') {
     const diagnostics = getFuelPipeNetworkDiagnostics(state);
     const present = hasUtilityUnderlay(state, 'fuel-pipe', tileIndex);
@@ -4894,7 +5018,8 @@ function podDockAttachmentCandidates(state: StationState, originTile: number): A
 export function getPodDockAttachmentView(
   state: StationState,
   module: ModuleType,
-  originTile: number
+  originTile: number,
+  ignoreModuleId?: number
 ): PodDockAttachmentView {
   const attachment = POD_DOCK_ATTACHMENT_CAPABILITY[module];
   if (!attachment) {
@@ -4913,7 +5038,8 @@ export function getPodDockAttachmentView(
   }
   const dock = candidates[0];
   const duplicate = state.moduleInstances.some((instance) =>
-    instance.type === module && instance.id !== state.moduleOccupancyByTile[originTile] &&
+    instance.type === module &&
+    instance.id !== (ignoreModuleId ?? state.moduleOccupancyByTile[originTile]) &&
     podDockAttachmentCandidates(state, instance.originTile).some((candidate) => candidate.moduleId === dock.moduleId)
   );
   if (duplicate) {
@@ -4922,9 +5048,16 @@ export function getPodDockAttachmentView(
   return { originTile, attachment, dockModuleId: dock.moduleId, dockAnchorTile: dock.originTile, valid: true, reason: null };
 }
 
-export function validatePortModulePlacement(state: StationState, module: ModuleType, originTile: number): string | null {
+export function validatePortModulePlacement(
+  state: StationState,
+  module: ModuleType,
+  originTile: number,
+  ignoreModuleId?: number
+): string | null {
   if (module === ModuleType.PodDock) return getPodDockPlacementView(state, originTile).reason;
-  if (POD_DOCK_ATTACHMENT_CAPABILITY[module]) return getPodDockAttachmentView(state, module, originTile).reason;
+  if (POD_DOCK_ATTACHMENT_CAPABILITY[module]) {
+    return getPodDockAttachmentView(state, module, originTile, ignoreModuleId).reason;
+  }
   return null;
 }
 
@@ -5113,6 +5246,8 @@ export function moduleCreditBuildCost(module: ModuleType, rotation: ModuleRotati
   const appliedRotation = rotation === 90 && MODULE_DEFINITIONS[module]?.rotatable ? 90 : 0;
   return Math.ceil(moduleConstructionCostForDefinition(module, appliedRotation));
 }
+
+export const MODULE_RESALE_REFUND_RATE = 0.5;
 
 function hasAdjacentDoor(state: StationState, tile: number): boolean {
   const p = fromIndex(tile, state.width);
@@ -8080,6 +8215,7 @@ function inspectRoomCluster(
   if (definition.activationChecks.door && doorCount <= 0) reasons.push('missing door');
   if (definition.activationChecks.pressurization && !pressurizedEnough) reasons.push('not pressurized');
   if (definition.activationChecks.path && !hasPath) reasons.push('no path');
+  if (!roomClusterHasLocalPower(state, room, cluster)) reasons.push('no local power');
 
   const warnings: string[] = [];
   if (serviceNodeCount <= 1 && cluster.length >= 10) warnings.push('room too large for service nodes');
@@ -12042,8 +12178,14 @@ function tryBoardVisitorOriginShipAtTile(
 
 function isVisitorExitTile(state: StationState, tileIndex: number): boolean {
   // Dock-migration v0: legacy ships board from Dock tiles; berth ships
-  // board from the Berth room tiles bound into ArrivingShip.bayTiles.
-  return state.tiles[tileIndex] === TileType.Dock || state.rooms[tileIndex] === RoomType.Berth;
+  // board from the Berth room tiles bound into ArrivingShip.bayTiles. Physical
+  // Pod Docks instead board from their ordinary interior floor/door access
+  // tile, so include every derived dock access point as an exit as well.
+  return (
+    state.tiles[tileIndex] === TileType.Dock ||
+    state.rooms[tileIndex] === RoomType.Berth ||
+    state.docks.some((dock) => dockAccessTiles(dock).includes(tileIndex))
+  );
 }
 
 function spawnShipAtDock(
@@ -20079,11 +20221,13 @@ function computeMetrics(state: StationState): void {
   // map-condition sunlight at its tile, so bright tiles (and a sunward charter,
   // which lifts the sunlight baseline) make solar genuinely strong while
   // deep-shade panels contribute almost nothing.
+  const powerGrid = computePowerGridRuntime(state);
   let solarSupply = 0;
   let activeSolarPanels = 0;
   let solarSunlightSum = 0;
   for (const module of state.moduleInstances) {
     if (module.type !== ModuleType.SolarPanel) continue;
+    if (powerGrid.gridMode && !hasUtilityUnderlay(state, 'power-conduit', module.originTile)) continue;
     activeSolarPanels += 1;
     solarSunlightSum += mapConditionAt(state, 'sunlight', module.originTile);
   }
@@ -20091,8 +20235,13 @@ function computeMetrics(state: StationState): void {
     const avgSunlight = solarSunlightSum / activeSolarPanels;
     solarSupply = activeSolarPanels * POWER_PER_SOLAR * avgSunlight;
   }
+  const gridConnectedReactors = powerGrid.gridMode
+    ? roomClusters(state, RoomType.Reactor).filter((cluster) => cluster.some((tile) => powerGrid.poweredRoomTiles.has(tile))).length
+    : state.ops.reactorsActive;
   const powerSupply =
-    BASE_POWER_SUPPLY + state.ops.reactorsActive * POWER_PER_REACTOR * reactorMaintenanceMultiplier + solarSupply;
+    (powerGrid.gridMode ? 0 : BASE_POWER_SUPPLY) +
+    Math.min(state.ops.reactorsActive, gridConnectedReactors) * POWER_PER_REACTOR * reactorMaintenanceMultiplier +
+    solarSupply;
   // Cold heating load: an outer-system charter (low sunFactor) pays more power
   // to hold heat, the way a sunward charter pays it back in solar. Absent site
   // → multiplier 1 (unchanged). Weight 0.35 → up to +35% LS draw at the rim.
@@ -21441,7 +21590,192 @@ export function tryPlaceModuleWithCredits(
   const placed = tryPlaceModule(state, moduleType, originTile, appliedRotation);
   if (!placed.ok) return { ok: false, cost: 0, reason: placed.reason ?? 'module placement failed' };
   state.metrics.credits -= cost;
+  const instance = state.moduleInstances[state.moduleInstances.length - 1];
+  if (instance) instance.purchaseCost = cost;
   return { ok: true, cost };
+}
+
+export type ModuleMovePreview = {
+  ok: boolean;
+  reason?: string;
+  tiles: number[];
+  module?: ModuleInstance;
+};
+
+export type ModuleMoveResult = {
+  ok: boolean;
+  reason?: string;
+  module?: ModuleInstance;
+};
+
+export type ModuleSaleResult = {
+  ok: boolean;
+  reason?: string;
+  moduleType?: ModuleType;
+  refund: number;
+};
+
+function moduleAtTile(state: StationState, tileIndex: number): ModuleInstance | undefined {
+  const moduleId = state.moduleOccupancyByTile[tileIndex];
+  return moduleId === null ? undefined : state.moduleInstances.find((module) => module.id === moduleId);
+}
+
+function moduleIsTenantOwned(state: StationState, moduleId: number): boolean {
+  return state.commercialUnits.some((unit) => unit.fittedModuleIds.includes(moduleId));
+}
+
+function moduleInteractionTiles(state: StationState, module: ModuleInstance): Set<number> {
+  const tiles = new Set(module.tiles);
+  if (moduleMount(module.type) === 'wall') {
+    const serviceTile = wallMountedModuleServiceTile(state, module.originTile);
+    if (serviceTile !== null) tiles.add(serviceTile);
+  }
+  return tiles;
+}
+
+function moduleRelocationBlockReason(state: StationState, module: ModuleInstance): string | null {
+  if (moduleIsTenantOwned(state, module.id)) return 'Tenant fixtures are managed by the leaseholder';
+  const interactionTiles = moduleInteractionTiles(state, module);
+  const activeReservation = state.reservations.some(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.expiresAt > state.now &&
+      reservation.targetTile !== null &&
+      interactionTiles.has(reservation.targetTile)
+  );
+  if (activeReservation) return 'Module is currently in use';
+
+  const activeJob = state.jobs.some(
+    (job) =>
+      job.state !== 'done' &&
+      job.state !== 'expired' &&
+      (interactionTiles.has(job.fromTile) || interactionTiles.has(job.toTile))
+  );
+  if (activeJob) return 'Module is assigned to an active job';
+
+  const actorOccupiesModule =
+    state.crewMembers.some(
+      (crew) => interactionTiles.has(crew.tileIndex) || (crew.targetTile !== null && interactionTiles.has(crew.targetTile))
+    ) ||
+    state.visitors.some(
+      (visitor) =>
+        interactionTiles.has(visitor.tileIndex) ||
+        (visitor.reservedServingTile !== null && interactionTiles.has(visitor.reservedServingTile)) ||
+        (visitor.reservedTargetTile !== null && interactionTiles.has(visitor.reservedTargetTile))
+    ) ||
+    state.residents.some(
+      (resident) =>
+        interactionTiles.has(resident.tileIndex) ||
+        (resident.reservedServingTile != null && interactionTiles.has(resident.reservedServingTile)) ||
+        (resident.reservedTargetTile !== null && interactionTiles.has(resident.reservedTargetTile))
+    );
+  if (actorOccupiesModule) return 'Wait until the module is unoccupied';
+
+  ensureDockEntitiesUpToDate(state);
+  const directDock = state.docks.find((dock) => dock.moduleId === module.id);
+  if (directDock?.occupiedByShipId !== null && directDock?.occupiedByShipId !== undefined) {
+    return 'Dock hardware cannot move while a ship is attached';
+  }
+  if (module.type === ModuleType.PodDock) {
+    const hasAttachments = state.moduleInstances.some((candidate) => {
+      if (!POD_DOCK_ATTACHMENT_CAPABILITY[candidate.type]) return false;
+      return getPodDockAttachmentView(state, candidate.type, candidate.originTile).dockModuleId === module.id;
+    });
+    if (hasAttachments) return "Move or remove this Pod Dock's attachments first";
+  } else if (POD_DOCK_ATTACHMENT_CAPABILITY[module.type]) {
+    const owner = getPodDockAttachmentView(state, module.type, module.originTile);
+    const ownerDock = state.docks.find((dock) => dock.moduleId === owner.dockModuleId);
+    if (ownerDock?.occupiedByShipId !== null && ownerDock?.occupiedByShipId !== undefined) {
+      return 'Dock attachment cannot move while a ship is attached';
+    }
+  }
+  return null;
+}
+
+export function getModuleMovePreview(
+  state: StationState,
+  moduleId: number,
+  destinationOriginTile: number
+): ModuleMovePreview {
+  const module = state.moduleInstances.find((candidate) => candidate.id === moduleId);
+  if (!module) return { ok: false, reason: 'Select a module to move', tiles: [destinationOriginTile] };
+  const footprint = moduleFootprint(module.type, module.rotation);
+  const tiles = footprintTiles(state, destinationOriginTile, footprint.width, footprint.height);
+  if (tiles.length <= 0) return { ok: false, reason: 'out of bounds', tiles: [destinationOriginTile], module };
+  const validation = validateModulePlacementForConstruction(
+    state,
+    module.type,
+    destinationOriginTile,
+    module.rotation,
+    module.id
+  );
+  return validation.ok
+    ? { ok: true, tiles, module }
+    : { ok: false, reason: validation.reason, tiles, module };
+}
+
+export function tryMoveModule(
+  state: StationState,
+  moduleId: number,
+  destinationOriginTile: number
+): ModuleMoveResult {
+  const module = state.moduleInstances.find((candidate) => candidate.id === moduleId);
+  if (!module) return { ok: false, reason: 'Module no longer exists' };
+  if (destinationOriginTile === module.originTile) return { ok: true, module };
+  const blockedReason = moduleRelocationBlockReason(state, module);
+  if (blockedReason) return { ok: false, reason: blockedReason, module };
+  const preview = getModuleMovePreview(state, moduleId, destinationOriginTile);
+  if (!preview.ok) return { ok: false, reason: preview.reason, module };
+
+  const oldOriginTile = module.originTile;
+  const oldOrigin = fromIndex(oldOriginTile, state.width);
+  const newOrigin = fromIndex(destinationOriginTile, state.width);
+  const storedItems = state.itemNodes.find((node) => node.tileIndex === oldOriginTile)?.items;
+  const footprint = moduleFootprint(module.type, module.rotation);
+  module.originTile = destinationOriginTile;
+  module.width = footprint.width;
+  module.height = footprint.height;
+  module.tiles = preview.tiles;
+
+  const dx = newOrigin.x - oldOrigin.x;
+  const dy = newOrigin.y - oldOrigin.y;
+  for (const debt of state.maintenanceDebts) {
+    if (debt.moduleId !== module.id) continue;
+    const anchor = fromIndex(debt.anchorTile, state.width);
+    debt.anchorTile = toIndex(anchor.x + dx, anchor.y + dy, state.width);
+    if (debt.targetTile !== undefined) {
+      const target = fromIndex(debt.targetTile, state.width);
+      debt.targetTile = toIndex(target.x + dx, target.y + dy, state.width);
+    }
+  }
+
+  syncModuleOccupancy(state);
+  if (storedItems) {
+    const nextNode = state.itemNodes.find((node) => node.tileIndex === destinationOriginTile);
+    if (nextNode) nextNode.items = { ...storedItems };
+  }
+  return { ok: true, module };
+}
+
+export function sellModuleAtTile(state: StationState, tileIndex: number): ModuleSaleResult {
+  const module = moduleAtTile(state, tileIndex);
+  if (!module) return { ok: false, reason: 'No module here', refund: 0 };
+  if (moduleIsTenantOwned(state, module.id)) {
+    return { ok: false, reason: 'Tenant fixtures belong to the leaseholder', moduleType: module.type, refund: 0 };
+  }
+  const blockedReason = moduleRelocationBlockReason(state, module);
+  if (blockedReason) return { ok: false, reason: blockedReason, moduleType: module.type, refund: 0 };
+  const inventory = state.itemNodes.find((node) => node.tileIndex === module.originTile);
+  if (inventory && totalItemsInNode(inventory) > 0.05) {
+    return { ok: false, reason: 'Empty this module before selling it', moduleType: module.type, refund: 0 };
+  }
+  const purchaseCost = module.purchaseCost ?? moduleCreditBuildCost(module.type, module.rotation);
+  const refund = Math.max(0, Math.floor(purchaseCost * MODULE_RESALE_REFUND_RATE));
+  if (!removeModuleById(state, module.id)) {
+    return { ok: false, reason: 'Module could not be removed', moduleType: module.type, refund: 0 };
+  }
+  state.metrics.credits += refund;
+  return { ok: true, moduleType: module.type, refund };
 }
 
 export function resolveWallLightFacing(

@@ -388,6 +388,13 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: false,
     allowedRooms: null
   },
+  [ModuleType.ReactorCore]: {
+    width: 2,
+    height: 2,
+    rotatable: false,
+    allowedRooms: [RoomType.Reactor],
+    capitalCost: 120
+  },
   // Solar panel: 1x1, place-on-floor (no wall mount), allowed in any room so
   // the player can chase bright tiles. Passive power source — see the solar
   // supply term in sim.ts.
@@ -487,7 +494,7 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   },
   [RoomType.Reactor]: {
     minTiles: 4,
-    requiredModules: [],
+    requiredModules: [{ module: ModuleType.ReactorCore, count: 1 }],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: false },
     staffedPostMode: 'none'

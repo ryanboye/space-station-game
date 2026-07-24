@@ -388,6 +388,12 @@ sprites:
     prompt: "Top-down pixel art station module sprite: small hydroponic potted plant. 1x1
       footprint, transparent background, readable at 18x18."
     rotation: 0
+  module.reactor_core:
+    prompt: "Native low-resolution top-down pixel art: heavy 2x2 reactor core with a broad gunmetal chassis, four corner housings, dominant amber circular chamber, two cyan status bars, and one chunky hazard-striped service panel. Strict 64x64 logical pixel design, no antialiasing or detail finer than one pixel, transparent background, readable at 64x64."
+    rotation: 0
+  module.solar_panel:
+    prompt: "Native low-resolution top-down pixel art: square one-tile solar panel with four broad navy photovoltaic cells, chunky silver frame, bright central cross, and one amber bottom connector. Strict 32x32 logical pixel design, no antialiasing or detail finer than one pixel, transparent background, readable at 32x32."
+    rotation: 0
   agent.visitor.1:
     prompt: Top-down pixel art. space station. Style of rimworld. humanoid visitor sprite variant 1, casual civilian clothes,
       Prison Architect-inspired readability, full body centered, transparent background, strong silhouette, no text.

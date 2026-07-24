@@ -26,7 +26,7 @@ Nothing in this slice adds a new simulation system. It converts existing state i
 
 - **Sanitation is already Prison-Architect-grade in the sim**: per-tile `dirtByTile: Float32Array` with source attribution, severity tiers, and crew who physically walk to clean ranked dirty patches (`updateSanitation` ~10967, `createSanitationJobs` ~10816). Floor grime/wear decals DO render (`pickFloorOverlayKey`, decorative layer) — but only past dirt ≥ 25, and playtesting reads as "nothing ever looks dirty." Either accrual, cleaning cadence, thresholds, or decal contrast needs tuning; the mechanism itself exists.
 - **Module condition is the biggest data-to-render gap.** `MaintenanceDebt` tracks per-module debt with anchor tiles, but `drawModuleVisual` never swaps or overlays a module sprite by condition. Machines never look worn, strained, or broken outside the toggled maintenance overlay and the wrench badge. The decorative layer already composites decal overlays (floor grime, hull wear), so `overlay.module.wear.*` decals are a single draw hook + atlas art.
-- **Agent mood overlays are contracted but absent**: `AGENT_OVERLAY_SPRITE_KEYS` (distressed/critical/agitated) exist in `sprite-keys-extended.ts` with zero atlas frames and no draw call. `fx.low_oxygen` is packed in the atlas and never used.
+- **Agent mood overlays are contracted but absent**: `AGENT_OVERLAY_SPRITE_KEYS` (distressed/critical/agitated) exist in `sprite-keys-extended.ts` with zero atlas frames and no draw call. `fx.low_oxygen` is the inverse case — corrected 2026-07-23: the draw call, alpha pulse, and severity ramp are all live in `render.ts`, but the art was never packed, so every low-air tile renders a vector fallback badge. Art-only gap.
 - Thermal, air quality, and crowding surface only through toggled diagnostic overlays — exactly the "twelve diagnostic modes" pattern doc 23 tells us to retire.
 
 ### Architecture
@@ -47,7 +47,7 @@ Goal: a player who never opens a panel can see dirt, wear, strain, fatigue, and 
 1. **Module condition decals.** Grime/wear/damage overlay on module sprites keyed off `MaintenanceDebt.debt` per `moduleId`, following the floor-grime decal precedent. Amber strain and red fault states for powered machines (the cargo arm already has this pattern — generalize it). New `overlay.module.wear.*` keys in `sprite-spec.yaml`.
 2. **Make dirt legible in normal play.** Verify in-browser that dirt actually crosses decal thresholds under realistic traffic; tune accrual/cleaning cadence and decal contrast so a busy shift visibly grimes the cafeteria and corridors before the cleaner arrives. Consider a lower first band (~12) with a subtle decal so "lived-in" reads before "dirty."
 3. **Persistent agent state icons.** Generate the missing `overlay.agent.*` atlas art and draw small persistent markers for tired/low-morale crew and angry/critically-unserved visitors (bubbles remain the transient channel; icons are the persistent one).
-4. **Low-oxygen haze.** Wire the packed-but-unused `fx.low_oxygen` to `airQualityByTile` in a cached overlay.
+4. **Low-oxygen haze.** Corrected 2026-07-23: the render path already exists and draws a vector fallback badge; pack `fx.low_oxygen` art so it upgrades to a proper haze. Art task, not code.
 5. **Cleaning is theater.** Cleaner crew already walk to dirty tiles; make the act visible (broom badge exists — add a brief sparkle/wipe on completion and let the decal clear tile-by-tile, not room-at-once).
 
 Exit test: pause a mid-shift station and screenshot it. A stranger should be able to point at the dirty room, the strained machine, the tired worker, and the angry queue without any UI open.
@@ -102,7 +102,7 @@ Every item above passes doc 23's five questions the same way: it changes what th
 - Maintenance debt: `updateMaintenanceDebt` ~7202, `MaintenanceDebt` `types.ts` ~617
 - Render decals: decorative layer `src/render/render.ts` ~2559-2595, `pickFloorOverlayKey` ~1281, `drawModuleVisual` ~1369
 - Thoughts/bubbles: `render.ts` ~2780-2932, throttle ~4442
-- Unused contracts: `sprite-keys-extended.ts` (agent overlays ~53), `fx.low_oxygen` in atlas
+- Unused contracts: `sprite-keys-extended.ts` (agent overlays ~53 — no art, no draw call); `fx.low_oxygen` (draw call live, art unpacked)
 - Sprite pipeline: `tools/sprites/sprite-spec.yaml`, `npm run sprites:build:v1`
 - Unlock gates to consolidate: `src/sim/sim.ts` ~600-625, `updateUnlockProgress` call ~18548
 - Shift/routine hooks: `shiftBucket` ~5150, `updateResidentRoutinePhase` ~14980

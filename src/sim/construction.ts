@@ -281,7 +281,8 @@ export function validateModulePlacementForConstruction(
   state: StationState,
   module: ModuleType,
   originTile: number,
-  rotation: ModuleRotation
+  rotation: ModuleRotation,
+  ignoreModuleId?: number
 ): { ok: true } | { ok: false; reason: string } {
   if (!isModuleUnlocked(state, module)) return { ok: false, reason: 'module locked by progression' };
   const def = MODULE_DEFINITIONS[module];
@@ -305,7 +306,10 @@ export function validateModulePlacementForConstruction(
     } else if (!isWalkable(state.tiles[tile])) {
       return { ok: false, reason: 'footprint blocked' };
     }
-    if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'module overlap' };
+    const occupyingModuleId = state.moduleOccupancyByTile[tile];
+    if (occupyingModuleId !== null && occupyingModuleId !== ignoreModuleId) {
+      return { ok: false, reason: 'module overlap' };
+    }
     const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
     if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) {
       return { ok: false, reason: 'invalid room for module' };
@@ -316,7 +320,7 @@ export function validateModulePlacementForConstruction(
   }
   const berthModuleReason = validateBerthModulePlacement(state, module, tiles);
   if (berthModuleReason) return { ok: false, reason: berthModuleReason };
-  const portModuleReason = validatePortModulePlacement(state, module, originTile);
+  const portModuleReason = validatePortModulePlacement(state, module, originTile, ignoreModuleId);
   if (portModuleReason) return { ok: false, reason: portModuleReason };
   return { ok: true };
 }

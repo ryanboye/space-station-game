@@ -144,6 +144,7 @@ export interface StationSnapshotV1 {
     type: ModuleType;
     originTile: number;
     rotation: ModuleRotation;
+    purchaseCost?: number;
   }>;
   commercialUnits?: CommercialUnit[];
   constructionSites: Array<{
@@ -529,7 +530,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       .map((module) => ({
         type: module.type,
         originTile: module.originTile,
-        rotation: module.rotation
+        rotation: module.rotation,
+        purchaseCost: module.purchaseCost
       }))
       .sort((a, b) => a.originTile - b.originTile || a.type.localeCompare(b.type)),
     commercialUnits: state.commercialUnits.map((unit) => ({
@@ -1080,6 +1082,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       const type = entry.type;
       const originTile = Math.floor(asFiniteNumber(entry.originTile, -1));
       const rawRotation = Math.round(asFiniteNumber(entry.rotation, 0));
+      const purchaseCost = Number.isFinite(entry.purchaseCost)
+        ? Math.max(0, Math.floor(entry.purchaseCost as number))
+        : undefined;
       if (!isOneOf(type, Object.values(ModuleType)) || type === ModuleType.None) {
         warnings.push(`modules[${i}] has invalid type; skipped.`);
         continue;
@@ -1092,7 +1097,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       if (rawRotation !== 0 && rawRotation !== 90) {
         warnings.push(`modules[${i}] has unsupported rotation ${rawRotation}; defaulted to ${rotation}.`);
       }
-      modules.push({ type, originTile, rotation });
+      modules.push({ type, originTile, rotation, purchaseCost });
     }
   }
 
@@ -1987,6 +1992,8 @@ export function hydrateStateFromSave(
     const result = tryPlaceModule(next, module.type, module.originTile, module.rotation);
     if (!result.ok) {
       warnings.push(`Module ${index} (${module.type} @ ${module.originTile}) skipped: ${result.reason ?? 'invalid'}.`);
+    } else if (module.purchaseCost !== undefined) {
+      next.moduleInstances[next.moduleInstances.length - 1].purchaseCost = module.purchaseCost;
     }
   }
   next.commercialUnits = (snapshot.commercialUnits ?? []).map((unit) => {

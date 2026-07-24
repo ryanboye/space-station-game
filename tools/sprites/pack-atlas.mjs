@@ -91,7 +91,9 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.tap': { w: 1, h: 1 },
   'module.telescope': { w: 2, h: 2 },
   'module.water_fountain': { w: 1, h: 1 },
-  'module.plant': { w: 1, h: 1 }
+  'module.plant': { w: 1, h: 1 },
+  'module.reactor_core': { w: 2, h: 2 },
+  'module.solar_panel': { w: 1, h: 1 }
 };
 
 const OVERLAY_FOOTPRINT_BY_KEY = {

@@ -349,6 +349,8 @@ export enum ModuleType {
   // Plant: 1x1 decorative. Allowed anywhere; small public-appeal +
   // residential-comfort bonus to surrounding tiles.
   Plant = 'plant',
+  // Physical 2x2 generator required inside a Reactor room.
+  ReactorCore = 'reactor-core',
   // SolarPanel: 1x1 place-on-floor power module. Passive (no crew): each panel
   // supplies power proportional to the local map-condition 'sunlight' at its
   // tile, so a sunward charter and bright-tile placement both matter. Weak in
@@ -366,6 +368,8 @@ export interface ModuleInstance {
   width: number;
   height: number;
   tiles: number[];
+  /** Credits originally paid by the station. Older/scenario modules fall back to the current catalog price. */
+  purchaseCost?: number;
   legacyForced?: boolean;
 }
 
@@ -2714,6 +2718,7 @@ export interface BuildTool {
     | 'zone'
     | 'room'
     | 'module'
+    | 'move-module'
     | 'utility-underlay'
     | 'copy-room'
     | 'paste-room'
@@ -2723,6 +2728,7 @@ export interface BuildTool {
   zone?: ZoneType;
   room?: RoomType;
   module?: ModuleType;
+  moveSourceModuleId?: number;
   utilityKind?: UtilityUnderlayKind;
   utilityErase?: boolean;
   pasteStamp?: BuildStampPreview;

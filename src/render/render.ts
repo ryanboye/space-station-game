@@ -35,11 +35,14 @@ import {
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
   getFuelPipeNetworkDiagnostics,
+  getPowerNetworkDiagnostics,
+  getUnpoweredPowerRoomAnchors,
   getWaterPipeNetworkDiagnostics,
   getUtilityUnderlayTileDiagnostic,
   getSanitationTileDiagnostic,
   mapConditionSamplesAt,
   getMaintenanceTileDiagnostic,
+  getModuleMovePreview,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
   getReputationTileDiagnostic,
@@ -64,6 +67,7 @@ import {
   WALL_SPRITE_VARIANT_KEYS
 } from './sprite-keys';
 import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
+import { drawEnvironmentAtlasCell, getEnvironmentPiece } from './environment-pieces';
 import {
   AGENT_EVA_SUIT_SPRITE_KEY,
   AGENT_SPRITE_VARIANTS,
@@ -74,9 +78,7 @@ import {
   FLOOR_WEAR_SPRITE_KEYS,
   HULL_WEAR_SPRITE_KEYS,
   IMPACT_DEBRIS_SPRITE_KEYS,
-  SPACE_BACKDROP_SPRITE_KEYS,
   SPACE_DEBRIS_SPRITE_KEYS,
-  SPACE_MASSIVE_PLANET_SPRITE_KEYS,
   STAFF_ROLE_SPRITE_KEYS,
   UTILITY_UNDERLAY_SPRITE_KEYS
 } from './sprite-keys-extended';
@@ -253,6 +255,7 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.Telescope]: 'O',
   [ModuleType.WaterFountain]: '~',
   [ModuleType.Plant]: '*',
+  [ModuleType.ReactorCore]: 'RX',
   [ModuleType.SolarPanel]: '☀'
 };
 
@@ -359,22 +362,107 @@ function seededSunAngle(state: StationState): number {
 }
 
 const DEBRIS_PARALLAX_LAYERS = [
-  { scale: 0.58, alpha: 0.46, amplitude: 8, period: 96, rotation: 3 },
-  { scale: 0.88, alpha: 0.72, amplitude: 18, period: 68, rotation: 7 },
-  { scale: 1.22, alpha: 0.95, amplitude: 34, period: 46, rotation: 12 }
+  { scale: 0.58, alpha: 0.42, amplitude: 7, speed: 0.028, rotation: 0.18 },
+  { scale: 0.88, alpha: 0.7, amplitude: 18, speed: 0.052, rotation: 0.34 },
+  { scale: 1.22, alpha: 0.92, amplitude: 34, speed: 0.088, rotation: 0.56 }
 ] as const;
+
+type StationEnvironmentKind = 'ambient' | 'sunward' | 'ice' | 'metal' | 'gas';
+type DebrisTone = 'planet' | 'rock' | 'metal' | 'ice' | 'gas' | 'spark';
+
+interface StationEnvironmentProfile {
+  kind: StationEnvironmentKind;
+  bodyType: 'rocky' | 'gas' | 'ice' | null;
+  resourceType: 'metal' | 'ice' | 'gas' | null;
+  traffic: number;
+  debris: number;
+  sun: number;
+  siteVisualSeed: number;
+  planetDistance: number;
+  planetPresentation: 'none' | 'regional' | 'near';
+}
+
+interface EnvironmentStarDescriptor {
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  phase: number;
+  color: string;
+}
+
+interface EnvironmentAtmosphereDescriptor {
+  x: number;
+  y: number;
+  radius: number;
+  innerColor: string;
+  outerColor: string;
+  alpha: number;
+}
+
+interface EnvironmentDustDescriptor {
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  phase: number;
+  color: string;
+}
+
+interface EnvironmentDebrisDescriptor {
+  x: number;
+  y: number;
+  size: number;
+  phase: number;
+  layer: 0 | 1 | 2;
+  tone: DebrisTone;
+  key: (typeof SPACE_DEBRIS_SPRITE_KEYS)[number];
+  atlasCell: number;
+}
+
+interface EnvironmentTrafficDescriptor {
+  startX: number;
+  startY: number;
+  controlX: number;
+  controlY: number;
+  endX: number;
+  endY: number;
+  phase: number;
+  speed: number;
+  alpha: number;
+  scale: number;
+}
+
+interface StationEnvironmentCache {
+  key: string;
+  profile: StationEnvironmentProfile;
+  stars: EnvironmentStarDescriptor[];
+  atmosphere: EnvironmentAtmosphereDescriptor[];
+  dust: EnvironmentDustDescriptor[];
+  debris: EnvironmentDebrisDescriptor[];
+  traffic: EnvironmentTrafficDescriptor[];
+}
+
+let stationEnvironmentCache: StationEnvironmentCache | null = null;
+const reducedMotionQuery = typeof window !== 'undefined'
+  ? window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null
+  : null;
+
+function renderTimeSeconds(): number {
+  return reducedMotionQuery?.matches ? 0 : performance.now() / 1000;
+}
 
 function drawDebrisFallback(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   size: number,
-  tone: 'planet' | 'rock' | 'metal' | 'ice' | 'gas' | 'spark',
-  alpha: number
+  tone: DebrisTone,
+  alpha: number,
+  rotation = renderHash01(Math.floor(x + y), 3, 4) * Math.PI
 ): void {
   ctx.save();
   ctx.globalAlpha = alpha;
-  const rotation = renderHash01(Math.floor(x + y), 3, 4) * Math.PI;
   if (tone === 'spark') {
     ctx.fillStyle = '#ffeaa6';
     ctx.beginPath();
@@ -423,44 +511,201 @@ function debrisToneForResource(
   return resource === 'metal' || resource === 'ice' || resource === 'gas' ? resource : null;
 }
 
-// Pick the massive backdrop planet sprite from the nearest system-map body's
-// type. Falls back to a neutral dark limb when the type has no dedicated key.
-function massivePlanetKeyForBody(
-  bodyType: 'rocky' | 'gas' | 'ice'
-): (typeof SPACE_MASSIVE_PLANET_SPRITE_KEYS)[number] {
-  if (bodyType === 'gas') return 'space.massive.gas_blue_limb.1';
-  if (bodyType === 'ice') return 'space.massive.moon_ice_limb.1';
-  if (bodyType === 'rocky') return 'space.massive.planet_rust_limb.1';
-  return 'space.massive.moon_dark_limb.1';
-}
-
-// Nearest planet's body type to a disc-coord position (0..1, center 0.5).
-// orbitRadius/orbitAngle map to disc coords the same way system-map does.
-function nearestPlanetBodyType(
+function nearestPlanetInfo(
   state: StationState,
   x: number,
   y: number
-): 'rocky' | 'gas' | 'ice' | null {
+): { bodyType: 'rocky' | 'gas' | 'ice'; distance: number } | null {
   const planets = state.system?.planets;
   if (!planets || planets.length === 0) return null;
-  let best: 'rocky' | 'gas' | 'ice' | null = null;
+  let best: { bodyType: 'rocky' | 'gas' | 'ice'; distance: number } | null = null;
   let bestDist = Infinity;
   for (const planet of planets) {
     const px = 0.5 + planet.orbitRadius * 0.5 * Math.cos(planet.orbitAngle);
     const py = 0.5 + planet.orbitRadius * 0.5 * Math.sin(planet.orbitAngle);
-    const dist = (px - x) * (px - x) + (py - y) * (py - y);
+    const dist = Math.hypot(px - x, py - y);
     if (dist < bestDist) {
       bestDist = dist;
-      best = planet.bodyType;
+      best = { bodyType: planet.bodyType, distance: dist };
     }
   }
   return best;
 }
 
+function siteVisualSeed(state: StationState): number {
+  const site = state.site;
+  if (!site) return state.seedAtCreation;
+  const x = Math.round(site.x * 1000);
+  const y = Math.round(site.y * 1000);
+  return state.seedAtCreation + x * 4099 + y * 7919;
+}
+
+function debrisSpriteKeyForTone(
+  tone: DebrisTone,
+  seed: number,
+  index: number
+): (typeof SPACE_DEBRIS_SPRITE_KEYS)[number] {
+  if (tone === 'ice') return pickSpriteKey(['space.debris.ice.1', 'space.debris.ice.2', 'space.debris.ice.3'] as const, seed, index, 71);
+  if (tone === 'metal') return pickSpriteKey(['space.debris.metal.1', 'space.debris.metal.2', 'space.debris.metal.3', 'space.debris.rust.1', 'space.debris.rust.2'] as const, seed, index, 72);
+  if (tone === 'gas' || tone === 'spark') return pickSpriteKey(['space.debris.hot.1', 'space.debris.dark.1'] as const, seed, index, 73);
+  return pickSpriteKey(SPACE_DEBRIS_SPRITE_KEYS, seed, index, 74);
+}
+
+function stationEnvironmentProfile(state: StationState): StationEnvironmentProfile {
+  const site = state.site;
+  const nearestPlanet = site ? nearestPlanetInfo(state, site.x, site.y) : null;
+  const bodyType = nearestPlanet?.bodyType ?? null;
+  const planetDistance = nearestPlanet?.distance ?? Number.POSITIVE_INFINITY;
+  const planetPresentation = planetDistance <= 0.08 ? 'near' : planetDistance <= 0.24 ? 'regional' : 'none';
+  const traffic = site
+    ? Math.max(site.laneTrafficFactor.north, site.laneTrafficFactor.east, site.laneTrafficFactor.south, site.laneTrafficFactor.west)
+    : 1;
+  const resourceType = site?.resourceType ?? null;
+  const debris = site?.debrisFactor ?? 0;
+  const sun = site?.sunFactor ?? 0;
+  let kind: StationEnvironmentKind = 'ambient';
+  if (site) {
+    if (sun >= 0.78 && !resourceType && planetDistance > 0.06) kind = 'sunward';
+    else if (resourceType === 'metal') kind = 'metal';
+    else if (resourceType === 'ice') kind = 'ice';
+    else if (planetPresentation === 'near' && bodyType === 'gas') kind = 'gas';
+    else if (planetPresentation === 'near' && bodyType === 'ice') kind = 'ice';
+    else if (resourceType === 'gas' && planetDistance <= 0.24) kind = 'gas';
+    else if (planetPresentation !== 'none' && bodyType === 'rocky' && debris >= 0.42) kind = 'metal';
+  }
+  return {
+    kind,
+    bodyType,
+    resourceType,
+    traffic,
+    debris,
+    sun,
+    siteVisualSeed: siteVisualSeed(state),
+    planetDistance,
+    planetPresentation
+  };
+}
+
+function environmentCacheKey(state: StationState): string {
+  const site = state.site;
+  const siteKey = site
+    ? `${site.x.toFixed(3)}:${site.y.toFixed(3)}:${site.sunFactor.toFixed(3)}:${site.debrisFactor.toFixed(3)}:${site.resourceType}:${site.laneTrafficFactor.north.toFixed(2)}:${site.laneTrafficFactor.east.toFixed(2)}:${site.laneTrafficFactor.south.toFixed(2)}:${site.laneTrafficFactor.west.toFixed(2)}`
+    : 'legacy';
+  const bodyKey = state.system?.planets.map((planet) => `${planet.bodyType}:${planet.orbitRadius.toFixed(2)}:${planet.orbitAngle.toFixed(2)}`).join('|') ?? '';
+  return `${state.seedAtCreation}:${state.width}:${state.height}:${siteKey}:${bodyKey}`;
+}
+
+function getStationEnvironment(state: StationState): StationEnvironmentCache {
+  const key = environmentCacheKey(state);
+  if (stationEnvironmentCache?.key === key) return stationEnvironmentCache;
+  const profile = stationEnvironmentProfile(state);
+  const visualSeed = profile.siteVisualSeed;
+  const worldW = state.width * TILE_SIZE;
+  const worldH = state.height * TILE_SIZE;
+  // Most stars are sub-pixel after the station camera is fitted. A denser
+  // cached field keeps open space visibly starry without adding frame-time
+  // object churn.
+  const starCount = profile.kind === 'gas' ? 304 : profile.kind === 'ice' ? 296 : profile.kind === 'sunward' ? 276 : profile.kind === 'metal' ? 288 : 420;
+  const debrisCount = profile.kind === 'metal' ? 82 : profile.kind === 'ice' ? 70 : profile.kind === 'sunward' ? 30 : profile.kind === 'gas' ? 20 : 24;
+  const tone: DebrisTone = profile.kind === 'ice' ? 'ice' : profile.kind === 'metal' ? 'metal' : profile.kind === 'gas' ? 'gas' : profile.kind === 'sunward' ? 'spark' : 'rock';
+  const starColor = profile.kind === 'ice' ? '#d8f5ff' : profile.kind === 'metal' ? '#ffd1a5' : profile.kind === 'gas' ? '#b9dcff' : profile.kind === 'ambient' ? '#c6b6ff' : '#fff1bd';
+  const stars: EnvironmentStarDescriptor[] = [];
+  const atmosphere: EnvironmentAtmosphereDescriptor[] = [];
+  const dust: EnvironmentDustDescriptor[] = [];
+  const debris: EnvironmentDebrisDescriptor[] = [];
+  const traffic: EnvironmentTrafficDescriptor[] = [];
+  for (let i = 0; i < starCount; i++) {
+    const tier = renderHash01(visualSeed, i, 100);
+    stars.push({
+      x: renderHash01(visualSeed, i, 101) * worldW,
+      y: renderHash01(visualSeed, i, 102) * worldH,
+      radius: tier > 0.94 ? 1.9 + renderHash01(visualSeed, i, 103) * 1.35 : tier > 0.72 ? 1 + renderHash01(visualSeed, i, 103) : 0.58 + renderHash01(visualSeed, i, 103) * 0.66,
+      alpha: tier > 0.94 ? 0.68 + renderHash01(visualSeed, i, 104) * 0.26 : 0.16 + renderHash01(visualSeed, i, 104) * 0.48,
+      phase: renderHash01(visualSeed, i, 105) * Math.PI * 2,
+      color: i % 9 === 0 ? '#8fd9ff' : i % 13 === 0 ? '#ffd8a6' : starColor
+    });
+  }
+  const palette = profile.kind === 'ice'
+    ? [['125, 224, 255', '40, 67, 137'], ['186, 132, 255', '28, 33, 91']]
+    : profile.kind === 'metal'
+      ? [['255, 177, 93', '66, 42, 31'], ['130, 161, 183', '29, 35, 47']]
+      : profile.kind === 'gas'
+        ? [['73, 230, 205', '26, 80, 100'], ['255, 193, 96', '60, 41, 77']]
+        : profile.kind === 'sunward'
+          ? [['255, 205, 104', '80, 42, 28'], ['255, 130, 74', '45, 26, 37']]
+          : [['104, 132, 255', '20, 29, 75'], ['218, 100, 214', '37, 20, 58']];
+  for (let i = 0; i < 5; i++) {
+    const side = i % 2 === 0 ? -0.14 : 1.14;
+    atmosphere.push({
+      x: worldW * (side + (renderHash01(visualSeed, i, 106) - 0.5) * 0.18),
+      y: worldH * (0.12 + renderHash01(visualSeed, i, 107) * 0.76),
+      radius: Math.max(worldW, worldH) * (0.28 + renderHash01(visualSeed, i, 108) * 0.2),
+      innerColor: palette[i % palette.length][0],
+      outerColor: palette[i % palette.length][1],
+      alpha: 0.075 + renderHash01(visualSeed, i, 109) * 0.065
+    });
+  }
+  for (let i = 0; i < 26; i++) {
+    dust.push({
+      x: renderHash01(visualSeed, i, 110) * worldW,
+      y: renderHash01(visualSeed, i, 111) * worldH,
+      radius: 1 + renderHash01(visualSeed, i, 112) * 2.6,
+      alpha: 0.04 + renderHash01(visualSeed, i, 113) * 0.11,
+      phase: renderHash01(visualSeed, i, 114) * Math.PI * 2,
+      color: i % 2 === 0 ? palette[0][0] : palette[1][0]
+    });
+  }
+  for (let i = 0; i < debrisCount; i++) {
+    const layer = Math.min(2, Math.floor(renderHash01(visualSeed, i, 115) * 3)) as 0 | 1 | 2;
+    const itemTone = profile.kind === 'sunward' && i % 4 !== 0 ? 'spark' : tone;
+    debris.push({
+      x: renderHash01(visualSeed, i, 116) * worldW,
+      y: renderHash01(visualSeed, i, 117) * worldH,
+      size: (20 + renderHash01(visualSeed, i, 118) * 42) * DEBRIS_PARALLAX_LAYERS[layer].scale,
+      phase: renderHash01(visualSeed, i, 119) * Math.PI * 2,
+      layer,
+      tone: itemTone,
+      key: debrisSpriteKeyForTone(itemTone, visualSeed, i),
+      atlasCell: Math.floor(renderHash01(visualSeed, i, 120) * 12)
+    });
+  }
+  const trafficCount = profile.kind === 'gas'
+    ? 10
+    : profile.traffic >= 1.45
+      ? 7
+      : profile.traffic >= 1.05
+        ? 5
+        : profile.traffic >= 0.82
+          ? 3
+          : 1;
+  if (trafficCount > 0) {
+    for (let i = 0; i < trafficCount; i++) {
+      const side = renderHash01(visualSeed, i, 121) > 0.5 ? 1 : -1;
+      const laneY = (i + 1) / (trafficCount + 1);
+      traffic.push({
+        startX: worldW * (side > 0 ? -0.08 : 1.08),
+        startY: worldH * (laneY + (renderHash01(visualSeed, i, 125) - 0.5) * 0.08),
+        controlX: worldW * (0.46 + (renderHash01(visualSeed, i, 122) - 0.5) * 0.16),
+        controlY: worldH * (laneY + (renderHash01(visualSeed, i, 126) - 0.5) * 0.22),
+        endX: worldW * (side > 0 ? 1.08 : -0.08),
+        endY: worldH * (laneY + (renderHash01(visualSeed, i, 127) - 0.5) * 0.1),
+        phase: renderHash01(visualSeed, i, 123),
+        speed: 0.012 + renderHash01(visualSeed, i, 124) * 0.034,
+        alpha: 0.16 + renderHash01(visualSeed, i, 128) * 0.36,
+        scale: 0.48 + renderHash01(visualSeed, i, 129) * 0.82
+      });
+    }
+  }
+  stationEnvironmentCache = { key, profile, stars, atmosphere, dust, debris, traffic };
+  return stationEnvironmentCache;
+}
+
 function renderSeededSpaceConditionBackdrop(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  viewport: RenderViewport | null
+  viewport: RenderViewport | null,
+  environment: StationEnvironmentCache,
+  visualTime: number
 ): void {
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
@@ -470,6 +715,8 @@ function renderSeededSpaceConditionBackdrop(
   const dy = Math.sin(angle);
   const cx = view.x + view.width * 0.5;
   const cy = view.y + view.height * 0.5;
+  const profile = environment.profile;
+  const visualSeed = profile.siteVisualSeed;
   // Chartered sunFactor scales the sun's warmth and spread. Absent site keeps
   // both multipliers at exactly 1 → seeded behavior is bit-identical.
   const sunFactor = state.site?.sunFactor;
@@ -479,14 +726,72 @@ function renderSeededSpaceConditionBackdrop(
 
   ctx.save();
   const light = ctx.createLinearGradient(cx + dx * reach, cy + dy * reach, cx - dx * reach, cy - dy * reach);
-  light.addColorStop(0, `rgba(255, 203, 105, ${0.16 * sunWarmth})`);
-  light.addColorStop(0.36, `rgba(255, 174, 82, ${0.055 * sunWarmth})`);
+  const warm = profile.kind === 'ice' ? '178, 225, 255' : profile.kind === 'metal' ? '220, 137, 77' : profile.kind === 'gas' ? '190, 172, 255' : '255, 203, 105';
+  light.addColorStop(0, `rgba(${warm}, ${0.16 * sunWarmth})`);
+  light.addColorStop(0.36, `rgba(${warm}, ${0.055 * sunWarmth})`);
   light.addColorStop(0.64, 'rgba(10, 26, 40, 0.03)');
   light.addColorStop(1, 'rgba(24, 45, 82, 0.18)');
   ctx.fillStyle = light;
   ctx.fillRect(view.x, view.y, view.width, view.height);
 
-  const bandOffset = (renderHash01(state.seedAtCreation, 5, 31) - 0.5) * Math.max(view.width, view.height) * 0.34;
+  // Atmospheric veils live at the edges so the working station remains the
+  // crisp visual anchor. Their positions are cached with the environment.
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (const veil of environment.atmosphere) {
+    if (veil.x + veil.radius < view.x || veil.x - veil.radius > view.x + view.width || veil.y + veil.radius < view.y || veil.y - veil.radius > view.y + view.height) continue;
+    const gradient = ctx.createRadialGradient(veil.x, veil.y, veil.radius * 0.04, veil.x, veil.y, veil.radius);
+    gradient.addColorStop(0, `rgba(${veil.innerColor}, ${veil.alpha})`);
+    gradient.addColorStop(0.42, `rgba(${veil.outerColor}, ${veil.alpha * 0.5})`);
+    gradient.addColorStop(1, `rgba(${veil.outerColor}, 0)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(view.x, view.y, view.width, view.height);
+  }
+
+  // A second, very distant haze layer follows the camera at a fraction of
+  // its movement. This keeps large maps atmospheric even when the world-
+  // anchored veils are outside the current viewport.
+  for (let i = 0; i < 3; i++) {
+    const side = i % 2 === 0 ? 0.04 : 0.96;
+    const x = view.x + view.width * (side + (renderHash01(visualSeed, i, 141) - 0.5) * 0.1);
+    const y = view.y + view.height * (0.14 + renderHash01(visualSeed, i, 142) * 0.72);
+    const radius = Math.max(view.width, view.height) * (0.34 + renderHash01(visualSeed, i, 143) * 0.2);
+    const colors = environment.atmosphere[i % environment.atmosphere.length];
+    const gradient = ctx.createRadialGradient(x, y, radius * 0.03, x, y, radius);
+    gradient.addColorStop(0, `rgba(${colors.innerColor}, 0.07)`);
+    gradient.addColorStop(0.48, `rgba(${colors.outerColor}, 0.035)`);
+    gradient.addColorStop(1, `rgba(${colors.outerColor}, 0)`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(view.x, view.y, view.width, view.height);
+  }
+  ctx.restore();
+
+  // Far stars are intentionally cheap and only drift a few pixels. They make
+  // the paused station feel alive without moving the world or its hit targets.
+  for (const star of environment.stars) {
+    const animated = star.radius > 1.7;
+    const x = star.x + (animated ? Math.cos(visualTime * 0.014 + star.phase) * 3 : 0);
+    const y = star.y + (animated ? Math.sin(visualTime * 0.011 + star.phase) * 2 : 0);
+    if (x < view.x - 3 || x > view.x + view.width + 3 || y < view.y - 3 || y > view.y + view.height + 3) continue;
+    ctx.globalAlpha = animated
+      ? star.alpha * (0.75 + Math.sin(visualTime * 0.45 + star.phase) * 0.25)
+      : star.alpha;
+    ctx.fillStyle = star.color;
+    ctx.fillRect(Math.round(x), Math.round(y), star.radius, star.radius);
+  }
+  for (const mote of environment.dust) {
+    const x = mote.x + Math.cos(visualTime * 0.025 + mote.phase) * 5;
+    const y = mote.y + Math.sin(visualTime * 0.017 + mote.phase) * 3;
+    if (x < view.x - 4 || x > view.x + view.width + 4 || y < view.y - 4 || y > view.y + view.height + 4) continue;
+    ctx.globalAlpha = mote.alpha * (0.72 + Math.sin(visualTime * 0.32 + mote.phase) * 0.28);
+    ctx.fillStyle = `rgb(${mote.color})`;
+    ctx.beginPath();
+    ctx.arc(x, y, mote.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const bandOffset = (renderHash01(visualSeed, 5, 31) - 0.5) * Math.max(view.width, view.height) * 0.34;
   ctx.translate(cx + -dy * bandOffset, cy + dx * bandOffset);
   ctx.rotate(angle + Math.PI / 2);
   const bandW = Math.max(view.width, view.height) * 2.4;
@@ -499,9 +804,9 @@ function renderSeededSpaceConditionBackdrop(
   ctx.fillRect(-bandW * 0.5, -bandH, bandW, bandH * 2);
   ctx.restore();
 
-  const sinkX = worldW * (0.22 + renderHash01(state.seedAtCreation, 17, 91) * 0.56);
-  const sinkY = worldH * (0.18 + renderHash01(state.seedAtCreation, 23, 91) * 0.64);
-  const sinkRadius = Math.max(worldW, worldH) * (0.22 + renderHash01(state.seedAtCreation, 29, 91) * 0.18);
+  const sinkX = worldW * (0.22 + renderHash01(visualSeed, 17, 91) * 0.56);
+  const sinkY = worldH * (0.18 + renderHash01(visualSeed, 23, 91) * 0.64);
+  const sinkRadius = Math.max(worldW, worldH) * (0.22 + renderHash01(visualSeed, 29, 91) * 0.18);
   if (
     sinkX + sinkRadius >= view.x &&
     sinkX - sinkRadius <= view.x + view.width &&
@@ -515,6 +820,34 @@ function renderSeededSpaceConditionBackdrop(
     sink.addColorStop(1, 'rgba(83, 214, 255, 0)');
     ctx.fillStyle = sink;
     ctx.fillRect(view.x, view.y, view.width, view.height);
+    ctx.restore();
+  }
+
+  if (profile.kind === 'sunward') {
+    const limbX = view.x - view.width * 0.12 + Math.sin(visualTime * 0.018) * 5;
+    const limbY = view.y + view.height * 1.02;
+    const radius = Math.max(view.width, view.height) * 0.68;
+    const flare = ctx.createRadialGradient(limbX, limbY, radius * 0.16, limbX, limbY, radius * 1.08);
+    flare.addColorStop(0, 'rgba(255, 219, 137, 0.035)');
+    flare.addColorStop(0.58, 'rgba(255, 151, 59, 0.065)');
+    flare.addColorStop(0.78, 'rgba(255, 174, 66, 0.15)');
+    flare.addColorStop(0.88, 'rgba(255, 218, 124, 0.3)');
+    flare.addColorStop(1, 'rgba(255, 234, 159, 0)');
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = flare;
+    ctx.fillRect(view.x, view.y, view.width, view.height);
+    ctx.strokeStyle = 'rgba(255, 187, 74, 0.5)';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.06);
+    for (let i = 0; i < 12; i++) {
+      const a = -2.72 + i * 0.21 + Math.sin(visualTime * 0.3 + i) * 0.025;
+      const start = radius * 0.94;
+      const end = radius * (1.01 + (i % 3) * 0.015);
+      ctx.beginPath();
+      ctx.moveTo(limbX + Math.cos(a) * start, limbY + Math.sin(a) * start);
+      ctx.lineTo(limbX + Math.cos(a) * end, limbY + Math.sin(a) * end);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 }
@@ -536,32 +869,161 @@ function clipToVisibleSpaceTiles(
   ctx.clip();
 }
 
-function renderMassivePlanetBackdrop(
+function renderSunwardHullRim(
   ctx: CanvasRenderingContext2D,
   state: StationState,
-  spriteAtlas: SpriteAtlas | null,
-  useSprites: boolean,
-  viewport: RenderViewport | null
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number },
+  environment: StationEnvironmentCache
 ): void {
+  if (environment.profile.kind !== 'sunward') return;
+  const angle = seededSunAngle(state);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const edge = Math.abs(dx) > Math.abs(dy)
+    ? dx >= 0 ? { x: 1, y: 0 } : { x: -1, y: 0 }
+    : dy >= 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 183, 78, 0.46)';
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.065);
+  for (let y = visibleTiles.minY; y <= visibleTiles.maxY; y++) {
+    for (let x = visibleTiles.minX; x <= visibleTiles.maxX; x++) {
+      const tile = toIndex(x, y, state.width);
+      if (state.tiles[tile] === TileType.Space || state.tiles[tile] === TileType.Truss) continue;
+      const nx = x + edge.x;
+      const ny = y + edge.y;
+      if (inBounds(nx, ny, state.width, state.height)) {
+        const neighbor = state.tiles[toIndex(nx, ny, state.width)];
+        if (neighbor !== TileType.Space && neighbor !== TileType.Truss) continue;
+      }
+      const px = x * TILE_SIZE;
+      const py = y * TILE_SIZE;
+      ctx.beginPath();
+      if (edge.x > 0) {
+        ctx.moveTo(px + TILE_SIZE - 1, py + 1);
+        ctx.lineTo(px + TILE_SIZE - 1, py + TILE_SIZE - 1);
+      } else if (edge.x < 0) {
+        ctx.moveTo(px + 1, py + 1);
+        ctx.lineTo(px + 1, py + TILE_SIZE - 1);
+      } else if (edge.y > 0) {
+        ctx.moveTo(px + 1, py + TILE_SIZE - 1);
+        ctx.lineTo(px + TILE_SIZE - 1, py + TILE_SIZE - 1);
+      } else {
+        ctx.moveTo(px + 1, py + 1);
+        ctx.lineTo(px + TILE_SIZE - 1, py + 1);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function renderCelestialBackdrop(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  viewport: RenderViewport | null,
+  environment: StationEnvironmentCache,
+  visualTime: number
+): void {
+  const profile = environment.profile;
+  if (profile.planetPresentation === 'none' || !profile.bodyType) return;
   const worldW = state.width * TILE_SIZE;
   const worldH = state.height * TILE_SIZE;
-  // A chartered site prefers the nearest system-map planet's body type for the
-  // massive backdrop sprite; absent site keeps the seeded pick.
-  const site = state.site;
-  let key = pickSpriteKey(SPACE_MASSIVE_PLANET_SPRITE_KEYS, state.seedAtCreation, 0, 52);
-  if (site) {
-    const bodyType = nearestPlanetBodyType(state, site.x, site.y);
-    if (bodyType) key = massivePlanetKeyForBody(bodyType);
+  const view = viewport ?? { x: 0, y: 0, width: worldW, height: worldH };
+  const visualSeed = profile.siteVisualSeed;
+  const piece = profile.bodyType === 'gas' ? 'gas-giant' : profile.bodyType === 'ice' ? 'ice-moon' : 'rocky-moon';
+  const image = getEnvironmentPiece(piece);
+  const near = profile.planetPresentation === 'near';
+  const extent = Math.max(view.width, view.height);
+  const baseScale = profile.bodyType === 'gas' ? 1.02 : 0.76;
+  const size = extent * (near ? baseScale : baseScale * 0.32);
+  const fromLeft = renderHash01(visualSeed, 211, 1) > 0.5;
+  const x = view.x + view.width * (near ? 0.82 : (fromLeft ? 0.06 : 0.94)) + Math.sin(visualTime * 0.008 + visualSeed) * (near ? 5 : 2);
+  const y = view.y + view.height * (near ? 0.2 : 0.16 + renderHash01(visualSeed, 212, 1) * 0.58) + Math.cos(visualTime * 0.006 + visualSeed) * (near ? 4 : 2);
+  if (viewport && (x + size * 0.56 < viewport.x || x - size * 0.56 > viewport.x + viewport.width || y + size * 0.56 < viewport.y || y - size * 0.56 > viewport.y + viewport.height)) return;
+  ctx.save();
+  ctx.globalAlpha = near ? (profile.bodyType === 'gas' ? 0.74 : 0.62) : 0.42;
+  if (image) ctx.drawImage(image, x - size * 0.5, y - size * 0.5, size, size);
+  else drawDebrisFallback(ctx, x, y, size, profile.bodyType === 'gas' ? 'gas' : 'planet', 0.28);
+  ctx.restore();
+}
+
+function quadraticPoint(
+  startX: number,
+  startY: number,
+  controlX: number,
+  controlY: number,
+  endX: number,
+  endY: number,
+  t: number
+): { x: number; y: number } {
+  const u = 1 - t;
+  return {
+    x: u * u * startX + 2 * u * t * controlX + t * t * endX,
+    y: u * u * startY + 2 * u * t * controlY + t * t * endY
+  };
+}
+
+function quadraticTangent(
+  startX: number,
+  startY: number,
+  controlX: number,
+  controlY: number,
+  endX: number,
+  endY: number,
+  t: number
+): { x: number; y: number } {
+  const u = 1 - t;
+  return {
+    x: 2 * u * (controlX - startX) + 2 * t * (endX - controlX),
+    y: 2 * u * (controlY - startY) + 2 * t * (endY - controlY)
+  };
+}
+
+function renderTrafficBackdrop(
+  ctx: CanvasRenderingContext2D,
+  viewport: RenderViewport | null,
+  environment: StationEnvironmentCache,
+  visualTime: number
+): void {
+  if (environment.traffic.length === 0) return;
+  const shipSheet = getEnvironmentPiece('traffic-ships');
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (const [laneIndex, lane] of environment.traffic.entries()) {
+    if (viewport) {
+      const minX = Math.min(lane.startX, lane.controlX, lane.endX);
+      const maxX = Math.max(lane.startX, lane.controlX, lane.endX);
+      const minY = Math.min(lane.startY, lane.controlY, lane.endY);
+      const maxY = Math.max(lane.startY, lane.controlY, lane.endY);
+      if (maxX < viewport.x - 40 || minX > viewport.x + viewport.width + 40 || maxY < viewport.y - 40 || minY > viewport.y + viewport.height + 40) continue;
+    }
+    ctx.strokeStyle = `rgba(132, 202, 255, ${lane.alpha * 0.28})`;
+    ctx.lineWidth = Math.max(0.7, TILE_SIZE * 0.022 * lane.scale);
+    ctx.beginPath();
+    ctx.moveTo(lane.startX, lane.startY);
+    ctx.quadraticCurveTo(lane.controlX, lane.controlY, lane.endX, lane.endY);
+    ctx.stroke();
+    const t = positiveMod(lane.phase + visualTime * lane.speed, 1);
+    const ship = quadraticPoint(lane.startX, lane.startY, lane.controlX, lane.controlY, lane.endX, lane.endY, t);
+    const previous = quadraticPoint(lane.startX, lane.startY, lane.controlX, lane.controlY, lane.endX, lane.endY, positiveMod(t - 0.035, 1));
+    ctx.strokeStyle = `rgba(128, 238, 255, ${lane.alpha})`;
+    ctx.lineWidth = Math.max(0.75, TILE_SIZE * 0.04 * lane.scale);
+    ctx.beginPath();
+    ctx.moveTo(previous.x, previous.y);
+    ctx.lineTo(ship.x, ship.y);
+    ctx.stroke();
+    const tangent = quadraticTangent(lane.startX, lane.startY, lane.controlX, lane.controlY, lane.endX, lane.endY, t);
+    const rotation = Math.atan2(tangent.y, tangent.x);
+    const shipSize = Math.max(12, TILE_SIZE * 0.52 * lane.scale);
+    const cell = Math.floor(renderHash01(environment.profile.siteVisualSeed, laneIndex, 261) * 8);
+    if (!drawEnvironmentAtlasCell(ctx, shipSheet, 4, 2, cell, ship.x, ship.y, shipSize, shipSize, rotation, Math.min(0.9, lane.alpha + 0.24))) {
+      ctx.fillStyle = `rgba(255, 224, 165, ${Math.min(0.82, lane.alpha + 0.24)})`;
+      ctx.beginPath();
+      ctx.arc(ship.x, ship.y, Math.max(0.8, TILE_SIZE * 0.05 * lane.scale), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
-  const x = worldW * (0.13 + renderHash01(state.seedAtCreation, 31, 52) * 0.18);
-  const y = worldH * (0.82 + renderHash01(state.seedAtCreation, 37, 52) * 0.12);
-  const size = Math.max(560, Math.min(worldW, worldH) * (0.92 + renderHash01(state.seedAtCreation, 41, 52) * 0.18));
-  if (viewport && (x + size * 0.56 < viewport.x || x - size * 0.56 > viewport.x + viewport.width || y + size * 0.56 < viewport.y || y - size * 0.56 > viewport.y + viewport.height)) {
-    return;
-  }
-  const alpha = 0.38;
-  if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, 0, alpha)) return;
-  drawDebrisFallback(ctx, x, y, size, 'planet', alpha);
+  ctx.restore();
 }
 
 function renderDebrisBackdrop(
@@ -569,59 +1031,30 @@ function renderDebrisBackdrop(
   state: StationState,
   spriteAtlas: SpriteAtlas | null,
   useSprites: boolean,
-  viewport: RenderViewport | null
+  viewport: RenderViewport | null,
+  environment: StationEnvironmentCache,
+  visualTime: number
 ): void {
-  const worldW = state.width * TILE_SIZE;
-  const worldH = state.height * TILE_SIZE;
-  // Chartered debris flavor + density. Absent site: densityMul is exactly 1 and
-  // siteTone is null → seeded parallax field is bit-identical.
-  const site = state.site;
-  const densityMul = site ? 1 + site.debrisFactor * 0.9 : 1;
-  const siteTone = debrisToneForResource(site?.resourceType);
-  const spriteCount = 520;
-  for (let i = 0; i < spriteCount; i++) {
-    const layer = DEBRIS_PARALLAX_LAYERS[Math.floor(renderHash01(state.seedAtCreation, i, 0) * DEBRIS_PARALLAX_LAYERS.length)];
-    const baseX = renderHash01(state.seedAtCreation, i, 1) * worldW;
-    const baseY = renderHash01(state.seedAtCreation, i, 2) * worldH;
-    const baseTileX = clampRender(Math.floor(baseX / TILE_SIZE), 0, state.width - 1);
-    const baseTileY = clampRender(Math.floor(baseY / TILE_SIZE), 0, state.height - 1);
-    const baseTile = toIndex(baseTileX, baseTileY, state.width);
-    if (state.tiles[baseTile] !== TileType.Space && state.tiles[baseTile] !== TileType.Truss) continue;
-    const debris = mapConditionSamplesAt(state, baseTile).find((sample) => sample.kind === 'debris-risk')?.value ?? 0;
-    const keep = renderHash01(state.seedAtCreation, i, 3) < clampRender((0.04 + debris * 1.05) * densityMul, 0.05, 0.98);
-    if (!keep) continue;
-    const phase = renderHash01(state.seedAtCreation, i, 4) * Math.PI * 2;
-    const orbit = (state.now / layer.period) * Math.PI * 2 + phase;
-    const sway = (state.now / (layer.period * 1.7)) * Math.PI * 2 + phase * 0.61;
-    const x = baseX + Math.cos(orbit) * layer.amplitude * (0.6 + debris * 0.8);
-    const y = baseY + Math.sin(sway) * layer.amplitude * (0.45 + debris * 0.55);
-    if (viewport && (x < viewport.x - 190 || x > viewport.x + viewport.width + 190 || y < viewport.y - 190 || y > viewport.y + viewport.height + 190)) {
-      continue;
-    }
+  const profile = environment.profile;
+  const iceDebrisSheet = profile.kind === 'ice' ? getEnvironmentPiece('ice-debris') : null;
+  const metalDebrisSheet = profile.kind === 'metal' ? getEnvironmentPiece('metal-debris') : null;
+  for (const item of environment.debris) {
+    const layer = DEBRIS_PARALLAX_LAYERS[item.layer];
+    const orbit = visualTime * layer.speed + item.phase;
+    const x = item.x + Math.cos(orbit) * layer.amplitude;
+    const y = item.y + Math.sin(orbit * 0.74 + item.phase) * layer.amplitude * 0.65;
+    const size = item.size;
+    if (viewport && (x < viewport.x - size || x > viewport.x + viewport.width + size || y < viewport.y - size || y > viewport.y + viewport.height + size)) continue;
     const tileX = clampRender(Math.floor(x / TILE_SIZE), 0, state.width - 1);
     const tileY = clampRender(Math.floor(y / TILE_SIZE), 0, state.height - 1);
     const tile = toIndex(tileX, tileY, state.width);
     if (state.tiles[tile] !== TileType.Space && state.tiles[tile] !== TileType.Truss) continue;
-    const variant = renderHash01(state.seedAtCreation, i, 5);
-    const spriteKey =
-      variant > 0.72
-        ? pickSpriteKey(SPACE_BACKDROP_SPRITE_KEYS, state.seedAtCreation, i, 19)
-        : pickSpriteKey(SPACE_DEBRIS_SPRITE_KEYS, state.seedAtCreation, i, 20);
-    const baseSize = 24 + renderHash01(state.seedAtCreation, i, 21) * 34;
-    const size = baseSize * layer.scale * (0.82 + renderHash01(state.seedAtCreation, i, 6) * 0.7);
-    const alpha = clampRender((0.16 + debris * 0.44) * layer.alpha, 0.12, 0.82);
-    const rotation = Math.sin(orbit * 0.43 + phase) * layer.rotation + state.now * (0.12 + layer.rotation * 0.012) * (variant > 0.5 ? 1 : -1);
-    const dx = x - size * 0.5;
-    const dy = y - size * 0.5;
-    if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, spriteKey, dx, dy, size, size, rotation, alpha)) continue;
-    drawDebrisFallback(
-      ctx,
-      dx + size * 0.5,
-      dy + size * 0.5,
-      size,
-      siteTone ?? (spriteKey.includes('metal') ? 'metal' : spriteKey.includes('ice') ? 'ice' : 'rock'),
-      alpha
-    );
+    const alpha = clampRender((0.24 + profile.debris * 0.34) * layer.alpha, 0.12, 0.86);
+    const rotation = item.phase + visualTime * layer.rotation * (item.layer % 2 === 0 ? 1 : -1);
+    const sheet = item.tone === 'ice' ? iceDebrisSheet : item.tone === 'metal' ? metalDebrisSheet : null;
+    if (drawEnvironmentAtlasCell(ctx, sheet, 4, 3, item.atlasCell, x, y, size, size, rotation, alpha)) continue;
+    if (useSprites && spriteAtlas && item.tone !== 'spark' && drawSpriteByKey(ctx, spriteAtlas, item.key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
+    drawDebrisFallback(ctx, x, y, size, item.tone, alpha, rotation);
   }
 
   for (const debt of state.maintenanceDebts) {
@@ -632,7 +1065,7 @@ function renderDebrisBackdrop(
     for (let j = 0; j < 8; j++) {
       const layer = DEBRIS_PARALLAX_LAYERS[j % DEBRIS_PARALLAX_LAYERS.length];
       const angle = renderHash01(state.seedAtCreation + target, j, 11) * Math.PI * 2;
-      const orbit = state.now / (layer.period * 0.9) + angle;
+      const orbit = visualTime * layer.speed * 1.5 + angle;
       const distance = TILE_SIZE * (2.2 + j * 0.72 + renderHash01(state.seedAtCreation + target, j, 12) * 1.6);
       const x =
         (pos.x + 0.5) * TILE_SIZE +
@@ -652,9 +1085,9 @@ function renderDebrisBackdrop(
       const key = pickSpriteKey(SPACE_DEBRIS_SPRITE_KEYS, state.seedAtCreation + target, j, 31);
       const size = TILE_SIZE * layer.scale * (0.78 + debris * 0.9 + renderHash01(state.seedAtCreation + target, j, 32) * 0.72);
       const alpha = clampRender((0.3 + debris * 0.42) * layer.alpha, 0.22, 0.78);
-      const rotation = Math.sin(orbit) * layer.rotation + state.now * 0.28 * (j % 2 === 0 ? 1 : -1);
+      const rotation = Math.sin(orbit) * layer.rotation + visualTime * 0.28 * (j % 2 === 0 ? 1 : -1);
       if (useSprites && spriteAtlas && drawSpriteByKey(ctx, spriteAtlas, key, x - size * 0.5, y - size * 0.5, size, size, rotation, alpha)) continue;
-      drawDebrisFallback(ctx, x, y, size, siteTone ?? (j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock'), alpha);
+      drawDebrisFallback(ctx, x, y, size, debrisToneForResource(profile.resourceType) ?? (j === 1 ? 'metal' : j === 2 ? 'ice' : 'rock'), alpha, rotation);
     }
   }
 }
@@ -3206,6 +3639,7 @@ function ensureDecorativeLayer(
     state.roomVersion,
     state.moduleVersion,
     state.dockVersion,
+    state.utilityUnderlay.version,
     sanitationRenderSignature(state),
     plumbingRenderSignature(state),
     moduleConditionRenderSignature(state),
@@ -3270,6 +3704,24 @@ function ensureDecorativeLayer(
   for (const module of state.moduleInstances) {
     drawModuleVisual(ctx, state, module, spriteAtlas, useSprites);
     drawModuleConditionDecal(ctx, state, module, moduleDebtById.get(module.id) ?? 0);
+  }
+
+  for (const tile of getUnpoweredPowerRoomAnchors(state)) {
+    const { x, y } = fromIndex(tile, state.width);
+    const cx = x * TILE_SIZE + TILE_SIZE * 0.5;
+    const cy = y * TILE_SIZE + TILE_SIZE * 0.5;
+    ctx.fillStyle = 'rgba(20, 12, 16, 0.92)';
+    ctx.strokeStyle = '#ee4f4f';
+    ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE_SIZE * 0.34, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ffd65c';
+    ctx.font = `bold ${Math.round(14 * PX)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⚡', cx, cy + Math.round(PX));
   }
 
   return layer;
@@ -3764,7 +4216,11 @@ function mixRgba(
   return rgba(mixChannel(a[0], b[0], k), mixChannel(a[1], b[1], k), mixChannel(a[2], b[2], k), alpha);
 }
 
-function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverlay): string {
+function diagnosticOverlayCacheKey(
+  state: StationState,
+  overlay: DiagnosticOverlay,
+  focusedUtilityKind?: UtilityUnderlayKind
+): string {
   const debtKey =
     overlay === 'maintenance'
       ? state.maintenanceDebts
@@ -3806,6 +4262,7 @@ function diagnosticOverlayCacheKey(state: StationState, overlay: DiagnosticOverl
   const utilityKey =
     overlay === 'utility-underlay'
       ? [
+          focusedUtilityKind ?? 'all',
           state.utilityUnderlay.version,
           state.metrics.airNetworkPoweredVents,
           state.metrics.airNetworkUnpoweredVents,
@@ -4218,6 +4675,42 @@ function drawFuelPipeOverlayLayer(ctx: CanvasRenderingContext2D, state: StationS
   ctx.restore();
 }
 
+function drawPowerConduitOverlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
+  const diagnostics = getPowerNetworkDiagnostics(state);
+  ctx.save();
+  for (let i = 0; i < state.tiles.length; i++) {
+    if (!hasUtilityUnderlay(state, 'power-conduit', i)) continue;
+    const { x, y } = fromIndex(i, state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    const componentId = diagnostics.componentIdByTile[i];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+    const powered = component?.powered ?? false;
+    const source = component?.sourceTiles.includes(i) ?? false;
+    const sink = component?.sinkTiles.includes(i) ?? false;
+    ctx.fillStyle = source
+      ? 'rgba(110, 219, 143, 0.24)'
+      : powered ? 'rgba(255, 214, 92, 0.18)' : 'rgba(238, 79, 79, 0.2)';
+    ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    drawUtilityUnderlayDuct(
+      ctx,
+      state,
+      i,
+      'power-conduit',
+      source ? '#6edb8f' : powered ? '#ffd65c' : '#ee4f4f',
+      powered ? '#fff5bd' : '#ffd1d1',
+      null,
+      false
+    );
+    if (source || sink) {
+      ctx.strokeStyle = source ? '#6edb8f' : powered ? '#fff5bd' : '#ff8b80';
+      ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+      ctx.strokeRect(px + Math.round(4 * PX) + 0.5, py + Math.round(4 * PX) + 0.5, TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX));
+    }
+  }
+  ctx.restore();
+}
+
 function drawAirCoverageUnderlayLayer(ctx: CanvasRenderingContext2D, state: StationState): void {
   const coverage = getLifeSupportCoverageDiagnostics(state);
   ctx.save();
@@ -4238,11 +4731,27 @@ function drawUtilityUnderlayOverlayLayer(
   ctx: CanvasRenderingContext2D,
   state: StationState,
   spriteAtlas: SpriteAtlas,
-  useSprites: boolean
+  useSprites: boolean,
+  focusedKind?: UtilityUnderlayKind
 ): void {
+  if (focusedKind === 'power-conduit') {
+    drawPowerConduitOverlayLayer(ctx, state);
+    return;
+  }
+  if (focusedKind === 'water-pipe') {
+    drawWaterPipeOverlayLayer(ctx, state);
+    return;
+  }
+  if (focusedKind === 'fuel-pipe') {
+    drawFuelPipeOverlayLayer(ctx, state);
+    return;
+  }
   drawAirCoverageUnderlayLayer(ctx, state);
-  drawWaterPipeOverlayLayer(ctx, state);
-  drawFuelPipeOverlayLayer(ctx, state);
+  if (focusedKind === undefined) {
+    drawPowerConduitOverlayLayer(ctx, state);
+    drawWaterPipeOverlayLayer(ctx, state);
+    drawFuelPipeOverlayLayer(ctx, state);
+  }
   const diagnostics = getAirDuctNetworkDiagnostics(state);
   if (diagnostics.tileCount <= 0) return;
   const sourceTiles = new Set<number>();
@@ -4306,11 +4815,12 @@ function drawDiagnosticOverlayLayer(
   state: StationState,
   overlay: DiagnosticOverlay,
   spriteAtlas: SpriteAtlas,
-  useSprites: boolean
+  useSprites: boolean,
+  focusedUtilityKind?: UtilityUnderlayKind
 ): void {
   if (overlay === 'none') return;
   if (overlay === 'utility-underlay') {
-    drawUtilityUnderlayOverlayLayer(ctx, state, spriteAtlas, useSprites);
+    drawUtilityUnderlayOverlayLayer(ctx, state, spriteAtlas, useSprites, focusedUtilityKind);
     return;
   }
   const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
@@ -4364,7 +4874,8 @@ function ensureDiagnosticOverlayLayer(
   widthPx: number,
   heightPx: number,
   spriteAtlas: SpriteAtlas,
-  useSprites: boolean
+  useSprites: boolean,
+  focusedUtilityKind?: UtilityUnderlayKind
 ): CachedLayer | null {
   const overlay = state.controls.diagnosticOverlay;
   if (overlay === 'none') {
@@ -4373,11 +4884,11 @@ function ensureDiagnosticOverlayLayer(
   }
   diagnosticOverlayCache = ensureCachedLayer(diagnosticOverlayCache, widthPx, heightPx);
   const layer = diagnosticOverlayCache;
-  const key = `${diagnosticOverlayCacheKey(state, overlay)}|sprites:${useSprites ? 1 : 0}:${spriteAtlas.version}`;
+  const key = `${diagnosticOverlayCacheKey(state, overlay, focusedUtilityKind)}|sprites:${useSprites ? 1 : 0}:${spriteAtlas.version}`;
   if (layer.key === key) return layer;
   layer.key = key;
   layer.ctx.clearRect(0, 0, widthPx, heightPx);
-  drawDiagnosticOverlayLayer(layer.ctx, state, overlay, spriteAtlas, useSprites);
+  drawDiagnosticOverlayLayer(layer.ctx, state, overlay, spriteAtlas, useSprites, focusedUtilityKind);
   return layer;
 }
 
@@ -5252,6 +5763,8 @@ export function renderWorld(
   const useSprites = spritesEnabled(state, spriteAtlas);
   const viewport = normalizeViewport(viewportInput, widthPx, heightPx);
   const visibleTiles = tileRangeForViewport(viewport, state);
+  const environment = getStationEnvironment(state);
+  const visualTime = renderTimeSeconds();
 
   ctx.save();
   if (viewport) {
@@ -5265,21 +5778,34 @@ export function renderWorld(
   } else {
     ctx.fillRect(0, 0, widthPx, heightPx);
   }
-  renderSeededSpaceConditionBackdrop(ctx, state, viewport);
-  renderMassivePlanetBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
+  renderSeededSpaceConditionBackdrop(ctx, state, viewport, environment, visualTime);
+  renderCelestialBackdrop(ctx, state, viewport, environment, visualTime);
+  renderTrafficBackdrop(ctx, viewport, environment, visualTime);
   const staticLayer = ensureStaticLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   drawCachedLayer(ctx, staticLayer.canvas, viewport);
   drawCachedLayer(ctx, decorativeLayer.canvas, viewport);
+  renderSunwardHullRim(ctx, state, visibleTiles, environment);
   // Glow pass paints after the sprite layers (additive blend). Gated on
   // state.controls.showGlow; cache key includes dynamic signatures (med-bed
   // occupancy, kitchen-active) so frame cost is ~0 when nothing changes.
   renderGlowPass(ctx, state, widthPx, heightPx, useSprites, viewport);
-  const diagnosticLayer = ensureDiagnosticOverlayLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
+  const focusedUtilityKind =
+    currentTool.kind === 'utility-underlay' && !currentTool.utilityErase
+      ? currentTool.utilityKind
+      : undefined;
+  const diagnosticLayer = ensureDiagnosticOverlayLayer(
+    state,
+    widthPx,
+    heightPx,
+    spriteAtlas,
+    useSprites,
+    focusedUtilityKind
+  );
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
   ctx.save();
   clipToVisibleSpaceTiles(ctx, state, visibleTiles);
-  renderDebrisBackdrop(ctx, state, spriteAtlas, useSprites, viewport);
+  renderDebrisBackdrop(ctx, state, spriteAtlas, useSprites, viewport, environment, visualTime);
   ctx.restore();
   renderHullWearOverlays(ctx, state, spriteAtlas, useSprites, viewport);
   renderMaintenanceImpacts(ctx, state, spriteAtlas, useSprites, viewport);
@@ -5504,14 +6030,15 @@ export function renderWorld(
       currentTool.utilityErase ||
       canPlaceUtilityUnderlay(state, currentTool.utilityKind ?? 'air-duct', hoveredTile);
     const isFuelPipe = currentTool.utilityKind === 'fuel-pipe';
+    const isPowerCable = currentTool.utilityKind === 'power-conduit';
     ctx.fillStyle = currentTool.utilityErase
       ? 'rgba(255, 188, 82, 0.24)'
       : valid
-        ? isFuelPipe ? 'rgba(242, 168, 75, 0.28)' : 'rgba(97, 200, 255, 0.26)'
+        ? isFuelPipe ? 'rgba(242, 168, 75, 0.28)' : isPowerCable ? 'rgba(255, 214, 92, 0.28)' : 'rgba(97, 200, 255, 0.26)'
         : 'rgba(238, 79, 79, 0.26)';
     ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
     ctx.strokeStyle = valid
-      ? isFuelPipe ? 'rgba(255, 240, 189, 0.95)' : 'rgba(167, 243, 255, 0.95)'
+      ? isFuelPipe ? 'rgba(255, 240, 189, 0.95)' : isPowerCable ? 'rgba(255, 245, 189, 0.95)' : 'rgba(167, 243, 255, 0.95)'
       : 'rgba(238, 79, 79, 0.95)';
     ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
   }
@@ -5530,6 +6057,40 @@ export function renderWorld(
       ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
       ctx.strokeStyle = preview.valid ? 'rgba(110,219,143,0.95)' : 'rgba(255,118,118,0.95)';
       ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+    }
+  }
+
+  if (currentTool.kind === 'move-module') {
+    const selectedModule = currentTool.moveSourceModuleId === undefined
+      ? undefined
+      : state.moduleInstances.find((module) => module.id === currentTool.moveSourceModuleId);
+    const hoveredModuleId = hoveredTile === null ? null : state.moduleOccupancyByTile[hoveredTile];
+    const hoveredModule = hoveredModuleId === null
+      ? undefined
+      : state.moduleInstances.find((module) => module.id === hoveredModuleId);
+    const source = selectedModule ?? hoveredModule;
+    if (source) {
+      for (const ti of source.tiles) {
+        if (!tileInRange(ti, state, visibleTiles)) continue;
+        const p = fromIndex(ti, state.width);
+        ctx.fillStyle = 'rgba(94, 211, 255, 0.2)';
+        ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        ctx.strokeStyle = 'rgba(138, 231, 255, 0.98)';
+        ctx.lineWidth = Math.max(2, Math.round(2 * PX));
+        ctx.strokeRect(p.x * TILE_SIZE + 2, p.y * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+      }
+    }
+    if (selectedModule && hoveredTile !== null && !selectedModule.tiles.includes(hoveredTile)) {
+      const preview = getModuleMovePreview(state, selectedModule.id, hoveredTile);
+      for (const ti of preview.tiles) {
+        if (!tileInRange(ti, state, visibleTiles)) continue;
+        const p = fromIndex(ti, state.width);
+        ctx.fillStyle = preview.ok ? 'rgba(110, 219, 143, 0.3)' : 'rgba(255, 118, 118, 0.34)';
+        ctx.fillRect(p.x * TILE_SIZE + 1, p.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        ctx.strokeStyle = preview.ok ? 'rgba(110, 219, 143, 0.98)' : 'rgba(255, 118, 118, 0.98)';
+        ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+        ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+      }
     }
   }
 
@@ -5855,6 +6416,10 @@ export function renderWorld(
                   : `Tool: ${currentTool.utilityKind ?? 'utility'}`
           : currentTool.kind === 'module'
             ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
+            : currentTool.kind === 'move-module'
+              ? currentTool.moveSourceModuleId === undefined
+                ? 'Tool: Move Module - select fixture'
+                : `Tool: Move ${currentTool.module} - choose destination`
             : currentTool.kind === 'hire-staff'
               ? `Tool: Place ${currentTool.staffRole}`
               : 'Tool: Cancel Build';
