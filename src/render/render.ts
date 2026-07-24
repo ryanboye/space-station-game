@@ -1466,18 +1466,37 @@ function plumbingRenderSignature(state: StationState): string {
   return `${flooded}:${maxBucket}:${spatialHash >>> 0}`;
 }
 
+// Condition tiers mirror the sim's maintenance thresholds so the world reads
+// the same story the panels do: MAINTENANCE_DEBT_WARNING (30) is where output
+// actually starts degrading, MAINTENANCE_DEBT_SEVERE (60) is where a module is
+// failing. Wear becomes visible well before either, so the player can see a
+// machine sliding before it costs them anything.
+const MODULE_WEAR_VISIBLE = 12;
+const MODULE_WEAR_STRAINED = 30;
+const MODULE_WEAR_FAILING = 60;
+const MODULE_WEAR_BUCKET = 6;
+
 function moduleConditionRenderSignature(state: StationState): string {
   let worn = 0;
   let strained = 0;
   let worstBucket = 0;
+  // A per-module hash is required, not just the aggregate counts: repairing one
+  // module while another wears in leaves worn/strained/worst identical, and the
+  // decorative layer would keep serving a stale cache where the repair never
+  // visibly lifts. Same shape as sanitationRenderSignature's spatial hash.
+  let spatialHash = 2166136261;
   for (const debt of state.maintenanceDebts) {
-    if (debt.moduleId === undefined || debt.debt < 12) continue;
-    const bucket = Math.floor(debt.debt / 10);
+    if (debt.moduleId === undefined || debt.debt < MODULE_WEAR_VISIBLE) continue;
+    const bucket = Math.floor(debt.debt / MODULE_WEAR_BUCKET);
     worn += 1;
-    if (bucket >= 6) strained += 1;
+    if (debt.debt >= MODULE_WEAR_STRAINED) strained += 1;
     worstBucket = Math.max(worstBucket, bucket);
+    spatialHash ^= debt.moduleId + 1;
+    spatialHash = Math.imul(spatialHash, 16777619);
+    spatialHash ^= bucket;
+    spatialHash = Math.imul(spatialHash, 16777619);
   }
-  return `${worn}:${strained}:${worstBucket}`;
+  return `${worn}:${strained}:${worstBucket}:${spatialHash >>> 0}`;
 }
 
 function drawModuleConditionDecal(
@@ -1486,22 +1505,29 @@ function drawModuleConditionDecal(
   module: StationState['moduleInstances'][number],
   debt: number
 ): void {
-  if (debt < 12) return;
+  if (debt < MODULE_WEAR_VISIBLE) return;
   const origin = fromIndex(module.originTile, state.width);
   const x = origin.x * TILE_SIZE;
   const y = origin.y * TILE_SIZE;
   const w = module.width * TILE_SIZE;
   const h = module.height * TILE_SIZE;
-  const t = clamp01((debt - 12) / 88);
-  const seed = hashWeatherSeed(module.id, state.rooms[module.originTile], Math.floor(debt / 10));
+  const t = clamp01((debt - MODULE_WEAR_VISIBLE) / (100 - MODULE_WEAR_VISIBLE));
+  const failing = debt >= MODULE_WEAR_FAILING;
+  const strained = debt >= MODULE_WEAR_STRAINED;
+  // Seed on the module alone, never on the debt level: marks must accumulate in
+  // place as a machine wears and disappear when it is repaired. Re-seeding per
+  // debt bucket made the scratches jump around instead of deepening.
+  const seed = hashWeatherSeed(module.id, state.rooms[module.originTile], module.originTile);
 
   ctx.save();
-  ctx.strokeStyle = debt >= 65
-    ? `rgba(255, 102, 82, ${0.42 + t * 0.34})`
-    : `rgba(196, 142, 78, ${0.28 + t * 0.32})`;
-  ctx.lineWidth = Math.max(1, Math.round(PX * (0.8 + t)));
+  ctx.strokeStyle = failing
+    ? `rgba(255, 102, 82, ${0.46 + t * 0.32})`
+    : `rgba(196, 142, 78, ${0.34 + t * 0.34})`;
+  ctx.lineWidth = Math.max(1, Math.round(PX * (0.9 + t)));
   ctx.lineCap = 'round';
-  const marks = debt >= 65 ? 6 : debt >= 35 ? 4 : 2;
+  // Marks are added, never replaced, so each tier keeps the previous tier's
+  // scratches and layers more on top.
+  const marks = failing ? 7 : strained ? 5 : 3;
   for (let i = 0; i < marks; i++) {
     const hx = ((seed >>> ((i * 3) % 21)) & 31) / 31;
     const hy = ((seed >>> ((i * 5 + 7) % 21)) & 31) / 31;
@@ -1509,12 +1535,25 @@ function drawModuleConditionDecal(
     const sy = y + h * (0.16 + hy * 0.66);
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + w * (0.06 + t * 0.06), sy + h * (i % 2 === 0 ? 0.08 : -0.07));
+    ctx.lineTo(sx + w * (0.06 + t * 0.07), sy + h * (i % 2 === 0 ? 0.08 : -0.07));
     ctx.stroke();
   }
-  if (debt >= 35) {
-    ctx.fillStyle = debt >= 65 ? 'rgba(126, 30, 28, 0.32)' : 'rgba(100, 68, 35, 0.24)';
-    ctx.fillRect(x + w * 0.08, y + h * 0.77, w * Math.min(0.76, 0.22 + t * 0.54), Math.max(2, h * 0.07));
+  if (strained) {
+    // Grime/scorch pooling at the base. Widens with debt, so a strained module
+    // keeps deepening rather than snapping between two looks.
+    ctx.fillStyle = failing ? 'rgba(126, 30, 28, 0.34)' : 'rgba(100, 68, 35, 0.26)';
+    ctx.fillRect(x + w * 0.08, y + h * 0.77, w * Math.min(0.78, 0.24 + t * 0.56), Math.max(2, h * 0.07));
+  }
+  if (failing) {
+    // A failing module has to be distinguishable from a merely worn one at a
+    // glance and while zoomed out, where individual scratches stop resolving.
+    // The inset fault frame survives that zoom-out; the scratches do not.
+    const inset = Math.max(1, Math.round(PX * 1.2));
+    ctx.strokeStyle = `rgba(255, 118, 96, ${0.5 + t * 0.3})`;
+    ctx.lineWidth = Math.max(1, Math.round(PX * 1.1));
+    ctx.setLineDash([Math.max(2, Math.round(PX * 2.4)), Math.max(2, Math.round(PX * 2))]);
+    ctx.strokeRect(x + inset, y + inset, w - inset * 2, h - inset * 2);
+    ctx.setLineDash([]);
   }
   ctx.restore();
 }
