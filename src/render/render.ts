@@ -297,6 +297,8 @@ const RESIDENT_MARK_COLOR = '#35d98a';
 const SHIP_TRANSIT_VISUAL_SEC = 2;
 const SHIP_ASSET_VERSION = 'generated-ship-sheet-2026-05-02';
 const SERVICE_OVERLAY_CACHE_TTL_SEC = 0.2;
+// How long a just-cleared floor tile keeps its finish sparkle.
+const SANITATION_CLEARED_SPARKLE_SEC = 0.7;
 
 type CachedLayer = {
   canvas: HTMLCanvasElement;
@@ -6040,15 +6042,66 @@ export function renderWorld(
   for (const job of state.jobs) {
     if (job.type !== 'sanitize') continue;
     if (job.state === 'done' || job.state === 'expired') continue;
-    if (!tileInRange(job.fromTile, state, visibleTiles)) continue;
-    const tx = job.fromTile % state.width;
-    const ty = Math.floor(job.fromTile / state.width);
+    const inProgress = job.state === 'in_progress';
+    // A working cleaner scrubs the patch one tile at a time, so the badge rides
+    // the tile actually being scrubbed. A pending job has no cleaner yet and
+    // stays on its anchor.
+    const badgeTile = inProgress ? job.sanitationWipeTile ?? job.fromTile : job.fromTile;
+    // Each finished tile gets a short sparkle burst where it was cleared, so the
+    // player sees the clean area grow square by square rather than noticing a
+    // block of grime is quietly gone.
+    const clearAge =
+      job.sanitationClearedTile !== undefined && job.sanitationClearedAt !== undefined
+        ? state.now - job.sanitationClearedAt
+        : Number.POSITIVE_INFINITY;
+    if (
+      clearAge >= 0 &&
+      clearAge < SANITATION_CLEARED_SPARKLE_SEC &&
+      job.sanitationClearedTile !== undefined &&
+      tileInRange(job.sanitationClearedTile, state, visibleTiles)
+    ) {
+      const fade = 1 - clearAge / SANITATION_CLEARED_SPARKLE_SEC;
+      const sx = (job.sanitationClearedTile % state.width + 0.5) * TILE_SIZE;
+      const sy = (Math.floor(job.sanitationClearedTile / state.width) + 0.5) * TILE_SIZE;
+      const reach = TILE_SIZE * (0.16 + 0.24 * (1 - fade));
+      ctx.save();
+      ctx.strokeStyle = `rgba(214, 255, 240, ${0.85 * fade})`;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05 * fade);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let spoke = 0; spoke < 4; spoke++) {
+        const angle = (Math.PI / 2) * spoke + Math.PI / 4;
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+        ctx.moveTo(sx + dx * reach * 0.35, sy + dy * reach * 0.35);
+        ctx.lineTo(sx + dx * reach, sy + dy * reach);
+      }
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(sx, sy, reach * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (!tileInRange(badgeTile, state, visibleTiles)) continue;
+    const tx = badgeTile % state.width;
+    const ty = Math.floor(badgeTile / state.width);
     const cx = (tx + 0.5) * TILE_SIZE;
     const cy = (ty + 0.5) * TILE_SIZE + TILE_SIZE * 0.2;
     const r = TILE_SIZE * 0.2;
-    const inProgress = job.state === 'in_progress';
     const pulse = inProgress ? 0.62 + 0.38 * Math.sin(state.now * 5.5) : 1;
     ctx.save();
+    if (inProgress) {
+      // Scrubbing arc under the badge: a short back-and-forth wipe stroke on the
+      // tile being worked, so a standing cleaner still reads as doing something.
+      const sweep = Math.sin(state.now * 6.2) * TILE_SIZE * 0.22;
+      ctx.strokeStyle = `rgba(203, 255, 236, ${0.34 + 0.26 * pulse})`;
+      ctx.lineWidth = Math.max(1.2, TILE_SIZE * 0.07);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - TILE_SIZE * 0.26 + sweep, cy - TILE_SIZE * 0.34);
+      ctx.lineTo(cx + TILE_SIZE * 0.1 + sweep, cy - TILE_SIZE * 0.34);
+      ctx.stroke();
+    }
     ctx.fillStyle = 'rgba(6, 18, 20, 0.82)';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
