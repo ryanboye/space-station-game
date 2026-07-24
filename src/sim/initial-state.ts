@@ -180,9 +180,10 @@ export function createInitialState(options?: {
   rooms[fuelCouplerServiceDoor] = RoomType.Maintenance;
   addStarterModule(ModuleType.FuelTank, coreX - 1, coreY - 2, 0);
 
-  // Cargo intake and storage face the south service gallery. Life support,
-  // command and power are baseline hull services in this validation slice;
-  // they do not consume the first screen with rooms the player cannot use.
+  // Cargo intake and storage face the south service gallery. Command and life
+  // support remain baseline hull services in this compact opening, but power
+  // is deliberately physical: the starter reactor is both a visible system
+  // and the first meaningful expansion constraint.
   paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX, coreY + 5);
   addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
   paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 5, coreY + 5);
@@ -202,6 +203,12 @@ export function createInitialState(options?: {
   // with separate reasons to visit, without spending the berth expansion.
   paintEnclosedRoom(RoomType.Market, coreX + 12, coreY - 3, coreX + 15, coreY - 1, coreX + 11, coreY - 2);
   addStarterModule(ModuleType.MarketStall, coreX + 12, coreY - 3, 0);
+
+  // The starter's 2x2 reactor is kept in its own accessible service pod,
+  // away from guest rooms but near the public-service trunk. It replaces the
+  // old invisible baseline grid for every newly authored station.
+  paintEnclosedRoom(RoomType.Reactor, coreX + 6, coreY - 3, coreX + 7, coreY - 2, coreX + 5, coreY - 2);
+  addStarterModule(ModuleType.ReactorCore, coreX + 6, coreY - 3, 0);
 
   // The starter crew has functional but deliberately ramshackle support.
   // Four double bunks cover the initial shift at low comfort; beds and
@@ -288,6 +295,35 @@ export function createInitialState(options?: {
     [coreX, coreY - 3]
   ] as const) {
     utilityUnderlay.layers['fuel-pipe'][toIndex(x, y, GRID_WIDTH)] = 1;
+  }
+  // Fresh starts are visibly wired before play begins. The reactor trunk
+  // branches to every opening room whose fixtures require electricity;
+  // extensions can continue from these runs without commissioning a hidden
+  // second grid. Underlays may pass beneath hull walls, as the utility system
+  // already supports, so the public rooms stay readable rather than filling
+  // their floors with cabling.
+  const starterPowerTiles = new Set<number>();
+  const addPowerRun = (fromX: number, fromY: number, toX: number, toY: number): void => {
+    let x = fromX;
+    let y = fromY;
+    starterPowerTiles.add(toIndex(x, y, GRID_WIDTH));
+    while (x !== toX) {
+      x += Math.sign(toX - x);
+      starterPowerTiles.add(toIndex(x, y, GRID_WIDTH));
+    }
+    while (y !== toY) {
+      y += Math.sign(toY - y);
+      starterPowerTiles.add(toIndex(x, y, GRID_WIDTH));
+    }
+  };
+  const reactorX = coreX + 6;
+  const reactorY = coreY - 3;
+  addPowerRun(reactorX, reactorY, coreX + 6, coreY);
+  addPowerRun(reactorX, reactorY, coreX + 12, coreY - 3);
+  addPowerRun(reactorX, reactorY, coreX - 9, coreY - 3);
+  addPowerRun(coreX - 9, coreY - 3, coreX - 9, coreY + 3);
+  for (const tile of starterPowerTiles) {
+    utilityUnderlay.layers['power-conduit'][tile] = 1;
   }
   utilityUnderlay.version = 1;
 

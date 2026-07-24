@@ -498,9 +498,12 @@ function cafeteriaServiceRateForCounter(state: StationState, counterTile: number
 }
 
 const BASE_POWER_SUPPLY = 14;
-const POWER_PER_REACTOR = 22;
-// Per-panel power at full local sunlight (1.0). Tuned so ~4 panels on bright
-// tiles (sunlight ~0.85) rival one reactor's 22 output, while deep-shade
+// One authored starter reactor should feel secure, not limitless. At 18 it
+// carries the opening rooms at roughly 70% draw and makes the first powered
+// service expansion an understandable reserve decision.
+const POWER_PER_REACTOR = 18;
+// Per-panel power at full local sunlight (1.0). Tuned so ~3-4 panels on bright
+// tiles (sunlight ~0.85) rival one reactor's 18 output, while deep-shade
 // panels (sunlight <0.15) contribute almost nothing.
 const POWER_PER_SOLAR = 6;
 const SHIP_APPROACH_TIME = TASK_TIMINGS.shipApproachSec;
@@ -2946,7 +2949,13 @@ function computePowerGridRuntime(state: StationState): PowerGridRuntime {
   const utility = ensureUtilityUnderlay(state);
   const key = `${utility.version}:${state.roomVersion}:${state.moduleVersion}`;
   if (powerGridCache?.state === state && powerGridCache.key === key) return powerGridCache.runtime;
-  const gridMode = utilityUnderlayTileCount(state, 'power-conduit') > 0;
+  // Existing saves that have neither a source nor a commissioned source keep
+  // their historical fallback. A loose cable alone must not silently revoke
+  // that fallback; grid enforcement begins when the player installs a source.
+  const hasInstalledSource = state.moduleInstances.some(
+    (module) => module.type === ModuleType.SolarPanel || module.type === ModuleType.ReactorCore
+  );
+  const gridMode = hasInstalledSource;
   const diagnostics = discoverUtilityNetworks(state, 'power-conduit', {
     sourceTiles: powerSourceTiles(state),
     sinkTiles: powerSinkTiles(state)
