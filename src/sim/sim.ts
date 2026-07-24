@@ -538,9 +538,17 @@ const THERMAL_DRIFT_CADENCE_SEC = 4;
 const SANITATION_DIRTY_THRESHOLD = 32;
 const SANITATION_FILTHY_THRESHOLD = 68;
 const SANITATION_JOB_SPAWN_THRESHOLD = 36;
-const SANITATION_JOB_TARGET = 18;
-const SANITATION_JOB_RATE_PER_SEC = 32;
+// Cleaning drives a tile below the renderer's grime threshold (12) so a cleaned
+// floor actually *looks* clean. Anything at or above that threshold would leave
+// visible grime behind and make the cleaner's trip feel pointless.
+const SANITATION_JOB_TARGET = 2;
+// Slow enough that scrubbing is watchable labor: a filthy tile (68) is ~9s of
+// standing work rather than a single-frame snap.
+const SANITATION_JOB_RATE_PER_SEC = 7;
 const SANITATION_JOB_PATCH_RADIUS = 2;
+// Traffic smears onto orthogonal neighbours so walking lanes read as tracks
+// instead of isolated specks under chairs.
+const SANITATION_TRAFFIC_NEIGHBOUR_SHARE = 0.35;
 const SANITATION_MAX_OPEN_JOBS = 14;
 const SANITATION_VISITOR_RATING_PENALTY_PER_SEC = 0.0014;
 const SANITATION_RESIDENT_STRESS_PER_SEC = 0.018;
@@ -13491,11 +13499,32 @@ function updateFires(state: StationState, dt: number): void {
 
 function updateSanitation(state: StationState, dt: number): void {
   if (dt <= 0) return;
+  // An actor grinds dirt into the tile it occupies and, more faintly, into the
+  // tiles it is stepping between. That is five `addDirt` calls per actor per
+  // tick instead of one; against an identical world at 60-crew scale the four
+  // extra calls measured inside run-to-run noise (~55ms/tick either way, a
+  // pre-existing cost dominated by crew logic), so no cadence gate is needed.
+  // `addDirt` already rejects non-walkable tiles, so grime never bleeds into
+  // walls or space.
   const addActorTraffic = (tile: number, source: SanitationSource, rate: number): void => {
-    addDirt(state, tile, rate * dt, source);
+    const amount = rate * dt;
+    if (amount <= 0) return;
+    addDirt(state, tile, amount, source);
+    if (tile < 0 || tile >= state.dirtByTile.length) return;
+    const share = amount * SANITATION_TRAFFIC_NEIGHBOUR_SHARE;
+    const x = tile % state.width;
+    if (x > 0) addDirt(state, tile - 1, share, source);
+    if (x < state.width - 1) addDirt(state, tile + 1, share, source);
+    addDirt(state, tile - state.width, share, source);
+    addDirt(state, tile + state.width, share, source);
   };
+  // Traffic rates are ~1.6x their pre-slice values. Now that passive decay no
+  // longer erases foot traffic faster than actors lay it down, these are what
+  // carry a busy lane across the visible threshold (12) inside a single
+  // turnaround instead of leaving it hovering near zero forever. Tuned against
+  // the starter and demo-station fixtures, not from a ratio.
   for (const visitor of state.visitors) {
-    addActorTraffic(visitor.tileIndex, 'traffic', visitor.state === VisitorState.Queueing ? 0.105 : 0.052);
+    addActorTraffic(visitor.tileIndex, 'traffic', visitor.state === VisitorState.Queueing ? 0.17 : 0.084);
     if (visitor.state === VisitorState.Eating) {
       const traitDirt = visitor.trait === 'messy' ? 1.75 : visitor.trait === 'tidy' ? 0.55 : 1;
       addDirt(state, visitor.tileIndex, 0.3 * dt * traitDirt, 'meals');
@@ -13505,14 +13534,14 @@ function updateSanitation(state: StationState, dt: number): void {
     }
   }
   for (const resident of state.residents) {
-    addActorTraffic(resident.tileIndex, 'traffic', 0.04);
+    addActorTraffic(resident.tileIndex, 'traffic', 0.064);
     if (resident.state === ResidentState.Eating) addDirt(state, resident.tileIndex, 0.2 * dt, 'meals');
     if (resident.state === ResidentState.Cleaning || resident.state === ResidentState.ToHygiene) {
       addDirt(state, resident.tileIndex, 0.12 * dt, 'hygiene');
     }
   }
   for (const crew of state.crewMembers) {
-    addActorTraffic(crew.tileIndex, crew.activeJobId !== null ? 'traffic' : 'traffic', crew.activeJobId !== null ? 0.06 : 0.028);
+    addActorTraffic(crew.tileIndex, 'traffic', crew.activeJobId !== null ? 0.096 : 0.045);
     if (crew.toileting || crew.cleaning) addDirt(state, crew.tileIndex, 0.09 * dt, 'hygiene');
   }
   for (const tile of activeRoomTargets(state, RoomType.Kitchen)) addDirt(state, tile, 0.24 * dt, 'kitchen');
@@ -13525,12 +13554,15 @@ function updateSanitation(state: StationState, dt: number): void {
   }
   for (const tile of state.bodyTiles) addDirt(state, tile, 0.18 * dt, 'body');
 
-  // Slow passive cleanup from ventilation/normal housekeeping prevents tiny
-  // lived-in specks from being permanent while leaving dirty rooms actionable.
+  // Passive cleanup is deliberately near-inert: dirt is removed by *cleaners*,
+  // not by physics. It exists only so a stray speck in an abandoned corner
+  // eventually settles instead of being permanent. It used to run at 0.006/s
+  // below 18, which out-paced ordinary foot traffic and kept corridors
+  // permanently at zero — no lane could ever reach the visible threshold.
   for (let i = 0; i < state.dirtByTile.length; i++) {
     const dirt = state.dirtByTile[i];
     if (dirt <= 0) continue;
-    const decay = dirt < 18 ? 0.006 * dt : 0.001 * dt;
+    const decay = dirt < 18 ? 0.0015 * dt : 0.00025 * dt;
     if (decay > 0) reduceDirt(state, i, decay);
   }
 }

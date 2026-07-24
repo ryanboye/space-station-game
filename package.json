@@ -11,6 +11,7 @@
     "test:port-ops": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/port-ops-tests.js",
     "test:commercial": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/commercial-unit-tests.js",
     "test:site-charter": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/site-charter-tests.js",
+    "test:sanitation": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sanitation-tests.js",
     "balance:port-ops": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/port-ops-balance.js",
     "test:harness": "playwright test",
     "test:harness:update-snapshots": "playwright test --update-snapshots",
