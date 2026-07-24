@@ -300,6 +300,8 @@ const RESIDENT_MARK_COLOR = '#35d98a';
 const SHIP_TRANSIT_VISUAL_SEC = 2;
 const SHIP_ASSET_VERSION = 'generated-ship-sheet-2026-05-02';
 const SERVICE_OVERLAY_CACHE_TTL_SEC = 0.2;
+// How long a just-cleared floor tile keeps its finish sparkle.
+const SANITATION_CLEARED_SPARKLE_SEC = 0.7;
 
 type CachedLayer = {
   canvas: HTMLCanvasElement;
@@ -1897,18 +1899,37 @@ function plumbingRenderSignature(state: StationState): string {
   return `${flooded}:${maxBucket}:${spatialHash >>> 0}`;
 }
 
+// Condition tiers mirror the sim's maintenance thresholds so the world reads
+// the same story the panels do: MAINTENANCE_DEBT_WARNING (30) is where output
+// actually starts degrading, MAINTENANCE_DEBT_SEVERE (60) is where a module is
+// failing. Wear becomes visible well before either, so the player can see a
+// machine sliding before it costs them anything.
+const MODULE_WEAR_VISIBLE = 12;
+const MODULE_WEAR_STRAINED = 30;
+const MODULE_WEAR_FAILING = 60;
+const MODULE_WEAR_BUCKET = 6;
+
 function moduleConditionRenderSignature(state: StationState): string {
   let worn = 0;
   let strained = 0;
   let worstBucket = 0;
+  // A per-module hash is required, not just the aggregate counts: repairing one
+  // module while another wears in leaves worn/strained/worst identical, and the
+  // decorative layer would keep serving a stale cache where the repair never
+  // visibly lifts. Same shape as sanitationRenderSignature's spatial hash.
+  let spatialHash = 2166136261;
   for (const debt of state.maintenanceDebts) {
-    if (debt.moduleId === undefined || debt.debt < 12) continue;
-    const bucket = Math.floor(debt.debt / 10);
+    if (debt.moduleId === undefined || debt.debt < MODULE_WEAR_VISIBLE) continue;
+    const bucket = Math.floor(debt.debt / MODULE_WEAR_BUCKET);
     worn += 1;
-    if (bucket >= 6) strained += 1;
+    if (debt.debt >= MODULE_WEAR_STRAINED) strained += 1;
     worstBucket = Math.max(worstBucket, bucket);
+    spatialHash ^= debt.moduleId + 1;
+    spatialHash = Math.imul(spatialHash, 16777619);
+    spatialHash ^= bucket;
+    spatialHash = Math.imul(spatialHash, 16777619);
   }
-  return `${worn}:${strained}:${worstBucket}`;
+  return `${worn}:${strained}:${worstBucket}:${spatialHash >>> 0}`;
 }
 
 function drawModuleConditionDecal(
@@ -1917,22 +1938,29 @@ function drawModuleConditionDecal(
   module: StationState['moduleInstances'][number],
   debt: number
 ): void {
-  if (debt < 12) return;
+  if (debt < MODULE_WEAR_VISIBLE) return;
   const origin = fromIndex(module.originTile, state.width);
   const x = origin.x * TILE_SIZE;
   const y = origin.y * TILE_SIZE;
   const w = module.width * TILE_SIZE;
   const h = module.height * TILE_SIZE;
-  const t = clamp01((debt - 12) / 88);
-  const seed = hashWeatherSeed(module.id, state.rooms[module.originTile], Math.floor(debt / 10));
+  const t = clamp01((debt - MODULE_WEAR_VISIBLE) / (100 - MODULE_WEAR_VISIBLE));
+  const failing = debt >= MODULE_WEAR_FAILING;
+  const strained = debt >= MODULE_WEAR_STRAINED;
+  // Seed on the module alone, never on the debt level: marks must accumulate in
+  // place as a machine wears and disappear when it is repaired. Re-seeding per
+  // debt bucket made the scratches jump around instead of deepening.
+  const seed = hashWeatherSeed(module.id, state.rooms[module.originTile], module.originTile);
 
   ctx.save();
-  ctx.strokeStyle = debt >= 65
-    ? `rgba(255, 102, 82, ${0.42 + t * 0.34})`
-    : `rgba(196, 142, 78, ${0.28 + t * 0.32})`;
-  ctx.lineWidth = Math.max(1, Math.round(PX * (0.8 + t)));
+  ctx.strokeStyle = failing
+    ? `rgba(255, 102, 82, ${0.46 + t * 0.32})`
+    : `rgba(196, 142, 78, ${0.34 + t * 0.34})`;
+  ctx.lineWidth = Math.max(1, Math.round(PX * (0.9 + t)));
   ctx.lineCap = 'round';
-  const marks = debt >= 65 ? 6 : debt >= 35 ? 4 : 2;
+  // Marks are added, never replaced, so each tier keeps the previous tier's
+  // scratches and layers more on top.
+  const marks = failing ? 7 : strained ? 5 : 3;
   for (let i = 0; i < marks; i++) {
     const hx = ((seed >>> ((i * 3) % 21)) & 31) / 31;
     const hy = ((seed >>> ((i * 5 + 7) % 21)) & 31) / 31;
@@ -1940,12 +1968,25 @@ function drawModuleConditionDecal(
     const sy = y + h * (0.16 + hy * 0.66);
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + w * (0.06 + t * 0.06), sy + h * (i % 2 === 0 ? 0.08 : -0.07));
+    ctx.lineTo(sx + w * (0.06 + t * 0.07), sy + h * (i % 2 === 0 ? 0.08 : -0.07));
     ctx.stroke();
   }
-  if (debt >= 35) {
-    ctx.fillStyle = debt >= 65 ? 'rgba(126, 30, 28, 0.32)' : 'rgba(100, 68, 35, 0.24)';
-    ctx.fillRect(x + w * 0.08, y + h * 0.77, w * Math.min(0.76, 0.22 + t * 0.54), Math.max(2, h * 0.07));
+  if (strained) {
+    // Grime/scorch pooling at the base. Widens with debt, so a strained module
+    // keeps deepening rather than snapping between two looks.
+    ctx.fillStyle = failing ? 'rgba(126, 30, 28, 0.34)' : 'rgba(100, 68, 35, 0.26)';
+    ctx.fillRect(x + w * 0.08, y + h * 0.77, w * Math.min(0.78, 0.24 + t * 0.56), Math.max(2, h * 0.07));
+  }
+  if (failing) {
+    // A failing module has to be distinguishable from a merely worn one at a
+    // glance and while zoomed out, where individual scratches stop resolving.
+    // The inset fault frame survives that zoom-out; the scratches do not.
+    const inset = Math.max(1, Math.round(PX * 1.2));
+    ctx.strokeStyle = `rgba(255, 118, 96, ${0.5 + t * 0.3})`;
+    ctx.lineWidth = Math.max(1, Math.round(PX * 1.1));
+    ctx.setLineDash([Math.max(2, Math.round(PX * 2.4)), Math.max(2, Math.round(PX * 2))]);
+    ctx.strokeRect(x + inset, y + inset, w - inset * 2, h - inset * 2);
+    ctx.setLineDash([]);
   }
   ctx.restore();
 }
@@ -6606,15 +6647,66 @@ export function renderWorld(
   for (const job of state.jobs) {
     if (job.type !== 'sanitize') continue;
     if (job.state === 'done' || job.state === 'expired') continue;
-    if (!tileInRange(job.fromTile, state, visibleTiles)) continue;
-    const tx = job.fromTile % state.width;
-    const ty = Math.floor(job.fromTile / state.width);
+    const inProgress = job.state === 'in_progress';
+    // A working cleaner scrubs the patch one tile at a time, so the badge rides
+    // the tile actually being scrubbed. A pending job has no cleaner yet and
+    // stays on its anchor.
+    const badgeTile = inProgress ? job.sanitationWipeTile ?? job.fromTile : job.fromTile;
+    // Each finished tile gets a short sparkle burst where it was cleared, so the
+    // player sees the clean area grow square by square rather than noticing a
+    // block of grime is quietly gone.
+    const clearAge =
+      job.sanitationClearedTile !== undefined && job.sanitationClearedAt !== undefined
+        ? state.now - job.sanitationClearedAt
+        : Number.POSITIVE_INFINITY;
+    if (
+      clearAge >= 0 &&
+      clearAge < SANITATION_CLEARED_SPARKLE_SEC &&
+      job.sanitationClearedTile !== undefined &&
+      tileInRange(job.sanitationClearedTile, state, visibleTiles)
+    ) {
+      const fade = 1 - clearAge / SANITATION_CLEARED_SPARKLE_SEC;
+      const sx = (job.sanitationClearedTile % state.width + 0.5) * TILE_SIZE;
+      const sy = (Math.floor(job.sanitationClearedTile / state.width) + 0.5) * TILE_SIZE;
+      const reach = TILE_SIZE * (0.16 + 0.24 * (1 - fade));
+      ctx.save();
+      ctx.strokeStyle = `rgba(214, 255, 240, ${0.85 * fade})`;
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05 * fade);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let spoke = 0; spoke < 4; spoke++) {
+        const angle = (Math.PI / 2) * spoke + Math.PI / 4;
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+        ctx.moveTo(sx + dx * reach * 0.35, sy + dy * reach * 0.35);
+        ctx.lineTo(sx + dx * reach, sy + dy * reach);
+      }
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(sx, sy, reach * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (!tileInRange(badgeTile, state, visibleTiles)) continue;
+    const tx = badgeTile % state.width;
+    const ty = Math.floor(badgeTile / state.width);
     const cx = (tx + 0.5) * TILE_SIZE;
     const cy = (ty + 0.5) * TILE_SIZE + TILE_SIZE * 0.2;
     const r = TILE_SIZE * 0.2;
-    const inProgress = job.state === 'in_progress';
     const pulse = inProgress ? 0.62 + 0.38 * Math.sin(state.now * 5.5) : 1;
     ctx.save();
+    if (inProgress) {
+      // Scrubbing arc under the badge: a short back-and-forth wipe stroke on the
+      // tile being worked, so a standing cleaner still reads as doing something.
+      const sweep = Math.sin(state.now * 6.2) * TILE_SIZE * 0.22;
+      ctx.strokeStyle = `rgba(203, 255, 236, ${0.34 + 0.26 * pulse})`;
+      ctx.lineWidth = Math.max(1.2, TILE_SIZE * 0.07);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - TILE_SIZE * 0.26 + sweep, cy - TILE_SIZE * 0.34);
+      ctx.lineTo(cx + TILE_SIZE * 0.1 + sweep, cy - TILE_SIZE * 0.34);
+      ctx.stroke();
+    }
     ctx.fillStyle = 'rgba(6, 18, 20, 0.82)';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);

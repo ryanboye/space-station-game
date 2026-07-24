@@ -77,6 +77,7 @@ import {
   getDockByTile,
   getPodDockFuelSupplyView,
   getSanitationTileDiagnostic,
+  getRoomSanitationSummary,
   isModuleUnlocked,
   isCrewHoldingProtectedPost,
   isPortAutoAdmitUnlocked,
@@ -1774,7 +1775,11 @@ function diagnosticReadoutText(): string {
     const diagnostic = getSanitationTileDiagnostic(state, p.x, p.y);
     if (!diagnostic) return `${globalLine}\n${departmentLine}\n${diagnosticHoverPrefix()}: no sanitation sample here.`;
     const effect = diagnostic.effectSummary === 'none' ? 'no active penalty' : diagnostic.effectSummary;
-    return `${globalLine}\n${departmentLine}\n${diagnosticHoverPrefix()}: ${diagnostic.severity} ${diagnostic.dirt.toFixed(0)}%, source ${diagnostic.dominantSource}; ${effect}.`;
+    // `driftSeverity` is the authored 5-step entropy language (none/low/warning/
+    // active/severe) that classifies how far this tile has drifted from kept.
+    // It was computed on every sample and read by nothing; this is where the
+    // player finally sees it.
+    return `${globalLine}\n${departmentLine}\n${diagnosticHoverPrefix()}: ${diagnostic.severity} ${diagnostic.dirt.toFixed(0)}%, drift ${diagnostic.driftSeverity}, source ${diagnostic.dominantSource}; ${effect}.`;
   }
   if (overlay === 'map-conditions') {
     const globalLine = `Map seed: ${state.seedAtCreation} | conditions v${state.mapConditionVersion}`;
@@ -5107,6 +5112,22 @@ function refreshSelectionSummary(): void {
     const clusterMeta = state.derived.clusterByTile.get(selectedRoomTile);
     const cluster = clusterMeta?.cluster ?? [selectedRoomTile];
     const clusterSet = new Set(cluster);
+    // How dirty this room is and who is on it — appended to whatever the
+    // room-specific summary says below, so "Cafeteria - filthy, 2 cleaners
+    // assigned" is readable without opening the sanitation overlay. Silent
+    // while the floors are clean; a room with nothing wrong should not spend
+    // a line saying so.
+    const sanitationSummary = getRoomSanitationSummary(state, selectedRoomTile);
+    const sanitationSuffix =
+      !sanitationSummary || sanitationSummary.severity === 'clean'
+        ? ''
+        : ` | ${sanitationSummary.severity} floors, ${
+            sanitationSummary.assignedCleaners > 0
+              ? `${sanitationSummary.assignedCleaners} cleaner${sanitationSummary.assignedCleaners === 1 ? '' : 's'} assigned`
+              : sanitationSummary.openJobs > 0
+                ? 'cleanup queued, nobody assigned'
+                : 'no cleaner assigned'
+          }`;
     if (room === undefined || room === RoomType.None || !diagnostic) {
       selectionSummaryEl.textContent = 'Selected room is no longer available.';
     } else if (room === RoomType.Cafeteria) {
@@ -5180,6 +5201,7 @@ function refreshSelectionSummary(): void {
         selectionSummaryEl.textContent = `${room}: ${diagnostic.active ? 'active' : 'inactive'} | ${assignedCrew} assigned crew | pressure ${pressurePct.toFixed(0)}%`;
       }
     }
+    if (sanitationSuffix && selectionSummaryEl.textContent) selectionSummaryEl.textContent += sanitationSuffix;
     return;
   }
   selectionSummaryEl.textContent = 'No room, dock, or resident selected.';
