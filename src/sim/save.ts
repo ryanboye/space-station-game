@@ -68,6 +68,23 @@ import {
   createInitialSpecialtyProgress,
   totalStaffCount
 } from './content/command';
+import {
+  DEFAULT_ECONOMY_RECENT_LIMIT,
+  createEconomyLedger,
+  normalizeEconomyLedger,
+  type EconomyLedger,
+  type MarketPricingPolicy
+} from './opening-economy';
+import { createCapitalProjectsState, hydrateCapitalProjectsState } from './capital-projects';
+import {
+  validatePodFreightOperation,
+  type CourierHandling,
+  type PodFreightDirection,
+  type PodFreightOperation,
+  type PodFreightStatus,
+  type PodFreightStockKind,
+  type SupplierDelivery
+} from './pod-freight';
 
 const SAVE_SCHEMA_VERSION = 3 as const;
 const ITEM_TYPES: ItemType[] = [
@@ -114,6 +131,20 @@ const PORT_PROMISE_KINDS: PortPromiseKind[] = [
   'condition'
 ];
 const PORT_CONTRACT_STATUSES: PortContractStatus[] = ['accepted', 'active', 'boarding', 'settled', 'departed'];
+const MARKET_PRICING_POLICIES: MarketPricingPolicy[] = ['budget', 'standard', 'premium'];
+const POD_FREIGHT_STOCK_KINDS: PodFreightStockKind[] = ['travel-supplies', 'prepared-meals', 'fuel', 'raw-materials'];
+const POD_FREIGHT_STATUSES: PodFreightStatus[] = [
+  'ordered',
+  'arrived',
+  'unloading',
+  'blocked',
+  'complete',
+  'partial',
+  'cancelled',
+  'expired'
+];
+const POD_FREIGHT_DIRECTIONS: PodFreightDirection[] = ['inbound', 'outbound', 'transfer'];
+const MAX_POD_FREIGHT_OPERATIONS = 64;
 const SPECIALTY_IDS = SPECIALTY_DEFINITIONS.map((def) => def.id);
 // Derived from UNLOCK_DEFINITIONS so adding a 7th tier doesn't require
 // hand-editing two parallel tables. UNLOCK_DEFINITIONS is tier-ordered
@@ -300,6 +331,8 @@ export interface StationSnapshotV1 {
       ignitionRiskSince?: number;
     }>;
   };
+  /** Optional for legacy v3 saves; hydration supplies a neutral default. */
+  openingEconomy?: StationState['openingEconomy'];
   portOps: PortOpsState;
   activePortShips: ArrivingShip[];
   // Optional on the wire — legacy saves and un-chartered starts predate this
@@ -359,6 +392,125 @@ function normalizeSite(raw: unknown): SiteCharter | undefined {
     debrisFactor: clamp01(asFiniteNumber(raw.debrisFactor, 0)),
     resourceType,
     laneTrafficFactor
+  };
+}
+
+function normalizePodFreightOperation(raw: unknown): PodFreightOperation | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.trim().length === 0) return null;
+  const id = raw.id.trim().slice(0, 80);
+  const status = isOneOf(raw.status, POD_FREIGHT_STATUSES) ? raw.status : 'ordered';
+  const stockKind = isOneOf(raw.stockKind, POD_FREIGHT_STOCK_KINDS) ? raw.stockKind : null;
+  if (!stockKind) return null;
+  const dockId = typeof raw.dockId === 'number' && Number.isFinite(raw.dockId)
+    ? Math.max(1, Math.floor(raw.dockId))
+    : null;
+  const nullableTime = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : null;
+  const positiveUnits = (value: unknown): number => Math.max(0, asFiniteNumber(value, 0));
+
+  if (raw.kind === 'supplier-delivery') {
+    const orderedUnits = positiveUnits(raw.orderedUnits);
+    if (orderedUnits <= 0) return null;
+    const arrivedUnits = clamp(positiveUnits(raw.arrivedUnits), 0, orderedUnits);
+    const unloadedUnits = clamp(positiveUnits(raw.unloadedUnits), 0, arrivedUnits);
+    const normalizedStatus = status === 'complete' && unloadedUnits < orderedUnits
+      ? (unloadedUnits > 0 ? 'unloading' : arrivedUnits > 0 ? 'arrived' : 'ordered')
+      : status;
+    const operation: SupplierDelivery = {
+      id,
+      kind: 'supplier-delivery',
+      status: normalizedStatus,
+      stockKind,
+      orderedUnits,
+      arrivedUnits,
+      unloadedUnits,
+      landedUnitCost: Math.max(0, asFiniteNumber(raw.landedUnitCost, 0)),
+      orderedAt: Math.max(0, asFiniteNumber(raw.orderedAt, 0)),
+      arrivedAt: nullableTime(raw.arrivedAt),
+      completedAt: nullableTime(raw.completedAt),
+      blockedReason: typeof raw.blockedReason === 'string' ? raw.blockedReason.slice(0, 160) : null,
+      dockId,
+      purchaseRecorded: raw.purchaseRecorded === true
+    };
+    return validatePodFreightOperation(operation) === null ? operation : null;
+  }
+
+  if (raw.kind !== 'courier-handling') return null;
+  const direction = isOneOf(raw.direction, POD_FREIGHT_DIRECTIONS) ? raw.direction : null;
+  const consignedUnits = positiveUnits(raw.consignedUnits);
+  if (!direction || consignedUnits <= 0) return null;
+  const completedUnits = clamp(positiveUnits(raw.completedUnits), 0, consignedUnits);
+  const settledUnits = clamp(positiveUnits(raw.settledUnits), 0, completedUnits);
+  const normalizedStatus = status === 'complete' && completedUnits < consignedUnits
+    ? (completedUnits > 0 ? 'partial' : 'arrived')
+    : status;
+  const operation: CourierHandling = {
+    id,
+    kind: 'courier-handling',
+    status: normalizedStatus,
+    stockKind,
+    direction,
+    consignedUnits,
+    completedUnits,
+    settledUnits,
+    handlingFeePerUnit: Math.max(0, asFiniteNumber(raw.handlingFeePerUnit, 0)),
+    arrivedAt: Math.max(0, asFiniteNumber(raw.arrivedAt, 0)),
+    completedAt: nullableTime(raw.completedAt),
+    blockedReason: typeof raw.blockedReason === 'string' ? raw.blockedReason.slice(0, 160) : null,
+    dockId
+  };
+  return validatePodFreightOperation(operation) === null ? operation : null;
+}
+
+function normalizeOpeningEconomyState(raw: unknown, warnings: string[]): NonNullable<StationState['openingEconomy']> {
+  const fallback = {
+    ledger: createEconomyLedger(),
+    marketPricingPolicy: 'standard' as MarketPricingPolicy,
+    podFreightOperations: [] as PodFreightOperation[],
+    capitalProjects: createCapitalProjectsState()
+  };
+  if (!isRecord(raw)) return fallback;
+
+  const ledgerRecord = isRecord(raw.ledger) ? raw.ledger : undefined;
+  const rawRecent = Array.isArray(ledgerRecord?.recent) ? ledgerRecord.recent : undefined;
+  const ledgerRaw = ledgerRecord
+    ? {
+        ...ledgerRecord,
+        recent: rawRecent?.slice(-DEFAULT_ECONOMY_RECENT_LIMIT)
+      } as Partial<EconomyLedger>
+    : undefined;
+  const ledger = normalizeEconomyLedger(ledgerRaw);
+  if (rawRecent && rawRecent.length > DEFAULT_ECONOMY_RECENT_LIMIT) {
+    warnings.push(`openingEconomy.ledger.recent exceeded ${DEFAULT_ECONOMY_RECENT_LIMIT}; trimmed.`);
+  }
+  const marketPricingPolicy = isOneOf(raw.marketPricingPolicy, MARKET_PRICING_POLICIES)
+    ? raw.marketPricingPolicy
+    : 'standard';
+  const podFreightOperations: PodFreightOperation[] = [];
+  const seenOperationIds = new Set<string>();
+  let invalidOperationCount = 0;
+  if (Array.isArray(raw.podFreightOperations)) {
+    for (const entry of raw.podFreightOperations.slice(0, MAX_POD_FREIGHT_OPERATIONS)) {
+      const operation = normalizePodFreightOperation(entry);
+      if (!operation || seenOperationIds.has(operation.id)) {
+        invalidOperationCount++;
+        continue;
+      }
+      seenOperationIds.add(operation.id);
+      podFreightOperations.push(operation);
+    }
+    if (raw.podFreightOperations.length > MAX_POD_FREIGHT_OPERATIONS) {
+      warnings.push(`openingEconomy.podFreightOperations exceeded ${MAX_POD_FREIGHT_OPERATIONS}; trimmed.`);
+    }
+  }
+  if (invalidOperationCount > 0) {
+    warnings.push(`openingEconomy.podFreightOperations skipped ${invalidOperationCount} invalid or duplicate operation(s).`);
+  }
+  return {
+    ledger,
+    marketPricingPolicy,
+    podFreightOperations,
+    capitalProjects: hydrateCapitalProjectsState(raw.capitalProjects)
   };
 }
 
@@ -717,6 +869,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           ignitionRiskSince: entry.ignitionRiskSince
         }))
     },
+    openingEconomy: normalizeOpeningEconomyState(state.openingEconomy, []),
     portOps: {
       ...state.portOps,
       contracts: state.portOps.contracts.map((contract) => ({
@@ -1680,6 +1833,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       })
     : [];
   const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
+  const openingEconomy = normalizeOpeningEconomyState(snapshotRaw.openingEconomy, warnings);
 
   return {
     simTime,
@@ -1751,6 +1905,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     maintenance: {
       debts: maintenanceDebts
     },
+    openingEconomy,
     portOps,
     activePortShips,
     site: normalizeSite(snapshotRaw.site)
@@ -2154,6 +2309,7 @@ export function hydrateStateFromSave(
   next.metrics.waterStock = Math.max(0, snapshot.resources.waterStock);
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
+  next.openingEconomy = normalizeOpeningEconomyState(snapshot.openingEconomy, warnings);
   next.crew.roleCounts = snapshot.crew.roleCounts
     ? ({ ...createEmptyStaffRoleCounts(), ...snapshot.crew.roleCounts } as StaffRoleCounts)
     : next.crew.roleCounts;

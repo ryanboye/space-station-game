@@ -1,3 +1,7 @@
+import type { CapitalProjectsState } from './capital-projects';
+import type { EconomyLedger, MarketPricingPolicy } from './opening-economy';
+import type { PodFreightOperation } from './pod-freight';
+
 export const GRID_WIDTH = 100;
 export const GRID_HEIGHT = 80;
 export const TILE_SIZE = 32;
@@ -2466,6 +2470,18 @@ export interface Controls {
   emergencyRecallUntil: number;
 }
 
+/**
+ * Persistent opening-economy data. The pure domain modules own the detailed
+ * value contracts; this envelope gives simulation, save, UI, and rendering a
+ * single shared home without coupling those layers to one another.
+ */
+export interface OpeningEconomyState {
+  ledger: EconomyLedger;
+  marketPricingPolicy: MarketPricingPolicy;
+  podFreightOperations: PodFreightOperation[];
+  capitalProjects: CapitalProjectsState;
+}
+
 export interface StationState {
   width: number;
   height: number;
@@ -2504,6 +2520,10 @@ export interface StationState {
   dockQueue: DockQueueEntry[];
   trafficOffers: TrafficOffer[];
   portOps: PortOpsState;
+  // Optional only while fresh-state construction is being migrated. Save
+  // hydration always supplies this field; consumers should retain a neutral
+  // fallback until initial-state owns its authored default.
+  openingEconomy?: OpeningEconomyState;
   pressurized: boolean[];
   // Per-tile air quality 0..100. Computed each tick from life-support coverage
   // distance + active source count. Local exposure checks (crew, visitor,
