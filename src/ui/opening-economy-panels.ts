@@ -4,18 +4,15 @@
 
 export type MarketPricingPolicy = 'budget' | 'standard' | 'premium';
 
-export type EconomyEventKind =
-  | 'dock-fee'
-  | 'passenger-service'
-  | 'fuel-sale'
-  | 'repair-service'
-  | 'retail-sale'
-  | 'supplier-purchase'
-  | 'courier-fee'
-  | 'wages'
-  | 'maintenance'
-  | 'construction'
-  | 'grant-award';
+/**
+ * Structural mirror of the simulation's economy-event categories.
+ *
+ * Presentation deliberately owns no simulation state, so this stays a plain
+ * string alias rather than importing the sim's union: the sim can add a
+ * category without a UI edit, and neither module can drift into disagreement
+ * about which categories exist.
+ */
+export type EconomyEventKind = string;
 
 export interface OpeningEconomyEvent {
   id: number;

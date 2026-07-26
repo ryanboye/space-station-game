@@ -634,6 +634,21 @@ export const SERVICE_CAPACITY = {
   bedResidentsPerModule: MODULE_DEFINITIONS[ModuleType.Bed].residentCapacity ?? 2
 } as const;
 
+/**
+ * How a berth call settles (opening ticket 09).
+ *
+ * A turnaround used to pay its access and handling components in full even
+ * when most of its promised services were missed, so a station could compound
+ * capital while its hospitality was failing. These constants put that payout
+ * at risk in proportion to the promises the station actually kept.
+ */
+export const PORT_SETTLEMENT = {
+  /** Share of the settled payout forfeited by a completely unserved call. */
+  shortfallPenaltyShare: 0.85,
+  /** A ruined call can cost money, but never more than this share of its value. */
+  maxNetLossShare: 0.25
+} as const;
+
 export const PROCESS_RATES = {
   hydroRawMealPerSecPerGrowStation: 1.25,
   kitchenMealPerSecPerStove: 0.95,

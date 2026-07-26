@@ -9,6 +9,13 @@
 
 import type { SiteCharter, SpaceLane } from './types';
 
+/**
+ * Every categorized credit movement (shared contract C6).
+ *
+ * The list is append-only: `grant-award` is retained so saves written before
+ * project money was split into advance and award still load, but nothing
+ * emits it any more.
+ */
 export const ECONOMY_EVENT_KINDS = [
   'dock-fee',
   'passenger-service',
@@ -20,7 +27,23 @@ export const ECONOMY_EVENT_KINDS = [
   'wages',
   'maintenance',
   'construction',
-  'grant-award'
+  'grant-award',
+  // Capital in and out.
+  'capital-resale',
+  'station-expansion',
+  'hiring',
+  'research',
+  // Contract money, kept separate from traffic revenue so a project advance
+  // cannot look like the station earning its way (opening ticket 09).
+  'project-advance',
+  'project-award',
+  'contract-settlement',
+  'contract-procurement',
+  // Tenant income and the cost of failing a promise.
+  'tenant-income',
+  'penalty',
+  'security-recovery',
+  'resident-tax'
 ] as const;
 
 export type EconomyEventKind = typeof ECONOMY_EVENT_KINDS[number];
@@ -319,5 +342,55 @@ export function deriveOpeningEconomyProfile(site?: SiteCharter): OpeningEconomyP
     repairDemandMultiplier: bounded((0.8 + (1 - trafficNormalized) * 0.28 + debris * 0.25) * resourceEffects.repair, 0.76, 1.38),
     solarYieldMultiplier: bounded(0.55 + sun * 0.9, 0.55, 1.45),
     environmentPressureMultiplier: bounded(0.75 + debris * 0.62 + sun * 0.18, 0.72, 1.48)
+  };
+}
+
+
+/**
+ * How a berth call's payout is split between work delivered and work promised
+ * but not delivered (opening ticket 09).
+ *
+ * Pure and exported so the settlement path, the report UI, and the focused
+ * checks all agree on the arithmetic instead of restating it.
+ */
+export interface SettlementPromiseInput {
+  target: number;
+  completed: number;
+  payoutCredits: number;
+}
+
+export interface SettlementPayout {
+  /** What the call is worth when every promise is kept. */
+  grossCredits: number;
+  /** Share of promised work the station did not deliver, 0..1. */
+  shortfallRatio: number;
+  shortfallPenaltyCredits: number;
+  /** What the station is actually paid. May be negative for a ruined call. */
+  netCredits: number;
+}
+
+export function computeSettlementPayout(
+  promises: readonly SettlementPromiseInput[],
+  standingMultiplier: number,
+  options: { shortfallPenaltyShare: number; maxNetLossShare: number }
+): SettlementPayout {
+  const componentValue = promises.reduce((sum, promise) => {
+    const ratio = promise.target <= 0 ? 1 : bounded(promise.completed / promise.target, 0, 1);
+    return sum + Math.round(Math.max(0, promise.payoutCredits) * ratio);
+  }, 0);
+  const grossCredits = Math.round(componentValue * standingMultiplier);
+  const promisedTotal = promises.reduce((sum, promise) => sum + Math.max(0, promise.target), 0);
+  const completedTotal = promises.reduce(
+    (sum, promise) => sum + bounded(promise.completed, 0, Math.max(0, promise.target)),
+    0
+  );
+  const shortfallRatio = promisedTotal <= 0 ? 0 : bounded(1 - completedTotal / promisedTotal, 0, 1);
+  const shortfallPenaltyCredits = Math.round(grossCredits * shortfallRatio * options.shortfallPenaltyShare);
+  const floor = -Math.round(grossCredits * options.maxNetLossShare);
+  return {
+    grossCredits,
+    shortfallRatio,
+    shortfallPenaltyCredits,
+    netCredits: Math.max(floor, grossCredits - shortfallPenaltyCredits)
   };
 }

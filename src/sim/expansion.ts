@@ -5,6 +5,7 @@
 // Public surface is re-exported from sim.ts so consumers (main.ts,
 // save.ts, scenarios.ts, sim-tests.ts) keep working unchanged.
 
+import { recordEconomyEvent } from './opening-economy';
 import {
   EXPANSION_COST_TIERS,
   EXPANSION_STEP_TILES,
@@ -103,6 +104,13 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     }
   }
 
+  recordEconomyEvent(state.openingEconomy.ledger, {
+    at: state.now,
+    kind: 'station-expansion',
+    credits: -cost,
+    costBasis: cost,
+    label: `Station expansion · ${direction}`
+  });
   state.metrics.credits -= cost;
   state.width = newWidth;
   state.height = newHeight;

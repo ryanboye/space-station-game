@@ -7,8 +7,10 @@
  */
 
 import {
+  acceptOpeningCapitalProject,
   buyPreparedMealsDetailed,
   createInitialState,
+  getOpeningCapitalProjects,
   getPreparedMealInventory,
   previewPreparedMealPurchase,
   removeModuleAtTile,
@@ -16,6 +18,8 @@ import {
   tick,
   tryPlaceModule
 } from '../src/sim';
+import { PORT_SETTLEMENT } from '../src/sim/balance';
+import { computeSettlementPayout } from '../src/sim/opening-economy';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   appendServiceCompletion,
@@ -382,6 +386,99 @@ check('two serving stations cannot serve the same meal twice', () => {
   const drained = Math.max(0, node.items.meal ?? 0);
   node.items.meal = 0;
   assertEqual(Math.round(locatedMealTotal(state)), Math.round(total - drained), 'station total after draining one counter');
+});
+
+// --- TRUTH-04: economy and settlement reconciliation -----------------------
+
+console.log('');
+console.log('TRUTH-04 economy and settlement reconciliation');
+
+function ledgerNet(state: StationState): number {
+  return Object.values(state.openingEconomy.ledger.lifetime).reduce((sum, entry) => sum + entry.net, 0);
+}
+
+check('the ledger reconciles current credits over a live run', () => {
+  const state = freshState();
+  const openingCredits = state.metrics.credits;
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 900; step += 1) tick(state, 1);
+  const reconciled = openingCredits + ledgerNet(state);
+  const drift = Math.abs(reconciled - state.metrics.credits);
+  assert(
+    drift < 1,
+    `ledger does not reconcile: opening ${openingCredits} + ledger ${ledgerNet(state).toFixed(2)} = ${reconciled.toFixed(2)}, credits ${state.metrics.credits.toFixed(2)}`
+  );
+});
+
+check('every credit movement in a live run lands in a category', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 900; step += 1) tick(state, 1);
+  const categories = Object.entries(state.openingEconomy.ledger.lifetime)
+    .filter(([, entry]) => entry.count > 0)
+    .map(([kind]) => kind);
+  assert(categories.length >= 2, `expected several economy categories, saw ${categories.join(', ')}`);
+  assert(!categories.includes('grant-award'), 'grant-award is retired; project money must be advance or award');
+});
+
+check('project money never counts as traffic revenue', () => {
+  const state = freshState();
+  tick(state, 0);
+  const before = state.metrics.creditsEarnedLifetime;
+  const beforeCredits = state.metrics.credits;
+  const projects = getOpeningCapitalProjects(state);
+  const available = projects.find((project) => project.state === 'available');
+  assert(available, 'no capital project is available to accept');
+  const accepted = acceptOpeningCapitalProject(state, available.id as never);
+  assert(accepted, 'capital project could not be accepted');
+  assert(state.metrics.credits > beforeCredits, 'accepting the project paid no advance');
+  assertEqual(
+    state.metrics.creditsEarnedLifetime,
+    before,
+    'lifetime traffic revenue moved on a project advance'
+  );
+  assert(
+    state.openingEconomy.ledger.lifetime['project-advance'].count > 0,
+    'the advance was not categorized as project money'
+  );
+});
+
+check('a badly served call earns far less than a well served one', () => {
+  // Opening ticket 09's worst observed turnaround: 24 passengers, 2 of 17
+  // meals, most drink/lounge/restroom promises missed, yet it paid 343c.
+  const promises = [
+    { kind: 'dock', target: 1, completed: 1, payoutCredits: 120 },
+    { kind: 'passengers-served', target: 17, completed: 2, payoutCredits: 0 },
+    { kind: 'drinks-served', target: 13, completed: 6, payoutCredits: 52 },
+    { kind: 'leisure-served', target: 13, completed: 6, payoutCredits: 52 },
+    { kind: 'restroom-served', target: 11, completed: 4, payoutCredits: 33 },
+    { kind: 'hygiene-served', target: 2, completed: 0, payoutCredits: 8 },
+    { kind: 'passengers-returned', target: 24, completed: 22, payoutCredits: 80 }
+  ];
+  const bad = computeSettlementPayout(promises, 1, PORT_SETTLEMENT);
+  const good = computeSettlementPayout(
+    promises.map((promise) => ({ ...promise, completed: promise.target })),
+    1,
+    PORT_SETTLEMENT
+  );
+  assert(good.netCredits > bad.netCredits * 2, `a failing call should not approach a clean one (bad ${bad.netCredits}, good ${good.netCredits})`);
+  assertEqual(good.shortfallPenaltyCredits, 0, 'a fully served call carries no deduction');
+  assert(bad.shortfallPenaltyCredits > 0, 'a failing call carries no deduction');
+  console.log(`       observed: failing call ${bad.netCredits}c, clean call ${good.netCredits}c`);
+});
+
+check('a completely unserved call cannot be quietly profitable', () => {
+  const promises = [
+    { kind: 'dock', target: 1, completed: 1, payoutCredits: 120 },
+    { kind: 'passengers-served', target: 20, completed: 0, payoutCredits: 0 },
+    { kind: 'passengers-returned', target: 20, completed: 0, payoutCredits: 80 }
+  ];
+  const result = computeSettlementPayout(promises, 1, PORT_SETTLEMENT);
+  assert(result.netCredits <= 20, `an unserved call still paid ${result.netCredits}c`);
+  // ...but it must not be able to bankrupt the station in one call either.
+  assert(result.netCredits >= -Math.round(result.grossCredits * PORT_SETTLEMENT.maxNetLossShare), 'loss exceeded its floor');
 });
 
 console.log('');

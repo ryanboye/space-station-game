@@ -2,6 +2,7 @@ import { findPath as findPathCore } from './path';
 import {
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
+  PORT_SETTLEMENT,
   PROCESS_RATES,
   ROOM_ENVIRONMENT_TRAITS,
   ROOM_DEFINITIONS,
@@ -40,6 +41,7 @@ import {
   deriveOpeningEconomyProfile,
   marketPolicyEffect,
   recordEconomyEvent,
+  computeSettlementPayout,
   summarizeEconomyEvents,
   type EconomyEventInput,
   type MarketPricingPolicy
@@ -359,13 +361,16 @@ export function acceptOpeningCapitalProject(state: StationState, projectId: Capi
   if (!mutation.activated) return false;
   state.openingEconomy.capitalProjects = mutation.state;
   if (mutation.creditsAwarded > 0) {
+    // Opening ticket 09: an advance is borrowed setup capital, not the
+    // station earning its way, so it must not feed creditsEarnedLifetime —
+    // the counter that drives the traffic-revenue goal and the tier trigger.
     applyEconomyTransaction(state, {
       at: state.now,
-      kind: 'grant-award',
+      kind: 'project-advance',
       credits: mutation.creditsAwarded,
       costBasis: 0,
       label: `${capitalProjectDefinitions().find((definition) => definition.id === projectId)?.title ?? 'Project'} advance`
-    });
+    }, { countAsEarned: false });
   }
   return true;
 }
@@ -379,11 +384,11 @@ function updateOpeningCapitalProjects(state: StationState): void {
     );
     applyEconomyTransaction(state, {
       at: state.now,
-      kind: 'grant-award',
+      kind: 'project-award',
       credits: mutation.creditsAwarded,
       costBasis: 0,
       label: completedNames.length === 1 ? `${completedNames[0]} completed` : 'Capital projects completed'
-    });
+    }, { countAsEarned: false });
   }
   if (mutation.ratingAwarded > 0) state.usageTotals.ratingDelta += mutation.ratingAwarded;
 }
@@ -11175,7 +11180,14 @@ function ensurePortContract(state: StationState, offer: TrafficOffer, berthAncho
       locationTile: null,
       location: 'aboard'
     });
-    state.metrics.credits -= contract.procurementCostCredits;
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'contract-procurement',
+      credits: -contract.procurementCostCredits,
+      costBasis: contract.procurementCostCredits,
+      label: `${contract.callsign} · fuel purchased aboard`,
+      sourceId: contract.id
+    }, { countAsEarned: false });
   }
   return contract;
 }
@@ -11277,14 +11289,23 @@ function settlePortContract(state: StationState, ship: ArrivingShip): void {
   if (state.portOps.cargoArmFaultContractIds.includes(contract.id)) {
     notes.push('Cargo arm fault interrupted handling');
   }
-  const componentValue = contract.promises.reduce((sum, promise) => {
-    const ratio = promise.target <= 0 ? 1 : clamp(promise.completed / promise.target, 0, 1);
-    return sum + Math.round(promise.payoutCredits * ratio);
-  }, 0);
   const standingMultiplier = berthServicePayoutMultiplier(
     berthServiceScoreForAnchor(state, contract.assignedBerthAnchor)
   );
-  const payoutCredits = Math.round(componentValue * standingMultiplier);
+  // Opening ticket 09: access and handling used to pay in full regardless of
+  // service, so a 2/17-meal call could still clear hundreds of credits. The
+  // payout is now weighted by the share of promised work the station actually
+  // completed, and the shortfall is a visible, categorized deduction.
+  const payout = computeSettlementPayout(contract.promises, standingMultiplier, PORT_SETTLEMENT);
+  const grossPayout = payout.grossCredits;
+  const shortfallPenaltyCredits = payout.shortfallPenaltyCredits;
+  const payoutCredits = payout.netCredits;
+  const shortfallRatio = payout.shortfallRatio;
+  if (shortfallPenaltyCredits > 0) {
+    notes.push(
+      `Missed-service deduction ${shortfallPenaltyCredits}c · ${Math.round(shortfallRatio * 100)}% of promised work unserved`
+    );
+  }
   const settlement = {
     id: state.portOps.nextSettlementId++,
     contractId: contract.id,
@@ -11293,6 +11314,7 @@ function settlePortContract(state: StationState, ship: ArrivingShip): void {
     settledAt: state.now,
     promises: contract.promises.map((promise) => ({ ...promise })),
     payoutCredits,
+    shortfallPenaltyCredits,
     passengerSpendingCredits: Math.round(contract.passengerSpendingCredits),
     procurementCostCredits: Math.round(contract.procurementCostCredits),
     notes: notes.length > 0 ? notes : ['All promises fulfilled']
@@ -11326,8 +11348,27 @@ function settlePortContract(state: StationState, ship: ArrivingShip): void {
       lot.location = 'delivered';
     }
   }
-  state.metrics.credits += payoutCredits;
-  state.metrics.creditsEarnedLifetime += payoutCredits;
+  // Both halves are ledgered so the operating report explains the number the
+  // player sees: what the call was worth, and what the shortfall cost.
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'contract-settlement',
+    credits: grossPayout,
+    costBasis: 0,
+    label: `${contract.callsign} · turnaround settled`,
+    sourceId: contract.id
+  });
+  const appliedPenalty = grossPayout - payoutCredits;
+  if (appliedPenalty > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'penalty',
+      credits: -appliedPenalty,
+      costBasis: 0,
+      label: `${contract.callsign} · missed promised services`,
+      sourceId: contract.id
+    }, { countAsEarned: false });
+  }
   state.portOps.selectedSettlementId = settlement.id;
   contract.settlementId = settlement.id;
   contract.status = 'settled';
@@ -19005,9 +19046,15 @@ function updateVisitorLogic(
       if (state.modules[visitor.tileIndex] === ModuleType.VendingMachine) {
         const vendSpend = dt * 0.15 * clamp(visitor.spendMultiplier, 0.7, 1.6); // Crowd-loop v1: passive drip trimmed
         const stationSpend = recordCommercialSaleAtTile(state, visitor.tileIndex, vendSpend);
-        state.metrics.credits += stationSpend;
+        applyEconomyTransaction(state, {
+          at: state.now,
+          kind: 'retail-sale',
+          credits: stationSpend,
+          costBasis: 0,
+          label: 'Vending sale',
+          tileIndex: visitor.tileIndex
+        });
         recordVisitorPortSpending(state, visitor, vendSpend);
-        state.metrics.creditsEarnedLifetime += stationSpend;
         state.usageTotals.creditsMarketGross += vendSpend;
       }
       if (state.rooms[visitor.tileIndex] === RoomType.Clinic) {
@@ -19994,7 +20041,13 @@ function resolveIncident(
     clearIncidentSubject(state, incident, incident.outcome);
     if (incident.type === 'theft' && (incident.outcome === 'recovered' || incident.outcome === 'detained' || incident.outcome === 'ejected')) {
       const recovered = clamp((incident.value ?? 0) * 0.12, 0, 18);
-      state.metrics.credits += recovered;
+      applyEconomyTransaction(state, {
+        at: state.now,
+        kind: 'security-recovery',
+        credits: recovered,
+        costBasis: 0,
+        label: 'Recovered stolen goods'
+      }, { countAsEarned: false });
       state.usageTotals.creditsMarketGross += recovered;
     }
   }
@@ -20862,8 +20915,13 @@ function applyResidentTaxes(state: StationState): void {
   const multiplier = clamp(avgSatisfaction / 72, 0.45, 1.35);
   const collected = taxableResidents * RESIDENT_TAX_PER_HEAD * multiplier;
   if (collected <= 0) return;
-  state.metrics.credits += collected;
-  state.metrics.creditsEarnedLifetime += collected;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'resident-tax',
+    credits: collected,
+    costBasis: 0,
+    label: `Resident dues · ${taxableResidents} household${taxableResidents === 1 ? '' : 's'}`
+  });
   state.usageTotals.residentTaxesCollected += collected;
 }
 
@@ -22731,7 +22789,15 @@ export function buyMaterialsDetailed(
     : added < addedTarget
       ? Math.max(1, Math.ceil(scaledCost * (added / Math.max(1, addedTarget))))
       : scaledCost;
-  state.metrics.credits -= actualCost;
+  if (actualCost > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'supplier-purchase',
+      credits: -actualCost,
+      costBasis: actualCost,
+      label: `Raw materials · ${Math.round(added)} units`
+    }, { countAsEarned: false });
+  }
   refreshMaterialMetric(state);
   return {
     ok: true,
@@ -22908,7 +22974,13 @@ export function orderFoodSupply(
       message: admitted.reason
     };
   }
-  state.metrics.credits -= creditCost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'supplier-purchase',
+    credits: -creditCost,
+    costBasis: creditCost,
+    label: `Raw food order · ${amount} units`
+  }, { countAsEarned: false });
   state.metrics.foodSupplyOrdersPlaced += 1;
   state.metrics.foodSupplyUnitsOrdered += amount;
   state.portOps.offerSequenceIndex += 1;
@@ -23213,7 +23285,13 @@ export function hireStaffRole(state: StationState, role: StaffRole): boolean {
   const check = canHireStaffRole(state, role);
   if (!check.ok) return false;
   const def = STAFF_ROLE_DEFINITIONS[role];
-  state.metrics.credits -= def.cost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'hiring',
+    credits: -def.cost,
+    costBasis: def.cost,
+    label: `Hired ${role}`
+  }, { countAsEarned: false });
   state.crew.roleCounts[role] += 1;
   if (def.officer) state.command.officers[role] = true;
   state.crew.total = totalStaffCount(state.crew.roleCounts);
@@ -23240,7 +23318,13 @@ export function selectSpecialty(state: StationState, specialtyId: SpecialtyId): 
   const progress = state.command.specialtyProgress[specialtyId];
   if (progress.state === 'completed') return false;
   if (state.metrics.credits < def.researchCost) return false;
-  state.metrics.credits -= def.researchCost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'research',
+    credits: -def.researchCost,
+    costBasis: def.researchCost,
+    label: `${def.label} research`
+  }, { countAsEarned: false });
   progress.state = 'active';
   progress.selectedAt = state.now;
   state.command.selectedSpecialty = specialtyId;
@@ -23341,7 +23425,13 @@ export function updateCommandProgress(state: StationState, dt: number): void {
 export function hireCrew(state: StationState, creditCost = HIRE_COST): boolean {
   if (state.metrics.credits < creditCost) return false;
   if (state.crew.total >= 40) return false;
-  state.metrics.credits -= creditCost;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'hiring',
+    credits: -creditCost,
+    costBasis: creditCost,
+    label: 'Hired general crew'
+  }, { countAsEarned: false });
   ensureCommandState(state);
   state.crew.roleCounts.assistant += 1;
   state.crew.total = totalStaffCount(state.crew.roleCounts);
@@ -23356,7 +23446,13 @@ export function fireCrew(state: StationState, creditRefund = 0): boolean {
   state.crew.roleCounts[role] -= 1;
   state.crew.total = totalStaffCount(state.crew.roleCounts);
   if (creditRefund > 0) {
-    state.metrics.credits += creditRefund;
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'hiring',
+      credits: creditRefund,
+      costBasis: 0,
+      label: 'Severance settlement'
+    }, { countAsEarned: false });
   }
   return true;
 }
@@ -23384,8 +23480,13 @@ export function sellMaterials(state: StationState, materialsCost: number, credit
   const removed = takeItemAcrossTargets(state, sources, 'rawMaterial', materialsCost);
   if (removed < materialsCost) return false;
   state.metrics.materials = Math.max(0, state.metrics.materials - removed);
-  state.metrics.credits += creditGain;
-  state.metrics.creditsEarnedLifetime += creditGain;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'retail-sale',
+    credits: creditGain,
+    costBasis: 0,
+    label: `Sold raw materials · ${Math.round(removed)} units`
+  });
   return true;
 }
 
@@ -23404,8 +23505,13 @@ export function sellRawFood(state: StationState, rawFoodCost: number, creditGain
   const removed = takeItemAcrossTargets(state, sources, 'rawMeal', rawFoodCost);
   if (removed < rawFoodCost) return false;
   state.metrics.rawFoodStock = clamp(state.metrics.rawFoodStock - removed, 0, 260);
-  state.metrics.credits += creditGain;
-  state.metrics.creditsEarnedLifetime += creditGain;
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'retail-sale',
+    credits: creditGain,
+    costBasis: 0,
+    label: `Sold raw food · ${Math.round(removed)} units`
+  });
   return true;
 }
 

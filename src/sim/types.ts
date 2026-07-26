@@ -1612,6 +1612,8 @@ export interface PortSettlement {
   settledAt: number;
   promises: PortPromiseComponent[];
   payoutCredits: number;
+  /** Credits deducted for promised services the station did not deliver. */
+  shortfallPenaltyCredits?: number;
   passengerSpendingCredits: number;
   procurementCostCredits: number;
   notes: string[];
