@@ -2416,6 +2416,91 @@ export function collectServiceNodeReachability(
   return result;
 }
 
+export interface CrewFacilityReachability {
+  facility: 'quarters' | 'hygiene' | 'meals';
+  label: string;
+  crewTotal: number;
+  crewWithAccess: number;
+  /** No such facility exists anywhere on the station. */
+  missing: boolean;
+  /** The facility exists but some crew are walled off from every instance. */
+  blocked: boolean;
+}
+
+/**
+ * Can each crew member physically walk to the things they need (shared
+ * contract C3/C8)?
+ *
+ * The existing service-node reachability check measures routes from dock
+ * entries, so it could not see a station whose *crew* were sealed away from
+ * their own quarters — which is exactly how the authored starter shipped as
+ * two disconnected halves, with eight crew slowly collapsing beside a hygiene
+ * room they could reach and bunks they could not. This walks the walkable
+ * network once and reports the answer per facility so an alert can name the
+ * real bottleneck instead of leaving the player to guess.
+ */
+export function getCrewFacilityReachability(state: StationState): CrewFacilityReachability[] {
+  const region = new Int32Array(state.tiles.length).fill(-1);
+  let nextRegion = 0;
+  const queue: number[] = [];
+  for (let start = 0; start < state.tiles.length; start += 1) {
+    if (region[start] >= 0 || !isWalkable(state.tiles[start])) continue;
+    const id = nextRegion++;
+    region[start] = id;
+    queue.push(start);
+    while (queue.length > 0) {
+      const tile = queue.pop() as number;
+      const { x, y } = fromIndex(tile, state.width);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as Array<[number, number]>) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+        const next = ny * state.width + nx;
+        if (region[next] >= 0 || !isWalkable(state.tiles[next])) continue;
+        region[next] = id;
+        queue.push(next);
+      }
+    }
+  }
+
+  const crewRegions = state.crewMembers.map((crew) => region[crew.tileIndex] ?? -1);
+  const crewTotal = crewRegions.length;
+  const summarize = (
+    facility: CrewFacilityReachability['facility'],
+    label: string,
+    tiles: number[]
+  ): CrewFacilityReachability => {
+    const facilityRegions = new Set(tiles.map((tile) => region[tile]).filter((id) => id >= 0));
+    const crewWithAccess = crewRegions.filter((id) => id >= 0 && facilityRegions.has(id)).length;
+    return {
+      facility,
+      label,
+      crewTotal,
+      crewWithAccess,
+      missing: tiles.length === 0,
+      blocked: tiles.length > 0 && crewTotal > 0 && crewWithAccess < crewTotal
+    };
+  };
+
+  const sleepTiles = state.moduleInstances
+    .filter((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)
+    .flatMap((module) => module.tiles);
+  const hygieneTiles = state.moduleInstances
+    .filter((module) =>
+      module.type === ModuleType.Toilet || module.type === ModuleType.Shower || module.type === ModuleType.Sink
+    )
+    .flatMap((module) => module.tiles);
+  const mealTiles = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation)
+    .flatMap((module) => module.tiles);
+
+  return [
+    summarize('quarters', 'crew quarters', sleepTiles),
+    summarize('hygiene', 'hygiene fixtures', hygieneTiles),
+    summarize('meals', 'serving counters', mealTiles)
+  ];
+}
+
 function collectIdleWalkTiles(state: StationState): number[] {
   const out: number[] = [];
   for (let i = 0; i < state.tiles.length; i++) {
@@ -22337,11 +22422,24 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   if (room !== RoomType.Dorm && room !== RoomType.Hygiene) return null;
   const policy = state.roomHousingPolicies[tileIndex];
   const tiles = collectRooms(state, room).filter((tile) => state.roomHousingPolicies[tile] === policy);
+  // Opening ticket 11: this counted Bed modules only, so the starter Crew
+  // Quarters — four Bunks rendering eight sleep slots — inspected as
+  // `beds 0/0` while the shortage alert correctly said 8/10. Artwork and
+  // simulation capacity must agree (shared contract C3), so count every
+  // sleeping fixture and report the slots they actually provide.
   const bedModules =
     room === RoomType.Dorm
-      ? state.moduleInstances.filter((m) => m.type === ModuleType.Bed && tiles.includes(m.originTile))
+      ? state.moduleInstances.filter(
+          (m) => (m.type === ModuleType.Bed || m.type === ModuleType.Bunk) && tiles.includes(m.originTile)
+        )
       : [];
+  const slotsFor = (module: (typeof bedModules)[number]): number =>
+    Math.max(1, MODULE_DEFINITIONS[module.type].residentCapacity ?? 1);
+  const bedsTotal = bedModules.reduce((sum, module) => sum + slotsFor(module), 0);
   const assignedBeds = assignedHousingBedIds(state);
+  const bedsAssigned = bedModules
+    .filter((m) => assignedBeds.has(m.id))
+    .reduce((sum, module) => sum + slotsFor(module), 0);
   const hygieneTargets = privateHygieneTargets(state);
   const validPrivateHousing =
     room === RoomType.Dorm &&
@@ -22351,8 +22449,9 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   return {
     room,
     policy,
-    bedsTotal: bedModules.length,
-    bedsAssigned: bedModules.filter((m) => assignedBeds.has(m.id)).length,
+    bedsTotal,
+    bedsAssigned,
+    bedModuleCount: bedModules.length,
     hygieneTargets: hygieneTargets.length,
     validPrivateHousing
   };

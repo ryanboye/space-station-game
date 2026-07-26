@@ -2227,8 +2227,11 @@ export interface RoomInspector {
 export interface HousingInspector {
   room: RoomType;
   policy: HousingPolicy;
+  /** Sleep *slots*, not fixture count: a Bunk sleeps two, a Bed sleeps one. */
   bedsTotal: number;
   bedsAssigned: number;
+  /** Sleeping fixtures behind those slots, so the copy can name both. */
+  bedModuleCount: number;
   hygieneTargets: number;
   validPrivateHousing: boolean;
 }

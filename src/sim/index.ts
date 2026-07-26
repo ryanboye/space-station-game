@@ -34,6 +34,8 @@ export {
   getCommercialUnitAt,
   getEligibleBerthsForOffer,
   getCrewInspectorById,
+  getCrewFacilityReachability,
+  type CrewFacilityReachability,
   getCrewSustainabilitySummary,
   getCrewWatchStatus,
   getOperatingSchedule,

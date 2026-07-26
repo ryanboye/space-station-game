@@ -49,6 +49,7 @@ import {
   getCommercialUnitAt,
   getEligibleBerthsForOffer,
   getCrewInspectorById,
+  getCrewFacilityReachability,
   getCrewSustainabilitySummary,
   getCrewWatchStatus,
   getOperatingSchedule,
@@ -4425,7 +4426,17 @@ function cafeteriaStaffingSnapshot(): {
 
 function refreshAlertPanel(): void {
   if (state.controls.manualTrafficAdmission) {
-    const portAlerts: Array<{ tone: 'danger' | 'warn'; text: string; tile: number | null; incidentId?: number }> = [];
+    // `diagnosis` is what the alert says once you click it: what is wrong,
+    // why, and what the player can change (opening ticket 02). Alerts that
+    // focus a person rather than a room rely on it, because a crew tile has
+    // no room inspector to fall back to.
+    const portAlerts: Array<{
+      tone: 'danger' | 'warn';
+      text: string;
+      tile: number | null;
+      incidentId?: number;
+      diagnosis?: string;
+    }> = [];
     const crewSustainability = getCrewSustainabilitySummary(state);
     if (crewSustainability.resignationNotices > 0) {
       portAlerts.push({
@@ -4468,10 +4479,49 @@ function refreshAlertPanel(): void {
       state.metrics.idleCrewByReason.idle_waiting_fixture >= Math.max(4, Math.ceil(state.crew.total * 0.2))
     ) {
       const fixtureWait = state.metrics.idleCrewByReason.idle_waiting_fixture;
+      // Focus the facility the player can act on, not a wandering crew member.
+      // Selecting a crew tile used to set the room selection to a roomless
+      // tile, which reported "Selected room is no longer available".
+      const hygieneTile = state.rooms.findIndex((room) => room === RoomType.Hygiene);
+      const quartersTile = state.rooms.findIndex((room) => room === RoomType.Dorm);
+      const focusTile = fixtureWait > 0 && hygieneTile >= 0
+        ? hygieneTile
+        : quartersTile >= 0
+          ? quartersTile
+          : hygieneTile >= 0
+            ? hygieneTile
+            : null;
+      const sleepSlots = crewSustainability.sleepSlots;
       portAlerts.push({
         tone: 'warn',
         text: `Crew needs building: ${crewSustainability.strainedCrew} strained · ${crewSustainability.occupiedSleepSlots} sleeping${fixtureWait > 0 ? ` · ${fixtureWait} waiting for fixtures` : ''}`,
-        tile: state.crewMembers.find((crew) => Math.min(crew.energy, crew.hunger, crew.hygiene, crew.bladder, crew.thirst) < 50)?.tileIndex ?? null
+        tile: focusTile,
+        diagnosis:
+          `${crewSustainability.strainedCrew} of ${state.crew.total} crew are running low on a need. ` +
+          `Sleep slots ${sleepSlots}/${state.crew.total}` +
+          (fixtureWait > 0 ? `, ${fixtureWait} waiting on a hygiene fixture` : '') +
+          `. Add toilets, showers or bunks in the highlighted room, or expand it first if the ghost says the footprint is blocked.`
+      });
+    }
+    // A walled-off wing is a silent killer: crew simply never arrive, and
+    // every downstream need reads as a mysterious shortage. Name it directly.
+    for (const facility of getCrewFacilityReachability(state)) {
+      if (!facility.blocked && !facility.missing) continue;
+      const focus = facility.facility === 'quarters'
+        ? state.rooms.findIndex((room) => room === RoomType.Dorm)
+        : facility.facility === 'hygiene'
+          ? state.rooms.findIndex((room) => room === RoomType.Hygiene)
+          : state.moduleInstances.find((module) => module.type === ModuleType.ServingStation)?.originTile ?? -1;
+      portAlerts.push({
+        tone: 'danger',
+        text: facility.missing
+          ? `No ${facility.label} on the station`
+          : `${facility.crewTotal - facility.crewWithAccess} crew cannot reach ${facility.label}`,
+        tile: focus >= 0 ? focus : null,
+        diagnosis: facility.missing
+          ? `The station has no ${facility.label}. Crew needs that depend on them can never be met — build one.`
+          : `${facility.crewTotal - facility.crewWithAccess} of ${facility.crewTotal} crew are on a part of the station with no walkable route to any ${facility.label}. ` +
+            `Check for a missing door or a room wall that closed the only corridor, then add a door to reconnect the two halves.`
       });
     }
     const cargoArmTile = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm)?.originTile ?? null;
@@ -4616,7 +4666,9 @@ function refreshAlertPanel(): void {
         ? `<button class="alert-item ${alert.tone}" data-incident-select="${alert.incidentId}">${escapeHtml(alert.text)}</button>`
         : alert.tile === null
           ? `<div class="alert-item ${alert.tone}">${escapeHtml(alert.text)}</div>`
-          : `<button class="alert-item ${alert.tone}" data-port-focus="${alert.tile}">${escapeHtml(alert.text)}</button>`
+          : `<button class="alert-item ${alert.tone}" data-port-focus="${alert.tile}"${
+              alert.diagnosis ? ` data-port-diagnosis="${escapeHtml(alert.diagnosis)}"` : ''
+            } title="${escapeHtml(alert.diagnosis ?? alert.text)}" aria-label="${escapeHtml(alert.diagnosis ?? alert.text)}">${escapeHtml(alert.text)}</button>`
     ).join('');
     return;
   }
@@ -5095,7 +5147,19 @@ function refreshAgentSidePanel(): boolean {
   return true;
 }
 
+/** Diagnosis carried over from the last alert click, cleared by any other selection. */
+let alertDiagnosisText: string | null = null;
+
+/** Any selection the player makes themselves replaces the alert's explanation. */
+function clearAlertDiagnosis(): void {
+  alertDiagnosisText = null;
+}
+
 function refreshSelectionSummary(): void {
+  if (selectedRoomTile === null && alertDiagnosisText !== null) {
+    selectionSummaryEl.textContent = alertDiagnosisText;
+    return;
+  }
   const incident = selectedIncident();
   if (incident) {
     selectionSummaryEl.textContent =
@@ -7878,8 +7942,12 @@ function refreshRoomModal(): void {
     roomModalHousingSelect.style.display = 'block';
     const housing = getHousingInspectorAt(state, selectedRoomTile!);
     if (housing) {
+      // Opening ticket 11: report slots against demand and name the fixtures
+      // behind them, so the inspector matches both the artwork and the alert.
       roomModalHousingEl.textContent =
-        `Housing: beds ${housing.bedsAssigned}/${housing.bedsTotal} | hygiene targets ${housing.hygieneTargets} | ` +
+        `Housing: ${housing.bedsAssigned}/${housing.bedsTotal} sleep slots assigned ` +
+        `across ${housing.bedModuleCount} fixture${housing.bedModuleCount === 1 ? '' : 's'} | ` +
+        `hygiene targets ${housing.hygieneTargets} | ` +
         `${housing.validPrivateHousing ? 'valid private loop' : 'private loop incomplete'}`;
       roomModalHousingEl.style.color = housing.validPrivateHousing ? '#6edb8f' : '#ffcf6e';
     } else {
@@ -8729,6 +8797,7 @@ canvas.addEventListener('mouseup', (e) => {
       if (world) {
         const agent = pickInspectableAgent(world.x, world.y, clickedTile);
         if (agent) {
+          clearAlertDiagnosis();
           selectedAgent = agent;
           selectedDockId = null;
           selectedRoomTile = null;
@@ -8748,6 +8817,7 @@ canvas.addEventListener('mouseup', (e) => {
     }
 
     if (canOpenInspectors && singleClick && clickedTile !== null) {
+      clearAlertDiagnosis();
       const dock = getDockByTile(state, clickedTile);
       if (dock) {
         selectedDockId = dock.id;
@@ -9169,7 +9239,12 @@ alertListEl.addEventListener('click', (event) => {
   const tile = fromIndex(tileIndex, state.width);
   centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
   hoveredTile = tileIndex;
-  selectedRoomTile = tileIndex;
+  // Opening ticket 02: an alert must land on one deterministic destination.
+  // Selecting a tile with no room produced "Selected room is no longer
+  // available", which is both wrong and unrelated to what the player clicked.
+  const hasRoom = state.rooms[tileIndex] !== RoomType.None;
+  selectedRoomTile = hasRoom ? tileIndex : null;
+  alertDiagnosisText = button.dataset.portDiagnosis ?? null;
   refreshSelectionSummary();
 });
 

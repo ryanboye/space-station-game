@@ -23,6 +23,7 @@ import {
   type StationState
 } from '../sim/types';
 import { MODULE_DEFINITIONS } from '../sim/balance';
+import { previewModulePlacement } from '../sim/construction';
 import {
   collectActiveRoomTiles,
   airQualityAt,
@@ -3812,63 +3813,36 @@ function readServiceOverlay(state: StationState): ServiceOverlayCache {
   return serviceOverlayCache;
 }
 
-function previewFootprint(module: ModuleType, rotation: 0 | 90): { width: number; height: number } {
-  const def = MODULE_DEFINITIONS[module] ?? MODULE_DEFINITIONS[ModuleType.None];
-  if (rotation === 90 && def.rotatable) return { width: def.height, height: def.width };
-  return { width: def.width, height: def.height };
-}
-
-function previewTiles(
+/**
+ * One short line beside the placement cursor: the price when the spot works,
+ * the specific blocker when it does not. Kept to a single row so it reads as
+ * cursor feedback rather than a panel.
+ */
+function drawPlacementReason(
+  ctx: CanvasRenderingContext2D,
   state: StationState,
-  originTile: number,
-  width: number,
-  height: number
-): number[] | null {
-  const { x, y } = fromIndex(originTile, state.width);
-  const out: number[] = [];
-  for (let dy = 0; dy < height; dy++) {
-    for (let dx = 0; dx < width; dx++) {
-      const tx = x + dx;
-      const ty = y + dy;
-      if (!inBounds(tx, ty, state.width, state.height)) return null;
-      out.push(ty * state.width + tx);
-    }
-  }
-  return out;
-}
-
-function validateModulePreviewPlacement(
-  state: StationState,
-  moduleType: ModuleType,
-  originTile: number,
-  rotation: 0 | 90
-): { valid: boolean; tiles: number[] } {
-  if (moduleType === ModuleType.None) return { valid: true, tiles: [originTile] };
-  const def = MODULE_DEFINITIONS[moduleType];
-  if (!def) return { valid: false, tiles: [originTile] };
-  const footprint = previewFootprint(moduleType, rotation);
-  const tiles = previewTiles(state, originTile, footprint.width, footprint.height);
-  if (!tiles) return { valid: false, tiles: [originTile] };
-  const requiresWallMount = def.mount === 'wall';
-  const serviceTile = requiresWallMount ? wallMountedModuleServiceTile(state, originTile) : originTile;
-  if (requiresWallMount && serviceTile === null) return { valid: false, tiles };
-  const roomAtOrigin = state.rooms[serviceTile ?? originTile];
-  for (const tile of tiles) {
-    if (requiresWallMount) {
-      if (state.tiles[tile] !== TileType.Wall) return { valid: false, tiles };
-    } else if (!isWalkable(state.tiles[tile])) {
-      return { valid: false, tiles };
-    }
-    if (state.moduleOccupancyByTile[tile] !== null) return { valid: false, tiles };
-    const roomForTile = requiresWallMount ? roomAtOrigin : state.rooms[tile];
-    if (def.allowedRooms && !def.allowedRooms.includes(roomForTile)) return { valid: false, tiles };
-    if (!requiresWallMount && def.allowedRooms && state.rooms[tile] !== roomAtOrigin) return { valid: false, tiles };
-  }
-  if (validateBerthModulePlacement(state, moduleType, tiles)) return { valid: false, tiles };
-  if (requiresWallMount && !resolveWallLightFacing(state, originTile)) {
-    return { valid: false, tiles };
-  }
-  return { valid: true, tiles };
+  hoveredTile: number,
+  text: string,
+  valid: boolean
+): void {
+  if (!text) return;
+  const p = fromIndex(hoveredTile, state.width);
+  const fontPx = Math.max(9, Math.round(11 * PX));
+  ctx.font = `${fontPx}px Consolas, Menlo, monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const padding = Math.round(4 * PX);
+  const width = ctx.measureText(text).width + padding * 2;
+  const height = Math.round(15 * PX);
+  const x = p.x * TILE_SIZE;
+  const y = p.y * TILE_SIZE - height - Math.round(3 * PX);
+  ctx.fillStyle = valid ? 'rgba(12, 32, 22, 0.88)' : 'rgba(44, 14, 14, 0.9)';
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = valid ? 'rgba(110,219,143,0.9)' : 'rgba(255,118,118,0.95)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+  ctx.fillStyle = valid ? '#8fe6b0' : '#ffb0b0';
+  ctx.fillText(text, x + padding, y + height - Math.round(4 * PX));
 }
 
 function agentOffset(id: number): { x: number; y: number } {
@@ -6085,7 +6059,10 @@ export function renderWorld(
   }
 
   if (currentTool.kind === 'module' && hoveredTile !== null && currentTool.module) {
-    const preview = validateModulePreviewPlacement(
+    // Opening ticket 11: the ghost's verdict comes from the same validator the
+    // build path runs, and an invalid one names its reason beside the cursor
+    // instead of just turning red.
+    const preview = previewModulePlacement(
       state,
       currentTool.module,
       hoveredTile,
@@ -6099,6 +6076,7 @@ export function renderWorld(
       ctx.strokeStyle = preview.valid ? 'rgba(110,219,143,0.95)' : 'rgba(255,118,118,0.95)';
       ctx.strokeRect(p.x * TILE_SIZE + 1.5, p.y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
     }
+    drawPlacementReason(ctx, state, hoveredTile, preview.valid ? `${preview.cost}c` : preview.reason, preview.valid);
   }
 
   if (currentTool.kind === 'move-module') {

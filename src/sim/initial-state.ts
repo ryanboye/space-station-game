@@ -180,7 +180,14 @@ export function createInitialState(options?: {
   // A compact maintenance room sits directly beneath the fuel Pod Dock. The
   // tank is deliberately local: its underfloor fuel line reaches the hull
   // coupler without crossing the public concourse or the cargo store.
-  paintEnclosedRoom(RoomType.Maintenance, coreX - 2, coreY - 2, coreX + 1, coreY, coreX, coreY + 1);
+  // The south door is the station's only link between the public deck and the
+  // freight/service gallery, so it has to open onto the gallery corridor. It
+  // sat one tile east at coreX, where the Logistics Stock room's north-west
+  // corner wall is, so it opened into solid hull: the authored starter shipped
+  // as two disconnected halves. Crew spawned in the gallery side with the
+  // hygiene, intake and storage rooms and could never reach their bunks or the
+  // cafeteria, which is the crew-needs collapse in opening ticket 01.
+  paintEnclosedRoom(RoomType.Maintenance, coreX - 2, coreY - 2, coreX + 1, coreY, coreX - 1, coreY + 1);
   const fuelPodDockServiceDoor = toIndex(coreX - 2, coreY - 3, GRID_WIDTH);
   tiles[fuelPodDockServiceDoor] = TileType.Door;
   rooms[fuelPodDockServiceDoor] = RoomType.Maintenance;

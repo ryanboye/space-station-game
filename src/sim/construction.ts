@@ -44,7 +44,7 @@ import {
 import { MODULE_DEFINITIONS } from './balance';
 // setTile, setRoom, setZone live in sim.ts and are NOT exported there yet.
 // applyConstructionSite uses them at the end of the file. Import from sim.
-import { findPath, setRoom, setTile, setZone } from './sim';
+import { findPath, moduleCreditBuildCost, setRoom, setTile, setZone } from './sim';
 
 export const CONSTRUCTION_CARRY_AMOUNT = 8;
 export const CONSTRUCTION_BUILD_RATE_PER_SEC = 6;
@@ -323,6 +323,71 @@ export function validateModulePlacementForConstruction(
   const portModuleReason = validatePortModulePlacement(state, module, originTile, ignoreModuleId);
   if (portModuleReason) return { ok: false, reason: portModuleReason };
   return { ok: true };
+}
+
+/**
+ * What the placement ghost should say (opening ticket 11).
+ *
+ * The renderer used to re-derive validity with its own copy of the rules,
+ * which could not see progression locks, port rules or price, so an invalid
+ * ghost went red with no explanation. This returns the authoritative verdict
+ * plus a short player-facing reason, from the same validator the build path
+ * runs, so the two can never disagree.
+ */
+export interface ModulePlacementPreview {
+  valid: boolean;
+  tiles: number[];
+  /** Short sentence to render beside the cursor. Empty when placement is fine. */
+  reason: string;
+  cost: number;
+  affordable: boolean;
+}
+
+const PLACEMENT_REASON_COPY: Record<string, string> = {
+  'module locked by progression': 'Locked — not yet available',
+  'unknown module': 'Unknown module',
+  'out of bounds': 'Outside the station grid',
+  'wall fixture requires adjacent floor': 'Wall fixture needs floor in front',
+  'wall fixture requires wall tile': 'Wall fixture needs a wall tile',
+  'footprint blocked': 'Footprint blocked — not walkable floor',
+  'module overlap': 'Another module is already here',
+  'construction overlap': 'A construction site is already here',
+  'invalid room for module': 'Wrong room type for this module',
+  'footprint crosses room boundary': 'Footprint crosses a room boundary'
+};
+
+export function previewModulePlacement(
+  state: StationState,
+  module: ModuleType,
+  originTile: number,
+  rotation: ModuleRotation
+): ModulePlacementPreview {
+  const def = MODULE_DEFINITIONS[module];
+  const appliedRotation: ModuleRotation = rotation === 90 && def?.rotatable ? 90 : 0;
+  const footprint = def ? moduleFootprint(module, appliedRotation) : { width: 1, height: 1 };
+  const tiles = footprintTiles(state, originTile, footprint.width, footprint.height);
+  const cost = def ? moduleCreditBuildCost(module, appliedRotation) : 0;
+  const affordable = state.metrics.credits >= cost;
+  const verdict = validateModulePlacementForConstruction(state, module, originTile, rotation);
+  if (!verdict.ok) {
+    return {
+      valid: false,
+      tiles: tiles.length > 0 ? tiles : [originTile],
+      reason: PLACEMENT_REASON_COPY[verdict.reason] ?? verdict.reason,
+      cost,
+      affordable
+    };
+  }
+  if (!affordable) {
+    return {
+      valid: false,
+      tiles,
+      reason: `Needs ${cost}c — you have ${Math.floor(state.metrics.credits)}c`,
+      cost,
+      affordable
+    };
+  }
+  return { valid: true, tiles, reason: '', cost, affordable };
 }
 
 function constructionMaterialSources(state: StationState): Array<{ tile: number; available: number; legacy: boolean }> {

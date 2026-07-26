@@ -10,6 +10,9 @@ import {
   acceptOpeningCapitalProject,
   buyPreparedMealsDetailed,
   createInitialState,
+  getCrewFacilityReachability,
+  getCrewSustainabilitySummary,
+  getHousingInspectorAt,
   getOpeningCapitalProjects,
   getPreparedMealInventory,
   previewPreparedMealPurchase,
@@ -19,6 +22,7 @@ import {
   tryPlaceModule
 } from '../src/sim';
 import { PORT_SETTLEMENT } from '../src/sim/balance';
+import { previewModulePlacement } from '../src/sim/construction';
 import { computeSettlementPayout } from '../src/sim/opening-economy';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
@@ -26,7 +30,7 @@ import {
   createServiceLog,
   fixtureProvidesService
 } from '../src/sim/service-truth';
-import { ModuleType, RoomType, type StationState } from '../src/sim/types';
+import { ModuleType, RoomType, TileType, type StationState } from '../src/sim/types';
 
 const GAME_VERSION = 'truth-checks';
 
@@ -479,6 +483,109 @@ check('a completely unserved call cannot be quietly profitable', () => {
   assert(result.netCredits <= 20, `an unserved call still paid ${result.netCredits}c`);
   // ...but it must not be able to bankrupt the station in one call either.
   assert(result.netCredits >= -Math.round(result.grossCredits * PORT_SETTLEMENT.maxNetLossShare), 'loss exceeded its floor');
+});
+
+// --- TRUTH-05: capacity and diagnosis --------------------------------------
+
+console.log('');
+console.log('TRUTH-05 capacity and diagnosis');
+
+check('every crew member can walk to quarters, hygiene and meals', () => {
+  // Regression for opening ticket 01. The authored starter shipped as two
+  // disconnected halves: all eight crew spawned in the gallery wing and could
+  // never reach their bunks, so needs collapsed with idle fixtures nearby.
+  const state = freshState();
+  tick(state, 0);
+  for (const facility of getCrewFacilityReachability(state)) {
+    assert(!facility.missing, `starter station has no ${facility.label}`);
+    assert(
+      !facility.blocked,
+      `${facility.crewTotal - facility.crewWithAccess} of ${facility.crewTotal} crew cannot reach ${facility.label}`
+    );
+  }
+});
+
+check('a no-input run lets crew actually use the starter fixtures', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  // Keep the counters stocked so this measures fixture access rather than the
+  // deliberate opening supply squeeze.
+  for (let step = 0; step < 1200; step += 1) {
+    tick(state, 1);
+    if (step % 30 === 0) buyPreparedMealsDetailed(state, 0, 12);
+  }
+  assert(
+    state.metrics.crewAvgHygiene > 40,
+    `crew hygiene collapsed to ${state.metrics.crewAvgHygiene.toFixed(0)} beside reachable fixtures`
+  );
+  assertEqual(state.metrics.improvisedRestingCrew, 0, 'crew sleeping on the floor beside reachable bunks');
+});
+
+check('the crew quarters inspector reports its rendered sleep slots', () => {
+  // Opening ticket 11: four starter Bunks render eight slots, but the
+  // inspector counted Bed modules only and reported beds 0/0.
+  const state = freshState();
+  tick(state, 0);
+  const dormTile = state.rooms.findIndex((room) => room === RoomType.Dorm);
+  assert(dormTile >= 0, 'starter station has no crew quarters');
+  const housing = getHousingInspectorAt(state, dormTile);
+  assert(housing, 'crew quarters produced no housing inspector');
+  assertEqual(housing.bedsTotal, 8, 'reported sleep slots');
+  assertEqual(housing.bedModuleCount, 4, 'reported sleeping fixtures');
+  assertEqual(
+    housing.bedsTotal,
+    getCrewSustainabilitySummary(state).sleepSlots,
+    'inspector slots vs the capacity the shortage alert uses'
+  );
+});
+
+check('an invalid placement names its reason', () => {
+  const state = freshState();
+  tick(state, 0);
+  const dormTile = state.rooms.findIndex(
+    (room, index) => room === RoomType.Dorm && state.modules[index] === ModuleType.None
+  );
+  assert(dormTile >= 0, 'no empty crew-quarters tile to test against');
+  const spaceTile = state.tiles.findIndex((tile, index) => tile === TileType.Space && index > 0);
+
+  const wrongRoom = previewModulePlacement(state, ModuleType.MarketStall, dormTile, 0);
+  assert(!wrongRoom.valid, 'a market stall placed in the crew quarters was accepted');
+  assert(wrongRoom.reason.length > 0, 'invalid placement gave no reason');
+  assertEqual(wrongRoom.reason, 'Wrong room type for this module', 'wrong-room reason');
+
+  if (spaceTile >= 0) {
+    const inSpace = previewModulePlacement(state, ModuleType.Table, spaceTile, 0);
+    assert(!inSpace.valid, 'a table placed in open space was accepted');
+    assert(inSpace.reason.length > 0, 'placement in space gave no reason');
+  }
+
+  const broke = freshState();
+  tick(broke, 0);
+  broke.metrics.credits = 0;
+  const cafeteriaFloor = broke.rooms.findIndex(
+    (room, index) =>
+      room === RoomType.Cafeteria &&
+      broke.moduleOccupancyByTile[index] === null &&
+      broke.moduleOccupancyByTile[index + 1] === null &&
+      broke.rooms[index + 1] === RoomType.Cafeteria
+  );
+  if (cafeteriaFloor >= 0) {
+    const unaffordable = previewModulePlacement(broke, ModuleType.Table, cafeteriaFloor, 0);
+    assert(!unaffordable.valid, 'an unaffordable module previewed as placeable');
+    assert(unaffordable.reason.includes('Needs'), `affordability reason was "${unaffordable.reason}"`);
+  }
+});
+
+check('the placement preview agrees with what the build path would do', () => {
+  const state = freshState();
+  tick(state, 0);
+  const dormTile = state.rooms.findIndex(
+    (room, index) => room === RoomType.Dorm && state.modules[index] === ModuleType.None
+  );
+  const preview = previewModulePlacement(state, ModuleType.MarketStall, dormTile, 0);
+  const attempted = tryPlaceModule(state, ModuleType.MarketStall, dormTile, 0);
+  assertEqual(preview.valid, attempted.ok, 'preview verdict vs build verdict');
 });
 
 console.log('');
