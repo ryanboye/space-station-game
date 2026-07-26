@@ -6,7 +6,16 @@
  * packages can iterate without running the full simulation suite.
  */
 
-import { createInitialState, removeModuleAtTile, setRoom, tick, tryPlaceModule } from '../src/sim';
+import {
+  buyPreparedMealsDetailed,
+  createInitialState,
+  getPreparedMealInventory,
+  previewPreparedMealPurchase,
+  removeModuleAtTile,
+  setRoom,
+  tick,
+  tryPlaceModule
+} from '../src/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   appendServiceCompletion,
@@ -262,6 +271,117 @@ check('building the room changes the result the report can show', () => {
   for (const event of state.serviceLog.recent.filter((entry) => entry.service === 'leisure')) {
     assertEqual(event.roomType, RoomType.Lounge, 'lounge visit room type');
   }
+});
+
+// --- TRUTH-03: inventory and meal reconciliation ---------------------------
+
+console.log('');
+console.log('TRUTH-03 inventory and meal reconciliation');
+
+function servingStationTiles(state: StationState): number[] {
+  return state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation)
+    .map((module) => module.originTile);
+}
+
+/** Empties every serving counter so a purchase has somewhere to land. */
+function drainServingCounters(state: StationState): void {
+  const tiles = new Set(servingStationTiles(state));
+  for (const node of state.itemNodes) {
+    if (!tiles.has(node.tileIndex)) continue;
+    node.items.meal = 0;
+    node.items.cleanTray = 0;
+  }
+}
+
+function locatedMealTotal(state: StationState): number {
+  const tiles = new Set(servingStationTiles(state));
+  return state.itemNodes.reduce(
+    (sum, node) => sum + (tiles.has(node.tileIndex) ? Math.max(0, node.items.meal ?? 0) : 0),
+    0
+  );
+}
+
+check('the meal total is derivable from the located counter nodes', () => {
+  const state = freshState();
+  tick(state, 0);
+  drainServingCounters(state);
+  const before = locatedMealTotal(state);
+  const result = buyPreparedMealsDetailed(state, 36, 12);
+  assert(result.ok, `purchase refused: ${result.message}`);
+  tick(state, 0);
+  assertEqual(
+    Math.round(locatedMealTotal(state)),
+    Math.round(before + result.added),
+    'located counter meals after purchase'
+  );
+  // Regression: the purchase also incremented metrics.mealStock by hand while
+  // the tick derives it from the same nodes, double-counting every order. The
+  // shared accessor is what the header, tooltip and alert all read.
+  const inventory = getPreparedMealInventory(state);
+  assertEqual(
+    inventory.stationMeals,
+    Math.round(locatedMealTotal(state)),
+    'shared prepared-meal total vs located counter stock'
+  );
+  assertEqual(inventory.readyServings, inventory.stationMeals, 'servings ready with trays');
+});
+
+check('a refused purchase says why and changes nothing', () => {
+  const broke = freshState();
+  tick(broke, 0);
+  drainServingCounters(broke);
+  broke.metrics.credits = 0;
+  const denied = buyPreparedMealsDetailed(broke, 36, 12);
+  assert(!denied.ok, 'a station with no credits should not be sold meals');
+  assertEqual(denied.reason, 'insufficient_credits', 'refusal reason');
+  assert(denied.message.length > 0, 'refusal must carry a player-facing reason');
+  assertEqual(denied.added, 0, 'servings landed on a refused order');
+
+  // The preview must agree with the order it is previewing.
+  const preview = previewPreparedMealPurchase(broke, 36, 12);
+  assertEqual(preview.ok, false, 'preview verdict');
+  assertEqual(preview.reason, denied.reason, 'preview reason matches order reason');
+});
+
+check('a station with no serving station cannot buy prepared meals', () => {
+  const state = freshState();
+  tick(state, 0);
+  for (const tile of servingStationTiles(state)) removeModuleAtTile(state, tile);
+  tick(state, 0);
+  const result = buyPreparedMealsDetailed(state, 36, 12);
+  assert(!result.ok, 'meals delivered with nowhere to put them');
+  assertEqual(result.reason, 'no_serving_station', 'refusal reason');
+  assertEqual(result.destinationCount, 0, 'destination count');
+});
+
+check('a full counter refuses the order instead of silently doing nothing', () => {
+  const state = freshState();
+  tick(state, 0);
+  // Fill every counter, then ask for more.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (!buyPreparedMealsDetailed(state, 0, 12).ok) break;
+  }
+  const result = previewPreparedMealPurchase(state, 0, 12);
+  assert(!result.ok, 'a saturated counter still accepted an order');
+  assertEqual(result.reason, 'counter_capacity', 'refusal reason');
+});
+
+check('two serving stations cannot serve the same meal twice', () => {
+  const state = freshState();
+  tick(state, 0);
+  const tiles = servingStationTiles(state);
+  assert(tiles.length >= 1, 'starter station has no serving station');
+  drainServingCounters(state);
+  buyPreparedMealsDetailed(state, 36, 12);
+  tick(state, 0);
+  const total = locatedMealTotal(state);
+  // Draining one counter must reduce the station total by exactly what left it.
+  const node = state.itemNodes.find((entry) => tiles.includes(entry.tileIndex) && (entry.items.meal ?? 0) > 0);
+  assert(node, 'no counter holds meals after the purchase');
+  const drained = Math.max(0, node.items.meal ?? 0);
+  node.items.meal = 0;
+  assertEqual(Math.round(locatedMealTotal(state)), Math.round(total - drained), 'station total after draining one counter');
 });
 
 console.log('');

@@ -30,7 +30,8 @@ import {
   acceptOpeningCapitalProject,
   buyImportedTradeGoods,
   buyMaterialsDetailed,
-  buyPreparedMeals,
+  buyPreparedMealsDetailed,
+  previewPreparedMealPurchase,
   admitTrafficOffer,
   acceptCommercialOffer,
   buyRawFoodDetailed,
@@ -53,6 +54,8 @@ import {
   getOperatingSchedule,
   getOpeningCapitalProjects,
   getOpeningEconomySummary,
+  getPreparedMealInventory,
+  type PreparedMealInventory,
   getHousingInspectorAt,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
@@ -2653,34 +2656,10 @@ function refreshUnlockLegendAndHotkeys(): void {
  * Uses simple red/yellow/green thresholds matching the existing sidebar
  * treatments so the HUD reads the same at a glance.
  */
-function preparedMealServiceSnapshot(): {
-  readyServings: number;
-  counterMeals: number;
-  counterTrays: number;
-  counterCount: number;
-} {
-  const servingTiles = new Set(
-    state.moduleInstances
-      .filter((module) => module.type === ModuleType.ServingStation)
-      .map((module) => module.originTile)
-  );
-  let readyServings = 0;
-  let counterMeals = 0;
-  let counterTrays = 0;
-  for (const node of state.itemNodes) {
-    if (!servingTiles.has(node.tileIndex)) continue;
-    const meals = Math.max(0, node.items.meal ?? 0);
-    const trays = Math.max(0, node.items.cleanTray ?? 0);
-    counterMeals += meals;
-    counterTrays += trays;
-    readyServings += Math.min(meals, trays);
-  }
-  return {
-    readyServings: Math.floor(readyServings),
-    counterMeals: Math.floor(counterMeals),
-    counterTrays: Math.floor(counterTrays),
-    counterCount: servingTiles.size
-  };
+// One reconciled prepared-meal view for the header, its tooltip, and the meal
+// alert. Owned by the simulation so the UI cannot invent a second total.
+function preparedMealServiceSnapshot(): PreparedMealInventory {
+  return getPreparedMealInventory(state);
 }
 
 function refreshHudStatus(): void {
@@ -2761,7 +2740,8 @@ function refreshHudStatus(): void {
   hudFoodEl.parentElement!.title =
     `${preparedMeals.readyServings} servings ready at ${preparedMeals.counterCount} counter${preparedMeals.counterCount === 1 ? '' : 's'} · ` +
     `${preparedMeals.counterMeals} meals and ${preparedMeals.counterTrays} clean trays at counters · ` +
-    `${Math.floor(state.metrics.mealStock)} cooked meals station-wide. Buy 12 prepared meals with clean trays for 36 credits.`;
+    `${preparedMeals.stationMeals} cooked meals station-wide.`;
+  refreshPreparedMealPurchaseAffordance();
   hudRatingEl.textContent = String(Math.round(state.metrics.stationRating));
   hudRatingEl.style.color = ratingToneColor();
   const ratingButton = hudRatingEl.parentElement;
@@ -4545,16 +4525,23 @@ function refreshAlertPanel(): void {
     const stockedPickupSlots = state.moduleInstances.filter(
       (module) => module.type === ModuleType.ServingStation
     ).length * 2;
-    if (state.metrics.mealStock < 8) {
+    // Opening ticket 10: the alert used to quote station-wide cooked meals
+    // while the header quoted servings ready to take, so the two contradicted
+    // each other. Both now read the same located-node total, and a meal with
+    // no clean tray is called out as the tray problem it is.
+    const mealInventory = preparedMealServiceSnapshot();
+    const trayShortfall = mealInventory.counterMeals - mealInventory.readyServings;
+    const trayNote = trayShortfall > 0 ? ` · ${trayShortfall} meal${trayShortfall === 1 ? '' : 's'} waiting on clean trays` : '';
+    if (mealInventory.readyServings < 8) {
       portAlerts.push({
         tone: 'danger',
-        text: `Meal buffer empty: ${Math.floor(state.metrics.mealStock)} left · import meals or put a Cook on food production`,
+        text: `Meal buffer empty: ${mealInventory.readyServings} servings ready${trayNote} · import meals or put a Cook on food production`,
         tile: servingTile
       });
-    } else if (state.metrics.mealStock < 20) {
+    } else if (mealInventory.readyServings < 20) {
       portAlerts.push({
         tone: 'warn',
-        text: `Meals running low: ${Math.floor(state.metrics.mealStock)} left · restock before the next passenger ship`,
+        text: `Meals running low: ${mealInventory.readyServings} servings ready${trayNote} · restock before the next passenger ship`,
         tile: servingTile
       });
     }
@@ -4640,8 +4627,9 @@ function refreshAlertPanel(): void {
   } else if (state.metrics.deathsTotal > 0 && state.metrics.bodyCount > 0) {
     alerts.push({ tone: 'danger', text: `⚠ ${state.metrics.deathsTotal} dead — bodies await recovery` });
   }
-  if (state.metrics.mealStock < 8) alerts.push({ tone: 'danger', text: `Low meals: ${Math.round(state.metrics.mealStock)}` });
-  else if (state.metrics.mealStock < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${Math.round(state.metrics.mealStock)}` });
+  const readyServings = preparedMealServiceSnapshot().readyServings;
+  if (readyServings < 8) alerts.push({ tone: 'danger', text: `Low meals: ${readyServings} servings ready` });
+  else if (readyServings < 25) alerts.push({ tone: 'warn', text: `Meals running low: ${readyServings} servings ready` });
   if (state.metrics.airQuality < 35) alerts.push({ tone: 'danger', text: `Oxygen low: ${Math.round(state.metrics.airQuality)}%` });
   if (state.metrics.airBlockedWarningActive) alerts.push({ tone: 'danger', text: 'Life support blocked' });
   if (state.metrics.airNetworkUnpoweredVents > 0) {
@@ -5177,7 +5165,7 @@ function refreshSelectionSummary(): void {
         (module) => module.type === ModuleType.ServingStation && clusterSet.has(module.originTile)
       ).length;
       const positions = Math.max(1, servingStations * 2);
-      selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${Math.floor(state.metrics.mealStock)} ready | Counter staff ${activeServiceCrew}/${positions}${activeServiceCrew <= 0 ? ` (slow: ${cafeteriaStaffing.diagnosis})` : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
+      selectionSummaryEl.textContent = `Cafeteria: ${state.metrics.cafeteriaQueueingCount} waiting | ${state.metrics.mealsConsumedPerMin.toFixed(1)} meals/min | ${preparedMealServiceSnapshot().readyServings} ready | Counter staff ${activeServiceCrew}/${positions}${activeServiceCrew <= 0 ? ` (slow: ${cafeteriaStaffing.diagnosis})` : ''}${nextDeadline === undefined ? '' : ` | next ship ${nextDeadline}s`}`;
     } else if (room === RoomType.Maintenance) {
       const nodes = state.itemNodes.filter((node) => clusterSet.has(node.tileIndex) && (node.items.fuel !== undefined || state.modules[node.tileIndex] === ModuleType.FuelTank));
       const stock = nodes.reduce((sum, node) => sum + Math.max(0, node.items.fuel ?? 0), 0);
@@ -9093,16 +9081,29 @@ shipsInput.addEventListener('input', () => {
 });
 
 buyPreparedMealsBtn.addEventListener('click', () => {
-  const purchased = buyPreparedMeals(state);
-  buyPreparedMealsBtn.classList.toggle('purchase-failed', !purchased);
-  buyPreparedMealsBtn.title = purchased
-    ? 'Bought 12 prepared meals with clean trays'
-    : 'Need 36 credits, a serving station, and room for 12 meals and trays';
-  window.setTimeout(() => {
-    buyPreparedMealsBtn.classList.remove('purchase-failed');
-    buyPreparedMealsBtn.title = 'Buy 12 prepared meals for 36 credits';
-  }, 1200);
+  // Opening ticket 10: the order now reports its own outcome instead of
+  // failing silently behind an enabled button.
+  const result = buyPreparedMealsDetailed(state);
+  buyPreparedMealsBtn.classList.toggle('purchase-failed', !result.ok);
+  buyPreparedMealsBtn.title = result.message;
+  buyPreparedMealsBtn.setAttribute('aria-label', result.message);
+  window.setTimeout(refreshPreparedMealPurchaseAffordance, 1200);
 });
+
+/**
+ * Keeps the `+` button's enabled state and title honest between clicks: the
+ * player should be able to read why an order cannot be accepted without
+ * clicking it and watching nothing happen.
+ */
+function refreshPreparedMealPurchaseAffordance(): void {
+  const preview = previewPreparedMealPurchase(state);
+  buyPreparedMealsBtn.disabled = !preview.ok;
+  buyPreparedMealsBtn.classList.remove('purchase-failed');
+  buyPreparedMealsBtn.title = preview.ok
+    ? `Buy ${preview.requestedAmount} prepared meals for ${preview.creditCost}c`
+    : preview.message;
+  buyPreparedMealsBtn.setAttribute('aria-label', buyPreparedMealsBtn.title);
+}
 
 portAutoToggleEl.addEventListener('click', () => {
   const next = !state.controls.portAutoAdmitEnabled;

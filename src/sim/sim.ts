@@ -20585,6 +20585,71 @@ function activeResidentRoleCounts(state: StationState): Record<ResidentRole, num
   return counts;
 }
 
+/**
+ * Recomputes every stock headline from the located item nodes that inspectors
+ * show (shared contract C2).
+ *
+ * Split out of updateResources because that function only runs while the
+ * simulation is advancing. The game opens paused, so the HUD spent the whole
+ * first decision showing the numbers baked into the starter factory rather
+ * than the ones actually sitting on the counters — one of the ways the header,
+ * the tooltip and the alert disagreed in opening ticket 10.
+ */
+function refreshLocatedInventoryMetrics(state: StationState): void {
+  const growTargets = collectServiceTargets(state, RoomType.Hydroponics);
+  const intakeTargets = collectServiceTargets(state, RoomType.LogisticsStock);
+  const storageTargets = collectServiceTargets(state, RoomType.Storage);
+  const coldTargets = collectColdFoodTargets(state);
+  const prepTargets = collectPrepTargets(state);
+  const stoveTargets = collectServiceTargets(state, RoomType.Kitchen);
+  const servingTargets = collectServingTargets(state);
+  const trayReturnTargets = collectTrayReturnTargets(state);
+  const dishwasherTargets = collectDishwasherTargets(state);
+  const sumAt = (tiles: number[], item: ItemType): number =>
+    tiles.reduce((acc, tile) => acc + itemStockAtNode(state, tile, item), 0);
+
+  const rawMealAtGrow = sumAt(growTargets, 'rawMeal');
+  const rawMealAtIntake = sumAt(intakeTargets, 'rawMeal');
+  const rawMealAtStorage = sumAt(storageTargets, 'rawMeal');
+  const rawMealAtCold = sumAt(coldTargets, 'rawMeal');
+  const rawMealAtPrep = sumAt(prepTargets, 'rawMeal');
+  const rawMealAtStove = sumAt(stoveTargets, 'rawMeal');
+  const preppedMealAtPrep = sumAt(prepTargets, 'preppedMeal');
+  const preppedMealAtStove = sumAt(stoveTargets, 'preppedMeal');
+  const mealAtStove = sumAt(stoveTargets, 'meal');
+  const mealAtServing = sumAt(servingTargets, 'meal');
+  const cleanTrayAtServing = sumAt(servingTargets, 'cleanTray');
+  const cleanTrayAtDish = sumAt(dishwasherTargets, 'cleanTray');
+  const dirtyTrayAtReturn = sumAt(trayReturnTargets, 'dirtyTray');
+  const dirtyTrayAtDish = sumAt(dishwasherTargets, 'dirtyTray');
+  let logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
+  let storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
+  state.metrics.rawFoodStock = clamp(rawMealAtGrow + rawMealAtIntake + rawMealAtStorage + rawMealAtCold + rawMealAtPrep + rawMealAtStove, 0, 520);
+  state.metrics.kitchenRawBuffer = clamp(rawMealAtCold + rawMealAtPrep + rawMealAtStove + preppedMealAtPrep + preppedMealAtStove, 0, 520);
+  state.metrics.preppedMealStock = clamp(preppedMealAtPrep + preppedMealAtStove, 0, 260);
+  state.metrics.mealStock = clamp(mealAtStove + mealAtServing, 0, 260);
+  state.metrics.cleanTrayStock = clamp(cleanTrayAtServing + cleanTrayAtDish, 0, 260);
+  state.metrics.dirtyTrayStock = clamp(dirtyTrayAtReturn + dirtyTrayAtDish, 0, 260);
+  // Compatibility adapter for the pre-located global material pool: it drains
+  // into real nodes and is never a second source of truth once empty.
+  const inventoryTiles = materialInventoryTiles(state);
+  if (inventoryTiles.length > 0 && state.legacyMaterialStock > 0.01) {
+    const migrated = addItemAcrossTargets(
+      state,
+      inventoryTiles,
+      'rawMaterial',
+      state.legacyMaterialStock,
+      state.core.serviceTile
+    );
+    if (migrated > 0) {
+      state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - migrated);
+      logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
+      storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
+    }
+  }
+  state.metrics.materials = Math.max(0, state.legacyMaterialStock + logisticsRawMaterial + storageRawMaterial);
+}
+
 function updateResources(state: StationState, dt: number): void {
   const roleWorkers = activeResidentRoleCounts(state);
   const leakPenalty = state.metrics.leakingTiles * 0.03;
@@ -20666,44 +20731,7 @@ function updateResources(state: StationState, dt: number): void {
     }
   }
 
-  const rawMealAtGrow = growTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const rawMealAtIntake = intakeTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const rawMealAtStorage = storageTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const rawMealAtCold = coldTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const rawMealAtPrep = prepTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const rawMealAtStove = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'rawMeal'), 0);
-  const preppedMealAtPrep = prepTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'preppedMeal'), 0);
-  const preppedMealAtStove = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'preppedMeal'), 0);
-  const mealAtStove = stoveTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
-  const mealAtServing = servingTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'meal'), 0);
-  const cleanTrayAtServing = servingTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'cleanTray'), 0);
-  const cleanTrayAtDish = dishwasherTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'cleanTray'), 0);
-  const dirtyTrayAtReturn = trayReturnTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'dirtyTray'), 0);
-  const dirtyTrayAtDish = dishwasherTargets.reduce((acc, tile) => acc + itemStockAtNode(state, tile, 'dirtyTray'), 0);
-  let logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
-  let storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
-  state.metrics.rawFoodStock = clamp(rawMealAtGrow + rawMealAtIntake + rawMealAtStorage + rawMealAtCold + rawMealAtPrep + rawMealAtStove, 0, 520);
-  state.metrics.kitchenRawBuffer = clamp(rawMealAtCold + rawMealAtPrep + rawMealAtStove + preppedMealAtPrep + preppedMealAtStove, 0, 520);
-  state.metrics.preppedMealStock = clamp(preppedMealAtPrep + preppedMealAtStove, 0, 260);
-  state.metrics.mealStock = clamp(mealAtStove + mealAtServing, 0, 260);
-  state.metrics.cleanTrayStock = clamp(cleanTrayAtServing + cleanTrayAtDish, 0, 260);
-  state.metrics.dirtyTrayStock = clamp(dirtyTrayAtReturn + dirtyTrayAtDish, 0, 260);
-  const inventoryTiles = materialInventoryTiles(state);
-  if (inventoryTiles.length > 0 && state.legacyMaterialStock > 0.01) {
-    const migrated = addItemAcrossTargets(
-      state,
-      inventoryTiles,
-      'rawMaterial',
-      state.legacyMaterialStock,
-      state.core.serviceTile
-    );
-    if (migrated > 0) {
-      state.legacyMaterialStock = Math.max(0, state.legacyMaterialStock - migrated);
-      logisticsRawMaterial = sumItemStockForRoom(state, RoomType.LogisticsStock, 'rawMaterial');
-      storageRawMaterial = sumItemStockForRoom(state, RoomType.Storage, 'rawMaterial');
-    }
-  }
-  state.metrics.materials = Math.max(0, state.legacyMaterialStock + logisticsRawMaterial + storageRawMaterial);
+  refreshLocatedInventoryMetrics(state);
 
   const lifeSupportMaintenanceMultiplier = maintenanceOutputMultiplierForSystem(state, 'life-support');
   state.metrics.waterStock = clamp(
@@ -22887,26 +22915,195 @@ export function orderFoodSupply(
   return { ok: true, ordered: amount, creditCost, offerId: offer.id, berthAnchor: admitted.berthAnchor ?? berth.anchorTile };
 }
 
-export function buyPreparedMeals(state: StationState, creditCost = 36, mealGain = 12): boolean {
-  rebuildItemNodes(state);
+/** One reconciled view of prepared-meal inventory, read from located nodes. */
+export interface PreparedMealInventory {
+  /** Servings a traveller could actually take now: a meal *and* a clean tray. */
+  readyServings: number;
+  counterMeals: number;
+  counterTrays: number;
+  counterCount: number;
+  /** Free units across counters. A serving needs two. */
+  counterFreeCapacity: number;
+  /** Cooked meals anywhere they can reach a counter, including kitchen stoves. */
+  stationMeals: number;
+}
+
+/**
+ * The single prepared-meal total (shared contract C2). Header, tooltip, alert
+ * and inspector all call this so they cannot disagree, and every number in it
+ * is a sum over the same item nodes the room inspectors display.
+ */
+export function getPreparedMealInventory(state: StationState): PreparedMealInventory {
+  const counterTiles = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation)
+    .map((module) => module.originTile);
+  const counterSet = new Set(counterTiles);
+  let readyServings = 0;
+  let counterMeals = 0;
+  let counterTrays = 0;
+  for (const node of state.itemNodes) {
+    if (!counterSet.has(node.tileIndex)) continue;
+    const meals = Math.max(0, node.items.meal ?? 0);
+    const trays = Math.max(0, node.items.cleanTray ?? 0);
+    counterMeals += meals;
+    counterTrays += trays;
+    readyServings += Math.min(meals, trays);
+  }
+  const stoveMeals = collectServiceTargets(state, RoomType.Kitchen)
+    .reduce((sum, tile) => sum + itemStockAtNode(state, tile, 'meal'), 0);
+  return {
+    readyServings: Math.floor(readyServings),
+    counterMeals: Math.floor(counterMeals),
+    counterTrays: Math.floor(counterTrays),
+    counterCount: counterSet.size,
+    counterFreeCapacity: counterTiles.length === 0 ? 0 : totalItemCapacityAtTargets(state, counterTiles),
+    stationMeals: Math.floor(counterMeals + stoveMeals)
+  };
+}
+
+export type BuyPreparedMealsFailureReason =
+  | 'no_serving_station'
+  | 'insufficient_credits'
+  | 'counter_capacity';
+
+export interface BuyPreparedMealsResult {
+  ok: boolean;
+  reason?: BuyPreparedMealsFailureReason;
+  /** Servings actually landed on counters — one meal plus one clean tray. */
+  added: number;
+  requestedAmount: number;
+  creditCost: number;
+  /** Free units across serving-station nodes. A serving needs two of them. */
+  freeCapacity: number;
+  destinationCount: number;
+  /** Player-facing sentence for the HUD button title and alert copy. */
+  message: string;
+}
+
+/**
+ * Buys prepared meals onto serving counters, reporting exactly what happened.
+ *
+ * Opening ticket 10: this used to return a bare boolean, so the HUD's `Buy 12`
+ * button stayed enabled and silently did nothing when the counters were full.
+ * Every refusal now names its cause, and a partial order is accepted at a
+ * proportional price rather than being thrown away after the stock has landed.
+ *
+ * A serving consumes one meal and one clean tray, so `mealGain` servings need
+ * `mealGain * 2` units of counter capacity.
+ */
+/**
+ * Non-mutating verdict on a prepared-meal order. The HUD uses this to disable
+ * the buy control with a readable reason instead of letting the player click a
+ * live button that does nothing.
+ */
+export function previewPreparedMealPurchase(
+  state: StationState,
+  creditCost = 36,
+  mealGain = 12
+): BuyPreparedMealsResult {
   const destinations = state.moduleInstances
     .filter((module) => module.type === ModuleType.ServingStation)
     .map((module) => module.originTile);
-  if (destinations.length === 0 || state.metrics.credits < creditCost) return false;
-  if (totalItemCapacityAtTargets(state, destinations) + 0.01 < mealGain * 2) return false;
-  const addedMeals = addItemAcrossTargets(state, destinations, 'meal', mealGain, destinations[0]);
-  const addedTrays = addItemAcrossTargets(state, destinations, 'cleanTray', mealGain, destinations[0]);
-  if (addedMeals + 0.01 < mealGain || addedTrays + 0.01 < mealGain) return false;
+  const freeCapacity = destinations.length === 0 ? 0 : totalItemCapacityAtTargets(state, destinations);
+  const base = {
+    added: 0,
+    requestedAmount: mealGain,
+    creditCost: 0,
+    freeCapacity,
+    destinationCount: destinations.length
+  };
+  if (destinations.length === 0) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'no_serving_station',
+      message: 'No Serving Station to deliver to. Build one in a Cafeteria first.'
+    };
+  }
+  // Two units of counter room per serving: the meal and the tray it rides on.
+  const servingsThatFit = Math.floor(freeCapacity / 2);
+  if (servingsThatFit < 1) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'counter_capacity',
+      message: 'Serving counters are full. Clear servings or add a Serving Station.'
+    };
+  }
+  const servings = Math.min(mealGain, servingsThatFit);
+  const scaledCost = Math.max(1, Math.ceil(creditCost * (servings / Math.max(1, mealGain))));
+  if (state.metrics.credits < scaledCost) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'insufficient_credits',
+      creditCost: scaledCost,
+      message: `Needs ${scaledCost}c for ${servings} serving${servings === 1 ? '' : 's'}.`
+    };
+  }
+  return {
+    ...base,
+    ok: true,
+    requestedAmount: servings,
+    creditCost: scaledCost,
+    message: `${servings} serving${servings === 1 ? '' : 's'} to ${destinations.length} counter${destinations.length === 1 ? '' : 's'} · ${scaledCost}c`
+  };
+}
+
+export function buyPreparedMealsDetailed(
+  state: StationState,
+  creditCost = 36,
+  mealGain = 12
+): BuyPreparedMealsResult {
+  rebuildItemNodes(state);
+  const preview = previewPreparedMealPurchase(state, creditCost, mealGain);
+  if (!preview.ok) return preview;
+  const destinations = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation)
+    .map((module) => module.originTile);
+  const base = {
+    added: 0,
+    requestedAmount: mealGain,
+    creditCost: 0,
+    freeCapacity: preview.freeCapacity,
+    destinationCount: destinations.length
+  };
+  const servings = preview.requestedAmount;
+  const addedMeals = addItemAcrossTargets(state, destinations, 'meal', servings, destinations[0]);
+  const addedTrays = addItemAcrossTargets(state, destinations, 'cleanTray', servings, destinations[0]);
+  const landed = Math.floor(Math.min(addedMeals, addedTrays));
+  if (landed < 1) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'counter_capacity',
+      message: 'Serving counters could not accept the order.'
+    };
+  }
+  const actualCost = Math.max(1, Math.ceil(creditCost * (landed / Math.max(1, mealGain))));
   applyEconomyTransaction(state, {
     at: state.now,
     kind: 'supplier-purchase',
-    credits: -creditCost,
-    costBasis: creditCost,
-    label: `Prepared meals · ${mealGain} servings`
+    credits: -actualCost,
+    costBasis: actualCost,
+    label: `Prepared meals · ${landed} servings`
   }, { countAsEarned: false });
-  state.metrics.mealStock += addedMeals;
-  state.metrics.cleanTrayStock += addedTrays;
-  return true;
+  // metrics.mealStock and metrics.cleanTrayStock are derived from the located
+  // item nodes on every tick. Incrementing them here as well double-counted
+  // the order until the next derive pass, which is one of the ways the header
+  // and the counter tooltip disagreed.
+  return {
+    ...base,
+    ok: true,
+    added: landed,
+    creditCost: actualCost,
+    message: `${landed} serving${landed === 1 ? '' : 's'} delivered to ${destinations.length} counter${destinations.length === 1 ? '' : 's'} · ${actualCost}c`
+  };
+}
+
+/** Boolean wrapper retained for existing call sites and saved scenarios. */
+export function buyPreparedMeals(state: StationState, creditCost = 36, mealGain = 12): boolean {
+  return buyPreparedMealsDetailed(state, creditCost, mealGain).ok;
 }
 
 export function buyImportedTradeGoods(
@@ -23294,6 +23491,7 @@ export function tick(state: StationState, frameDt: number): void {
     releaseClosedJobReservations(state);
     refreshReservationMetrics(state);
     refreshJobMetrics(state);
+    refreshLocatedInventoryMetrics(state);
     computeMetrics(state);
     updateUnlockProgress(state);
     updateCommandProgress(state, 0);
