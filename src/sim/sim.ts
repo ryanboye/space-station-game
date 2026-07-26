@@ -16726,7 +16726,14 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         !crew.carryingMeal &&
         !crew.toileting &&
         !crew.eating &&
-        crew.bladder < (routineSelfCareAllowed ? CREW_BLADDER_TOILET_THRESHOLD : 12)
+        crew.bladder < (routineSelfCareAllowed ? CREW_BLADDER_TOILET_THRESHOLD : 12) &&
+        // Opening ticket 01. This chain is ordered, not prioritized, so the
+        // shortest-cycle need starves every need behind it: bladder refills
+        // and drains faster than thirst or hunger, so crew took a toilet trip
+        // every time and never reached the drink or meal branch. Thirst and
+        // hunger fell to zero beside a stocked, reachable counter. Yield the
+        // turn when one of them is in worse shape than the bladder is.
+        crew.bladder <= Math.min(crew.thirst, crew.hunger)
       ) {
         // Bladder is short-cycle: toilet interrupts cleaning/leisure but not active jobs or rest.
         if (toiletTargets.length > 0 && !airEmergency) {

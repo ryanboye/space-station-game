@@ -194,7 +194,9 @@ export function createInitialState(options?: {
   const fuelCouplerServiceDoor = toIndex(coreX, coreY - 3, GRID_WIDTH);
   tiles[fuelCouplerServiceDoor] = TileType.Door;
   rooms[fuelCouplerServiceDoor] = RoomType.Maintenance;
-  addStarterModule(ModuleType.FuelTank, coreX - 1, coreY - 2, 0);
+  // OPEN-01: the Maintenance bay is shared infrastructure and stays, but the
+  // Fuel Tank does not. Tank, pipe run, coupler and an opening fuel lot are
+  // the Service Ships recipe the player buys, not equipment they inherit.
 
   // Cargo intake and storage face the south service gallery. Command and life
   // support remain baseline hull services in this compact opening, but power
@@ -202,23 +204,28 @@ export function createInitialState(options?: {
   // and the first meaningful expansion constraint.
   paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX, coreY + 5);
   addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
-  paintEnclosedRoom(RoomType.Storage, coreX + 6, coreY + 3, coreX + 9, coreY + 6, coreX + 5, coreY + 5);
-  addStarterModule(ModuleType.StorageRack, coreX + 9, coreY + 4, 90);
-  addStarterModule(ModuleType.StorageRack, coreX + 6, coreY + 6, 0);
-  addStarterModule(ModuleType.StorageRack, coreX + 8, coreY + 6, 0);
+  // The former Storage room and its racks are gone. Storage and Storage Racks
+  // are tier-2 catalog entries, so shipping them in the starter both handed
+  // the player content they had not reached and, before TRUTH-01, inflated a
+  // fresh save's tier on every reload. The south-east gallery is now open
+  // apron: the first authored expansion edge.
 
   // Prepared meals arrive as station stock. The cafeteria is the first public
   // service; Kitchen and Hydroponics return later as optional margin choices.
-  paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 10, coreY + 2, coreX + 2, coreY);
+  // OPEN-01: a crew mess, not a completed hospitality business. Twelve tiles
+  // is the smallest a Cafeteria can be and still operate at all
+  // (ROOM_DEFINITIONS minTiles), so that is exactly what the crew get: one
+  // counter and one four-seat table, stocked as a crew food buffer. Choice A
+  // is still a real build — a second Serving Station, two more Tables for
+  // eight seats, and a bought traveller meal batch — and until the player
+  // makes it, a pod wave's worth of travellers leaves without eating.
+  paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 6, coreY + 2, coreX + 2, coreY);
   addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
-  addStarterModule(ModuleType.Table, coreX + 7, coreY, 0);
-  addStarterModule(ModuleType.Table, coreX + 9, coreY, 0);
+  addStarterModule(ModuleType.Table, coreX + 5, coreY + 1, 0);
 
-  // The market is a small, station-run counter rather than a later tenant
-  // unlock. Its east-hull annex also makes the first screen read as a stop
-  // with separate reasons to visit, without spending the berth expansion.
-  paintEnclosedRoom(RoomType.Market, coreX + 12, coreY - 3, coreX + 15, coreY - 1, coreX + 11, coreY - 2);
-  addStarterModule(ModuleType.MarketStall, coreX + 12, coreY - 3, 0);
+  // No Market. Choice B — Market tiles, a Market Stall, an opening stock order
+  // through the Freight Locker and a pricing policy — is the whole point of
+  // the commerce opening, so the starter must not hand it over pre-built.
 
   // The starter's 2x2 reactor is kept in its own accessible service pod,
   // away from guest rooms but near the public-service trunk. It replaces the
@@ -270,7 +277,6 @@ export function createInitialState(options?: {
   // west dock, freight on the east dock. East and west hull runs remain clear
   // as the two obvious future berth-expansion edges.
   addStarterModule(ModuleType.PodDock, coreX - 2, starterWallMinY, 0);
-  addStarterModule(ModuleType.FuelCoupler, coreX, starterWallMinY, 0);
   addStarterModule(ModuleType.PodDock, coreX + 3, starterWallMinY, 0);
   addStarterModule(ModuleType.FreightLocker, coreX + 5, starterWallMinY, 0);
 
@@ -285,25 +291,20 @@ export function createInitialState(options?: {
       const capacity = MODULE_DEFINITIONS[module.type].itemNodeCapacity ?? 0;
       // Starter construction stock belongs in Intake / Storage. Seeding every
       // item node would mix build material into the opening visitor services.
-      const starterStockNode = module.type === ModuleType.IntakePallet || module.type === ModuleType.StorageRack;
+      const starterStockNode = module.type === ModuleType.IntakePallet;
       const rawMaterial = options?.physicalStarterInventory && starterStockNode
         ? Math.min(capacity, starterMaterialsRemaining)
         : 0;
       starterMaterialsRemaining -= rawMaterial;
       const items: Partial<Record<ItemType, number>> = {};
       if (rawMaterial > 0) items.rawMaterial = rawMaterial;
-      // The cafeteria opens with a small visible meal buffer. It prevents the
-      // first five passengers from arriving to a dead station while still
-      // exhausting quickly enough to expose the production/logistics loop.
+      // OPEN-01: the crew mess opens with a crew food buffer, not a traveller
+      // stock. Five crew eat through it slowly enough that payroll, not
+      // starvation, is the first pressure; a station that wants to sell meals
+      // buys its own batch as part of the Feed Travelers recipe.
       if (module.type === ModuleType.ServingStation) {
         items.meal = 30;
         items.cleanTray = 30;
-      }
-      if (module.type === ModuleType.MarketStall) {
-        items.tradeGood = 16;
-      }
-      if (module.type === ModuleType.FuelTank) {
-        items.fuel = 40;
       }
       return {
         tileIndex: module.originTile,
@@ -356,11 +357,14 @@ export function createInitialState(options?: {
   // the site's per-lane factor at generation time. Absent charter → the stub
   // has no `site`, so generateLaneProfiles falls back to factor 1 (default).
   const laneProfiles = generateLaneProfiles({ rng, system, site: options?.charter } as StationState);
+  // OPEN-01 asks for four to six general crew with full opening needs. Five
+  // covers the shared infrastructure the starter actually runs — power, life
+  // support, receiving, cleaning and the crew mess — without pre-staffing a
+  // portfolio the player has not chosen yet.
   const initialStaffRoleCounts = createInitialStaffRoleCounts();
-  initialStaffRoleCounts.cook = 1;
   initialStaffRoleCounts.steward = 1;
-  initialStaffRoleCounts['cargo-handler'] = 2;
-  initialStaffRoleCounts.engineer = 2;
+  initialStaffRoleCounts['cargo-handler'] = 1;
+  initialStaffRoleCounts.engineer = 1;
   initialStaffRoleCounts.cleaner = 1;
   initialStaffRoleCounts.assistant = 1;
   const initialStaffTotal = totalStaffCount(initialStaffRoleCounts);

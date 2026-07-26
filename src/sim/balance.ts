@@ -451,9 +451,16 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   },
   [RoomType.Cafeteria]: {
     minTiles: 12,
+    // One table, not two. A counter plus somewhere to sit is a working mess;
+    // a second table is throughput, and shared contract C3 asks for capacity
+    // to come from fixtures rather than a room-wide on/off switch. This is
+    // also what lets OPEN-01 give the starter crew a food buffer without
+    // pre-building the Feed Travelers business: the minimum operating room
+    // used to be that recipe exactly, so the starter could not have one
+    // without having the other.
     requiredModules: [
       { module: ModuleType.ServingStation, count: 1 },
-      { module: ModuleType.Table, count: 2 }
+      { module: ModuleType.Table, count: 1 }
     ],
     requiredAnyOf: [],
     activationChecks: { door: true, path: true, pressurization: true },

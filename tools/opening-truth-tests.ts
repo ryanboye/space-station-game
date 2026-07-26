@@ -67,6 +67,32 @@ function freshState(): StationState {
   return createInitialState({ physicalStarterInventory: true, manualTrafficAdmission: true });
 }
 
+/** First 4x3-style patch of unzoned, unoccupied floor — the build apron. */
+function findOpenRectangle(state: StationState, width: number, height: number): number[] {
+  for (let y = 0; y < state.height - height; y += 1) {
+    for (let x = 0; x < state.width - width; x += 1) {
+      const tiles: number[] = [];
+      let ok = true;
+      for (let dy = 0; dy < height && ok; dy += 1) {
+        for (let dx = 0; dx < width && ok; dx += 1) {
+          const index = (y + dy) * state.width + (x + dx);
+          if (
+            state.tiles[index] !== TileType.Floor ||
+            state.rooms[index] !== RoomType.None ||
+            state.moduleOccupancyByTile[index] !== null
+          ) {
+            ok = false;
+            break;
+          }
+          tiles.push(index);
+        }
+      }
+      if (ok) return tiles;
+    }
+  }
+  return [];
+}
+
 // --- TRUTH-01: fresh game isolation ----------------------------------------
 
 console.log('TRUTH-01 fresh game isolation');
@@ -252,20 +278,24 @@ check('building the room changes the result the report can show', () => {
   // completions possible. Convert the starter Market into a Lounge with two
   // couches so the station has somewhere real to sit.
   const state = freshState();
-  const marketTiles: number[] = [];
+  tick(state, 0);
+  // Convert the starter crew mess: it is already enclosed, doored and powered,
+  // so this isolates "does building the room change the result" from the
+  // separate question of whether a freshly painted patch of floor is a room.
+  const loungeTiles: number[] = [];
   for (let index = 0; index < state.rooms.length; index += 1) {
-    if (state.rooms[index] === RoomType.Market) marketTiles.push(index);
+    if (state.rooms[index] === RoomType.Cafeteria) loungeTiles.push(index);
   }
-  assert(marketTiles.length >= 4, 'starter station has no market room to convert');
-  for (const tile of marketTiles) {
+  assert(loungeTiles.length >= 12, 'starter station has no crew mess to convert');
+  for (const tile of loungeTiles) {
     if (state.modules[tile] !== ModuleType.None) removeModuleAtTile(state, tile);
   }
   // Lounge and Couch are tier-1 catalog entries; this check is about physical
   // truth rather than progression gating.
   state.unlocks.tier = 1;
-  for (const tile of marketTiles) setRoom(state, tile, RoomType.Lounge);
+  for (const tile of loungeTiles) setRoom(state, tile, RoomType.Lounge);
   tick(state, 0);
-  const placed = marketTiles.filter((tile) => tryPlaceModule(state, ModuleType.Couch, tile, 0).ok).length;
+  const placed = loungeTiles.filter((tile) => tryPlaceModule(state, ModuleType.Couch, tile, 0).ok).length;
   assert(placed >= 1, 'could not place a couch in the converted lounge');
 
   state.controls.paused = false;
@@ -568,7 +598,11 @@ check('an invalid placement names its reason', () => {
       room === RoomType.Cafeteria &&
       broke.moduleOccupancyByTile[index] === null &&
       broke.moduleOccupancyByTile[index + 1] === null &&
-      broke.rooms[index + 1] === RoomType.Cafeteria
+      broke.moduleOccupancyByTile[index + broke.width] === null &&
+      broke.moduleOccupancyByTile[index + broke.width + 1] === null &&
+      broke.rooms[index + 1] === RoomType.Cafeteria &&
+      broke.rooms[index + broke.width] === RoomType.Cafeteria &&
+      broke.rooms[index + broke.width + 1] === RoomType.Cafeteria
   );
   if (cafeteriaFloor >= 0) {
     const unaffordable = previewModulePlacement(broke, ModuleType.Table, cafeteriaFloor, 0);
@@ -586,6 +620,72 @@ check('the placement preview agrees with what the build path would do', () => {
   const preview = previewModulePlacement(state, ModuleType.MarketStall, dormTile, 0);
   const attempted = tryPlaceModule(state, ModuleType.MarketStall, dormTile, 0);
   assertEqual(preview.valid, attempted.ok, 'preview verdict vs build verdict');
+});
+
+// --- OPEN-01: commercially empty starter -----------------------------------
+
+console.log('');
+console.log('OPEN-01 commercially empty starter');
+
+check('the starter ships no completed portfolio business', () => {
+  const state = freshState();
+  tick(state, 0);
+  for (const room of [RoomType.Market, RoomType.Lounge, RoomType.Cantina, RoomType.Workshop, RoomType.CommercialUnit, RoomType.Storage]) {
+    assert(!state.rooms.includes(room), `starter station ships a completed ${String(room)}`);
+  }
+  for (const module of [ModuleType.MarketStall, ModuleType.FuelTank, ModuleType.FuelCoupler, ModuleType.StorageRack, ModuleType.Workbench]) {
+    assert(
+      !state.moduleInstances.some((instance) => instance.type === module),
+      `starter station ships a ${String(module)}`
+    );
+  }
+});
+
+check('the starter ships the shared infrastructure the opening needs', () => {
+  const state = freshState();
+  tick(state, 0);
+  const count = (module: ModuleType): number =>
+    state.moduleInstances.filter((instance) => instance.type === module).length;
+  assertEqual(count(ModuleType.PodDock), 2, 'pod docks');
+  assertEqual(count(ModuleType.FreightLocker), 1, 'freight lockers');
+  assertEqual(count(ModuleType.ReactorCore), 1, 'reactors');
+  assert(state.rooms.includes(RoomType.Dorm), 'no crew quarters');
+  assert(state.rooms.includes(RoomType.Hygiene), 'no hygiene room');
+  assert(!state.rooms.includes(RoomType.Berth), 'starter station ships a passenger berth');
+  assert(state.crew.total >= 4 && state.crew.total <= 6, `opening crew ${state.crew.total} is outside 4-6`);
+});
+
+check('the starter leaves authored room to build on', () => {
+  const state = freshState();
+  tick(state, 0);
+  // Choice B needs at least ten contiguous Market tiles; the apron has to be
+  // able to hold a starter business somewhere.
+  assert(findOpenRectangle(state, 4, 3).length === 12, 'no 4x3 patch of open floor to build on');
+});
+
+check('doing nothing earns only meager access income', () => {
+  const state = freshState();
+  const openingCredits = state.metrics.credits;
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1800; step += 1) tick(state, 1);
+
+  const lifetime = state.openingEconomy.ledger.lifetime;
+  const dockFees = lifetime['dock-fee'].revenue;
+  const payroll = lifetime.wages.expenses;
+  assert(dockFees > 0, 'pods arrived but paid no access fee at all');
+  assert(
+    dockFees < payroll,
+    `access fees alone (${dockFees.toFixed(0)}c) covered payroll (${payroll.toFixed(0)}c); doing nothing should not fund the station`
+  );
+  assert(
+    state.metrics.credits < openingCredits * 2,
+    `a no-input run doubled its cash (${openingCredits} to ${state.metrics.credits.toFixed(0)})`
+  );
+  console.log(
+    `       observed: ${lifetime['dock-fee'].count} pod calls, access ${dockFees.toFixed(0)}c, payroll ${payroll.toFixed(0)}c, ` +
+    `cash ${openingCredits} to ${Math.round(state.metrics.credits)}`
+  );
 });
 
 console.log('');
