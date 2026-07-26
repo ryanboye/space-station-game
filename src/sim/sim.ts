@@ -45,6 +45,13 @@ import {
   type MarketPricingPolicy
 } from './opening-economy';
 import {
+  appendServiceCompletion,
+  fixtureProvidesService,
+  type ServiceCompletion,
+  type ServiceKind,
+  type ServicePopulation
+} from './service-truth';
+import {
   acceptCapitalProject,
   capitalProjectDefinitions,
   evaluateCapitalProjects,
@@ -16911,6 +16918,14 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.energy = clamp(crew.energy + dt * 0.7, 0, 100);
         if (state.now >= crew.eatUntil && crew.hunger >= CREW_HUNGER_EXIT_THRESHOLD) {
           returnDirtyTray(state, crew.tileIndex);
+          // Crew meals are real services at real seats, but they belong to the
+          // crew population and must not advance visitor progression.
+          recordServiceCompletion(state, {
+            population: 'crew',
+            actorId: crew.id,
+            service: 'meal',
+            tileIndex: crew.tileIndex
+          });
           clearCrewMeal(state, crew, 'completed');
           setCrewPath(state, crew, []);
           crew.retargetAt = state.now + 10 + deterministicUnit(crew.id, 817) * 8;
@@ -18370,16 +18385,101 @@ function promiseKindForHospitalityService(service: HospitalityServiceKind): Port
   }
 }
 
+/**
+ * The single gate every completed service passes through (shared contract C1).
+ *
+ * Returns the canonical event, or `null` when the actor is not standing at a
+ * fixture that can deliver `service`. Nothing else in the simulation may mark
+ * a service complete: promises, goals, settlement reports and world feedback
+ * all read the log this writes.
+ *
+ * The physical-truth check matters because visitors fall back to whatever
+ * leisure tile they can reach. A passenger who wanted a drink and idled at a
+ * Market Stall used to complete `drinks-served`, which is how turnaround
+ * reports credited a cantina and a lounge the station had never built.
+ */
+function recordServiceCompletion(
+  state: StationState,
+  options: {
+    population: ServicePopulation;
+    actorId: number;
+    service: ServiceKind;
+    tileIndex: number;
+    shipId?: number | null;
+    firstForActor?: boolean;
+  }
+): ServiceCompletion | null {
+  const { tileIndex, service } = options;
+  if (tileIndex < 0 || tileIndex >= state.rooms.length) return null;
+  const roomType = state.rooms[tileIndex];
+  const moduleType = state.modules[tileIndex];
+  if (!fixtureProvidesService(roomType, moduleType, service)) return null;
+  const event = appendServiceCompletion(
+    state.serviceLog,
+    {
+      at: state.now,
+      population: options.population,
+      actorId: options.actorId,
+      service,
+      roomType,
+      moduleType,
+      tileIndex,
+      shipId: options.shipId ?? null,
+      commercialUnitId: getCommercialUnitAt(state, tileIndex)?.id ?? null
+    },
+    { firstForActor: options.firstForActor }
+  );
+  if (event.shipId !== null && service !== 'retail') {
+    advancePortPromise(state, event.shipId, promiseKindForHospitalityService(service), 1);
+  }
+  return event;
+}
+
+/**
+ * Records a physical service a visitor just finished.
+ *
+ * Walk-in pod travellers have no manifest, so completion is recorded for them
+ * too — the station really did serve someone. Only a service that is still
+ * outstanding on a passenger's plan advances that ship's promise, which keeps
+ * repeat drinks and opportunistic stops out of the settlement report.
+ */
+/**
+ * What a walk-in traveller actually received at the tile they just finished a
+ * dwell on, or `null` when the stop delivered nothing.
+ *
+ * Deliberately conservative. Sitting in a cantina without collecting a drink
+ * is not a drink service, and standing in a market without a completed stall
+ * sale is not a retail sale — those record at their own consumption sites.
+ */
+function walkInServiceKindAt(state: StationState, tile: number, visitor: Visitor): ServiceKind | null {
+  const module = state.modules[tile];
+  const room = state.rooms[tile];
+  if (module === ModuleType.Toilet) return 'restroom';
+  if (module === ModuleType.Shower || module === ModuleType.Sink) return 'hygiene';
+  if (visitor.carryingDrink && (room === RoomType.Cantina || room === RoomType.CommercialUnit)) return 'drink';
+  if (module === ModuleType.GameStation || module === ModuleType.Telescope) return 'comfort';
+  if (room === RoomType.Lounge || room === RoomType.RecHall || room === RoomType.Observatory) return 'leisure';
+  return null;
+}
+
 function completeVisitorHospitalityService(
   state: StationState,
   visitor: Visitor,
   service: HospitalityServiceKind
-): void {
-  if (visitor.activeService !== service || visitor.completedServices.includes(service)) return;
-  visitor.completedServices.push(service);
-  if (visitor.originShipId !== null) {
-    advancePortPromise(state, visitor.originShipId, promiseKindForHospitalityService(service), 1);
-  }
+): boolean {
+  const onPlan = visitor.activeService === service && !visitor.completedServices.includes(service);
+  const recorded = recordServiceCompletion(state, {
+    population: 'visitor',
+    actorId: visitor.id,
+    service,
+    tileIndex: visitor.tileIndex,
+    shipId: onPlan ? visitor.originShipId : null,
+    firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
+  });
+  if (!recorded) return false;
+  visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
+  if (onPlan) visitor.completedServices.push(service);
+  return true;
 }
 
 function routeContractVisitorToNextService(state: StationState, visitor: Visitor): boolean {
@@ -18975,11 +19075,40 @@ function updateVisitorLogic(
               state.usageTotals.tradeGoodsSold += consumedGoods;
               marketTradeGoodsUsed += consumedGoods;
               state.usageTotals.creditsTradeGoodsGross += spend;
+              // A retail sale is a completed physical service too: located
+              // stock left a real stall for a real traveller. It advances no
+              // berth promise, but it does mean the station served someone,
+              // which keeps a commerce-only opening able to make progress.
+              recordServiceCompletion(state, {
+                population: 'visitor',
+                actorId: visitor.id,
+                service: 'retail',
+                tileIndex: visitor.tileIndex,
+                firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
+              });
+              visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
               visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
             } else {
               state.usageTotals.marketStockouts += 1;
               addVisitorPatience(state, visitor, 0.35);
               addVisitorFailurePenalty(state, 0.01, 'shipServicesMissing');
+            }
+          }
+          // Walk-in pod travellers carry no manifest, so nothing above claims
+          // their stop. The session still physically happened at a real
+          // fixture, and the opening station is built almost entirely on this
+          // population, so it belongs in the same completion log.
+          if (visitor.activeService === null) {
+            const walkInService = walkInServiceKindAt(state, visitor.tileIndex, visitor);
+            if (walkInService) {
+              const recorded = recordServiceCompletion(state, {
+                population: 'visitor',
+                actorId: visitor.id,
+                service: walkInService,
+                tileIndex: visitor.tileIndex,
+                firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
+              });
+              if (recorded) visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
             }
           }
           // Record this stop's room kind so the next leg picks somewhere new.
@@ -20230,6 +20359,14 @@ function updateResidentLogic(
       resident.hunger = clamp(resident.hunger + dt * 22, 0, 100);
       if (resident.actionTimer <= 0 || resident.hunger >= 95) {
         state.metrics.mealsServedTotal += 1;
+        // Population identity matters: a resident meal is a real service but
+        // must never advance visitor progression (opening ticket 13).
+        recordServiceCompletion(state, {
+          population: 'resident',
+          actorId: resident.id,
+          service: 'meal',
+          tileIndex: resident.tileIndex
+        });
         resident.state = ResidentState.Idle;
         resident.carryingMeal = false;
         returnDirtyTray(state, resident.tileIndex);

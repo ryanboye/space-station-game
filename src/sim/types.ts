@@ -1,6 +1,7 @@
 import type { CapitalProjectsState } from './capital-projects';
 import type { EconomyLedger, MarketPricingPolicy } from './opening-economy';
 import type { PodFreightOperation } from './pod-freight';
+import type { ServiceLog } from './service-truth';
 
 export const GRID_WIDTH = 100;
 export const GRID_HEIGHT = 80;
@@ -520,6 +521,12 @@ export interface Visitor {
   servicePlan: HospitalityServiceKind[];
   completedServices: HospitalityServiceKind[];
   activeService: HospitalityServiceKind | null;
+  /**
+   * Completed physical sessions recorded for this visitor. Owned by the
+   * service log so "visitors served" counts each person once regardless of
+   * how many services they used. Optional for save compatibility.
+   */
+  serviceCompletionsRecorded?: number;
   /** Optional non-contract repeat drink in progress. Contract drinks still advance promises once. */
   optionalDrinkActive?: boolean;
   /** Count of optional repeat drinks completed during this visit. */
@@ -2488,6 +2495,12 @@ export interface OpeningEconomyState {
 }
 
 export interface StationState {
+  /**
+   * Canonical completed-service record (shared contract C1). Promises,
+   * settlement reports, progression goals and world feedback all read this
+   * log rather than inferring completion from their own local signal.
+   */
+  serviceLog: ServiceLog;
   width: number;
   height: number;
   tiles: TileType[];

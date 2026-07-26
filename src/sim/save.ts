@@ -75,6 +75,7 @@ import {
   type EconomyLedger,
   type MarketPricingPolicy
 } from './opening-economy';
+import { normalizeServiceLog, type ServiceLog } from './service-truth';
 import { createCapitalProjectsState, hydrateCapitalProjectsState } from './capital-projects';
 import {
   validatePodFreightOperation,
@@ -333,6 +334,8 @@ export interface StationSnapshotV1 {
   };
   /** Optional for legacy v3 saves; hydration supplies a neutral default. */
   openingEconomy?: StationState['openingEconomy'];
+  /** Canonical completed-service log. Optional for saves written before it. */
+  serviceLog?: ServiceLog;
   portOps: PortOpsState;
   activePortShips: ArrivingShip[];
   // Optional on the wire — legacy saves and un-chartered starts predate this
@@ -870,6 +873,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         }))
     },
     openingEconomy: normalizeOpeningEconomyState(state.openingEconomy, []),
+    serviceLog: normalizeServiceLog(state.serviceLog),
     portOps: {
       ...state.portOps,
       contracts: state.portOps.contracts.map((contract) => ({
@@ -1842,6 +1846,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     : [];
   const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
   const openingEconomy = normalizeOpeningEconomyState(snapshotRaw.openingEconomy, warnings);
+  const serviceLog = normalizeServiceLog(snapshotRaw.serviceLog as Partial<ServiceLog> | undefined);
 
   return {
     simTime,
@@ -1914,6 +1919,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       debts: maintenanceDebts
     },
     openingEconomy,
+    serviceLog,
     portOps,
     activePortShips,
     site: normalizeSite(snapshotRaw.site)
@@ -2318,6 +2324,7 @@ export function hydrateStateFromSave(
   next.metrics.airQuality = clamp(snapshot.resources.airQuality, 0, 100);
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
   next.openingEconomy = normalizeOpeningEconomyState(snapshot.openingEconomy, warnings);
+  next.serviceLog = normalizeServiceLog(snapshot.serviceLog);
   next.crew.roleCounts = snapshot.crew.roleCounts
     ? ({ ...createEmptyStaffRoleCounts(), ...snapshot.crew.roleCounts } as StaffRoleCounts)
     : next.crew.roleCounts;

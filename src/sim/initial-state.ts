@@ -28,6 +28,7 @@ import { createInitialUnlockState } from './content/unlocks';
 import { MAP_CONDITION_VERSION } from './map-conditions';
 import { createCapitalProjectsState } from './capital-projects';
 import { createEconomyLedger } from './opening-economy';
+import { createServiceLog } from './service-truth';
 import { createEmptyUtilityUnderlay } from './utility-underlay';
 import {
   CREW_PRIORITY_PRESET_WEIGHTS,
@@ -427,6 +428,7 @@ export function createInitialState(options?: {
         fuelCompleted: 0
       }
     },
+    serviceLog: createServiceLog(),
     openingEconomy: {
       ledger: createEconomyLedger(),
       marketPricingPolicy: 'standard',

@@ -5642,14 +5642,14 @@ const STATION_GOALS: StationGoalDefinition[] = [
     title: 'Establish a working port',
     criteria: [
       { metric: 'credits', label: 'Earn traffic revenue', target: 500 },
-      { metric: 'visitors', label: 'Serve visitors', target: 20 }
+      { metric: 'visitors', label: 'Visitors served', target: 20 }
     ]
   },
   {
     title: 'Become a reliable stop',
     criteria: [
       { metric: 'credits', label: 'Earn traffic revenue', target: 1500 },
-      { metric: 'visitors', label: 'Serve visitors', target: 60 },
+      { metric: 'visitors', label: 'Visitors served', target: 60 },
       { metric: 'turnarounds', label: 'Complete turnarounds', target: 8 }
     ]
   },
@@ -5657,16 +5657,19 @@ const STATION_GOALS: StationGoalDefinition[] = [
     title: 'Build a regional hub',
     criteria: [
       { metric: 'credits', label: 'Earn traffic revenue', target: 4000 },
-      { metric: 'visitors', label: 'Serve visitors', target: 160 },
+      { metric: 'visitors', label: 'Visitors served', target: 160 },
       { metric: 'perfect-turnarounds', label: 'Perfect turnarounds', target: 12 }
     ]
   }
 ];
 
 function lifetimeVisitorsServed(): number {
-  // Pod visitors complete meals outside berth-contract telemetry. This
-  // persisted metric keeps the opening goal reachable before a berth exists.
-  return state.metrics.mealsServedTotal;
+  // Opening ticket 13. The goal counts *distinct visitors who completed at
+  // least one physical service*, not meals: mealsServedTotal also rises when
+  // crew and residents eat, so habitation used to finish visitor progression.
+  // Pod walk-ins and berth passengers both feed this counter through the one
+  // service-completion event, so it works before a berth exists.
+  return state.serviceLog.visitorsServedLifetime;
 }
 
 function stationGoalMetricValue(metric: StationGoalMetric): number {

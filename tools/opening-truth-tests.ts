@@ -6,9 +6,14 @@
  * packages can iterate without running the full simulation suite.
  */
 
-import { createInitialState } from '../src/sim';
+import { createInitialState, removeModuleAtTile, setRoom, tick, tryPlaceModule } from '../src/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
-import type { StationState } from '../src/sim/types';
+import {
+  appendServiceCompletion,
+  createServiceLog,
+  fixtureProvidesService
+} from '../src/sim/service-truth';
+import { ModuleType, RoomType, type StationState } from '../src/sim/types';
 
 const GAME_VERSION = 'truth-checks';
 
@@ -96,6 +101,167 @@ check('a new station built after an advanced run shares no progression with it',
   assertEqual(newGame.unlocks.tier, 0, 'new game tier');
   assertEqual(newGame.metrics.creditsEarnedLifetime, 0, 'new game lifetime credits');
   assertEqual(newGame.metrics.mealsServedTotal, 0, 'new game meals served');
+});
+
+// --- TRUTH-02: service completion integrity --------------------------------
+
+console.log('');
+console.log('TRUTH-02 service completion integrity');
+
+check('a missing facility cannot complete its service', () => {
+  // The reported defect: a passenger who wanted a drink idled at the Market
+  // Stall and the turnaround credited a cantina the station never built.
+  assert(
+    !fixtureProvidesService(RoomType.Market, ModuleType.MarketStall, 'drink'),
+    'a market stall must not provide drinks'
+  );
+  assert(
+    !fixtureProvidesService(RoomType.Market, ModuleType.MarketStall, 'leisure'),
+    'a market stall must not provide a lounge visit'
+  );
+  assert(
+    !fixtureProvidesService(RoomType.Cafeteria, ModuleType.Table, 'leisure'),
+    'a cafeteria table must not provide a lounge visit'
+  );
+  assert(
+    !fixtureProvidesService(RoomType.None, ModuleType.None, 'meal'),
+    'bare floor must not provide a meal'
+  );
+});
+
+check('a correctly built facility does complete its service', () => {
+  assert(fixtureProvidesService(RoomType.Cafeteria, ModuleType.Table, 'meal'), 'cafeteria table serves meals');
+  assert(fixtureProvidesService(RoomType.Cantina, ModuleType.BarCounter, 'drink'), 'cantina bar serves drinks');
+  assert(fixtureProvidesService(RoomType.Lounge, ModuleType.Couch, 'leisure'), 'lounge couch serves leisure');
+  assert(fixtureProvidesService(RoomType.RecHall, ModuleType.RecUnit, 'leisure'), 'rec unit serves leisure');
+  assert(fixtureProvidesService(RoomType.Hygiene, ModuleType.Toilet, 'restroom'), 'toilet serves restroom');
+  assert(fixtureProvidesService(RoomType.Hygiene, ModuleType.Shower, 'hygiene'), 'shower serves hygiene');
+  assert(fixtureProvidesService(RoomType.Observatory, ModuleType.Telescope, 'comfort'), 'telescope serves comfort');
+});
+
+check('the service log separates visitor, crew and resident consumption', () => {
+  const log = createServiceLog();
+  const base = {
+    at: 10,
+    service: 'meal' as const,
+    roomType: RoomType.Cafeteria,
+    moduleType: ModuleType.Table,
+    tileIndex: 100,
+    shipId: null,
+    commercialUnitId: null
+  };
+  appendServiceCompletion(log, { ...base, population: 'visitor', actorId: 1 }, { firstForActor: true });
+  appendServiceCompletion(log, { ...base, population: 'crew', actorId: 2 }, { firstForActor: true });
+  appendServiceCompletion(log, { ...base, population: 'resident', actorId: 3 }, { firstForActor: true });
+  assertEqual(log.lifetimeByService.meal, 3, 'total meals across populations');
+  assertEqual(log.visitorLifetimeByService.meal, 1, 'visitor meals');
+  assertEqual(log.visitorsServedLifetime, 1, 'visitors served');
+});
+
+check('one visitor using several services counts as one visitor served', () => {
+  const log = createServiceLog();
+  const base = {
+    at: 10,
+    population: 'visitor' as const,
+    actorId: 7,
+    roomType: RoomType.Cafeteria,
+    moduleType: ModuleType.Table,
+    tileIndex: 100,
+    shipId: null,
+    commercialUnitId: null
+  };
+  appendServiceCompletion(log, { ...base, service: 'meal' }, { firstForActor: true });
+  appendServiceCompletion(log, { ...base, service: 'drink' }, { firstForActor: false });
+  appendServiceCompletion(log, { ...base, service: 'leisure' }, { firstForActor: false });
+  assertEqual(log.visitorsServedLifetime, 1, 'visitors served');
+  assertEqual(log.visitorLifetimeByService.drink, 1, 'visitor drinks');
+});
+
+check('the service log survives save and reload', () => {
+  const state = freshState();
+  appendServiceCompletion(
+    state.serviceLog,
+    {
+      at: 5,
+      population: 'visitor',
+      actorId: 11,
+      service: 'meal',
+      roomType: RoomType.Cafeteria,
+      moduleType: ModuleType.Table,
+      tileIndex: 250,
+      shipId: null,
+      commercialUnitId: null
+    },
+    { firstForActor: true }
+  );
+  const restored = roundTrip(state);
+  assertEqual(restored.serviceLog.visitorsServedLifetime, 1, 'restored visitors served');
+  assertEqual(restored.serviceLog.visitorLifetimeByService.meal, 1, 'restored visitor meals');
+  assertEqual(restored.serviceLog.recent.length, 1, 'restored recent completions');
+  assertEqual(restored.serviceLog.recent[0].tileIndex, 250, 'restored facility identity');
+});
+
+check('a live opening run only records services its fixtures can deliver', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 900; step += 1) tick(state, 1);
+
+  assert(state.serviceLog.recent.length > 0, 'the opening run completed no service at all');
+  for (const event of state.serviceLog.recent) {
+    assert(
+      fixtureProvidesService(event.roomType, event.moduleType, event.service),
+      `recorded ${event.service} at room ${event.roomType}/module ${event.moduleType}, which cannot provide it`
+    );
+  }
+});
+
+check('a station with no lounge or cantina completes zero lounge and drink services', () => {
+  const state = freshState();
+  const hasLounge = state.rooms.some((room) => room === RoomType.Lounge || room === RoomType.RecHall);
+  const hasCantina = state.rooms.some((room) => room === RoomType.Cantina);
+  assert(!hasLounge && !hasCantina, 'starter station unexpectedly ships a lounge or cantina');
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 900; step += 1) tick(state, 1);
+
+  assertEqual(state.serviceLog.lifetimeByService.leisure, 0, 'lounge visits without a lounge');
+  assertEqual(state.serviceLog.lifetimeByService.drink, 0, 'drinks without a cantina');
+});
+
+check('building the room changes the result the report can show', () => {
+  // Acceptance from opening ticket 07: adding a lounge is what makes lounge
+  // completions possible. Convert the starter Market into a Lounge with two
+  // couches so the station has somewhere real to sit.
+  const state = freshState();
+  const marketTiles: number[] = [];
+  for (let index = 0; index < state.rooms.length; index += 1) {
+    if (state.rooms[index] === RoomType.Market) marketTiles.push(index);
+  }
+  assert(marketTiles.length >= 4, 'starter station has no market room to convert');
+  for (const tile of marketTiles) {
+    if (state.modules[tile] !== ModuleType.None) removeModuleAtTile(state, tile);
+  }
+  // Lounge and Couch are tier-1 catalog entries; this check is about physical
+  // truth rather than progression gating.
+  state.unlocks.tier = 1;
+  for (const tile of marketTiles) setRoom(state, tile, RoomType.Lounge);
+  tick(state, 0);
+  const placed = marketTiles.filter((tile) => tryPlaceModule(state, ModuleType.Couch, tile, 0).ok).length;
+  assert(placed >= 1, 'could not place a couch in the converted lounge');
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1200; step += 1) tick(state, 1);
+
+  assert(
+    state.serviceLog.lifetimeByService.leisure > 0,
+    'a lounge with couches recorded no lounge visits'
+  );
+  for (const event of state.serviceLog.recent.filter((entry) => entry.service === 'leisure')) {
+    assertEqual(event.roomType, RoomType.Lounge, 'lounge visit room type');
+  }
 });
 
 console.log('');
