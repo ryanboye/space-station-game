@@ -1595,6 +1595,13 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     warnings.push('unlocks missing; deriving from saved content.');
   }
 
+  // Content-derived tier is a *fallback for legacy saves only*. Elevating a
+  // save that carries explicit unlock state made every save/load inflate the
+  // player's tier, because the authored starter station itself contains
+  // content whose catalog entries sit above tier 0 (Storage, Storage Rack).
+  // A fresh run therefore reloaded as Tier 2 and looked like unlock state was
+  // leaking across playthroughs. Saved unlock state is authoritative; content
+  // above it stays usable because gating only governs *new* placement.
   const requiredTier = requiredUnlockTierForSnapshotContent(rooms, modules, dockConfigs);
   if (!hasUnlockState) {
     unlockTier = requiredTier;
@@ -1603,8 +1610,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       warnings.push(`Derived unlock tier ${requiredTier} from saved rooms/modules/ship permissions.`);
     }
   } else if (unlockTier < requiredTier) {
-    warnings.push(`Unlock tier ${unlockTier} too low for saved content; elevated to tier ${requiredTier}.`);
-    unlockTier = requiredTier;
+    warnings.push(
+      `Save contains tier-${requiredTier} content at tier ${unlockTier}; existing content is preserved and the tier is left as saved.`
+    );
   }
   for (const id of UNLOCK_IDS_BY_TIER[unlockTier]) {
     unlockedIds.add(id);

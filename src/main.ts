@@ -1495,6 +1495,10 @@ function applyStarterLayout(target: StationState, authored: StationState): void 
   tick(target, 0);
 }
 
+// Cached so New Game can rebuild an authored starter without re-reading
+// storage. `null` means "stock layout"; the read is done once at bootstrap.
+let savedStarterLayoutState: StationState | null = null;
+
 async function applySavedStarterLayout(): Promise<void> {
   if (startupParams.has('load') || startupParams.has('loadId') || startupParams.has('scenario')) return;
   if (startupParams.get('starter') === 'stock') return;
@@ -1507,11 +1511,31 @@ async function applySavedStarterLayout(): Promise<void> {
   }
   try {
     const authored = hydrateStateFromSave(parsed.save, { seed: gameSeed }).state;
+    savedStarterLayoutState = authored;
     applyStarterLayout(state, authored);
     console.info(`[starter-layout] applied template saved ${new Date(record.savedAt).toLocaleString()}`);
   } catch (error) {
     console.warn('[starter-layout] could not apply stored template:', error);
   }
+}
+
+/**
+ * Build the exact station a New Game should begin from: the stock starter
+ * factory plus the authored starter template when one is stored.
+ *
+ * TRUTH-01. New Game used to keep whatever `state` the session already held.
+ * A failed Continue left a half-hydrated station behind, and nothing reset
+ * progression, metrics, rating history or scenario overlays, so a fresh
+ * charter could inherit an older run's unlock tier and goal progress.
+ */
+function buildFreshGameState(): StationState {
+  const fresh = createInitialState({
+    seed: gameSeed,
+    physicalStarterInventory: true,
+    manualTrafficAdmission: true
+  });
+  if (savedStarterLayoutState) applyStarterLayout(fresh, savedStarterLayoutState);
+  return fresh;
 }
 
 // The fresh state now owns a complete, visible Berth room. Keeping starter
@@ -10602,6 +10626,34 @@ function writeAutosave(): void {
   }
 }
 
+/**
+ * TRUTH-01. A New Game must own the single autosave slot from its first
+ * moment. Otherwise the previous run's envelope stays on disk until the new
+ * run's first 60s tick, and a reload in that window offers Continue on a
+ * station the player has already abandoned.
+ */
+function startFreshAutosaveEpoch(): void {
+  pendingAutosaveLoad = false;
+  try {
+    localStorage.setItem(
+      AUTOSAVE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        payloadText: serializeSave('__autosave__', state, GAME_VERSION)
+      } satisfies AutosaveRecord)
+    );
+  } catch (err) {
+    // Losing the slot is survivable; a stale record is not. Clear instead.
+    console.warn('[autosave] could not seed new-game epoch:', err);
+    try {
+      localStorage.removeItem(AUTOSAVE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+  stateDirty = false;
+}
+
 function offerAutosaveLoadOnColdStart(): void {
   const record = readAutosaveRecord();
   if (!record) return;
@@ -10858,8 +10910,14 @@ async function runPlayerStartup(): Promise<void> {
       return;
     }
 
+    // TRUTH-01: every path that is not a successful Continue starts from a
+    // rebuilt station. This covers New Game, a Continue whose hydration threw
+    // partway through Object.assign, and a second loop pass after the player
+    // backed out of the charter screen.
+    applyHydratedState(buildFreshGameState());
     if (!state.system) {
       console.warn('[charter] system map unavailable; starting at default site.');
+      startFreshAutosaveEpoch();
       startGameLoop();
       return;
     }
@@ -10869,6 +10927,7 @@ async function runPlayerStartup(): Promise<void> {
     state.laneProfiles = generateLaneProfiles(state);
     state.controls.paused = true;
     console.info('[charter] site chartered', charter);
+    startFreshAutosaveEpoch();
     startGameLoop();
     return;
   }
