@@ -25,6 +25,7 @@ import { mountCharterScreen } from './ui/charter-screen';
 import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
 import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/opening-economy-panels';
 import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-economy';
+import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -1230,6 +1231,14 @@ function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
         if (service.kind === 'freight') wants.push('cargo');
         if (service.kind === 'repair') wants.push('repair');
       }
+      // OPEN-02 asks the chip to show request, current operation, and result.
+      // The middle one comes from whatever service is physically running now.
+      const runningService = ship.smallCraftVisit?.services.find((service) => service.status === 'active');
+      const activeOperation = runningService
+        ? `${runningService.kind} ${Math.round(clamp(runningService.progress, 0, 1) * 100)}%`
+        : ship.smallCraftVisit?.services.find((service) => service.status === 'blocked')
+          ? `blocked: ${ship.smallCraftVisit.services.find((service) => service.status === 'blocked')?.blockedReason ?? 'no facility'}`
+          : '';
       const remainingFreight = freightOperation?.kind === 'supplier-delivery'
         ? Math.max(0, freightOperation.orderedUnits - freightOperation.unloadedUnits)
         : freightOperation?.kind === 'courier-handling'
@@ -1247,7 +1256,9 @@ function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
           ? `${remainingFreight} travel supplies for your shop`
           : freightOperation?.kind === 'courier-handling'
             ? `${freightOperation.direction} · ${remainingFreight} consigned crates`
-            : `${ship.passengersTotal} traveler${ship.passengersTotal === 1 ? '' : 's'} · ${[...new Set(wants)].join(' + ') || 'quick stop'}`
+            : `${ship.passengersTotal} traveler${ship.passengersTotal === 1 ? '' : 's'} · ${[...new Set(wants)].join(' + ') || 'quick stop'}${
+              activeOperation ? ` · now: ${activeOperation}` : ''
+            }`
       }];
     });
 
@@ -1272,16 +1283,35 @@ function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
       .filter((event) => event.label.startsWith('Missed '))
       .map((event) => event.label.slice('Missed '.length))
       .join(' + ');
-    const missed = liveMissed || recordedMissed;
+    // OPEN-02: the filed outcome knows what this call wanted across all three
+    // opening families and what the station physically delivered, so the chip
+    // can price the opportunity rather than just naming it.
+    const outcomeRecord = state.openingEconomy.podDemand.recent.find((entry) => entry.visitId === shipId);
+    const missedFamilies = outcomeRecord
+      ? POD_DEMAND_FAMILIES
+          .filter((family) => outcomeRecord.wanted[family] > outcomeRecord.served[family])
+          .map((family) => (family === 'food' ? 'food' : family === 'supplies' ? 'supplies' : 'ship service'))
+      : [];
+    const missedLabel = missedFamilies.length > 0
+      ? `wanted ${missedFamilies.join(' + ')} · est. ${outcomeRecord?.missedCredits ?? 0}c missed`
+      : liveMissed || recordedMissed;
     const resultLabels = events.filter((event) => !event.label.startsWith('Missed '));
+    const servedSummary = outcomeRecord
+      ? POD_DEMAND_FAMILIES
+          .filter((family) => outcomeRecord.served[family] > 0)
+          .map((family) => `${family === 'food' ? 'meals' : family === 'supplies' ? 'supplies' : 'ship service'} ${outcomeRecord.served[family]}`)
+          .join(' · ')
+      : '';
     departures.push({
       visitId: shipId,
       dockTileIndex: tileIndex,
       settledAt: Math.max(...events.map((event) => event.at)),
       events,
-      serviceSummary: [...new Set(resultLabels.map((event) => event.label))].slice(0, 2).join(' · '),
-      missedOpportunity: missed || undefined,
-      outcome: missed ? 'partial' : 'success'
+      serviceSummary: servedSummary
+        || [...new Set(resultLabels.map((event) => event.label))].slice(0, 2).join(' · ')
+        || (outcomeRecord ? 'bought nothing' : ''),
+      missedOpportunity: missedLabel || undefined,
+      outcome: missedLabel ? 'partial' : 'success'
     });
   }
   dockEconomyFeedback.update({

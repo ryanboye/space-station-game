@@ -28,6 +28,7 @@ import { createInitialUnlockState } from './content/unlocks';
 import { MAP_CONDITION_VERSION } from './map-conditions';
 import { createCapitalProjectsState } from './capital-projects';
 import { createEconomyLedger } from './opening-economy';
+import { createPodDemandLog } from './pod-demand';
 import { createServiceLog } from './service-truth';
 import { createEmptyUtilityUnderlay } from './utility-underlay';
 import {
@@ -442,6 +443,7 @@ export function createInitialState(options?: {
     serviceLog: createServiceLog(),
     openingEconomy: {
       ledger: createEconomyLedger(),
+      podDemand: createPodDemandLog(),
       marketPricingPolicy: 'standard',
       podFreightOperations: [],
       capitalProjects: createCapitalProjectsState()

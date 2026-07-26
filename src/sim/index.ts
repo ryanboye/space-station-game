@@ -41,6 +41,7 @@ export {
   getOperatingSchedule,
   getOpeningCapitalProjects,
   getOpeningEconomySummary,
+  getPodDemandSummary,
   getPreparedMealInventory,
   type PreparedMealInventory,
   getCrewPriorityPresetWeights,

@@ -14,6 +14,7 @@ import {
   getCrewSustainabilitySummary,
   getHousingInspectorAt,
   getOpeningCapitalProjects,
+  getPodDemandSummary,
   getPreparedMealInventory,
   previewPreparedMealPurchase,
   removeModuleAtTile,
@@ -24,6 +25,7 @@ import {
 import { PORT_SETTLEMENT } from '../src/sim/balance';
 import { previewModulePlacement } from '../src/sim/construction';
 import { computeSettlementPayout } from '../src/sim/opening-economy';
+import { summarizePodDemand } from '../src/sim/pod-demand';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   appendServiceCompletion,
@@ -686,6 +688,76 @@ check('doing nothing earns only meager access income', () => {
     `       observed: ${lifetime['dock-fee'].count} pod calls, access ${dockFees.toFixed(0)}c, payroll ${payroll.toFixed(0)}c, ` +
     `cash ${openingCredits} to ${Math.round(state.metrics.credits)}`
   );
+});
+
+// --- OPEN-02: demand and missed opportunity --------------------------------
+
+console.log('');
+console.log('OPEN-02 demand and missed opportunity');
+
+check('pod demand is sampled across all three opening families', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1500; step += 1) tick(state, 1);
+  const summary = getPodDemandSummary(state, null);
+  assert(summary.calls > 0, 'no pod call was filed at all');
+  for (const row of summary.rows) {
+    assert(row.wanted > 0, `no pod ever asked for ${row.label}`);
+  }
+  console.log(
+    `       observed: ${summary.calls} calls, ${summary.travelers} travellers, ` +
+    summary.rows.map((row) => `${row.label} ${row.served}/${row.wanted}`).join(', ')
+  );
+});
+
+check('unbuilt services complete nothing and are priced as missed', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1500; step += 1) tick(state, 1);
+  const summary = getPodDemandSummary(state, null);
+
+  const supplies = summary.rows.find((row) => row.family === 'supplies');
+  assert(supplies, 'no supplies row');
+  assertEqual(supplies.served, 0, 'travel supplies sold without a market');
+  assert(supplies.missedCredits > 0, 'missed supply demand was priced at zero');
+  assert(summary.missedCredits > 0, 'the run reported no missed opportunity at all');
+  assert(summary.topOpportunity !== null, 'no opening opportunity was identified');
+  console.log(`       observed: est. ${summary.missedCredits}c missed, top opportunity ${summary.topOpportunity}`);
+});
+
+check('served counts come from the completion log, never from intent', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1500; step += 1) tick(state, 1);
+  const summary = getPodDemandSummary(state, null);
+  for (const row of summary.rows) {
+    assert(row.served <= row.wanted, `${row.label} served ${row.served} of only ${row.wanted} wanted`);
+  }
+  const food = summary.rows.find((row) => row.family === 'food');
+  assert(food, 'no food row');
+  assert(
+    food.served <= state.serviceLog.lifetimeByService.meal,
+    'more pod meals were credited than the service log recorded'
+  );
+});
+
+check('the demand aggregation is bounded and survives save and reload', () => {
+  const state = freshState();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 2400; step += 1) tick(state, 1);
+  assert(
+    state.openingEconomy.podDemand.recent.length <= 40,
+    `pod demand log grew unbounded to ${state.openingEconomy.podDemand.recent.length}`
+  );
+  const before = getPodDemandSummary(state, null);
+  const restored = roundTrip(state);
+  const after = summarizePodDemand(restored.openingEconomy.podDemand, state.now, null);
+  assertEqual(after.calls, before.calls, 'restored call count');
+  assertEqual(after.missedCredits, before.missedCredits, 'restored missed credits');
 });
 
 console.log('');

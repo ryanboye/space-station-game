@@ -76,6 +76,7 @@ import {
   type MarketPricingPolicy
 } from './opening-economy';
 import { normalizeServiceLog, type ServiceLog } from './service-truth';
+import { createPodDemandLog, normalizePodDemandLog } from './pod-demand';
 import { createCapitalProjectsState, hydrateCapitalProjectsState } from './capital-projects';
 import {
   validatePodFreightOperation,
@@ -468,6 +469,7 @@ function normalizePodFreightOperation(raw: unknown): PodFreightOperation | null 
 function normalizeOpeningEconomyState(raw: unknown, warnings: string[]): NonNullable<StationState['openingEconomy']> {
   const fallback = {
     ledger: createEconomyLedger(),
+    podDemand: createPodDemandLog(),
     marketPricingPolicy: 'standard' as MarketPricingPolicy,
     podFreightOperations: [] as PodFreightOperation[],
     capitalProjects: createCapitalProjectsState()
@@ -511,6 +513,7 @@ function normalizeOpeningEconomyState(raw: unknown, warnings: string[]): NonNull
   }
   return {
     ledger,
+    podDemand: normalizePodDemandLog(raw.podDemand as Parameters<typeof normalizePodDemandLog>[0]),
     marketPricingPolicy,
     podFreightOperations,
     capitalProjects: hydrateCapitalProjectsState(raw.capitalProjects)

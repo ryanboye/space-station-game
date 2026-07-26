@@ -47,6 +47,14 @@ import {
   type MarketPricingPolicy
 } from './opening-economy';
 import {
+  POD_DEMAND_FAMILIES,
+  estimateMissedCredits,
+  recordPodVisitOutcome,
+  summarizePodDemand,
+  type PodDemandCounts,
+  type PodDemandSummary
+} from './pod-demand';
+import {
   appendServiceCompletion,
   fixtureProvidesService,
   type ServiceCompletion,
@@ -298,6 +306,14 @@ function recordPodFreightEconomyIntents(
 
 export function setMarketPricingPolicy(state: StationState, policy: MarketPricingPolicy): void {
   state.openingEconomy.marketPricingPolicy = policy;
+}
+
+/**
+ * Bounded recent-demand aggregation for the build catalog and the first-cycle
+ * summary (OPEN-02). Pass `null` for the whole retained window.
+ */
+export function getPodDemandSummary(state: StationState, windowSec: number | null = 240): PodDemandSummary {
+  return summarizePodDemand(state.openingEconomy.podDemand, state.now, windowSec);
 }
 
 export function getOpeningEconomySummary(state: StationState, windowSec = 120): ReturnType<typeof summarizeEconomyEvents> {
@@ -11349,6 +11365,66 @@ function setPortPromiseProgress(
   promise.completed = clamp(completed, 0, promise.target);
 }
 
+/**
+ * Files what one departing pod call wanted against what it received (OPEN-02).
+ *
+ * Demand is sampled across all three opening families whether or not the
+ * station can serve them, so a station that sells nothing still shows the
+ * player what walked past. Served counts come from the canonical service log
+ * and the small-craft services, never from intent.
+ */
+function recordPodVisitDemandOutcome(state: StationState, ship: ArrivingShip): void {
+  if (ship.kind !== 'transient' || ship.portContractId !== undefined) return;
+  const dockTile = ship.assignedDockId === null
+    ? -1
+    : (() => {
+        const dock = state.docks.find((candidate) => candidate.id === ship.assignedDockId);
+        if (!dock) return -1;
+        const module = dock.moduleId === undefined
+          ? undefined
+          : state.moduleInstances.find((candidate) => candidate.id === dock.moduleId);
+        return module?.originTile ?? dock.tiles[0] ?? -1;
+      })();
+  if (dockTile < 0) return;
+
+  const travelers = Math.max(0, Math.round(ship.passengersTotal));
+  const wanted: PodDemandCounts = {
+    food: Math.round(travelers * clamp(ship.manifestDemand.cafeteria, 0, 1)),
+    supplies: Math.round(travelers * clamp(ship.manifestDemand.market, 0, 1)),
+    shipService: ship.smallCraftVisit?.services.filter((service) => service.kind !== 'passenger').length ?? 0
+  };
+
+  // Served counts read the canonical completion log for this ship plus the
+  // small-craft services that physically finished. Nothing is inferred from a
+  // promise or a timer.
+  const completions = state.serviceLog.recent.filter((event) => event.shipId === ship.id);
+  const served: PodDemandCounts = {
+    food: completions.filter((event) => event.service === 'meal').length,
+    supplies: completions.filter((event) => event.service === 'retail').length,
+    shipService: ship.smallCraftVisit?.services.filter(
+      (service) => service.kind !== 'passenger' && service.status === 'complete'
+    ).length ?? 0
+  };
+  for (const family of POD_DEMAND_FAMILIES) {
+    served[family] = Math.min(served[family], wanted[family]);
+  }
+
+  const earnedCredits = state.openingEconomy.ledger.recent
+    .filter((event) => event.sourceId === ship.id && event.credits > 0)
+    .reduce((sum, event) => sum + event.credits, 0);
+
+  recordPodVisitOutcome(state.openingEconomy.podDemand, {
+    visitId: ship.id,
+    at: state.now,
+    dockTileIndex: dockTile,
+    travelers,
+    wanted,
+    served,
+    earnedCredits: Math.round(earnedCredits),
+    missedCredits: estimateMissedCredits(wanted, served)
+  });
+}
+
 function settlePortContract(state: StationState, ship: ArrivingShip): void {
   const contract = portContractForShip(state, ship.id);
   if (!contract || contract.settlementId !== null) return;
@@ -12723,6 +12799,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         state.dockedTimeTotal += Math.max(0, state.now - ship.dockedAt);
         state.dockedShipsCompleted += 1;
       }
+      recordPodVisitDemandOutcome(state, ship);
       recordBerthServiceOutcome(state, ship);
       const contract = portContractForShip(state, ship.id);
       if (contract) {
@@ -18539,6 +18616,13 @@ function recordServiceCompletion(
     service: ServiceKind;
     tileIndex: number;
     shipId?: number | null;
+    /**
+     * Whether this completion satisfies an outstanding manifest promise.
+     * Attribution and promise credit are separate questions: a walk-in stop
+     * still belongs to the pod that brought the traveller, but it must not
+     * tick a promise nobody made.
+     */
+    advancePromise?: boolean;
     firstForActor?: boolean;
   }
 ): ServiceCompletion | null {
@@ -18562,7 +18646,7 @@ function recordServiceCompletion(
     },
     { firstForActor: options.firstForActor }
   );
-  if (event.shipId !== null && service !== 'retail') {
+  if (event.shipId !== null && service !== 'retail' && options.advancePromise) {
     advancePortPromise(state, event.shipId, promiseKindForHospitalityService(service), 1);
   }
   return event;
@@ -18606,7 +18690,8 @@ function completeVisitorHospitalityService(
     actorId: visitor.id,
     service,
     tileIndex: visitor.tileIndex,
-    shipId: onPlan ? visitor.originShipId : null,
+    shipId: visitor.originShipId,
+    advancePromise: onPlan,
     firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
   });
   if (!recorded) return false;
@@ -19223,6 +19308,7 @@ function updateVisitorLogic(
                 actorId: visitor.id,
                 service: 'retail',
                 tileIndex: visitor.tileIndex,
+                shipId: visitor.originShipId,
                 firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
               });
               visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
@@ -19245,6 +19331,7 @@ function updateVisitorLogic(
                 actorId: visitor.id,
                 service: walkInService,
                 tileIndex: visitor.tileIndex,
+                shipId: visitor.originShipId,
                 firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
               });
               if (recorded) visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;

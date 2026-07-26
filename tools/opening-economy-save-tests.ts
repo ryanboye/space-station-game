@@ -1,3 +1,4 @@
+import { createPodDemandLog } from '../src/sim/pod-demand';
 import { acceptCapitalProject, createCapitalProjectsState } from '../src/sim/capital-projects';
 import { createEconomyLedger, recordEconomyEvent } from '../src/sim/opening-economy';
 import { createCourierHandling, createSupplierDelivery } from '../src/sim/pod-freight';
@@ -51,6 +52,7 @@ function testRoundTripPreservesOpeningEconomy(): void {
   const projects = acceptCapitalProject(createCapitalProjectsState(), 'roadside-rest-stop', 9).state;
   state.openingEconomy = {
     ledger,
+    podDemand: createPodDemandLog(),
     marketPricingPolicy: 'premium',
     podFreightOperations: [supplier, courier],
     capitalProjects: projects
@@ -83,6 +85,7 @@ function testLegacySaveGetsNeutralOpeningEconomy(): void {
 function testMalformedOpeningEconomyIsTolerantAndBounded(): void {
   const save = parsedSave() as unknown as { snapshot: Record<string, unknown> };
   save.snapshot.openingEconomy = {
+    podDemand: createPodDemandLog(),
     ledger: {
       nextEventId: -10,
       recent: [

@@ -1,6 +1,7 @@
 import type { CapitalProjectsState } from './capital-projects';
 import type { EconomyLedger, MarketPricingPolicy } from './opening-economy';
 import type { PodFreightOperation } from './pod-freight';
+import type { PodDemandLog } from './pod-demand';
 import type { ServiceLog } from './service-truth';
 
 export const GRID_WIDTH = 100;
@@ -2494,6 +2495,8 @@ export interface Controls {
  */
 export interface OpeningEconomyState {
   ledger: EconomyLedger;
+  /** What recent pod calls wanted, got, and left on the table (OPEN-02). */
+  podDemand: PodDemandLog;
   marketPricingPolicy: MarketPricingPolicy;
   podFreightOperations: PodFreightOperation[];
   capitalProjects: CapitalProjectsState;
