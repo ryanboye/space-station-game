@@ -3575,6 +3575,10 @@ button.alert-item {
   backdrop-filter: blur(3px);
 }
 
+#bottom-dock.pod-only {
+  grid-template-columns: 0.95fr 1.3fr 0.9fr;
+}
+
 .command-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

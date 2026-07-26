@@ -110,6 +110,19 @@ const STYLE_TEXT = `
 #charter-screen .key-line { width: 19px; height: 2px; background: #72d5bb; box-shadow: 0 0 7px #72d5bb; }
 #charter-screen .key-gate { width: 11px; height: 11px; border: 1px solid #9ac9ff; transform: rotate(45deg); }
 #charter-screen .charter-actions { right: 36px; bottom: 28px; width: min(290px, calc(100vw - 72px)); display: grid; gap: 8px; }
+#charter-screen .charter-selection {
+  display: grid;
+  gap: 5px;
+  min-height: 58px;
+  padding: 9px 11px;
+  border: 1px solid rgba(126, 158, 177, 0.38);
+  background: rgba(5, 13, 20, 0.78);
+  color: #9fb0bb;
+  font-size: 10px;
+  line-height: 1.35;
+}
+#charter-screen .charter-selection strong { color: #f0d38d; font-size: 11px; }
+#charter-screen .charter-selection span { color: #c7d7df; }
 #charter-screen button {
   min-height: 48px;
   padding: 10px 16px;
@@ -124,6 +137,7 @@ const STYLE_TEXT = `
 }
 #charter-screen button:hover { background: rgba(21, 41, 53, 0.94); border-color: #b9d9e8; }
 #charter-screen button.charter-primary { border-color: #c89743; color: #f4cf7b; }
+#charter-screen button.charter-primary:not(:disabled) { background: rgba(82, 57, 17, 0.9); box-shadow: inset 0 0 0 1px rgba(244, 207, 123, 0.18); }
 #charter-screen button.charter-primary:hover { background: rgba(74, 52, 19, 0.85); }
 #charter-screen button:disabled { cursor: default; color: #63737e; border-color: rgba(104, 122, 133, 0.42); background: rgba(8, 14, 20, 0.65); }
 #charter-screen .charter-back { position: absolute; right: 0; bottom: 112px; min-height: 33px; padding: 6px 12px; font-size: 11px; }
@@ -494,6 +508,7 @@ export function mountCharterScreen(
     </aside>
     <div class="charter-tooltip" role="status"><div class="tooltip-title" data-field="title">Survey site</div><div class="tooltip-row"><span>Sunlight</span><span data-field="sun"></span></div><div class="tooltip-row"><span>Traffic</span><span data-field="traffic"></span></div><div class="tooltip-row"><span>Debris</span><span data-field="debris"></span></div><div class="tooltip-row"><span>Resource</span><span data-field="resource"></span></div><div class="tooltip-row"><span>Supply cost</span><span data-field="supply-cost"></span></div><div class="tooltip-row"><span>Retail demand</span><span data-field="retail-demand"></span></div><div class="tooltip-row"><span>Repair demand</span><span data-field="repair-demand"></span></div><div class="tooltip-row"><span>Solar yield</span><span data-field="solar-yield"></span></div></div>
     <nav class="charter-actions" aria-label="Charter actions">
+      <div class="charter-selection" aria-live="polite"><strong>Select a station site</strong><span>Click the map or use the recommended location to compare its operating conditions.</span></div>
       <button type="button" class="charter-recommended">Recommended Site</button>
       <button type="button" class="charter-primary" disabled>Charter This Site</button>
       ${options.allowCancel ? '<button type="button" class="charter-back">Back</button>' : ''}
@@ -515,6 +530,7 @@ export function mountCharterScreen(
   const solarYieldField = root.querySelector<HTMLElement>('[data-field="solar-yield"]')!;
   const recommendedButton = root.querySelector<HTMLButtonElement>('.charter-recommended')!;
   const charterButton = root.querySelector<HTMLButtonElement>('.charter-primary')!;
+  const selectionSummary = root.querySelector<HTMLElement>('.charter-selection')!;
   const backButton = root.querySelector<HTMLButtonElement>('.charter-back');
 
   let width = 1;
@@ -695,6 +711,9 @@ export function mountCharterScreen(
 
   const select = (point: Point): void => {
     selected = point;
+    const profile = computeSiteProfile(system, point.x, point.y);
+    const economy = deriveOpeningEconomyProfile(profile);
+    selectionSummary.innerHTML = `<strong>${trafficBand(peakTraffic(profile))} traffic · ${resourceLabel(profile.resourceType)}</strong><span>Supplies ${Math.round(economy.supplyWholesaleMultiplier * 100)}% · retail ${Math.round(economy.retailDemandMultiplier * 100)}% · repairs ${Math.round(economy.repairDemandMultiplier * 100)}% · solar ${Math.round(economy.solarYieldMultiplier * 100)}%</span>`;
     charterButton.disabled = false;
     draw(performance.now());
   };

@@ -7281,6 +7281,30 @@ function berthClusterIsUShaped(state: StationState, clusterTiles: number[]): boo
   return expected.size === clusterTiles.length && clusterTiles.every((tile) => expected.has(tile));
 }
 
+function berthClusterIsRectangularBay(state: StationState, clusterTiles: number[]): boolean {
+  if (clusterTiles.length === 0) return false;
+  const facing = deriveBerthFacing(state, clusterTiles);
+  if (facing === null) return false;
+  const points = clusterTiles.map((tile) => fromIndex(tile, state.width));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  const horizontalOpening = facing === 'north' || facing === 'south';
+  const breadth = horizontalOpening ? width : height;
+  const depth = horizontalOpening ? height : width;
+  if (breadth < 3 || depth < 3 || width * height !== clusterTiles.length) return false;
+  const cluster = new Set(clusterTiles);
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      if (!cluster.has(toIndex(x, y, state.width))) return false;
+    }
+  }
+  return true;
+}
+
 function berthModuleInstances(state: StationState, clusterTiles: number[]) {
   const cluster = new Set(clusterTiles);
   return state.moduleInstances.filter((module) => module.tiles.some((tile) => cluster.has(tile)));
@@ -7317,7 +7341,11 @@ function deriveBerthFacilityForCluster(state: StationState, clusterTiles: number
     module.type === ModuleType.FuelPump ||
     module.type === ModuleType.FuelTank
   );
-  const uShaped = berthClusterIsUShaped(state, clusterTiles);
+  // The berth floor is normally a solid rectangle. Its hull forms the U:
+  // three enclosed sides and one face open to space. Keep accepting the
+  // earlier room-paint U so saves authored during the prototype remain valid.
+  const uShaped = berthClusterIsRectangularBay(state, clusterTiles) ||
+    berthClusterIsUShaped(state, clusterTiles);
   // Old saves do not retain a facility identity or a construction timestamp.
   // Their authored berth paint is often a clipped rectangle around hull art,
   // so legacy detection keys off pre-existing berth hardware rather than an
@@ -7330,7 +7358,7 @@ function deriveBerthFacilityForCluster(state: StationState, clusterTiles: number
   const accessReady = berthAccessReady(state, clusterTiles);
   const reasons: string[] = [];
   if (!spaceExposed) reasons.push('berth needs one edge open to space');
-  if (geometry === 'invalid') reasons.push('berth needs a U-shaped service deck or a legacy rectangular adapter');
+  if (geometry === 'invalid') reasons.push('berth needs a rectangular floor at least 3 tiles wide and deep, with one edge open to space');
   if (!legacyCompatibility && !accessReady) reasons.push('berth needs a pressurized station-side access route');
   if (!legacyCompatibility && controlModuleId === null) reasons.push('berth needs a berth control unit');
   return {

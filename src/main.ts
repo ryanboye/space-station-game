@@ -351,7 +351,7 @@ app.innerHTML = `
     </div>
     <section id="berth-ops-widget" class="hud-card berth-ops-widget overlay-card hidden" aria-live="polite">
       <div class="hud-card-title berth-ops-head">
-        <span>Live Berth Ops</span>
+        <span id="berth-ops-title">Live Berth Ops</span>
         <span class="berth-ops-head-actions">
           <span id="berth-ops-count" class="berth-ops-count">0 ACTIVE</span>
           <button id="toggle-berth-ops" class="panel-collapse-button" type="button" aria-label="Collapse live berth operations" title="Collapse ship details" aria-expanded="true" aria-controls="berth-ops-list">
@@ -401,7 +401,7 @@ app.innerHTML = `
         <div class="row compact list-row"><span>Work Queue</span><span class="value" id="jobs">No queued work</span></div>
         <small id="critical-staffing-line"></small>
       </section>
-      <section class="dock-card settlement-card">
+      <section id="settlement-card" class="dock-card settlement-card">
         <div class="hud-card-title">Last Turnaround</div>
         <div id="settlement-summary" class="settlement-summary">No ship settled yet.</div>
       </section>
@@ -1626,10 +1626,13 @@ const portAutoStatusEl = document.querySelector<HTMLElement>('#port-auto-status'
 const approachPolicyEl = document.querySelector<HTMLElement>('#approach-policy')!;
 const approachReputationPullEl = document.querySelector<HTMLElement>('#approach-reputation-pull')!;
 const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
+const berthOpsTitleEl = document.querySelector<HTMLElement>('#berth-ops-title')!;
 const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
 const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
 const toggleBerthOpsBtn = document.querySelector<HTMLButtonElement>('#toggle-berth-ops')!;
 const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
+const settlementCardEl = document.querySelector<HTMLElement>('#settlement-card')!;
+const bottomDockEl = document.querySelector<HTMLElement>('#bottom-dock')!;
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
 const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
 const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;
@@ -3095,6 +3098,9 @@ let lastSettlementRenderKey = '';
 
 function refreshSettlementSummary(): void {
   const settlements = state.portOps.settlements;
+  const berthMode = state.rooms.includes(RoomType.Berth);
+  settlementCardEl.classList.toggle('hidden', !berthMode);
+  bottomDockEl.classList.toggle('pod-only', !berthMode);
   const settlement = state.portOps.selectedSettlementId == null
     ? null
     : settlements.find((entry) => entry.id === state.portOps.selectedSettlementId) ?? settlements[settlements.length - 1] ?? null;
@@ -3206,6 +3212,9 @@ function refreshTrafficOffers(): void {
   const activeTurnarounds = state.arrivingShips.filter((ship) =>
     ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
   );
+  berthOpsTitleEl.textContent = activeTurnarounds.some((ship) => !ship.smallCraftVisit)
+    ? 'Live Berth Ops'
+    : 'Live Pod Ops';
   refreshShiftBrief(activeTurnarounds.filter((ship) => ship.portManifest && !ship.smallCraftVisit));
   const activeHtml = activeTurnarounds.map((ship) => {
     if (ship.smallCraftVisit) {
@@ -5631,12 +5640,9 @@ const STATION_GOALS: StationGoalDefinition[] = [
 ];
 
 function lifetimeVisitorsServed(): number {
-  const unsettledProgress = state.portOps.contracts
-    .filter((contract) => contract.status === 'accepted' || contract.status === 'active' || contract.status === 'boarding')
-    .flatMap((contract) => contract.promises)
-    .filter((promise) => promise.kind === 'passengers-served')
-    .reduce((sum, promise) => sum + promise.completed, 0);
-  return state.portOps.telemetry.mealsCompleted + unsettledProgress;
+  // Pod visitors complete meals outside berth-contract telemetry. This
+  // persisted metric keeps the opening goal reachable before a berth exists.
+  return state.metrics.mealsServedTotal;
 }
 
 function stationGoalMetricValue(metric: StationGoalMetric): number {
@@ -6052,7 +6058,7 @@ function restoreViewAfterUtilityTool(): void {
 }
 let panStartScrollTop = 0;
 let uiPanelsHidden = false;
-let berthOpsCollapsed = false;
+let berthOpsCollapsed = !state.rooms.includes(RoomType.Berth);
 
 function syncPanelVisibility(): void {
   app!.classList.toggle('ui-panels-hidden', uiPanelsHidden);
@@ -7879,7 +7885,7 @@ function refreshRoomModal(): void {
     if (berth) {
       const facility = berth.facility;
       const geometry = facility.geometry === 'u-shaped'
-        ? 'U-shape ready'
+        ? 'Three-sided bay ready'
         : facility.geometry === 'legacy-rectangular'
           ? 'Legacy adapter'
           : 'Incomplete geometry';

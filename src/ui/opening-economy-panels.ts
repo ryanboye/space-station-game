@@ -212,6 +212,31 @@ const STYLE_TEXT = `
 .oe-trait strong { color: #e4edf0; font-weight: 700; }
 .oe-trait.good { border-color: rgba(89, 190, 137, 0.58); color: #a5dbbe; }
 .oe-trait.warn { border-color: rgba(232, 174, 73, 0.65); color: #edca8a; }
+.oe-site-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-top: 8px;
+}
+.oe-site-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 31px;
+  padding: 5px 7px;
+  border: 1px solid rgba(105, 145, 169, 0.62);
+  border-radius: 3px;
+  background: rgba(19, 39, 55, 0.82);
+  color: #dceaf0;
+  cursor: pointer;
+  font: 10px Consolas, Menlo, Monaco, monospace;
+  text-align: left;
+}
+.oe-site-action:hover,
+.oe-site-action:focus-visible { border-color: #a7cfdf; background: rgba(31, 61, 80, 0.92); }
+.oe-site-action b { color: #82d9a8; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.oe-site-action.warn b { color: #efc36f; }
 .oe-panel-layer {
   position: absolute;
   inset: 0;
@@ -507,7 +532,15 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     const brief = currentView?.siteBrief;
     siteBrief.hidden = !brief || !siteBriefVisible;
     if (!brief || !siteBriefVisible) return;
-    siteBrief.innerHTML = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>`;
+    const shop = currentView?.shop;
+    const projects = currentView?.projects;
+    const actions = shop || projects
+      ? `<div class="oe-site-actions">
+          ${shop ? `<button type="button" class="oe-site-action${shop.stock <= 0 ? ' warn' : ''}" data-oe-open-shop><span>Travel supplies</span><b>${Math.round(shop.stock)}/${Math.round(shop.capacity)}</b></button>` : ''}
+          ${projects ? `<button type="button" class="oe-site-action" data-oe-open-projects><span>Capital projects</span><b>${projects.activeCount}/${projects.maxActive} active</b></button>` : ''}
+        </div>`
+      : '';
+    siteBrief.innerHTML = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
   };
 
   const renderOpenPanel = (): void => {
@@ -540,6 +573,25 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     const nextPanel = layer.querySelector<HTMLElement>('.oe-panel');
     if (nextPanel && previousScrollTop > 0) nextPanel.scrollTop = previousScrollTop;
   };
+
+  // The brief may be reparented into the game's left HUD stack, outside this
+  // controller's root. Give its compact launch buttons their own listener.
+  const handleSiteBriefClick = (event: Event): void => {
+    const target = event.target as Element | null;
+    if (!target) return;
+    if (target.closest('[data-oe-open-shop]') && currentView?.shop) {
+      openPanel = 'shop';
+      renderOpenPanel();
+      emit({ type: 'open-shop' });
+      return;
+    }
+    if (target.closest('[data-oe-open-projects]') && currentView?.projects) {
+      openPanel = 'projects';
+      renderOpenPanel();
+      emit({ type: 'open-projects' });
+    }
+  };
+  siteBrief.addEventListener('click', handleSiteBriefClick);
 
   root.addEventListener('click', (event) => {
     const target = event.target as Element | null;
@@ -591,6 +643,8 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
       renderSiteBrief();
     },
     destroy(): void {
+      siteBrief.removeEventListener('click', handleSiteBriefClick);
+      if (siteBrief.parentElement !== root) siteBrief.remove();
       root.remove();
     }
   };

@@ -621,7 +621,10 @@ export const BERTH_SIZE_MIN = {
   // v0: small lowered to 4 to match relaxed minTiles. Production v1
   // restores to 9.
   small: 4,
-  medium: 20,
+  // Contract traffic begins at medium size. A canonical 4x3 starter bay
+  // must therefore qualify, or the first berth the player can reasonably
+  // build is a dead-end that cannot accept any manifest.
+  medium: 12,
   large: 42
 } as const;
 

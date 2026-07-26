@@ -14,6 +14,7 @@ If you're an agent picking up a task, read in this order:
 6. **`16/17/18-roadmap-part-*.md`** — paused subsystem plans; use as implementation history and inventory, not an automatic feature sequence.
 7. **The system docs** for whatever you're touching (e.g. crew -> `05-crew.md`; walls -> `11-render.md`).
 8. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
+9. **`37-station-portfolio-program/`** for the current portfolio spine, exact facility recipes, and implementation handoffs.
 
 Every system doc follows the same shape:
 
@@ -49,6 +50,7 @@ Every system doc follows the same shape:
 | `23-operational-promise-core-loop.md` | Current core-loop design authority, system disposition, and Two-Berth Shift slice |
 | `24-two-berth-shift-implementation-goal.md` | One-shot implementation goal for the standalone Two-Berth Shift branch |
 | `25-crew-sustainability-and-hospitality.md` | Crew quarters, morale/retention, and manifest-backed hospitality services |
+| `37-station-portfolio-program/` | Current station portfolio design, player-authored opening, and ordered implementation packages |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions
