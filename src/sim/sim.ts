@@ -219,6 +219,7 @@ import {
   type ShipSize,
   TileType,
   type VisitorArchetype,
+  type RecurringNeedKind,
   type VisitStayClass,
   type VisitorPreference,
   VisitorState,
@@ -274,6 +275,15 @@ const MAX_SHIPS_PER_CYCLE = 3;
 const TRAFFIC_ARRIVAL_MIN_DELAY_SEC = 3.5;
 const TRAFFIC_ARRIVAL_MAX_DELAY_SEC = 28;
 const MAX_OCCUPANTS_PER_TILE = 4;
+
+const FAILED_STAY_TIMINGS = {
+  balkingAfterSec: 28,
+  distressedAfterSec: 75,
+  disruptiveAfterSec: 150,
+  reliefDelaySec: 60
+} as const;
+const STRANDED_RELIEF_BASE_COST = 35;
+const FAILED_STAY_ROUTE_CONFIRMATION_SEC = 12;
 
 const CREW_PER_CAFETERIA = 2;
 const CREW_PER_KITCHEN = 1;
@@ -12894,6 +12904,17 @@ function updatePortTurnaround(state: StationState, ship: ArrivingShip, dt: numbe
   if (ship.stage === 'depart') turn.phase = 'departing';
 }
 
+export function getContractVisitorWorkMultiplier(state: StationState, shipId: number): number {
+  let distressed = 0;
+  let disruptive = 0;
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId !== shipId || !isLongStayClass(visitor.stayClass)) continue;
+    if (visitor.serviceFailureStage === 'disruptive') disruptive += 1;
+    else if (visitor.serviceFailureStage === 'distressed') distressed += 1;
+  }
+  return clamp(1 - distressed * 0.08 - disruptive * 0.18, 0.45, 1);
+}
+
 function cargoArmRepairTile(state: StationState): number | null {
   const arm = state.moduleInstances.find((module) => module.type === ModuleType.CargoArm);
   if (!arm) return null;
@@ -12996,6 +13017,61 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     assignPathToDock(state, visitor);
   }
   pushCrowdEvent(state, 'info', `${ship.portManifest?.callsign ?? `Ship ${ship.id}`} recall started`);
+}
+
+function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void {
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId !== ship.id) continue;
+    releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+    removeVisitorFromQueues(state, visitor.id);
+    visitor.strandedFromShipId = ship.id;
+    visitor.strandedAt = state.now;
+    visitor.reliefEligibleAt = state.now + FAILED_STAY_TIMINGS.reliefDelaySec;
+    visitor.originShipId = null;
+    visitor.activeService = null;
+    visitor.recurringNeedActive = null;
+    if (visitor.needs) visitor.needs.active = null;
+    visitor.reservedTargetTile = null;
+    visitor.reservedServingTile = null;
+    visitor.marketTradeGoodSourceTile = null;
+    visitor.temporarySleepTargetTile = null;
+    visitor.state = VisitorState.ToLeisure;
+    setVisitorPath(state, visitor, []);
+    routeStrandedVisitor(state, visitor);
+  }
+}
+
+function strandedReliefCost(visitor: Visitor): number {
+  const surcharge = visitor.serviceFailureStage === 'disruptive'
+    ? 50
+    : visitor.serviceFailureStage === 'distressed'
+      ? 30
+      : visitor.serviceFailureStage === 'balking'
+        ? 15
+        : 0;
+  return clamp(STRANDED_RELIEF_BASE_COST + surcharge, STRANDED_RELIEF_BASE_COST, 120);
+}
+
+/** Pays for a relief transfer after the passenger has been stranded long enough. */
+export function transferStrandedVisitor(state: StationState, visitorId: number): boolean {
+  const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
+  if (!visitor || !visitorIsStranded(visitor)) return false;
+  if (state.now < (visitor.reliefEligibleAt ?? Number.POSITIVE_INFINITY)) return false;
+  const cost = strandedReliefCost(visitor);
+  if (state.metrics.credits + 0.001 < cost) return false;
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+  removeVisitorFromQueues(state, visitor.id);
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'security-recovery',
+    credits: -cost,
+    costBasis: 0,
+    label: `Relief transfer · stranded passenger`,
+    sourceId: visitor.strandedFromShipId ?? undefined,
+    tileIndex: visitor.tileIndex
+  }, { countAsEarned: false });
+  state.visitors = state.visitors.filter((candidate) => candidate.id !== visitor.id);
+  return true;
 }
 
 function tryExtendLongStayVisit(state: StationState, ship: ArrivingShip, contract: PortContract): boolean {
@@ -13104,11 +13180,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.stageTime = 0;
       } else if (contract && state.now >= contract.hardDepartureAt) {
         state.portOps.telemetry.hardDeadlineDepartures += 1;
-        for (const visitor of state.visitors) {
-          if (visitor.originShipId !== ship.id) continue;
-          releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
-        }
-        state.visitors = state.visitors.filter((visitor) => visitor.originShipId !== ship.id);
+        strandUnboardedVisitors(state, ship);
         for (const job of state.jobs) {
           if (job.portShipId !== ship.id || job.state === 'done' || job.state === 'expired') continue;
           if (job.itemType === 'fuel' && job.assignedCrewId !== null) {
@@ -17665,7 +17737,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           }
         } else {
           job.state = 'in_progress';
-          job.workProgress = Math.min(job.workRequired ?? 7, (job.workProgress ?? 0) + dt);
+          const workMultiplier = ship.portContractId === undefined ? 1 : getContractVisitorWorkMultiplier(state, ship.id);
+          job.workProgress = Math.min(job.workRequired ?? 7, (job.workProgress ?? 0) + dt * workMultiplier);
           turnaround.inspectionProgress = job.workProgress;
           job.lastProgressAt = state.now;
           if ((job.workProgress ?? 0) >= (job.workRequired ?? 7)) {
@@ -19347,6 +19420,62 @@ function shipIsRecalling(state: StationState, visitor: Visitor): boolean {
   return ship?.visitPhase === 'recall' || ship?.visitPhase === 'boarding' || ship?.stage === 'depart';
 }
 
+function visitorIsStranded(visitor: Visitor): boolean {
+  return visitor.strandedFromShipId !== null && visitor.strandedFromShipId !== undefined;
+}
+
+function clearVisitorServiceFailure(visitor: Visitor): void {
+  visitor.serviceFailureStage = 'none';
+  visitor.failureSince = null;
+  visitor.failureNeed = null;
+}
+
+function severeNeedForVisitor(visitor: Visitor): RecurringNeedKind | null {
+  const needs = visitor.needs;
+  if (!needs || !hasSevereUnmetNeed(needs)) return null;
+  return selectRecurringNeed(needs);
+}
+
+function visitorCannotCompleteNeed(state: StationState, visitor: Visitor): boolean {
+  if (visitor.serviceBlockedSince !== null && visitor.serviceBlockedSince !== undefined) return true;
+  if (visitor.activeService === null || visitor.state === VisitorState.Eating || visitor.state === VisitorState.Leisure) return false;
+  // An empty path while the actor still needs a real service is the existing
+  // routing system's durable signal that no usable fixture/path was found.
+  // Confirm it over time so a single path auction or missed meal is harmless.
+  const unmetFor = state.now - (visitor.needs?.unmetSince ?? state.now);
+  return visitor.path.length === 0 && visitorPathRetryReady(state, visitor) && unmetFor >= FAILED_STAY_ROUTE_CONFIRMATION_SEC;
+}
+
+function updateVisitorServiceFailure(state: StationState, visitor: Visitor): void {
+  if ((!isLongStayClass(visitor.stayClass) && !visitorIsStranded(visitor)) || !visitor.needs) {
+    clearVisitorServiceFailure(visitor);
+    return;
+  }
+  const severeNeed = severeNeedForVisitor(visitor);
+  if (severeNeed === null || !visitorCannotCompleteNeed(state, visitor)) {
+    clearVisitorServiceFailure(visitor);
+    return;
+  }
+  visitor.failureSince ??= state.now;
+  visitor.failureNeed = severeNeed;
+  const elapsed = Math.max(0, state.now - visitor.failureSince);
+  visitor.serviceFailureStage = elapsed >= FAILED_STAY_TIMINGS.disruptiveAfterSec
+    ? 'disruptive'
+    : elapsed >= FAILED_STAY_TIMINGS.distressedAfterSec
+      ? 'distressed'
+      : elapsed >= FAILED_STAY_TIMINGS.balkingAfterSec
+        ? 'balking'
+        : 'unmet';
+}
+
+function routeStrandedVisitor(state: StationState, visitor: Visitor): boolean {
+  if (!visitorIsStranded(visitor) || !visitor.needs) return false;
+  // A bed is a real scarce recovery slot. Prefer it only when energy is the
+  // pressing need; food and hygiene retain their ordinary facility routes.
+  if (visitor.needs.energy <= 55 && assignPathToTemporarySleep(state, visitor)) return true;
+  return routeLongStayVisitor(state, visitor);
+}
+
 function routeLongStayVisitor(state: StationState, visitor: Visitor): boolean {
   if (!isLongStayClass(visitor.stayClass) || !visitor.needs || shipIsRecalling(state, visitor)) return false;
   const need = selectRecurringNeed(visitor.needs);
@@ -19371,13 +19500,14 @@ function routeLongStayVisitor(state: StationState, visitor: Visitor): boolean {
 }
 
 function updateLongStayVisitorNeeds(state: StationState, visitor: Visitor, dt: number): void {
-  if (!isLongStayClass(visitor.stayClass) || !visitor.needs || shipIsRecalling(state, visitor)) return;
+  if ((!isLongStayClass(visitor.stayClass) && !visitorIsStranded(visitor)) || !visitor.needs || shipIsRecalling(state, visitor)) return;
   decayVisitorNeeds(visitor.needs, dt);
   if (hasSevereUnmetNeed(visitor.needs)) visitor.needs.unmetSince ??= state.now;
   else visitor.needs.unmetSince = null;
   if (visitor.activeService === null && visitor.state !== VisitorState.Eating && visitor.state !== VisitorState.Leisure) {
-    routeLongStayVisitor(state, visitor);
+    if (!routeStrandedVisitor(state, visitor)) routeLongStayVisitor(state, visitor);
   }
+  updateVisitorServiceFailure(state, visitor);
 }
 
 function routeContractVisitorToNextService(state: StationState, visitor: Visitor): boolean {
@@ -20150,6 +20280,7 @@ function updateVisitorLogic(
         const boarded = boardedResult.boarded;
         const originShipPresent = originShipForVisitor(state, visitor) !== null;
         const canExitNormally =
+          !visitorIsStranded(visitor) &&
           !originShipPresent &&
           state.now - visitor.spawnedAt >= VISITOR_MIN_STAY_SEC;
         if (boarded || canExitNormally) {
@@ -20200,7 +20331,7 @@ function updateVisitorLogic(
           );
           continue;
         }
-        if (originShipForVisitor(state, visitor) === null) {
+        if (!visitorIsStranded(visitor) && originShipForVisitor(state, visitor) === null) {
           state.recentExitTimes.push(state.now);
           occupancyByTile.set(
             visitor.tileIndex,

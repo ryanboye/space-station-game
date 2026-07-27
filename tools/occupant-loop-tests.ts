@@ -221,14 +221,18 @@ function testRecallHardDepartureAndSaveResume(): void {
   assert(restored.state.visitors.every((entry) => entry.originShipId !== ship.id || entry.state === VisitorState.ToDock || entry.path.length === 0), 'Recall must clear irrelevant visitor activity.');
 
   // A fresh cohort makes the hard-departure assertion deterministic even if the
-  // recalled visitor reached the access tile during the preceding tick.
+  // recalled visitor reached the access tile during the preceding tick. Missed
+  // passengers now remain temporary occupants until a relief transfer rather
+  // than disappearing or silently becoming residents.
   const departureVisitor = longStayVisitor(restored.state, resumedShip, 9203);
   resumedContract.hardDepartureAt = restored.state.now;
   resumedContract.boardingStartsAt = restored.state.now;
   resumedShip.extensionUntil = restored.state.now + 1;
   resumedShip.visitPhase = 'boarding';
   advance(restored.state, 0.4);
-  assert(!restored.state.visitors.some((entry) => entry.id === departureVisitor.id), 'Hard departure must clear remaining temporary occupants.');
+  const stranded = restored.state.visitors.find((entry) => entry.id === departureVisitor.id);
+  assert(stranded?.originShipId === null && stranded.strandedFromShipId === resumedShip.id, 'Hard departure must preserve a missed passenger as a stranded temporary occupant.');
+  assert(restored.state.residents.length === 0, 'A stranded visitor must never become a resident implicitly.');
   const settlements = restored.state.portOps.settlements.filter((settlement) => settlement.contractId === resumedContract.id).length;
   advance(restored.state, 1);
   assert(restored.state.portOps.settlements.filter((settlement) => settlement.contractId === resumedContract.id).length === settlements, 'Repeated departure ticks must not settle twice.');

@@ -52,6 +52,7 @@ import {
   type VisitorArchetype,
   type Visitor,
   type VisitorNeeds,
+  type VisitorServiceFailureStage,
   type VisitStayClass,
   VisitorState,
   ZoneType,
@@ -113,6 +114,7 @@ const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SMALL_CRAFT_SERVICE_KINDS = ['passenger', 'refuel', 'freight', 'repair'] as const;
 const SMALL_CRAFT_SERVICE_STATUSES = ['pending', 'active', 'complete', 'blocked', 'skipped'] as const;
 const VISIT_STAY_CLASSES: VisitStayClass[] = ['errand', 'shore', 'contract', 'extended', 'permanent'];
+const VISITOR_FAILURE_STAGES: VisitorServiceFailureStage[] = ['none', 'unmet', 'balking', 'distressed', 'disruptive'];
 const SHIP_VISIT_PHASES = ['announced', 'approach', 'secure', 'visit-service', 'recall', 'boarding', 'depart'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
 const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
@@ -727,6 +729,15 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
   const visitor = value as unknown as Visitor;
   const stayClass = isOneOf(value.stayClass, VISIT_STAY_CLASSES) ? value.stayClass : 'errand';
   const needs = normalizeVisitorNeeds(value.needs);
+  const serviceFailureStage = isOneOf(value.serviceFailureStage, VISITOR_FAILURE_STAGES)
+    ? value.serviceFailureStage
+    : 'none';
+  const failureNeed = value.failureNeed === 'hunger' || value.failureNeed === 'energy' || value.failureNeed === 'hygiene' || value.failureNeed === 'leisure'
+    ? value.failureNeed
+    : null;
+  const strandedFromShipId = typeof value.strandedFromShipId === 'number' && Number.isFinite(value.strandedFromShipId)
+    ? Math.max(1, Math.floor(value.strandedFromShipId))
+    : null;
   const hadTransientFacilityClaim =
     (typeof value.marketTradeGoodSourceTile === 'number' && Number.isFinite(value.marketTradeGoodSourceTile)) ||
     (typeof value.temporarySleepTargetTile === 'number' && Number.isFinite(value.temporarySleepTargetTile));
@@ -744,7 +755,17 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     temporarySleepTargetTile: null,
     stayClass,
     needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
-    recurringNeedActive: needs?.active ?? null
+    recurringNeedActive: needs?.active ?? null,
+    serviceFailureStage,
+    failureSince: typeof value.failureSince === 'number' && Number.isFinite(value.failureSince) ? Math.max(0, value.failureSince) : null,
+    failureNeed,
+    strandedFromShipId,
+    strandedAt: strandedFromShipId !== null && typeof value.strandedAt === 'number' && Number.isFinite(value.strandedAt)
+      ? Math.max(0, value.strandedAt)
+      : null,
+    reliefEligibleAt: strandedFromShipId !== null && typeof value.reliefEligibleAt === 'number' && Number.isFinite(value.reliefEligibleAt)
+      ? Math.max(0, value.reliefEligibleAt)
+      : null
   };
 }
 

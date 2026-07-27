@@ -469,6 +469,7 @@ export type VisitorPreference = 'cafeteria' | 'market' | 'lounge';
 export type VisitStayClass = 'errand' | 'shore' | 'contract' | 'extended' | 'permanent';
 export type ShipVisitPhase = 'announced' | 'approach' | 'secure' | 'visit-service' | 'recall' | 'boarding' | 'depart';
 export type RecurringNeedKind = 'hunger' | 'energy' | 'hygiene' | 'leisure';
+export type VisitorServiceFailureStage = 'none' | 'unmet' | 'balking' | 'distressed' | 'disruptive';
 
 /** Durable needs for a temporary long-stay occupant. Residents retain their own state. */
 export interface VisitorNeeds {
@@ -577,6 +578,14 @@ export interface Visitor {
   marketTradeGoodSourceTile?: number | null;
   /** Current temporary lodging slot. This is never resident housing identity. */
   temporarySleepTargetTile?: number | null;
+  /** Durable service-failure state for long-stay and stranded occupants. */
+  serviceFailureStage?: VisitorServiceFailureStage;
+  failureSince?: number | null;
+  failureNeed?: RecurringNeedKind | null;
+  /** Departure provenance for a passenger left behind by a berth ship. */
+  strandedFromShipId?: number | null;
+  strandedAt?: number | null;
+  reliefEligibleAt?: number | null;
 }
 
 export enum ResidentState {
