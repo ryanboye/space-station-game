@@ -13,7 +13,7 @@
  * stay visible with plain prerequisite copy so nothing arrives as a surprise.
  */
 
-import { MODULE_DEFINITIONS, ROOM_DEFINITIONS } from './balance';
+import { MODULE_DEFINITIONS, OPENING_BALANCE, ROOM_DEFINITIONS } from './balance';
 import { ModuleType, RoomType, type StationState } from './types';
 
 export type OpeningRecipeId = 'feed-travelers' | 'sell-supplies' | 'service-ships';
@@ -65,11 +65,11 @@ function roomStep(room: RoomType, label: string): RecipeStep {
   return { kind: 'room', room, count: ROOM_DEFINITIONS[room].minTiles, label, costCredits: 0 };
 }
 
-/** Opening stock batches, priced to match their purchase paths. */
+/** Opening stock batches, read from the one balance location (OPEN-04). */
 export const OPENING_STOCK_COST = {
-  preparedMeals: 36,
-  travelSupplies: 30,
-  fuelLot: 40
+  preparedMeals: OPENING_BALANCE.preparedMealBatch.costCredits,
+  travelSupplies: OPENING_BALANCE.travelSupplyBatch.costCredits,
+  fuelLot: OPENING_BALANCE.fuelLot.costCredits
 } as const;
 
 export function openingRecipes(): OpeningRecipe[] {
@@ -85,7 +85,7 @@ export function openingRecipes(): OpeningRecipe[] {
         {
           kind: 'stock',
           label: 'Buy an opening batch of prepared meals',
-          count: 12,
+          count: OPENING_BALANCE.preparedMealBatch.units,
           costCredits: OPENING_STOCK_COST.preparedMeals
         }
       ],
@@ -103,7 +103,7 @@ export function openingRecipes(): OpeningRecipe[] {
         {
           kind: 'stock',
           label: 'Order opening stock through the Freight Locker',
-          count: 12,
+          count: OPENING_BALANCE.travelSupplyBatch.units,
           costCredits: OPENING_STOCK_COST.travelSupplies
         }
       ],
@@ -120,7 +120,7 @@ export function openingRecipes(): OpeningRecipe[] {
         roomStep(RoomType.Maintenance, `Paint ${ROOM_DEFINITIONS[RoomType.Maintenance].minTiles} Maintenance tiles`),
         moduleStep(ModuleType.FuelTank, 1, 'Place a Fuel Tank'),
         { kind: 'utility', label: 'Draw fuel pipe from the tank to the coupler', count: 1, costCredits: 0 },
-        { kind: 'stock', label: 'Order an opening fuel lot', count: 40, costCredits: OPENING_STOCK_COST.fuelLot }
+        { kind: 'stock', label: 'Order an opening fuel lot', count: OPENING_BALANCE.fuelLot.units, costCredits: OPENING_STOCK_COST.fuelLot }
       ],
       staffing: 'An Engineer once physical staffing is enabled.',
       utilities: 'Power, safe access, and a continuous fuel pipe run.',
@@ -184,9 +184,16 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
             : 0;
       return { ...step, have, satisfied: step.kind === 'stock' ? false : have >= step.count };
     });
+    // Price what is still missing, not the whole step: the player who already
+    // owns one of two Serving Stations owes for one, and a headline that says
+    // otherwise is the kind of number that stops being trusted.
     const remainingCostCredits = steps
       .filter((step) => !step.satisfied)
-      .reduce((sum, step) => sum + step.costCredits, 0);
+      .reduce((sum, step) => {
+        const missing = step.kind === 'stock' ? 1 : Math.max(0, step.count - step.have);
+        const perUnit = step.count > 0 ? step.costCredits / step.count : step.costCredits;
+        return sum + Math.round(step.kind === 'stock' ? step.costCredits : missing * perUnit);
+      }, 0);
     const totalCostCredits = steps.reduce((sum, step) => sum + step.costCredits, 0);
     return {
       id: recipe.id,

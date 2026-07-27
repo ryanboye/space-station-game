@@ -2,6 +2,7 @@ import { findPath as findPathCore } from './path';
 import {
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
+  OPENING_BALANCE,
   PORT_SETTLEMENT,
   PROCESS_RATES,
   ROOM_ENVIRONMENT_TRAITS,
@@ -271,9 +272,9 @@ const CREW_PER_MARKET = 1;
 const COMMERCIAL_RENT_INTERVAL_SEC = 60;
 const COMMERCIAL_RESTOCK_INTERVAL_SEC = 18;
 
-const TRAVEL_SUPPLY_ORDER_UNITS = 12;
+const TRAVEL_SUPPLY_ORDER_UNITS = OPENING_BALANCE.travelSupplyBatch.units;
 const TRAVEL_SUPPLY_BASE_WHOLESALE = 3.5;
-const POD_COURIER_HANDLING_FEE = 2.5;
+const POD_COURIER_HANDLING_FEE = OPENING_BALANCE.courierHandlingFeePerUnit;
 
 function applyEconomyTransaction(
   state: StationState,
@@ -775,7 +776,7 @@ const SANITATION_TRAFFIC_NEIGHBOUR_SHARE = 0.35;
 const SANITATION_MAX_OPEN_JOBS = 14;
 const SANITATION_VISITOR_RATING_PENALTY_PER_SEC = 0.0014;
 const SANITATION_RESIDENT_STRESS_PER_SEC = 0.018;
-export const STARTING_CREDITS = 260;
+export const STARTING_CREDITS = OPENING_BALANCE.startingCredits;
 export const STARTING_SUPPLIES = 100;
 const MATERIAL_IMPORT_CADENCE_SEC = 10;
 const MATERIAL_IMPORT_UNIT_BASE_COST = 0.72;
@@ -23263,8 +23264,8 @@ export interface BuyPreparedMealsResult {
  */
 export function previewPreparedMealPurchase(
   state: StationState,
-  creditCost = 36,
-  mealGain = 12
+  creditCost = OPENING_BALANCE.preparedMealBatch.costCredits,
+  mealGain = OPENING_BALANCE.preparedMealBatch.units
 ): BuyPreparedMealsResult {
   const destinations = state.moduleInstances
     .filter((module) => module.type === ModuleType.ServingStation)
@@ -23317,8 +23318,8 @@ export function previewPreparedMealPurchase(
 
 export function buyPreparedMealsDetailed(
   state: StationState,
-  creditCost = 36,
-  mealGain = 12
+  creditCost = OPENING_BALANCE.preparedMealBatch.costCredits,
+  mealGain = OPENING_BALANCE.preparedMealBatch.units
 ): BuyPreparedMealsResult {
   rebuildItemNodes(state);
   const preview = previewPreparedMealPurchase(state, creditCost, mealGain);
@@ -23367,13 +23368,17 @@ export function buyPreparedMealsDetailed(
 }
 
 /** Boolean wrapper retained for existing call sites and saved scenarios. */
-export function buyPreparedMeals(state: StationState, creditCost = 36, mealGain = 12): boolean {
+export function buyPreparedMeals(
+  state: StationState,
+  creditCost = OPENING_BALANCE.preparedMealBatch.costCredits,
+  mealGain = OPENING_BALANCE.preparedMealBatch.units
+): boolean {
   return buyPreparedMealsDetailed(state, creditCost, mealGain).ok;
 }
 
 export function buyImportedTradeGoods(
   state: StationState,
-  creditCost = 30,
+  creditCost = OPENING_BALANCE.travelSupplyBatch.costCredits,
   goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
 ): boolean {
   rebuildItemNodes(state);

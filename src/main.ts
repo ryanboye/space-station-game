@@ -1106,7 +1106,7 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
   siteBriefHost: document.querySelector<HTMLElement>('.left-stack'),
   onAction: (action) => {
     if (action.type === 'order-stock') {
-      buyImportedTradeGoods(state, 30, 12);
+      buyImportedTradeGoods(state);
     } else if (action.type === 'set-pricing-policy') {
       setMarketPricingPolicy(state, action.policy);
     } else if (action.type === 'accept-project') {

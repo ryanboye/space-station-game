@@ -80,7 +80,10 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     // The 2x2 artwork contains four visible seats. Each footprint tile is one
     // exclusive usage position, so the rendered and simulated capacity agree.
     visitorCapacity: 4,
-    reservationCapacity: 4
+    reservationCapacity: 4,
+    // OPEN-04: seating and counters are priced explicitly rather than by
+    // footprint, so the three opening recipes cost comparable money.
+    capitalCost: 40
   },
   [ModuleType.ServingStation]: {
     width: 2,
@@ -89,7 +92,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Cafeteria],
     itemNodeCapacity: 60,
     storageClass: 'serving',
-    facilityActivities: ['serve']
+    facilityActivities: ['serve'],
+    capitalCost: 25
   },
   [ModuleType.Fridge]: {
     width: 1,
@@ -200,7 +204,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Market],
     // A starter counter can hold its opening display plus one 12-unit pod
     // delivery, so restocking is a planning choice rather than a capacity trap.
-    itemNodeCapacity: 32
+    itemNodeCapacity: 32,
+    capitalCost: 50
   },
   [ModuleType.IntakePallet]: {
     width: 2,
@@ -250,7 +255,9 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Maintenance],
     itemNodeCapacity: 160,
     storageClass: 'fuel',
-    capitalCost: 150
+    // OPEN-04: opening-business hardware is priced against OPENING_BALANCE so
+    // Feed Travelers, Sell Supplies and Service Ships cost comparable money.
+    capitalCost: 60
   },
   [ModuleType.FuelPump]: {
     width: 2,
@@ -277,7 +284,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: false,
     allowedRooms: null,
     mount: 'wall',
-    capitalCost: 75
+    capitalCost: 35
   },
   [ModuleType.FreightLocker]: {
     width: 2,
@@ -649,6 +656,38 @@ export const SERVICE_CAPACITY = {
  * capital while its hospitality was failing. These constants put that payout
  * at risk in proportion to the promises the station actually kept.
  */
+/**
+ * OPEN-04. Every number the opening decision depends on, in one place.
+ *
+ * Targets from `01-player-authored-opening.md`: one starter recipe should cost
+ * 55-70% of opening cash, two must not both be affordable at once, and access
+ * fees must cover part of payroll without funding growth on their own.
+ */
+export interface OpeningStockBatch {
+  units: number;
+  costCredits: number;
+}
+
+export const OPENING_BALANCE: {
+  startingCredits: number;
+  podAccessFeeCredits: number;
+  courierHandlingFeePerUnit: number;
+  preparedMealBatch: OpeningStockBatch;
+  travelSupplyBatch: OpeningStockBatch;
+  fuelLot: OpeningStockBatch;
+} = {
+  /** Cash a chartered station opens with. */
+  startingCredits: 220,
+  /** Basic pod access fee, per call. Recoverable, never a growth engine. */
+  podAccessFeeCredits: 3,
+  /** Per-unit fee for handling consigned courier freight. */
+  courierHandlingFeePerUnit: 1.5,
+  /** Opening stock batches, priced so each recipe lands in the target band. */
+  preparedMealBatch: { units: 12, costCredits: 70 },
+  travelSupplyBatch: { units: 12, costCredits: 80 },
+  fuelLot: { units: 40, costCredits: 50 }
+};
+
 export const PORT_SETTLEMENT = {
   /** Share of the settled payout forfeited by a completely unserved call. */
   shortfallPenaltyShare: 0.85,

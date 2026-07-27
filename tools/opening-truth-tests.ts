@@ -22,11 +22,11 @@ import {
   tick,
   tryPlaceModule
 } from '../src/sim';
-import { MODULE_DEFINITIONS, PORT_SETTLEMENT, ROOM_DEFINITIONS } from '../src/sim/balance';
+import { MODULE_DEFINITIONS, OPENING_BALANCE, PORT_SETTLEMENT, ROOM_DEFINITIONS } from '../src/sim/balance';
 import { previewModulePlacement } from '../src/sim/construction';
-import { computeSettlementPayout } from '../src/sim/opening-economy';
+import { computeSettlementPayout, deriveOpeningEconomyProfile } from '../src/sim/opening-economy';
 import { summarizePodDemand } from '../src/sim/pod-demand';
-import { evaluateOpeningRecipes, futureFacilities, openingRecipes } from '../src/sim/opening-recipes';
+import { OPENING_STOCK_COST, evaluateOpeningRecipes, futureFacilities, openingRecipes } from '../src/sim/opening-recipes';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   appendServiceCompletion,
@@ -831,6 +831,116 @@ check('future facilities stay visible with plain prerequisites', () => {
   for (const facility of facilities) {
     assert(facility.prerequisite.length > 0, `${facility.title} has no prerequisite copy`);
   }
+});
+
+// --- OPEN-04: opening balance pass -----------------------------------------
+
+console.log('');
+console.log('OPEN-04 opening balance pass');
+
+check('opening cash buys one recipe plus a contingency', () => {
+  const state = freshState();
+  tick(state, 0);
+  const cash = state.metrics.credits;
+  const costs = evaluateOpeningRecipes(state).map((recipe) => ({
+    title: recipe.title,
+    cost: recipe.remainingCostCredits,
+    share: recipe.remainingCostCredits / cash
+  }));
+  for (const entry of costs) {
+    assert(
+      entry.share >= 0.55 && entry.share <= 0.7,
+      `${entry.title} costs ${entry.cost}c, ${Math.round(entry.share * 100)}% of ${cash}c — target is 55-70%`
+    );
+  }
+  console.log(
+    `       observed: ${cash}c opening cash, ` +
+    costs.map((entry) => `${entry.title} ${entry.cost}c (${Math.round(entry.share * 100)}%)`).join(', ')
+  );
+});
+
+check('two recipes cannot both be completed immediately', () => {
+  const state = freshState();
+  tick(state, 0);
+  const sorted = evaluateOpeningRecipes(state)
+    .map((recipe) => recipe.remainingCostCredits)
+    .sort((a, b) => a - b);
+  assert(
+    sorted[0] + sorted[1] > state.metrics.credits,
+    `the two cheapest recipes cost ${sorted[0] + sorted[1]}c against ${state.metrics.credits}c of cash`
+  );
+});
+
+check('access and handling fees cannot finance growth on their own', () => {
+  const state = freshState();
+  const openingCredits = state.metrics.credits;
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 1800; step += 1) tick(state, 1);
+  const lifetime = state.openingEconomy.ledger.lifetime;
+  const passive = lifetime['dock-fee'].revenue + lifetime['courier-fee'].revenue;
+  const cheapestRecipe = Math.min(
+    ...evaluateOpeningRecipes(state).map((recipe) => recipe.remainingCostCredits)
+  );
+  assert(
+    passive < lifetime.wages.expenses,
+    `access and handling alone (${passive.toFixed(0)}c) covered payroll (${lifetime.wages.expenses.toFixed(0)}c)`
+  );
+  assert(
+    state.metrics.credits - openingCredits < cheapestRecipe,
+    `doing nothing funded a whole recipe: +${(state.metrics.credits - openingCredits).toFixed(0)}c against ${cheapestRecipe}c`
+  );
+  console.log(
+    `       observed: access+handling ${passive.toFixed(0)}c, payroll ${lifetime.wages.expenses.toFixed(0)}c, ` +
+    `cash ${openingCredits} to ${Math.round(state.metrics.credits)}`
+  );
+});
+
+check('charter site shifts the best opportunity without closing a path', () => {
+  // Every site must leave all three recipes buildable; what changes is which
+  // one the local economy rewards.
+  const profiles = [
+    { label: 'busy lane', site: { laneTrafficFactor: { north: 2.4, east: 2.4, south: 2.4, west: 2.4 }, sunFactor: 0.5, debrisFactor: 0 } },
+    { label: 'remote', site: { laneTrafficFactor: { north: 0.6, east: 0.6, south: 0.6, west: 0.6 }, sunFactor: 0.5, debrisFactor: 0.6 } },
+    { label: 'ice belt', site: { laneTrafficFactor: { north: 1.2, east: 1.2, south: 1.2, west: 1.2 }, sunFactor: 0.5, debrisFactor: 0, resourceType: 'ice' } }
+  ];
+  const observed = profiles.map((entry) => {
+    const profile = deriveOpeningEconomyProfile(entry.site as never);
+    const scores: Array<[string, number]> = [
+      ['food', profile.passengerTrafficMultiplier],
+      ['supplies', profile.retailDemandMultiplier],
+      ['ship service', profile.repairDemandMultiplier * (2 - profile.fuelWholesaleMultiplier)]
+    ];
+    scores.sort((a, b) => b[1] - a[1]);
+    for (const [, score] of scores) {
+      assert(score > 0.5, `${entry.label} closed off a path with multiplier ${score.toFixed(2)}`);
+    }
+    return `${entry.label} favours ${scores[0][0]}`;
+  });
+  assert(new Set(observed).size > 1, `every charter favoured the same path: ${observed.join(', ')}`);
+  console.log(`       observed: ${observed.join(' | ')}`);
+});
+
+check('the opening economy constants live in one place', () => {
+  assertEqual(createInitialState().metrics.credits, OPENING_BALANCE.startingCredits, 'starting credits');
+  assertEqual(
+    OPENING_STOCK_COST.preparedMeals,
+    OPENING_BALANCE.preparedMealBatch.costCredits,
+    'prepared meal batch price'
+  );
+  assertEqual(
+    OPENING_STOCK_COST.travelSupplies,
+    OPENING_BALANCE.travelSupplyBatch.costCredits,
+    'travel supply batch price'
+  );
+  assertEqual(OPENING_STOCK_COST.fuelLot, OPENING_BALANCE.fuelLot.costCredits, 'fuel lot price');
+  // The purchase path must charge what the recipe advertises.
+  const state = freshState();
+  tick(state, 0);
+  drainServingCounters(state);
+  const order = buyPreparedMealsDetailed(state);
+  assert(order.ok, `meal order refused: ${order.message}`);
+  assertEqual(order.creditCost, OPENING_BALANCE.preparedMealBatch.costCredits, 'charged price vs advertised price');
 });
 
 console.log('');
