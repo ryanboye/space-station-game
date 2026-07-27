@@ -254,9 +254,9 @@ compiles is not sufficient for player-facing work.
 
 ### Large Fixture Artwork
 
-- [ ] Generate native-footprint low-resolution artwork after footprints stabilize.
-- [ ] Use transparent backgrounds and silhouettes readable at gameplay zoom.
-- [ ] Match sprite dimensions to simulation footprint exactly.
+- [x] Generate native-footprint low-resolution artwork after footprints stabilize.
+- [x] Use transparent backgrounds and silhouettes readable at gameplay zoom.
+- [x] Match sprite dimensions to simulation footprint exactly.
 - [ ] Add idle state.
 - [ ] Add occupied/in-service state.
 - [ ] Add unstaffed state where applicable.
@@ -809,3 +809,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:facility-slots` and `npm run test:occupant-loop` passed. The facility runner covers rotated slot geometry, exclusive claims, proportional capacity, no-stock rejection, exactly-once stocked checkout, a complete browse-to-checkout trip, temporary guest sleep, provider arrival without retarget oscillation, and hydration cleanup.
 - Visual/playtest evidence: not yet. Dedicated native-footprint sprites, staff lanes, visible checkout queues, restocking, and actual-zoom footprint validation remain open.
 - Remaining uncertainty: the legacy Market Stall remains as a compact compatibility path; the new Checkout Bank and Shelf Aisle become a deeper market only when both are present. Bunk Bank is temporary guest capacity and does not grant permanent resident identity.
+
+2026-07-27 · Phase 1B native facility artwork
+
+- Commit or files: `537062c`, `tools/sprites/curated/module_checkout_bank.png`, `tools/sprites/curated/module_shelf_aisle.png`, `tools/sprites/curated/module_bunk_bank.png`, atlas pipeline metadata, and `src/render/sprite-keys.ts`.
+- Focused checks: the curated sources were deliberately reduced to the final 18-pixel tile density before nearest-neighbor atlas scaling. Packed atlas frames are exactly `128x320`, `64x256`, and `128x256`, matching 2x5, 1x4, and 2x4 footprints at the 64-pixel atlas cell size.
+- Visual/playtest evidence: each transparent curated sprite was inspected directly after chroma removal and low-resolution reduction. The two registers, three shelf bays, and four beds remain distinct.
+- Remaining uncertainty: live-render placement, rotation, occupied states, low-stock states, dirt, and damage remain unchecked and must be observed in the game before their checklist items close.
