@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-07-24T18:27:54.858Z",
+  "version": "sprite-v1-2026-07-27T23:04:45.798Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -525,831 +525,849 @@
       "w": 128,
       "h": 64
     },
-    "module.intake_pallet": {
+    "module.checkout_bank": {
       "x": 1010,
+      "y": 394,
+      "w": 128,
+      "h": 320
+    },
+    "module.shelf_aisle": {
+      "x": 1142,
+      "y": 394,
+      "w": 64,
+      "h": 256
+    },
+    "module.bunk_bank": {
+      "x": 1210,
+      "y": 394,
+      "w": 128,
+      "h": 256
+    },
+    "module.intake_pallet": {
+      "x": 1342,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.intake_pallet.empty": {
-      "x": 1142,
+      "x": 1474,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.intake_pallet.light": {
-      "x": 1274,
+      "x": 1606,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.intake_pallet.stocked": {
-      "x": 1406,
+      "x": 1738,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.intake_pallet.full": {
-      "x": 1538,
+      "x": 1870,
       "y": 394,
       "w": 128,
       "h": 128
     },
     "module.storage_rack": {
-      "x": 1670,
+      "x": 2002,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.empty": {
-      "x": 1802,
+      "x": 2134,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.light": {
-      "x": 1934,
+      "x": 2266,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.stocked": {
-      "x": 2066,
+      "x": 2398,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.full": {
-      "x": 2198,
+      "x": 2530,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "room.berth": {
-      "x": 2330,
+      "x": 2662,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "room.cantina": {
-      "x": 2398,
+      "x": 2730,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "room.observatory": {
-      "x": 2466,
+      "x": 2798,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.gangway": {
-      "x": 2534,
+      "x": 2866,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.gangway.active": {
-      "x": 2602,
+      "x": 2934,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.customs_counter": {
-      "x": 2670,
+      "x": 3002,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.cargo_arm": {
-      "x": 2738,
-      "y": 394,
+      "x": 2,
+      "y": 718,
       "w": 128,
       "h": 128
     },
     "module.fuel_tank": {
-      "x": 2870,
-      "y": 394,
+      "x": 134,
+      "y": 718,
       "w": 128,
       "h": 128
     },
     "module.fuel_pump": {
-      "x": 2,
-      "y": 526,
+      "x": 266,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.pod_dock": {
-      "x": 134,
-      "y": 526,
+      "x": 398,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.pod_dock.active": {
-      "x": 266,
-      "y": 526,
+      "x": 530,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.fuel_coupler": {
-      "x": 398,
-      "y": 526,
+      "x": 662,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.freight_locker": {
-      "x": 466,
-      "y": 526,
+      "x": 730,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.maintenance_socket": {
-      "x": 598,
-      "y": 526,
+      "x": 862,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.berth_control": {
-      "x": 730,
-      "y": 526,
+      "x": 994,
+      "y": 718,
       "w": 128,
       "h": 128
     },
     "module.docking_clamp": {
-      "x": 862,
-      "y": 526,
+      "x": 1126,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.docking_clamp.active": {
-      "x": 930,
-      "y": 526,
+      "x": 1194,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.fire_extinguisher": {
-      "x": 998,
-      "y": 526,
+      "x": 1262,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.vent": {
-      "x": 1066,
-      "y": 526,
+      "x": 1330,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.insulation_panel": {
-      "x": 1134,
-      "y": 526,
+      "x": 1398,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.vending_machine": {
-      "x": 1202,
-      "y": 526,
+      "x": 1466,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.bench": {
-      "x": 1270,
-      "y": 526,
+      "x": 1534,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.bar_counter": {
-      "x": 1402,
-      "y": 526,
+      "x": 1666,
+      "y": 718,
       "w": 128,
       "h": 64
     },
     "module.tap": {
-      "x": 1534,
-      "y": 526,
+      "x": 1798,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.telescope": {
-      "x": 1602,
-      "y": 526,
+      "x": 1866,
+      "y": 718,
       "w": 128,
       "h": 128
     },
     "module.water_fountain": {
-      "x": 1734,
-      "y": 526,
+      "x": 1998,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.plant": {
-      "x": 1802,
-      "y": 526,
+      "x": 2066,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.reactor_core": {
-      "x": 1870,
-      "y": 526,
+      "x": 2134,
+      "y": 718,
       "w": 128,
       "h": 128
     },
     "module.solar_panel": {
-      "x": 2002,
-      "y": 526,
+      "x": 2266,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.utility.air_duct_tile": {
-      "x": 2070,
-      "y": 526,
+      "x": 2334,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.tourist": {
-      "x": 2138,
-      "y": 526,
+      "x": 2402,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.trader": {
-      "x": 2206,
-      "y": 526,
+      "x": 2470,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.industrial": {
-      "x": 2274,
-      "y": 526,
+      "x": 2538,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.military": {
-      "x": 2342,
-      "y": 526,
+      "x": 2606,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.colonist": {
-      "x": 2410,
-      "y": 526,
+      "x": 2674,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.solo": {
-      "x": 2478,
-      "y": 526,
+      "x": 2742,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.start": {
-      "x": 2546,
-      "y": 526,
+      "x": 2810,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.middle": {
-      "x": 2614,
-      "y": 526,
+      "x": 2878,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.end": {
-      "x": 2682,
-      "y": 526,
+      "x": 2946,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.1": {
-      "x": 2750,
-      "y": 526,
+      "x": 2,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.2": {
-      "x": 2818,
-      "y": 526,
+      "x": 70,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.3": {
-      "x": 2886,
-      "y": 526,
+      "x": 138,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.4": {
-      "x": 2954,
-      "y": 526,
+      "x": 206,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.5": {
-      "x": 2,
-      "y": 658,
+      "x": 274,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.6": {
-      "x": 70,
-      "y": 658,
+      "x": 342,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.1": {
-      "x": 138,
-      "y": 658,
+      "x": 410,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.2": {
-      "x": 206,
-      "y": 658,
+      "x": 478,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.3": {
-      "x": 274,
-      "y": 658,
+      "x": 546,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.wear.4": {
-      "x": 342,
-      "y": 658,
+      "x": 614,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.1": {
-      "x": 410,
-      "y": 658,
+      "x": 682,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.2": {
-      "x": 478,
-      "y": 658,
+      "x": 750,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.3": {
-      "x": 546,
-      "y": 658,
+      "x": 818,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.4": {
-      "x": 614,
-      "y": 658,
+      "x": 886,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.5": {
-      "x": 682,
-      "y": 658,
+      "x": 954,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.visitor.6": {
-      "x": 750,
-      "y": 658,
+      "x": 1022,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.1": {
-      "x": 818,
-      "y": 658,
+      "x": 1090,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.2": {
-      "x": 886,
-      "y": 658,
+      "x": 1158,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.3": {
-      "x": 954,
-      "y": 658,
+      "x": 1226,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.4": {
-      "x": 1022,
-      "y": 658,
+      "x": 1294,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.5": {
-      "x": 1090,
-      "y": 658,
+      "x": 1362,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.resident.6": {
-      "x": 1158,
-      "y": 658,
+      "x": 1430,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.1": {
-      "x": 1226,
-      "y": 658,
+      "x": 1498,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.2": {
-      "x": 1294,
-      "y": 658,
+      "x": 1566,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.3": {
-      "x": 1362,
-      "y": 658,
+      "x": 1634,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.4": {
-      "x": 1430,
-      "y": 658,
+      "x": 1702,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.5": {
-      "x": 1498,
-      "y": 658,
+      "x": 1770,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.6": {
-      "x": 1566,
-      "y": 658,
+      "x": 1838,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.eva_suit": {
-      "x": 1634,
-      "y": 658,
+      "x": 1906,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.captain": {
-      "x": 1702,
-      "y": 658,
+      "x": 1974,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.sanitation_officer": {
-      "x": 1770,
-      "y": 658,
+      "x": 2042,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.security_officer": {
-      "x": 1838,
-      "y": 658,
+      "x": 2110,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.mechanic_officer": {
-      "x": 1906,
-      "y": 658,
+      "x": 2178,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.industrial_officer": {
-      "x": 1974,
-      "y": 658,
+      "x": 2246,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.navigation_officer": {
-      "x": 2042,
-      "y": 658,
+      "x": 2314,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.comms_officer": {
-      "x": 2110,
-      "y": 658,
+      "x": 2382,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.medical_officer": {
-      "x": 2178,
-      "y": 658,
+      "x": 2450,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.eva_specialist": {
-      "x": 2246,
-      "y": 658,
+      "x": 2518,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.eva_engineer": {
-      "x": 2314,
-      "y": 658,
+      "x": 2586,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.flight_controller": {
-      "x": 2382,
-      "y": 658,
+      "x": 2654,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.docking_officer": {
-      "x": 2450,
-      "y": 658,
+      "x": 2722,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.doctor": {
-      "x": 2518,
-      "y": 658,
+      "x": 2790,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.nurse": {
-      "x": 2586,
-      "y": 658,
+      "x": 2858,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.cook": {
-      "x": 2654,
-      "y": 658,
+      "x": 2926,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.cleaner": {
-      "x": 2722,
-      "y": 658,
+      "x": 2994,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "agent.crew.janitor": {
-      "x": 2790,
-      "y": 658,
+      "x": 2,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.botanist": {
-      "x": 2858,
-      "y": 658,
+      "x": 70,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.technician": {
-      "x": 2926,
-      "y": 658,
+      "x": 138,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.assistant": {
-      "x": 2994,
-      "y": 658,
+      "x": 206,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.security_guard": {
-      "x": 2,
-      "y": 726,
+      "x": 274,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.maintenance_tech": {
-      "x": 70,
-      "y": 726,
+      "x": 342,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.engineer": {
-      "x": 138,
-      "y": 726,
+      "x": 410,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.mechanic": {
-      "x": 206,
-      "y": 726,
+      "x": 478,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "agent.crew.welder": {
-      "x": 274,
-      "y": 726,
+      "x": 546,
+      "y": 918,
       "w": 64,
       "h": 64
     },
     "space.planet.rocky.1": {
-      "x": 342,
-      "y": 726,
+      "x": 614,
+      "y": 918,
       "w": 256,
       "h": 256
     },
     "space.massive.moon_dark_limb.1": {
-      "x": 602,
-      "y": 726,
+      "x": 874,
+      "y": 918,
       "w": 768,
       "h": 768
     },
     "space.massive.gas_blue_limb.1": {
-      "x": 1374,
-      "y": 726,
+      "x": 1646,
+      "y": 918,
       "w": 768,
       "h": 768
     },
     "space.massive.planet_rust_limb.1": {
-      "x": 2146,
-      "y": 726,
+      "x": 2,
+      "y": 1690,
       "w": 768,
       "h": 768
     },
     "space.massive.moon_ice_limb.1": {
-      "x": 2,
-      "y": 1498,
+      "x": 774,
+      "y": 1690,
       "w": 768,
       "h": 768
     },
     "space.debris.rock.2": {
-      "x": 774,
-      "y": 1498,
+      "x": 1546,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.rust.1": {
-      "x": 874,
-      "y": 1498,
+      "x": 1646,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.ice.2": {
-      "x": 974,
-      "y": 1498,
+      "x": 1746,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.metal.2": {
-      "x": 1074,
-      "y": 1498,
+      "x": 1846,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.dark.1": {
-      "x": 1174,
-      "y": 1498,
+      "x": 1946,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.hot.1": {
-      "x": 1274,
-      "y": 1498,
+      "x": 2046,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.crater.1": {
-      "x": 1374,
-      "y": 1498,
+      "x": 2146,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.ice.3": {
-      "x": 1474,
-      "y": 1498,
+      "x": 2246,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.rust.2": {
-      "x": 1574,
-      "y": 1498,
+      "x": 2346,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "space.debris.metal.3": {
-      "x": 1674,
-      "y": 1498,
+      "x": 2446,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_rock.1": {
-      "x": 1774,
-      "y": 1498,
+      "x": 2546,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_rust.1": {
-      "x": 1874,
-      "y": 1498,
+      "x": 2646,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_ice.1": {
-      "x": 1974,
-      "y": 1498,
+      "x": 2746,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_metal.1": {
-      "x": 2074,
-      "y": 1498,
+      "x": 2846,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_dark.1": {
-      "x": 2174,
-      "y": 1498,
+      "x": 2946,
+      "y": 1690,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_hot.1": {
-      "x": 2274,
-      "y": 1498,
+      "x": 2,
+      "y": 2462,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_rock.2": {
-      "x": 2374,
-      "y": 1498,
+      "x": 102,
+      "y": 2462,
       "w": 96,
       "h": 96
     },
     "fx.impact.micro_hot.2": {
-      "x": 2474,
-      "y": 1498,
+      "x": 202,
+      "y": 2462,
       "w": 96,
       "h": 96
     },
     "space.asteroid.cluster.1": {
-      "x": 2574,
-      "y": 1498,
+      "x": 302,
+      "y": 2462,
       "w": 256,
       "h": 256
     },
     "space.debris.metal.1": {
-      "x": 2834,
-      "y": 1498,
+      "x": 562,
+      "y": 2462,
       "w": 128,
       "h": 128
     },
     "space.debris.ice.1": {
-      "x": 2,
-      "y": 2270,
+      "x": 694,
+      "y": 2462,
       "w": 128,
       "h": 128
     },
     "fx.repair.spark": {
-      "x": 134,
-      "y": 2270,
+      "x": 826,
+      "y": 2462,
       "w": 128,
       "h": 128
     },
     "overlay.wall.hull_wear.1": {
-      "x": 266,
-      "y": 2270,
+      "x": 958,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "overlay.wall.hull_wear.2": {
-      "x": 334,
-      "y": 2270,
+      "x": 1026,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier1_unlock": {
-      "x": 402,
-      "y": 2270,
+      "x": 1094,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier2_unlock": {
-      "x": 470,
-      "y": 2270,
+      "x": 1162,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier3_unlock": {
-      "x": 538,
-      "y": 2270,
+      "x": 1230,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier4_unlock": {
-      "x": 606,
-      "y": 2270,
+      "x": 1298,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier5_unlock": {
-      "x": 674,
-      "y": 2270,
+      "x": 1366,
+      "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier6_unlock": {
-      "x": 742,
-      "y": 2270,
+      "x": 1434,
+      "y": 2462,
       "w": 64,
       "h": 64
     }

@@ -426,6 +426,9 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.shower': { w: 1, h: 1 },
   'module.sink': { w: 1, h: 1 },
   'module.market_stall': { w: 2, h: 1 },
+  'module.checkout_bank': { w: 2, h: 5 },
+  'module.shelf_aisle': { w: 1, h: 4 },
+  'module.bunk_bank': { w: 2, h: 4 },
   'module.intake_pallet': { w: 2, h: 2 },
   'module.storage_rack': { w: 2, h: 1 }
 };

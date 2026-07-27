@@ -319,6 +319,15 @@ sprites:
     prompt: "Top-down pixel art station module sprite: market stall. 2x1 footprint,
       transparent background, readable at 36x18."
     rotation: 0
+  module.checkout_bank:
+    prompt: "Top-down low-resolution pixel art station module: long market checkout bank. 2x5 footprint, two distinct cyan registers on the public side and a staff lane on the reverse, transparent background, readable at 36x90."
+    rotation: 0
+  module.shelf_aisle:
+    prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle. 1x4 footprint, three distinct stocked browsing bays, transparent background, readable at 18x72."
+    rotation: 0
+  module.bunk_bank:
+    prompt: "Top-down low-resolution pixel art station module: temporary bunk bank. 2x4 footprint, four unmistakable separate sleeping positions, transparent background, readable at 36x72."
+    rotation: 0
   module.intake_pallet:
     prompt: "Top-down pixel art station module sprite: intake pallet. 2x2 footprint,
       transparent background, readable at 36x36."
