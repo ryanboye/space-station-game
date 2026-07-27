@@ -26,6 +26,7 @@ import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
 import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/opening-economy-panels';
 import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-economy';
 import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
+import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -56,6 +57,7 @@ import {
   getOperatingSchedule,
   getOpeningCapitalProjects,
   getOpeningEconomySummary,
+  getPodDemandSummary,
   getPreparedMealInventory,
   type PreparedMealInventory,
   getHousingInspectorAt,
@@ -484,14 +486,22 @@ app.innerHTML = `
   <aside id="panel">
     <h2>Build Palette</h2>
     <div class="palette-tabs" aria-label="Build palette categories">
-      <button class="palette-tab active" data-palette-target="structure">Build</button>
+      <button class="palette-tab active" data-palette-target="businesses">Businesses</button>
+      <button class="palette-tab" data-palette-target="structure">Build</button>
       <button class="palette-tab" data-palette-target="rooms">Rooms</button>
       <button class="palette-tab" data-palette-target="modules">Modules</button>
       <button class="palette-tab" data-palette-target="crew">Crew</button>
       <button class="palette-tab" data-palette-target="overlays">Overlays</button>
     </div>
     <div id="toolbar" aria-label="Build tools">
-      <div class="tool-row palette-section active" data-palette-section="structure">
+      <div class="tool-row palette-section active" data-palette-section="businesses">
+        <span class="tool-row-label">Opening businesses</span>
+        <small class="market-status">Each step is an ordinary paint or place tool. Nothing here builds for you.</small>
+        <div id="opening-recipe-list" class="recipe-list"></div>
+        <span class="tool-row-label">Later, once you can afford it</span>
+        <div id="future-facility-list" class="recipe-future"></div>
+      </div>
+      <div class="tool-row palette-section" data-palette-section="structure">
         <span class="tool-row-label">Structure & Utilities</span>
         <button class="tool-btn" data-tool-deselect="1" title="Inspect / no build tool (Esc)"><span class="tool-key">Esc</span>Inspect</button>
         <button class="tool-btn" data-tool-room-copy="1" title="Copy station stamp — drag over floors, walls, rooms, and furniture"><span class="tool-key">⧉</span>Copy</button>
@@ -5977,7 +5987,7 @@ function refreshProgressionModal(): void {
 }
 
 const simSpeeds: Array<1 | 2 | 4> = [1, 2, 4];
-type PaletteSection = 'structure' | 'rooms' | 'modules' | 'crew' | 'overlays';
+type PaletteSection = 'businesses' | 'structure' | 'rooms' | 'modules' | 'crew' | 'overlays';
 const market = {
   hireCost: 14,
   fireRefund: 5,
@@ -6824,6 +6834,110 @@ function applyModulePaletteFallback(btn: HTMLButtonElement, spriteEl: HTMLElemen
   spriteEl.textContent = MODULE_PALETTE_FALLBACK_LABEL[module] || '?';
 }
 
+// --- OPEN-03: recipe-oriented build catalog --------------------------------
+//
+// The three opening businesses rendered as recipes, with every step wired to
+// the ordinary paint or place tool it corresponds to. Deliberately not a
+// prefab builder: the buttons below select a tool, they never construct.
+
+const RECIPE_ROOM_TOOL_KEY = new Map<RoomType, string>(
+  Object.entries(TOOLBAR_ROOM_MAP).map(([key, room]) => [room, key] as const)
+);
+const RECIPE_MODULE_TOOL_KEY = new Map<ModuleType, string>(
+  Object.entries(TOOLBAR_MODULE_MAP).map(([key, module]) => [module, key] as const)
+);
+
+function recipeStepAttributes(step: RecipeStepProgress): string {
+  if (step.kind === 'room' && step.room !== undefined) {
+    const key = RECIPE_ROOM_TOOL_KEY.get(step.room);
+    return key ? ` data-tool-room="${key}"` : '';
+  }
+  if (step.kind === 'module' && step.module !== undefined) {
+    const key = RECIPE_MODULE_TOOL_KEY.get(step.module);
+    return key ? ` data-tool-module="${key}"` : '';
+  }
+  if (step.kind === 'utility') return ' data-tool-utility-underlay="fuel-pipe"';
+  return ' data-recipe-stock="1"';
+}
+
+function recipeStepDetail(step: RecipeStepProgress): string {
+  const progress = step.kind === 'stock'
+    ? 'order when the room is ready'
+    : `${Math.min(step.have, step.count)}/${step.count}`;
+  const cost = step.costCredits > 0 ? ` · ${step.costCredits}c` : ' · free';
+  return `${progress}${cost}`;
+}
+
+/**
+ * Signature of the last rendered catalog. refreshToolbar runs every frame, and
+ * replacing the list's innerHTML that often detached each step button between
+ * pointerdown and click — the click then landed on a node that was no longer
+ * inside #toolbar, so the delegated handler never saw it and the step appeared
+ * to do nothing. Re-render only when something actually changed.
+ */
+let renderedRecipeSignature = '';
+
+function refreshOpeningRecipeCatalog(): void {
+  const host = document.querySelector<HTMLElement>('#opening-recipe-list');
+  if (!host) return;
+  const demand = getPodDemandSummary(state, null);
+  const recipes = evaluateOpeningRecipes(state);
+  const signature = JSON.stringify([
+    recipes.map((recipe) => [recipe.remainingCostCredits, recipe.affordable, recipe.steps.map((step) => step.have)]),
+    demand.rows.map((row) => [row.served, row.wanted, row.missedCredits])
+  ]);
+  if (signature === renderedRecipeSignature) return;
+  renderedRecipeSignature = signature;
+  host.innerHTML = recipes
+    .map((recipe) => {
+      const demandRow = demand.rows.find((row) =>
+        (recipe.id === 'feed-travelers' && row.family === 'food') ||
+        (recipe.id === 'sell-supplies' && row.family === 'supplies') ||
+        (recipe.id === 'service-ships' && row.family === 'shipService')
+      );
+      // Recent demand is the whole reason to pick one of these over another,
+      // so it sits in the heading rather than behind a metrics panel.
+      const demandNote = demandRow && demandRow.wanted > 0
+        ? `${demandRow.served}/${demandRow.wanted} served recently${demandRow.missedCredits > 0 ? ` · est. ${demandRow.missedCredits}c missed` : ''}`
+        : 'no demand seen yet';
+      const steps = recipe.steps
+        .map((step) => `
+          <button class="tool-btn recipe-step${step.satisfied ? ' recipe-step-done' : ''}"${recipeStepAttributes(step)} title="${escapeHtml(step.label)}">
+            <span class="recipe-step-mark">${step.satisfied ? '✓' : '·'}</span>
+            <span class="recipe-step-label">${escapeHtml(step.label)}</span>
+            <span class="recipe-step-detail">${escapeHtml(recipeStepDetail(step))}</span>
+          </button>`)
+        .join('');
+      return `
+        <div class="recipe-card${recipe.complete ? ' recipe-card-done' : ''}">
+          <div class="recipe-card-head">
+            <span class="recipe-card-title">${escapeHtml(recipe.title)}</span>
+            <span class="recipe-card-cost${recipe.affordable ? '' : ' recipe-card-unaffordable'}">${
+              recipe.complete ? 'built' : `${recipe.remainingCostCredits}c to finish`
+            }</span>
+          </div>
+          <small class="recipe-card-summary">${escapeHtml(recipe.summary)}</small>
+          <small class="recipe-card-demand">${escapeHtml(demandNote)}</small>
+          <div class="recipe-steps">${steps}</div>
+          <small class="recipe-card-note">Staff: ${escapeHtml(recipe.staffing)}</small>
+          <small class="recipe-card-note">Utilities: ${escapeHtml(recipe.utilities)}</small>
+          <small class="recipe-card-note">${escapeHtml(recipe.economics)}</small>
+        </div>`;
+    })
+    .join('');
+
+  const futureHost = document.querySelector<HTMLElement>('#future-facility-list');
+  if (futureHost && futureHost.childElementCount === 0) {
+    futureHost.innerHTML = futureFacilities()
+      .map((facility) => `
+        <div class="recipe-future-row">
+          <span class="recipe-future-title">${escapeHtml(facility.title)}</span>
+          <small>${escapeHtml(facility.prerequisite)}</small>
+        </div>`)
+      .join('');
+  }
+}
+
 function refreshModulePaletteSprites(): void {
   document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn[data-tool-module]').forEach((btn) => {
     const moduleKey = btn.dataset.toolModule;
@@ -6948,7 +7062,32 @@ function wireToolbar(): void {
     }
   };
   toolbar.addEventListener('pointerdown', handleCrewButtonAction, true);
-  document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn').forEach((btn) => {
+  // OPEN-03: recipe steps are rendered after this wiring runs, so they get a
+  // delegated listener of their own. They select the ordinary tool through the
+  // same helpers the catalog buttons use — a step is a shortcut to a tool, not
+  // a second way to build.
+  document.querySelector('#opening-recipe-list')?.addEventListener('click', (event) => {
+    const step = (event.target as HTMLElement).closest<HTMLButtonElement>('.recipe-step');
+    if (!step) return;
+    const roomKey = step.dataset.toolRoom;
+    const moduleKey = step.dataset.toolModule;
+    const utilityKey = step.dataset.toolUtilityUnderlay;
+    if (roomKey && TOOLBAR_ROOM_MAP[roomKey] !== undefined) {
+      selectRoomTool(TOOLBAR_ROOM_MAP[roomKey]);
+    } else if (moduleKey && TOOLBAR_MODULE_MAP[moduleKey] !== undefined) {
+      selectModuleTool(TOOLBAR_MODULE_MAP[moduleKey]);
+    } else if (utilityKey && TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey] !== undefined) {
+      selectUtilityUnderlayTool(TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey]);
+    } else {
+      // Stock steps have nothing to place; open where the order is made.
+      openingEconomyPanels.open('shop');
+      return;
+    }
+    // The palette follows the selection to the section that owns the tool, so
+    // the player also learns where that tool lives for next time.
+    refreshToolbar();
+  });
+  document.querySelectorAll<HTMLButtonElement>('#toolbar .tool-btn:not(.recipe-step)').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tileKey = btn.dataset.toolTile;
       const zoneKey = btn.dataset.toolZone;
@@ -7011,6 +7150,7 @@ function wireToolbar(): void {
   });
 }
 function refreshToolbar(): void {
+  refreshOpeningRecipeCatalog();
   refreshPaletteMenu();
   const hasBerth = state.rooms.includes(RoomType.Berth);
   document.querySelectorAll<HTMLElement>('[data-berth-hardware]').forEach((element) => {

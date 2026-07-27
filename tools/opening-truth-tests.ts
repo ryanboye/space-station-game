@@ -22,10 +22,11 @@ import {
   tick,
   tryPlaceModule
 } from '../src/sim';
-import { PORT_SETTLEMENT } from '../src/sim/balance';
+import { MODULE_DEFINITIONS, PORT_SETTLEMENT, ROOM_DEFINITIONS } from '../src/sim/balance';
 import { previewModulePlacement } from '../src/sim/construction';
 import { computeSettlementPayout } from '../src/sim/opening-economy';
 import { summarizePodDemand } from '../src/sim/pod-demand';
+import { evaluateOpeningRecipes, futureFacilities, openingRecipes } from '../src/sim/opening-recipes';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   appendServiceCompletion,
@@ -758,6 +759,78 @@ check('the demand aggregation is bounded and survives save and reload', () => {
   const after = summarizePodDemand(restored.openingEconomy.podDemand, state.now, null);
   assertEqual(after.calls, before.calls, 'restored call count');
   assertEqual(after.missedCredits, before.missedCredits, 'restored missed credits');
+});
+
+// --- OPEN-03: recipe-oriented build catalog --------------------------------
+
+console.log('');
+console.log('OPEN-03 recipe-oriented build catalog');
+
+check('the catalog offers exactly the three opening groups', () => {
+  const recipes = evaluateOpeningRecipes(freshState());
+  assertEqual(recipes.length, 3, 'recipe count');
+  assertEqual(recipes.map((recipe) => recipe.title).join(' | '), 'Feed Travelers | Sell Supplies | Service Ships', 'group titles');
+  for (const recipe of recipes) {
+    assert(recipe.steps.length > 0, `${recipe.title} has no steps`);
+    assert(recipe.staffing.length > 0, `${recipe.title} does not say who staffs it`);
+    assert(recipe.utilities.length > 0, `${recipe.title} does not say what it needs`);
+    assert(recipe.economics.length > 0, `${recipe.title} does not say what it earns`);
+  }
+});
+
+check('no opening business is already built on the starter', () => {
+  const state = freshState();
+  tick(state, 0);
+  for (const recipe of evaluateOpeningRecipes(state)) {
+    assert(!recipe.complete, `${recipe.title} is already complete on a fresh station`);
+    assert(recipe.remainingCostCredits > 0, `${recipe.title} costs nothing to finish`);
+  }
+});
+
+check('recipe steps resolve to real rooms and modules', () => {
+  for (const recipe of openingRecipes()) {
+    for (const step of recipe.steps) {
+      if (step.kind === 'room') {
+        assert(step.room !== undefined, `${recipe.title}: room step names no room`);
+        assert(step.count >= ROOM_DEFINITIONS[step.room].minTiles, `${recipe.title}: room step under the minimum size`);
+      }
+      if (step.kind === 'module') {
+        assert(step.module !== undefined, `${recipe.title}: module step names no module`);
+        assert(MODULE_DEFINITIONS[step.module] !== undefined, `${recipe.title}: unknown module`);
+        assert(step.costCredits > 0, `${recipe.title}: module step is free`);
+      }
+    }
+  }
+});
+
+check('building a step ticks it off', () => {
+  const state = freshState();
+  tick(state, 0);
+  const before = evaluateOpeningRecipes(state).find((recipe) => recipe.id === 'sell-supplies');
+  assert(before, 'no sell-supplies recipe');
+  const marketStep = before.steps.find((step) => step.room === RoomType.Market);
+  assert(marketStep && !marketStep.satisfied, 'market step already satisfied');
+
+  const tiles = findOpenRectangle(state, 4, 3);
+  assert(tiles.length === 12, 'no open floor to paint a market on');
+  for (const tile of tiles) setRoom(state, tile, RoomType.Market);
+  tick(state, 0);
+
+  const after = evaluateOpeningRecipes(state).find((recipe) => recipe.id === 'sell-supplies');
+  const paintedStep = after?.steps.find((step) => step.room === RoomType.Market);
+  assert(paintedStep?.satisfied, 'painting the market did not satisfy its recipe step');
+  assert(
+    (after?.remainingCostCredits ?? 0) <= before.remainingCostCredits,
+    'remaining cost went up after completing a step'
+  );
+});
+
+check('future facilities stay visible with plain prerequisites', () => {
+  const facilities = futureFacilities();
+  assert(facilities.length >= 4, 'too few future facilities listed');
+  for (const facility of facilities) {
+    assert(facility.prerequisite.length > 0, `${facility.title} has no prerequisite copy`);
+  }
 });
 
 console.log('');
