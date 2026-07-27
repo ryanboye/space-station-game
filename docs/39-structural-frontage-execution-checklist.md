@@ -325,8 +325,8 @@ compiles is not sufficient for player-facing work.
 - [ ] Show expected revenue range.
 - [ ] Show committed capacity if accepted.
 - [ ] Provide `Accept`, `Hold`, and `Pass` without opening a large manifest.
-- [ ] Never pause automatically when an offer arrives.
-- [ ] Bind acceptance to a compatible docking slot or Berth reservation.
+- [x] Never pause automatically when an offer arrives.
+- [x] Bind acceptance to a compatible docking slot or Berth reservation.
 - [ ] Project the candidate approach envelope into the world on hover/focus.
 - [ ] Project expected Berth, bed, meal, hygiene, and staff load.
 - [ ] Surface conflicts with already accepted work.
@@ -816,3 +816,10 @@ Remaining uncertainty:
 - Focused checks: the curated sources were deliberately reduced to the final 18-pixel tile density before nearest-neighbor atlas scaling. Packed atlas frames are exactly `128x320`, `64x256`, and `128x256`, matching 2x5, 1x4, and 2x4 footprints at the 64-pixel atlas cell size.
 - Visual/playtest evidence: each transparent curated sprite was inspected directly after chroma removal and low-resolution reduction. The two registers, three shelf bays, and four beds remain distinct.
 - Remaining uncertainty: live-render placement, rotation, occupied states, low-stock states, dirt, and damage remain unchecked and must be observed in the game before their checklist items close.
+
+2026-07-27 · Approach Control commitment model
+
+- Commit or files: `4d4d707`, `src/sim/approach-control.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, `src/sim/types.ts`, `tools/approach-control-tests.ts`.
+- Focused checks: `npm run test:approach-control` passed and `npm run build` passed. The runner proves compact preview ranges/cues/load, no auto-pause, Pod-only and Berth-only physical binding, reservation exclusion, bounded Hold, guarded Pass, and pending/committed save-load recovery.
+- Visual/playtest evidence: the model is ready for the compact contextual panel, but no panel or hover envelope has been implemented or checked yet.
+- Remaining uncertainty: interface labels and approach-side presentation need UI review; future-load conflicts currently expose committed physical-interface counts but do not forecast time-overlap contention across every service.
