@@ -4234,7 +4234,7 @@ function routePressureRoomConflicts(
     room === RoomType.Security ||
     room === RoomType.Brig;
   return {
-    publicConflict: backOfHouseActors > 0 && (publicFacing || residential),
+    publicConflict: publicActors > 0 && backOfHouseActors > 0 && (publicFacing || residential),
     serviceConflict: publicActors > 0 && service
   };
 }

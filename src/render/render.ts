@@ -36,6 +36,7 @@ import {
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
   getFuelPipeNetworkDiagnostics,
+  itemStockAtNode,
   getPowerNetworkDiagnostics,
   getUnpoweredPowerRoomAnchors,
   getWaterPipeNetworkDiagnostics,
@@ -297,6 +298,100 @@ const itemShortCode: Record<ItemType, string> = {
   fuel: 'FL',
   body: 'BD'
 };
+
+const itemSpriteCanvasByType = new Map<ItemType, HTMLCanvasElement>();
+
+function buildItemSpriteCanvas(itemType: ItemType): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 12;
+  canvas.height = 12;
+  const itemCtx = canvas.getContext('2d');
+  if (!itemCtx) return canvas;
+  itemCtx.imageSmoothingEnabled = false;
+
+  const rect = (color: string, x: number, y: number, w: number, h: number): void => {
+    itemCtx.fillStyle = color;
+    itemCtx.fillRect(x, y, w, h);
+  };
+  rect('rgba(3, 7, 11, 0.72)', 1, 2, 10, 9);
+  switch (itemType) {
+    case 'rawMeal':
+      rect('#704a31', 2, 3, 8, 7);
+      rect('#69b65b', 3, 3, 2, 3);
+      rect('#d96c50', 6, 4, 3, 3);
+      rect('#c48b46', 2, 8, 8, 1);
+      break;
+    case 'preppedMeal':
+      rect('#d7e0c2', 2, 4, 8, 6);
+      rect('#79b76b', 3, 5, 6, 2);
+      rect('#f0d17b', 4, 7, 4, 2);
+      break;
+    case 'meal':
+      rect('#abb8c4', 1, 6, 10, 4);
+      rect('#f0d27b', 3, 4, 6, 4);
+      rect('#6fc27b', 7, 5, 2, 2);
+      break;
+    case 'cleanTray':
+      rect('#dce8ee', 2, 3, 8, 2);
+      rect('#9fb4c2', 2, 6, 8, 2);
+      rect('#6f8799', 2, 9, 8, 1);
+      break;
+    case 'dirtyTray':
+      rect('#a28b7b', 2, 3, 8, 2);
+      rect('#685349', 2, 6, 8, 2);
+      rect('#c66a4b', 4, 8, 3, 2);
+      break;
+    case 'drink':
+      rect('#7ee2ec', 2, 4, 3, 6);
+      rect('#d6fbff', 3, 3, 1, 2);
+      rect('#4ba8cf', 7, 3, 3, 7);
+      rect('#d6fbff', 8, 2, 1, 2);
+      break;
+    case 'rawMaterial':
+      rect('#b87838', 2, 3, 8, 7);
+      rect('#e1aa59', 3, 4, 6, 5);
+      rect('#495662', 5, 3, 2, 7);
+      break;
+    case 'tradeGood':
+      rect('#4a8eb3', 2, 3, 8, 7);
+      rect('#7ed8d1', 3, 4, 6, 5);
+      rect('#d87ab7', 6, 5, 2, 2);
+      break;
+    case 'fuel':
+      rect('#cda93b', 3, 2, 6, 8);
+      rect('#f3d55e', 4, 3, 4, 6);
+      rect('#36434a', 5, 1, 3, 2);
+      rect('#4bcaa3', 5, 5, 2, 3);
+      break;
+    case 'body':
+      rect('#8f4b53', 2, 5, 8, 4);
+      rect('#d88b8b', 7, 3, 3, 3);
+      break;
+  }
+  return canvas;
+}
+
+function itemSpriteCanvas(itemType: ItemType): HTMLCanvasElement {
+  const existing = itemSpriteCanvasByType.get(itemType);
+  if (existing) return existing;
+  const canvas = buildItemSpriteCanvas(itemType);
+  itemSpriteCanvasByType.set(itemType, canvas);
+  return canvas;
+}
+
+function drawItemWorldSprite(
+  ctx: CanvasRenderingContext2D,
+  itemType: ItemType,
+  centerX: number,
+  centerY: number,
+  size: number
+): void {
+  const sprite = itemSpriteCanvas(itemType);
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sprite, Math.round(centerX - size * 0.5), Math.round(centerY - size * 0.5), Math.round(size), Math.round(size));
+  ctx.restore();
+}
 const RESIDENT_MARK_COLOR = '#35d98a';
 const SHIP_TRANSIT_VISUAL_SEC = 2;
 const SHIP_ASSET_VERSION = 'generated-ship-sheet-2026-05-02';
@@ -3559,6 +3654,56 @@ function buildModuleInventoryVisualMap(state: StationState): Map<number, ModuleI
   return out;
 }
 
+function drawLocatedInventorySprites(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  for (const node of state.itemNodes) {
+    if (!tileInRange(node.tileIndex, state, visibleTiles)) continue;
+    let dominantItem: ItemType | null = null;
+    let dominantAmount = 0;
+    let totalAmount = 0;
+    for (const itemType of ITEM_TYPES) {
+      if (itemType === 'body') continue;
+      const amount = node.items[itemType] ?? 0;
+      totalAmount += amount;
+      if (amount > dominantAmount) {
+        dominantAmount = amount;
+        dominantItem = itemType;
+      }
+    }
+    if (!dominantItem || totalAmount <= 0.01) continue;
+
+    const tileX = node.tileIndex % state.width;
+    const tileY = Math.floor(node.tileIndex / state.width);
+    const stackCount = node.capacity > 0
+      ? 1 + Math.min(2, Math.floor(clamp01(totalAmount / node.capacity) * 3))
+      : 1;
+    const iconSize = TILE_SIZE * 0.38;
+    for (let stack = 0; stack < stackCount; stack += 1) {
+      drawItemWorldSprite(
+        ctx,
+        dominantItem,
+        (tileX + 0.73 - stack * 0.12) * TILE_SIZE,
+        (tileY + 0.72 - stack * 0.08) * TILE_SIZE,
+        iconSize
+      );
+    }
+  }
+}
+
+function drawCarriedInventorySprite(
+  ctx: CanvasRenderingContext2D,
+  itemType: ItemType | null,
+  amount: number,
+  centerX: number,
+  centerY: number
+): void {
+  if (!itemType || itemType === 'body' || amount <= 0.01) return;
+  drawItemWorldSprite(ctx, itemType, centerX + TILE_SIZE * 0.22, centerY + TILE_SIZE * 0.2, TILE_SIZE * 0.44);
+}
+
 function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
   return collectQueueTargets(state, RoomType.Cafeteria);
 }
@@ -3931,6 +4076,25 @@ function visitorThoughtVariant(visitorId: number, lines: readonly string[], salt
   return lines[Math.abs(visitorId * 17 + salt * 31) % lines.length];
 }
 
+function shouldVoiceRouteComplaint(state: StationState, visitorId: number, salt: number): boolean {
+  const window = Math.floor(state.now / 14);
+  return Math.abs(visitorId * 19 + window * 11 + salt * 7) % 3 === 0;
+}
+
+function visitorRecentlyCompletedRetail(state: StationState, visitorId: number): boolean {
+  for (let i = state.serviceLog.recent.length - 1; i >= 0; i -= 1) {
+    const event = state.serviceLog.recent[i];
+    if (state.now - event.at > 16) break;
+    if (event.population === 'visitor' && event.actorId === visitorId && event.service === 'retail') return true;
+  }
+  return false;
+}
+
+function marketStockAtTile(state: StationState, tileIndex: number): number | null {
+  if (state.modules[tileIndex] !== ModuleType.MarketStall) return null;
+  return itemStockAtNode(state, tileIndex, 'tradeGood');
+}
+
 function visitorWorldThought(state: StationState, visitor: StationState['visitors'][number]): WorldThought | null {
   if (visitor.healthState === 'critical') return { text: 'I need help!', tone: 'negative' };
   if ((visitor.angryUntil ?? 0) > state.now) return { text: "I'm leaving!", tone: 'negative' };
@@ -3985,10 +4149,10 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
     Math.floor(visitor.tileIndex / state.width)
   );
   const route = visitor.lastRouteExposure;
-  if ((route?.cargoTiles ?? 0) >= 4) {
+  if ((route?.cargoTiles ?? 0) >= 7 && shouldVoiceRouteComplaint(state, visitor.id, 1)) {
     return { text: 'Why am I walking through cargo?', tone: 'negative' };
   }
-  if ((route?.distance ?? 0) >= 24) {
+  if ((route?.distance ?? 0) >= 32 && shouldVoiceRouteComplaint(state, visitor.id, 2)) {
     return { text: 'Everything is so far away', tone: 'negative' };
   }
   if (environment && environment.visitorDiscomfort >= 1.5) {
@@ -4005,7 +4169,10 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
   if (visitor.state === VisitorState.Leisure) {
     if (room === RoomType.Observatory) return { text: 'What a view!', tone: 'positive' };
     if (room === RoomType.Cantina) return { text: 'Great drinks!', tone: 'positive' };
-    if (room === RoomType.Market) return { text: 'Good selection!', tone: 'positive' };
+    if (room === RoomType.Market) {
+      if (visitorRecentlyCompletedRetail(state, visitor.id)) return { text: 'Good selection!', tone: 'positive' };
+      if (marketStockAtTile(state, visitor.tileIndex) === 0) return { text: 'These shelves are empty', tone: 'negative' };
+    }
     if (room === RoomType.Hygiene && sanitation?.severity === 'clean') {
       return { text: 'These facilities are spotless!', tone: 'positive' };
     }
@@ -5965,6 +6132,11 @@ export function renderWorld(
     }
   }
 
+  // Inventory already moves through real pickup/carry/drop-off jobs. Keep the
+  // goods visible in the normal world view so players can watch that flow
+  // without switching to a diagnostic overlay.
+  drawLocatedInventorySprites(ctx, state, visibleTiles);
+
   drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
 
   for (const site of state.constructionSites) {
@@ -6330,9 +6502,11 @@ export function renderWorld(
         ctx.strokeStyle = '#6fd8ff';
         ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
         ctx.stroke();
+        drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
         continue;
       }
       drawEvaSuitAgentFallback(ctx, cx, cy, TILE_SIZE * AGENT_SPRITE_SCALE);
+      drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
       continue;
     }
     const crewSpriteDrawn = useSprites && drawTintedAgentSprite(
@@ -6345,6 +6519,7 @@ export function renderWorld(
       ctx.arc(cx, cy, TILE_SIZE * 0.18, 0, Math.PI * 2);
       ctx.fill();
     }
+    drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
     if (c.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
     else if (c.healthState === 'distressed' && shouldDrawAirDistressPip(state, c.id, c.tileIndex)) {
       drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
