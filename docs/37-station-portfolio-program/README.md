@@ -30,10 +30,12 @@ Read these before implementing a package:
 2. `01-player-authored-opening.md` - the first playable decision and immediate priority.
 3. The selected portfolio document.
 4. `08-implementation-packages.md` - dependency order and agent handoffs.
-5. `../tickets/2026-07-25-opening-playtest/README.md` - current P0 defects.
-6. `../33-prison-architect-depth-catalogue.md` - deeper facility and operations research.
-7. `../35-port-infrastructure-evolution.md` - Pod Dock and berth contracts.
-8. `../36-opening-economy-legibility-and-growth.md` - current economy implementation.
+5. `09-gate-0-1-handoff.md` - what Gate 0 and Gate 1 actually shipped, the
+   judgment calls behind it, and the open questions it returned.
+6. `../tickets/2026-07-25-opening-playtest/README.md` - current P0 defects.
+7. `../33-prison-architect-depth-catalogue.md` - deeper facility and operations research.
+8. `../35-port-infrastructure-evolution.md` - Pod Dock and berth contracts.
+9. `../36-opening-economy-legibility-and-growth.md` - current economy implementation.
 
 Code is the source of truth when implementation and prose disagree. Report the
 conflict instead of silently choosing a new product direction.
