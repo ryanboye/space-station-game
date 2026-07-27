@@ -264,7 +264,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Add dirty state.
 - [ ] Add damaged state.
 - [ ] Add connected straight/corner/end bar rendering.
-- [ ] Verify sprites in the live game rather than only as source images.
+- [x] Verify sprites in the live game rather than only as source images.
 
 ### Phase 1B Gate
 
@@ -807,7 +807,7 @@ Remaining uncertainty:
 
 - Commit or files: `8a49e07`, `src/sim/facility-descriptors.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, `src/sim/balance.ts`, `tools/facility-slots-tests.ts`.
 - Focused checks: `npm run test:facility-slots` and `npm run test:occupant-loop` passed. The facility runner covers rotated slot geometry, exclusive claims, proportional capacity, no-stock rejection, exactly-once stocked checkout, a complete browse-to-checkout trip, temporary guest sleep, provider arrival without retarget oscillation, and hydration cleanup.
-- Visual/playtest evidence: not yet. Dedicated native-footprint sprites, staff lanes, visible checkout queues, restocking, and actual-zoom footprint validation remain open.
+- Visual/playtest evidence: `?scenario=facility-scale` was inspected in the live browser at actual play zoom. The Checkout Bank reads as one long service fixture, each Shelf Aisle exposes three distinct merchandise bays, and both four-bed Bunk Banks fit their enclosed room without occluding the door. Staff lanes, visible checkout queues, and restocking remain open.
 - Remaining uncertainty: the legacy Market Stall remains as a compact compatibility path; the new Checkout Bank and Shelf Aisle become a deeper market only when both are present. Bunk Bank is temporary guest capacity and does not grant permanent resident identity.
 
 2026-07-27 · Phase 1B native facility artwork
@@ -816,6 +816,13 @@ Remaining uncertainty:
 - Focused checks: the curated sources were deliberately reduced to the final 18-pixel tile density before nearest-neighbor atlas scaling. Packed atlas frames are exactly `128x320`, `64x256`, and `128x256`, matching 2x5, 1x4, and 2x4 footprints at the 64-pixel atlas cell size.
 - Visual/playtest evidence: each transparent curated sprite was inspected directly after chroma removal and low-resolution reduction. The two registers, three shelf bays, and four beds remain distinct.
 - Remaining uncertainty: live-render placement, rotation, occupied states, low-stock states, dirt, and damage remain unchecked and must be observed in the game before their checklist items close.
+
+2026-07-27 · Phase 1B live facility showcase
+
+- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=facility-scale`).
+- Focused checks: `npm run build` passed. The fixture replaces only the demo station's legacy Market and Dorm furniture and preserves its sealed shell.
+- Visual/playtest evidence: inspected with interface panels hidden at both fit-station and actual play zoom. Checkout, shelf, and bunk silhouettes are distinct and their native footprints align to room tiles.
+- Remaining uncertainty: this is paused visual evidence, not proof of queue throughput, visitor use, stocking labor, occupied states, or damage states.
 
 2026-07-27 · Approach Control commitment model
 

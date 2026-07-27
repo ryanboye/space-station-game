@@ -380,6 +380,31 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     applyDemoStationOverlay(s);
   },
 
+  // Focused visual fixture for the larger, slot-driven hospitality modules.
+  // It keeps the demo station's sealed shell but replaces the old one-tile
+  // market and dorm furniture so atlas scale, walkable faces, and occupancy
+  // indicators can be reviewed together at `?scenario=facility-scale`.
+  'facility-scale': (s) => {
+    unlockThrough(s, 3);
+    s.metrics.credits = 3000;
+    s.metrics.materials = 500;
+    applyDemoStationOverlay(s);
+
+    for (let y = 7; y < 14; y++) {
+      for (let x = 6; x < 14; x++) removeModuleAtTile(s, y * GRID_WIDTH + x);
+    }
+    for (let y = 21; y < 28; y++) {
+      for (let x = 6; x < 14; x++) removeModuleAtTile(s, y * GRID_WIDTH + x);
+    }
+
+    placeMod(s, 6, 7, ModuleType.BunkBank);
+    placeMod(s, 10, 7, ModuleType.BunkBank);
+    placeMod(s, 6, 21, ModuleType.CheckoutBank);
+    placeMod(s, 10, 21, ModuleType.ShelfAisle);
+    placeMod(s, 12, 21, ModuleType.ShelfAisle);
+    s.controls.paused = true;
+  },
+
   // Commercial-unit prototype: a mature station with one large vacant shell
   // ready for the player to solicit and compare tenant proposals.
   'commercial-units': (s) => {
