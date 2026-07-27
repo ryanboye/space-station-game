@@ -5271,8 +5271,15 @@ function refreshSelectionSummary(): void {
       const stock = nodes.reduce((sum, node) => sum + Math.max(0, node.items.fuel ?? 0), 0);
       const capacity = nodes.reduce((sum, node) => sum + Math.max(0, node.capacity), 0);
       const fuel = getFuelPipeNetworkDiagnostics(state);
-      const connectedSources = new Set(fuel.components.filter((component) => component.powered).flatMap((component) => component.sourceTiles));
-      const connectedTanks = nodes.filter((node) => connectedSources.has(node.tileIndex)).length;
+      const connectedTanks = nodes.filter((node) => {
+        const tank = state.moduleInstances.find(
+          (module) => module.type === ModuleType.FuelTank && module.originTile === node.tileIndex
+        );
+        return tank?.tiles.some((tile) => {
+          const componentId = fuel.componentIdByTile[tile];
+          return componentId >= 0 && fuel.components[componentId]?.powered;
+        }) ?? false;
+      }).length;
       selectionSummaryEl.textContent = `Maintenance: ${Math.floor(stock)}/${Math.floor(capacity)} fuel | ${connectedTanks}/${nodes.length} tanks connected | ${fuel.poweredSinkCount}/${fuel.sinkCount} Fuel Couplers supplied`;
     } else if (room === RoomType.Storage || room === RoomType.LogisticsStock) {
       const nodes = state.itemNodes.filter((node) => state.rooms[node.tileIndex] === room);
@@ -8847,7 +8854,18 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
     }
     state.controls.diagnosticOverlay = 'utility-underlay';
     if (changed > 0) {
-      toolLockMessage = `${currentTool.utilityErase ? 'Erased' : 'Drew'} ${changed} ${currentTool.utilityErase ? 'utility' : kind} tile${changed === 1 ? '' : 's'}.`;
+      const actionSummary = `${currentTool.utilityErase ? 'Erased' : 'Drew'} ${changed} ${currentTool.utilityErase ? 'utility' : kind} tile${changed === 1 ? '' : 's'}.`;
+      if (kind === 'fuel-pipe' && !currentTool.utilityErase) {
+        const fuel = getFuelPipeNetworkDiagnostics(state);
+        const connectionSummary = fuel.poweredSinkCount > 0
+          ? ` Fuel Coupler connected: ${fuel.poweredSinkCount} supplied.`
+          : fuel.poweredNetworkCount <= 0
+            ? ' Not connected yet: run the pipe beneath any tile of a Fuel Tank in a Maintenance room.'
+            : ' Tank connected; continue the pipe to the highlighted interior socket behind the Fuel Coupler.';
+        toolLockMessage = actionSummary + connectionSummary;
+      } else {
+        toolLockMessage = actionSummary;
+      }
     } else if (blocked > 0) {
       toolLockMessage = `${kind} can only be drawn under walkable station tiles.`;
     }

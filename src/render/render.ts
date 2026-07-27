@@ -3502,6 +3502,147 @@ function drawFuelTankFillGauges(
   }
 }
 
+function drawFuelConnectionLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  topY: number,
+  color: string
+): void {
+  const fontSize = Math.max(8, Math.round(TILE_SIZE * 0.28));
+  ctx.font = `bold ${fontSize}px monospace`;
+  const paddingX = Math.max(5, Math.round(TILE_SIZE * 0.18));
+  const height = fontSize + Math.max(6, Math.round(TILE_SIZE * 0.18));
+  const width = ctx.measureText(text).width + paddingX * 2;
+  const left = centerX - width * 0.5;
+  ctx.fillStyle = 'rgba(5, 10, 15, 0.92)';
+  ctx.fillRect(left, topY, width, height);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, Math.round(PX));
+  ctx.strokeRect(left + 0.5, topY + 0.5, width - 1, height - 1);
+  ctx.fillStyle = '#f3f7fb';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, centerX, topY + height * 0.5);
+}
+
+function drawFuelCouplerConnectionIndicators(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number },
+  showPlanningDetails: boolean
+): void {
+  const diagnostics = getFuelPipeNetworkDiagnostics(state);
+  const fuelTanks = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
+
+  ctx.save();
+  if (showPlanningDetails) {
+    for (const tank of fuelTanks) {
+      if (!tank.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+      const connectedTile = tank.tiles.find((tile) => {
+        const componentId = diagnostics.componentIdByTile[tile];
+        return componentId >= 0 && diagnostics.components[componentId]?.powered;
+      });
+      const connected = connectedTile !== undefined;
+      const origin = fromIndex(tank.originTile, state.width);
+      const color = connected ? '#63f0b2' : '#ff7d72';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(2, Math.round(TILE_SIZE * 0.07));
+      ctx.setLineDash(connected ? [] : [Math.max(3, Math.round(TILE_SIZE * 0.16)), Math.max(2, Math.round(TILE_SIZE * 0.1))]);
+      ctx.strokeRect(
+        origin.x * TILE_SIZE + 2,
+        origin.y * TILE_SIZE + 2,
+        tank.width * TILE_SIZE - 4,
+        tank.height * TILE_SIZE - 4
+      );
+      ctx.setLineDash([]);
+      drawFuelConnectionLabel(
+        ctx,
+        connected ? 'TANK CONNECTED' : 'PIPE TO ANY TANK TILE',
+        (origin.x + tank.width * 0.5) * TILE_SIZE,
+        origin.y * TILE_SIZE - Math.max(18, TILE_SIZE * 0.62),
+        color
+      );
+    }
+  }
+
+  for (const coupler of state.moduleInstances) {
+    if (coupler.type !== ModuleType.FuelCoupler || !coupler.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const serviceTile = wallMountedModuleServiceTile(state, coupler.originTile);
+    const hasPipe = serviceTile !== null && hasUtilityUnderlay(state, 'fuel-pipe', serviceTile);
+    const componentId = serviceTile === null ? -1 : diagnostics.componentIdByTile[serviceTile];
+    const component = componentId >= 0 ? diagnostics.components[componentId] : undefined;
+    const connected = hasPipe && component?.powered === true;
+    const connectedTankOrigins = new Set<number>();
+    if (component) {
+      const sourceTiles = new Set(component.sourceTiles);
+      for (const tank of fuelTanks) {
+        if (tank.tiles.some((tile) => sourceTiles.has(tile))) connectedTankOrigins.add(tank.originTile);
+      }
+    }
+    const fuelStock = [...connectedTankOrigins].reduce(
+      (sum, tile) => sum + itemStockAtNode(state, tile, 'fuel'),
+      0
+    );
+    const ready = connected && fuelStock > 0.01;
+    const color = ready ? '#63f0b2' : connected ? '#ffd36a' : '#ff7d72';
+    const geometry = portExteriorSpriteGeometry(state, coupler);
+    const origin = fromIndex(coupler.originTile, state.width);
+    const couplerX = geometry ? geometry.x + geometry.width * 0.5 : (origin.x + 0.5) * TILE_SIZE;
+    const couplerY = geometry ? geometry.y + geometry.height * 0.5 : (origin.y + 0.5) * TILE_SIZE;
+    const lampRadius = Math.max(5, TILE_SIZE * 0.16);
+
+    ctx.fillStyle = 'rgba(4, 9, 13, 0.9)';
+    ctx.beginPath();
+    ctx.arc(couplerX, couplerY, lampRadius + Math.max(2, PX), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(couplerX, couplerY, lampRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#071015';
+    ctx.lineWidth = Math.max(2, Math.round(TILE_SIZE * 0.07));
+    ctx.beginPath();
+    if (connected) {
+      ctx.moveTo(couplerX - lampRadius * 0.48, couplerY);
+      ctx.lineTo(couplerX - lampRadius * 0.1, couplerY + lampRadius * 0.38);
+      ctx.lineTo(couplerX + lampRadius * 0.52, couplerY - lampRadius * 0.42);
+    } else {
+      ctx.moveTo(couplerX, couplerY - lampRadius * 0.5);
+      ctx.lineTo(couplerX, couplerY + lampRadius * 0.18);
+      ctx.moveTo(couplerX, couplerY + lampRadius * 0.48);
+      ctx.lineTo(couplerX, couplerY + lampRadius * 0.5);
+    }
+    ctx.stroke();
+
+    if (!showPlanningDetails || serviceTile === null) continue;
+    const service = fromIndex(serviceTile, state.width);
+    const socketX = (service.x + 0.5) * TILE_SIZE;
+    const socketY = (service.y + 0.5) * TILE_SIZE;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, Math.round(TILE_SIZE * 0.07));
+    ctx.setLineDash(hasPipe ? [] : [Math.max(3, Math.round(TILE_SIZE * 0.16)), Math.max(2, Math.round(TILE_SIZE * 0.1))]);
+    ctx.beginPath();
+    ctx.moveTo(socketX, socketY);
+    ctx.lineTo(couplerX, couplerY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(socketX, socketY, TILE_SIZE * 0.25, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const label = !hasPipe
+      ? 'COUPLER: PIPE HERE'
+      : !connected
+        ? 'COUPLER: NO TANK'
+        : fuelStock <= 0.01
+          ? 'COUPLER: LINE OK, TANK EMPTY'
+          : `COUPLER: READY · ${Math.floor(fuelStock)} FUEL`;
+    drawFuelConnectionLabel(ctx, label, socketX, socketY + TILE_SIZE * 0.35, color);
+  }
+  ctx.restore();
+}
+
 function drawPodDockInformationChips(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -5993,6 +6134,12 @@ export function renderWorld(
   renderMaintenanceImpacts(ctx, state, spriteAtlas, useSprites, viewport);
   renderDockInfrastructureAnimationPass(ctx, state, visibleTiles, spriteAtlas, useSprites);
   drawFuelTankFillGauges(ctx, state, visibleTiles);
+  drawFuelCouplerConnectionIndicators(
+    ctx,
+    state,
+    visibleTiles,
+    currentTool.kind === 'utility-underlay' && currentTool.utilityKind === 'fuel-pipe' && !currentTool.utilityErase
+  );
 
   const activeRoomTiles = collectActiveRoomTiles(state);
   const serviceOverlay = readServiceOverlay(state);

@@ -3243,8 +3243,15 @@ function waterSourceTiles(state: StationState): number[] {
 function fuelTankSourceTiles(state: StationState): number[] {
   return state.moduleInstances
     .filter((module) => module.type === ModuleType.FuelTank && state.rooms[module.originTile] === RoomType.Maintenance)
-    .map((module) => module.originTile)
-    .filter((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile));
+    .map((module) => module.tiles.find((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile)) ?? null)
+    .filter((tile): tile is number => tile !== null);
+}
+
+function fuelTankOriginForPipeTile(state: StationState, pipeTile: number): number | null {
+  const tank = state.moduleInstances.find(
+    (module) => module.type === ModuleType.FuelTank && module.tiles.includes(pipeTile)
+  );
+  return tank?.originTile ?? null;
 }
 
 function fuelCouplerServiceTiles(state: StationState): number[] {
@@ -3256,11 +3263,19 @@ function fuelCouplerServiceTiles(state: StationState): number[] {
 
 export function getFuelPipeNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
   const sources = fuelTankSourceTiles(state);
-  const sinks = fuelCouplerServiceTiles(state).filter((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile));
-  return discoverUtilityNetworks(state, 'fuel-pipe', {
+  const installedSinks = fuelCouplerServiceTiles(state);
+  const sinks = installedSinks.filter((tile) => hasUtilityUnderlay(state, 'fuel-pipe', tile));
+  const diagnostics = discoverUtilityNetworks(state, 'fuel-pipe', {
     sourceTiles: sources,
     sinkTiles: sinks
   });
+  return {
+    ...diagnostics,
+    sourceCount: state.moduleInstances.filter(
+      (module) => module.type === ModuleType.FuelTank && state.rooms[module.originTile] === RoomType.Maintenance
+    ).length,
+    sinkCount: installedSinks.length
+  };
 }
 
 export function getWaterPipeNetworkDiagnostics(state: StationState): UtilityNetworkDiagnostics {
@@ -11122,7 +11137,11 @@ function fuelSupplyForDock(state: StationState, dock: DockEntity): PodDockFuelSu
       tankTiles: []
     };
   }
-  const tankOrigins = new Set(component.sourceTiles);
+  const tankOrigins = new Set(
+    component.sourceTiles
+      .map((sourceTile) => fuelTankOriginForPipeTile(state, sourceTile))
+      .filter((tile): tile is number => tile !== null)
+  );
   const nodes = state.itemNodes.filter((node) => tankOrigins.has(node.tileIndex));
   const tankTiles = nodes.map((node) => node.tileIndex);
   return {
