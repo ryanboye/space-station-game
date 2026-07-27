@@ -186,10 +186,10 @@ compiles is not sufficient for player-facing work.
 - [ ] Generalize provider, fixture, seat, and queue reservations without breaking
   cafeteria behavior.
 - [ ] Give every active need/want a physical slot and duration.
-- [ ] Prevent two actors from owning one exclusive use slot.
+- [x] Prevent two actors from owning one exclusive use slot.
 - [ ] Make depicted table seats individually reservable.
 - [ ] Make bed positions individually claimable for a sleep session.
-- [ ] Support temporary bed claims separately from permanent home assignment.
+- [x] Support temporary bed claims separately from permanent home assignment.
 - [ ] Make hygiene fixtures hold exclusive sessions for visible durations.
 - [ ] Make lounge and cantina positions hold meaningful leisure sessions.
 - [ ] Release stale slots after cancellation, departure, death, save hydration, or
@@ -199,8 +199,8 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Replace unlimited one-tile Market Stall behavior with limited checkout
   throughput.
-- [ ] Add stocked shelf or aisle browsing positions.
-- [ ] Require physical inventory for positive market feedback and sales.
+- [x] Add stocked shelf or aisle browsing positions.
+- [x] Require physical inventory for positive market feedback and sales.
 - [ ] Add stock collection from visible shelf/display inventory.
 - [ ] Add a staff-side restock route.
 - [ ] Add a real customer queue at checkout.
@@ -224,10 +224,10 @@ compiles is not sufficient for player-facing work.
 
 ### Large Functional Modules
 
-- [ ] Implement Checkout Bank, initial target 2x5.
+- [x] Implement Checkout Bank, initial target 2x5.
 - [ ] Give Checkout Bank two staffed registers and two customer service slots.
-- [ ] Implement tileable Shelf Aisle, initial target 1x4.
-- [ ] Give Shelf Aisle three visible browsing positions.
+- [x] Implement tileable Shelf Aisle, initial target 1x4.
+- [x] Give Shelf Aisle three visible browsing positions.
 - [ ] Implement Display or Cold Case, initial target 1x3.
 - [ ] Implement Backroom Stock Bank, initial target 2x3.
 - [ ] Implement Service Bar, initial target 2x5.
@@ -238,7 +238,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Implement Standing Rail, initial target 1x4.
 - [ ] Implement Serving Line, initial target 2x5.
 - [ ] Implement Community Table, initial target 3x4 with eight depicted seats.
-- [ ] Implement Bunk Bank, initial target 2x4 with four temporary beds.
+- [x] Implement Bunk Bank, initial target 2x4 with four temporary beds.
 - [ ] Implement Guest Cabin, initial target 3x4 with two quality beds.
 - [ ] Implement Arrival Desk, initial target 2x4 with two processors.
 - [ ] Implement Wash Bank, initial target 2x5.
@@ -802,3 +802,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:occupant-loop` passed after lead review. It covers deterministic tenure derivation, need decay/restoration, recurring completion without promise inflation, active-visitor save/resume, visible recall staging, hard-departure cleanup, and settlement idempotence.
 - Visual/playtest evidence: not yet. World-space lifecycle feedback and the actual multi-service repair-crew playtest remain open.
 - Remaining uncertainty: the new visitor demand component reuses physical visitor service/reservation paths but does not yet share the resident target loop itself; guest beds, holding/disembark phases, early failure departure, stranding, reception, large fixtures, and traffic-concurrency tuning remain unchecked.
+
+2026-07-27 · Phase 1B physical facility slots, first slice
+
+- Commit or files: `8a49e07`, `src/sim/facility-descriptors.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, `src/sim/balance.ts`, `tools/facility-slots-tests.ts`.
+- Focused checks: `npm run test:facility-slots` and `npm run test:occupant-loop` passed. The facility runner covers rotated slot geometry, exclusive claims, proportional capacity, no-stock rejection, exactly-once stocked checkout, a complete browse-to-checkout trip, temporary guest sleep, provider arrival without retarget oscillation, and hydration cleanup.
+- Visual/playtest evidence: not yet. Dedicated native-footprint sprites, staff lanes, visible checkout queues, restocking, and actual-zoom footprint validation remain open.
+- Remaining uncertainty: the legacy Market Stall remains as a compact compatibility path; the new Checkout Bank and Shelf Aisle become a deeper market only when both are present. Bunk Bank is temporary guest capacity and does not grant permanent resident identity.
