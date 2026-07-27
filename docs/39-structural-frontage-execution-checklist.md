@@ -347,7 +347,7 @@ compiles is not sufficient for player-facing work.
 
 ### Structural Pieces
 
-- [ ] Promote existing Truss as the exterior scaffold and utility support.
+- [x] Promote existing Truss as the exterior scaffold and utility support.
 - [ ] Add Truss Junction with branch/span function.
 - [ ] Add Reinforced Bulkhead with heavy-load transfer function.
 - [ ] Keep Pod Dock as the small docking collar.
@@ -357,17 +357,17 @@ compiles is not sufficient for player-facing work.
 
 ### Structural Graph
 
-- [ ] Root support in the original station frame/core.
-- [ ] Grandfather legacy hull as supported.
-- [ ] Derive nodes and edges from Truss, Junctions, Bulkheads, and hull boundaries.
-- [ ] Enforce a readable straight-span limit.
-- [ ] Require Junctions for unsupported branches or long runs.
-- [ ] Define small, medium, and heavy interface loads.
-- [ ] Require reinforced load transfer for large Berths where appropriate.
-- [ ] Validate support while planning.
+- [x] Root support in the original station frame/core.
+- [x] Grandfather legacy hull as supported.
+- [x] Derive nodes and edges from Truss, Junctions, Bulkheads, and hull boundaries.
+- [x] Enforce a readable straight-span limit.
+- [x] Require Junctions for unsupported branches or long runs.
+- [x] Define small, medium, and heavy interface loads.
+- [x] Require reinforced load transfer for large Berths where appropriate.
+- [x] Validate support while planning.
 - [ ] Validate support again before commissioning.
 - [ ] Cache support by structure/topology version.
-- [ ] Avoid per-tick structure scans.
+- [x] Avoid per-tick structure scans.
 
 ### Planning Feedback
 
@@ -382,8 +382,8 @@ compiles is not sufficient for player-facing work.
 ### Phase 2 Gate
 
 - [ ] Unsupported hull planning is rejected.
-- [ ] A Junction enables a branch.
-- [ ] Reinforcement enables a heavy interface.
+- [x] A Junction enables a branch.
+- [x] Reinforcement enables a heavy interface.
 - [ ] Legacy saves load as structurally valid.
 - [ ] Structural recomputation occurs only after relevant mutations.
 
@@ -844,3 +844,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:failed-stay`, `npm run test:occupant-loop`, `npm run test:facility-slots`, and `npm run build` passed. Coverage includes normal boarding, hard-departure stranding, gradual escalation, ship-local productivity pressure, save/load, delayed paid relief, and exactly-once removal/settlement.
 - Visual/playtest evidence: none yet. Failure stages, stranded accommodation, and the relief action still need world-space/UI presentation before their visible checklist items can close.
 - Remaining uncertainty: `disruptive` is durable state only; it does not yet spawn a bounded incident. Emergency relief exists as a simulation command but is not yet a player-facing control.
+
+2026-07-27 · Structural support read model
+
+- Commit or files: `9b42161`, `src/sim/structural-support.ts`, `tools/structural-support-tests.ts`, `package.json`.
+- Focused checks: `npm run test:structural-support` and `git diff --check` passed. Coverage proves legacy rooting, connected/disconnected runs, a six-tile maximum span, junction-required branching, distinct small/medium/heavy loads, reinforced heavy transfer, deterministic reason codes, and zero `StationState` mutation.
+- Visual/playtest evidence: none yet. The validator is deliberately planning-time data and is not wired to the build gesture or support overlay.
+- Remaining uncertainty: without historical construction provenance, all existing non-space/non-truss tiles are conservatively grandfathered roots. Junction and Reinforced Bulkhead exist as proposed planning kinds but still need real placeable pieces, art, overlays, construction, and commissioning validation.
