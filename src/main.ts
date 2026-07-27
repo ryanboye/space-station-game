@@ -51,7 +51,7 @@ import {
   fireStaffRole,
   getBerthInspectorAt,
   getCommercialUnitAt,
-  getEligibleBerthsForOffer,
+  getTrafficOfferPreview,
   getCrewInspectorById,
   getCrewFacilityReachability,
   getCrewSustainabilitySummary,
@@ -103,7 +103,7 @@ import {
   previewCommercialOffer,
   quoteMaterialImportCost,
   removeModuleAtTile,
-  refuseTrafficOffer,
+  passTrafficOffer,
   setPortAutoAdmit,
   setPortAutoAdmitPolicy,
   setMarketPricingPolicy,
@@ -2847,7 +2847,7 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
 }
 
 function openPortDispatch(): void {
-  if (!state.rooms.includes(RoomType.Berth)) return;
+  if (!hasVisitorDock()) return;
   portDispatchModal.classList.remove('hidden');
   openPortDispatchBtn.setAttribute('aria-expanded', 'true');
 }
@@ -2858,14 +2858,16 @@ function closePortDispatch(): void {
 }
 
 function refreshDispatchTrigger(): void {
-  const openOffers = state.trafficOffers.filter((offer) => offer.status !== 'cleared');
-  const clearedOffers = state.trafficOffers.filter((offer) => offer.status === 'cleared');
+  const hasBerthCapacity = state.rooms.includes(RoomType.Berth);
+  const visibleOffers = state.trafficOffers.filter((offer) => hasBerthCapacity || offer.size === 'small');
+  const openOffers = visibleOffers.filter((offer) => offer.status !== 'cleared');
+  const clearedOffers = visibleOffers.filter((offer) => offer.status === 'cleared');
   const activeShips = state.arrivingShips.filter((ship) => ship.portManifest && ship.stage !== 'depart');
   const holdingCount = openOffers.filter((offer) => offer.status === 'holding').length;
-  const hasBerthCapacity = state.rooms.includes(RoomType.Berth);
+  const hasApproachCapacity = hasVisitorDock();
 
-  openPortDispatchBtn.classList.toggle('hidden', !hasBerthCapacity);
-  if (!hasBerthCapacity) {
+  openPortDispatchBtn.classList.toggle('hidden', !hasApproachCapacity);
+  if (!hasApproachCapacity) {
     closePortDispatch();
     return;
   }
@@ -2878,8 +2880,8 @@ function refreshDispatchTrigger(): void {
   if (openOffers.length > 0) {
     dispatchTriggerTitleEl.textContent = `${openOffers.length} ship${openOffers.length === 1 ? '' : 's'} waiting to approach`;
     dispatchTriggerMetaEl.textContent = holdingCount > 0
-      ? `${holdingCount} in holding orbit · review manifests`
-      : 'Compare work, risk, and berth fit';
+      ? `${holdingCount} in holding orbit · choose a dock or berth`
+      : hasBerthCapacity ? 'Compare capacity and committed load' : 'Pod Dock traffic ready';
   } else if (clearedOffers.length > 0) {
     dispatchTriggerTitleEl.textContent = `${clearedOffers.length} ship${clearedOffers.length === 1 ? '' : 's'} cleared for approach`;
     dispatchTriggerMetaEl.textContent = 'Open dispatch for traffic controls';
@@ -3253,6 +3255,27 @@ function renderSettlementHistory(settlements: StationState['portOps']['settlemen
 
 let lastTrafficOfferRenderKey = '';
 
+function trafficOfferTimer(offer: StationState['trafficOffers'][number]): string {
+  if (offer.status === 'cleared') {
+    return `COMMITTED · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
+  }
+  if (offer.status === 'holding') {
+    return `HOLD · ${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s`;
+  }
+  return `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
+}
+
+function refreshTrafficOfferTimers(offers: StationState['trafficOffers']): void {
+  for (const offer of offers) {
+    const timer = trafficOfferListEl.querySelector<HTMLElement>(`[data-offer-timer="${offer.id}"]`);
+    if (timer) timer.textContent = trafficOfferTimer(offer);
+  }
+}
+
+function compactLoadItem(label: string, value: string): string {
+  return `<span><b>${escapeHtml(value)}</b>${label}</span>`;
+}
+
 function refreshTrafficOffers(): void {
   const cargoOps = state.portOps;
   const cargoArmCount = state.moduleInstances.filter((module) => module.type === ModuleType.CargoArm).length;
@@ -3326,55 +3349,75 @@ function refreshTrafficOffers(): void {
     trafficOfferListEl.innerHTML = '';
     return;
   }
+  const hasBerthCapacity = state.rooms.includes(RoomType.Berth);
+  const visibleOffers = state.trafficOffers.filter((offer) => hasBerthCapacity || offer.size === 'small');
+  const offerViews = visibleOffers.map((offer) => ({ offer, preview: getTrafficOfferPreview(state, offer.id) }));
   const offerRenderKey = JSON.stringify({
-    now: Math.floor(state.now),
     dockVersion: state.dockVersion,
     manual: state.controls.manualTrafficAdmission,
-    offers: state.trafficOffers.map((offer) => [offer.id, offer.status, offer.holdUsed, Math.ceil(offer.arrivesAt - state.now), Math.ceil(offer.expiresAt - state.now)]),
-    contracts: state.portOps.contracts.map((contract) => [contract.offerId, contract.status])
+    hasBerthCapacity,
+    offers: offerViews.map(({ offer, preview }) => [
+      offer.id,
+      offer.status,
+      offer.holdUsed,
+      preview?.compatibleInterface.compatibleCount ?? 0,
+      preview?.compatibleInterface.freeCount ?? 0,
+      preview?.canAccept ?? false,
+      preview?.canHold ?? false
+    ])
   });
-  if (offerRenderKey === lastTrafficOfferRenderKey) return;
-  lastTrafficOfferRenderKey = offerRenderKey;
-  if (state.trafficOffers.length === 0) {
-    trafficOfferListEl.innerHTML = '<div class="traffic-empty">Orbital manifest queue clear</div>';
+  if (offerRenderKey === lastTrafficOfferRenderKey) {
+    refreshTrafficOfferTimers(visibleOffers);
     return;
   }
-  const offersHtml = state.trafficOffers.map((offer) => {
-    const eligibleBerths = getEligibleBerthsForOffer(state, offer.id);
-    const eligible = eligibleBerths.length;
-    const bestStanding = eligibleBerths
-      .map((candidate) => getBerthInspectorAt(state, candidate.anchorTile))
-      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-      .sort((a, b) => b.serviceScore - a.serviceScore)[0];
-    const ready = offer.status === 'holding';
+  lastTrafficOfferRenderKey = offerRenderKey;
+  if (visibleOffers.length === 0) {
+    trafficOfferListEl.innerHTML = state.trafficOffers.length > 0 && !hasBerthCapacity
+      ? '<div class="traffic-empty">Berth contracts are waiting beyond this Pod Dock-only station.</div>'
+      : '<div class="traffic-empty">Orbital manifest queue clear</div>';
+    return;
+  }
+  const offersHtml = offerViews.map(({ offer, preview }) => {
+    if (!preview) return '';
     const cleared = offer.status === 'cleared';
-    const autoRouted = cleared && state.controls.portAutoAdmitEnabled && offer.riskLabel === 'low';
-    const timer = ready ? `${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s hold` : cleared ? `${autoRouted ? 'AUTO ROUTED' : 'CLEARED'} · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s` : `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
-    const berthText = eligible > 0
-      ? `${eligible} berth${eligible === 1 ? '' : 's'} ready · best ${bestStanding?.serviceGrade ?? 'C'} ×${(bestStanding?.servicePayoutMultiplier ?? 1).toFixed(2)}`
-      : `No ${offer.size} berth ready`;
-    const crewVerdict = crewPlanVerdict(offer);
-    const facilityVerdict = offerFacilityVerdict(offer);
-    const maxReturn = offer.dockingFee + offer.projectedSpend;
-    const economicLine = (offer.fuelSupply ?? 0) > 0
-      ? `pay ${offer.fuelProcurementCostCredits ?? 0}c · receive ${offer.fuelSupply} fuel + up to ${maxReturn}c`
-      : `up to ${maxReturn}c`;
-    return `<article class="traffic-offer ${ready ? 'is-holding' : ''}">
-      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${timer}</span></div>
-      <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} · ${offer.size} ${offer.shipType} · ${offer.riskLabel} risk</div>
-      <div class="traffic-offer-line"><b>Goal</b> ${offerPromisePreview(offer)}</div>
-      <div class="traffic-offer-line"><b>Plan</b> ${offerOperatingPlan(offer)} <span class="crew-plan-verdict ${crewVerdict.ready ? 'ready' : 'short'}">${crewVerdict.label}</span></div>
-      <div class="traffic-offer-line"><b>Facilities</b> <span class="crew-plan-verdict ${facilityVerdict.ready ? 'ready' : 'short'}">${facilityVerdict.label}</span></div>
-      <div class="traffic-offer-line"><b>Economy</b> ${economicLine} · ${offer.berthTimeSec}s</div>
-      <div class="traffic-offer-actions">
-        <span class="traffic-readiness ${eligible > 0 ? 'ready' : 'blocked'}">${berthText}</span>
-        <button data-traffic-action="assign" data-offer-id="${offer.id}" ${cleared || eligible <= 0 ? 'disabled' : ''}>${cleared ? 'Assigned' : ready ? 'Assign' : 'Reserve'}</button>
-        ${ready ? `<button data-traffic-action="hold" data-offer-id="${offer.id}" ${offer.holdUsed ? 'disabled' : ''}>${offer.holdUsed ? 'Held' : 'Hold'}</button>` : ''}
-        <button data-traffic-action="refuse" data-offer-id="${offer.id}">Refuse</button>
+    const className = preview.shipClass === 'pod' ? 'pod' : 'berth';
+    const interfaceLabel = preview.compatibleInterface.kind === 'pod-dock' ? 'Pod Docks' : 'Berths';
+    const range = (value: { min: number; max: number }, suffix: string) =>
+      value.min === value.max ? `${value.min}${suffix}` : `${value.min}-${value.max}${suffix}`;
+    const cues = preview.serviceCues.slice(0, 4)
+      .map((cue) => `<span class="traffic-cue">${escapeHtml(cue)}</span>`)
+      .join('');
+    const load = preview.committedLoad;
+    const blocker = !cleared && !preview.canAccept && preview.acceptReason
+      ? `<small class="traffic-offer-blocker">${escapeHtml(preview.acceptReason)}</small>`
+      : '';
+    const actions = cleared
+      ? '<span class="traffic-commitment">Interface committed</span>'
+      : `<button data-traffic-action="accept" data-offer-id="${offer.id}" ${preview.canAccept ? '' : 'disabled'}>Accept</button>
+        <button data-traffic-action="hold" data-offer-id="${offer.id}" ${preview.canHold ? '' : 'disabled'}>Hold</button>
+        <button data-traffic-action="pass" data-offer-id="${offer.id}" ${preview.canPass ? '' : 'disabled'}>Pass</button>`;
+    return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}">
+      <div class="traffic-offer-title-row">
+        <span class="traffic-offer-class traffic-offer-class--${className}" aria-hidden="true"><i></i></span>
+        <div><strong>${escapeHtml(offer.callsign)}</strong><small>${escapeHtml(offer.shipName)}</small></div>
+        <span class="traffic-offer-timer" data-offer-timer="${offer.id}">${trafficOfferTimer(offer)}</span>
       </div>
+      <div class="traffic-offer-facts"><span>${preview.shipClass === 'pod' ? 'POD' : offer.size.toUpperCase()} · ${range(preview.partySize, ' guests')}</span><span>${range(preview.staySeconds, 's')} stay</span></div>
+      <div class="traffic-cues">${cues}</div>
+      <div class="traffic-interface ${preview.compatibleInterface.freeCount > 0 ? 'ready' : 'blocked'}"><b>${preview.compatibleInterface.freeCount}/${preview.compatibleInterface.compatibleCount}</b> ${interfaceLabel} free <span>· ${range(preview.expectedRevenue, 'c')}</span></div>
+      <div class="traffic-load-strip" aria-label="Committed load">
+        ${compactLoadItem('berth', `${Math.ceil(load.berthSeconds / 60)}m`)}
+        ${compactLoadItem('beds', String(load.bedNights))}
+        ${compactLoadItem('meals', String(load.meals))}
+        ${compactLoadItem('hygiene', String(load.hygieneVisits))}
+        ${compactLoadItem('staff', `${load.staffMinutes}m`)}
+      </div>
+      ${blocker}
+      <div class="traffic-offer-actions">${actions}</div>
     </article>`;
-  }).join('');
+  }).join('') || '<div class="traffic-empty">No compatible approach traffic is waiting.</div>';
   trafficOfferListEl.innerHTML = offersHtml;
+  refreshTrafficOfferTimers(visibleOffers);
 }
 
 let routeConflictCalloutSampledAt = Number.NEGATIVE_INFINITY;
@@ -9494,19 +9537,19 @@ trafficOfferListEl.addEventListener('click', (event) => {
   const offerId = Number(button.dataset.offerId);
   if (!Number.isFinite(offerId)) return;
   const action = button.dataset.trafficAction;
-  if (action === 'assign') {
+  if (action === 'accept' || action === 'assign') {
     const result = admitTrafficOffer(state, offerId);
     trafficActionNoteEl.textContent = result.ok
-      ? (result.reason ?? `Berth assigned. Approach clearance transmitted.`)
-      : (result.reason ?? 'Unable to assign berth.');
+      ? (result.reason ?? `Approach clearance transmitted.`)
+      : (result.reason ?? 'Unable to accept this approach.');
     trafficActionNoteEl.className = `traffic-action-note ${result.ok ? 'tone-ok' : 'tone-warn'}`;
   } else if (action === 'hold') {
     const held = holdTrafficOffer(state, offerId);
     trafficActionNoteEl.textContent = held ? 'Holding window extended 25 seconds.' : 'Ship has not reached holding orbit.';
     trafficActionNoteEl.className = `traffic-action-note ${held ? 'tone-ok' : 'tone-warn'}`;
-  } else if (action === 'refuse') {
-    const refused = refuseTrafficOffer(state, offerId);
-    trafficActionNoteEl.textContent = refused ? 'Manifest declined. Lane control notified.' : 'Manifest already cleared.';
+  } else if (action === 'pass' || action === 'refuse') {
+    const passed = passTrafficOffer(state, offerId);
+    trafficActionNoteEl.textContent = passed ? 'Traffic passed. Lane control notified.' : 'Approach is already committed.';
     trafficActionNoteEl.className = 'traffic-action-note tone-muted';
   }
   refreshTrafficStatus();
