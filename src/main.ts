@@ -1642,6 +1642,30 @@ function buildFreshGameState(): StationState {
 })();
 
 let spriteAtlas: SpriteAtlas = createEmptySpriteAtlas();
+let spriteAtlasLoadInFlight = false;
+let spriteAtlasRetryTimer: number | null = null;
+
+function requestSpriteAtlasLoad(): void {
+  if (spriteAtlasLoadInFlight || state.controls.spriteMode !== 'sprites') return;
+  spriteAtlasLoadInFlight = true;
+  void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
+    spriteAtlas = loaded;
+    spriteAtlasLoadInFlight = false;
+    refreshCrewPanel();
+    refreshModulePaletteSprites();
+    if (loaded.ready) {
+      if (spriteAtlasRetryTimer !== null) window.clearTimeout(spriteAtlasRetryTimer);
+      spriteAtlasRetryTimer = null;
+      return;
+    }
+    if (state.controls.spriteMode === 'sprites' && spriteAtlasRetryTimer === null) {
+      spriteAtlasRetryTimer = window.setTimeout(() => {
+        spriteAtlasRetryTimer = null;
+        requestSpriteAtlasLoad();
+      }, 3000);
+    }
+  });
+}
 let zoom = 1;
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
@@ -9318,11 +9342,7 @@ window.addEventListener('keydown', (e) => {
       case 'F2':
       state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
       if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-        void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
-          spriteAtlas = loaded;
-          refreshModulePaletteSprites();
-          refreshCrewPanel();
-        });
+        requestSpriteAtlasLoad();
       }
       syncToggleLabels();
       break;
@@ -9635,11 +9655,7 @@ for (const btn of diagnosticOverlayBtns) {
 toggleSpritesBtn.addEventListener('click', () => {
   state.controls.spriteMode = state.controls.spriteMode === 'sprites' ? 'fallback' : 'sprites';
   if (state.controls.spriteMode === 'sprites' && !spriteAtlas.ready) {
-    void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
-      spriteAtlas = loaded;
-      refreshModulePaletteSprites();
-      refreshCrewPanel();
-    });
+    requestSpriteAtlasLoad();
   }
   syncToggleLabels();
 });
@@ -11039,11 +11055,7 @@ let gameLoopStarted = false;
 function startGameLoop(): void {
   if (gameLoopStarted) return;
   gameLoopStarted = true;
-  void loadSpriteAtlas(state.controls.spritePipeline).then((loaded) => {
-    spriteAtlas = loaded;
-    refreshCrewPanel();
-    refreshModulePaletteSprites();
-  });
+  requestSpriteAtlasLoad();
   refreshCrewPanel();
   refreshModulePaletteSprites();
   pendingAutosaveLoad = false;
