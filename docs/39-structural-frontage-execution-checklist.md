@@ -282,10 +282,10 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Errand visitors can balk, abandon a purchase, and leave early.
 - [ ] Shore-leave passengers seek an alternative and obey recall.
-- [ ] A passenger who physically misses boarding becomes stranded.
+- [x] A passenger who physically misses boarding becomes stranded.
 - [ ] Contract crews remain while their ship work is incomplete.
-- [ ] Poor contract-crew needs reduce cooperation or work productivity.
-- [ ] Extended/stranded guests consume temporary food, hygiene, and lodging.
+- [x] Poor contract-crew needs reduce cooperation or work productivity.
+- [x] Extended/stranded guests consume temporary food, hygiene, and lodging.
 - [ ] Residents accumulate persistent stress and can withdraw from work or leave.
 - [ ] Implement visible `unmet` escalation.
 - [ ] Implement visible `balking` escalation.
@@ -293,8 +293,8 @@ compiles is not sufficient for player-facing work.
 - [ ] Implement bounded `disruptive` escalation.
 - [ ] Let prolonged failure cause mess, complaints, arguments, theft, vandalism,
   medical demand, or refusal to work as appropriate.
-- [ ] Ensure one missed meal cannot immediately trigger a serious incident.
-- [ ] Make distressed repair crews extend repair and Berth occupation.
+- [x] Ensure one missed meal cannot immediately trigger a serious incident.
+- [x] Make distressed repair crews extend repair and Berth occupation.
 - [ ] Make extended occupation block or delay subsequent accepted traffic.
 - [ ] Allow emergency meal purchase.
 - [ ] Allow emergency temporary bunk capacity.
@@ -304,9 +304,9 @@ compiles is not sufficient for player-facing work.
 - [ ] Allow contract cancellation with an explicit penalty.
 - [ ] Allow admission closure while recovering.
 - [ ] Reserve security intervention for genuinely disruptive occupants.
-- [ ] Give stranded occupants temporary accommodation and future departure.
-- [ ] Add an expensive relief transfer after a generous maximum disruption window.
-- [ ] Never silently convert a failed visitor into a resident.
+- [x] Give stranded occupants temporary accommodation and future departure.
+- [x] Add an expensive relief transfer after a generous maximum disruption window.
+- [x] Never silently convert a failed visitor into a resident.
 - [ ] Require housing availability and explicit policy for resident acceptance.
 - [ ] Let an accepted resident's origin ship depart normally.
 - [ ] Apply rating/faction effects at meaningful milestones or resolution.
@@ -317,18 +317,18 @@ compiles is not sufficient for player-facing work.
 ### Small-Port Manual Control
 
 - [ ] Present a short list of incoming ship silhouettes tied to physical lanes.
-- [ ] Show ship/visit class at a glance.
-- [ ] Show likely party-size range.
-- [ ] Show likely stay range.
-- [ ] Show broad service or demand cues.
+- [x] Show ship/visit class at a glance.
+- [x] Show likely party-size range.
+- [x] Show likely stay range.
+- [x] Show broad service or demand cues.
 - [ ] Show compatible interface and approach side.
-- [ ] Show expected revenue range.
-- [ ] Show committed capacity if accepted.
-- [ ] Provide `Accept`, `Hold`, and `Pass` without opening a large manifest.
+- [x] Show expected revenue range.
+- [x] Show committed capacity if accepted.
+- [x] Provide `Accept`, `Hold`, and `Pass` without opening a large manifest.
 - [x] Never pause automatically when an offer arrives.
 - [x] Bind acceptance to a compatible docking slot or Berth reservation.
 - [ ] Project the candidate approach envelope into the world on hover/focus.
-- [ ] Project expected Berth, bed, meal, hygiene, and staff load.
+- [x] Project expected Berth, bed, meal, hygiene, and staff load.
 - [ ] Surface conflicts with already accepted work.
 
 ### Scaling Automation
@@ -830,3 +830,17 @@ Remaining uncertainty:
 - Focused checks: `npm run test:approach-control` passed and `npm run build` passed. The runner proves compact preview ranges/cues/load, no auto-pause, Pod-only and Berth-only physical binding, reservation exclusion, bounded Hold, guarded Pass, and pending/committed save-load recovery.
 - Visual/playtest evidence: the model is ready for the compact contextual panel, but no panel or hover envelope has been implemented or checked yet.
 - Remaining uncertainty: interface labels and approach-side presentation need UI review; future-load conflicts currently expose committed physical-interface counts but do not forecast time-overlap contention across every service.
+
+2026-07-27 · Compact Approach Control interface
+
+- Commit or files: `f983e50` plus follow-up integration fixes in `src/main.ts` and `src/styles.css`.
+- Focused checks: `npm run build` and `git diff --check` passed. `fuel-day` supplied two deterministic medium offers; accepting `F-901` changed its card to `Interface committed` exactly once.
+- Visual/playtest evidence: inspected populated cards at `1600x1000` and `700x900`. Both show class silhouette, party/stay ranges, demand cues, free interfaces, revenue, committed load, and `Accept` / `Hold` / `Pass`; the narrow layout becomes one column and remains within the viewport.
+- Remaining uncertainty: approach-side world projection, hover envelopes, service-overlap conflicts, and large-station automation remain open.
+
+2026-07-27 · Failed-stay and stranding foundation
+
+- Commit or files: `bd954f3`, `src/sim/types.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, `tools/failed-stay-tests.ts`, `tools/occupant-loop-tests.ts`.
+- Focused checks: `npm run test:failed-stay`, `npm run test:occupant-loop`, `npm run test:facility-slots`, and `npm run build` passed. Coverage includes normal boarding, hard-departure stranding, gradual escalation, ship-local productivity pressure, save/load, delayed paid relief, and exactly-once removal/settlement.
+- Visual/playtest evidence: none yet. Failure stages, stranded accommodation, and the relief action still need world-space/UI presentation before their visible checklist items can close.
+- Remaining uncertainty: `disruptive` is durable state only; it does not yet spawn a bounded incident. Emergency relief exists as a simulation command but is not yet a player-facing control.

@@ -4487,6 +4487,18 @@ button.alert-item {
     margin: 8px;
   }
 
+  /* The responsive game viewport clips the rest of the static left stack.
+     Keep the one time-sensitive approach affordance reachable without turning
+     the entire management stack back into a screen-covering overlay. */
+  #open-port-dispatch:not(.hidden) {
+    position: fixed;
+    top: 138px;
+    left: 12px;
+    z-index: 20;
+    width: min(300px, calc(100vw - 24px));
+    margin: 0;
+  }
+
   .traffic-controls,
   .traffic-offer-list {
     grid-template-columns: 1fr;

@@ -686,7 +686,7 @@ app.innerHTML = `
         </div>
         <small id="approach-reputation-pull" class="approach-reputation-pull">Traffic pull: reputation has no effect yet</small>
         <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
-        <small id="traffic-action-note" class="traffic-action-note">Select a manifest to reserve a berth.</small>
+        <small id="traffic-action-note" class="traffic-action-note">Accept commits the shown interface and station load.</small>
       </div>
     </div>
   </div>
@@ -2827,7 +2827,9 @@ function refreshHudStatus(): void {
 const VISITOR_TRAFFIC_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
 
 function hasVisitorDock(): boolean {
-  return state.docks.some((dock) => dock.purpose === 'visitor') || state.metrics.visitorBerthsTotal > 0;
+  return state.docks.some((dock) => dock.purpose === 'visitor') ||
+    state.metrics.visitorBerthsTotal > 0 ||
+    state.rooms.includes(RoomType.Berth);
 }
 
 function hasEligibleVisitorDock(): boolean {
@@ -2847,7 +2849,6 @@ function setTrafficStatus(text: string, tone: 'muted' | 'ok' | 'warn'): void {
 }
 
 function openPortDispatch(): void {
-  if (!hasVisitorDock()) return;
   portDispatchModal.classList.remove('hidden');
   openPortDispatchBtn.setAttribute('aria-expanded', 'true');
 }
@@ -3155,7 +3156,7 @@ function refreshShiftBrief(activeTurnarounds: StationState['arrivingShips']): vo
   const openOffers = state.trafficOffers.filter((offer) => offer.status !== 'cleared');
   shiftBriefEl.className = 'shift-brief';
   shiftBriefEl.innerHTML = openOffers.length > 0
-    ? '<span class="shift-brief-kicker">Choose this shift\'s work</span><strong>Reserve one manifest, then staff its promise</strong><span>Passenger work needs Service. Freight needs Cargo. Overlap competes for the same eight crew.</span>'
+    ? '<span class="shift-brief-kicker">Commit frontage carefully</span><strong>Accept reserves a physical dock or berth</strong><span>Hold buys time once. Pass leaves the interface free for later traffic.</span>'
     : state.portOps.firstOfferShownAt === null
       ? '<span class="shift-brief-kicker">Start the shift</span><strong>Press Play to receive the first manifests</strong><span>Approach Control will announce arrivals without interrupting station operations.</span>'
       : '<span class="shift-brief-kicker">Waiting for traffic</span><strong>Keep the station ready</strong><span>Review the roster, meal buffer, storage route, and cargo-arm condition.</span>';
