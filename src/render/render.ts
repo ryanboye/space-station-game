@@ -4239,9 +4239,33 @@ function marketStockAtTile(state: StationState, tileIndex: number): number | nul
   return itemStockAtNode(state, tileIndex, 'tradeGood');
 }
 
+function visitorFailureThought(visitor: StationState['visitors'][number]): WorldThought | null {
+  const need = visitor.failureNeed;
+  const needText = need === 'hunger'
+    ? 'food'
+    : need === 'energy'
+      ? 'a place to rest'
+      : need === 'hygiene'
+        ? 'somewhere to wash'
+        : need === 'leisure'
+          ? 'somewhere to relax'
+          : null;
+  if (!needText) return null;
+  if (visitor.serviceFailureStage === 'disruptive') return { text: `I need ${needText} now!`, tone: 'negative' };
+  if (visitor.serviceFailureStage === 'distressed') return { text: `I still need ${needText}!`, tone: 'negative' };
+  if (visitor.serviceFailureStage === 'balking') return { text: `I cannot find ${needText}`, tone: 'negative' };
+  return null;
+}
+
 function visitorWorldThought(state: StationState, visitor: StationState['visitors'][number]): WorldThought | null {
   if (visitor.healthState === 'critical') return { text: 'I need help!', tone: 'negative' };
   if ((visitor.angryUntil ?? 0) > state.now) return { text: "I'm leaving!", tone: 'negative' };
+  if (visitor.strandedFromShipId !== null && visitor.strandedFromShipId !== undefined) {
+    return { text: 'My ship left. I need transport.', tone: 'negative' };
+  }
+  const failureThought = visitorFailureThought(visitor);
+  if (failureThought && visitor.serviceFailureStage !== 'balking') return failureThought;
+  if (failureThought && shouldVoiceRouteComplaint(state, visitor.id, 5)) return failureThought;
   const hasEnteredStation =
     state.now - visitor.spawnedAt >= 4 &&
     state.rooms[visitor.tileIndex] !== RoomType.Berth &&
@@ -6044,10 +6068,11 @@ function drawAgentStatusPip(
   cx: number,
   cy: number,
   code: string,
-  color: string
+  color: string,
+  offset: number = 0
 ): void {
   const radius = Math.max(5, TILE_SIZE * 0.18);
-  const x = cx + TILE_SIZE * 0.29;
+  const x = cx + TILE_SIZE * 0.29 + offset * radius * 1.45;
   const y = cy - TILE_SIZE * 0.35;
   ctx.save();
   ctx.fillStyle = 'rgba(5, 10, 16, 0.9)';
@@ -6523,11 +6548,30 @@ export function renderWorld(
       ctx.arc(cx, cy, TILE_SIZE * 0.22, 0, Math.PI * 2);
       ctx.fill();
     }
-    if (v.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
-    else if (v.healthState === 'distressed' && shouldDrawAirDistressPip(state, v.id, v.tileIndex)) {
-      drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');
+    const failureStage = v.serviceFailureStage ?? 'none';
+    const stranded = v.strandedFromShipId !== null && v.strandedFromShipId !== undefined;
+    let pipOffset = 0;
+    if (v.healthState === 'critical') {
+      drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b', pipOffset);
+      pipOffset++;
+    } else if (v.healthState === 'distressed' && shouldDrawAirDistressPip(state, v.id, v.tileIndex)) {
+      drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2', pipOffset);
+      pipOffset++;
     }
-    else if ((v.serviceBlockedSince ?? state.now) < state.now - 8) drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62');
+    if (failureStage === 'balking') {
+      drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62', pipOffset);
+      pipOffset++;
+    } else if (failureStage === 'distressed') {
+      drawAgentStatusPip(ctx, cx, cy, '!', '#ffb454', pipOffset);
+      pipOffset++;
+    } else if (failureStage === 'disruptive') {
+      drawAgentStatusPip(ctx, cx, cy, '!', '#ff5f5f', pipOffset);
+      pipOffset++;
+    } else if ((v.serviceBlockedSince ?? state.now) < state.now - 8) {
+      drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62', pipOffset);
+      pipOffset++;
+    }
+    if (stranded) drawAgentStatusPip(ctx, cx, cy, '>', '#7bdcff', pipOffset);
     // Crowd-loop v1 (B3): storm-offs read as angry at a glance...
     if (angry) {
       ctx.save();
@@ -6555,8 +6599,11 @@ export function renderWorld(
       }
       ctx.restore();
     }
-    const urgentThought = angry || v.healthState === 'critical';
-    if (thoughtWindowOpen(v.id, urgentThought)) {
+    const urgentThought = angry || v.healthState === 'critical' || stranded || failureStage === 'distressed' || failureStage === 'disruptive';
+    const visitorThoughtWindowOpen = urgentThought
+      ? (Math.floor(state.now / 2) + v.id * 5) % 3 === 0
+      : thoughtWindowOpen(v.id, false);
+    if (visitorThoughtWindowOpen) {
       const thought = visitorWorldThought(state, v);
       if (thought && shouldDrawThought(v.id, cx, cy, urgentThought)) {
         drawWorldThought(ctx, thought.text, cx, cy, urgentThought, thought.tone);

@@ -288,8 +288,8 @@ compiles is not sufficient for player-facing work.
 - [x] Extended/stranded guests consume temporary food, hygiene, and lodging.
 - [ ] Residents accumulate persistent stress and can withdraw from work or leave.
 - [ ] Implement visible `unmet` escalation.
-- [ ] Implement visible `balking` escalation.
-- [ ] Implement visible `distressed` escalation.
+- [x] Implement visible `balking` escalation.
+- [x] Implement visible `distressed` escalation.
 - [ ] Implement bounded `disruptive` escalation.
 - [ ] Let prolonged failure cause mess, complaints, arguments, theft, vandalism,
   medical demand, or refusal to work as appropriate.
@@ -745,13 +745,13 @@ compiles is not sufficient for player-facing work.
 
 ## Focused Runner Catalogue
 
-- [ ] Add structural support runner.
+- [x] Add structural support runner.
 - [ ] Add phased construction/EVA runner.
-- [ ] Add approach geometry/reservation runner.
+- [x] Add approach geometry/reservation runner.
 - [ ] Add ship visit/settlement runner.
 - [x] Add occupant tenure/needs runner.
-- [ ] Add fixture-slot/reception runner.
-- [ ] Add failed-stay/stranding runner.
+- [x] Add fixture-slot/reception runner.
+- [x] Add failed-stay/stranding runner.
 - [ ] Add movement/queue/deadlock runner.
 - [ ] Add cargo/boarding/support runner.
 - [ ] Add integrity/pressure/EVA repair runner.
@@ -851,3 +851,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:structural-support` and `git diff --check` passed. Coverage proves legacy rooting, connected/disconnected runs, a six-tile maximum span, junction-required branching, distinct small/medium/heavy loads, reinforced heavy transfer, deterministic reason codes, and zero `StationState` mutation.
 - Visual/playtest evidence: none yet. The validator is deliberately planning-time data and is not wired to the build gesture or support overlay.
 - Remaining uncertainty: without historical construction provenance, all existing non-space/non-truss tiles are conservatively grandfathered roots. Junction and Reinforced Bulkhead exist as proposed planning kinds but still need real placeable pieces, art, overlays, construction, and commissioning validation.
+
+2026-07-27 · Failed-stay world presentation and relief control
+
+- Commit or files: `src/render/render.ts`, `src/main.ts`, `src/sim/sim.ts`, `src/sim/cold-start-scenarios.ts` (`?scenario=failed-stay-showcase`).
+- Focused checks: `npm run test:failed-stay`, `npm run test:occupant-loop`, and `npm run build` passed. The deterministic fixture stages four occupants without relying on elapsed playtest time.
+- Visual/playtest evidence: inspected at `1600x1000` with panels both visible and hidden. Balking renders an amber `?`; distressed/disruptive states render escalating `!` markers and need-specific speech; stranding adds a separate transport marker. The Alerts panel identified one stranded passenger, the worst current stage, and a 65-credit relief action. Clicking the unique action removed the stranded passenger exactly once and displayed `Relief transfer arranged for visitor #99104 (-65c)`.
+- Remaining uncertainty: `unmet` remains intentionally quiet, `disruptive` does not yet create a bounded physical incident, and this paused showcase does not prove a naturally emerging failed stay during a complete ship visit.

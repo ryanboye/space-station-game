@@ -1,5 +1,6 @@
 import './styles.css';
 import { renderWorld, type RenderViewport } from './render/render';
+import { getStrandedReliefQuote, transferStrandedVisitor } from './sim/sim';
 import { DockEconomyFeedbackLayer, type DockDepartureResult } from './render/dock-economy-feedback';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
@@ -4496,6 +4497,48 @@ function refreshOpsModal(): void {
 }
 
 let lastPortAlertRenderKey = '';
+let strandedReliefFeedback: { text: string; tone: 'danger' | 'warn'; expiresAt: number } | null = null;
+
+type StrandedAlert = {
+  tone: 'danger' | 'warn';
+  text: string;
+  visitorId: number;
+  tile: number;
+  eligible: boolean;
+  cost: number;
+};
+
+function strandedAlert(): StrandedAlert | null {
+  const visitors = state.visitors
+    .filter((visitor) => visitor.strandedFromShipId !== null && visitor.strandedFromShipId !== undefined)
+    .sort((a, b) => (a.strandedAt ?? Number.POSITIVE_INFINITY) - (b.strandedAt ?? Number.POSITIVE_INFINITY) || a.id - b.id);
+  const target = visitors[0];
+  if (!target) return null;
+  const quote = getStrandedReliefQuote(state, target.id);
+  if (!quote) return null;
+  const stageRank = { none: 0, unmet: 1, balking: 2, distressed: 3, disruptive: 4 } as const;
+  const worst = visitors.reduce((current, visitor) =>
+    stageRank[visitor.serviceFailureStage ?? 'none'] > stageRank[current.serviceFailureStage ?? 'none'] ? visitor : current
+  );
+  const worstStage = (worst.serviceFailureStage ?? 'none') === 'none' ? 'unmet' : worst.serviceFailureStage ?? 'unmet';
+  const relief = quote.eligible ? `arrange relief ${quote.cost}c` : `relief in ${Math.ceil(quote.secondsUntilEligible)}s`;
+  return {
+    tone: worstStage === 'disruptive' || worstStage === 'distressed' ? 'danger' : 'warn',
+    text: `${visitors.length} stranded passenger${visitors.length === 1 ? '' : 's'} | worst: ${worstStage} | ${relief}`,
+    visitorId: target.id,
+    tile: target.tileIndex,
+    eligible: quote.eligible,
+    cost: quote.cost
+  };
+}
+
+function strandedAlertHtml(alert: StrandedAlert): string {
+  const action = alert.eligible ? 'data-stranded-relief' : 'data-stranded-focus';
+  const title = alert.eligible
+    ? `Arrange relief transfer for stranded visitor #${alert.visitorId} for ${alert.cost} credits`
+    : `Focus stranded visitor #${alert.visitorId}`;
+  return `<button class="alert-item ${alert.tone} alert-action" ${action}="${alert.visitorId}" data-stranded-tile="${alert.tile}" title="${title}" aria-label="${title}">${escapeHtml(alert.text)}</button>`;
+}
 
 function cafeteriaStaffingSnapshot(): {
   active: number;
@@ -4529,6 +4572,8 @@ function cafeteriaStaffingSnapshot(): {
 }
 
 function refreshAlertPanel(): void {
+  if (strandedReliefFeedback && state.now >= strandedReliefFeedback.expiresAt) strandedReliefFeedback = null;
+  const stranded = strandedAlert();
   if (state.controls.manualTrafficAdmission) {
     // `diagnosis` is what the alert says once you click it: what is wrong,
     // why, and what the player can change (opening ticket 02). Alerts that
@@ -4540,7 +4585,10 @@ function refreshAlertPanel(): void {
       tile: number | null;
       incidentId?: number;
       diagnosis?: string;
+      stranded?: StrandedAlert;
     }> = [];
+    if (strandedReliefFeedback) portAlerts.push({ tone: strandedReliefFeedback.tone, text: strandedReliefFeedback.text, tile: null });
+    if (stranded) portAlerts.push({ ...stranded, stranded });
     const crewSustainability = getCrewSustainabilitySummary(state);
     if (crewSustainability.resignationNotices > 0) {
       portAlerts.push({
@@ -4766,7 +4814,9 @@ function refreshAlertPanel(): void {
     }
     alertListEl.classList.remove('is-clear');
     alertListEl.innerHTML = portAlerts.slice(0, 5).map((alert) =>
-      alert.incidentId !== undefined
+      alert.stranded
+        ? strandedAlertHtml(alert.stranded)
+        : alert.incidentId !== undefined
         ? `<button class="alert-item ${alert.tone}" data-incident-select="${alert.incidentId}">${escapeHtml(alert.text)}</button>`
         : alert.tile === null
           ? `<div class="alert-item ${alert.tone}">${escapeHtml(alert.text)}</div>`
@@ -4776,7 +4826,9 @@ function refreshAlertPanel(): void {
     ).join('');
     return;
   }
-  const alerts: Array<{ tone: 'danger' | 'warn'; text: string; incidentId?: number }> = [];
+  const alerts: Array<{ tone: 'danger' | 'warn'; text: string; incidentId?: number; stranded?: StrandedAlert }> = [];
+  if (strandedReliefFeedback) alerts.push({ tone: strandedReliefFeedback.tone, text: strandedReliefFeedback.text });
+  if (stranded) alerts.push({ ...stranded, stranded });
   // Crowd-loop v1 (CH-0): death is never silent — top alert, always first.
   if (state.metrics.recentDeaths > 0) {
     alerts.push({ tone: 'danger', text: `⚠ ${state.metrics.recentDeaths} SUFFOCATED — check air / life support (${state.metrics.deathsTotal} total dead)` });
@@ -4849,7 +4901,9 @@ function refreshAlertPanel(): void {
   alertListEl.innerHTML = alerts
     .slice(0, 5)
     .map((alert) =>
-      alert.incidentId === undefined
+      alert.stranded
+        ? strandedAlertHtml(alert.stranded)
+        : alert.incidentId === undefined
         ? `<div class="alert-item ${alert.tone}">${alert.text}</div>`
         : `<button class="alert-item ${alert.tone}" data-incident-select="${alert.incidentId}">${alert.text}</button>`
     )
@@ -9558,6 +9612,38 @@ trafficOfferListEl.addEventListener('click', (event) => {
 });
 
 alertListEl.addEventListener('click', (event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const strandedButton = target?.closest<HTMLButtonElement>('button[data-stranded-focus], button[data-stranded-relief]');
+  if (strandedButton) {
+    const visitorId = Number(strandedButton.dataset.strandedFocus ?? strandedButton.dataset.strandedRelief);
+    const tileIndex = Number(strandedButton.dataset.strandedTile);
+    if (!Number.isFinite(visitorId) || !Number.isFinite(tileIndex) || tileIndex < 0 || tileIndex >= state.tiles.length) return;
+    const tile = fromIndex(tileIndex, state.width);
+    centerViewportOnWorldPx((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE);
+    hoveredTile = tileIndex;
+    selectedRoomTile = null;
+    if (strandedButton.dataset.strandedRelief !== undefined) {
+      const quote = getStrandedReliefQuote(state, visitorId);
+      const transferred = transferStrandedVisitor(state, visitorId);
+      strandedReliefFeedback = {
+        tone: transferred ? 'warn' : 'danger',
+        text: transferred
+          ? `Relief transfer arranged for visitor #${visitorId} (-${quote?.cost ?? 0}c)`
+          : quote && quote.eligible && state.metrics.credits < quote.cost
+            ? `Relief transfer needs ${quote.cost} credits`
+            : 'Relief transfer could not be arranged',
+        expiresAt: state.now + 8
+      };
+      alertDiagnosisText = strandedReliefFeedback.text;
+      lastPortAlertRenderKey = '';
+      refreshHudStatus();
+      refreshAlertPanel();
+    } else {
+      alertDiagnosisText = `Stranded visitor #${visitorId}: their ship has left. Relief transfer becomes available when the alert shows its cost.`;
+    }
+    refreshSelectionSummary();
+    return;
+  }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-port-focus]');
   if (!button) return;
   const tileIndex = Number(button.dataset.portFocus);

@@ -16,8 +16,9 @@
 
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
-import { GRID_WIDTH, TileType, RoomType, ModuleType } from './types';
-import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier } from './types';
+import { createVisitorNeeds } from './occupant-demand';
+import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
+import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
 import { buyMaterials, buyRawFood, mapConditionAt, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
@@ -405,6 +406,22 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // Presentation fixture for the long-stay failure ladder and relief action.
+  // The states are intentionally staged and paused so each warning remains
+  // visible long enough for visual QA at `?scenario=failed-stay-showcase`.
+  'failed-stay-showcase': (s) => {
+    unlockThrough(s, 3);
+    s.metrics.credits = 3000;
+    s.metrics.materials = 500;
+    applyDemoStationOverlay(s);
+    s.visitors.length = 0;
+    addFailureShowcaseVisitor(s, 99101, 17, 17, 'balking', 'hunger');
+    addFailureShowcaseVisitor(s, 99102, 23, 17, 'distressed', 'leisure');
+    addFailureShowcaseVisitor(s, 99103, 29, 17, 'disruptive', 'hygiene');
+    addFailureShowcaseVisitor(s, 99104, 35, 17, 'distressed', 'energy', true);
+    s.controls.paused = true;
+  },
+
   // Commercial-unit prototype: a mature station with one large vacant shell
   // ready for the player to solicit and compare tenant proposals.
   'commercial-units': (s) => {
@@ -595,6 +612,66 @@ function seedItemNodeStock(state: StationState, x: number, y: number, itemType: 
   if (added <= 0) return 0;
   node.items[itemType] = (node.items[itemType] ?? 0) + added;
   return added;
+}
+
+function addFailureShowcaseVisitor(
+  state: StationState,
+  id: number,
+  x: number,
+  y: number,
+  stage: Exclude<VisitorServiceFailureStage, 'none' | 'unmet'>,
+  need: RecurringNeedKind,
+  stranded = false
+): void {
+  const tileIndex = y * GRID_WIDTH + x;
+  const needs = createVisitorNeeds(id);
+  needs[need] = 12;
+  needs.active = need;
+  needs.unmetSince = state.now - 120;
+  const visitor: Visitor = {
+    id,
+    name: `Showcase ${id}`,
+    x: x + 0.5,
+    y: y + 0.5,
+    tileIndex,
+    state: VisitorState.Leisure,
+    path: [],
+    speed: 2,
+    patience: 0,
+    eatTimer: 0,
+    trespassed: false,
+    servedMeal: false,
+    carryingMeal: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: need === 'hunger' ? 'diner' : 'lounger',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: need === 'hunger' ? 'cafeteria' : 'lounge',
+    spawnedAt: state.now - 180,
+    originShipId: null,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null,
+    servicePlan: [],
+    completedServices: [],
+    activeService: need === 'hunger' ? 'meal' : need === 'hygiene' ? 'hygiene' : 'leisure',
+    stayClass: 'extended',
+    needs,
+    recurringNeedActive: need,
+    serviceBlockedSince: state.now - 120,
+    serviceFailureStage: stage,
+    failureSince: state.now - 120,
+    failureNeed: need,
+    strandedFromShipId: stranded ? 99100 : null,
+    strandedAt: stranded ? state.now - 90 : null,
+    reliefEligibleAt: stranded ? state.now : null
+  };
+  state.visitors.push(visitor);
 }
 
 function applyDemoStationOverlay(state: StationState): void {

@@ -13052,6 +13052,24 @@ function strandedReliefCost(visitor: Visitor): number {
   return clamp(STRANDED_RELIEF_BASE_COST + surcharge, STRANDED_RELIEF_BASE_COST, 120);
 }
 
+/** Read-only transfer terms for a stranded passenger. */
+export function getStrandedReliefQuote(
+  state: StationState,
+  visitorId: number
+): { cost: number; eligible: boolean; eligibleAt: number; secondsUntilEligible: number } | null {
+  const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
+  if (!visitor || !visitorIsStranded(visitor) || visitor.reliefEligibleAt === null || visitor.reliefEligibleAt === undefined) {
+    return null;
+  }
+  const eligibleAt = visitor.reliefEligibleAt;
+  return {
+    cost: strandedReliefCost(visitor),
+    eligible: state.now >= eligibleAt,
+    eligibleAt,
+    secondsUntilEligible: Math.max(0, eligibleAt - state.now)
+  };
+}
+
 /** Pays for a relief transfer after the passenger has been stranded long enough. */
 export function transferStrandedVisitor(state: StationState, visitorId: number): boolean {
   const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
