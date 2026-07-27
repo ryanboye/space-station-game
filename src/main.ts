@@ -6924,6 +6924,10 @@ function refreshOpeningRecipeCatalog(): void {
     demand.rows.map((row) => [row.served, row.wanted, row.missedCredits])
   ]);
   if (signature === renderedRecipeSignature) return;
+  // Demand can change while the player is deciding which step to click. Keep
+  // the current nodes stable under the pointer and catch up on the next 125ms
+  // refresh after it leaves the catalog.
+  if (host.matches(':hover')) return;
   renderedRecipeSignature = signature;
   host.innerHTML = recipes
     .map((recipe) => {

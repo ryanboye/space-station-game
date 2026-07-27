@@ -522,13 +522,18 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
   let currentView: OpeningEconomyPanelView | null = null;
   let openPanel: OpeningEconomyPanelName | null = null;
   let siteBriefVisible = options.showSiteBrief ?? true;
+  let renderedSiteBrief = '';
+  let renderedPanel = '';
 
   const emit = (action: OpeningEconomyPanelAction): void => options.onAction?.(action);
 
-  const renderSiteBrief = (): void => {
+  const renderSiteBrief = (force = false): void => {
     const brief = currentView?.siteBrief;
     siteBrief.hidden = !brief || !siteBriefVisible;
-    if (!brief || !siteBriefVisible) return;
+    if (!brief || !siteBriefVisible) {
+      renderedSiteBrief = '';
+      return;
+    }
     const shop = currentView?.shop;
     const projects = currentView?.projects;
     const actions = shop || projects
@@ -537,25 +542,35 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
           ${projects ? `<button type="button" class="oe-site-action" data-oe-open-projects><span>Capital projects</span><b>${projects.activeCount}/${projects.maxActive} active</b></button>` : ''}
         </div>`
       : '';
-    siteBrief.innerHTML = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
+    const content = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
+    if (content === renderedSiteBrief) return;
+    // Replacing a hovered button between pointerdown and click makes the
+    // control flash and drops the click. Defer live-value refreshes until the
+    // pointer leaves; the next regular render catches up immediately.
+    if (!force && siteBrief.matches(':hover')) return;
+    siteBrief.innerHTML = content;
+    renderedSiteBrief = content;
   };
 
-  const renderOpenPanel = (): void => {
+  const renderOpenPanel = (force = false): void => {
     if (!currentView || !openPanel) {
       layer.hidden = true;
-      layer.innerHTML = '';
+      if (renderedPanel !== '') layer.innerHTML = '';
+      renderedPanel = '';
       return;
     }
     if (openPanel === 'shop' && !currentView.shop) {
       openPanel = null;
       layer.hidden = true;
       layer.innerHTML = '';
+      renderedPanel = '';
       return;
     }
     if (openPanel === 'projects' && !currentView.projects) {
       openPanel = null;
       layer.hidden = true;
       layer.innerHTML = '';
+      renderedPanel = '';
       return;
     }
     const previousPanel = layer.querySelector<HTMLElement>('.oe-panel');
@@ -566,7 +581,12 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
         ? renderShop(currentView.shop!)
         : renderProjects(currentView.projects!);
     layer.hidden = false;
+    const signature = `${openPanel}\n${content}`;
+    if (signature === renderedPanel) return;
+    const hoveredPanel = layer.querySelector<HTMLElement>('.oe-panel');
+    if (!force && hoveredPanel?.matches(':hover')) return;
     layer.innerHTML = content;
+    renderedPanel = signature;
     const nextPanel = layer.querySelector<HTMLElement>('.oe-panel');
     if (nextPanel && previousScrollTop > 0) nextPanel.scrollTop = previousScrollTop;
   };
@@ -623,7 +643,7 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     open(panel): void {
       if (!currentView || (panel === 'shop' && !currentView.shop) || (panel === 'projects' && !currentView.projects)) return;
       openPanel = panel;
-      renderOpenPanel();
+      renderOpenPanel(true);
       if (panel === 'ledger') emit({ type: 'open-ledger' });
       if (panel === 'shop') emit({ type: 'open-shop' });
       if (panel === 'projects') emit({ type: 'open-projects' });
