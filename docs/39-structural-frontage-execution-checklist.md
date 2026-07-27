@@ -37,7 +37,7 @@ compiles is not sufficient for player-facing work.
   Evidence: `docs/SPEC-OCCUPANT-LOOP.md`, commit `eed5c36`.
 - [x] Establish a dedicated implementation branch.
   Evidence: `codex/structural-frontage-occupant-loop`.
-- [ ] Add this execution checklist to `docs/README.md`.
+- [x] Add this execution checklist to `docs/README.md`.
 - [ ] Record the focused commands and artifacts used for every phase gate.
 - [ ] Keep a running playtest findings section at the bottom of this file.
 
@@ -67,15 +67,15 @@ compiles is not sufficient for player-facing work.
 
 ### Deterministic Scenarios
 
-- [ ] Add a compact starter with two Pod Docks.
+- [x] Add a compact starter with two Pod Docks.
 - [ ] Add a four-Pod-Dock docking finger.
 - [ ] Add a medium Berth with two Gangways.
-- [ ] Add a bad single-door passenger terminal.
-- [ ] Add the same terminal with a second entrance or wider concourse.
-- [ ] Add a public/cargo crossing scenario.
-- [ ] Add a separated service-corridor comparison.
-- [ ] Add an overwhelmed one-checkout market.
-- [ ] Add a redesigned two-checkout market.
+- [x] Add a bad single-door passenger terminal.
+- [x] Add the same terminal with a second entrance or wider concourse.
+- [x] Add a public/cargo crossing scenario.
+- [x] Add a separated service-corridor comparison.
+- [x] Add an overwhelmed one-checkout market.
+- [x] Add a redesigned two-checkout market.
 - [ ] Add short errands, shore leave, and a long repair crew in one scenario.
 - [ ] Add reception-bypass and reception-assisted variants.
 - [ ] Add a debris-facing exterior wing.
@@ -96,7 +96,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Record committed future Berth, bed, service, and staff load.
 - [ ] Record missed departures and stranded occupants.
 - [ ] Record maintenance work, damage, and EVA time.
-- [ ] Record average and p95 simulation-step cost.
+- [x] Record average and p95 simulation-step cost.
 - [ ] Record render frame time and visible animation smoothness.
 
 ### Existing Caps Audit
@@ -110,10 +110,10 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 0 Gate
 
-- [ ] One command produces the deterministic baseline report.
-- [ ] Bad and improved layouts show measurable differences.
+- [x] One command produces the deterministic baseline report.
+- [x] Bad and improved layouts show measurable differences.
 - [ ] Baseline artifacts are saved for later comparison.
-- [ ] No full test suite is required for ordinary Phase 0 iteration.
+- [x] No full test suite is required for ordinary Phase 0 iteration.
 
 ## Phase 1A: Longer Visits And Shared Occupant Demand
 
@@ -782,3 +782,16 @@ Visual/playtest evidence:
 Remaining uncertainty:
 ```
 
+2026-07-27 · Program setup and implementation authority
+
+- Commit or files: `4c0c637`, `docs/38-structural-frontage-visit-flow-implementation-plan.md`, `docs/39-structural-frontage-execution-checklist.md`, `docs/README.md`.
+- Focused checks: Markdown whitespace validation; 539 auditable checklist items recorded.
+- Visual/playtest evidence: not applicable to documentation setup.
+- Remaining uncertainty: phase implementation and gameplay evidence remain open.
+
+2026-07-27 · Phase 0 frontage baseline v1
+
+- Commit or files: `tools/frontage-baseline.ts`, `package.json`.
+- Focused checks: `npm run baseline:frontage` passed. Terminal peak route load improved `12 -> 7`; shared route tiles improved `40 -> 30`; separated cargo route overlap improved `1 -> 0`; two current Market Stall providers increased measured service slots `2 -> 4` and stock capacity `32 -> 64`.
+- Visual/playtest evidence: none yet. These are deterministic route and provider proxies, not proof of physical actor blocking.
+- Remaining uncertainty: live visit, boarding, queue, recurring-needs, reception, damage/EVA, render, and target-scale metrics remain unavailable until their systems land.
