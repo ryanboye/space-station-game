@@ -15,6 +15,8 @@ If you're an agent picking up a task, read in this order:
 7. **The system docs** for whatever you're touching (e.g. crew -> `05-crew.md`; walls -> `11-render.md`).
 8. **`99-trip-wires.md`** before you commit. Cross-cutting gotchas that will burn you if you didn't know about them.
 9. **`37-station-portfolio-program/`** for the current portfolio spine, exact facility recipes, and implementation handoffs.
+10. **`38-structural-frontage-visit-flow-implementation-plan.md`** for the physical expansion, frontage, long-visit, crowd-flow, and exposure implementation sequence.
+11. **`39-structural-frontage-execution-checklist.md`** for the auditable implementation ledger and playtest acceptance gates.
 
 Every system doc follows the same shape:
 
@@ -51,6 +53,8 @@ Every system doc follows the same shape:
 | `24-two-berth-shift-implementation-goal.md` | One-shot implementation goal for the standalone Two-Berth Shift branch |
 | `25-crew-sustainability-and-hospitality.md` | Crew quarters, morale/retention, and manifest-backed hospitality services |
 | `37-station-portfolio-program/` | Current station portfolio design, player-authored opening, and ordered implementation packages |
+| `38-structural-frontage-visit-flow-implementation-plan.md` | Structural expansion, physical frontage, approach envelopes, longer visits, crowd flow, and hull exposure plan |
+| `39-structural-frontage-execution-checklist.md` | Master checklist for implementation, evidence, migration, performance, and user playtest review |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions
