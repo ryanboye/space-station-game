@@ -22,6 +22,7 @@ import {
   selectRecurringNeed,
   serviceForRecurringNeed
 } from './occupant-demand';
+import { previewTrafficOffer } from './approach-control';
 import {
   facilityUsageTilesForModule,
   resolveFacilitySlots,
@@ -191,6 +192,8 @@ import {
   type ThermalSeverity,
   type ThermalTileDiagnostic,
   type TrafficOffer,
+  type TrafficOfferPreview,
+  type ApproachInterfaceSummary,
   type PortContract,
   type PortPromiseComponent,
   type PortPromiseKind,
@@ -7287,7 +7290,7 @@ export function rebuildDockEntities(state: StationState): void {
   const next: DockEntity[] = [];
   for (const dock of state.docks) {
     const sourceKind = dock.sourceKind ?? 'legacy-tile-cluster';
-    const sourceKey = dock.sourceKey ?? (sourceKind === 'pod-dock-module' ? `pod-dock:${dock.moduleId ?? dock.anchorTile}` : `legacy-dock:${dock.anchorTile}`);
+    const sourceKey = dock.sourceKey ?? (sourceKind === 'pod-dock-module' ? `pod-dock:${dock.anchorTile}` : `legacy-dock:${dock.anchorTile}`);
     bySourceKey.set(sourceKey, dock);
     if (sourceKind === 'legacy-tile-cluster') {
       for (const tile of dock.tiles) byAnyTile.set(tile, dock);
@@ -7350,7 +7353,9 @@ export function rebuildDockEntities(state: StationState): void {
   for (const module of podModules) {
     const placement = getPodDockPlacementView(state, module.originTile);
     if (!placement.valid || placement.facing === null || placement.accessTile === null) continue;
-    const sourceKey = `pod-dock:${module.id}`;
+    // The origin survives save/load and module rehydration order; a runtime
+    // module id does not. Reservations must use this stable physical key.
+    const sourceKey = `pod-dock:${module.originTile}`;
     const inherited = bySourceKey.get(sourceKey);
     const inheritedId = inherited && !consumedIds.has(inherited.id) ? inherited.id : null;
     const newId = inheritedId ?? ++maxId;
@@ -11804,14 +11809,23 @@ export function getEligibleBerthsForOffer(state: StationState, offerId: number):
   const offer = state.trafficOffers.find((entry) => entry.id === offerId);
   if (!offer) return [];
   if (offer.size === 'small') return [];
+  return compatibleBerthsForOffer(state, offer, offerId, true);
+}
+
+function compatibleBerthsForOffer(
+  state: StationState,
+  offer: TrafficOffer,
+  offerId: number,
+  requireFree: boolean
+): BerthCandidate[] {
   const reservedAnchors = new Set(state.trafficOffers
     .filter((entry) => entry.id !== offerId && entry.status === 'cleared' && entry.assignedBerthAnchor != null)
     .map((entry) => entry.assignedBerthAnchor as number));
   const required = [...(SHIP_PROFILES[offer.shipType]?.requiredCapabilities ?? [])];
   if ((offer.fuelRequest ?? 0) > 0 && !required.includes('refuel')) required.push('refuel');
   return listBerthCandidates(state)
-    .filter((berth) => berth.occupiedByShipId === null)
-    .filter((berth) => !reservedAnchors.has(berth.anchorTile))
+    .filter((berth) => !requireFree || berth.occupiedByShipId === null)
+    .filter((berth) => !requireFree || !reservedAnchors.has(berth.anchorTile))
     .filter((berth) => shipSizeFitsBerth(offer.size, berth.size))
     .filter((berth) => berth.spaceExposed)
     .filter((berth) => berthHardwareReason(berth.facility, offer.size) === null)
@@ -11822,6 +11836,49 @@ export function getEligibleBerthsForOffer(state: StationState, offerId: number):
     });
 }
 
+function compatiblePodDocksForOffer(
+  state: StationState,
+  offer: TrafficOffer,
+  offerId: number,
+  requireFree: boolean
+): DockEntity[] {
+  const reservedSourceKeys = new Set(state.trafficOffers
+    .filter((entry) => entry.id !== offerId && entry.status === 'cleared' && entry.assignedDockSourceKey)
+    .map((entry) => entry.assignedDockSourceKey as string));
+  return state.docks.filter((dock) =>
+    dock.purpose === 'visitor' &&
+    dock.allowedShipTypes.includes(offer.shipType) &&
+    dock.allowedShipSizes.includes('small') &&
+    (!requireFree || (dock.occupiedByShipId === null && !reservedSourceKeys.has(dock.sourceKey)))
+  );
+}
+
+export function getTrafficOfferPreview(state: StationState, offerId: number): TrafficOfferPreview | null {
+  ensureDockEntitiesUpToDate(state);
+  const offer = state.trafficOffers.find((entry) => entry.id === offerId);
+  if (!offer) return null;
+  const interfaces: ApproachInterfaceSummary[] = offer.size === 'small'
+    ? compatiblePodDocksForOffer(state, offer, offer.id, false).map((dock) => ({
+      kind: 'pod-dock',
+      id: dock.sourceKey,
+      label: `Pod Dock ${dock.id}`,
+      compatible: true,
+      available: dock.occupiedByShipId === null && !state.trafficOffers.some((entry) =>
+        entry.id !== offer.id && entry.status === 'cleared' && entry.assignedDockSourceKey === dock.sourceKey
+      )
+    }))
+    : compatibleBerthsForOffer(state, offer, offer.id, false).map((berth) => ({
+      kind: 'berth',
+      id: String(berth.anchorTile),
+      label: `Berth ${berth.anchorTile}`,
+      compatible: true,
+      available: berth.occupiedByShipId === null && !state.trafficOffers.some((entry) =>
+        entry.id !== offer.id && entry.status === 'cleared' && entry.assignedBerthAnchor === berth.anchorTile
+      )
+    }));
+  return previewTrafficOffer({ offer, interfaces, now: state.now });
+}
+
 export function admitTrafficOffer(
   state: StationState,
   offerId: number,
@@ -11830,8 +11887,16 @@ export function admitTrafficOffer(
   const offerIndex = state.trafficOffers.findIndex((entry) => entry.id === offerId);
   if (offerIndex < 0) return { ok: false, reason: 'Ship manifest is no longer available.' };
   const offer = state.trafficOffers[offerIndex];
+  if (state.now >= offer.expiresAt) return { ok: false, reason: 'This approach window has expired.' };
   if (offer.size === 'small' && berthAnchor !== undefined) {
-    return { ok: false, reason: 'Small pods require a Dock tile.' };
+    return { ok: false, reason: 'Small pods require a compatible Pod Dock.' };
+  }
+  if (state.now < offer.arrivesAt && offer.status === 'cleared') {
+    return {
+      ok: true,
+      berthAnchor: offer.assignedBerthAnchor ?? undefined,
+      reason: 'Physical interface already reserved.'
+    };
   }
   if (!state.portOps.contracts.some((contract) => contract.offerId === offer.id)) {
     const inboundTotal = Object.values(offer.inboundCargo).reduce((sum, amount) => sum + amount, 0);
@@ -11861,14 +11926,10 @@ export function admitTrafficOffer(
       : eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0])
     : eligibleBerths.find((entry) => entry.anchorTile === berthAnchor);
   if (offer.size === 'small' && state.now < offer.arrivesAt) {
-    const dock = state.docks.find((entry) =>
-      entry.purpose === 'visitor' &&
-      entry.occupiedByShipId === null &&
-      entry.allowedShipTypes.includes(offer.shipType) &&
-      entry.allowedShipSizes.includes('small')
-    );
+    const dock = compatiblePodDocksForOffer(state, offer, offer.id, true)[0];
     if (!dock) return { ok: false, reason: 'No free Dock accepts this small pod.' };
     offer.status = 'cleared';
+    offer.assignedDockSourceKey = dock.sourceKey;
     return { ok: true, reason: 'Dock reserved. Small pod will dock on arrival.' };
   }
   if (state.now < offer.arrivesAt) {
@@ -11888,9 +11949,15 @@ export function admitTrafficOffer(
     return { ok: true, berthAnchor: berth.anchorTile };
   }
   if (offer.size === 'small') {
-    const dock = state.docks.find((entry) =>
-      entry.purpose === 'visitor' && entry.occupiedByShipId === null && entry.allowedShipTypes.includes(offer.shipType) && entry.allowedShipSizes.includes('small')
-    );
+    const dock = offer.assignedDockSourceKey
+      ? state.docks.find((entry) =>
+        entry.sourceKey === offer.assignedDockSourceKey &&
+        entry.purpose === 'visitor' &&
+        entry.occupiedByShipId === null &&
+        entry.allowedShipTypes.includes(offer.shipType) &&
+        entry.allowedShipSizes.includes('small')
+      )
+      : compatiblePodDocksForOffer(state, offer, offer.id, true)[0];
     if (dock) {
       spawnShipAtDock(state, offer.lane, offer.shipType, dock.id, offer.id, 'small', offer);
       state.trafficOffers.splice(offerIndex, 1);
@@ -11903,11 +11970,16 @@ export function admitTrafficOffer(
 
 export function refuseTrafficOffer(state: StationState, offerId: number): boolean {
   const index = state.trafficOffers.findIndex((entry) => entry.id === offerId);
-  if (index < 0) return false;
+  if (index < 0 || state.trafficOffers[index].status === 'cleared') return false;
   state.trafficOffers.splice(index, 1);
   state.portOps.telemetry.offersRefused += 1;
   state.portOps.firstChoiceAt ??= state.now;
   return true;
+}
+
+/** Pass is the player-facing name. Keep the older refusal API for existing UI callers. */
+export function passTrafficOffer(state: StationState, offerId: number): boolean {
+  return refuseTrafficOffer(state, offerId);
 }
 
 export function getPortOpsTelemetry(state: StationState) {
@@ -11923,7 +11995,7 @@ export function getPortOpsTelemetry(state: StationState) {
 
 export function holdTrafficOffer(state: StationState, offerId: number): boolean {
   const offer = state.trafficOffers.find((entry) => entry.id === offerId);
-  if (!offer || state.now < offer.arrivesAt || offer.holdUsed) return false;
+  if (!offer || offer.status === 'cleared' || state.now < offer.arrivesAt || state.now >= offer.expiresAt || offer.holdUsed) return false;
   offer.holdUsed = true;
   offer.expiresAt = Math.max(offer.expiresAt, state.now) + 25;
   return true;

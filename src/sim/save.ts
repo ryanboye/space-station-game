@@ -26,6 +26,7 @@ import {
   type MaintenanceSource,
   type PortContractStatus,
   type PortOfferKind,
+  type ShipServiceTag,
   type PortOpsState,
   type PortPromiseKind,
   type Resident,
@@ -47,6 +48,7 @@ import {
   type SpaceLane,
   TileType,
   type StationState,
+  type TrafficOffer,
   type VisitorArchetype,
   type Visitor,
   type VisitorNeeds,
@@ -122,6 +124,10 @@ const COMMERCIAL_PHASES = ['vacant', 'offers', 'fitting-out', 'open', 'closed'] 
 const MAINTENANCE_DOMAINS: MaintenanceDomain[] = ['utility', 'module', 'hull', 'dock', 'berth', 'door', 'vent', 'plumbing'];
 const MAINTENANCE_SOURCES: MaintenanceSource[] = ['idle', 'high-load', 'debris', 'traffic', 'heat', 'fire-aftermath', 'construction', 'plumbing'];
 const PORT_OFFER_KINDS: PortOfferKind[] = ['passenger', 'freight', 'mixed'];
+const SHIP_SERVICE_TAGS: ShipServiceTag[] = [
+  'cafeteria', 'market', 'lounge', 'workshop', 'security', 'hygiene',
+  'housing', 'clinic', 'recreation', 'fuel'
+];
 const PORT_PROMISE_KINDS: PortPromiseKind[] = [
   'dock',
   'passengers-served',
@@ -372,6 +378,8 @@ export interface StationSnapshotV1 {
   /** Canonical completed-service log. Optional for saves written before it. */
   serviceLog?: ServiceLog;
   portOps: PortOpsState;
+  /** Pending approach decisions, including physical reservations made before arrival. */
+  trafficOffers?: TrafficOffer[];
   activePortShips: ArrivingShip[];
   /** Active temporary occupants are durable from Phase 1A onward. */
   visitors?: Visitor[];
@@ -614,6 +622,85 @@ function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
       shipService: Math.max(0, Math.floor(asFiniteNumber(isRecord(value.servedDemand) ? value.servedDemand.shipService : undefined, 0)))
     },
     earnedCredits: Math.max(0, asFiniteNumber(value.earnedCredits, 0))
+  };
+}
+
+function normalizeTrafficOffer(value: unknown): TrafficOffer | null {
+  if (!isRecord(value) || typeof value.id !== 'number' || !Number.isFinite(value.id) || !isOneOf(value.shipType, SHIP_TYPES) || !isOneOf(value.size, SHIP_SIZES)) {
+    return null;
+  }
+  if (!isOneOf(value.status, ['forecast', 'holding', 'cleared'] as const) || !isOneOf(value.lane, SPACE_LANES)) return null;
+  const manifestRecord = isRecord(value.manifestDemand) ? value.manifestDemand : {};
+  const mixRecord = isRecord(value.manifestMix) ? value.manifestMix : {};
+  const hospitalityRecord = isRecord(value.hospitalityDemand) ? value.hospitalityDemand : null;
+  const inboundRecord = isRecord(value.inboundCargo) ? value.inboundCargo : {};
+  const outboundRecord = isRecord(value.outboundRequest) ? value.outboundRequest : {};
+  const nonNegative = (raw: unknown) => Math.max(0, asFiniteNumber(raw, 0));
+  const forecastAt = Math.max(0, asFiniteNumber(value.forecastAt, 0));
+  const arrivesAt = Math.max(forecastAt, asFiniteNumber(value.arrivesAt, forecastAt));
+  const expiresAt = Math.max(arrivesAt, asFiniteNumber(value.expiresAt, arrivesAt + 1));
+  const requestedServices = Array.isArray(value.requestedServices)
+    ? [...new Set(value.requestedServices.filter((tag): tag is ShipServiceTag => isOneOf(tag, SHIP_SERVICE_TAGS)))]
+    : [];
+  return {
+    id: Math.max(1, Math.floor(asFiniteNumber(value.id, 1))),
+    callsign: typeof value.callsign === 'string' ? value.callsign.slice(0, 80) : 'Unknown vessel',
+    shipName: typeof value.shipName === 'string' ? value.shipName.slice(0, 80) : 'Unknown ship',
+    lane: value.lane,
+    shipType: value.shipType,
+    offerKind: isOneOf(value.offerKind, PORT_OFFER_KINDS) ? value.offerKind : undefined,
+    size: value.size,
+    status: value.status,
+    forecastAt,
+    arrivesAt,
+    expiresAt,
+    passengersTotal: Math.max(0, Math.floor(nonNegative(value.passengersTotal))),
+    manifestDemand: {
+      cafeteria: nonNegative(manifestRecord.cafeteria),
+      market: nonNegative(manifestRecord.market),
+      lounge: nonNegative(manifestRecord.lounge)
+    },
+    manifestMix: {
+      diner: nonNegative(mixRecord.diner),
+      shopper: nonNegative(mixRecord.shopper),
+      lounger: nonNegative(mixRecord.lounger),
+      rusher: nonNegative(mixRecord.rusher)
+    },
+    hospitalityDemand: hospitalityRecord ? {
+      meal: nonNegative(hospitalityRecord.meal),
+      drink: nonNegative(hospitalityRecord.drink),
+      leisure: nonNegative(hospitalityRecord.leisure),
+      restroom: nonNegative(hospitalityRecord.restroom),
+      hygiene: nonNegative(hospitalityRecord.hygiene),
+      comfort: nonNegative(hospitalityRecord.comfort)
+    } : undefined,
+    inboundCargo: {
+      rawMaterial: nonNegative(inboundRecord.rawMaterial),
+      rawMeal: nonNegative(inboundRecord.rawMeal),
+      tradeGood: nonNegative(inboundRecord.tradeGood)
+    },
+    outboundRequest: {
+      rawMaterial: nonNegative(outboundRecord.rawMaterial),
+      meal: nonNegative(outboundRecord.meal),
+      tradeGood: nonNegative(outboundRecord.tradeGood)
+    },
+    fuelSupply: nonNegative(value.fuelSupply),
+    fuelRequest: nonNegative(value.fuelRequest),
+    fuelProcurementCostCredits: nonNegative(value.fuelProcurementCostCredits),
+    procurementKind: value.procurementKind === 'food-supply' ? 'food-supply' : undefined,
+    stationProcurementCostCredits: nonNegative(value.stationProcurementCostCredits),
+    requestedServices,
+    berthTimeSec: Math.max(1, Math.floor(nonNegative(value.berthTimeSec))),
+    dockingFee: Math.round(nonNegative(value.dockingFee)),
+    projectedSpend: Math.round(nonNegative(value.projectedSpend)),
+    riskLabel: value.riskLabel === 'guarded' || value.riskLabel === 'high' ? value.riskLabel : 'low',
+    assignedBerthAnchor: typeof value.assignedBerthAnchor === 'number' && Number.isFinite(value.assignedBerthAnchor)
+      ? Math.max(0, Math.floor(value.assignedBerthAnchor))
+      : null,
+    assignedDockSourceKey: typeof value.assignedDockSourceKey === 'string' && value.assignedDockSourceKey.length > 0
+      ? value.assignedDockSourceKey.slice(0, 160)
+      : null,
+    holdUsed: value.holdUsed === true
   };
 }
 
@@ -1009,6 +1096,15 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         notes: [...settlement.notes]
       }))
     },
+    trafficOffers: state.trafficOffers.map((offer) => ({
+      ...offer,
+      manifestDemand: { ...offer.manifestDemand },
+      manifestMix: { ...offer.manifestMix },
+      hospitalityDemand: offer.hospitalityDemand ? { ...offer.hospitalityDemand } : undefined,
+      inboundCargo: { ...offer.inboundCargo },
+      outboundRequest: { ...offer.outboundRequest },
+      requestedServices: [...offer.requestedServices]
+    })),
     activePortShips: state.arrivingShips
       .filter((ship) => ship.kind === 'transient' && (ship.portContractId !== undefined || ship.smallCraftVisit !== undefined))
       .map((ship) => ({
@@ -2008,6 +2104,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         }];
       })
     : [];
+  const trafficOffers: TrafficOffer[] = Array.isArray(snapshotRaw.trafficOffers)
+    ? snapshotRaw.trafficOffers
+        .map((entry) => normalizeTrafficOffer(entry))
+        .filter((offer): offer is TrafficOffer => offer !== null)
+    : [];
   const residents: Resident[] = Array.isArray(snapshotRaw.residents)
     ? snapshotRaw.residents.flatMap((entry) => {
         if (!isRecord(entry) || !Number.isFinite(entry.id) || !Number.isFinite(entry.tileIndex)) return [];
@@ -2097,6 +2198,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     openingEconomy,
     serviceLog,
     portOps,
+    trafficOffers,
     activePortShips,
     visitors,
     site: normalizeSite(snapshotRaw.site)
@@ -2594,6 +2696,35 @@ export function hydrateStateFromSave(
       notes: [...settlement.notes]
     }))
   };
+  next.trafficOffers = (snapshot.trafficOffers ?? []).map((offer) => ({
+    ...offer,
+    manifestDemand: { ...offer.manifestDemand },
+    manifestMix: { ...offer.manifestMix },
+    hospitalityDemand: offer.hospitalityDemand ? { ...offer.hospitalityDemand } : undefined,
+    inboundCargo: { ...offer.inboundCargo },
+    outboundRequest: { ...offer.outboundRequest },
+    requestedServices: [...offer.requestedServices]
+  }));
+  for (const offer of next.trafficOffers) {
+    if (offer.status !== 'cleared') continue;
+    if (offer.size === 'small') {
+      const dock = offer.assignedDockSourceKey
+        ? next.docks.find((entry) => entry.sourceKey === offer.assignedDockSourceKey)
+        : undefined;
+      if (!dock) {
+        warnings.push(`Cleared pod offer ${offer.callsign} lost its dock binding; returned to holding.`);
+        offer.status = 'holding';
+        offer.assignedDockSourceKey = null;
+      }
+    } else {
+      const berthAnchor = offer.assignedBerthAnchor;
+      if (berthAnchor === null || berthAnchor === undefined || next.rooms[berthAnchor] !== RoomType.Berth) {
+        warnings.push(`Cleared berth offer ${offer.callsign} lost its berth binding; returned to holding.`);
+        offer.status = 'holding';
+        offer.assignedBerthAnchor = null;
+      }
+    }
+  }
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);
@@ -2684,7 +2815,8 @@ export function hydrateStateFromSave(
   });
   next.shipSpawnCounter = Math.max(
     next.shipSpawnCounter,
-    next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1)
+    next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1),
+    next.trafficOffers.reduce((max, offer) => Math.max(max, offer.id + 1), 1)
   );
   const activeShipIds = new Set(next.arrivingShips.map((ship) => ship.id));
   next.visitors = (snapshot.visitors ?? [])

@@ -1596,6 +1596,7 @@ export interface DockQueueEntry {
 }
 
 export type TrafficOfferStatus = 'forecast' | 'holding' | 'cleared';
+export type ApproachInterfaceKind = 'pod-dock' | 'berth';
 export type PortOfferKind = 'passenger' | 'freight' | 'mixed';
 export type PortPromiseKind =
   | 'dock'
@@ -1750,8 +1751,50 @@ export interface TrafficOffer {
   riskLabel: 'low' | 'guarded' | 'high';
   /** Berth reserved by advance player clearance while the ship is still inbound. */
   assignedBerthAnchor?: number | null;
+  /** Stable small-craft reservation. Runtime dock ids are rebuilt after topology changes. */
+  assignedDockSourceKey?: string | null;
   /** One disclosed schedule extension; repeated holds are not free parking. */
   holdUsed?: boolean;
+}
+
+/** A physical station interface summarized for quick approach decisions. */
+export interface ApproachInterfaceSummary {
+  kind: ApproachInterfaceKind;
+  id: string;
+  label: string;
+  available: boolean;
+  compatible: boolean;
+}
+
+/**
+ * Compact decision data for the Approach Control UI. It deliberately gives a
+ * player operational consequences, not a full manifest to read line by line.
+ */
+export interface TrafficOfferPreview {
+  offerId: number;
+  shipClass: 'pod' | 'berth';
+  partySize: { min: number; max: number };
+  staySeconds: { min: number; max: number };
+  serviceCues: string[];
+  compatibleInterface: {
+    kind: ApproachInterfaceKind;
+    compatibleCount: number;
+    freeCount: number;
+    reservedCount: number;
+    interfaces: ApproachInterfaceSummary[];
+  };
+  expectedRevenue: { min: number; max: number };
+  committedLoad: {
+    berthSeconds: number;
+    bedNights: number;
+    meals: number;
+    hygieneVisits: number;
+    staffMinutes: number;
+  };
+  canAccept: boolean;
+  acceptReason: string | null;
+  canHold: boolean;
+  canPass: boolean;
 }
 
 export interface IncidentEntity {
