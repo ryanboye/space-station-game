@@ -640,15 +640,21 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
   const visitor = value as unknown as Visitor;
   const stayClass = isOneOf(value.stayClass, VISIT_STAY_CLASSES) ? value.stayClass : 'errand';
   const needs = normalizeVisitorNeeds(value.needs);
+  const hadTransientFacilityClaim =
+    (typeof value.marketTradeGoodSourceTile === 'number' && Number.isFinite(value.marketTradeGoodSourceTile)) ||
+    (typeof value.temporarySleepTargetTile === 'number' && Number.isFinite(value.temporarySleepTargetTile));
   return {
     ...visitor,
     id: Math.floor(visitor.id),
     tileIndex: clamp(Math.floor(visitor.tileIndex), 0, Math.max(0, tileCount - 1)),
+    state: hadTransientFacilityClaim ? VisitorState.ToLeisure : visitor.state,
     path: [],
     reservedServingTile: null,
     reservedTargetTile: null,
     serveTimer: undefined,
     nextPathRetryAt: undefined,
+    marketTradeGoodSourceTile: null,
+    temporarySleepTargetTile: null,
     stayClass,
     needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
     recurringNeedActive: needs?.active ?? null

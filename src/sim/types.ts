@@ -361,7 +361,12 @@ export enum ModuleType {
   // supplies power proportional to the local map-condition 'sunlight' at its
   // tile, so a sunward charter and bright-tile placement both matter. Weak in
   // deep shade. See POWER_PER_SOLAR + the powerSupply term in sim.ts.
-  SolarPanel = 'solar-panel'
+  SolarPanel = 'solar-panel',
+  // Phase 1B facility-scale fixtures. These are additive so existing module
+  // footprints and saved stations remain valid.
+  CheckoutBank = 'checkout-bank',
+  ShelfAisle = 'shelf-aisle',
+  BunkBank = 'bunk-bank'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -568,6 +573,10 @@ export interface Visitor {
   needs?: VisitorNeeds;
   /** A recurring completion never advances a one-shot port promise. */
   recurringNeedActive?: RecurringNeedKind | null;
+  /** Shelf node holding the one trade good reserved for this checkout. */
+  marketTradeGoodSourceTile?: number | null;
+  /** Current temporary lodging slot. This is never resident housing identity. */
+  temporarySleepTargetTile?: number | null;
 }
 
 export enum ResidentState {

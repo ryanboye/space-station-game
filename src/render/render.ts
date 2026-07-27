@@ -230,6 +230,9 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.FloorDrain]: 'D',
   [ModuleType.WaterValve]: 'WV',
   [ModuleType.MarketStall]: '$',
+  [ModuleType.CheckoutBank]: '$',
+  [ModuleType.ShelfAisle]: '=',
+  [ModuleType.BunkBank]: 'B',
   [ModuleType.IntakePallet]: 'P',
   [ModuleType.StorageRack]: 'R',
   // Dock-migration v0: capability-module letters for vector fallback.

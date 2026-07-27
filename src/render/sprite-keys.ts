@@ -109,6 +109,11 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.FloorDrain]: 'module.floor_drain',
   [ModuleType.WaterValve]: 'module.water_valve',
   [ModuleType.MarketStall]: 'module.market_stall',
+  // Phase 1B uses conservative existing fallback art until its dedicated
+  // chunky fixtures are authored in the visual pass.
+  [ModuleType.CheckoutBank]: 'module.market_stall',
+  [ModuleType.ShelfAisle]: 'module.storage_rack',
+  [ModuleType.BunkBank]: 'module.bunk',
   [ModuleType.IntakePallet]: 'module.intake_pallet',
   [ModuleType.StorageRack]: 'module.storage_rack',
   [ModuleType.Gangway]: 'module.gangway',

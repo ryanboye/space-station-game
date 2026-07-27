@@ -18,6 +18,7 @@
     "balance:port-ops": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/port-ops-balance.js",
     "baseline:frontage": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/frontage-baseline.js",
     "test:occupant-loop": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/occupant-loop-tests.js",
+    "test:facility-slots": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/facility-slots-tests.js",
     "test:harness": "playwright test",
     "test:harness:update-snapshots": "playwright test --update-snapshots",
     "perf:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-perf.js",

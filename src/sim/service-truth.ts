@@ -104,12 +104,12 @@ export const SERVICE_FIXTURE_RULES: Record<ServiceKind, ServiceFixtureRule> = {
   restroom: { rooms: null, modules: [ModuleType.Toilet] },
   hygiene: { rooms: null, modules: [ModuleType.Shower, ModuleType.Sink] },
   comfort: {
-    rooms: [RoomType.Lounge, RoomType.Observatory, RoomType.RecHall],
-    modules: [ModuleType.GameStation, ModuleType.Telescope]
+    rooms: [RoomType.Lounge, RoomType.Observatory, RoomType.RecHall, RoomType.Dorm],
+    modules: [ModuleType.GameStation, ModuleType.Telescope, ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank]
   },
   retail: {
     rooms: [RoomType.Market, RoomType.CommercialUnit, RoomType.Cafeteria, RoomType.Lounge, RoomType.RecHall],
-    modules: [ModuleType.MarketStall, ModuleType.VendingMachine]
+    modules: [ModuleType.MarketStall, ModuleType.VendingMachine, ModuleType.CheckoutBank]
   }
 };
 

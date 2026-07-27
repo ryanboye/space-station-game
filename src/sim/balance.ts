@@ -66,6 +66,13 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Dorm],
     residentCapacity: 2
   },
+  [ModuleType.BunkBank]: {
+    width: 2,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Dorm],
+    capitalCost: 150
+  },
   [ModuleType.Locker]: {
     width: 1,
     height: 1,
@@ -206,6 +213,22 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     // delivery, so restocking is a planning choice rather than a capacity trap.
     itemNodeCapacity: 32,
     capitalCost: 50
+  },
+  [ModuleType.CheckoutBank]: {
+    width: 2,
+    height: 5,
+    rotatable: true,
+    allowedRooms: [RoomType.Market],
+    capitalCost: 180
+  },
+  [ModuleType.ShelfAisle]: {
+    width: 1,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Market],
+    itemNodeCapacity: 72,
+    storageClass: 'ambient',
+    capitalCost: 90
   },
   [ModuleType.IntakePallet]: {
     width: 2,
@@ -525,7 +548,7 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   [RoomType.Dorm]: {
     minTiles: 6,
     requiredModules: [],
-    requiredAnyOf: [ModuleType.Bed, ModuleType.Bunk],
+    requiredAnyOf: [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },
@@ -565,8 +588,8 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   },
   [RoomType.Market]: {
     minTiles: 10,
-    requiredModules: [{ module: ModuleType.MarketStall, count: 1 }],
-    requiredAnyOf: [],
+    requiredModules: [],
+    requiredAnyOf: [ModuleType.MarketStall, ModuleType.CheckoutBank],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },

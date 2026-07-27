@@ -211,6 +211,9 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.FloorDrain]: 0,
   [ModuleType.WaterValve]: 0,
   [ModuleType.MarketStall]: 0,
+  [ModuleType.CheckoutBank]: 0,
+  [ModuleType.ShelfAisle]: 0,
+  [ModuleType.BunkBank]: 0,
   [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,
   // Dock-migration v0: capability modules at T0 for testing.

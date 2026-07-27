@@ -22,6 +22,11 @@ import {
   selectRecurringNeed,
   serviceForRecurringNeed
 } from './occupant-demand';
+import {
+  facilityUsageTilesForModule,
+  resolveFacilitySlots,
+  type FacilitySlotRole
+} from './facility-descriptors';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import {
   SPECIALTY_BY_ID,
@@ -1659,6 +1664,23 @@ function syncModuleOccupancy(state: StationState): void {
 function removeModuleById(state: StationState, moduleId: number): boolean {
   const idx = state.moduleInstances.findIndex((m) => m.id === moduleId);
   if (idx < 0) return false;
+  const module = state.moduleInstances[idx];
+  if (!module) return false;
+  const affectedTiles = new Set(module.tiles);
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null || reservation.targetTile === null) continue;
+    if (affectedTiles.has(reservation.targetTile)) releaseReservation(state, reservation, 'cleared');
+  }
+  for (const visitor of state.visitors) {
+    if (visitor.marketTradeGoodSourceTile === module.originTile) visitor.marketTradeGoodSourceTile = null;
+    if (
+      visitor.temporarySleepTargetTile !== null &&
+      visitor.temporarySleepTargetTile !== undefined &&
+      affectedTiles.has(visitor.temporarySleepTargetTile)
+    ) {
+      visitor.temporarySleepTargetTile = null;
+    }
+  }
   state.moduleInstances.splice(idx, 1);
   syncModuleOccupancy(state);
   return true;
@@ -1680,6 +1702,12 @@ function collectModuleAnchors(
 
 function moduleUsageSlotCount(moduleType: ModuleType): number {
   switch (moduleType) {
+    case ModuleType.CheckoutBank:
+      return 2;
+    case ModuleType.ShelfAisle:
+      return 3;
+    case ModuleType.BunkBank:
+      return 4;
     case ModuleType.Bunk:
       return 2;
     case ModuleType.Table:
@@ -1699,6 +1727,8 @@ function moduleUsageSlotCount(moduleType: ModuleType): number {
 }
 
 function moduleUsageTiles(module: StationState['moduleInstances'][number]): number[] {
+  const descriptorTiles = facilityUsageTilesForModule(module);
+  if (descriptorTiles.length > 0) return descriptorTiles;
   return module.tiles.slice(0, Math.min(module.tiles.length, moduleUsageSlotCount(module.type)));
 }
 
@@ -1727,7 +1757,7 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
       ModuleType.LogisticsTerminal
     ];
   }
-  if (room === RoomType.Dorm) return [ModuleType.Bed, ModuleType.Bunk];
+  if (room === RoomType.Dorm) return [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank];
   if (room === RoomType.Hygiene) return [ModuleType.Toilet, ModuleType.Shower, ModuleType.Sink];
   if (room === RoomType.Cafeteria) return [ModuleType.ServingStation];
   if (room === RoomType.Kitchen) return [ModuleType.Stove];
@@ -1738,7 +1768,7 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
   if (room === RoomType.Hydroponics) return [ModuleType.GrowStation];
   if (room === RoomType.Security) return [ModuleType.Terminal];
   if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation];
-  if (room === RoomType.Market) return [ModuleType.MarketStall];
+  if (room === RoomType.Market) return [ModuleType.MarketStall, ModuleType.ShelfAisle, ModuleType.CheckoutBank];
   if (room === RoomType.Cantina) return [ModuleType.BarCounter];
   if (room === RoomType.Observatory) return [ModuleType.Telescope];
   if (room === RoomType.LogisticsStock) return [ModuleType.IntakePallet];
@@ -7086,7 +7116,7 @@ function hospitalityPlanForPassenger(ship: ArrivingShip, passengerIndex: number)
 function planVisitorLeisureLegs(state: StationState, archetype: VisitorArchetype): number {
   const roll = state.rng();
   const availableKinds = [
-    activeModuleTargets(state, [ModuleType.MarketStall], [RoomType.Market]).length > 0,
+    activeModuleTargets(state, [ModuleType.MarketStall, ModuleType.CheckoutBank], [RoomType.Market]).length > 0,
     activeModuleTargets(state, [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench], [RoomType.Lounge]).length > 0 ||
       activeModuleTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]).length > 0,
     activeModuleTargets(state, [ModuleType.BarCounter], [RoomType.Cantina]).length > 0,
@@ -9584,6 +9614,38 @@ function activeModuleUsageTargets(state: StationState, modules: ModuleType[], ro
   return out.sort((a, b) => a - b);
 }
 
+type FacilitySlotTarget = {
+  tileIndex: number;
+  moduleId: number;
+  moduleType: ModuleType;
+  moduleOriginTile: number;
+  slotId: string;
+};
+
+function activeFacilitySlotTargets(
+  state: StationState,
+  moduleTypes: ModuleType[],
+  room: RoomType,
+  role: FacilitySlotRole
+): FacilitySlotTarget[] {
+  const activeOrigins = new Set(activeModuleTargets(state, moduleTypes, [room]));
+  const wanted = new Set(moduleTypes);
+  return state.moduleInstances
+    .filter((module) => wanted.has(module.type) && activeOrigins.has(module.originTile))
+    .flatMap((module) =>
+      resolveFacilitySlots(module, state.width)
+        .filter((slot) => slot.role === role)
+        .map((slot) => ({
+          tileIndex: slot.tileIndex,
+          moduleId: module.id,
+          moduleType: module.type,
+          moduleOriginTile: module.originTile,
+          slotId: slot.id
+        }))
+    )
+    .sort((a, b) => a.tileIndex - b.tileIndex || a.moduleId - b.moduleId || a.slotId.localeCompare(b.slotId));
+}
+
 function staffRequiredForRoom(room: RoomType): number {
   return 0;
 }
@@ -9629,6 +9691,8 @@ function summarizeInventoryAtTargets(state: StationState, targets: number[]): Ro
 function providerKindForModule(module: ModuleType, room: RoomType): ProviderSummary['kind'] | null {
   switch (module) {
     case ModuleType.Bed:
+    case ModuleType.Bunk:
+    case ModuleType.BunkBank:
       return 'bed';
     case ModuleType.ServingStation:
       return 'meal-pickup';
@@ -9639,6 +9703,7 @@ function providerKindForModule(module: ModuleType, room: RoomType): ProviderSumm
     case ModuleType.VendingMachine:
       return 'vending';
     case ModuleType.MarketStall:
+    case ModuleType.CheckoutBank:
       return 'market';
     case ModuleType.BarCounter:
     case ModuleType.WaterFountain:
@@ -12850,6 +12915,8 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     visitor.activeService = null;
     visitor.recurringNeedActive = null;
     if (visitor.needs) visitor.needs.active = null;
+    visitor.marketTradeGoodSourceTile = null;
+    visitor.temporarySleepTargetTile = null;
     visitor.reservedTargetTile = null;
     visitor.reservedServingTile = null;
     releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
@@ -14750,6 +14817,12 @@ function releaseReservationSideEffects(state: StationState, reservation: Reserva
     if (visitor) {
       if (visitor.reservedServingTile === reservation.targetTile) visitor.reservedServingTile = null;
       if (visitor.reservedTargetTile === reservation.targetTile) visitor.reservedTargetTile = null;
+      if (reservation.kind === 'source-item' && reservation.targetId?.startsWith('market-stock:')) {
+        visitor.marketTradeGoodSourceTile = null;
+      }
+      if (reservation.kind === 'provider-slot' && reservation.targetId?.startsWith('temporary-sleep:')) {
+        visitor.temporarySleepTargetTile = null;
+      }
     }
   } else if (reservation.ownerKind === 'resident') {
     const resident = state.residents.find((candidate) => candidate.id === reservation.ownerId);
@@ -18360,6 +18433,8 @@ function assignPathToDock(state: StationState, visitor: Visitor): void {
   removeVisitorFromQueues(state, visitor.id);
   visitor.carryingMeal = false;
   visitor.carryingDrink = false;
+  visitor.marketTradeGoodSourceTile = null;
+  visitor.temporarySleepTargetTile = null;
   visitor.commercialDrinkUnitId = null;
   visitor.optionalDrinkActive = false;
   setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, docks, false, 'visitor', visitor.id) ?? []);
@@ -18582,13 +18657,26 @@ function assignPathToCantinaPickup(state: StationState, visitor: Visitor): boole
 }
 
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
+  // A browsed item is a real, reserved physical good. Do not let a generic
+  // leisure reroute abandon it or skip the checkout stage.
+  if (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) {
+    return assignPathToMarketCheckout(state, visitor);
+  }
+  if (visitor.recurringNeedActive === 'energy' && visitor.activeService === 'comfort') {
+    if (assignPathToTemporarySleep(state, visitor)) return true;
+    // Older saves remain playable without guest lodging: comfort fixtures are
+    // the intentional fallback until the player builds temporary beds.
+  }
   const loungeTargets = activeModuleUsageTargets(
     state,
     [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench],
     [RoomType.Lounge]
   );
   const recHallTargets = activeModuleUsageTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]);
-  const marketTargets = activeModuleUsageTargets(state, [ModuleType.MarketStall], [RoomType.Market]);
+  const enhancedMarket = hasEnhancedMarketMachine(state);
+  const marketTargets = enhancedMarket
+    ? []
+    : activeModuleUsageTargets(state, [ModuleType.MarketStall], [RoomType.Market]);
   const cantinaTargets = activeModuleUsageTargets(state, [ModuleType.Bench], [RoomType.Cantina]);
   const observatoryTargets = activeModuleUsageTargets(state, [ModuleType.Telescope, ModuleType.Bench], [RoomType.Observatory]);
   const vendingTargets = activeModuleUsageTargets(
@@ -18663,12 +18751,15 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
     ...vendingTargets
   ];
   if (shouldSeekVisitorHygiene(state, visitor) && assignPathToVisitorHygiene(state, visitor)) return true;
-  if (allTargets.length === 0) return false;
+  if (allTargets.length === 0 && !enhancedMarket) return false;
 
   releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
   visitor.reservedTargetTile = null;
 
   if (visitor.archetype === 'rusher') {
+    if (enhancedMarket && visitor.primaryPreference === 'market') {
+      return assignPathToMarketBrowse(state, visitor);
+    }
     const choice = chooseLeastLoadedPath(state, visitor.tileIndex, allTargets, false, 'visitor', undefined, visitor.id);
     if (choice) {
       const reservation = tryCreateReservation(state, {
@@ -18716,7 +18807,10 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   for (const preference of tryOrder) {
     let targets: number[];
     switch (preference) {
-      case 'market': targets = marketTargets; break;
+      case 'market':
+        if (enhancedMarket && assignPathToMarketBrowse(state, visitor)) return true;
+        targets = marketTargets;
+        break;
       case 'cantina': targets = cantinaTargets; break;
       case 'observatory': targets = observatoryTargets; break;
       case 'vending': targets = vendingTargets; break;
@@ -18783,6 +18877,215 @@ function marketSpendPerSec(state: StationState, visitor: Visitor): number {
   return 1.15 * pricing.salePriceMultiplier * economy.retailDemandMultiplier *
     visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state) *
     reputationSpendMultiplierAt(state, visitor.tileIndex);
+}
+
+const MARKET_BROWSE_DWELL_SEC = 4.5;
+const MARKET_CHECKOUT_DWELL_SEC = 2.4;
+const TEMPORARY_SLEEP_DWELL_SEC = 18;
+
+function enhancedMarketSlots(state: StationState, role: 'browse' | 'checkout'): FacilitySlotTarget[] {
+  return activeFacilitySlotTargets(
+    state,
+    role === 'browse' ? [ModuleType.ShelfAisle] : [ModuleType.CheckoutBank],
+    RoomType.Market,
+    role
+  );
+}
+
+function hasEnhancedMarketMachine(state: StationState): boolean {
+  return enhancedMarketSlots(state, 'browse').length > 0 && enhancedMarketSlots(state, 'checkout').length > 0;
+}
+
+function hasActiveVisitorReservation(
+  state: StationState,
+  visitor: Visitor,
+  kind: ReservationKind,
+  targetTile: number,
+  targetId: string
+): boolean {
+  return state.reservations.some(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.expiresAt > state.now &&
+      reservation.ownerKind === 'visitor' &&
+      reservation.ownerId === visitor.id &&
+      reservation.kind === kind &&
+      reservation.targetTile === targetTile &&
+      reservation.targetId === targetId
+  );
+}
+
+function visitorHasArrivedAtReservedProvider(state: StationState, visitor: Visitor): boolean {
+  if (visitor.reservedTargetTile === null || visitor.tileIndex !== visitor.reservedTargetTile) return false;
+  return state.reservations.some(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.expiresAt > state.now &&
+      reservation.ownerKind === 'visitor' &&
+      reservation.ownerId === visitor.id &&
+      reservation.kind === 'provider-slot' &&
+      reservation.targetTile === visitor.tileIndex
+  );
+}
+
+function assignPathToMarketBrowse(state: StationState, visitor: Visitor): boolean {
+  const browseSlots = enhancedMarketSlots(state, 'browse').filter((slot) => {
+    const stock = itemStockAtNode(state, slot.moduleOriginTile, 'tradeGood');
+    const reserved = activeReservationAmount(state, 'source-item', slot.moduleOriginTile, `market-stock:${slot.moduleOriginTile}`, 'tradeGood');
+    return stock - reserved >= 0.95;
+  });
+  if (browseSlots.length === 0) return false;
+
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot', 'source-item']);
+  visitor.reservedTargetTile = null;
+  visitor.marketTradeGoodSourceTile = null;
+  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, browseSlots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
+  if (!choice) return false;
+  const slot = browseSlots.find((candidate) => candidate.tileIndex === choice.target);
+  if (!slot) return false;
+  const stockCapacity = itemStockAtNode(state, slot.moduleOriginTile, 'tradeGood');
+  const stockReservation = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'source-item',
+    targetTile: slot.moduleOriginTile,
+    targetId: `market-stock:${slot.moduleOriginTile}`,
+    itemType: 'tradeGood',
+    amount: 1,
+    capacity: stockCapacity,
+    ttlSec: 100
+  });
+  if (!stockReservation.ok) return false;
+  const browseReservation = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'provider-slot',
+    targetTile: slot.tileIndex,
+    targetId: `market-browse:${slot.moduleId}:${slot.slotId}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 75,
+    replaceOwnerReservations: true
+  });
+  if (!browseReservation.ok) {
+    releaseReservationsForOwner(state, 'visitor', visitor.id, 'failed', ['source-item']);
+    return false;
+  }
+  visitor.marketTradeGoodSourceTile = slot.moduleOriginTile;
+  visitor.reservedTargetTile = slot.tileIndex;
+  visitor.reservedServingTile = null;
+  visitor.serviceBlockedSince = null;
+  setVisitorPath(state, visitor, choice.path);
+  visitor.state = VisitorState.ToLeisure;
+  return visitor.path.length > 0 || visitor.tileIndex === slot.tileIndex;
+}
+
+function assignPathToMarketCheckout(state: StationState, visitor: Visitor): boolean {
+  const sourceTile = visitor.marketTradeGoodSourceTile;
+  if (sourceTile === null || sourceTile === undefined) return false;
+  const stockTargetId = `market-stock:${sourceTile}`;
+  if (!hasActiveVisitorReservation(state, visitor, 'source-item', sourceTile, stockTargetId)) {
+    visitor.marketTradeGoodSourceTile = null;
+    return false;
+  }
+  const checkoutSlots = enhancedMarketSlots(state, 'checkout');
+  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, checkoutSlots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
+  if (!choice) return false;
+  const slot = checkoutSlots.find((candidate) => candidate.tileIndex === choice.target);
+  if (!slot) return false;
+  const checkoutReservation = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'provider-slot',
+    targetTile: slot.tileIndex,
+    targetId: `market-checkout:${slot.moduleId}:${slot.slotId}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 75,
+    replaceOwnerReservations: true
+  });
+  if (!checkoutReservation.ok) return false;
+  visitor.reservedTargetTile = slot.tileIndex;
+  visitor.reservedServingTile = null;
+  visitor.serviceBlockedSince = null;
+  setVisitorPath(state, visitor, choice.path);
+  visitor.state = VisitorState.ToLeisure;
+  return visitor.path.length > 0 || visitor.tileIndex === slot.tileIndex;
+}
+
+function temporarySleepSlots(state: StationState): FacilitySlotTarget[] {
+  const bunkBankSlots = activeFacilitySlotTargets(state, [ModuleType.BunkBank], RoomType.Dorm, 'temporary-sleep');
+  if (bunkBankSlots.length > 0) return bunkBankSlots;
+  return activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm])
+    .filter((tileIndex) => state.roomHousingPolicies[tileIndex] === 'visitor')
+    .map((tileIndex) => ({
+      tileIndex,
+      moduleId: state.moduleOccupancyByTile[tileIndex] ?? -1,
+      moduleType: state.modules[tileIndex],
+      moduleOriginTile: state.moduleInstances.find((module) => module.id === state.moduleOccupancyByTile[tileIndex])?.originTile ?? tileIndex,
+      slotId: `guest-bed:${tileIndex}`
+    }));
+}
+
+export function assignPathToTemporarySleep(state: StationState, visitor: Visitor): boolean {
+  const slots = temporarySleepSlots(state);
+  if (slots.length === 0) return false;
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
+  visitor.reservedTargetTile = null;
+  visitor.temporarySleepTargetTile = null;
+  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, slots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
+  if (!choice) return false;
+  const slot = slots.find((candidate) => candidate.tileIndex === choice.target);
+  if (!slot) return false;
+  const reservation = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'provider-slot',
+    targetTile: slot.tileIndex,
+    targetId: `temporary-sleep:${slot.moduleId}:${slot.slotId}`,
+    amount: 1,
+    capacity: 1,
+    ttlSec: 90,
+    replaceOwnerReservations: true
+  });
+  if (!reservation.ok) return false;
+  visitor.reservedTargetTile = slot.tileIndex;
+  visitor.temporarySleepTargetTile = slot.tileIndex;
+  visitor.reservedServingTile = null;
+  setVisitorPath(state, visitor, choice.path);
+  visitor.state = VisitorState.ToLeisure;
+  return visitor.path.length > 0 || visitor.tileIndex === slot.tileIndex;
+}
+
+export function completeMarketCheckout(state: StationState, visitor: Visitor): boolean {
+  const sourceTile = visitor.marketTradeGoodSourceTile;
+  if (sourceTile === null || sourceTile === undefined) return false;
+  const consumedGoods = takeItemStockAtNode(state, sourceTile, 'tradeGood', 1);
+  releaseReservationsForOwner(state, 'visitor', visitor.id, consumedGoods >= 0.95 ? 'completed' : 'failed', ['provider-slot', 'source-item']);
+  visitor.reservedTargetTile = null;
+  visitor.marketTradeGoodSourceTile = null;
+  if (consumedGoods < 0.95) {
+    state.usageTotals.marketStockouts += 1;
+    addVisitorPatience(state, visitor, 0.35);
+    return false;
+  }
+  const environment = roomEnvironmentScoreAt(state, visitor.tileIndex);
+  const quality = clamp(1 + (environment.visitorStatus + environment.publicAppeal * 0.3 - environment.serviceNoise * 0.2) * 0.06, 0.85, 1.15);
+  const spend = marketSpendPerSec(state, visitor) * 5.5 * quality;
+  recordVisitorTransaction(state, visitor, spend, getCommercialUnitAt(state, visitor.tileIndex), 'market');
+  state.usageTotals.tradeGoodsSold += consumedGoods;
+  state.usageTotals.creditsTradeGoodsGross += spend;
+  recordServiceCompletion(state, {
+    population: 'visitor',
+    actorId: visitor.id,
+    service: 'retail',
+    tileIndex: visitor.tileIndex,
+    shipId: visitor.originShipId,
+    firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
+  });
+  visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
+  visitorSuccessRatingBonus(state, consumedGoods * 0.02, 'leisureService');
+  return true;
 }
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
@@ -19362,7 +19665,12 @@ function updateVisitorLogic(
       const waitingInCantinaLine =
         visitorWaitingForCantinaPickup(visitor) &&
         queuePositionOf(state, visitor.id, new Set(collectCantinaBarTargets(state))) !== null;
-      if (visitor.path.length === 0 && !waitingForClinicCare && visitorPathRetryReady(state, visitor)) {
+      if (
+        visitor.path.length === 0 &&
+        !waitingForClinicCare &&
+        !visitorHasArrivedAtReservedProvider(state, visitor) &&
+        visitorPathRetryReady(state, visitor)
+      ) {
         scheduleVisitorPathRetry(state, visitor);
         if (waitingInCantinaLine) {
           const qpos = queuePositionOf(state, visitor.id, new Set(collectCantinaBarTargets(state)));
@@ -19423,12 +19731,46 @@ function updateVisitorLogic(
         hasActiveDrinkPickupReservation(state, 'visitor', visitor.id, visitor.tileIndex) &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
       const needsDrinkPickup = visitor.activeService === 'drink' && !visitor.carryingDrink;
+      const currentModule = state.modules[visitor.tileIndex];
       const atLoungeModule =
-        state.modules[visitor.tileIndex] === ModuleType.Couch ||
-        state.modules[visitor.tileIndex] === ModuleType.GameStation ||
-        state.modules[visitor.tileIndex] === ModuleType.RecUnit ||
-        state.modules[visitor.tileIndex] === ModuleType.Bench;
-      const atMarketModule = state.modules[visitor.tileIndex] === ModuleType.MarketStall;
+        currentModule === ModuleType.Couch ||
+        currentModule === ModuleType.GameStation ||
+        currentModule === ModuleType.RecUnit ||
+        currentModule === ModuleType.Bench;
+      const atShelfAisle =
+        currentModule === ModuleType.ShelfAisle &&
+        visitor.marketTradeGoodSourceTile !== null &&
+        visitor.marketTradeGoodSourceTile !== undefined &&
+        visitor.reservedTargetTile === visitor.tileIndex;
+      const atCheckoutBank =
+        currentModule === ModuleType.CheckoutBank &&
+        visitor.marketTradeGoodSourceTile !== null &&
+        visitor.marketTradeGoodSourceTile !== undefined &&
+        visitor.reservedTargetTile === visitor.tileIndex &&
+        state.reservations.some(
+          (reservation) =>
+            reservation.releaseReason === null &&
+            reservation.expiresAt > state.now &&
+            reservation.ownerKind === 'visitor' &&
+            reservation.ownerId === visitor.id &&
+            reservation.kind === 'provider-slot' &&
+            reservation.targetTile === visitor.tileIndex &&
+            reservation.targetId?.startsWith('market-checkout:')
+        );
+      const atTemporarySleep =
+        visitor.temporarySleepTargetTile === visitor.tileIndex &&
+        visitor.reservedTargetTile === visitor.tileIndex &&
+        state.reservations.some(
+          (reservation) =>
+            reservation.releaseReason === null &&
+            reservation.expiresAt > state.now &&
+            reservation.ownerKind === 'visitor' &&
+            reservation.ownerId === visitor.id &&
+            reservation.kind === 'provider-slot' &&
+            reservation.targetTile === visitor.tileIndex &&
+            reservation.targetId?.startsWith('temporary-sleep:')
+        );
+      const atMarketModule = currentModule === ModuleType.MarketStall || atShelfAisle;
       const atVendingModule = state.modules[visitor.tileIndex] === ModuleType.VendingMachine;
       const atCantinaModule =
         collectingDrink ||
@@ -19454,6 +19796,8 @@ function updateVisitorLogic(
       if (
         atLoungeModule ||
         atMarketModule ||
+        atCheckoutBank ||
+        atTemporarySleep ||
         atVendingModule ||
         atCantinaModule ||
         atObservatoryModule ||
@@ -19474,10 +19818,14 @@ function updateVisitorLogic(
                 : atHygieneService
                   ? 0.025
                   : 0.04;
-        visitorSuccessRatingBonus(state, ratingBonus, 'leisureService');
+        // Retail earns its feedback only when a physically reserved item makes
+        // it through checkout. Browsing an empty shelf is not a sale.
+        if (!atMarketModule && !atCheckoutBank && !atTemporarySleep) {
+          visitorSuccessRatingBonus(state, ratingBonus, 'leisureService');
+        }
         if (atVendingModule) {
           state.usageTotals.visitorLeisureEntries.vending += 1;
-        } else if (atMarketModule || state.rooms[visitor.tileIndex] === RoomType.Market) {
+        } else if (atMarketModule || atCheckoutBank || state.rooms[visitor.tileIndex] === RoomType.Market) {
           state.usageTotals.visitorLeisureEntries.market += 1;
         } else if (atHygieneService) {
           state.usageTotals.hygiene += 1;
@@ -19496,7 +19844,13 @@ function updateVisitorLogic(
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
         // Observatory: longer dwell (wonder). Cantina: shorter (drink + go).
         const dwellMult = atObservatoryModule ? 1.45 : atCantinaModule ? 0.85 : 1;
-        const contractDwell = visitor.activeService === 'restroom'
+        const contractDwell = atTemporarySleep
+          ? TEMPORARY_SLEEP_DWELL_SEC
+          : atShelfAisle
+            ? MARKET_BROWSE_DWELL_SEC
+            : atCheckoutBank
+              ? MARKET_CHECKOUT_DWELL_SEC
+              : visitor.activeService === 'restroom'
           ? 2.8
           : visitor.activeService === 'hygiene'
             ? state.modules[visitor.tileIndex] === ModuleType.Shower ? 4.2 : 6.2
@@ -19549,6 +19903,58 @@ function updateVisitorLogic(
         updateActorHealthFromExposure(state, visitor);
       }
       if (visitor.eatTimer <= 0) {
+        const completedTemporarySleep =
+          visitor.temporarySleepTargetTile === visitor.tileIndex &&
+          state.reservations.some(
+            (reservation) =>
+              reservation.releaseReason === null &&
+              reservation.expiresAt > state.now &&
+              reservation.ownerKind === 'visitor' &&
+              reservation.ownerId === visitor.id &&
+              reservation.kind === 'provider-slot' &&
+              reservation.targetTile === visitor.tileIndex &&
+              reservation.targetId?.startsWith('temporary-sleep:')
+          );
+        if (completedTemporarySleep) {
+          releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot']);
+          visitor.reservedTargetTile = null;
+          visitor.temporarySleepTargetTile = null;
+          if (visitor.recurringNeedActive === 'energy' && visitor.needs) {
+            completeVisitorHospitalityService(state, visitor, 'comfort');
+          }
+          routeVisitorAfterLeisureStop(state, visitor);
+          keep.push(visitor);
+          continue;
+        }
+
+        const completedMarketBrowse =
+          state.modules[visitor.tileIndex] === ModuleType.ShelfAisle &&
+          visitor.marketTradeGoodSourceTile !== null &&
+          visitor.marketTradeGoodSourceTile !== undefined &&
+          visitor.reservedTargetTile === visitor.tileIndex;
+        if (completedMarketBrowse) {
+          releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot']);
+          visitor.reservedTargetTile = null;
+          visitor.state = VisitorState.ToLeisure;
+          if (!assignPathToMarketCheckout(state, visitor)) {
+            visitor.serviceBlockedSince ??= state.now;
+          }
+          keep.push(visitor);
+          continue;
+        }
+
+        const completedMarketCheckout =
+          state.modules[visitor.tileIndex] === ModuleType.CheckoutBank &&
+          visitor.marketTradeGoodSourceTile !== null &&
+          visitor.marketTradeGoodSourceTile !== undefined &&
+          visitor.reservedTargetTile === visitor.tileIndex;
+        if (completedMarketCheckout) {
+          if (completeMarketCheckout(state, visitor)) marketTradeGoodsUsed += 1;
+          routeVisitorAfterLeisureStop(state, visitor);
+          keep.push(visitor);
+          continue;
+        }
+
         const completedDrinkPickup =
           visitor.activeService === 'drink' &&
           !visitor.carryingDrink &&
