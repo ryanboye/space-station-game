@@ -745,3 +745,13 @@ export const TASK_TIMINGS = {
   residentSleepSec: 3.2,
   residentCleanSec: 2.2
 } as const;
+
+/** Visit clocks are centralized so Phase 1A can be tuned without touching port logic. */
+export const VISIT_TIMINGS = {
+  shoreMinSec: 105,
+  contractMinSec: 190,
+  extendedMinSec: 300,
+  boardingLeadSec: 20,
+  recallAssemblySec: 3,
+  extensionSec: 75
+} as const;

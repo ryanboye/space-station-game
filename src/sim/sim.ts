@@ -9,8 +9,19 @@ import {
   ROOM_DEFINITIONS,
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
-  TASK_TIMINGS
+  TASK_TIMINGS,
+  VISIT_TIMINGS
 } from './balance';
+import {
+  createVisitorNeeds,
+  decayVisitorNeeds,
+  deriveVisitStayClass,
+  hasSevereUnmetNeed,
+  isLongStayClass,
+  restoreRecurringNeed,
+  selectRecurringNeed,
+  serviceForRecurringNeed
+} from './occupant-demand';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import {
   SPECIALTY_BY_ID,
@@ -200,6 +211,7 @@ import {
   type ShipSize,
   TileType,
   type VisitorArchetype,
+  type VisitStayClass,
   type VisitorPreference,
   VisitorState,
   ZoneType,
@@ -6992,6 +7004,7 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
   const hasContractPlan = !!ship?.portManifest;
   const servicePlan = ship ? hospitalityPlanForPassenger(ship, ship.passengersSpawned) : [];
   const activeService = servicePlan[0] ?? null;
+  const stayClass = ship?.stayClass ?? 'errand';
   const visitor: Visitor = {
     id: visitorId,
     name: identity.name,
@@ -7034,7 +7047,10 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     activeService,
     optionalDrinkActive: false,
     repeatDrinksServed: 0,
-    serviceBlockedSince: null
+    serviceBlockedSince: null,
+    stayClass,
+    needs: isLongStayClass(stayClass) ? createVisitorNeeds(visitorId + (ship?.id ?? 0) * 31) : undefined,
+    recurringNeedActive: null
   };
   // Plan the trip up front. Long-stay archetypes do multi-room loops; rushers
   // mostly eat-and-leave. Roll once at spawn so the inspector can show the
@@ -11345,7 +11361,15 @@ function promisesForOffer(offer: TrafficOffer): PortPromiseComponent[] {
 function ensurePortContract(state: StationState, offer: TrafficOffer, berthAnchor: number): PortContract {
   const existing = state.portOps.contracts.find((contract) => contract.offerId === offer.id);
   if (existing) return existing;
-  const hardDepartureAt = Math.max(state.now, offer.arrivesAt) + offer.berthTimeSec;
+  const stayClass = deriveVisitStayClass({
+    shipType: offer.shipType,
+    size: offer.size,
+    offerKind: offer.offerKind,
+    seed: offer.id
+  });
+  const visitDuration = visitDurationForClass(stayClass, offer.berthTimeSec);
+  const earliestDepartureAt = Math.max(state.now, offer.arrivesAt) + Math.min(offer.berthTimeSec, visitDuration * 0.55);
+  const hardDepartureAt = Math.max(state.now, offer.arrivesAt) + visitDuration;
   const contract: PortContract = {
     id: state.portOps.nextContractId++,
     offerId: offer.id,
@@ -11355,13 +11379,18 @@ function ensurePortContract(state: StationState, offer: TrafficOffer, berthAncho
     assignedBerthAnchor: berthAnchor,
     acceptedAt: state.now,
     arrivesAt: offer.arrivesAt,
-    boardingStartsAt: hardDepartureAt - 12,
+    boardingStartsAt: hardDepartureAt - VISIT_TIMINGS.boardingLeadSec,
     hardDepartureAt,
     status: 'accepted',
     promises: promisesForOffer(offer),
     passengerSpendingCredits: 0,
     procurementCostCredits: Math.max(0, (offer.fuelProcurementCostCredits ?? 0) + (offer.stationProcurementCostCredits ?? 0)),
-    settlementId: null
+    settlementId: null,
+    stayClass,
+    earliestDepartureAt,
+    plannedDepartureAt: hardDepartureAt,
+    extensionUntil: null,
+    recallAt: null
   };
   state.portOps.contracts.push(contract);
   state.portOps.firstChoiceAt ??= state.now;
@@ -12599,12 +12628,30 @@ function beginPortTurnaround(state: StationState, ship: ArrivingShip): void {
   const requiresCargoHandling = inboundTotal > 0 || outboundTotal > 0 || fuelSupply > 0;
   const requiresInspection = requiresCargoHandling && customsModuleTile !== null && cargoModuleTile !== null;
   const contract = portContractForShip(state, ship.id);
-  const hardDepartureAt = state.now + ship.portManifest.berthTimeSec;
+  const stayClass = ship.stayClass ?? deriveVisitStayClass({
+    shipType: ship.shipType,
+    size: ship.size,
+    offerKind: ship.portManifest.offerKind,
+    seed: ship.id
+  });
+  ship.stayClass = stayClass;
+  const visitDuration = visitDurationForClass(stayClass, ship.portManifest.berthTimeSec);
+  const hardDepartureAt = state.now + visitDuration;
+  ship.earliestDepartureAt = state.now + Math.min(ship.portManifest.berthTimeSec, visitDuration * 0.55);
+  ship.plannedDepartureAt = hardDepartureAt;
+  ship.extensionUntil ??= null;
+  ship.recallAt ??= null;
+  ship.visitPhase = 'visit-service';
   if (contract) {
     contract.arrivesAt = state.now;
-    contract.boardingStartsAt = hardDepartureAt - 12;
+    contract.boardingStartsAt = hardDepartureAt - VISIT_TIMINGS.boardingLeadSec;
     contract.hardDepartureAt = hardDepartureAt;
     contract.status = 'active';
+    contract.stayClass = stayClass;
+    contract.earliestDepartureAt = ship.earliestDepartureAt;
+    contract.plannedDepartureAt = hardDepartureAt;
+    contract.extensionUntil = ship.extensionUntil;
+    contract.recallAt = ship.recallAt;
     setPortPromiseProgress(state, ship.id, 'dock', 1);
   }
   ship.portTurnaround = {
@@ -12652,12 +12699,14 @@ function releaseInboundCargo(state: StationState, ship: ArrivingShip): void {
   turn.cargoReleased = true;
   // The service clock starts after customs, so a slow inspection never makes
   // an export order fail before the player can act on it.
-  turn.loadingDeadlineAt = state.now + manifest.berthTimeSec;
+  turn.loadingDeadlineAt = state.now + visitDurationForClass(ship.stayClass ?? 'shore', manifest.berthTimeSec);
   const contract = portContractForShip(state, ship.id);
   if (contract) {
-    contract.boardingStartsAt = turn.loadingDeadlineAt - 12;
+    contract.boardingStartsAt = turn.loadingDeadlineAt - VISIT_TIMINGS.boardingLeadSec;
     contract.hardDepartureAt = turn.loadingDeadlineAt;
+    contract.plannedDepartureAt = turn.loadingDeadlineAt;
   }
+  ship.plannedDepartureAt = turn.loadingDeadlineAt;
   stageInboundCargoLots(state, ship, turn.cargoTile);
   const fuelSupply = Math.max(0, manifest.fuelSupply ?? 0);
   turn.phase = turn.inboundTotal + fuelSupply > 0 ? 'unloading' : 'loading';
@@ -12788,6 +12837,45 @@ function recordBerthServiceOutcome(state: StationState, ship: ArrivingShip): voi
   });
 }
 
+function beginShipRecall(state: StationState, ship: ArrivingShip): void {
+  if (ship.kind !== 'transient' || ship.stage !== 'docked') return;
+  const contract = portContractForShip(state, ship.id);
+  if (contract && contract.status !== 'boarding') contract.status = 'boarding';
+  ship.visitPhase = 'recall';
+  ship.recallAt = state.now;
+  if (contract) contract.recallAt = state.now;
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId !== ship.id || visitor.state === VisitorState.ToDock) continue;
+    visitor.state = VisitorState.ToDock;
+    visitor.activeService = null;
+    visitor.recurringNeedActive = null;
+    if (visitor.needs) visitor.needs.active = null;
+    visitor.reservedTargetTile = null;
+    visitor.reservedServingTile = null;
+    releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+    removeVisitorFromQueues(state, visitor.id);
+    assignPathToDock(state, visitor);
+  }
+  pushCrowdEvent(state, 'info', `${ship.portManifest?.callsign ?? `Ship ${ship.id}`} recall started`);
+}
+
+function tryExtendLongStayVisit(state: StationState, ship: ArrivingShip, contract: PortContract): boolean {
+  if (!isLongStayClass(ship.stayClass) || ship.extensionUntil !== null) return false;
+  const usefulWorkRemains = ship.portTurnaround !== undefined && ship.portTurnaround.phase !== 'open';
+  if (!usefulWorkRemains) return false;
+  const nextDeparture = state.now + VISIT_TIMINGS.extensionSec;
+  ship.extensionUntil = nextDeparture;
+  ship.plannedDepartureAt = nextDeparture;
+  ship.visitPhase = 'visit-service';
+  contract.extensionUntil = nextDeparture;
+  contract.plannedDepartureAt = nextDeparture;
+  contract.hardDepartureAt = nextDeparture;
+  contract.boardingStartsAt = nextDeparture - VISIT_TIMINGS.boardingLeadSec;
+  if (ship.portTurnaround) ship.portTurnaround.loadingDeadlineAt = nextDeparture;
+  pushCrowdEvent(state, 'info', `${contract.callsign} extended its stay for remaining station work`);
+  return true;
+}
+
 function updateArrivingShips(state: StationState, dt: number): void {
   for (let i = 0; i < state.dockQueue.length; i++) {
     const entry = state.dockQueue[i];
@@ -12833,6 +12921,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ship.stage = 'docked';
       ship.stageTime = 0;
       ship.dockedAt = state.now;
+      ship.visitPhase = 'secure';
       beginPortTurnaround(state, ship);
     }
 
@@ -12858,18 +12947,20 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.spawnCarry -= 1;
       }
       if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
-        contract.status = 'boarding';
-        for (const visitor of state.visitors) {
-          if (visitor.originShipId !== ship.id || visitor.state === VisitorState.ToDock) continue;
-          visitor.state = VisitorState.ToDock;
-          visitor.reservedTargetTile = null;
-          releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
-          assignPathToDock(state, visitor);
-        }
+        if (!tryExtendLongStayVisit(state, ship, contract)) beginShipRecall(state, ship);
+      }
+      if (
+        ship.visitPhase === 'recall' &&
+        ship.recallAt !== null &&
+        ship.recallAt !== undefined &&
+        state.now - ship.recallAt >= VISIT_TIMINGS.recallAssemblySec
+      ) {
+        ship.visitPhase = 'boarding';
       }
       if (ship.smallCraftVisit && state.now >= ship.smallCraftVisit.patienceExpiresAt) {
         expireSmallCraftVisit(state, ship);
         settlePortContract(state, ship);
+        ship.visitPhase = 'depart';
         ship.stage = 'depart';
         ship.stageTime = 0;
       } else if (contract && state.now >= contract.hardDepartureAt) {
@@ -12895,10 +12986,12 @@ function updateArrivingShips(state: StationState, dt: number): void {
           job.blockedReason = 'Ship departed at contract deadline.';
         }
         settlePortContract(state, ship);
+        ship.visitPhase = 'depart';
         ship.stage = 'depart';
         ship.stageTime = 0;
       } else if (transientShipVisitorsResolved(state, ship) && smallCraftVisitResolved(ship)) {
         settlePortContract(state, ship);
+        ship.visitPhase = 'depart';
         ship.stage = 'depart';
         ship.stageTime = 0;
       }
@@ -13013,6 +13106,12 @@ function spawnShipAtDock(
   const passengersTotal = trafficOffer?.passengersTotal ?? dockPodPassengerCount(state.rng);
   const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
+  const stayClass = deriveVisitStayClass({
+    shipType,
+    size,
+    offerKind: trafficOffer?.offerKind,
+    seed: shipId
+  });
   dock.occupiedByShipId = shipId;
   const center = dock.tiles
     .map((tile) => fromIndex(tile, state.width))
@@ -13049,7 +13148,11 @@ function spawnShipAtDock(
     manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
     portManifest: trafficOffer ? { ...trafficOffer } : undefined,
     portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined,
-    smallCraftVisit: createSmallCraftVisit(state, dock, shipId)
+    smallCraftVisit: createSmallCraftVisit(state, dock, shipId),
+    stayClass,
+    visitPhase: 'announced',
+    extensionUntil: null,
+    recallAt: null
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }
@@ -13079,6 +13182,12 @@ function spawnShipAtBerth(
   const passengersTotal = trafficOffer?.passengersTotal ?? berthPassengerCount(size, state.rng);
   const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
+  const stayClass = deriveVisitStayClass({
+    shipType,
+    size,
+    offerKind: trafficOffer?.offerKind,
+    seed: shipId
+  });
   const center = berth.tiles
     .map((tile) => fromIndex(tile, state.width))
     .reduce(
@@ -13113,7 +13222,11 @@ function spawnShipAtBerth(
     manifestDemand: 'manifestDemand' in manifest ? manifest.manifestDemand : manifest.demand,
     manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
     portManifest: trafficOffer ? { ...trafficOffer } : undefined,
-    portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined
+    portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined,
+    stayClass,
+    visitPhase: 'announced',
+    extensionUntil: null,
+    recallAt: null
   });
   state.usageTotals.shipsByType[shipType] += 1;
 }
@@ -18826,20 +18939,70 @@ function completeVisitorHospitalityService(
   visitor: Visitor,
   service: HospitalityServiceKind
 ): boolean {
-  const onPlan = visitor.activeService === service && !visitor.completedServices.includes(service);
+  const recurringNeed = visitor.recurringNeedActive ?? null;
+  const onPlan = recurringNeed === null && visitor.activeService === service && !visitor.completedServices.includes(service);
   const recorded = recordServiceCompletion(state, {
     population: 'visitor',
     actorId: visitor.id,
     service,
     tileIndex: visitor.tileIndex,
     shipId: visitor.originShipId,
-    advancePromise: onPlan,
+    advancePromise: onPlan && recurringNeed === null,
     firstForActor: (visitor.serviceCompletionsRecorded ?? 0) === 0
   });
   if (!recorded) return false;
   visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
   if (onPlan) visitor.completedServices.push(service);
+  if (recurringNeed !== null && visitor.needs) {
+    restoreRecurringNeed(visitor.needs, recurringNeed);
+    visitor.recurringNeedActive = null;
+  }
   return true;
+}
+
+function visitDurationForClass(stayClass: VisitStayClass, authoredDuration: number): number {
+  if (stayClass === 'extended') return Math.max(authoredDuration, VISIT_TIMINGS.extendedMinSec);
+  if (stayClass === 'contract') return Math.max(authoredDuration, VISIT_TIMINGS.contractMinSec);
+  if (stayClass === 'shore') return Math.max(authoredDuration, VISIT_TIMINGS.shoreMinSec);
+  return authoredDuration;
+}
+
+function shipIsRecalling(state: StationState, visitor: Visitor): boolean {
+  const ship = originShipForVisitor(state, visitor);
+  return ship?.visitPhase === 'recall' || ship?.visitPhase === 'boarding' || ship?.stage === 'depart';
+}
+
+function routeLongStayVisitor(state: StationState, visitor: Visitor): boolean {
+  if (!isLongStayClass(visitor.stayClass) || !visitor.needs || shipIsRecalling(state, visitor)) return false;
+  const need = selectRecurringNeed(visitor.needs);
+  if (need === null) {
+    visitor.activeService = null;
+    visitor.recurringNeedActive = null;
+    visitor.state = VisitorState.ToLeisure;
+    if (visitor.path.length === 0) assignPathToLeisure(state, visitor);
+    return true;
+  }
+  visitor.needs.active = need;
+  visitor.recurringNeedActive = need;
+  visitor.activeService = serviceForRecurringNeed(need);
+  if (visitor.activeService === 'meal') {
+    visitor.state = VisitorState.ToCafeteria;
+    assignPathToCafeteria(state, visitor);
+  } else {
+    visitor.state = VisitorState.ToLeisure;
+    assignPathToLeisure(state, visitor);
+  }
+  return true;
+}
+
+function updateLongStayVisitorNeeds(state: StationState, visitor: Visitor, dt: number): void {
+  if (!isLongStayClass(visitor.stayClass) || !visitor.needs || shipIsRecalling(state, visitor)) return;
+  decayVisitorNeeds(visitor.needs, dt);
+  if (hasSevereUnmetNeed(visitor.needs)) visitor.needs.unmetSince ??= state.now;
+  else visitor.needs.unmetSince = null;
+  if (visitor.activeService === null && visitor.state !== VisitorState.Eating && visitor.state !== VisitorState.Leisure) {
+    routeLongStayVisitor(state, visitor);
+  }
 }
 
 function routeContractVisitorToNextService(state: StationState, visitor: Visitor): boolean {
@@ -18847,7 +19010,11 @@ function routeContractVisitorToNextService(state: StationState, visitor: Visitor
     ? null
     : state.arrivingShips.find((candidate) => candidate.id === visitor.originShipId) ?? null;
   if (!ship?.portManifest) return false;
-  visitor.activeService = visitor.servicePlan.find((service) => !visitor.completedServices.includes(service)) ?? null;
+  const nextPlannedService = visitor.servicePlan.find((service) => !visitor.completedServices.includes(service)) ?? null;
+  if (nextPlannedService === null && isLongStayClass(visitor.stayClass) && !shipIsRecalling(state, visitor)) {
+    return routeLongStayVisitor(state, visitor);
+  }
+  visitor.activeService = nextPlannedService;
   if (visitor.activeService === 'meal') {
     visitor.state = VisitorState.ToCafeteria;
     assignPathToCafeteria(state, visitor);
@@ -18947,6 +19114,7 @@ function updateVisitorLogic(
   let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
+    updateLongStayVisitorNeeds(state, visitor, dt);
     const exposure = applyAirExposure(state, visitor, operationalAirAt(state, visitor.tileIndex), dt);
     if (exposure.died) {
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
@@ -19501,12 +19669,6 @@ function updateVisitorLogic(
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt);
       if (isVisitorExitTile(state, visitor.tileIndex)) {
         const boardedResult = tryBoardVisitorOriginShipAtTile(state, visitor, visitor.tileIndex);
-        if (boardedResult.boarded && boardedResult.ship) {
-          const converted = maybeConvertVisitorToResident(state, visitor, boardedResult.ship);
-          if (converted) {
-            continue;
-          }
-        }
         const boarded = boardedResult.boarded;
         const originShipPresent = originShipForVisitor(state, visitor) !== null;
         const canExitNormally =
@@ -19527,7 +19689,7 @@ function updateVisitorLogic(
       }
     }
 
-    if (visitor.patience > 30 && visitor.state !== VisitorState.ToDock) {
+    if (!isLongStayClass(visitor.stayClass) && visitor.patience > 30 && visitor.state !== VisitorState.ToDock) {
       visitor.state = VisitorState.ToDock;
       visitor.reservedTargetTile = null;
       assignPathToDock(state, visitor);
@@ -19544,7 +19706,7 @@ function updateVisitorLogic(
         pushCrowdEvent(state, 'info', `A ${visitor.archetype} left annoyed after long waits`);
       }
     }
-    if (visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
+    if (!isLongStayClass(visitor.stayClass) && visitor.patience > 80 && visitor.state === VisitorState.ToDock) {
       setVisitorPath(state, visitor, []);
       // Despawn when the visitor has reached an exit tile. Dock tiles are
       // explicit; Berth-room tiles are the equivalent for berth-arrivals
@@ -19572,7 +19734,7 @@ function updateVisitorLogic(
       addVisitorFailurePenalty(state, 0.12, 'dockTimeout');
       visitor.patience = 20;
     }
-    if (visitor.patience > 120 && visitor.state === VisitorState.ToDock) {
+    if (!isLongStayClass(visitor.stayClass) && visitor.patience > 120 && visitor.state === VisitorState.ToDock) {
       addVisitorFailurePenalty(state, 0.2, 'dockTimeout');
       occupancyByTile.set(
         visitor.tileIndex,

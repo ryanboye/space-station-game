@@ -48,6 +48,10 @@ import {
   TileType,
   type StationState,
   type VisitorArchetype,
+  type Visitor,
+  type VisitorNeeds,
+  type VisitStayClass,
+  VisitorState,
   ZoneType,
   fromIndex,
   isWalkable
@@ -106,6 +110,8 @@ const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', '
 const SHIP_SIZES: ShipSize[] = ['small', 'medium', 'large'];
 const SMALL_CRAFT_SERVICE_KINDS = ['passenger', 'refuel', 'freight', 'repair'] as const;
 const SMALL_CRAFT_SERVICE_STATUSES = ['pending', 'active', 'complete', 'blocked', 'skipped'] as const;
+const VISIT_STAY_CLASSES: VisitStayClass[] = ['errand', 'shore', 'contract', 'extended', 'permanent'];
+const SHIP_VISIT_PHASES = ['announced', 'approach', 'secure', 'visit-service', 'recall', 'boarding', 'depart'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
 const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
 const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
@@ -367,6 +373,8 @@ export interface StationSnapshotV1 {
   serviceLog?: ServiceLog;
   portOps: PortOpsState;
   activePortShips: ArrivingShip[];
+  /** Active temporary occupants are durable from Phase 1A onward. */
+  visitors?: Visitor[];
   // Optional on the wire — legacy saves and un-chartered starts predate this
   // slot. Absent → state.site stays undefined → current default behavior.
   site?: SiteCharter;
@@ -609,6 +617,44 @@ function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
   };
 }
 
+function normalizeVisitorNeeds(value: unknown): VisitorNeeds | undefined {
+  if (!isRecord(value)) return undefined;
+  const active = value.active === 'hunger' || value.active === 'energy' || value.active === 'hygiene' || value.active === 'leisure'
+    ? value.active
+    : null;
+  return {
+    hunger: clamp(asFiniteNumber(value.hunger, 80), 0, 100),
+    energy: clamp(asFiniteNumber(value.energy, 80), 0, 100),
+    hygiene: clamp(asFiniteNumber(value.hygiene, 80), 0, 100),
+    leisure: clamp(asFiniteNumber(value.leisure, 75), 0, 100),
+    active,
+    unmetSince: typeof value.unmetSince === 'number' && Number.isFinite(value.unmetSince) ? Math.max(0, value.unmetSince) : null,
+    completions: Math.max(0, Math.floor(asFiniteNumber(value.completions, 0)))
+  };
+}
+
+function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | null {
+  if (!isRecord(value) || !Number.isFinite(value.id) || !Number.isFinite(value.tileIndex) || !isOneOf(value.state, Object.values(VisitorState))) {
+    return null;
+  }
+  const visitor = value as unknown as Visitor;
+  const stayClass = isOneOf(value.stayClass, VISIT_STAY_CLASSES) ? value.stayClass : 'errand';
+  const needs = normalizeVisitorNeeds(value.needs);
+  return {
+    ...visitor,
+    id: Math.floor(visitor.id),
+    tileIndex: clamp(Math.floor(visitor.tileIndex), 0, Math.max(0, tileCount - 1)),
+    path: [],
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    serveTimer: undefined,
+    nextPathRetryAt: undefined,
+    stayClass,
+    needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
+    recurringNeedActive: needs?.active ?? null
+  };
+}
+
 function defaultHousingPolicyForRoom(room: RoomType): HousingPolicy {
   return room === RoomType.Dorm || room === RoomType.Hygiene ? 'crew' : 'visitor';
 }
@@ -827,6 +873,12 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       path: [...resident.path],
       roleAffinity: { ...resident.roleAffinity },
       lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
+    })),
+    visitors: state.visitors.map((visitor) => ({
+      ...visitor,
+      path: [...visitor.path],
+      needs: visitor.needs ? { ...visitor.needs } : undefined,
+      lastRouteExposure: visitor.lastRouteExposure ? { ...visitor.lastRouteExposure } : undefined
     })),
     command: {
       selectedSpecialty: state.command.selectedSpecialty,
@@ -1930,7 +1982,23 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         ) return [];
         return [{
           ...(entry as unknown as ArrivingShip),
-          smallCraftVisit: normalizeSmallCraftVisit(entry.smallCraftVisit)
+          smallCraftVisit: normalizeSmallCraftVisit(entry.smallCraftVisit),
+          stayClass: isOneOf(entry.stayClass, VISIT_STAY_CLASSES) ? entry.stayClass : 'errand',
+          visitPhase: isOneOf(entry.visitPhase, SHIP_VISIT_PHASES)
+            ? entry.visitPhase
+            : entry.stage === 'approach' ? 'approach' : entry.stage === 'depart' ? 'depart' : 'visit-service',
+          earliestDepartureAt: typeof entry.earliestDepartureAt === 'number' && Number.isFinite(entry.earliestDepartureAt)
+            ? Math.max(0, entry.earliestDepartureAt)
+            : undefined,
+          plannedDepartureAt: typeof entry.plannedDepartureAt === 'number' && Number.isFinite(entry.plannedDepartureAt)
+            ? Math.max(0, entry.plannedDepartureAt)
+            : undefined,
+          extensionUntil: typeof entry.extensionUntil === 'number' && Number.isFinite(entry.extensionUntil)
+            ? Math.max(0, entry.extensionUntil)
+            : null,
+          recallAt: typeof entry.recallAt === 'number' && Number.isFinite(entry.recallAt)
+            ? Math.max(0, entry.recallAt)
+            : null
         }];
       })
     : [];
@@ -1938,6 +2006,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     ? snapshotRaw.residents.flatMap((entry) => {
         if (!isRecord(entry) || !Number.isFinite(entry.id) || !Number.isFinite(entry.tileIndex)) return [];
         return [entry as unknown as Resident];
+      })
+    : [];
+  const visitors: Visitor[] = Array.isArray(snapshotRaw.visitors)
+    ? snapshotRaw.visitors.flatMap((entry) => {
+        const visitor = normalizeSavedVisitor(entry, expectedLength);
+        return visitor ? [visitor] : [];
       })
     : [];
   const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
@@ -2018,6 +2092,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     serviceLog,
     portOps,
     activePortShips,
+    visitors,
     site: normalizeSite(snapshotRaw.site)
   };
 }
@@ -2516,6 +2591,11 @@ export function hydrateStateFromSave(
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);
+  const savedVisitorCountByShip = new Map<number, number>();
+  for (const visitor of snapshot.visitors ?? []) {
+    if (visitor.originShipId === null) continue;
+    savedVisitorCountByShip.set(visitor.originShipId, (savedVisitorCountByShip.get(visitor.originShipId) ?? 0) + 1);
+  }
   next.arrivingShips = snapshot.activePortShips.map((savedShip) => {
     const ship: ArrivingShip = {
       ...savedShip,
@@ -2570,11 +2650,21 @@ export function hydrateStateFromSave(
     }
     const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
     if (contract && ship.stage === 'docked') {
-      const returned = contract.promises.find((promise) => promise.kind === 'passengers-returned');
-      ship.passengersTotal = Math.max(0, (returned?.target ?? ship.passengersTotal) - (returned?.completed ?? 0));
-      ship.passengersSpawned = 0;
-      ship.passengersBoarded = 0;
-      ship.spawnCarry = 0;
+      const savedVisitors = savedVisitorCountByShip.get(ship.id) ?? 0;
+      if (savedVisitors > 0) {
+        // Phase 1A snapshots preserve active occupants. Retain the saved spawn
+        // counters so the ship does not produce a duplicate passenger cohort.
+        ship.passengersSpawned = Math.max(ship.passengersSpawned, savedVisitors);
+        ship.spawnCarry = 0;
+      } else {
+        // Legacy saves omitted visitors entirely and retain the established
+        // reconstruction behavior.
+        const returned = contract.promises.find((promise) => promise.kind === 'passengers-returned');
+        ship.passengersTotal = Math.max(0, (returned?.target ?? ship.passengersTotal) - (returned?.completed ?? 0));
+        ship.passengersSpawned = 0;
+        ship.passengersBoarded = 0;
+        ship.spawnCarry = 0;
+      }
       if (ship.portTurnaround && !ship.portTurnaround.cargoReleased) {
         ship.portTurnaround.cargoReleased = true;
         ship.portTurnaround.phase = ship.portTurnaround.inboundUnloaded + 0.05 < ship.portTurnaround.inboundTotal
@@ -2589,6 +2679,23 @@ export function hydrateStateFromSave(
   next.shipSpawnCounter = Math.max(
     next.shipSpawnCounter,
     next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1)
+  );
+  const activeShipIds = new Set(next.arrivingShips.map((ship) => ship.id));
+  next.visitors = (snapshot.visitors ?? [])
+    .filter((visitor) => visitor.originShipId === null || activeShipIds.has(visitor.originShipId))
+    .map((visitor) => ({
+      ...visitor,
+      path: [],
+      reservedServingTile: null,
+      reservedTargetTile: null,
+      serveTimer: undefined,
+      nextPathRetryAt: undefined,
+      needs: visitor.needs ? { ...visitor.needs } : undefined,
+      lastRouteExposure: visitor.lastRouteExposure ? { ...visitor.lastRouteExposure } : undefined
+    }));
+  next.spawnCounter = Math.max(
+    next.spawnCounter,
+    next.visitors.reduce((max, visitor) => Math.max(max, visitor.id + 1), 1)
   );
   next.residents = (snapshot.residents ?? []).map((resident) => ({
     ...resident,

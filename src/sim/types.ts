@@ -460,6 +460,22 @@ export type VisitorTrait =
 
 export type VisitorPreference = 'cafeteria' | 'market' | 'lounge';
 
+/** Tenure controls departure, while the actor remains a Visitor in all cases. */
+export type VisitStayClass = 'errand' | 'shore' | 'contract' | 'extended' | 'permanent';
+export type ShipVisitPhase = 'announced' | 'approach' | 'secure' | 'visit-service' | 'recall' | 'boarding' | 'depart';
+export type RecurringNeedKind = 'hunger' | 'energy' | 'hygiene' | 'leisure';
+
+/** Durable needs for a temporary long-stay occupant. Residents retain their own state. */
+export interface VisitorNeeds {
+  hunger: number;
+  energy: number;
+  hygiene: number;
+  leisure: number;
+  active: RecurringNeedKind | null;
+  unmetSince: number | null;
+  completions: number;
+}
+
 export type HospitalityServiceKind = 'meal' | 'drink' | 'leisure' | 'restroom' | 'hygiene' | 'comfort';
 
 export interface HospitalityDemand {
@@ -547,6 +563,11 @@ export interface Visitor {
   commercialDrinkUnitId?: number | null;
   /** Short retry cooldown after a route auction cannot produce a usable path. */
   nextPathRetryAt?: number;
+  /** Optional on legacy visitors. Only contract/extended visitors receive it. */
+  stayClass?: VisitStayClass;
+  needs?: VisitorNeeds;
+  /** A recurring completion never advances a one-shot port promise. */
+  recurringNeedActive?: RecurringNeedKind | null;
 }
 
 export enum ResidentState {
@@ -1375,6 +1396,13 @@ export interface ArrivingShip {
   portContractId?: number;
   /** Present only for small dock visits; absent on berth traffic and old saves. */
   smallCraftVisit?: SmallCraftVisit;
+  /** Optional lifecycle metadata. Legacy ships hydrate to their current stage. */
+  stayClass?: VisitStayClass;
+  visitPhase?: ShipVisitPhase;
+  earliestDepartureAt?: number;
+  plannedDepartureAt?: number;
+  extensionUntil?: number | null;
+  recallAt?: number | null;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
@@ -1602,6 +1630,11 @@ export interface PortContract {
   passengerSpendingCredits: number;
   procurementCostCredits: number;
   settlementId: number | null;
+  stayClass?: VisitStayClass;
+  earliestDepartureAt?: number;
+  plannedDepartureAt?: number;
+  extensionUntil?: number | null;
+  recallAt?: number | null;
 }
 
 export interface PortCargoLot {

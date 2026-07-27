@@ -121,43 +121,43 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Extract or reuse the resident need lifecycle as a shared occupant-demand
   engine rather than writing a second long-visitor engine.
-- [ ] Preserve distinct actor identity and tenure contracts.
-- [ ] Add `errand` tenure.
-- [ ] Add `shore_leave` tenure.
-- [ ] Add `contract_crew` tenure.
-- [ ] Add `extended_guest` tenure.
-- [ ] Preserve `resident` as permanent tenure.
-- [ ] Give long-stay occupants regenerating hunger.
-- [ ] Give long-stay occupants regenerating energy/sleep demand.
-- [ ] Give long-stay occupants regenerating hygiene demand.
-- [ ] Give appropriate occupants recurring leisure/social demand.
-- [ ] Keep one-shot wants distinct from recurring needs.
-- [ ] Derive broad tenure and demand from ship purpose.
-- [ ] Add bounded seeded individual variation inside readable ship archetypes.
+- [x] Preserve distinct actor identity and tenure contracts.
+- [x] Add `errand` tenure.
+- [x] Add `shore` tenure for shore leave.
+- [x] Add `contract` tenure for contract crew.
+- [x] Add `extended` tenure for extended guests.
+- [x] Preserve `resident` as permanent tenure.
+- [x] Give long-stay occupants regenerating hunger.
+- [x] Give long-stay occupants regenerating energy/sleep demand.
+- [x] Give long-stay occupants regenerating hygiene demand.
+- [x] Give appropriate occupants recurring leisure/social demand.
+- [x] Keep one-shot wants distinct from recurring needs.
+- [x] Derive broad tenure and demand from ship purpose.
+- [x] Add bounded seeded individual variation inside readable ship archetypes.
 - [ ] Ensure critical needs override optional wants without target oscillation.
 
 ### Visit Lifecycle
 
-- [ ] Add `announced` phase.
+- [x] Add `announced` phase.
 - [ ] Add `holding` phase.
-- [ ] Add `approach` phase.
-- [ ] Add `secure` phase.
+- [x] Add `approach` phase.
+- [x] Add `secure` phase.
 - [ ] Add `disembark` phase.
-- [ ] Add `visit_service` phase.
-- [ ] Add `recall` phase.
-- [ ] Add `boarding` phase.
-- [ ] Add `depart` phase.
-- [ ] Preserve exactly-once `settled` behavior.
-- [ ] Store earliest departure, planned departure, boarding start, hard departure,
+- [x] Add `visit-service` phase.
+- [x] Add `recall` phase.
+- [x] Add `boarding` phase.
+- [x] Add `depart` phase.
+- [x] Preserve exactly-once `settled` behavior.
+- [x] Store earliest departure, planned departure, boarding start, hard departure,
   and extension window.
 - [ ] Support early departure after sustained service failure.
 - [ ] Support bounded extension while useful spend or work continues.
-- [ ] Give scheduled traffic firm windows.
+- [x] Give scheduled traffic firm windows.
 - [ ] Let freight wait for promised work until its explicit deadline.
 - [ ] Let repair traffic remain until work completes, aborts, or is cancelled.
 - [ ] Tune Pod visits toward observable minutes rather than 10-30-second churn.
 - [ ] Tune traffic generation for useful concurrent occupancy.
-- [ ] Prevent any ship or Berth from remaining pinned after terminal resolution.
+- [x] Prevent any ship or Berth from remaining pinned after terminal resolution.
 
 ### World Feedback
 
@@ -169,12 +169,12 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 1A Save And Checks
 
-- [ ] Persist tenure, recurring needs, wants, origin ship, and departure contract.
-- [ ] Persist durable visit phase and timing.
+- [x] Persist tenure, recurring needs, wants, origin ship, and departure contract.
+- [x] Persist durable visit phase and timing.
 - [ ] Hydrate legacy visitors and residents with safe defaults.
-- [ ] Save/load a repair crew mid-stay.
+- [x] Save/load a contract crew mid-stay.
 - [ ] Save/load during recall and boarding.
-- [ ] Verify settlement remains exactly once.
+- [x] Verify settlement remains exactly once.
 - [ ] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
 - [ ] Focused check: fixed and flexible schedules behave differently.
 - [ ] Focused check: concurrent visits overlap without rapid replacement.
@@ -749,7 +749,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Add phased construction/EVA runner.
 - [ ] Add approach geometry/reservation runner.
 - [ ] Add ship visit/settlement runner.
-- [ ] Add occupant tenure/needs runner.
+- [x] Add occupant tenure/needs runner.
 - [ ] Add fixture-slot/reception runner.
 - [ ] Add failed-stay/stranding runner.
 - [ ] Add movement/queue/deadlock runner.
@@ -795,3 +795,10 @@ Remaining uncertainty:
 - Focused checks: `npm run baseline:frontage` passed. Terminal peak route load improved `12 -> 7`; shared route tiles improved `40 -> 30`; separated cargo route overlap improved `1 -> 0`; two current Market Stall providers increased measured service slots `2 -> 4` and stock capacity `32 -> 64`.
 - Visual/playtest evidence: none yet. These are deterministic route and provider proxies, not proof of physical actor blocking.
 - Remaining uncertainty: live visit, boarding, queue, recurring-needs, reception, damage/EVA, render, and target-scale metrics remain unavailable until their systems land.
+
+2026-07-27 · Phase 1A occupant-loop foundation
+
+- Commit or files: `src/sim/occupant-demand.ts`, `src/sim/types.ts`, `src/sim/balance.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, `tools/occupant-loop-tests.ts`, `package.json`.
+- Focused checks: `npm run test:occupant-loop` passed after lead review. It covers deterministic tenure derivation, need decay/restoration, recurring completion without promise inflation, active-visitor save/resume, visible recall staging, hard-departure cleanup, and settlement idempotence.
+- Visual/playtest evidence: not yet. World-space lifecycle feedback and the actual multi-service repair-crew playtest remain open.
+- Remaining uncertainty: the new visitor demand component reuses physical visitor service/reservation paths but does not yet share the resident target loop itself; guest beds, holding/disembark phases, early failure departure, stranding, reception, large fixtures, and traffic-concurrency tuning remain unchecked.
