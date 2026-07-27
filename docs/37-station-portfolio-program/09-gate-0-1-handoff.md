@@ -105,9 +105,13 @@ units still missing.
 npm run test:truth
 ```
 
-New file `tools/opening-truth-tests.ts`, new script `test:truth`. 46 cases, all
+New file `tools/opening-truth-tests.ts`, new script `test:truth`. 54 cases, all
 passing, one section per package. Coverage includes the missing, blocked, full,
 successful and migrated-save cases the shared acceptance gate asks for.
+
+The lead pass also added `test:opening-procurement` and
+`test:pod-demand-accounting` for site-adjusted ordering and durable per-visit
+results. Both focused checks pass independently.
 
 The TRUTH-01 cases are verified to actually catch the defect: reverting the
 `save.ts` hunk fails two of them with `expected 0, got 2`.
@@ -159,19 +163,19 @@ Measured in headless runs from a clean start:
 | Measurement | Value |
 |---|---|
 | Opening cash | 220c |
-| Recipe cost — Feed Travelers | 135c (61% of cash) |
-| Recipe cost — Sell Supplies | 130c (59%) |
-| Recipe cost — Service Ships | 145c (66%) |
-| Two cheapest recipes together | 265c against 220c cash |
-| 1800s no-input run | 21 pod calls, 63c access fees, 360c payroll, cash 220 → 257 |
-| 1800s no-input, access + handling | 225c against 360c payroll, cash 220 → 261 |
+| Recipe cost — Feed Travelers | 130c (59% of cash) |
+| Base recipe cost — Sell Supplies | 130c before site wholesale adjustment |
+| Base recipe cost — Service Ships | 145c before site wholesale adjustment |
+| Recommended charter quote | Sell Supplies 127c; Service Ships 141c |
+| 1800s no-input after lead fix | 36 pod calls, 0c access income, about 346c payroll, cash 220 → 0 |
 | Same run before this branch | cash 260 → 405 |
-| 1500s demand sample | 40 calls, 66 travellers; meals 9/30, supplies 0/32, ship service 20/20; est. 225c missed, supplies named top opportunity |
+| Lead no-input demand sample | 36 calls, 52 travellers; meals 0/23, supplies 0/20, ship service 0/17; est. 377c missed, ship service named top opportunity |
 | Ticket 09's worst turnaround | 147c net, against 345c for the same call fully served (was 343c either way) |
 | Crew after the connectivity fix | hygiene holds above 40 over 1200s, zero improvised rest (was: all eight on the floor indefinitely, energy frozen) |
 
-The two no-input rows differ slightly because they are separate runs in separate
-checks with different RNG consumption. Both are reported rather than averaged.
+The no-input result is intentionally not averaged: it is an acceptance sample
+showing that idle traffic no longer creates growth. It also exposes the remaining
+balance question, because payroll eventually consumes the entire opening stake.
 
 ---
 
@@ -241,7 +245,8 @@ rather than a room-wide on/off switch — an activation threshold that flips a r
 between "serves nobody" and "serves everybody" is the thing C3 argues against.
 The starter mess is the minimum: twelve tiles, one counter, four seats, thirty
 crew meals. Choice A remains a real build on top of it — a second Serving
-Station, two more Tables for eight seats, and a bought traveller meal batch.
+Station and a second Table for eight seats. The crew reserve already satisfies
+the 12-meal operating-readiness floor while it remains stocked.
 
 **The cost:** this is a balance constant affecting every Cafeteria in the game,
 not just the starter, and it makes Choice A read as "expand the mess" rather than

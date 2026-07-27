@@ -14,7 +14,14 @@
  */
 
 import { MODULE_DEFINITIONS, OPENING_BALANCE, ROOM_DEFINITIONS } from './balance';
-import { ModuleType, RoomType, type StationState } from './types';
+import {
+  getPodDockFuelReadiness,
+  getRoomClusterOperationalViews,
+  quoteFuelOrder,
+  quoteTravelSuppliesOrder,
+  type RoomClusterOperationalView
+} from './sim';
+import { ModuleType, RoomType, type ItemType, type StationState } from './types';
 
 export type OpeningRecipeId = 'feed-travelers' | 'sell-supplies' | 'service-ships';
 
@@ -32,7 +39,11 @@ export interface RecipeStep {
   count: number;
   /** Credits this step costs, 0 when it only spends floor space. */
   costCredits: number;
+  /** The procurement action for an operating-stock step. */
+  stockKind?: OpeningRecipeStockKind;
 }
+
+export type OpeningRecipeStockKind = 'prepared-meals' | 'travel-supplies' | 'fuel';
 
 export interface OpeningRecipe {
   id: OpeningRecipeId;
@@ -79,14 +90,17 @@ export function openingRecipes(): OpeningRecipe[] {
       title: 'Feed Travelers',
       summary: 'Sell prepared meals to arriving pods. Simplest operation, thinnest margin.',
       steps: [
-        roomStep(RoomType.Cafeteria, `Paint ${ROOM_DEFINITIONS[RoomType.Cafeteria].minTiles} Cafeteria tiles`),
+        roomStep(RoomType.Cafeteria, `Build one ${ROOM_DEFINITIONS[RoomType.Cafeteria].minTiles}-tile Cafeteria cluster`),
         moduleStep(ModuleType.ServingStation, 2, 'Two Serving Stations (one more counter)'),
         moduleStep(ModuleType.Table, 2, 'Two Tables (eight seats)'),
         {
           kind: 'stock',
-          label: 'Buy an opening batch of prepared meals',
+          label: `Keep ${OPENING_BALANCE.preparedMealBatch.units} ready servings stocked (meal + clean tray)`,
+          // This is operating readiness, not purchase provenance. The crew
+          // reserve may satisfy it; depletion below one batch reopens it.
           count: OPENING_BALANCE.preparedMealBatch.units,
-          costCredits: OPENING_STOCK_COST.preparedMeals
+          costCredits: OPENING_STOCK_COST.preparedMeals,
+          stockKind: 'prepared-meals'
         }
       ],
       staffing: 'No dedicated staff yet — pickup is self-service.',
@@ -98,16 +112,20 @@ export function openingRecipes(): OpeningRecipe[] {
       title: 'Sell Supplies',
       summary: 'Stock travel goods and sell them to passing travellers.',
       steps: [
-        roomStep(RoomType.Market, `Paint ${ROOM_DEFINITIONS[RoomType.Market].minTiles} Market tiles`),
+        roomStep(
+          RoomType.Market,
+          `Paint one ${ROOM_DEFINITIONS[RoomType.Market].minTiles}-tile Market cluster`
+        ),
         moduleStep(ModuleType.MarketStall, 1, 'Place a Market Stall'),
         {
           kind: 'stock',
           label: 'Order opening stock through the Freight Locker',
           count: OPENING_BALANCE.travelSupplyBatch.units,
-          costCredits: OPENING_STOCK_COST.travelSupplies
+          costCredits: OPENING_STOCK_COST.travelSupplies,
+          stockKind: 'travel-supplies'
         }
       ],
-      staffing: 'A Cargo Handler to haul the delivered lot from receiving.',
+      staffing: 'Your starting Cargo Handler unloads the first lot from receiving.',
       utilities: 'Power, a reachable door, and a clear route from the Freight Locker.',
       economics: 'Ties up capital in stock. Pricing policy trades margin against volume.'
     },
@@ -120,13 +138,35 @@ export function openingRecipes(): OpeningRecipe[] {
         roomStep(RoomType.Maintenance, `Paint ${ROOM_DEFINITIONS[RoomType.Maintenance].minTiles} Maintenance tiles`),
         moduleStep(ModuleType.FuelTank, 1, 'Place a Fuel Tank'),
         { kind: 'utility', label: 'Draw fuel pipe from the tank to the coupler', count: 1, costCredits: 0 },
-        { kind: 'stock', label: 'Order an opening fuel lot', count: OPENING_BALANCE.fuelLot.units, costCredits: OPENING_STOCK_COST.fuelLot }
+        {
+          kind: 'stock',
+          label: 'Order an opening fuel lot',
+          count: OPENING_BALANCE.fuelLot.units,
+          costCredits: OPENING_STOCK_COST.fuelLot,
+          stockKind: 'fuel'
+        }
       ],
-      staffing: 'An Engineer once physical staffing is enabled.',
+      staffing: 'Your starting Engineer covers the fuel hardware; no extra hire is needed yet.',
       utilities: 'Power, safe access, and a continuous fuel pipe run.',
       economics: 'High revenue per call, but stock, pipe, tank and dock hardware come first.'
     }
   ];
+}
+
+/**
+ * Site freight conditions are part of the procurement decision, so the
+ * recipe's remaining-cost headline must use the same quote the order path
+ * charges. Prepared meals intentionally retain their fixed local price.
+ */
+function adjustedStepCost(state: StationState, step: RecipeStep): number {
+  if (step.kind !== 'stock' || !step.stockKind) return step.costCredits;
+  if (step.stockKind === 'travel-supplies') {
+    return quoteTravelSuppliesOrder(state, step.costCredits, step.count).creditCost;
+  }
+  if (step.stockKind === 'fuel') {
+    return quoteFuelOrder(state, step.costCredits, step.count).creditCost;
+  }
+  return step.costCredits;
 }
 
 export interface RecipeStepProgress extends RecipeStep {
@@ -145,6 +185,16 @@ export interface RecipeProgress {
   /** Credits still owed on the unfinished steps. */
   remainingCostCredits: number;
   totalCostCredits: number;
+  /** The permanent room/module/network investment is in place. */
+  built: boolean;
+  /** The completed investment can serve a customer this moment. */
+  operational: boolean;
+  /** Plain player-facing reasons the investment is not live yet. */
+  operationalReasons: string[];
+  /**
+   * Backward-compatible alias for permanent construction completion. Do not
+   * use this to answer whether stock or utilities are currently live.
+   */
   complete: boolean;
   affordable: boolean;
 }
@@ -159,30 +209,164 @@ function countModules(state: StationState, module: ModuleType): number {
   return state.moduleInstances.filter((instance) => instance.type === module).length;
 }
 
-function countUtilityTiles(state: StationState, layer: 'fuel-pipe'): number {
-  const tiles = state.utilityUnderlay?.layers?.[layer];
-  if (!tiles) return 0;
-  let total = 0;
-  for (const value of tiles) if (value > 0) total += 1;
-  return total;
+type FacilityRequirement = ReadonlyArray<readonly [ModuleType, number]>;
+
+function moduleCountInCluster(state: StationState, cluster: number[], module: ModuleType): number {
+  const tiles = new Set(cluster);
+  return state.moduleInstances.filter((instance) => instance.type === module && tiles.has(instance.originTile)).length;
+}
+
+function matchingRoomCluster(
+  state: StationState,
+  room: RoomType,
+  requirements: FacilityRequirement
+): RoomClusterOperationalView | null {
+  const minTiles = ROOM_DEFINITIONS[room].minTiles;
+  const matches = getRoomClusterOperationalViews(state, room).filter((cluster) =>
+    cluster.tiles.length >= minTiles &&
+    requirements.every(([module, count]) => moduleCountInCluster(state, cluster.tiles, module) >= count)
+  );
+  return matches.find((cluster) => cluster.active) ?? matches[0] ?? null;
+}
+
+/**
+ * Recipe rows must tell one coherent spatial story. Prefer a live cluster,
+ * then the cluster nearest to its fixture requirements, never a station-wide
+ * sum that makes split rooms look finished.
+ */
+function bestRoomCluster(
+  state: StationState,
+  room: RoomType,
+  requirements: FacilityRequirement
+): RoomClusterOperationalView | null {
+  const candidates = getRoomClusterOperationalViews(state, room).map((cluster) => {
+    const progress = requirements.reduce(
+      (total, [module, count]) => total + Math.min(count, moduleCountInCluster(state, cluster.tiles, module)) / count,
+      0
+    );
+    return { cluster, progress };
+  });
+  candidates.sort((a, b) =>
+    Number(b.cluster.active) - Number(a.cluster.active) ||
+    b.progress - a.progress ||
+    b.cluster.tiles.length - a.cluster.tiles.length
+  );
+  return candidates[0]?.cluster ?? null;
+}
+
+function coherentRoomProgress(
+  state: StationState,
+  cluster: RoomClusterOperationalView | null,
+  step: RecipeStep
+): number {
+  if (!cluster) return 0;
+  if (step.kind === 'room') return cluster.tiles.length;
+  if (step.kind === 'module' && step.module !== undefined) {
+    return moduleCountInCluster(state, cluster.tiles, step.module);
+  }
+  return 0;
+}
+
+function inactiveReason(label: string, cluster: RoomClusterOperationalView | null): string {
+  if (!cluster) return label;
+  if (cluster.active) return '';
+  return `${label}: ${cluster.reasons.join(', ')}`;
+}
+
+function countUsableCounterServings(state: StationState, cluster: RoomClusterOperationalView | null): number {
+  if (!cluster) return 0;
+  const servingOrigins = new Set(
+    state.moduleInstances
+      .filter((module) => module.type === ModuleType.ServingStation && cluster.tiles.includes(module.originTile))
+      .map((module) => module.originTile)
+  );
+  return state.itemNodes.reduce((total, node) => {
+    if (!servingOrigins.has(node.tileIndex)) return total;
+    return total + Math.min(Math.max(0, node.items.meal ?? 0), Math.max(0, node.items.cleanTray ?? 0));
+  }, 0);
+}
+
+function countStockInCluster(
+  state: StationState,
+  cluster: RoomClusterOperationalView | null,
+  module: ModuleType,
+  item: ItemType
+): number {
+  if (!cluster) return 0;
+  const origins = new Set(
+    state.moduleInstances
+      .filter((instance) => instance.type === module && cluster.tiles.includes(instance.originTile))
+      .map((instance) => instance.originTile)
+  );
+  return state.itemNodes.reduce(
+    (total, node) => total + (origins.has(node.tileIndex) ? Math.max(0, node.items[item] ?? 0) : 0),
+    0
+  );
+}
+
+function countRecipeStock(
+  state: StationState,
+  recipe: OpeningRecipeId,
+  facility: RoomClusterOperationalView | null
+): number {
+  switch (recipe) {
+    case 'feed-travelers':
+      return countUsableCounterServings(state, facility);
+    case 'sell-supplies':
+      return countStockInCluster(state, facility, ModuleType.MarketStall, 'tradeGood');
+    case 'service-ships': {
+      const connectedTanks = new Set(getPodDockFuelReadiness(state).flatMap((dock) => dock.connected ? dock.tankTiles : []));
+      return state.itemNodes.reduce(
+        (total, node) => total + (connectedTanks.has(node.tileIndex) ? Math.max(0, node.items.fuel ?? 0) : 0),
+        0
+      );
+    }
+  }
 }
 
 /**
  * How far along each recipe is, measured against what is physically on the
- * station right now. The starter's own crew mess counts toward Feed
- * Travelers, which is honest: the player really does only need the difference.
+ * station right now. The starter crew mess counts toward the room, fixture and
+ * stock requirements; the deliberate capital choice is the added public
+ * capacity, while stock remains a live operating-readiness check.
  */
 export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
   return openingRecipes().map((recipe) => {
+    const cafeteria = recipe.id === 'feed-travelers'
+      ? matchingRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2]])
+      : null;
+    // The starter crew mess already holds the opening meal/tray reserve. It
+    // counts as stock on hand before the second counter and table turn that
+    // same room into a public business; otherwise the card incorrectly adds a
+    // future 70c restock to the initial 130c capital decision.
+    const cafeteriaStockCluster = recipe.id === 'feed-travelers'
+      ? matchingRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 1], [ModuleType.Table, 1]])
+      : null;
+    const market = recipe.id === 'sell-supplies'
+      ? matchingRoomCluster(state, RoomType.Market, [[ModuleType.MarketStall, 1]])
+      : null;
+    const fuelDocks = recipe.id === 'service-ships' ? getPodDockFuelReadiness(state) : [];
+    const fuelNetworkReady = fuelDocks.some((dock) => dock.hasFuelCoupler && dock.connected);
+    const facility = recipe.id === 'feed-travelers' ? cafeteriaStockCluster : market;
+    const coherentCluster = recipe.id === 'feed-travelers'
+      ? bestRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2]])
+      : recipe.id === 'sell-supplies'
+        ? bestRoomCluster(state, RoomType.Market, [[ModuleType.MarketStall, 1]])
+        : null;
     const steps: RecipeStepProgress[] = recipe.steps.map((step) => {
-      const have = step.kind === 'room' && step.room !== undefined
-        ? countRoomTiles(state, step.room)
-        : step.kind === 'module' && step.module !== undefined
-          ? countModules(state, step.module)
+      const coherentRoomStep = coherentCluster !== null && (step.kind === 'room' || step.kind === 'module');
+      const have = coherentRoomStep
+        ? coherentRoomProgress(state, coherentCluster, step)
+        : step.kind === 'room' && step.room !== undefined
+          ? countRoomTiles(state, step.room)
+          : step.kind === 'module' && step.module !== undefined
+            ? countModules(state, step.module)
           : step.kind === 'utility'
-            ? countUtilityTiles(state, 'fuel-pipe')
-            : 0;
-      return { ...step, have, satisfied: step.kind === 'stock' ? false : have >= step.count };
+            ? fuelNetworkReady ? 1 : 0
+            : step.kind === 'stock'
+              ? countRecipeStock(state, recipe.id, facility)
+              : 0;
+      return { ...step, costCredits: adjustedStepCost(state, step), have, satisfied: have >= step.count };
     });
     // Price what is still missing, not the whole step: the player who already
     // owns one of two Serving Stations owes for one, and a headline that says
@@ -195,6 +379,37 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
         return sum + Math.round(step.kind === 'stock' ? step.costCredits : missing * perUnit);
       }, 0);
     const totalCostCredits = steps.reduce((sum, step) => sum + step.costCredits, 0);
+    const stockReady = steps.filter((step) => step.kind === 'stock').every((step) => step.satisfied);
+    const built = recipe.id === 'feed-travelers'
+      ? cafeteria !== null
+      : recipe.id === 'sell-supplies'
+        ? market !== null
+        : recipe.id === 'service-ships'
+          ? fuelNetworkReady
+          : false;
+    const operationalReasons: string[] = [];
+    if (recipe.id === 'feed-travelers') {
+      if (!cafeteria) {
+        operationalReasons.push('Keep two Serving Stations and two Tables together in one Cafeteria.');
+      } else {
+        const reason = inactiveReason('Cafeteria needs to be enclosed, reachable, pressurized, and powered', cafeteria);
+        if (reason) operationalReasons.push(reason);
+      }
+      if (!stockReady) operationalReasons.push('Need ready servings: each pickup needs one meal and one clean tray.');
+    } else if (recipe.id === 'sell-supplies') {
+      const reason = inactiveReason('Market needs enclosure, a door, a path, pressure, and local power', market);
+      if (reason) operationalReasons.push(reason);
+      if (!market) operationalReasons.push('Put the Market Stall inside one 10-tile Market cluster.');
+      if (!stockReady) operationalReasons.push('Order travel supplies through the Freight Locker.');
+    } else {
+      if (!fuelDocks.some((dock) => dock.hasFuelCoupler)) {
+        operationalReasons.push('Attach a Fuel Coupler to a real Pod Dock.');
+      } else if (!fuelNetworkReady) {
+        const reason = fuelDocks.find((dock) => dock.hasFuelCoupler)?.reason;
+        operationalReasons.push(reason ?? 'Connect a Maintenance Fuel Tank to the attached coupler with fuel pipe.');
+      }
+      if (!stockReady) operationalReasons.push('Order a fuel lot to the connected Fuel Tank.');
+    }
     return {
       id: recipe.id,
       title: recipe.title,
@@ -205,7 +420,10 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
       steps,
       remainingCostCredits,
       totalCostCredits,
-      complete: steps.every((step) => step.satisfied),
+      built,
+      operational: built && stockReady && operationalReasons.length === 0,
+      operationalReasons,
+      complete: built,
       affordable: state.metrics.credits >= remainingCostCredits
     };
   });

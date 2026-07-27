@@ -276,7 +276,7 @@ const TRAVEL_SUPPLY_ORDER_UNITS = OPENING_BALANCE.travelSupplyBatch.units;
 const TRAVEL_SUPPLY_BASE_WHOLESALE = 3.5;
 const POD_COURIER_HANDLING_FEE = OPENING_BALANCE.courierHandlingFeePerUnit;
 
-function applyEconomyTransaction(
+export function applyEconomyTransaction(
   state: StationState,
   input: EconomyEventInput,
   options: { countAsEarned?: boolean } = {}
@@ -286,6 +286,10 @@ function applyEconomyTransaction(
     state.metrics.creditsEarnedLifetime += input.credits;
   }
   recordEconomyEvent(state.openingEconomy.ledger, input);
+  if (input.sourceId !== undefined && input.credits > 0) {
+    const visit = state.arrivingShips.find((ship) => ship.id === input.sourceId)?.smallCraftVisit;
+    if (visit) visit.earnedCredits += input.credits;
+  }
 }
 
 function recordPodFreightEconomyIntents(
@@ -1066,7 +1070,9 @@ const VISITOR_MIN_STAY_SEC = TASK_TIMINGS.visitorMinStaySec;
 export const STATION_RATING_START = 0;
 const STATION_RATING_TIER_FOUNDATION: Record<UnlockTier, number> = {
   0: 0,
-  1: 8,
+  // Tier 1 only means that someone discovered the station. It cannot award
+  // reputation before the player has delivered a service.
+  1: 0,
   2: 18,
   3: 32,
   4: 48,
@@ -2139,8 +2145,40 @@ function collectServingTargets(state: StationState): number[] {
 // A serving station stores meals at its origin item node, but its two tiles
 // are two distinct physical pickup positions. Keep inventory and occupancy
 // separate so two customers can collect at once without sharing a tile.
+const publicCafeteriaPickupCache = new WeakMap<
+  StationState,
+  { version: string; targets: number[] }
+>();
+
 function collectServingPickupTargets(state: StationState): number[] {
-  return collectModuleUsageTargets(state, ModuleType.ServingStation, RoomType.Cafeteria);
+  // A single counter and table is the starter crew mess. It must remain a
+  // real meal source for crew, but it is not a public hospitality business.
+  // Visitors can only reserve pickup slots in a cafeteria cluster once the
+  // player has deliberately provided two counters and two tables there.
+  const version = `${state.roomVersion}:${state.moduleVersion}:${state.topologyVersion}`;
+  const cached = publicCafeteriaPickupCache.get(state);
+  if (cached?.version === version) return cached.targets;
+  const publicServingOrigins = new Set<number>();
+  for (const cluster of roomClusters(state, RoomType.Cafeteria)) {
+    const clusterTiles = new Set(cluster);
+    const servingStations = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.ServingStation && clusterTiles.has(module.originTile)
+    );
+    const tables = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.Table && clusterTiles.has(module.originTile)
+    );
+    if (servingStations.length < 2 || tables.length < 2) continue;
+    for (const module of servingStations) publicServingOrigins.add(module.originTile);
+  }
+  const out: number[] = [];
+  for (const module of state.moduleInstances) {
+    if (module.type === ModuleType.ServingStation && publicServingOrigins.has(module.originTile)) {
+      out.push(...moduleUsageTiles(module));
+    }
+  }
+  const targets = out.sort((a, b) => a - b);
+  publicCafeteriaPickupCache.set(state, { version, targets });
+  return targets;
 }
 
 function servingInventoryTileForPickup(state: StationState, pickupTile: number): number {
@@ -2611,6 +2649,34 @@ function ensureActiveRoomAndDiagnosticCaches(state: StationState): void {
 export function collectActiveRoomTiles(state: StationState): Set<number> {
   ensureActiveRoomAndDiagnosticCaches(state);
   return state.derived.activeRoomTiles;
+}
+
+/**
+ * Small read-only view for systems that need to explain whether a particular
+ * room cluster can actually run. Keeping this beside the activation cache
+ * prevents feature UIs from re-implementing a looser version of room truth.
+ */
+export type RoomClusterOperationalView = {
+  tiles: number[];
+  active: boolean;
+  reasons: string[];
+};
+
+export function getRoomClusterOperationalViews(
+  state: StationState,
+  room: RoomType
+): RoomClusterOperationalView[] {
+  ensureRoomClustersCache(state);
+  ensureActiveRoomAndDiagnosticCaches(state);
+  return roomClusters(state, room).map((tiles) => {
+    const anchor = tiles.reduce((best, tile) => Math.min(best, tile), tiles[0]);
+    const diagnostic = state.derived.diagnostics.diagnosticsByAnchor.get(anchor);
+    return {
+      tiles: [...tiles],
+      active: diagnostic?.active === true,
+      reasons: diagnostic?.reasons ?? ['room diagnostics unavailable']
+    };
+  });
 }
 
 function ensurePressurizationUpToDate(state: StationState): void {
@@ -11071,10 +11137,36 @@ function fuelSupplyForDock(state: StationState, dock: DockEntity): PodDockFuelSu
 }
 
 export function getPodDockFuelSupplyView(state: StationState, dockId: number): PodDockFuelSupplyView {
+  ensureDockEntitiesUpToDate(state);
   const dock = state.docks.find((candidate) => candidate.id === dockId) ?? null;
   return dock
     ? fuelSupplyForDock(state, dock)
     : { connected: false, tankCount: 0, stock: 0, capacity: 0, pipeTiles: 0, reason: 'Pod Dock not found' };
+}
+
+/**
+ * Refuelling only works through a real module-backed Pod Dock. This view is
+ * deliberately narrower than the generic fuel-network diagnostics: it is the
+ * exact dock-to-coupler-to-tank path the small-craft service loop consumes.
+ */
+export type PodDockFuelReadiness = PodDockFuelSupplyView & {
+  dockId: number;
+  hasFuelCoupler: boolean;
+  tankTiles: number[];
+};
+
+export function getPodDockFuelReadiness(state: StationState): PodDockFuelReadiness[] {
+  ensureDockEntitiesUpToDate(state);
+  return state.docks
+    .filter((dock) => dock.sourceKind === 'pod-dock-module')
+    .map((dock) => {
+      const supply = fuelSupplyForDock(state, dock);
+      return {
+        ...supply,
+        dockId: dock.id,
+        hasFuelCoupler: dock.podCapabilities?.includes('fuel') === true
+      };
+    });
 }
 
 function stationFuelStock(state: StationState): number {
@@ -11371,8 +11463,8 @@ function setPortPromiseProgress(
  *
  * Demand is sampled across all three opening families whether or not the
  * station can serve them, so a station that sells nothing still shows the
- * player what walked past. Served counts come from the canonical service log
- * and the small-craft services, never from intent.
+ * player what walked past. Served and revenue values come from the visit's
+ * durable accounting, written at canonical completion and ledger time.
  */
 function recordPodVisitDemandOutcome(state: StationState, ship: ArrivingShip): void {
   if (ship.kind !== 'transient' || ship.portContractId !== undefined) return;
@@ -11392,27 +11484,22 @@ function recordPodVisitDemandOutcome(state: StationState, ship: ArrivingShip): v
   const wanted: PodDemandCounts = {
     food: Math.round(travelers * clamp(ship.manifestDemand.cafeteria, 0, 1)),
     supplies: Math.round(travelers * clamp(ship.manifestDemand.market, 0, 1)),
-    shipService: ship.smallCraftVisit?.services.filter((service) => service.kind !== 'passenger').length ?? 0
+    // Freight is shared dock logistics, not an engineering service sold to a
+    // craft. This opening family deliberately represents refuel and repair.
+    shipService: ship.smallCraftVisit?.services.filter(
+      (service) => service.kind === 'refuel' || service.kind === 'repair'
+    ).length ?? 0
   };
 
-  // Served counts read the canonical completion log for this ship plus the
-  // small-craft services that physically finished. Nothing is inferred from a
-  // promise or a timer.
-  const completions = state.serviceLog.recent.filter((event) => event.shipId === ship.id);
+  const visit = ship.smallCraftVisit;
   const served: PodDemandCounts = {
-    food: completions.filter((event) => event.service === 'meal').length,
-    supplies: completions.filter((event) => event.service === 'retail').length,
-    shipService: ship.smallCraftVisit?.services.filter(
-      (service) => service.kind !== 'passenger' && service.status === 'complete'
-    ).length ?? 0
+    food: visit?.servedDemand.food ?? 0,
+    supplies: visit?.servedDemand.supplies ?? 0,
+    shipService: visit?.servedDemand.shipService ?? 0
   };
   for (const family of POD_DEMAND_FAMILIES) {
     served[family] = Math.min(served[family], wanted[family]);
   }
-
-  const earnedCredits = state.openingEconomy.ledger.recent
-    .filter((event) => event.sourceId === ship.id && event.credits > 0)
-    .reduce((sum, event) => sum + event.credits, 0);
 
   recordPodVisitOutcome(state.openingEconomy.podDemand, {
     visitId: ship.id,
@@ -11421,7 +11508,7 @@ function recordPodVisitDemandOutcome(state: StationState, ship: ArrivingShip): v
     travelers,
     wanted,
     served,
-    earnedCredits: Math.round(earnedCredits),
+    earnedCredits: Math.round(visit?.earnedCredits ?? 0),
     missedCredits: estimateMissedCredits(wanted, served)
   });
 }
@@ -12057,7 +12144,10 @@ function smallCraftService(
   freightDirection?: 'import' | 'export'
 ): SmallCraftService {
   const spec = kind === 'passenger'
-    ? { durationSec: 28, creditsEarned: 3, ratingDelta: 0.06 }
+    // A walk-in pod is demand, not a paid service. Otherwise a new station
+    // can idle indefinitely, accumulating credits and rating without ever
+    // choosing or operating a business.
+    ? { durationSec: 28, creditsEarned: 0, ratingDelta: 0 }
     : kind === 'refuel'
       ? { durationSec: 18, creditsEarned: 12, ratingDelta: 0.14 }
       : kind === 'freight'
@@ -12152,13 +12242,34 @@ function createSmallCraftVisit(state: StationState, dock: DockEntity, shipId: nu
     } else {
       services.push(smallCraftService(kind));
     }
+  } else {
+    // Passing craft bring demand with them; they do not start wanting fuel or
+    // repairs only after the station advertises the matching hardware. A bare
+    // Pod Dock therefore reveals the engineering opportunity as an unmet
+    // request, while an equipped dock can actually fulfill it.
+    if (state.rng() < 0.55) {
+      const profile = deriveOpeningEconomyProfile(state.site);
+      const fuelWeight = Math.max(0.1, profile.fuelSaleMultiplier);
+      const repairWeight = Math.max(0.1, profile.repairDemandMultiplier);
+      services.push(smallCraftService(state.rng() * (fuelWeight + repairWeight) < fuelWeight ? 'refuel' : 'repair'));
+    }
   }
   return {
     dockSourceKey: dock.sourceKey,
     startedAt: state.now,
     patienceExpiresAt: state.now + SMALL_CRAFT_PATIENCE_SEC,
-    services
+    services,
+    servedDemand: { food: 0, supplies: 0, shipService: 0 },
+    earnedCredits: 0
   };
+}
+
+/** Records the engineering service families represented by Service Ships. */
+export function recordSmallCraftServiceCompletion(
+  visit: SmallCraftVisit,
+  kind: SmallCraftServiceKind
+): void {
+  if (kind === 'refuel' || kind === 'repair') visit.servedDemand.shipService += 1;
 }
 
 function completeSmallCraftService(
@@ -12200,6 +12311,10 @@ function completeSmallCraftService(
         : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile,
       siteTag: 'pod-dock'
     });
+  }
+  if (service.kind !== 'passenger') {
+    const visit = ship.smallCraftVisit;
+    if (visit) recordSmallCraftServiceCompletion(visit, service.kind);
   }
   state.usageTotals.ratingDelta += service.ratingDelta;
 }
@@ -18609,7 +18724,7 @@ function promiseKindForHospitalityService(service: HospitalityServiceKind): Port
  * Market Stall used to complete `drinks-served`, which is how turnaround
  * reports credited a cantina and a lounge the station had never built.
  */
-function recordServiceCompletion(
+export function recordServiceCompletion(
   state: StationState,
   options: {
     population: ServicePopulation;
@@ -18649,6 +18764,13 @@ function recordServiceCompletion(
   );
   if (event.shipId !== null && service !== 'retail' && options.advancePromise) {
     advancePortPromise(state, event.shipId, promiseKindForHospitalityService(service), 1);
+  }
+  if (event.shipId !== null) {
+    const visit = state.arrivingShips.find((ship) => ship.id === event.shipId)?.smallCraftVisit;
+    if (visit) {
+      if (event.service === 'meal') visit.servedDemand.food += 1;
+      else if (event.service === 'retail') visit.servedDemand.supplies += 1;
+    }
   }
   return event;
 }
@@ -23376,42 +23498,188 @@ export function buyPreparedMeals(
   return buyPreparedMealsDetailed(state, creditCost, mealGain).ok;
 }
 
-export function buyImportedTradeGoods(
-  state: StationState,
-  creditCost = OPENING_BALANCE.travelSupplyBatch.costCredits,
-  goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
-): boolean {
-  rebuildItemNodes(state);
-  const destinations = state.moduleInstances
-    .filter((module) => module.type === ModuleType.MarketStall)
+export type SupplierOrderFailureReason =
+  | 'no_market_stall'
+  | 'no_fuel_tank'
+  | 'insufficient_credits'
+  | 'insufficient_capacity'
+  | 'no_freight_dock'
+  | 'delivery_pending';
+
+export interface SupplierOrderResult {
+  ok: boolean;
+  reason?: SupplierOrderFailureReason;
+  requestedAmount: number;
+  creditCost: number;
+  freeCapacity: number;
+  destinationCount: number;
+  message: string;
+}
+
+type SupplierOrderKind = 'travel-supplies' | 'fuel';
+
+function supplierOrderDestinations(state: StationState, stockKind: SupplierOrderKind): number[] {
+  const moduleType = stockKind === 'travel-supplies' ? ModuleType.MarketStall : ModuleType.FuelTank;
+  return state.moduleInstances
+    .filter((module) => module.type === moduleType)
     .map((module) => module.originTile);
-  if (destinations.length === 0 || state.metrics.credits < creditCost) return false;
-  if (totalItemCapacityAtTargets(state, destinations) < goodsGain) return false;
-  const hasFreightDock = state.docks.some((dock) =>
+}
+
+function hasFreightPodDock(state: StationState): boolean {
+  return state.docks.some((dock) =>
     dock.sourceKind === 'pod-dock-module' && dock.podCapabilities?.includes('freight')
   );
-  if (!hasFreightDock) return false;
-  if (state.openingEconomy.podFreightOperations.some((operation) =>
+}
+
+function hasPendingSupplierDelivery(state: StationState, stockKind: SupplierOrderKind): boolean {
+  return state.openingEconomy.podFreightOperations.some((operation) =>
     operation.kind === 'supplier-delivery' &&
-    operation.stockKind === 'travel-supplies' &&
+    operation.stockKind === stockKind &&
     operation.status !== 'complete' &&
     operation.status !== 'cancelled' &&
     operation.status !== 'expired'
-  )) return false;
+  );
+}
+
+function supplierOrderQuote(
+  state: StationState,
+  stockKind: SupplierOrderKind,
+  baseCost: number
+): number {
   const profile = deriveOpeningEconomyProfile(state.site);
-  const actualCost = Math.max(1, Math.round(creditCost * profile.supplyWholesaleMultiplier));
-  if (state.metrics.credits < actualCost) return false;
+  const multiplier = stockKind === 'travel-supplies'
+    ? profile.supplyWholesaleMultiplier
+    : profile.fuelWholesaleMultiplier;
+  return Math.max(1, Math.round(baseCost * multiplier));
+}
+
+function previewSupplierOrder(
+  state: StationState,
+  stockKind: SupplierOrderKind,
+  baseCost: number,
+  units: number
+): SupplierOrderResult {
+  const destinations = supplierOrderDestinations(state, stockKind);
+  const freeCapacity = destinations.length === 0 ? 0 : totalItemCapacityAtTargets(state, destinations);
+  const creditCost = supplierOrderQuote(state, stockKind, baseCost);
+  const stockLabel = stockKind === 'travel-supplies' ? 'travel supplies' : 'fuel';
+  const fixtureLabel = stockKind === 'travel-supplies' ? 'Market Stall' : 'Fuel Tank';
+  const destinationWord = destinations.length === 1 ? fixtureLabel : `${fixtureLabel}s`;
+  const base = { requestedAmount: units, creditCost, freeCapacity, destinationCount: destinations.length };
+  if (destinations.length === 0) {
+    return {
+      ...base,
+      ok: false,
+      reason: stockKind === 'travel-supplies' ? 'no_market_stall' : 'no_fuel_tank',
+      message: `Build a ${fixtureLabel} with free capacity before ordering ${stockLabel}.`
+    };
+  }
+  if (freeCapacity < units) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'insufficient_capacity',
+      message: `${destinationWord} need ${units - freeCapacity} more free slots for this ${stockLabel} delivery.`
+    };
+  }
+  if (!hasFreightPodDock(state)) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'no_freight_dock',
+      message: 'Install a Freight Locker beside a Pod Dock before ordering supplier stock.'
+    };
+  }
+  if (hasPendingSupplierDelivery(state, stockKind)) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'delivery_pending',
+      message: `A ${stockLabel} supplier pod is already en route.`
+    };
+  }
+  if (state.metrics.credits < creditCost) {
+    return {
+      ...base,
+      ok: false,
+      reason: 'insufficient_credits',
+      message: `Need ${creditCost}c to order ${units} ${stockLabel}.`
+    };
+  }
+  return {
+    ...base,
+    ok: true,
+    message: `Order ${units} ${stockLabel} to ${destinations.length} ${destinationWord.toLowerCase()} · ${creditCost}c.`
+  };
+}
+
+/** Exact current travel-supplies quote for UI, recipe, and order paths. */
+export function quoteTravelSuppliesOrder(
+  state: StationState,
+  creditCost = OPENING_BALANCE.travelSupplyBatch.costCredits,
+  goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
+): SupplierOrderResult {
+  return previewSupplierOrder(state, 'travel-supplies', creditCost, goodsGain);
+}
+
+/** Exact current fuel quote for UI, recipe, and order paths. */
+export function quoteFuelOrder(
+  state: StationState,
+  creditCost = OPENING_BALANCE.fuelLot.costCredits,
+  fuelGain = OPENING_BALANCE.fuelLot.units
+): SupplierOrderResult {
+  return previewSupplierOrder(state, 'fuel', creditCost, fuelGain);
+}
+
+function orderSupplierDeliveryDetailed(
+  state: StationState,
+  stockKind: SupplierOrderKind,
+  creditCost: number,
+  units: number
+): SupplierOrderResult {
+  rebuildItemNodes(state);
+  const preview = previewSupplierOrder(state, stockKind, creditCost, units);
+  if (!preview.ok) return preview;
   const created = createSupplierDelivery({
-    id: `supply-${state.spawnCounter++}`,
-    stockKind: 'travel-supplies',
-    units: goodsGain,
-    landedUnitCost: actualCost / Math.max(1, goodsGain),
+    id: `${stockKind === 'travel-supplies' ? 'supply' : 'fuel'}-${state.spawnCounter++}`,
+    stockKind,
+    units,
+    landedUnitCost: preview.creditCost / Math.max(1, units),
     orderedAt: state.now
   });
   replacePodFreightOperation(state, created.operation);
   recordPodFreightEconomyIntents(state, created.economyEvents);
   state.lastCycleTime = Math.min(state.lastCycleTime, state.now + 3);
-  return true;
+  return {
+    ...preview,
+    message: `${units} ${stockKind === 'travel-supplies' ? 'travel supplies' : 'fuel'} ordered · supplier pod en route · ${preview.creditCost}c.`
+  };
+}
+
+/** Orders travel supplies through the freight-pod path with a readable outcome. */
+export function buyImportedTradeGoodsDetailed(
+  state: StationState,
+  creditCost = OPENING_BALANCE.travelSupplyBatch.costCredits,
+  goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
+): SupplierOrderResult {
+  return orderSupplierDeliveryDetailed(state, 'travel-supplies', creditCost, goodsGain);
+}
+
+/** Orders a fuel lot; the existing freight-pod unload path deposits it in Fuel Tanks. */
+export function orderFuelDetailed(
+  state: StationState,
+  creditCost = OPENING_BALANCE.fuelLot.costCredits,
+  fuelGain = OPENING_BALANCE.fuelLot.units
+): SupplierOrderResult {
+  return orderSupplierDeliveryDetailed(state, 'fuel', creditCost, fuelGain);
+}
+
+export function buyImportedTradeGoods(
+  state: StationState,
+  creditCost = OPENING_BALANCE.travelSupplyBatch.costCredits,
+  goodsGain = TRAVEL_SUPPLY_ORDER_UNITS
+): boolean {
+  return buyImportedTradeGoodsDetailed(state, creditCost, goodsGain).ok;
 }
 
 export type BuyRawFoodFailureReason =

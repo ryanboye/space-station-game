@@ -9,6 +9,7 @@
 import {
   acceptOpeningCapitalProject,
   buyPreparedMealsDetailed,
+  canPlaceUtilityUnderlay,
   createInitialState,
   getCrewFacilityReachability,
   getCrewSustainabilitySummary,
@@ -16,9 +17,11 @@ import {
   getOpeningCapitalProjects,
   getPodDemandSummary,
   getPreparedMealInventory,
+  moduleCreditBuildCost,
   previewPreparedMealPurchase,
   removeModuleAtTile,
   setRoom,
+  setUtilityUnderlayTile,
   tick,
   tryPlaceModule
 } from '../src/sim';
@@ -121,6 +124,28 @@ check('reloading a fresh station preserves its opening progression counters', ()
   assertEqual(restored.metrics.archetypesServedLifetime, 0, 'lifetime archetypes served');
   assertEqual(restored.metrics.turnaroundsCompletedLifetime, 0, 'lifetime turnarounds');
   assertEqual(restored.metrics.mealsServedTotal, 0, 'lifetime meals served');
+});
+
+check('cumulative station rating and its player-facing factors survive save/load', () => {
+  const state = freshState();
+  state.metrics.stationRating = 23.5;
+  state.usageTotals.ratingDelta = 23.5;
+  state.usageTotals.ratingFromVisitorFailure = 1.25;
+  state.usageTotals.ratingFromVisitorFailureByReason.patienceBail = 1.25;
+  state.usageTotals.ratingFromVisitorSuccessByReason.mealService = 18;
+  state.usageTotals.ratingFromVisitorSuccessByReason.successfulExit = 6.75;
+
+  const restored = roundTrip(state);
+  assertEqual(restored.metrics.stationRating, 23.5, 'rating visible immediately after load');
+  assertEqual(restored.usageTotals.ratingDelta, 23.5, 'cumulative rating delta');
+  assertEqual(restored.usageTotals.ratingFromVisitorFailure, 1.25, 'rating failure total');
+  assertEqual(
+    restored.usageTotals.ratingFromVisitorFailureByReason.patienceBail,
+    1.25,
+    'rating failure diagnosis'
+  );
+  assertEqual(restored.usageTotals.ratingFromVisitorSuccessByReason.mealService, 18, 'meal rating bonus');
+  assertEqual(restored.usageTotals.ratingFromVisitorSuccessByReason.successfulExit, 6.75, 'exit rating bonus');
 });
 
 check('an advanced run round-trips its own tier and metrics intact', () => {
@@ -341,6 +366,102 @@ function locatedMealTotal(state: StationState): number {
     (sum, node) => sum + (tiles.has(node.tileIndex) ? Math.max(0, node.items.meal ?? 0) : 0),
     0
   );
+}
+
+function setModuleStock(
+  state: StationState,
+  moduleType: ModuleType,
+  item: 'meal' | 'tradeGood' | 'fuel',
+  amount: number
+): void {
+  const origin = state.moduleInstances.find((module) => module.type === moduleType)?.originTile;
+  assert(origin !== undefined, `no ${moduleType} module to stock`);
+  const node = state.itemNodes.find((candidate) => candidate.tileIndex === origin);
+  assert(node, `no item node for ${moduleType}`);
+  node.items[item] = amount;
+}
+
+function recipeStockStep(state: StationState, recipeId: 'feed-travelers' | 'sell-supplies' | 'service-ships') {
+  const recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === recipeId);
+  assert(recipe, `no ${recipeId} recipe`);
+  const step = recipe.steps.find((candidate) => candidate.kind === 'stock');
+  assert(step, `${recipeId} has no stock step`);
+  return step;
+}
+
+function placeStockFixture(state: StationState, room: RoomType, module: ModuleType, width: number, height: number): void {
+  const tiles = findOpenRectangle(state, width, height);
+  assert(tiles.length === width * height, `no ${width}x${height} area for ${module}`);
+  for (const tile of tiles) setRoom(state, tile, room);
+  const placed = tryPlaceModule(state, module, tiles[0], 0);
+  assert(placed.ok, `could not place ${module}: ${placed.reason ?? 'unknown reason'}`);
+  tick(state, 0);
+}
+
+function placeModuleInRoom(state: StationState, room: RoomType, module: ModuleType): void {
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] !== room) continue;
+    const placed = tryPlaceModule(state, module, tile, 0);
+    if (placed.ok) return;
+  }
+  throw new Error(`could not place ${String(module)} in ${String(room)}`);
+}
+
+function placeModuleInTiles(state: StationState, tiles: number[], module: ModuleType): void {
+  for (const tile of tiles) {
+    const placed = tryPlaceModule(state, module, tile, 0);
+    if (placed.ok) return;
+  }
+  throw new Error(`could not place ${String(module)} in the requested room cluster`);
+}
+
+function placeFuelCouplerAtStarterDock(state: StationState): number {
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    const placed = tryPlaceModule(state, ModuleType.FuelCoupler, tile, 0);
+    if (placed.ok) return tile;
+  }
+  throw new Error('could not attach a Fuel Coupler to either starter Pod Dock');
+}
+
+function walkableNeighbor(state: StationState, tile: number): number | null {
+  const x = tile % state.width;
+  const y = Math.floor(tile / state.width);
+  const candidates: number[] = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+    const neighbor = ny * state.width + nx;
+    if (state.tiles[neighbor] === TileType.Wall) continue;
+    if (canPlaceUtilityUnderlay(state, 'fuel-pipe', neighbor)) candidates.push(neighbor);
+  }
+  return candidates.find((candidate) => state.pressurized[candidate]) ?? candidates[0] ?? null;
+}
+
+function fuelPipePath(state: StationState, start: number, goal: number): number[] {
+  const previous = new Int32Array(state.tiles.length).fill(-1);
+  const queue = [start];
+  previous[start] = start;
+  for (let head = 0; head < queue.length; head += 1) {
+    const tile = queue[head];
+    if (tile === goal) break;
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+      const next = ny * state.width + nx;
+      if (previous[next] >= 0 || !canPlaceUtilityUnderlay(state, 'fuel-pipe', next)) continue;
+      previous[next] = tile;
+      queue.push(next);
+    }
+  }
+  if (previous[goal] < 0) return [];
+  const path: number[] = [];
+  for (let tile = goal; tile !== start; tile = previous[tile]) path.push(tile);
+  path.push(start);
+  return path.reverse();
 }
 
 check('the meal total is derivable from the located counter nodes', () => {
@@ -658,6 +779,33 @@ check('the starter ships the shared infrastructure the opening needs', () => {
   assert(state.crew.total >= 4 && state.crew.total <= 6, `opening crew ${state.crew.total} is outside 4-6`);
 });
 
+check('the starter crew mess feeds crew but does not sell meals before hospitality expansion', () => {
+  const state = freshState();
+  tick(state, 0);
+  const meals = getCrewFacilityReachability(state).find((facility) => facility.facility === 'meals');
+  assert(meals && !meals.missing && !meals.blocked, 'starter crew cannot reach the crew mess');
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  for (let step = 0; step < 900; step += 1) tick(state, 1);
+  assertEqual(state.serviceLog.visitorLifetimeByService.meal, 0, 'crew mess sold meals before public expansion');
+
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
+  setModuleStock(
+    state,
+    ModuleType.ServingStation,
+    'meal',
+    OPENING_BALANCE.preparedMealBatch.units
+  );
+  tick(state, 0);
+  const feedTravelers = evaluateOpeningRecipes(state).find((recipe) => recipe.id === 'feed-travelers');
+  assert(feedTravelers?.complete, 'expanded cafeteria did not complete Feed Travelers');
+
+  for (let step = 0; step < 1200; step += 1) tick(state, 1);
+  assert(state.serviceLog.visitorLifetimeByService.meal > 0, 'expanded public cafeteria served no visitor meals');
+});
+
 check('the starter leaves authored room to build on', () => {
   const state = freshState();
   tick(state, 0);
@@ -666,7 +814,7 @@ check('the starter leaves authored room to build on', () => {
   assert(findOpenRectangle(state, 4, 3).length === 12, 'no 4x3 patch of open floor to build on');
 });
 
-check('doing nothing earns only meager access income', () => {
+check('doing nothing reveals demand but earns no access income', () => {
   const state = freshState();
   const openingCredits = state.metrics.credits;
   state.controls.paused = false;
@@ -676,17 +824,14 @@ check('doing nothing earns only meager access income', () => {
   const lifetime = state.openingEconomy.ledger.lifetime;
   const dockFees = lifetime['dock-fee'].revenue;
   const payroll = lifetime.wages.expenses;
-  assert(dockFees > 0, 'pods arrived but paid no access fee at all');
-  assert(
-    dockFees < payroll,
-    `access fees alone (${dockFees.toFixed(0)}c) covered payroll (${payroll.toFixed(0)}c); doing nothing should not fund the station`
-  );
+  assertEqual(dockFees, 0, 'bare passenger arrival generated station income');
+  assert(payroll > 0, 'the no-input run never charged payroll');
   assert(
     state.metrics.credits < openingCredits * 2,
     `a no-input run doubled its cash (${openingCredits} to ${state.metrics.credits.toFixed(0)})`
   );
   console.log(
-    `       observed: ${lifetime['dock-fee'].count} pod calls, access ${dockFees.toFixed(0)}c, payroll ${payroll.toFixed(0)}c, ` +
+    `       observed: access ${dockFees.toFixed(0)}c, payroll ${payroll.toFixed(0)}c, ` +
     `cash ${openingCredits} to ${Math.round(state.metrics.credits)}`
   );
 });
@@ -787,6 +932,37 @@ check('no opening business is already built on the starter', () => {
   }
 });
 
+check('Feed Travelers is a 130c player commitment with matching build prices', () => {
+  const state = freshState();
+  tick(state, 0);
+  const recipes = evaluateOpeningRecipes(state);
+  const feed = recipes.find((recipe) => recipe.id === 'feed-travelers');
+  assert(feed, 'no Feed Travelers recipe');
+  assertEqual(feed.remainingCostCredits, 130, 'fresh Feed Travelers remaining cost');
+  assert(
+    feed.remainingCostCredits >= OPENING_BALANCE.startingCredits * 0.55 &&
+      feed.remainingCostCredits <= OPENING_BALANCE.startingCredits * 0.7,
+    `Feed Travelers cost ${feed.remainingCostCredits}c falls outside the 55-70% opening band`
+  );
+  const twoCheapest = recipes.map((recipe) => recipe.remainingCostCredits).sort((a, b) => a - b).slice(0, 2);
+  assert(twoCheapest[0] + twoCheapest[1] > OPENING_BALANCE.startingCredits, 'two opening businesses fit inside starting cash');
+
+  const serving = feed.steps.find((step) => step.module === ModuleType.ServingStation);
+  const table = feed.steps.find((step) => step.module === ModuleType.Table);
+  assert(serving && table, 'Feed Travelers has no fixture price steps');
+  assertEqual(serving.costCredits / serving.count, moduleCreditBuildCost(ModuleType.ServingStation), 'serving station recipe price');
+  assertEqual(table.costCredits / table.count, moduleCreditBuildCost(ModuleType.Table), 'table recipe price');
+  const stock = feed.steps.find((step) => step.kind === 'stock');
+  assert(stock, 'Feed Travelers has no opening stock step');
+  assertEqual(
+    stock.count,
+    OPENING_BALANCE.preparedMealBatch.units,
+    'prepared meal operating-readiness floor'
+  );
+  assert(stock.satisfied, 'starter crew reserve should satisfy meal operating readiness');
+  assertEqual(stock.costCredits, OPENING_BALANCE.preparedMealBatch.costCredits, 'prepared meal restock price');
+});
+
 check('recipe steps resolve to real rooms and modules', () => {
   for (const recipe of openingRecipes()) {
     for (const step of recipe.steps) {
@@ -823,6 +999,116 @@ check('building a step ticks it off', () => {
     (after?.remainingCostCredits ?? 0) <= before.remainingCostCredits,
     'remaining cost went up after completing a step'
   );
+});
+
+check('Service Ships requires one continuous tank-to-coupler fuel line', () => {
+  const state = freshState();
+  tick(state, 0);
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    setUtilityUnderlayTile(state, 'fuel-pipe', tile, false);
+  }
+  placeModuleInRoom(state, RoomType.Maintenance, ModuleType.FuelTank);
+  const couplerTile = placeFuelCouplerAtStarterDock(state);
+  const tank = state.moduleInstances.find((module) => module.type === ModuleType.FuelTank);
+  assert(tank, 'Fuel Tank placement was not recorded');
+  const couplerServiceTile = walkableNeighbor(state, couplerTile);
+  assert(couplerServiceTile !== null, 'Fuel Coupler has no interior service tile');
+
+  setUtilityUnderlayTile(state, 'fuel-pipe', tank.originTile, true);
+  setUtilityUnderlayTile(state, 'fuel-pipe', couplerServiceTile, true);
+  let utility = evaluateOpeningRecipes(state)
+    .find((recipe) => recipe.id === 'service-ships')
+    ?.steps.find((step) => step.kind === 'utility');
+  assert(utility && !utility.satisfied, 'isolated fuel-pipe tiles satisfied Service Ships');
+
+  const path = fuelPipePath(state, tank.originTile, couplerServiceTile);
+  assert(path.length > 1, 'could not find a valid fuel-pipe route from tank to coupler');
+  for (const tile of path) setUtilityUnderlayTile(state, 'fuel-pipe', tile, true);
+  utility = evaluateOpeningRecipes(state)
+    .find((recipe) => recipe.id === 'service-ships')
+    ?.steps.find((step) => step.kind === 'utility');
+  assertEqual(utility?.have, 1, 'connected fuel line progress');
+  assert(utility?.satisfied, 'connected tank-to-coupler line did not satisfy Service Ships');
+});
+
+check('Feed Travelers only becomes live when its counters and tables share one active Cafeteria', () => {
+  const state = freshState();
+  tick(state, 0);
+  const detachedTiles = findOpenRectangle(state, 5, 4);
+  assertEqual(detachedTiles.length, 20, 'no detached Cafeteria test area');
+  for (const tile of detachedTiles) setRoom(state, tile, RoomType.Cafeteria);
+  placeModuleInTiles(state, detachedTiles, ModuleType.ServingStation);
+  placeModuleInTiles(state, detachedTiles, ModuleType.Table);
+  tick(state, 0);
+
+  let recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'feed-travelers');
+  assert(recipe && !recipe.built, 'fixtures split across Cafeterias counted as one public business');
+  assert(recipe && !recipe.operational, 'split Cafeterias became operational');
+
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
+  tick(state, 0);
+  recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'feed-travelers');
+  assert(recipe?.built, 'two fixtures in the starter Cafeteria did not establish the business');
+  assert(recipe?.operational, 'a stocked active public Cafeteria did not become operational');
+});
+
+check('Feed Travelers uses the meal-and-tray limiting count at active counters', () => {
+  const state = freshState();
+  tick(state, 0);
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
+  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
+  tick(state, 0);
+  for (const node of state.itemNodes) {
+    if (state.moduleInstances.some((module) => module.type === ModuleType.ServingStation && module.originTile === node.tileIndex)) {
+      node.items.meal = OPENING_BALANCE.preparedMealBatch.units;
+      node.items.cleanTray = 0;
+    }
+  }
+  const recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'feed-travelers');
+  const stock = recipe?.steps.find((step) => step.kind === 'stock');
+  assert(recipe?.built, 'public Cafeteria should remain a completed capital investment');
+  assertEqual(stock?.have, 0, 'meals without trays counted as ready servings');
+  assert(!recipe?.operational, 'meal-only counters became operational');
+  assert(recipe?.operationalReasons.some((reason) => reason.includes('meal and one clean tray')), 'tray shortage lacked a truthful reason');
+});
+
+check('Sell Supplies stays built-but-blocked until its Stall is in an active Market cluster', () => {
+  const state = freshState();
+  tick(state, 0);
+  const tiles = findOpenRectangle(state, 5, 3);
+  assertEqual(tiles.length, 15, 'no Market test area');
+  for (const tile of tiles) setRoom(state, tile, RoomType.Market);
+  placeModuleInTiles(state, tiles, ModuleType.MarketStall);
+  tick(state, 0);
+
+  const recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'sell-supplies');
+  assert(recipe?.built, 'Market capital placement was not retained');
+  assert(!recipe?.operational, 'an unenclosed Market became operational');
+  assert(recipe?.operationalReasons.some((reason) => reason.includes('Market needs enclosure')), 'Market inactivity did not explain enclosure/power requirements');
+});
+
+check('Service Ships accepts only an attached Pod Dock with a live tank-to-coupler network', () => {
+  const state = freshState();
+  tick(state, 0);
+  placeStockFixture(state, RoomType.Maintenance, ModuleType.FuelTank, 4, 3);
+  const couplerTile = placeFuelCouplerAtStarterDock(state);
+  const tank = state.moduleInstances.find((module) => module.type === ModuleType.FuelTank);
+  assert(tank, 'Fuel Tank placement was not recorded');
+  const serviceTile = walkableNeighbor(state, couplerTile);
+  assert(serviceTile !== null, 'Fuel Coupler has no interior service tile');
+
+  setUtilityUnderlayTile(state, 'fuel-pipe', tank.originTile, true);
+  setUtilityUnderlayTile(state, 'fuel-pipe', serviceTile, true);
+  let recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'service-ships');
+  assert(!recipe?.built, 'two disconnected pipe ends formed a ship-service business');
+
+  for (const tile of fuelPipePath(state, tank.originTile, serviceTile)) setUtilityUnderlayTile(state, 'fuel-pipe', tile, true);
+  tick(state, 0);
+  recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'service-ships');
+  assert(recipe?.built, 'attached Pod Dock and connected tank did not establish Service Ships');
+  assert(!recipe?.operational, 'empty connected tank should need a fuel lot');
+  assert(recipe?.operationalReasons.some((reason) => reason.includes('fuel lot')), 'empty fuel network lacked a stock explanation');
 });
 
 check('future facilities stay visible with plain prerequisites', () => {

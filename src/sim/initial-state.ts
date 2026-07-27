@@ -17,7 +17,7 @@
 // callers (save.ts, scenarios.ts, sim-tests.ts, sim-perf.ts, etc.) keep
 // working without an import-site rewrite.
 
-import { MODULE_DEFINITIONS } from './balance';
+import { MODULE_DEFINITIONS, OPENING_BALANCE } from './balance';
 import {
   createInitialDepartments,
   createInitialSpecialtyProgress,
@@ -217,9 +217,10 @@ export function createInitialState(options?: {
   // is the smallest a Cafeteria can be and still operate at all
   // (ROOM_DEFINITIONS minTiles), so that is exactly what the crew get: one
   // counter and one four-seat table, stocked as a crew food buffer. Choice A
-  // is still a real build — a second Serving Station, two more Tables for
-  // eight seats, and a bought traveller meal batch — and until the player
-  // makes it, a pod wave's worth of travellers leaves without eating.
+  // is still a real build — a second Serving Station and a second Table for
+  // eight seats. The existing crew reserve satisfies opening stock readiness
+  // while it remains above the operating floor; until the fixtures are added,
+  // a pod wave's worth of travellers leaves without eating.
   paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 6, coreY + 2, coreX + 2, coreY);
   addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
   addStarterModule(ModuleType.Table, coreX + 5, coreY + 1, 0);
@@ -301,11 +302,11 @@ export function createInitialState(options?: {
       if (rawMaterial > 0) items.rawMaterial = rawMaterial;
       // OPEN-01: the crew mess opens with a crew food buffer, not a traveller
       // stock. Five crew eat through it slowly enough that payroll, not
-      // starvation, is the first pressure; a station that wants to sell meals
-      // buys its own batch as part of the Feed Travelers recipe.
+      // starvation, is the first pressure. Feed Travelers may use this stock,
+      // but only while at least one operating batch remains physically located.
       if (module.type === ModuleType.ServingStation) {
-        items.meal = 30;
-        items.cleanTray = 30;
+        items.meal = OPENING_BALANCE.crewMessMealReserve;
+        items.cleanTray = OPENING_BALANCE.crewMessMealReserve;
       }
       return {
         tileIndex: module.originTile,

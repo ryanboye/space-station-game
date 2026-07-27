@@ -83,7 +83,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     reservationCapacity: 4,
     // OPEN-04: seating and counters are priced explicitly rather than by
     // footprint, so the three opening recipes cost comparable money.
-    capitalCost: 40
+    capitalCost: 80
   },
   [ModuleType.ServingStation]: {
     width: 2,
@@ -93,7 +93,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     itemNodeCapacity: 60,
     storageClass: 'serving',
     facilityActivities: ['serve'],
-    capitalCost: 25
+    capitalCost: 50
   },
   [ModuleType.Fridge]: {
     width: 1,
@@ -672,6 +672,8 @@ export const OPENING_BALANCE: {
   startingCredits: number;
   podAccessFeeCredits: number;
   courierHandlingFeePerUnit: number;
+  /** Meals reserved for the starter crew mess before public meal service opens. */
+  crewMessMealReserve: number;
   preparedMealBatch: OpeningStockBatch;
   travelSupplyBatch: OpeningStockBatch;
   fuelLot: OpeningStockBatch;
@@ -682,6 +684,8 @@ export const OPENING_BALANCE: {
   podAccessFeeCredits: 3,
   /** Per-unit fee for handling consigned courier freight. */
   courierHandlingFeePerUnit: 1.5,
+  /** Five crew can eat before the player chooses a public hospitality business. */
+  crewMessMealReserve: 30,
   /** Opening stock batches, priced so each recipe lands in the target band. */
   preparedMealBatch: { units: 12, costCredits: 70 },
   travelSupplyBatch: { units: 12, costCredits: 80 },

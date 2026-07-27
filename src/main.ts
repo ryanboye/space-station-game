@@ -30,10 +30,12 @@ import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } fro
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
-  buyImportedTradeGoods,
+  buyImportedTradeGoodsDetailed,
   buyMaterialsDetailed,
   buyPreparedMealsDetailed,
   previewPreparedMealPurchase,
+  orderFuelDetailed,
+  quoteTravelSuppliesOrder,
   admitTrafficOffer,
   acceptCommercialOffer,
   buyRawFoodDetailed,
@@ -187,7 +189,6 @@ import {
 // primary build tools place immediately so other station systems can be tested
 // without early expansion bottlenecking on haul/build jobs.
 const INSTANT_BUILD_PLAYTEST = true;
-const TRAVEL_SUPPLY_UI_BASE_WHOLESALE = 3.5;
 const startupParams = new URLSearchParams(window.location.search);
 const TRUSS_EXPANSION_EXPERIMENT = startupParams.has('truss');
 const STARTER_LAYOUT_DB_NAME = 'starlight-starter-layouts';
@@ -1106,7 +1107,8 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
   siteBriefHost: document.querySelector<HTMLElement>('.left-stack'),
   onAction: (action) => {
     if (action.type === 'order-stock') {
-      buyImportedTradeGoods(state);
+      const result = buyImportedTradeGoodsDetailed(state);
+      toolLockMessage = result.message;
     } else if (action.type === 'set-pricing-policy') {
       setMarketPricingPolicy(state, action.policy);
     } else if (action.type === 'accept-project') {
@@ -1133,16 +1135,8 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
   );
   const recentUnitsSold = recentRetail.length;
   const recentMargin = recentRetail.reduce((sum, event) => sum + event.credits - event.costBasis, 0);
-  const supplierPending = state.openingEconomy.podFreightOperations.some((operation) =>
-    operation.kind === 'supplier-delivery' &&
-    operation.stockKind === 'travel-supplies' &&
-    operation.status !== 'complete' &&
-    operation.status !== 'cancelled' &&
-    operation.status !== 'expired'
-  );
-  const freightDockAvailable = state.docks.some((dock) => dock.podCapabilities?.includes('freight'));
-  const wholesaleUnitCost = TRAVEL_SUPPLY_UI_BASE_WHOLESALE * profile.supplyWholesaleMultiplier;
-  const orderCost = Math.round(30 * profile.supplyWholesaleMultiplier);
+  const travelSupplyQuote = quoteTravelSuppliesOrder(state);
+  const wholesaleUnitCost = travelSupplyQuote.creditCost / Math.max(1, travelSupplyQuote.requestedAmount);
   const saleUnitPrice = 1.15 * 5.5 * policy.salePriceMultiplier * profile.retailDemandMultiplier;
   const grouped = [
     { label: 'Travelers and docking', credits: summary.byKind['dock-fee'].net + summary.byKind['passenger-service'].net },
@@ -1175,12 +1169,14 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
       demandLabel: profile.trafficLabel,
       demandDetail: `${state.openingEconomy.marketPricingPolicy} pricing · ${Math.round(profile.retailDemandMultiplier * policy.demandMultiplier * 100)}% local demand`,
       pricingPolicy: state.openingEconomy.marketPricingPolicy,
-      canOrderStock: freightDockAvailable && !supplierPending && capacity - stock >= 12 && state.metrics.credits >= orderCost,
-      orderLabel: supplierPending ? 'Supplier pod en route' : 'Order 12 supplies by pod',
-      orderCost,
-      emptyStockMessage: freightDockAvailable
+      canOrderStock: travelSupplyQuote.ok,
+      orderLabel: travelSupplyQuote.reason === 'delivery_pending'
+        ? 'Supplier pod en route'
+        : `Order ${travelSupplyQuote.requestedAmount} supplies by pod`,
+      orderCost: travelSupplyQuote.creditCost,
+      emptyStockMessage: travelSupplyQuote.ok
         ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
-        : 'Install a Freight Locker beside a Pod Dock to receive shop stock.'
+        : travelSupplyQuote.message
     },
     siteBrief: {
       title: state.site ? 'Chartered site' : 'Standard orbit',
@@ -6152,7 +6148,10 @@ let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
 let hoveredTile: number | null = null;
-let activePaletteSection: PaletteSection = 'structure';
+// A new station starts with a strategic choice, not a catalog of walls. Keep
+// this in sync with the initially-active markup above. Once the player picks
+// a tool or tab, their choice remains theirs.
+let activePaletteSection: PaletteSection = 'businesses';
 let lastPaletteToolKey = '';
 let isRightPanning = false;
 let panStartClientX = 0;
@@ -6857,15 +6856,46 @@ function recipeStepAttributes(step: RecipeStepProgress): string {
     return key ? ` data-tool-module="${key}"` : '';
   }
   if (step.kind === 'utility') return ' data-tool-utility-underlay="fuel-pipe"';
-  return ' data-recipe-stock="1"';
+  return step.stockKind ? ` data-recipe-stock-kind="${step.stockKind}"` : ' data-recipe-stock="1"';
 }
 
-function recipeStepDetail(step: RecipeStepProgress): string {
-  const progress = step.kind === 'stock'
-    ? 'order when the room is ready'
-    : `${Math.min(step.have, step.count)}/${step.count}`;
-  const cost = step.costCredits > 0 ? ` · ${step.costCredits}c` : ' · free';
-  return `${progress}${cost}`;
+function recipeStepDetail(recipeId: string, step: RecipeStepProgress): string {
+  const have = Math.min(step.have, step.count);
+  const remaining = Math.max(0, step.count - have);
+  const progress = `${have}/${step.count}`;
+
+  if (step.satisfied) return `${progress} · ready`;
+
+  if (step.kind === 'stock') {
+    if (recipeId === 'feed-travelers') return `${progress} ready servings · meals + clean trays`;
+    return `${progress} stocked · ${step.costCredits}c to order`;
+  }
+
+  if (step.costCredits > 0) {
+    const perUnitCost = Math.round(step.costCredits / Math.max(1, step.count));
+    return `${progress} · ${remaining} more · ${remaining * perUnitCost}c`;
+  }
+
+  if (step.kind === 'utility') return `${progress} · draw the connection`;
+  return `${progress} · ${remaining} more`;
+}
+
+function shouldShowCapitalProjects(): boolean {
+  // Existing active projects must never become inaccessible after this UI
+  // hierarchy change. Otherwise, projects first appear only after the player
+  // has made one opening business operational.
+  return state.openingEconomy.capitalProjects.active.length > 0 ||
+    evaluateOpeningRecipes(state).some((recipe) => recipe.built);
+}
+
+function recipeOperationalLabel(recipe: ReturnType<typeof evaluateOpeningRecipes>[number]): string {
+  if (recipe.operational) return 'operational';
+  if (recipe.built) {
+    return recipe.steps.some((step) => step.kind === 'stock' && !step.satisfied)
+      ? 'built · needs stock'
+      : 'built · needs utilities';
+  }
+  return `${recipe.remainingCostCredits}c remaining`;
 }
 
 /**
@@ -6883,7 +6913,14 @@ function refreshOpeningRecipeCatalog(): void {
   const demand = getPodDemandSummary(state, null);
   const recipes = evaluateOpeningRecipes(state);
   const signature = JSON.stringify([
-    recipes.map((recipe) => [recipe.remainingCostCredits, recipe.affordable, recipe.steps.map((step) => step.have)]),
+    recipes.map((recipe) => [
+      recipe.remainingCostCredits,
+      recipe.affordable,
+      recipe.built,
+      recipe.operational,
+      recipe.operationalReasons,
+      recipe.steps.map((step) => step.have)
+    ]),
     demand.rows.map((row) => [row.served, row.wanted, row.missedCredits])
   ]);
   if (signature === renderedRecipeSignature) return;
@@ -6905,19 +6942,23 @@ function refreshOpeningRecipeCatalog(): void {
           <button class="tool-btn recipe-step${step.satisfied ? ' recipe-step-done' : ''}"${recipeStepAttributes(step)} title="${escapeHtml(step.label)}">
             <span class="recipe-step-mark">${step.satisfied ? '✓' : '·'}</span>
             <span class="recipe-step-label">${escapeHtml(step.label)}</span>
-            <span class="recipe-step-detail">${escapeHtml(recipeStepDetail(step))}</span>
+            <span class="recipe-step-detail">${escapeHtml(recipeStepDetail(recipe.id, step))}</span>
           </button>`)
         .join('');
+      const status = recipe.operational
+        ? 'Live now.'
+        : recipe.operationalReasons[0] ?? 'Finish the remaining build steps.';
       return `
-        <div class="recipe-card${recipe.complete ? ' recipe-card-done' : ''}">
+        <div class="recipe-card${recipe.built ? ' recipe-card-done' : ''}${recipe.operational ? ' recipe-card-operational' : ''}">
           <div class="recipe-card-head">
             <span class="recipe-card-title">${escapeHtml(recipe.title)}</span>
             <span class="recipe-card-cost${recipe.affordable ? '' : ' recipe-card-unaffordable'}">${
-              recipe.complete ? 'built' : `${recipe.remainingCostCredits}c to finish`
+              recipeOperationalLabel(recipe)
             }</span>
           </div>
           <small class="recipe-card-summary">${escapeHtml(recipe.summary)}</small>
           <small class="recipe-card-demand">${escapeHtml(demandNote)}</small>
+          <small class="recipe-card-status">${escapeHtml(status)}</small>
           <div class="recipe-steps">${steps}</div>
           <small class="recipe-card-note">Staff: ${escapeHtml(recipe.staffing)}</small>
           <small class="recipe-card-note">Utilities: ${escapeHtml(recipe.utilities)}</small>
@@ -7021,6 +7062,13 @@ function setPaletteSection(section: PaletteSection): void {
 }
 
 function refreshPaletteMenu(): void {
+  // `none` means inspect mode. It is not a request to reopen Build; returning
+  // here preserves the player's selected palette tab and keeps the opening
+  // Businesses view visible on a fresh charter.
+  if (currentTool.kind === 'none') {
+    lastPaletteToolKey = 'none';
+    return;
+  }
   const key = toolPaletteKey(currentTool);
   if (key !== lastPaletteToolKey) {
     lastPaletteToolKey = key;
@@ -7072,16 +7120,34 @@ function wireToolbar(): void {
     const roomKey = step.dataset.toolRoom;
     const moduleKey = step.dataset.toolModule;
     const utilityKey = step.dataset.toolUtilityUnderlay;
-    if (roomKey && TOOLBAR_ROOM_MAP[roomKey] !== undefined) {
+    const stockKind = step.dataset.recipeStockKind;
+    if (stockKind === 'prepared-meals') {
+      const result = buyPreparedMealsDetailed(state);
+      currentTool = { kind: 'none' };
+      toolLockMessage = result.message;
+      refreshOpeningEconomyPanels();
+      refreshToolbar();
+      return;
+    } else if (stockKind === 'travel-supplies') {
+      // Supplies are purchased from their pricing-and-stock panel, not from a
+      // generic recipe action that could accidentally issue another commodity.
+      currentTool = { kind: 'none' };
+      toolLockMessage = 'Travel Supplies Shop opened. Review the pod order before buying stock.';
+      openingEconomyPanels.open('shop');
+      return;
+    } else if (stockKind === 'fuel') {
+      const result = orderFuelDetailed(state);
+      currentTool = { kind: 'none' };
+      toolLockMessage = result.message;
+      refreshOpeningEconomyPanels();
+      refreshToolbar();
+      return;
+    } else if (roomKey && TOOLBAR_ROOM_MAP[roomKey] !== undefined) {
       selectRoomTool(TOOLBAR_ROOM_MAP[roomKey]);
     } else if (moduleKey && TOOLBAR_MODULE_MAP[moduleKey] !== undefined) {
       selectModuleTool(TOOLBAR_MODULE_MAP[moduleKey]);
     } else if (utilityKey && TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey] !== undefined) {
       selectUtilityUnderlayTool(TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey]);
-    } else {
-      // Stock steps have nothing to place; open where the order is made.
-      openingEconomyPanels.open('shop');
-      return;
     }
     // The palette follows the selection to the section that owns the tool, so
     // the player also learns where that tool lives for next time.
@@ -7152,6 +7218,7 @@ function wireToolbar(): void {
 function refreshToolbar(): void {
   refreshOpeningRecipeCatalog();
   refreshPaletteMenu();
+  openCapitalProjectsBtn.classList.toggle('hidden', !shouldShowCapitalProjects());
   const hasBerth = state.rooms.includes(RoomType.Berth);
   document.querySelectorAll<HTMLElement>('[data-berth-hardware]').forEach((element) => {
     element.classList.toggle('hidden', !hasBerth);

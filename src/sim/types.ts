@@ -1306,6 +1306,18 @@ export interface SmallCraftVisit {
   startedAt: number;
   patienceExpiresAt: number;
   services: SmallCraftService[];
+  /**
+   * Durable, visit-local demand accounting. These values are updated at the
+   * physical completion and ledger gates, then consumed when this pod leaves.
+   * Keeping them here avoids inferring a long call from bounded station logs.
+   */
+  servedDemand: {
+    food: number;
+    supplies: number;
+    shipService: number;
+  };
+  /** Positive station revenue attributable to this one pod visit. */
+  earnedCredits: number;
 }
 
 export type PortTurnaroundPhase = 'inspection' | 'unloading' | 'loading' | 'open' | 'departing';

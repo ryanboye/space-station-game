@@ -287,6 +287,34 @@ export interface StationSnapshotV1 {
     residentsConvertedLifetime: number;
     dockedShipsCompleted: number;
     archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>>;
+    /** Cumulative rating is progression, not a transient HUD metric. */
+    rating?: {
+      score: number;
+      delta: number;
+      penalties: {
+        shipTimeout: number;
+        shipSkip: number;
+        visitorFailure: number;
+        walkDissatisfaction: number;
+        routeExposure: number;
+        environment: number;
+        sanitation: number;
+        residentDeparture: number;
+      };
+      failureReasons: {
+        noLeisurePath: number;
+        shipServicesMissing: number;
+        patienceBail: number;
+        dockTimeout: number;
+        trespass: number;
+      };
+      bonuses: {
+        mealService: number;
+        leisureService: number;
+        successfulExit: number;
+        residentRetention: number;
+      };
+    };
   };
   sanitation?: {
     dirtByTile: number[];
@@ -530,7 +558,16 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 
 function cloneSmallCraftVisit(visit: SmallCraftVisit | undefined): SmallCraftVisit | undefined {
   return visit
-    ? { ...visit, services: visit.services.map((service) => ({ ...service })) }
+    ? {
+        ...visit,
+        services: visit.services.map((service) => ({ ...service })),
+        servedDemand: {
+          food: Math.max(0, Math.floor(visit.servedDemand?.food ?? 0)),
+          supplies: Math.max(0, Math.floor(visit.servedDemand?.supplies ?? 0)),
+          shipService: Math.max(0, Math.floor(visit.servedDemand?.shipService ?? 0))
+        },
+        earnedCredits: Math.max(0, visit.earnedCredits ?? 0)
+      }
     : undefined;
 }
 
@@ -560,7 +597,15 @@ function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
     dockSourceKey: value.dockSourceKey,
     startedAt: Math.max(0, asFiniteNumber(value.startedAt, 0)),
     patienceExpiresAt: Math.max(0, asFiniteNumber(value.patienceExpiresAt, 0)),
-    services
+    services,
+    // Gate 0 saves predate visit-local accounting. A missing record is a
+    // truthful zero rather than a reason to discard an otherwise live call.
+    servedDemand: {
+      food: Math.max(0, Math.floor(asFiniteNumber(isRecord(value.servedDemand) ? value.servedDemand.food : undefined, 0))),
+      supplies: Math.max(0, Math.floor(asFiniteNumber(isRecord(value.servedDemand) ? value.servedDemand.supplies : undefined, 0))),
+      shipService: Math.max(0, Math.floor(asFiniteNumber(isRecord(value.servedDemand) ? value.servedDemand.shipService : undefined, 0)))
+    },
+    earnedCredits: Math.max(0, asFiniteNumber(value.earnedCredits, 0))
   };
 }
 
@@ -822,7 +867,23 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       actorsTreatedLifetime: state.metrics.actorsTreatedLifetime,
       residentsConvertedLifetime: state.metrics.residentsConvertedLifetime,
       dockedShipsCompleted: state.dockedShipsCompleted,
-      archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen }
+      archetypesEverSeen: { ...state.usageTotals.archetypesEverSeen },
+      rating: {
+        score: state.metrics.stationRating,
+        delta: state.usageTotals.ratingDelta,
+        penalties: {
+          shipTimeout: state.usageTotals.ratingFromShipTimeout,
+          shipSkip: state.usageTotals.ratingFromShipSkip,
+          visitorFailure: state.usageTotals.ratingFromVisitorFailure,
+          walkDissatisfaction: state.usageTotals.ratingFromWalkDissatisfaction,
+          routeExposure: state.usageTotals.ratingFromRouteExposure,
+          environment: state.usageTotals.ratingFromEnvironment,
+          sanitation: state.usageTotals.ratingFromSanitation,
+          residentDeparture: state.usageTotals.ratingFromResidentDeparture
+        },
+        failureReasons: { ...state.usageTotals.ratingFromVisitorFailureByReason },
+        bonuses: { ...state.usageTotals.ratingFromVisitorSuccessByReason }
+      }
     },
     sanitation: {
       dirtByTile: Array.from(state.dirtByTile, (value) => Math.round(clamp(value, 0, 100) * 10) / 10),
@@ -1628,6 +1689,11 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   // Progression counters — missing in pre-progression save files, so
   // default all to 0 and an empty archetypesEverSeen set.
   const progRaw = isRecord(snapshotRaw.progression) ? snapshotRaw.progression : null;
+  const ratingRaw = progRaw && isRecord(progRaw.rating) ? progRaw.rating : null;
+  const ratingPenaltiesRaw = ratingRaw && isRecord(ratingRaw.penalties) ? ratingRaw.penalties : null;
+  const ratingFailuresRaw = ratingRaw && isRecord(ratingRaw.failureReasons) ? ratingRaw.failureReasons : null;
+  const ratingBonusesRaw = ratingRaw && isRecord(ratingRaw.bonuses) ? ratingRaw.bonuses : null;
+  const nonNegative = (value: unknown): number => Math.max(0, asFiniteNumber(value, 0));
   const archetypesEverSeen: Partial<Record<VisitorArchetype, boolean>> = {};
   if (progRaw && isRecord(progRaw.archetypesEverSeen)) {
     for (const archetype of VISITOR_ARCHETYPES) {
@@ -1651,7 +1717,34 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     actorsTreatedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.actorsTreatedLifetime, 0))),
     residentsConvertedLifetime: Math.max(0, Math.floor(asFiniteNumber(progRaw?.residentsConvertedLifetime, 0))),
     dockedShipsCompleted: Math.max(0, Math.floor(asFiniteNumber(progRaw?.dockedShipsCompleted, 0))),
-    archetypesEverSeen
+    archetypesEverSeen,
+    rating: {
+      score: clamp(asFiniteNumber(ratingRaw?.score, 0), 0, 100),
+      delta: asFiniteNumber(ratingRaw?.delta, 0),
+      penalties: {
+        shipTimeout: nonNegative(ratingPenaltiesRaw?.shipTimeout),
+        shipSkip: nonNegative(ratingPenaltiesRaw?.shipSkip),
+        visitorFailure: nonNegative(ratingPenaltiesRaw?.visitorFailure),
+        walkDissatisfaction: nonNegative(ratingPenaltiesRaw?.walkDissatisfaction),
+        routeExposure: nonNegative(ratingPenaltiesRaw?.routeExposure),
+        environment: nonNegative(ratingPenaltiesRaw?.environment),
+        sanitation: nonNegative(ratingPenaltiesRaw?.sanitation),
+        residentDeparture: nonNegative(ratingPenaltiesRaw?.residentDeparture)
+      },
+      failureReasons: {
+        noLeisurePath: nonNegative(ratingFailuresRaw?.noLeisurePath),
+        shipServicesMissing: nonNegative(ratingFailuresRaw?.shipServicesMissing),
+        patienceBail: nonNegative(ratingFailuresRaw?.patienceBail),
+        dockTimeout: nonNegative(ratingFailuresRaw?.dockTimeout),
+        trespass: nonNegative(ratingFailuresRaw?.trespass)
+      },
+      bonuses: {
+        mealService: nonNegative(ratingBonusesRaw?.mealService),
+        leisureService: nonNegative(ratingBonusesRaw?.leisureService),
+        successfulExit: nonNegative(ratingBonusesRaw?.successfulExit),
+        residentRetention: nonNegative(ratingBonusesRaw?.residentRetention)
+      }
+    }
   };
   if (!progRaw) warnings.push('progression counters missing; defaulted to zero (pre-progression save).');
 
@@ -2365,6 +2458,21 @@ export function hydrateStateFromSave(
   next.dockedShipsCompleted = snapshot.progression.dockedShipsCompleted;
   for (const archetype of VISITOR_ARCHETYPES) {
     next.usageTotals.archetypesEverSeen[archetype] = snapshot.progression.archetypesEverSeen[archetype] === true;
+  }
+  const savedRating = snapshot.progression.rating;
+  if (savedRating) {
+    next.metrics.stationRating = savedRating.score;
+    next.usageTotals.ratingDelta = savedRating.delta;
+    next.usageTotals.ratingFromShipTimeout = savedRating.penalties.shipTimeout;
+    next.usageTotals.ratingFromShipSkip = savedRating.penalties.shipSkip;
+    next.usageTotals.ratingFromVisitorFailure = savedRating.penalties.visitorFailure;
+    next.usageTotals.ratingFromWalkDissatisfaction = savedRating.penalties.walkDissatisfaction;
+    next.usageTotals.ratingFromRouteExposure = savedRating.penalties.routeExposure;
+    next.usageTotals.ratingFromEnvironment = savedRating.penalties.environment;
+    next.usageTotals.ratingFromSanitation = savedRating.penalties.sanitation;
+    next.usageTotals.ratingFromResidentDeparture = savedRating.penalties.residentDeparture;
+    next.usageTotals.ratingFromVisitorFailureByReason = { ...savedRating.failureReasons };
+    next.usageTotals.ratingFromVisitorSuccessByReason = { ...savedRating.bonuses };
   }
 
   next.controls.shipsPerCycle = clamp(Math.round(snapshot.controls.shipsPerCycle), 0, 3);

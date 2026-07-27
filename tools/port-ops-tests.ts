@@ -397,6 +397,10 @@ function testSmallCraftVisitSaveRoundTrip(): void {
     restored.smallCraftVisit.services.some((service) => service.kind === 'refuel' && service.progress > 0),
     'Small-craft refuel progress reset on load.'
   );
+  assert(
+    restored.smallCraftVisit.servedDemand.food === 0 && restored.smallCraftVisit.earnedCredits === 0,
+    'Legacy visit accounting did not initialize to zero during save/load.'
+  );
 }
 
 function testLegacyCoreTileIsBuildable(): void {
