@@ -2,14 +2,16 @@ import {
   createInitialState,
   expandMap,
   getPortOpsTelemetry,
+  setRoom,
   setTile,
   tick,
+  tryPlaceModule,
   validateDockPlacement
 } from '../src/sim/sim';
 import { buildStableScenario } from '../src/sim/scenarios';
 import { hydrateStateFromSave, serializeSave } from '../src/sim/save';
 import { createVisitorNeeds } from '../src/sim/occupant-demand';
-import { TileType, VisitorState, ZoneType, type StationState, type Visitor } from '../src/sim/types';
+import { ModuleType, RoomType, TileType, VisitorState, ZoneType, type StationState, type Visitor } from '../src/sim/types';
 
 const DT = 1 / 15;
 const WARMUP_TICKS = 30;
@@ -304,18 +306,51 @@ function farEnoughFromPlaced(state: StationState, candidate: number, placed: num
 function buildPublicApron(state: StationState, targetTiles = 240): void {
   const coreX = state.core.centerTile % state.width;
   const coreY = Math.floor(state.core.centerTile / state.width);
-  const top = Math.min(state.height - 14, coreY + 15);
-  const bottom = Math.min(state.height - 3, top + 9);
-  const left = Math.max(2, coreX - 14);
-  const right = Math.min(state.width - 3, coreX + 14);
-  for (let y = coreY; y <= bottom; y++) {
+  const tieInY = coreY + 6;
+  const top = Math.min(state.height - 14, coreY + 12);
+  const bottom = Math.min(state.height - 3, top + 11);
+  const left = Math.max(2, coreX - 15);
+  const right = Math.min(state.width - 3, coreX + 15);
+
+  // The old benchmark painted a bare floor ribbon through vacuum. Besides
+  // being an invalid player layout, that made air exposure depend on cadence
+  // and contaminated determinism. Build the same footprint as a sealed wing.
+  setTile(state, toIndex(state, coreX, tieInY), TileType.Door);
+  for (let y = tieInY + 1; y < top; y++) {
     setTile(state, toIndex(state, coreX, y), TileType.Floor);
+    setTile(state, toIndex(state, coreX - 1, y), TileType.Wall);
+    setTile(state, toIndex(state, coreX + 1, y), TileType.Wall);
   }
   for (let y = top; y <= bottom; y++) {
-    for (let x = left; x <= right; x++) setTile(state, toIndex(state, x, y), TileType.Floor);
+    for (let x = left; x <= right; x++) {
+      const perimeter = x === left || x === right || y === top || y === bottom;
+      setTile(state, toIndex(state, x, y), perimeter ? TileType.Wall : TileType.Floor);
+    }
   }
-  const built = (bottom - top + 1) * (right - left + 1);
+  setTile(state, toIndex(state, coreX, top), TileType.Door);
+  for (let y = top + 1; y < bottom; y++) {
+    for (let x = left + 1; x < right; x++) setRoom(state, toIndex(state, x, y), RoomType.Cafeteria);
+  }
+  const built = (bottom - top - 1) * (right - left - 1);
   assert(built >= targetTiles, `Authored apron must contribute at least ${targetTiles} tiles, got ${built}`);
+  tick(state, 0);
+
+  const serving = tryPlaceModule(state, ModuleType.ServingStation, toIndex(state, left + 2, top + 2));
+  assert(serving.ok, `Scale cafeteria serving station failed: ${serving.reason ?? 'unknown'}`);
+  for (let row = 0; row < 2; row++) {
+    for (let column = 0; column < 4; column++) {
+      const table = tryPlaceModule(
+        state,
+        ModuleType.Table,
+        toIndex(state, left + 7 + column * 4, top + 2 + row * 4)
+      );
+      assert(table.ok, `Scale cafeteria table failed: ${table.reason ?? 'unknown'}`);
+    }
+  }
+  const servingNode = state.itemNodes.find((node) => node.tileIndex === toIndex(state, left + 2, top + 2));
+  assert(servingNode, 'Scale cafeteria serving station needs a physical stock node.');
+  servingNode.items.meal = 60;
+  servingNode.items.cleanTray = 60;
   tick(state, 0);
 }
 
@@ -360,7 +395,11 @@ function makeTemplate(): FixtureTemplate {
 
 function makeStaticVisitor(id: number, tileIndex: number, state: StationState): Visitor {
   const needs = createVisitorNeeds(id);
-  needs.hunger = 100;
+  // A scale benchmark should exercise the station, not time an inert crowd.
+  // One third of the authored visitors arrive hungry and immediately seek a
+  // meal, producing real paths, provider reservations, and queue pressure.
+  const seekingMeal = id % 3 === 0;
+  needs.hunger = seekingMeal ? 18 : 100;
   needs.energy = 100;
   needs.hygiene = 100;
   needs.active = null;
@@ -372,13 +411,13 @@ function makeStaticVisitor(id: number, tileIndex: number, state: StationState): 
     x: (tileIndex % state.width) + 0.5,
     y: Math.floor(tileIndex / state.width) + 0.5,
     tileIndex,
-    state: VisitorState.Leisure,
+    state: seekingMeal ? VisitorState.ToCafeteria : VisitorState.Leisure,
     path: [],
     speed: 2,
     patience: 0,
-    eatTimer: 1_000_000,
+    eatTimer: seekingMeal ? 0 : 1_000_000,
     trespassed: false,
-    servedMeal: true,
+    servedMeal: !seekingMeal,
     carryingMeal: false,
     carryingDrink: false,
     reservedServingTile: null,
@@ -394,12 +433,12 @@ function makeStaticVisitor(id: number, tileIndex: number, state: StationState): 
     airExposureSec: 0,
     healthState: 'healthy',
     hygieneStopUsed: false,
-    leisureLegsRemaining: 1,
+    leisureLegsRemaining: seekingMeal ? 0 : 1,
     leisureLegsPlanned: 1,
     lastLeisureKind: null,
-    servicePlan: [],
+    servicePlan: seekingMeal ? ['meal'] : [],
     completedServices: [],
-    activeService: null,
+    activeService: seekingMeal ? 'meal' : null,
     optionalDrinkActive: false,
     repeatDrinksServed: 0,
     queueProviderTile: null,
@@ -422,9 +461,13 @@ function makeStaticVisitor(id: number, tileIndex: number, state: StationState): 
     serviceFailureStage: 'none',
     failureSince: null,
     failureNeed: null,
-    strandedFromShipId: null,
-    strandedAt: null,
-    reliefEligibleAt: null
+    // Keep the benchmark population resident for the entire sample while
+    // still exercising the long-stay visitor needs engine. A far-future
+    // relief transfer makes these synthetic occupants durable without
+    // inventing a fake live ship whose turnaround would skew port metrics.
+    strandedFromShipId: -1,
+    strandedAt: state.now,
+    reliefEligibleAt: state.now + 1_000_000
   };
 }
 
@@ -460,10 +503,12 @@ function buildTierState(template: FixtureTemplate, target: number): StationState
   if (!east.ok) throw new Error(`East expansion failed: ${east.reason ?? 'unknown reason'}`);
   installDockInterfaces(hydrated.state);
   const baseVisitorId = 1_000_000 + target * 100;
-  const visitorTiles = hydrated.state.tiles
+  const allPublicFloor = hydrated.state.tiles
     .map((tile, index) => ({ tile, index }))
     .filter(({ tile, index }) => tile === TileType.Floor && hydrated.state.zones[index] === ZoneType.Public)
     .map(({ index }) => index);
+  const cafeteriaFloor = allPublicFloor.filter((index) => hydrated.state.rooms[index] === RoomType.Cafeteria);
+  const visitorTiles = cafeteriaFloor.length > 0 ? cafeteriaFloor : allPublicFloor;
   assert(visitorTiles.length > 0, 'Expected at least one public floor for static visitors');
   hydrated.state.arrivingShips = [];
   hydrated.state.visitors = Array.from({ length: target }, (_, index) =>

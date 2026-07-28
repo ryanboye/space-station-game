@@ -17,10 +17,11 @@
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { selectShipHullVariant } from './ship-hulls';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
+import { resolveFacilitySlots } from './facility-descriptors';
 import { createVisitorNeeds } from './occupant-demand';
-import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
+import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, hireStaffRole, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -613,9 +614,23 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
 
     placeMod(s, 6, 7, ModuleType.BunkBank);
     placeMod(s, 10, 7, ModuleType.BunkBank);
-    placeMod(s, 6, 21, ModuleType.CheckoutBank);
-    placeMod(s, 10, 21, ModuleType.ShelfAisle);
-    placeMod(s, 12, 21, ModuleType.ShelfAisle);
+    // Leave two clear tiles in front of the west-facing checkout. This is the
+    // physical point of the fixture: crowd capacity comes from authored floor
+    // space, not an invisible queue counter packed against a wall.
+    placeMod(s, 10, 21, ModuleType.CheckoutBank);
+    placeMod(s, 6, 21, ModuleType.ShelfAisle);
+    placeMod(s, 13, 21, ModuleType.ShelfAisle);
+    placeMod(s, 13, 26, ModuleType.Vent);
+    for (let y = 20; y < 29; y++) {
+      for (let x = 5; x < 15; x++) {
+        const tileIndex = y * s.width + x;
+        s.zones[tileIndex] = ZoneType.Public;
+        if (s.tiles[tileIndex] !== TileType.Wall) s.pressurized[tileIndex] = true;
+      }
+    }
+    seedItemNodeStock(s, 6, 21, 'tradeGood', 12);
+    seedItemNodeStock(s, 13, 21, 'tradeGood', 12);
+    stageMarketShowcase(s, 6);
     s.controls.paused = true;
   },
 
@@ -838,6 +853,86 @@ function seedItemNodeStock(state: StationState, x: number, y: number, itemType: 
   if (added <= 0) return 0;
   node.items[itemType] = (node.items[itemType] ?? 0) + added;
   return added;
+}
+
+function stageMarketShowcase(state: StationState, shopperCount: number): void {
+  while ((state.crew.roleCounts.steward ?? 0) < 2) {
+    if (!hireStaffRole(state, 'steward')) break;
+  }
+
+  const checkout = state.moduleInstances.find((module) => module.type === ModuleType.CheckoutBank);
+  const staffSlots = checkout
+    ? resolveFacilitySlots(checkout, state.width).filter((slot) => slot.role === 'checkout-staff')
+    : [];
+  const stewards = state.crewMembers.filter((crew) => crew.staffRole === 'steward');
+  for (let index = 0; index < Math.min(staffSlots.length, stewards.length); index += 1) {
+    const crew = stewards[index];
+    const slot = staffSlots[index];
+    crew.assignedSystem = 'market';
+    crew.lastSystem = 'market';
+    crew.role = 'cafeteria';
+    crew.targetTile = slot.tileIndex;
+    crew.tileIndex = slot.tileIndex;
+    crew.x = (slot.tileIndex % state.width) + 0.5;
+    crew.y = Math.floor(slot.tileIndex / state.width) + 0.5;
+    crew.path = [];
+    crew.resting = false;
+    crew.energy = 100;
+    crew.hunger = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.morale = 100;
+    crew.retargetAt = state.now + 120;
+    crew.taskLockUntil = state.now + 120;
+  }
+
+  for (let index = 0; index < shopperCount; index += 1) {
+    const x = 7 + (index % 6);
+    const y = 17 + Math.floor(index / 6);
+    const tileIndex = y * state.width + x;
+    state.visitors.push({
+      id: 99200 + index,
+      name: `Shopper ${index + 1}`,
+      trait: index % 2 === 0 ? 'patient' : 'social',
+      x: x + 0.5,
+      y: y + 0.5,
+      tileIndex,
+      state: VisitorState.ToLeisure,
+      path: [],
+      speed: 2,
+      patience: 0,
+      eatTimer: 0,
+      trespassed: false,
+      servedMeal: false,
+      carryingMeal: false,
+      reservedServingTile: null,
+      reservedTargetTile: null,
+      blockedTicks: 0,
+      archetype: 'shopper',
+      taxSensitivity: 1,
+      spendMultiplier: 1,
+      patienceMultiplier: 1,
+      primaryPreference: 'market',
+      spawnedAt: state.now,
+      originShipId: null,
+      airExposureSec: 0,
+      healthState: 'healthy',
+      leisureLegsRemaining: 1,
+      leisureLegsPlanned: 1,
+      lastLeisureKind: null,
+      servicePlan: [],
+      completedServices: [],
+      activeService: null,
+      stayClass: 'errand',
+      needs: undefined,
+      recurringNeedActive: null,
+      marketTradeGoodSourceTile: null,
+      temporarySleepTargetTile: null,
+      queueProviderTile: null,
+      queueJoinedAt: null
+    });
+  }
 }
 
 function addFailureShowcaseVisitor(

@@ -45,6 +45,7 @@ import {
   getSanitationTileDiagnostic,
   mapConditionSamplesAt,
   getMaintenanceTileDiagnostic,
+  getMarketFixtureStatus,
   getModuleMovePreview,
   getRoutePressureDiagnostics,
   getRoutePressureTileDiagnostic,
@@ -3402,9 +3403,21 @@ function drawBerthInformationChips(
     const callsign = contract?.callsign ?? ship.portManifest?.callsign ?? `SHIP ${ship.id}`;
     const topLine = `${callsign} | ${ship.shipType.toUpperCase()}`;
     const completion = contract ? portPromiseCompletion(contract.promises) : ship.portTurnaround?.fulfillmentRatio ?? 0;
-    const phase = ship.portTurnaround?.phase.toUpperCase() ?? 'DOCKED';
-    const bottomLine = `${phase} | SERVICE ${Math.round(completion * 100)}%`;
-    const accent = completion >= 0.9 ? '#71e5a0' : completion >= 0.65 ? '#ffd36a' : '#72bff2';
+    const plannedDeparture = ship.plannedDepartureAt ?? contract?.plannedDepartureAt ?? contract?.hardDepartureAt;
+    const seconds = plannedDeparture === undefined ? null : Math.max(0, Math.ceil(plannedDeparture - state.now));
+    const phase = (ship.visitPhase ?? 'visit-service').replace('-', ' ').toUpperCase();
+    const bottomLine = ship.visitScheduleReason === 'service-failure'
+      ? 'EARLY RECALL | SERVICES FAILED'
+      : ship.visitScheduleReason === 'remaining-work'
+        ? `EXTENDED | WORK REMAINS${seconds === null ? '' : ` | ${seconds}S`}`
+        : `${phase} | ${ship.passengersTotal} PAX${seconds === null ? '' : ` | ${seconds}S`} | ${Math.round(completion * 100)}%`;
+    const accent = ship.visitScheduleReason === 'service-failure'
+      ? '#ff7a76'
+      : completion >= 0.9
+        ? '#71e5a0'
+        : completion >= 0.65
+          ? '#ffd36a'
+          : '#72bff2';
     ctx.font = `bold ${fontSize}px monospace`;
     const width = Math.max(
       TILE_SIZE * 5.2,
@@ -4702,8 +4715,17 @@ function visitorRecentlyCompletedRetail(state: StationState, visitorId: number):
 }
 
 function marketStockAtTile(state: StationState, tileIndex: number): number | null {
-  if (state.modules[tileIndex] !== ModuleType.MarketStall) return null;
-  return itemStockAtNode(state, tileIndex, 'tradeGood');
+  const moduleId = state.moduleOccupancyByTile[tileIndex];
+  const module = moduleId === null
+    ? null
+    : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
+  if (!module) return state.modules[tileIndex] === ModuleType.MarketStall ? itemStockAtNode(state, tileIndex, 'tradeGood') : null;
+  if (module.type === ModuleType.MarketStall) return itemStockAtNode(state, module.originTile, 'tradeGood');
+  if (module.type === ModuleType.ShelfAisle) {
+    const status = getMarketFixtureStatus(state, module.id);
+    return status?.kind === 'shelf' ? status.available : null;
+  }
+  return null;
 }
 
 function visitorFailureThought(visitor: StationState['visitors'][number]): WorldThought | null {
@@ -6347,6 +6369,51 @@ function drawCommercialUnitStatusChips(
   }
 }
 
+function drawMarketFixtureFeedback(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const drawChip = (tileIndex: number, text: string, accent: string, yOffset = 0): void => {
+    if (!tileInRange(tileIndex, state, visibleTiles)) return;
+    const point = fromIndex(tileIndex, state.width);
+    const font = Math.max(7, Math.round(TILE_SIZE * 0.23));
+    ctx.save();
+    ctx.font = `bold ${font}px monospace`;
+    const width = Math.max(TILE_SIZE * 1.45, ctx.measureText(text).width + TILE_SIZE * 0.38);
+    const height = Math.max(13, TILE_SIZE * 0.46);
+    const x = (point.x + 0.5) * TILE_SIZE - width / 2;
+    const y = point.y * TILE_SIZE - height - TILE_SIZE * 0.08 - yOffset;
+    ctx.fillStyle = 'rgba(5, 12, 20, 0.9)';
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.035);
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, Math.max(2, TILE_SIZE * 0.08));
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x + width / 2, y + height * 0.53);
+    ctx.restore();
+  };
+
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.ShelfAisle && module.type !== ModuleType.CheckoutBank) continue;
+    const status = getMarketFixtureStatus(state, module.id);
+    if (!status) continue;
+    if (status.kind === 'shelf') {
+      const stock = Math.floor(status.available + 0.0001);
+      drawChip(module.originTile, stock > 0 ? `SHELF ${stock}` : 'SHELVES EMPTY', stock > 0 ? '#72e7ad' : '#ff827a');
+      continue;
+    }
+    const active = `${status.activeRegisters}/${status.registerCount}`;
+    const line = status.queued > 0 ? ` · LINE ${status.queued}` : '';
+    const copy = status.activeRegisters > 0 ? `REG ${active}${line}` : `REG ${active} UNSTAFFED${line}`;
+    drawChip(module.originTile, copy, status.activeRegisters > 0 ? '#72dff2' : '#ffad65');
+  }
+}
+
 function drawCommercialTenantStaff(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -6803,6 +6870,7 @@ export function renderWorld(
 
   drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
 
+  const labeledBlockedConstruction = new Set<number>();
   for (const site of state.constructionSites) {
     if (!tileInRange(site.tileIndex, state, visibleTiles)) continue;
     const p = fromIndex(site.tileIndex, state.width);
@@ -6831,6 +6899,26 @@ export function renderWorld(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD', px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
+
+    if (site.state === 'blocked' && site.blockedReason) {
+      const labelKey = site.structuralProjectId ?? -site.id;
+      if (!labeledBlockedConstruction.has(labelKey)) {
+        labeledBlockedConstruction.add(labelKey);
+        const reason = `BLOCKED · ${site.blockedReason.toUpperCase()}`;
+        ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
+        const labelWidth = Math.ceil(ctx.measureText(reason).width + 10 * PX);
+        const labelX = px + TILE_SIZE * 0.5;
+        const labelY = py - Math.round(12 * PX);
+        ctx.fillStyle = 'rgba(21, 8, 12, 0.92)';
+        ctx.fillRect(labelX - labelWidth * 0.5, labelY, labelWidth, Math.round(11 * PX));
+        ctx.strokeStyle = '#ff7676';
+        ctx.strokeRect(labelX - labelWidth * 0.5, labelY, labelWidth, Math.round(11 * PX));
+        ctx.fillStyle = '#ffd7d7';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(reason, labelX, labelY + Math.round(5.5 * PX));
+      }
+    }
   }
 
   if (currentTool.kind !== 'hire-staff' && hoveredTile !== null && hoveredTile >= 0 && hoveredTile < state.tiles.length) {
@@ -6955,6 +7043,7 @@ export function renderWorld(
   drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
   drawIncidentMarkers(ctx, state, visibleTiles);
   drawCommercialUnitStatusChips(ctx, state, visibleTiles);
+  drawMarketFixtureFeedback(ctx, state, visibleTiles);
 
   const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
     x >= visibleTiles.minX - marginTiles &&

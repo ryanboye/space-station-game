@@ -468,6 +468,7 @@ export type VisitorPreference = 'cafeteria' | 'market' | 'lounge';
 /** Tenure controls departure, while the actor remains a Visitor in all cases. */
 export type VisitStayClass = 'errand' | 'shore' | 'contract' | 'extended' | 'permanent';
 export type ShipVisitPhase = 'announced' | 'approach' | 'secure' | 'visit-service' | 'recall' | 'boarding' | 'depart';
+export type VisitScheduleReason = 'remaining-work' | 'service-failure';
 export type RecurringNeedKind = 'hunger' | 'energy' | 'hygiene' | 'leisure';
 export type VisitorServiceFailureStage = 'none' | 'unmet' | 'balking' | 'distressed' | 'disruptive';
 
@@ -1528,6 +1529,8 @@ export interface ArrivingShip {
   plannedDepartureAt?: number;
   extensionUntil?: number | null;
   recallAt?: number | null;
+  /** Why the authored stay clock changed, retained for world-space feedback. */
+  visitScheduleReason?: VisitScheduleReason | null;
   // Dock-migration v0: when set, this ship is bound to a Berth room
   // (not a legacy Dock tile-cluster). The anchor is the lowest tile
   // index in the berth cluster — used by render to fit the ship inside
@@ -1775,6 +1778,7 @@ export interface PortContract {
   plannedDepartureAt?: number;
   extensionUntil?: number | null;
   recallAt?: number | null;
+  visitScheduleReason?: VisitScheduleReason | null;
 }
 
 export interface PortCargoLot {

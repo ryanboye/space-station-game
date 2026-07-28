@@ -1,6 +1,6 @@
 import { ModuleType, type ModuleInstance, type ModuleRotation, type StationState } from './types';
 
-export type FacilitySlotRole = 'browse' | 'checkout' | 'temporary-sleep';
+export type FacilitySlotRole = 'browse' | 'checkout' | 'checkout-staff' | 'temporary-sleep';
 export type FacilityFace = 'north' | 'east' | 'south' | 'west';
 
 export interface FacilitySlotDescriptor {
@@ -36,8 +36,13 @@ export const FACILITY_FIXTURE_DESCRIPTORS: Readonly<Partial<Record<ModuleType, F
     publicUseFace: 'west',
     stockServiceFace: 'east',
     slots: [
+      // The west face is the customer counter. The matching east-side slots
+      // are distinct duty positions: a Steward has to physically hold one to
+      // open that specific register.
       { id: 'checkout-a', role: 'checkout', x: 0, y: 1 },
-      { id: 'checkout-b', role: 'checkout', x: 0, y: 3 }
+      { id: 'checkout-b', role: 'checkout', x: 0, y: 3 },
+      { id: 'checkout-staff-a', role: 'checkout-staff', x: 1, y: 1 },
+      { id: 'checkout-staff-b', role: 'checkout-staff', x: 1, y: 3 }
     ]
   },
   [ModuleType.ShelfAisle]: {

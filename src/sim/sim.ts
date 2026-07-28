@@ -1962,20 +1962,22 @@ function shouldRefreshDerivedMetrics(state: StationState): boolean {
 }
 
 function roomOpsRefreshDt(state: StationState): number | null {
-  const wallNow = perfNowMs();
   const cadence = roomOpsCadenceByState.get(state);
-  if (cadence && wallNow < cadence.nextAt) return null;
+  // Operational state affects staffing, services and production; it must be
+  // a function of simulation time, never renderer or machine throughput.
+  if (cadence && state.now + 1e-9 < cadence.nextAt) return null;
   const elapsedSim = cadence ? Math.max(0, state.now - cadence.lastSimAt) : 0;
-  roomOpsCadenceByState.set(state, { nextAt: wallNow + ROOM_OPS_CADENCE_MS, lastSimAt: state.now });
+  roomOpsCadenceByState.set(state, { nextAt: state.now + ROOM_OPS_CADENCE_MS / 1000, lastSimAt: state.now });
   return elapsedSim;
 }
 
 function localAirRefreshDt(state: StationState): number | null {
-  const wallNow = perfNowMs();
   const cadence = localAirCadenceByState.get(state);
-  if (cadence && wallNow < cadence.nextAt) return null;
+  // Oxygen is gameplay. A fast-forwarded or low-frame-rate client must see
+  // the same atmosphere and exposure as a smoothly rendered client.
+  if (cadence && state.now + 1e-9 < cadence.nextAt) return null;
   const elapsedSim = cadence ? Math.max(0, state.now - cadence.lastSimAt) : 0;
-  localAirCadenceByState.set(state, { nextAt: wallNow + LOCAL_AIR_CADENCE_MS, lastSimAt: state.now });
+  localAirCadenceByState.set(state, { nextAt: state.now + LOCAL_AIR_CADENCE_MS / 1000, lastSimAt: state.now });
   return elapsedSim;
 }
 
@@ -2853,7 +2855,13 @@ function dutyAnchorsForSystem(state: StationState, system: CrewPrioritySystem): 
   }
   if (system === 'hygiene') return roomClusterAnchors(state, RoomType.Hygiene);
   if (system === 'lounge') return serviceWorkPosts(state, RoomType.Cantina);
-  if (system === 'market') return serviceWorkPosts(state, RoomType.Market);
+  if (system === 'market') {
+    // A large market is operated from the rear face of its Checkout Banks.
+    // Compact MarketStalls retain their self-service fallback and therefore
+    // do not consume a phantom staff post.
+    const registerPosts = enhancedMarketSlots(state, 'checkout-staff').map((slot) => slot.tileIndex);
+    return registerPosts.length > 0 ? registerPosts : [];
+  }
   return [];
 }
 
@@ -9488,6 +9496,12 @@ function clearLegacyCrewPostAssignments(state: StationState): void {
       crew.role === 'reactor' &&
       crew.targetTile === activeCargoRepairTile
     ) continue;
+    if (
+      crew.assignedSystem === 'market' &&
+      crew.staffRole === 'steward' &&
+      crew.targetTile !== null &&
+      enhancedMarketSlots(state, 'checkout-staff').some((slot) => slot.tileIndex === crew.targetTile)
+    ) continue;
     crew.role = 'idle';
     crew.targetTile = null;
     crew.lastSystem = null;
@@ -11889,10 +11903,16 @@ function ensureQueueChains(state: StationState): void {
     const claimed = new Set<number>();
     const providers = [
       ...collectServingPickupTargets(state).map((tile) => ({ tile, room: RoomType.Cafeteria })),
-      ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina }))
+      ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina })),
+      ...enhancedMarketSlots(state, 'checkout').map((slot) => ({ tile: slot.tileIndex, room: RoomType.Market }))
     ].sort((a, b) => a.tile - b.tile || a.room.localeCompare(b.room));
     for (const provider of providers) {
       const chain = buildQueueChain(state, provider.tile, provider.room, claimed);
+      // A CheckoutBank contains adjacent registers. Letting the numerically
+      // first register claim an entire 12-tile snake makes its neighbour look
+      // built but unusable. Four physical places per market register still
+      // reads as pressure while preserving a distinct FIFO line beside it.
+      if (provider.room === RoomType.Market && chain.length > 4) chain.length = 4;
       if (chain.length === 0) continue;
       theater.chainsByAnchor.set(provider.tile, chain);
       for (const tile of chain) claimed.add(tile);
@@ -11912,6 +11932,11 @@ function ensureQueueChains(state: StationState): void {
       if (provider === null || provider === undefined || !providers.has(provider)) return false;
       if (collectServingPickupTargets(state).includes(provider)) {
         return visitor.state === VisitorState.Queueing && !visitor.carryingMeal;
+      }
+      if (marketCheckoutAnchors(state).has(provider)) {
+        return visitor.state === VisitorState.Queueing &&
+          visitor.marketTradeGoodSourceTile !== null &&
+          visitor.marketTradeGoodSourceTile !== undefined;
       }
       return visitorWaitingForCantinaPickup(visitor);
     })
@@ -12084,6 +12109,56 @@ function joinCantinaBarQueue(state: StationState, visitor: Visitor): 'joined' | 
   visitor.state = VisitorState.ToLeisure;
   assignVisitorToQueue(state, visitor, bestAnchor);
   return 'joined';
+}
+
+/** A CheckoutBank is a staffed, physical service line. The source-item claim
+ * remains on the shopper from browse through this line, so a shelf unit can
+ * never be double-sold while the customer waits. */
+function joinMarketCheckoutQueue(state: StationState, visitor: Visitor): boolean {
+  ensureQueueChains(state);
+  const theater = state.derived.queueTheater;
+  const anchors = marketCheckoutAnchors(state);
+  if (anchors.size === 0) return false;
+  if (queuePositionOf(state, visitor.id, anchors) !== null) {
+    // A stale ToLeisure state can be restored from an old save while its
+    // durable queue membership remains valid. The line is authoritative:
+    // normalize the state before the visitor phase so it cannot drift into
+    // generic leisure routing and re-claim its own register.
+    visitor.state = VisitorState.Queueing;
+    return true;
+  }
+
+  let bestAnchor: number | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  const registerCandidates = [...theater.chainsByAnchor]
+    .filter(([anchor]) => anchors.has(anchor))
+    .sort(([left], [right]) => left - right);
+  const preferredRegisterIndex = registerCandidates.length > 0
+    ? Math.abs(visitor.id) % registerCandidates.length
+    : 0;
+  for (let index = 0; index < registerCandidates.length; index += 1) {
+    const [anchor, chain] = registerCandidates[index];
+    const members = theater.membersByAnchor.get(anchor) ?? [];
+    if (members.length >= chain.length) continue;
+    const register = marketCheckoutSlotAtTile(state, anchor);
+    if (!register) continue;
+    // Prefer registers that can currently finish a sale, but make an
+    // unstaffed checkout visibly accumulate a bounded line when it is all
+    // the player has built. The line itself says what is missing.
+    const unstaffedPenalty = marketRegisterIsStaffed(state, register) ? 0 : 5;
+    // Equal-length physical lines need a stable split. Without it, every
+    // shopper picks the numerically first empty register and a second staffed
+    // counter never visibly earns its footprint. Queue depth still dominates.
+    const score = members.length * 8 + unstaffedPenalty + (index === preferredRegisterIndex ? 0 : 0.01);
+    if (score < bestScore) {
+      bestScore = score;
+      bestAnchor = anchor;
+    }
+  }
+  if (bestAnchor === null) return false;
+  visitor.state = VisitorState.Queueing;
+  assignVisitorToQueue(state, visitor, bestAnchor);
+  return true;
 }
 
 /** Per-tick upkeep: prune leavers, compact slots, march everyone forward. */
@@ -13740,7 +13815,7 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
       }
       if (operation.kind === 'supplier-delivery') {
         const destinations = operation.stockKind === 'travel-supplies'
-          ? state.moduleInstances.filter((module) => module.type === ModuleType.MarketStall).map((module) => module.originTile)
+          ? supplierOrderDestinations(state, 'travel-supplies')
           : operation.stockKind === 'fuel'
             ? state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank).map((module) => module.originTile)
             : operation.stockKind === 'prepared-meals'
@@ -14138,6 +14213,46 @@ function recordBerthServiceOutcome(state: StationState, ship: ArrivingShip): voi
   });
 }
 
+function longStayServiceFailurePressure(
+  state: StationState,
+  shipId: number
+): { cohort: number; severe: number; pressure: number } {
+  let cohort = 0;
+  let severe = 0;
+  let weighted = 0;
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId !== shipId || !isLongStayClass(visitor.stayClass)) continue;
+    cohort += 1;
+    const stage = visitor.serviceFailureStage ?? 'none';
+    if (stage === 'distressed' || stage === 'disruptive') severe += 1;
+    weighted += stage === 'disruptive'
+      ? 1
+      : stage === 'distressed'
+        ? 0.7
+        : stage === 'balking'
+          ? 0.3
+          : stage === 'unmet'
+            ? 0.1
+            : 0;
+  }
+  return { cohort, severe, pressure: cohort > 0 ? weighted / cohort : 0 };
+}
+
+/** A long-stay captain may cut the visit short, but only after the promised
+ * minimum stay and a sustained cohort-level collapse. One unhappy passenger
+ * does not evict an otherwise healthy ship. */
+function tryRecallFailedLongStay(state: StationState, ship: ArrivingShip, contract: PortContract): boolean {
+  if (!isLongStayClass(ship.stayClass) || contract.status !== 'active') return false;
+  const earliest = ship.earliestDepartureAt ?? contract.earliestDepartureAt ?? Number.POSITIVE_INFINITY;
+  if (state.now < earliest) return false;
+  const failure = longStayServiceFailurePressure(state, ship.id);
+  if (failure.cohort === 0 || failure.severe < Math.ceil(failure.cohort * 0.5) || failure.pressure < 0.65) return false;
+  ship.visitScheduleReason = 'service-failure';
+  contract.visitScheduleReason = 'service-failure';
+  beginShipRecall(state, ship);
+  return true;
+}
+
 function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   if (ship.kind !== 'transient' || ship.stage !== 'docked') return;
   const contract = portContractForShip(state, ship.id);
@@ -14177,7 +14292,14 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   if (cancelledShipSide.size > 0) {
     state.visitors = state.visitors.filter((visitor) => !cancelledShipSide.has(visitor.id));
   }
-  pushCrowdEvent(state, 'info', `${ship.portManifest?.callsign ?? `Ship ${ship.id}`} recall started`);
+  const callsign = ship.portManifest?.callsign ?? `Ship ${ship.id}`;
+  pushCrowdEvent(
+    state,
+    ship.visitScheduleReason === 'service-failure' ? 'warn' : 'info',
+    ship.visitScheduleReason === 'service-failure'
+      ? `${callsign} began an early recall after sustained service failures`
+      : `${callsign} recall started`
+  );
 }
 
 function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void {
@@ -14282,10 +14404,12 @@ function tryExtendLongStayVisit(state: StationState, ship: ArrivingShip, contrac
   ship.extensionUntil = nextDeparture;
   ship.plannedDepartureAt = nextDeparture;
   ship.visitPhase = 'visit-service';
+  ship.visitScheduleReason = 'remaining-work';
   contract.extensionUntil = nextDeparture;
   contract.plannedDepartureAt = nextDeparture;
   contract.hardDepartureAt = nextDeparture;
   contract.boardingStartsAt = nextDeparture - VISIT_TIMINGS.boardingLeadSec;
+  contract.visitScheduleReason = 'remaining-work';
   if (ship.portTurnaround) ship.portTurnaround.loadingDeadlineAt = nextDeparture;
   pushCrowdEvent(state, 'info', `${contract.callsign} extended its stay for remaining station work`);
   return true;
@@ -14391,6 +14515,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         if (visitor) queuePassengerTransfer(state, visitor, 'disembark');
         ship.spawnCarry -= 1;
       }
+      if (contract && contract.status === 'active') tryRecallFailedLongStay(state, ship, contract);
       if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
         if (!tryExtendLongStayVisit(state, ship, contract)) beginShipRecall(state, ship);
       }
@@ -17794,12 +17919,22 @@ function isCrewReservedForCommandDuty(state: StationState, crew: CrewMember): bo
 export function isCrewHoldingProtectedPost(state: StationState, crew: CrewMember): boolean {
   const system = crew.assignedSystem;
   if (system === null || crew.resting) return false;
+  const marketDemand = state.visitors.filter(
+    (visitor) =>
+      visitor.state !== VisitorState.ToDock &&
+      (visitor.primaryPreference === 'market' ||
+        (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) ||
+        (visitor.queueProviderTile !== null &&
+          visitor.queueProviderTile !== undefined &&
+          marketCheckoutAnchors(state).has(visitor.queueProviderTile)))
+  ).length;
   const required: Partial<Record<CrewPrioritySystem, number>> = {
     reactor: state.metrics.requiredCriticalStaff.reactor,
     'life-support': state.metrics.requiredCriticalStaff.lifeSupport,
     hydroponics: state.metrics.requiredCriticalStaff.hydroponics,
     kitchen: state.metrics.requiredCriticalStaff.kitchen,
     cafeteria: state.metrics.requiredCriticalStaff.cafeteria,
+    market: Math.min(dutyAnchorsForSystem(state, 'market').length, marketDemand),
     security: state.incidents.some(isIncidentActive) ? 1 : 0
   };
   const floor = required[system] ?? 0;
@@ -17816,6 +17951,10 @@ export function isCrewHoldingProtectedPost(state: StationState, crew: CrewMember
             ? state.metrics.assignedCriticalStaff.kitchen
             : system === 'cafeteria'
               ? state.metrics.assignedCriticalStaff.cafeteria
+              : system === 'market'
+                ? state.crewMembers.filter(
+                    (candidate) => !candidate.resting && candidate.assignedSystem === 'market'
+                  ).length
               : 0;
   return availableAtPost <= floor;
 }
@@ -18260,6 +18399,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     })
     .filter((crew) => !isCrewReservedForCommandDuty(state, crew))
     .filter((crew) => !isCrewHandlingActiveIncident(state, crew.id))
+    .filter((crew) => crew.assignedSystem !== 'market' || !isCrewHoldingProtectedPost(state, crew))
     .filter((crew) => !hasProtectedSelfCare(crew) || canInterruptSelfCareForFood(crew) || canInterruptSelfCareForOwnLane(crew))
     .filter(
       (crew) =>
@@ -18877,6 +19017,17 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing)
     );
   const cafeteriaCrewPosts = dutyAnchorsForSystem(state, 'cafeteria');
+  const marketCheckoutPosts = dutyAnchorsForSystem(state, 'market');
+  const marketServiceNeeded =
+    marketCheckoutPosts.length > 0 &&
+    state.visitors.some(
+      (visitor) =>
+        visitor.primaryPreference === 'market' ||
+        (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) ||
+        (visitor.queueProviderTile !== null &&
+          visitor.queueProviderTile !== undefined &&
+          marketCheckoutAnchors(state).has(visitor.queueProviderTile))
+    );
   const cargoServiceShips = state.arrivingShips.filter(
     (ship) => ship.stage === 'docked' && ship.portTurnaround?.phase === 'unloading'
   );
@@ -20234,6 +20385,25 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       !crew.toileting &&
       !crew.drinking &&
       !crew.leisure &&
+      crew.staffRole === 'steward' &&
+      marketServiceNeeded &&
+      marketCheckoutPosts.length > 0
+    ) {
+      const post = marketCheckoutPosts[(crew.id - 1 + marketCheckoutPosts.length) % marketCheckoutPosts.length];
+      if (crew.assignedSystem !== 'market' || crew.targetTile !== post) {
+        crew.assignedSystem = 'market';
+        crew.lastSystem = 'market';
+        crew.role = 'cafeteria';
+        crew.targetTile = post;
+        setCrewPath(state, crew, []);
+      }
+    } else if (
+      crew.activeJobId === null &&
+      !crew.resting &&
+      !crew.cleaning &&
+      !crew.toileting &&
+      !crew.drinking &&
+      !crew.leisure &&
       crew.workLane === 'food' &&
       passengerServiceNeeded &&
       cafeteriaCrewPosts.length > 0
@@ -20267,6 +20437,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     } else if (
       crew.activeJobId === null &&
       (crew.assignedSystem === 'cafeteria' ||
+        crew.assignedSystem === 'market' ||
         (crew.assignedSystem === 'workshop' && crew.role === 'cafeteria') ||
         (crew.assignedSystem === 'reactor' && crew.role === 'reactor' && cargoRepairPost === null))
     ) {
@@ -20896,9 +21067,13 @@ function marketSpendPerSec(state: StationState, visitor: Visitor): number {
 
 const MARKET_BROWSE_DWELL_SEC = 4.5;
 const MARKET_CHECKOUT_DWELL_SEC = 2.4;
+const MARKET_UNSTAFFED_BALK_SEC = 14;
 const TEMPORARY_SLEEP_DWELL_SEC = 18;
 
-function enhancedMarketSlots(state: StationState, role: 'browse' | 'checkout'): FacilitySlotTarget[] {
+function enhancedMarketSlots(
+  state: StationState,
+  role: 'browse' | 'checkout' | 'checkout-staff'
+): FacilitySlotTarget[] {
   return activeFacilitySlotTargets(
     state,
     role === 'browse' ? [ModuleType.ShelfAisle] : [ModuleType.CheckoutBank],
@@ -20909,6 +21084,118 @@ function enhancedMarketSlots(state: StationState, role: 'browse' | 'checkout'): 
 
 function hasEnhancedMarketMachine(state: StationState): boolean {
   return enhancedMarketSlots(state, 'browse').length > 0 && enhancedMarketSlots(state, 'checkout').length > 0;
+}
+
+function marketRegisterKey(slot: FacilitySlotTarget): string {
+  return `${slot.moduleId}:${slot.slotId}`;
+}
+
+function matchingMarketStaffSlot(
+  state: StationState,
+  customerSlot: FacilitySlotTarget
+): FacilitySlotTarget | null {
+  const suffix = customerSlot.slotId.replace(/^checkout-/, '');
+  return enhancedMarketSlots(state, 'checkout-staff').find(
+    (slot) => slot.moduleId === customerSlot.moduleId && slot.slotId === `checkout-staff-${suffix}`
+  ) ?? null;
+}
+
+function tenantOpenedMarketRegisters(state: StationState): Set<string> {
+  const opened = new Set<string>();
+  for (const unit of state.commercialUnits) {
+    if (unit.phase !== 'open' || unit.selectedOffer?.targetRoom !== RoomType.Market) continue;
+    const unitTiles = new Set(unit.tiles);
+    const registers = enhancedMarketSlots(state, 'checkout')
+      .filter((slot) => unitTiles.has(slot.moduleOriginTile))
+      .sort((a, b) => a.moduleOriginTile - b.moduleOriginTile || a.slotId.localeCompare(b.slotId));
+    const staff = Math.max(0, unit.tenantStaffTiles.length, unit.selectedOffer.suppliedStaff);
+    for (const register of registers.slice(0, staff)) opened.add(marketRegisterKey(register));
+  }
+  return opened;
+}
+
+function marketRegisterIsStaffed(state: StationState, customerSlot: FacilitySlotTarget): boolean {
+  if (tenantOpenedMarketRegisters(state).has(marketRegisterKey(customerSlot))) return true;
+  const staffSlot = matchingMarketStaffSlot(state, customerSlot);
+  if (!staffSlot) return false;
+  return state.crewMembers.some(
+    (crew) =>
+      !crew.resting &&
+      crew.staffRole === 'steward' &&
+      crew.assignedSystem === 'market' &&
+      crew.targetTile === staffSlot.tileIndex &&
+      crew.tileIndex === staffSlot.tileIndex
+  );
+}
+
+function marketCheckoutSlotAtTile(state: StationState, tileIndex: number): FacilitySlotTarget | null {
+  return enhancedMarketSlots(state, 'checkout').find((slot) => slot.tileIndex === tileIndex) ?? null;
+}
+
+function marketCheckoutAnchors(state: StationState): Set<number> {
+  return new Set(enhancedMarketSlots(state, 'checkout').map((slot) => slot.tileIndex));
+}
+
+export type MarketFixtureStatus =
+  | {
+      kind: 'shelf';
+      stock: number;
+      reserved: number;
+      available: number;
+    }
+  | {
+      kind: 'checkout';
+      activeRegisters: number;
+      registerCount: number;
+      queued: number;
+      capacity: number;
+      unstaffedRegisters: number;
+    };
+
+/** Compact world/inspector summary for authored market fixtures. Kept in the
+ * simulation so renderer and UI both observe the same staff and FIFO truth. */
+export function getMarketFixtureStatus(
+  state: StationState,
+  moduleId: number
+): MarketFixtureStatus | null {
+  const module = state.moduleInstances.find((candidate) => candidate.id === moduleId);
+  if (!module) return null;
+  if (module.type === ModuleType.ShelfAisle) {
+    const stock = itemStockAtNode(state, module.originTile, 'tradeGood');
+    const reserved = activeReservationAmount(
+      state,
+      'source-item',
+      module.originTile,
+      `market-stock:${module.originTile}`,
+      'tradeGood'
+    );
+    return { kind: 'shelf', stock, reserved, available: Math.max(0, stock - reserved) };
+  }
+  if (module.type !== ModuleType.CheckoutBank) return null;
+  const registers = enhancedMarketSlots(state, 'checkout').filter((slot) => slot.moduleId === module.id);
+  const queued = registers.reduce(
+    (total, register) => total + state.visitors.filter(
+      (visitor) =>
+        visitor.state === VisitorState.Queueing &&
+        visitor.queueProviderTile === register.tileIndex &&
+        visitor.marketTradeGoodSourceTile !== null &&
+        visitor.marketTradeGoodSourceTile !== undefined
+    ).length,
+    0
+  );
+  const capacity = registers.reduce(
+    (total, register) => total + (state.derived.queueTheater.chainsByAnchor.get(register.tileIndex)?.length ?? 0),
+    0
+  );
+  const activeRegisters = registers.filter((register) => marketRegisterIsStaffed(state, register)).length;
+  return {
+    kind: 'checkout',
+    activeRegisters,
+    registerCount: registers.length,
+    queued,
+    capacity,
+    unstaffedRegisters: registers.length - activeRegisters
+  };
 }
 
 function hasActiveVisitorReservation(
@@ -21003,29 +21290,81 @@ function assignPathToMarketCheckout(state: StationState, visitor: Visitor): bool
     visitor.marketTradeGoodSourceTile = null;
     return false;
   }
-  const checkoutSlots = enhancedMarketSlots(state, 'checkout');
-  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, checkoutSlots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
-  if (!choice) return false;
-  const slot = checkoutSlots.find((candidate) => candidate.tileIndex === choice.target);
-  if (!slot) return false;
+  return joinMarketCheckoutQueue(state, visitor);
+}
+
+function abandonUnstaffedMarketCheckout(state: StationState, visitor: Visitor): void {
+  pushCrowdFloater(state, visitor.x, visitor.y, 'MARKET UNSTAFFED', '#ff9f5f');
+  pushCrowdEvent(state, 'warn', 'A shopper left an unstaffed checkout line');
+  addVisitorFailurePenalty(state, 0.025, 'shipServicesMissing');
+  removeVisitorFromQueues(state, visitor.id, marketCheckoutAnchors(state));
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'failed', ['provider-slot', 'source-item']);
+  visitor.marketTradeGoodSourceTile = null;
+  visitor.reservedTargetTile = null;
+  visitor.serviceBlockedSince = null;
+  visitor.lastLeisureKind = 'market';
+  visitor.state = VisitorState.ToDock;
+  assignPathToDock(state, visitor);
+}
+
+function updateMarketCheckoutQueue(
+  state: StationState,
+  visitor: Visitor,
+  dt: number,
+  occupancyByTile: Map<number, number>
+): void {
+  const anchors = marketCheckoutAnchors(state);
+  const position = queuePositionOf(state, visitor.id, anchors);
+  if (position === null) {
+    visitor.serviceBlockedSince ??= state.now;
+    visitor.movementWaitReason = 'checkout line unavailable';
+    if (state.now - visitor.serviceBlockedSince >= MARKET_UNSTAFFED_BALK_SEC) abandonUnstaffedMarketCheckout(state, visitor);
+    return;
+  }
+  const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+  if (moveResult === 'blocked') {
+    visitor.blockedTicks = Math.min(visitor.blockedTicks + 1, 9999);
+    addVisitorPatience(state, visitor, dt * 0.28);
+  } else if (moveResult === 'moved') {
+    visitor.blockedTicks = 0;
+  }
+  const queueSlot = state.derived.queueTheater.chainsByAnchor.get(position.anchor)?.[position.index] ?? null;
+  if (position.index !== 0 || visitor.path.length > 0 || visitor.tileIndex !== queueSlot) return;
+
+  const register = marketCheckoutSlotAtTile(state, position.anchor);
+  if (!register || !marketRegisterIsStaffed(state, register)) {
+    visitor.serviceBlockedSince ??= state.now;
+    visitor.movementWaitReason = 'market register unstaffed';
+    addVisitorPatience(state, visitor, dt * 0.45);
+    if (state.now - visitor.serviceBlockedSince >= MARKET_UNSTAFFED_BALK_SEC) abandonUnstaffedMarketCheckout(state, visitor);
+    return;
+  }
+
   const checkoutReservation = tryCreateReservation(state, {
     ownerKind: 'visitor',
     ownerId: visitor.id,
     kind: 'provider-slot',
-    targetTile: slot.tileIndex,
-    targetId: `market-checkout:${slot.moduleId}:${slot.slotId}`,
+    targetTile: register.tileIndex,
+    targetId: `market-checkout:${register.moduleId}:${register.slotId}`,
     amount: 1,
     capacity: 1,
-    ttlSec: 75,
-    replaceOwnerReservations: true
+    ttlSec: 75
   });
-  if (!checkoutReservation.ok) return false;
-  visitor.reservedTargetTile = slot.tileIndex;
-  visitor.reservedServingTile = null;
+  if (!checkoutReservation.ok) {
+    visitor.movementWaitReason = 'checkout register occupied';
+    return;
+  }
+  removeVisitorFromQueues(state, visitor.id, anchors);
+  // Queue state is persistent visitor data. Clear it explicitly at the same
+  // handoff as the checkout claim so the next head cannot be held behind a
+  // customer who is already walking to the counter.
+  visitor.queueProviderTile = null;
+  visitor.queueJoinedAt = null;
+  visitor.reservedTargetTile = register.tileIndex;
   visitor.serviceBlockedSince = null;
-  setVisitorPath(state, visitor, choice.path);
   visitor.state = VisitorState.ToLeisure;
-  return visitor.path.length > 0 || visitor.tileIndex === slot.tileIndex;
+  const path = findQueueSlotPath(state, visitor.tileIndex, register.tileIndex, visitor.id);
+  setVisitorPath(state, visitor, path ?? []);
 }
 
 function temporarySleepSlots(state: StationState): FacilitySlotTarget[] {
@@ -21338,6 +21677,12 @@ function updateVisitorServiceFailure(state: StationState, visitor: Visitor): voi
         : 'unmet';
 }
 
+/** Focused runner hook for the durable failure ladder. Full ship tests cover
+ * the resulting operational behavior separately. */
+export function runVisitorServiceFailureTestTick(state: StationState, visitor: Visitor): void {
+  updateVisitorServiceFailure(state, visitor);
+}
+
 function routeStrandedVisitor(state: StationState, visitor: Visitor): boolean {
   if (!visitorIsStranded(visitor) || !visitor.needs) return false;
   // A bed is a real scarce recovery slot. Prefer it only when energy is the
@@ -21558,6 +21903,33 @@ function updateVisitorLogic(
         }
       }
       addVisitorFailurePenalty(state, 0.2 * multiplier * (0.5 + suppression * 0.5), 'trespass');
+    }
+
+    const marketQueueAnchor =
+      visitor.queueProviderTile !== null &&
+      visitor.queueProviderTile !== undefined &&
+      marketCheckoutAnchors(state).has(visitor.queueProviderTile);
+    const marketCheckoutClaimed = state.reservations.some(
+      (reservation) =>
+        reservation.releaseReason === null &&
+        reservation.expiresAt > state.now &&
+        reservation.ownerKind === 'visitor' &&
+        reservation.ownerId === visitor.id &&
+        reservation.kind === 'provider-slot' &&
+        reservation.targetId?.startsWith('market-checkout:')
+    );
+    // Queue membership is durable across movement and save hydration. It
+    // always wins over generic leisure routing until this visitor has a real
+    // register claim; otherwise an arriving shopper can oscillate between
+    // ToLeisure and Queueing while still physically blocking the line.
+    if (marketQueueAnchor && !marketCheckoutClaimed) visitor.state = VisitorState.Queueing;
+    const marketQueueing =
+      visitor.state === VisitorState.Queueing &&
+      marketQueueAnchor;
+    if (marketQueueing) {
+      updateMarketCheckoutQueue(state, visitor, dt, occupancyByTile);
+      keep.push(visitor);
+      continue;
     }
 
     if (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing) {

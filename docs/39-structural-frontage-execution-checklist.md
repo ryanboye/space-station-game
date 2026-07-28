@@ -150,8 +150,8 @@ compiles is not sufficient for player-facing work.
 - [x] Preserve exactly-once `settled` behavior.
 - [x] Store earliest departure, planned departure, boarding start, hard departure,
   and extension window.
-- [ ] Support early departure after sustained service failure.
-- [ ] Support bounded extension while useful spend or work continues.
+- [x] Support early departure after sustained service failure.
+- [x] Support bounded extension while useful spend or work continues.
 - [x] Give scheduled traffic firm windows.
 - [ ] Let freight wait for promised work until its explicit deadline.
 - [ ] Let repair traffic remain until work completes, aborts, or is cancelled.
@@ -201,12 +201,12 @@ compiles is not sufficient for player-facing work.
   throughput.
 - [x] Add stocked shelf or aisle browsing positions.
 - [x] Require physical inventory for positive market feedback and sales.
-- [ ] Add stock collection from visible shelf/display inventory.
+- [x] Add stock collection from visible shelf/display inventory.
 - [ ] Add a staff-side restock route.
-- [ ] Add a real customer queue at checkout.
+- [x] Add a real customer queue at checkout.
 - [ ] Make a second checkout produce a visible throughput improvement.
 - [ ] Make shelf mix or goods category affect demand without creating a checklist.
-- [ ] Prevent `Great selection` feedback when no stock exists.
+- [x] Prevent `Great selection` feedback when no stock exists.
 
 ### Demand Discovery And Reception
 
@@ -225,7 +225,7 @@ compiles is not sufficient for player-facing work.
 ### Large Functional Modules
 
 - [x] Implement Checkout Bank, initial target 2x5.
-- [ ] Give Checkout Bank two staffed registers and two customer service slots.
+- [x] Give Checkout Bank two staffed registers and two customer service slots.
 - [x] Implement tileable Shelf Aisle, initial target 1x4.
 - [x] Give Shelf Aisle three visible browsing positions.
 - [ ] Implement Display or Cold Case, initial target 1x3.
@@ -271,16 +271,16 @@ compiles is not sufficient for player-facing work.
 - [ ] One checkout visibly becomes overwhelmed.
 - [ ] A second checkout or redesigned queue improves measured throughput.
 - [ ] A larger cantina visibly supports more simultaneous occupants.
-- [ ] Large fixtures create meaningful queue, route, stock, staffing, and floor
+- [x] Large fixtures create meaningful queue, route, stock, staffing, and floor
   tradeoffs.
-- [ ] Beds cannot be double-claimed.
+- [x] Beds cannot be double-claimed.
 - [ ] Reception helps without becoming mandatory.
 - [ ] Two seeded runs differ while remaining inferable.
 - [ ] Playtest decides whether to proceed with deeper hidden demand.
 
 ## Failed Stay And Stranding Contract
 
-- [ ] Errand visitors can balk, abandon a purchase, and leave early.
+- [x] Errand visitors can balk, abandon a purchase, and leave early.
 - [ ] Shore-leave passengers seek an alternative and obey recall.
 - [x] A passenger who physically misses boarding becomes stranded.
 - [ ] Contract crews remain while their ship work is incomplete.
@@ -415,7 +415,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Require EVA construction for exterior/unpressurized modules.
 - [ ] Report missing material.
 - [ ] Report missing staging route.
-- [ ] Report missing Airlock/EVA route.
+- [x] Report missing Airlock/EVA route.
 - [ ] Report low EVA oxygen.
 - [ ] Report incomplete seal.
 - [ ] Report obstructed work position.
@@ -709,13 +709,13 @@ compiles is not sufficient for player-facing work.
 - [ ] Adapt existing Berth geometry until edited/replaced.
 - [ ] Add safe defaults for new occupant state.
 - [ ] Add safe defaults for integrity/damage.
-- [ ] Persist construction and damage.
-- [ ] Persist durable ship visit and slot/queue ownership.
+- [x] Persist construction and damage.
+- [x] Persist durable ship visit and slot/queue ownership.
 - [ ] Rebuild structural graphs after load.
 - [ ] Rebuild approach conflict groups after load.
 - [ ] Rebuild congestion and movement intents after load.
 - [ ] Rebuild interface diagnoses after load.
-- [ ] Never persist stale actor paths or transient movement intents.
+- [x] Never persist stale actor paths or transient movement intents.
 - [ ] Preserve maintenance identity through map expansion and module movement.
 
 ### Performance
@@ -730,7 +730,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Maintain an exterior target list for maintenance.
 - [ ] Keep render interpolation independent of simulation speed.
 - [ ] Profile every phase at baseline scale.
-- [ ] Profile final build at two to three times current station footprint.
+- [x] Profile final build at two to three times current station footprint.
 
 ### Full Playthrough
 
@@ -768,16 +768,16 @@ compiles is not sufficient for player-facing work.
 - [ ] Add fixture-slot/reception runner.
 - [x] Add failed-stay/stranding runner.
 - [x] Add movement/queue/deadlock runner.
-- [ ] Add cargo/boarding/support runner.
+- [x] Add cargo/boarding/support runner.
 - [x] Add integrity/pressure/EVA repair runner.
-- [ ] Add target-scale performance runner.
+- [x] Add target-scale performance runner.
 - [x] Document commands beside each completed phase.
 
 ## User Playtest Review
 
 - [x] Provide a URL that opens the correct scenario/save.
 - [x] Provide a short list of new interactions to try.
-- [ ] Provide one deliberately bad layout to observe.
+- [x] Provide one deliberately bad layout to observe.
 - [ ] Provide the tools to improve that layout in world.
 - [x] Ensure sprites are enabled by default.
 - [x] Ensure panels can be hidden for visual inspection.
@@ -1027,3 +1027,24 @@ Remaining uncertainty:
 - Focused evidence: filtered `npm run test:site-charter` checks prove direct, cross-lane, and opposed approaches have ordered physical approach rates; two identical high-debris charters at different system-map positions rotate the exposed station face; the no-charter golden condition path remains untouched. `npm run build` and `git diff --check` pass.
 - Player-facing behavior: automatic interface selection now prefers a ship's arrival-facing Pod Dock or Berth, while legal cross-station routing remains available at a visible time cost. Inspecting or placing a physical interface labels its facing as busy, steady, or quiet and calls out debris exposure, bright space, cool pockets, or shelter directly beside the approach envelope. Existing lane generation makes high-volume directions produce more traffic; existing exterior-integrity sampling consumes the now-directional debris field; existing solar and room-heat simulation consume the shown sunlight field.
 - Remaining uncertainty: the station-world label still needs a fresh chartered live visual capture; high-load room placement against a cool pocket and charter-driven trade-composition/service mix remain open; mitigation is already covered by Truss and EVA repair but still needs to be explained alongside the placement forecast.
+
+2026-07-27 · Facility-scale market operation
+
+- Commit or files: `src/sim/facility-descriptors.ts`, market flow and crew dispatch in `src/sim/sim.ts`, market status presentation in `src/render/render.ts`, authored `?scenario=facility-scale`, and `tools/facility-slots-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:facility-slots` proves physical shelf browsing, exclusive stock claims, FIFO checkout, stocked and empty outcomes, abandonment of an unstaffed register, two distinct register/customer pairs, temporary-bunk exclusivity, and protection of physically posted Stewards from unrelated general dispatch.
+- Visual/playtest evidence: the first wall-adjacent Checkout Bank had no legal customer frontage and therefore zero queue capacity. Moving it inward produced eight physical line positions, two live registers, visible stocked aisles, and completed sales. This is the intended spatial tradeoff: the larger fixture earns throughput only when the player budgets public frontage, staff space, stock access, and floor area.
+- Remaining uncertainty: the second register has not yet been benchmarked against one-register throughput; restocking is sourced physically but its staff-side route needs a dedicated visual fixture; compact Market Stall compatibility still exists; and the larger cantina, Reception, wash, cabin, and connected-bar fixtures remain open.
+
+2026-07-27 · Visit scheduling, save migration, and deterministic scale cadence
+
+- Commit or files: visit timing and reasons in `src/sim/types.ts`, `src/sim/sim.ts`, and `src/sim/save.ts`; `tools/failed-stay-tests.ts`; new `tools/phase9-save-migration-tests.ts`; and `tools/target-scale-perf.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:failed-stay` proves cohort-level early recall after sustained failure and bounded extension for unfinished work. `npm run test:phase9-save` preserves five visit-phase records, exact contract timings, exactly-once settlement, partial construction, and breached exterior integrity while clearing stale paths, queue slots, reservations, occupancy, and invalid dock bindings. `npm run perf:target-scale` repeats a sealed 16,800-tile fixture with 50 crew, 50 visitors, and ten interfaces deterministically, at roughly 28 ms p95 simulation tick and 258 MiB RSS on this machine.
+- Correctness fix: room operations and local atmosphere cadence now use simulation time rather than wall-clock/render throughput. Fast-forward, a slow machine, and a smooth renderer therefore produce the same oxygen and operational results.
+- Remaining uncertainty: the scale fixture intentionally has little active work at its sample boundary and is not the full 50/50 mixed-operation gate; early recall and extension reasons render in interface chips but still need a live fixture capture; the broader `test:port-ops` runner retains obsolete assumptions about the pre-choice starter and needs an authored Berth fixture rather than patched expectations.
+
+2026-07-27 · Construction block diagnosis
+
+- Commit or files: blocked structural-project world feedback in `src/render/render.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:structural-expansion` remains green for planning, staging, Airlock/EVA routing, material custody, phased work, cancellation, save/resume, and commissioning.
+- Visual/playtest evidence: `?scenario=structural-expansion-blocked` now anchors `BLOCKED · NO AIRLOCK EVA ROUTE` directly over the red exterior blueprint. `?scenario=structural-expansion-active` shows the corresponding active EVA sites and worker, making the missing physical prerequisite diagnosable without opening a data panel.
+- Remaining uncertainty: missing material, staging, oxygen, seal, and obstructed-position reasons need equivalent live captures; a complete starter expansion still needs to be watched through sealed pressurization.

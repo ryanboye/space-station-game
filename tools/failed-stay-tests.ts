@@ -1,6 +1,7 @@
 import {
   createInitialState,
   getContractVisitorWorkMultiplier,
+  runVisitorServiceFailureTestTick,
   tick,
   transferStrandedVisitor
 } from '../src/sim/sim';
@@ -163,7 +164,9 @@ function testBoardingAndStranding(): void {
   normal.stayClass = 'errand';
   normal.needs = undefined;
   normal.state = VisitorState.ToDock;
-  advance(state, 0.4);
+  // Boarding now owns a physical transfer slot and crossing animation; allow
+  // that visible movement to finish rather than asserting the old instant exit.
+  advance(state, 3);
   assert(!state.visitors.some((visitor) => visitor.id === normal.id), 'A normally boarded passenger must leave the visitor list.');
 
   const strandedShip = contractShip(state, 91021);
@@ -189,26 +192,82 @@ function testFailureStagesAndWorkPressure(): void {
   const ship = contractShip(state, 92011);
   const visitor = passenger(state, ship, 92012);
   visitor.needs!.hunger = 17;
-  visitor.activeService = null;
-  visitor.state = VisitorState.Leisure;
-  advance(state, 0.4);
-  assert((visitor.serviceFailureStage ?? 'none') === 'none', 'A severe need with a reachable route must not immediately become a failure.');
-
   visitor.activeService = 'meal';
   visitor.state = VisitorState.ToCafeteria;
   visitor.serviceBlockedSince = state.now;
-  advance(state, 0.4);
+  visitor.needs!.unmetSince = state.now;
+  runVisitorServiceFailureTestTick(state, visitor);
   assert(visitor.serviceFailureStage === 'unmet', 'Failure should begin as unmet after a blocked severe need.');
-  advance(state, 30);
+  state.now += 30;
+  runVisitorServiceFailureTestTick(state, visitor);
   assert(String(visitor.serviceFailureStage) === 'balking', 'Failure should escalate to balking only after grace time.');
-  advance(state, 50);
+  state.now += 50;
+  runVisitorServiceFailureTestTick(state, visitor);
   assert(String(visitor.serviceFailureStage) === 'distressed', 'Failure should escalate to distressed only after a larger grace period.');
   assert(getContractVisitorWorkMultiplier(state, ship.id) === 0.92, 'Distressed passengers should reduce only their own ship work to 92%.');
   assert(getContractVisitorWorkMultiplier(state, ship.id + 1) === 1, 'Other ships must retain full work speed.');
   visitor.needs!.hunger = 100;
   visitor.serviceBlockedSince = null;
-  advance(state, 0.4);
+  runVisitorServiceFailureTestTick(state, visitor);
   assert(String(visitor.serviceFailureStage) === 'none' && getContractVisitorWorkMultiplier(state, ship.id) === 1, 'Need recovery must restore normal work productivity.');
+}
+
+function testEarlyRecallAndBoundedExtensionReasons(): void {
+  const failed = createInitialState({ seed: 9104, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(failed, 0);
+  const failedShip = contractShip(failed, 94011);
+  const failedVisitor = passenger(failed, failedShip, 94012);
+  const failedContract = failed.portOps.contracts.find((entry) => entry.id === failedShip.id)!;
+  failedShip.earliestDepartureAt = failed.now;
+  failedContract.earliestDepartureAt = failed.now;
+  failedVisitor.serviceFailureStage = 'distressed';
+  failedVisitor.failureSince = failed.now - 90;
+  failedVisitor.failureNeed = 'hunger';
+  failedVisitor.serviceBlockedSince = failed.now - 90;
+  failedVisitor.activeService = 'meal';
+  failedVisitor.state = VisitorState.ToCafeteria;
+  advance(failed, 0.2);
+  assert(failedShip.visitPhase === 'recall' && failedContract.status === 'boarding', 'Sustained cohort failure after the minimum stay must trigger early recall.');
+  assert(failedShip.visitScheduleReason === 'service-failure' && failedContract.visitScheduleReason === 'service-failure', 'Early recall must retain its player-facing cause.');
+
+  const working = createInitialState({ seed: 9105, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(working, 0);
+  const workingShip = contractShip(working, 95011);
+  const workingContract = working.portOps.contracts.find((entry) => entry.id === workingShip.id)!;
+  workingContract.boardingStartsAt = working.now;
+  workingShip.portTurnaround = {
+    phase: 'loading',
+    customsTile: workingShip.bayTiles[0],
+    cargoTile: workingShip.bayTiles[0],
+    inspectionProgress: 1,
+    inspectionRequired: 1,
+    clearanceJobId: null,
+    cargoReleased: true,
+    inboundTotal: 0,
+    inboundUnloaded: 0,
+    outboundRequired: { rawMaterial: 10, meal: 0, tradeGood: 0 },
+    outboundLoaded: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    fuelRequired: 0,
+    fuelDelivered: 0,
+    loadingDeadlineAt: working.now + 20,
+    payoutCredits: 0,
+    fulfillmentRatio: 0,
+    payoutSettled: false
+  };
+  advance(working, 0.2);
+  assert(workingShip.visitPhase === 'visit-service' && workingContract.status === 'active', 'Useful unfinished work should defer recall once.');
+  assert(workingShip.extensionUntil !== null && workingShip.visitScheduleReason === 'remaining-work', 'Extension must be bounded and retain its work reason.');
+  assert(workingContract.visitScheduleReason === 'remaining-work', 'Contract and ship must agree on the extension cause.');
+  const firstExtension = workingShip.extensionUntil;
+  workingContract.boardingStartsAt = working.now;
+  advance(working, 0.2);
+  assert(workingShip.extensionUntil === firstExtension, 'A ship must never receive repeated free extensions.');
+
+  const parsed = parseAndMigrateSave(serializeSave('visit-reasons', working, 'test'));
+  assert(parsed.ok, 'Visit-reason snapshot should parse.');
+  const restored = hydrateStateFromSave(parsed.save).state;
+  assert(restored.arrivingShips.find((entry) => entry.id === workingShip.id)?.visitScheduleReason === 'remaining-work', 'Ship extension reason must survive save/load.');
+  assert(restored.portOps.contracts.find((entry) => entry.id === workingContract.id)?.visitScheduleReason === 'remaining-work', 'Contract extension reason must survive save/load.');
 }
 
 function testReliefAndSaveRoundTrip(): void {
@@ -242,6 +301,7 @@ function testReliefAndSaveRoundTrip(): void {
 function main(): void {
   testBoardingAndStranding();
   testFailureStagesAndWorkPressure();
+  testEarlyRecallAndBoundedExtensionReasons();
   testReliefAndSaveRoundTrip();
   console.log('failed-stay-tests: ok');
 }

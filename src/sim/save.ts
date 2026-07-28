@@ -132,6 +132,7 @@ const PASSENGER_TRANSFER_PHASES: PassengerTransferPhase[] = [
   'boarding-crossing'
 ];
 const SHIP_VISIT_PHASES = ['announced', 'approach', 'secure', 'visit-service', 'recall', 'boarding', 'depart'] as const;
+const VISIT_SCHEDULE_REASONS = ['remaining-work', 'service-failure'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
 const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
 const SECURITY_POSTURES: SecurityPosture[] = ['discreet', 'standard', 'visible'];
@@ -1390,7 +1391,23 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
         promises: promisesFrom(entry.promises),
         passengerSpendingCredits: Math.max(0, asFiniteNumber(entry.passengerSpendingCredits, 0)),
         procurementCostCredits: Math.max(0, asFiniteNumber(entry.procurementCostCredits, 0)),
-        settlementId: typeof entry.settlementId === 'number' ? Math.max(1, Math.floor(entry.settlementId)) : null
+        settlementId: typeof entry.settlementId === 'number' ? Math.max(1, Math.floor(entry.settlementId)) : null,
+        stayClass: isOneOf(entry.stayClass, VISIT_STAY_CLASSES) ? entry.stayClass : 'errand',
+        earliestDepartureAt: typeof entry.earliestDepartureAt === 'number' && Number.isFinite(entry.earliestDepartureAt)
+          ? Math.max(0, entry.earliestDepartureAt)
+          : undefined,
+        plannedDepartureAt: typeof entry.plannedDepartureAt === 'number' && Number.isFinite(entry.plannedDepartureAt)
+          ? Math.max(0, entry.plannedDepartureAt)
+          : undefined,
+        extensionUntil: typeof entry.extensionUntil === 'number' && Number.isFinite(entry.extensionUntil)
+          ? Math.max(0, entry.extensionUntil)
+          : null,
+        recallAt: typeof entry.recallAt === 'number' && Number.isFinite(entry.recallAt)
+          ? Math.max(0, entry.recallAt)
+          : null,
+        visitScheduleReason: isOneOf(entry.visitScheduleReason, VISIT_SCHEDULE_REASONS)
+          ? entry.visitScheduleReason
+          : null
       });
     }
   }
@@ -2442,6 +2459,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
             : null,
           recallAt: typeof entry.recallAt === 'number' && Number.isFinite(entry.recallAt)
             ? Math.max(0, entry.recallAt)
+            : null,
+          visitScheduleReason: isOneOf(entry.visitScheduleReason, VISIT_SCHEDULE_REASONS)
+            ? entry.visitScheduleReason
             : null,
           approachCommitment: normalizeApproachCommitment(entry.approachCommitment)
         }];

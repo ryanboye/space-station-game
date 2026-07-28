@@ -2,7 +2,10 @@ import {
   assignPathToTemporarySleep,
   completeMarketCheckout,
   createInitialState,
+  getMarketFixtureStatus,
   getRoomInspectorAt,
+  hireStaffRole,
+  isCrewHoldingProtectedPost,
   tick,
   tryCreateReservation,
   tryPlaceModule
@@ -52,15 +55,15 @@ function setFixtureRoom(state: StationState, room: RoomType, x: number, y: numbe
 function buildFacilityState(): StationState {
   const state = createInitialState({ seed: 33101, physicalStarterInventory: true, manualTrafficAdmission: true });
   // Starter hull ends at y=48. These rooms share its accessible south edge.
-  setFixtureRoom(state, RoomType.Market, 42, 49, 10, 8);
-  setFixtureRoom(state, RoomType.Dorm, 54, 49, 7, 8);
+  setFixtureRoom(state, RoomType.Market, 42, 49, 18, 8);
+  setFixtureRoom(state, RoomType.Dorm, 62, 49, 7, 8);
   const place = (type: ModuleType, x: number, y: number): void => {
     const result = tryPlaceModule(state, type, tile(state, x, y));
     assert(result.ok, `place ${type} at ${x},${y}: ${result.reason ?? 'unknown error'}`);
   };
   place(ModuleType.ShelfAisle, 43, 50);
   place(ModuleType.CheckoutBank, 47, 50);
-  place(ModuleType.BunkBank, 55, 50);
+  place(ModuleType.BunkBank, 63, 50);
   state.pressurized.fill(true);
   return state;
 }
@@ -109,7 +112,9 @@ function makeVisitor(state: StationState, id: number, tileIndex: number): Visito
     needs: createVisitorNeeds(id),
     recurringNeedActive: null,
     marketTradeGoodSourceTile: null,
-    temporarySleepTargetTile: null
+    temporarySleepTargetTile: null,
+    queueProviderTile: null,
+    queueJoinedAt: null
   };
 }
 
@@ -125,6 +130,99 @@ function reserveSlot(state: StationState, visitorId: number, targetTile: number,
   }).ok;
 }
 
+function marketSlots(state: StationState, role: 'checkout' | 'checkout-staff') {
+  return resolveFacilitySlots(fixture(state, ModuleType.CheckoutBank), state.width).filter((slot) => slot.role === role);
+}
+
+function staffMarketRegisters(state: StationState, count: number): void {
+  const staffSlots = state.moduleInstances
+    .filter((module) => module.type === ModuleType.CheckoutBank)
+    .flatMap((module) => resolveFacilitySlots(module, state.width).filter((slot) => slot.role === 'checkout-staff'))
+    .sort((a, b) => a.tileIndex - b.tileIndex);
+  assert(staffSlots.length >= count, `need ${count} market staff slots`);
+  state.metrics.credits = Math.max(state.metrics.credits, 10_000);
+  while (state.crewMembers.length < count) {
+    assert(hireStaffRole(state, 'steward'), 'could not hire Steward for market fixture');
+  }
+  for (let index = 0; index < count; index += 1) {
+    const crew = state.crewMembers[index];
+    const slot = staffSlots[index];
+    crew.staffRole = 'steward';
+    crew.assignedSystem = 'market';
+    crew.lastSystem = 'market';
+    crew.role = 'cafeteria';
+    crew.targetTile = slot.tileIndex;
+    crew.tileIndex = slot.tileIndex;
+    crew.x = (slot.tileIndex % state.width) + 0.5;
+    crew.y = Math.floor(slot.tileIndex / state.width) + 0.5;
+    crew.path = [];
+    crew.resting = false;
+    crew.shiftBucket = 0;
+    crew.energy = 100;
+    crew.hunger = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.morale = 100;
+    crew.retargetAt = state.now + 120;
+    crew.taskLockUntil = state.now + 120;
+  }
+}
+
+function addShoppers(state: StationState, count: number, stockPerShelf = count): Visitor[] {
+  for (const shelf of state.moduleInstances.filter((module) => module.type === ModuleType.ShelfAisle)) {
+    const node = state.itemNodes.find((candidate) => candidate.tileIndex === shelf.originTile);
+    assert(node, 'ShelfAisle needs a stock node.');
+    node.items.tradeGood = stockPerShelf;
+  }
+  const shoppers: Visitor[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const visitor = makeVisitor(state, 500 + index, tile(state, 44 + (index % 3), 55));
+    visitor.stayClass = 'errand';
+    visitor.needs = undefined;
+    visitor.recurringNeedActive = null;
+    visitor.activeService = null;
+    visitor.primaryPreference = 'market';
+    visitor.leisureLegsRemaining = 1;
+    state.visitors.push(visitor);
+    shoppers.push(visitor);
+  }
+  return shoppers;
+}
+
+function runFor(state: StationState, seconds: number): void {
+  state.controls.paused = false;
+  for (let elapsed = 0; elapsed < seconds; elapsed += 0.1) tick(state, 0.1);
+}
+
+/** Saturated checkout harness: browsing/reserving is proven separately;
+ * this starts a simultaneous crowd carrying a real claimed shelf good. */
+function addCheckoutReadyShoppers(state: StationState, count: number): void {
+  const shelf = fixture(state, ModuleType.ShelfAisle);
+  const node = state.itemNodes.find((candidate) => candidate.tileIndex === shelf.originTile);
+  assert(node, 'ShelfAisle needs a stock node.');
+  node.items.tradeGood = count;
+  for (let index = 0; index < count; index += 1) {
+    const visitor = makeVisitor(state, 700 + index, tile(state, 44 + (index % 3), 55));
+    visitor.marketTradeGoodSourceTile = shelf.originTile;
+    assert(
+      tryCreateReservation(state, {
+        ownerKind: 'visitor',
+        ownerId: visitor.id,
+        kind: 'source-item',
+        targetTile: shelf.originTile,
+        targetId: `market-stock:${shelf.originTile}`,
+        itemType: 'tradeGood',
+        amount: 1,
+        capacity: count,
+        ttlSec: 100
+      }).ok,
+      'Checkout-ready shopper must reserve its physical shelf item.'
+    );
+    state.visitors.push(visitor);
+  }
+}
+
 function testDescriptorRotationAndCounts(): void {
   const unrotated: ModuleInstance = {
     id: 1,
@@ -138,9 +236,11 @@ function testDescriptorRotationAndCounts(): void {
   const rotated: ModuleInstance = { ...unrotated, rotation: 90, width: 5, height: 2 };
   const checkout = resolveFacilitySlots(unrotated, 100);
   const checkoutRotated = resolveFacilitySlots(rotated, 100);
-  assert(checkout.length === 2, 'CheckoutBank must expose exactly two checkout slots.');
-  assert(checkout.every((slot) => slot.role === 'checkout'), 'CheckoutBank slots must all be checkout slots.');
-  assert(checkoutRotated.map((slot) => `${slot.x},${slot.y}`).join('|') === '3,0|1,0', 'Checkout rotation must rotate local slot coordinates deterministically.');
+  const customerRegisters = checkout.filter((slot) => slot.role === 'checkout');
+  const staffRegisters = checkout.filter((slot) => slot.role === 'checkout-staff');
+  assert(customerRegisters.length === 2, 'CheckoutBank must expose exactly two customer registers.');
+  assert(staffRegisters.length === 2, 'CheckoutBank must expose a matching staff-side slot for each register.');
+  assert(checkoutRotated.filter((slot) => slot.role === 'checkout').map((slot) => `${slot.x},${slot.y}`).join('|') === '3,0|1,0', 'Checkout rotation must rotate customer slots deterministically.');
 
   const shelf: ModuleInstance = { ...unrotated, type: ModuleType.ShelfAisle, width: 1, height: 4, tiles: [202, 302, 402, 502] };
   const bunks: ModuleInstance = { ...unrotated, type: ModuleType.BunkBank, width: 2, height: 4, tiles: Array.from({ length: 8 }, (_, index) => 202 + index) };
@@ -151,7 +251,7 @@ function testDescriptorRotationAndCounts(): void {
 function testSlotExclusivityAndCapacity(): void {
   const state = buildFacilityState();
   const shelfSlot = resolveFacilitySlots(fixture(state, ModuleType.ShelfAisle), state.width)[0];
-  const checkoutSlots = resolveFacilitySlots(fixture(state, ModuleType.CheckoutBank), state.width);
+  const checkoutSlots = resolveFacilitySlots(fixture(state, ModuleType.CheckoutBank), state.width).filter((slot) => slot.role === 'checkout');
   const bunkSlot = resolveFacilitySlots(fixture(state, ModuleType.BunkBank), state.width)[0];
   assert(shelfSlot && bunkSlot, 'Expected fixture slots.');
   assert(reserveSlot(state, 1, shelfSlot.tileIndex, 'browse'), 'First visitor should claim browse slot.');
@@ -166,7 +266,7 @@ function testSlotExclusivityAndCapacity(): void {
   const oneBankSlots = checkoutSlots.length;
   const allCheckoutSlots = state.moduleInstances
     .filter((module) => module.type === ModuleType.CheckoutBank)
-    .flatMap((module) => resolveFacilitySlots(module, state.width));
+    .flatMap((module) => resolveFacilitySlots(module, state.width).filter((slot) => slot.role === 'checkout'));
   assert(oneBankSlots === 2 && allCheckoutSlots.length === 4, 'A second CheckoutBank must double physical checkout capacity from 2 to 4.');
 }
 
@@ -210,27 +310,156 @@ function testMarketBrowseToCheckoutFlow(): void {
   assert(shelfNode, 'ShelfAisle needs a physical stock node for the integrated flow.');
   shelfNode.items.tradeGood = 1;
 
-  const visitor = makeVisitor(state, 150, tile(state, 44, 55));
-  visitor.stayClass = 'errand';
-  visitor.needs = undefined;
-  visitor.recurringNeedActive = null;
-  visitor.activeService = null;
-  visitor.primaryPreference = 'market';
-  visitor.leisureLegsRemaining = 1;
-  state.visitors.push(visitor);
+  staffMarketRegisters(state, 1);
+  const [visitor] = addShoppers(state, 1, 1);
   state.controls.paused = false;
+  assert(getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id)?.kind === 'checkout', 'Expected checkout status.');
+  const initialRegister = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
+  assert(initialRegister?.kind === 'checkout' && initialRegister.activeRegisters === 1, `Steward must physically open one register before simulation (${JSON.stringify(initialRegister)} ${JSON.stringify(state.crewMembers[0])}).`);
+  tick(state, 0.1);
+  const afterFirstTick = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
+  assert(afterFirstTick?.kind === 'checkout' && afterFirstTick.activeRegisters === 1, `Steward lost register after first simulation tick (${JSON.stringify(afterFirstTick)} ${JSON.stringify(state.crewMembers[0])}).`);
+  assert(afterFirstTick.capacity > 0, `CheckoutBank needs a physical queue chain (${JSON.stringify([...state.derived.queueTheater.chainsByAnchor.entries()])}).`);
   const creditsBefore = state.metrics.credits;
 
-  for (let elapsed = 0; elapsed < 30 && state.usageTotals.tradeGoodsSold < 1; elapsed += 0.1) {
-    tick(state, 0.1);
-  }
+  for (let elapsed = 0; elapsed < 40 && state.usageTotals.tradeGoodsSold < 1; elapsed += 0.1) tick(state, 0.1);
 
-  assert(state.usageTotals.tradeGoodsSold === 1, 'A shopper must browse stocked shelves and complete checkout.');
+  assert(
+    state.usageTotals.tradeGoodsSold === 1,
+    `A shopper must browse stocked shelves and complete checkout (state ${visitor.state}, tile ${visitor.tileIndex}, target ${visitor.reservedTargetTile}, queue ${visitor.queueProviderTile}, wait ${visitor.movementWaitReason}, source ${visitor.marketTradeGoodSourceTile}, market ${JSON.stringify(getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id))}).`
+  );
   assert(shelfNode.items.tradeGood === 0, 'The integrated checkout must consume the reserved shelf item.');
   assert(state.metrics.credits > creditsBefore, 'The integrated checkout must pay the station.');
   assert(
     !state.reservations.some((reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null),
     'A completed browse-to-checkout trip must release all visitor reservations.'
+  );
+}
+
+function testMarketCheckoutFifoAndUnstaffedFeedback(): void {
+  const staffed = buildFacilityState();
+  staffMarketRegisters(staffed, 1);
+  const shoppers = addShoppers(staffed, 3, 3);
+  staffed.controls.paused = false;
+  let sawLine = false;
+  let sawTwoQueued = false;
+  for (let elapsed = 0; elapsed < 32 && !(sawTwoQueued && staffed.usageTotals.tradeGoodsSold >= 1); elapsed += 0.1) {
+    tick(staffed, 0.1);
+    const status = getMarketFixtureStatus(staffed, fixture(staffed, ModuleType.CheckoutBank).id);
+    if (status?.kind === 'checkout' && status.queued > 0) sawLine = true;
+    if (status?.kind === 'checkout' && status.queued >= 2) sawTwoQueued = true;
+  }
+  assert(sawLine, 'A large market must form a visible checkout line before sales complete.');
+  assert(sawTwoQueued, 'One staffed register must serialize a bounded FIFO line under demand.');
+  assert(staffed.usageTotals.tradeGoodsSold >= 1, 'A FIFO checkout line must eventually advance its head into exactly one sale.');
+  const liveQueue = shoppers
+    .filter((visitor) => visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined)
+    .sort((a, b) => (a.queueJoinedAt ?? Infinity) - (b.queueJoinedAt ?? Infinity) || a.id - b.id);
+  assert(liveQueue.length >= 2, 'The remaining shoppers must retain a physical FIFO order behind the active register.');
+  assert(liveQueue.map((visitor) => visitor.id).join('|') === [...liveQueue].sort((a, b) => a.id - b.id).map((visitor) => visitor.id).join('|'), 'Checkout line order must use joined-at time then visitor id as its deterministic FIFO tie-breaker.');
+  const retailEvents = staffed.serviceLog.recent.filter((event) => event.service === 'retail');
+  assert(retailEvents.length >= 1, 'Retail service log must record the completed checkout exactly once.');
+  assert(
+    retailEvents.every((event) => shoppers.some((visitor) => visitor.id === event.actorId)),
+    'Retail completion must belong to a shopper who physically entered the market queue.'
+  );
+
+  const unstaffed = buildFacilityState();
+  const [waiting] = addShoppers(unstaffed, 1, 1);
+  runFor(unstaffed, 11);
+  const register = getMarketFixtureStatus(unstaffed, fixture(unstaffed, ModuleType.CheckoutBank).id);
+  assert(register?.kind === 'checkout' && register.queued > 0 && register.unstaffedRegisters > 0, 'An unstaffed register must show a bounded visible line instead of selling goods.');
+  assert(unstaffed.usageTotals.tradeGoodsSold === 0, 'Unstaffed checkout must never complete a positive sale.');
+  assert(waiting.movementWaitReason === 'market register unstaffed', 'Unstaffed queue head must name the actual missing role.');
+  runFor(unstaffed, 20);
+  assert(waiting.marketTradeGoodSourceTile === null, 'Abandoning an unstaffed line must release the reserved shelf item.');
+  assert(!unstaffed.reservations.some((reservation) => reservation.ownerId === waiting.id && reservation.releaseReason === null), 'Unstaffed checkout abandonment must not strand claims.');
+}
+
+function testStaffedBankCapacityScales(): void {
+  const oneBank = buildFacilityState();
+  staffMarketRegisters(oneBank, 2);
+  addCheckoutReadyShoppers(oneBank, 8);
+  runFor(oneBank, 4);
+  const oneBankStatus = getMarketFixtureStatus(oneBank, fixture(oneBank, ModuleType.CheckoutBank).id);
+  assert(
+    oneBankStatus?.kind === 'checkout' && oneBankStatus.activeRegisters === 2,
+    'A second physically present Steward must open the second register in a CheckoutBank.'
+  );
+
+  const twoBanks = buildFacilityState();
+  const placed = tryPlaceModule(twoBanks, ModuleType.CheckoutBank, tile(twoBanks, 54, 50));
+  assert(placed.ok, `second checkout placement failed: ${placed.reason ?? 'unknown error'}`);
+  staffMarketRegisters(twoBanks, 4);
+  addCheckoutReadyShoppers(twoBanks, 8);
+  let consumedBankCapacity = false;
+  twoBanks.controls.paused = false;
+  for (let elapsed = 0; elapsed < 12; elapsed += 0.1) {
+    tick(twoBanks, 0.1);
+    const occupiedAnchors = new Set(
+      twoBanks.visitors
+        .filter((visitor) => visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined)
+        .map((visitor) => visitor.queueProviderTile!)
+    );
+    const activeBanks = twoBanks.moduleInstances
+      .filter((module) => module.type === ModuleType.CheckoutBank)
+      .filter((module) => {
+        const status = getMarketFixtureStatus(twoBanks, module.id);
+        return status?.kind === 'checkout' && status.activeRegisters > 0;
+      });
+    const banksWithDemand = new Set(
+      activeBanks.filter((module) => resolveFacilitySlots(module, twoBanks.width)
+        .some((slot) => slot.role === 'checkout' && occupiedAnchors.has(slot.tileIndex)))
+        .map((module) => module.id)
+    );
+    if (banksWithDemand.size >= 2) {
+      consumedBankCapacity = true;
+      break;
+    }
+  }
+  assert(
+    consumedBankCapacity,
+    'Under simultaneous reserved-goods demand, a second staffed CheckoutBank must receive a distinct physical queue.'
+  );
+}
+
+function testLiveCheckoutPostsSurviveGeneralDispatch(): void {
+  const state = buildFacilityState();
+  staffMarketRegisters(state, 2);
+  addShoppers(state, 3, 3);
+  state.controls.paused = false;
+  tick(state, 0.1);
+
+  const stewards = state.crewMembers.filter((crew) => crew.staffRole === 'steward').slice(0, 2);
+  const status = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
+  assert(
+    status?.kind === 'checkout' && status.activeRegisters === 2,
+    'General work dispatch must not strip Stewards from registers while shoppers need checkout.'
+  );
+  assert(
+    stewards.every((crew) => crew.assignedSystem === 'market' && crew.activeJobId === null),
+    'Protected checkout staff must remain physically posted instead of accepting unrelated jobs.'
+  );
+}
+
+function testUnrelatedQueueDoesNotCreateMarketDemand(): void {
+  const state = buildFacilityState();
+  staffMarketRegisters(state, 1);
+  const steward = state.crewMembers.find((crew) => crew.staffRole === 'steward');
+  assert(steward, 'Expected one posted Steward.');
+
+  const visitor = makeVisitor(state, 991, tile(state, 44, 52));
+  visitor.primaryPreference = 'cafeteria';
+  visitor.state = VisitorState.Queueing;
+  visitor.queueProviderTile = tile(state, 44, 53);
+  // Legacy saves may omit the market source field entirely. Undefined must
+  // not turn every old visitor into hidden demand for a register.
+  delete visitor.marketTradeGoodSourceTile;
+  state.visitors.push(visitor);
+
+  assert(
+    !isCrewHoldingProtectedPost(state, steward),
+    'A cafeteria line or missing legacy field must not reserve market staff.'
   );
 }
 
@@ -240,7 +469,7 @@ function testTemporarySleepAndHydration(): void {
   assert(bunkSlot, 'Expected bunk slot.');
   // Start inside the dorm fixture so this focused test exercises the bunk
   // reservation/dwell lifecycle rather than the starter hull's external route.
-  const visitor = makeVisitor(state, 200, tile(state, 56, 55));
+  const visitor = makeVisitor(state, 200, tile(state, 64, 55));
   visitor.needs!.energy = 10;
   visitor.needs!.active = 'energy';
   visitor.recurringNeedActive = 'energy';
@@ -285,6 +514,10 @@ function main(): void {
   testSlotExclusivityAndCapacity();
   testStockAndCheckoutAccounting();
   testMarketBrowseToCheckoutFlow();
+  testMarketCheckoutFifoAndUnstaffedFeedback();
+  testStaffedBankCapacityScales();
+  testLiveCheckoutPostsSurviveGeneralDispatch();
+  testUnrelatedQueueDoesNotCreateMarketDemand();
   testTemporarySleepAndHydration();
   console.log('facility-slots-tests: ok');
 }
