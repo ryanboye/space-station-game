@@ -55,6 +55,12 @@ export const EVA_OXYGEN_MAX_SEC = 240;
 export const EVA_LOW_OXYGEN_SEC = 18;
 const TRUSS_CONSTRUCTION_MATERIAL_COST = 1;
 const TRUSS_CONSTRUCTION_WORK_REQUIRED = 0.8;
+const EXTERIOR_HULL_MODULES = new Set<ModuleType>([
+  ModuleType.PodDock,
+  ModuleType.FuelCoupler,
+  ModuleType.FreightLocker,
+  ModuleType.MaintenanceSocket
+]);
 
 export function isEvaTraversalTile(state: StationState, tileIndex: number): boolean {
   const tile = state.tiles[tileIndex];
@@ -580,6 +586,12 @@ export function planModuleConstruction(
   if (!preview.ok) return preview;
   const appliedRotation = rotation === 90 && MODULE_DEFINITIONS[module]?.rotatable ? 90 : 0;
   const requiredMaterials = Math.ceil(moduleConstructionCost(state, module, appliedRotation));
+  const definition = MODULE_DEFINITIONS[module];
+  const footprint = moduleFootprint(module, appliedRotation);
+  const moduleTiles = footprintTiles(state, index, footprint.width, footprint.height);
+  const serviceTile = definition?.mount === 'wall' ? wallMountedModuleServiceTile(state, index) : null;
+  const workTiles = serviceTile !== null ? [serviceTile] : moduleTiles;
+  const requiresEva = EXTERIOR_HULL_MODULES.has(module) || workTiles.some((tile) => !state.pressurized[tile]);
   createConstructionSite(state, {
     kind: 'module',
     tileIndex: index,
@@ -589,7 +601,7 @@ export function planModuleConstruction(
     deliveredMaterials: 0,
     buildProgress: 0,
     buildWorkRequired: Math.max(6, requiredMaterials * 2.4),
-    requiresEva: false
+    requiresEva
   });
   return { ok: true };
 }

@@ -3,6 +3,7 @@ import {
   createInitialState,
   expandMap,
   planStationExpansionOnTruss,
+  removeModuleAtTile,
   setTile,
   tick
 } from '../src/sim/sim';
@@ -10,13 +11,40 @@ import {
   advanceStructuralExpansionProjects,
   applyConstructionSite,
   cancelConstructionAtTile,
-  findConstructionPath
+  findConstructionPath,
+  planModuleConstruction
 } from '../src/sim/construction';
 import { captureSnapshot, hydrateStateFromSave } from '../src/sim/save';
-import { TileType, fromIndex, inBounds, isWalkable, toIndex, type StationState } from '../src/sim/types';
+import { ModuleType, TileType, fromIndex, inBounds, isWalkable, toIndex, type StationState } from '../src/sim/types';
 
 function assertCondition(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+// Hull hardware uses EVA construction while ordinary pressurized furniture
+// stays on the interior work path.
+{
+  const state = createInitialState({ seed: 901001 });
+  tick(state, 0);
+  const podDock = state.moduleInstances.find((module) => module.type === ModuleType.PodDock);
+  const table = state.moduleInstances.find((module) => module.type === ModuleType.Table);
+  assertCondition(podDock && table, 'Starter needs Pod Dock and Table fixtures for construction classification.');
+
+  assertCondition(removeModuleAtTile(state, podDock.originTile), 'Could not remove starter Pod Dock for rebuild test.');
+  const plannedDock = planModuleConstruction(state, podDock.originTile, ModuleType.PodDock, podDock.rotation);
+  assertCondition(plannedDock.ok, `Could not plan replacement Pod Dock (${plannedDock.reason ?? 'no reason'}).`);
+  assertCondition(
+    state.constructionSites.find((site) => site.tileIndex === podDock.originTile)?.requiresEva === true,
+    'Exterior Pod Dock construction must require EVA.'
+  );
+
+  assertCondition(removeModuleAtTile(state, table.originTile), 'Could not remove starter Table for rebuild test.');
+  const plannedTable = planModuleConstruction(state, table.originTile, ModuleType.Table, table.rotation);
+  assertCondition(plannedTable.ok, `Could not plan replacement Table (${plannedTable.reason ?? 'no reason'}).`);
+  assertCondition(
+    state.constructionSites.find((site) => site.tileIndex === table.originTile)?.requiresEva === false,
+    'Pressurized interior furniture must not require EVA.'
+  );
 }
 
 function expansionPatch(state: StationState): number[] {

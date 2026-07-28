@@ -515,7 +515,7 @@ audited checklist with no unsupported checked claims.
 - [x] Keep incomplete shell unpressurized.
 - [x] Perform visible seal check.
 - [x] Commission and pressurize only a supported sealed shell.
-- [ ] Require EVA construction for exterior/unpressurized modules.
+- [x] Require EVA construction for exterior/unpressurized modules.
 - [ ] Report missing material.
 - [ ] Report missing staging route.
 - [x] Report missing Airlock/EVA route.
@@ -1206,3 +1206,9 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:structural-expansion` and `npm run build` passed. Existing construction truth plans Truss only in open space adjacent to hull or planned construction, charges one scaffold kit, and creates an EVA-required construction site.
 - Visual/playtest evidence: the normal `?scenario=starter` Build palette now visibly exposes Truss, Airlock, and Cancel Build together. These were previously functional but hidden behind `?truss` and two CSS suppression rules.
 - Remaining uncertainty: this proves planning is discoverable, not a full Gate C build. A normal-start player still needs to weld the scaffold, plan the hull, save/resume, and commission one sealed wing in a preserved live run.
+
+2026-07-28 · Exterior module construction authority
+
+- Commit or files: EVA classification in `src/sim/construction.ts`; focused contrast in `tools/structural-expansion-tests.ts` (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:structural-expansion` proves a replacement Pod Dock creates an EVA-required module site while a replacement Table on an initialized pressurized interior remains ordinary construction. `npm run build` passed.
+- Remaining uncertainty: the exterior worker animation already exists, but a Pod Dock installation still needs a preserved live capture before the catalogue's visual proof is complete.
