@@ -120,6 +120,7 @@ import { renderWallDetailLayer } from './wall-detail-layer';
 import { renderRoomLabelLayer } from './room-label-layer';
 import { renderDoorDockDetailLayer } from './door-dock-detail-layer';
 import { renderGlowPass, type GlowRenderViewport } from './glow-pass';
+import { FACILITY_SPRITE_VARIANTS, facilitySpriteKeyForModule } from './facility-sprite-state';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
 
@@ -2372,7 +2373,6 @@ function drawModuleVisual(
     )) {
       return;
     }
-    let rotation = module.rotation === 90 ? 90 : 0;
     if (module.type === ModuleType.WallLight) {
       const drawX = px - TILE_SIZE * 0.5;
       const drawY = py;
@@ -2380,11 +2380,17 @@ function drawModuleVisual(
         return;
       }
     }
-    const drawW = rotation === 90 ? h : w;
-    const drawH = rotation === 90 ? w : h;
-    const drawX = px + (w - drawW) * 0.5;
-    const drawY = py + (h - drawH) * 0.5;
-    if (drawSpriteByKey(ctx, spriteAtlas, moduleKey, drawX, drawY, drawW, drawH, rotation)) {
+    const geometry = moduleSpriteDrawGeometry(module, px, py, w, h);
+    if (drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      moduleKey,
+      geometry.x,
+      geometry.y,
+      geometry.width,
+      geometry.height,
+      geometry.rotation
+    )) {
       return;
     }
   }
@@ -2398,6 +2404,76 @@ function drawModuleVisual(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(moduleLetter[module.type] ?? '?', px + w * 0.5, py + h * 0.5);
+}
+
+type ModuleSpriteDrawGeometry = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
+function moduleSpriteDrawGeometry(
+  module: StationState['moduleInstances'][number],
+  px: number,
+  py: number,
+  width: number,
+  height: number
+): ModuleSpriteDrawGeometry {
+  const rotation = module.rotation === 90 ? 90 : 0;
+  const drawWidth = rotation === 90 ? height : width;
+  const drawHeight = rotation === 90 ? width : height;
+  return {
+    x: px + (width - drawWidth) * 0.5,
+    y: py + (height - drawHeight) * 0.5,
+    width: drawWidth,
+    height: drawHeight,
+    rotation
+  };
+}
+
+/**
+ * Dynamic Gate F state sprites live outside the cached decor canvas. The idle
+ * fixture remains in that canvas; this pass redraws only a changed full-frame
+ * fixture, so a guest taking a stool never repaints the whole station.
+ */
+function drawFacilitySpriteStateOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number },
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): void {
+  if (!useSprites) return;
+  for (const module of state.moduleInstances) {
+    if (!FACILITY_SPRITE_VARIANTS[module.type]) continue;
+    if (!module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const baseKey = MODULE_SPRITE_KEYS[module.type];
+    const selectedKey = facilitySpriteKeyForModule(state, module, (key) => spriteAtlas.getFrame(key) !== null);
+    if (!selectedKey || selectedKey === baseKey) continue;
+    const origin = fromIndex(module.originTile, state.width);
+    const px = origin.x * TILE_SIZE;
+    const py = origin.y * TILE_SIZE;
+    const width = module.width * TILE_SIZE;
+    const height = module.height * TILE_SIZE;
+    const geometry = moduleSpriteDrawGeometry(module, px, py, width, height);
+    if (!drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      selectedKey,
+      geometry.x,
+      geometry.y,
+      geometry.width,
+      geometry.height,
+      geometry.rotation
+    )) continue;
+    let debt = 0;
+    for (const candidate of state.maintenanceDebts) {
+      if (candidate.moduleId === module.id) debt = Math.max(debt, candidate.debt);
+    }
+    drawModuleConditionDecal(ctx, state, module, debt);
+  }
 }
 
 type PortExteriorSpriteGeometry = {
@@ -4245,16 +4321,13 @@ function ensureStaticLayer(
   return layer;
 }
 
-function ensureDecorativeLayer(
+/** Regression seam: transient facility claims deliberately do not enter this key. */
+export function decorativeLayerCacheKey(
   state: StationState,
-  widthPx: number,
-  heightPx: number,
-  spriteAtlas: SpriteAtlas,
-  useSprites: boolean
-): CachedLayer {
-  decorativeLayerCache = ensureCachedLayer(decorativeLayerCache, widthPx, heightPx);
-  const layer = decorativeLayerCache;
-  const key = [
+  useSprites: boolean,
+  spriteAtlasVersion: string
+): string {
+  return [
     state.width,
     state.height,
     state.topologyVersion,
@@ -4266,8 +4339,20 @@ function ensureDecorativeLayer(
     plumbingRenderSignature(state),
     moduleConditionRenderSignature(state),
     useSprites ? 1 : 0,
-    spriteAtlas.version
+    spriteAtlasVersion
   ].join('|');
+}
+
+function ensureDecorativeLayer(
+  state: StationState,
+  widthPx: number,
+  heightPx: number,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean
+): CachedLayer {
+  decorativeLayerCache = ensureCachedLayer(decorativeLayerCache, widthPx, heightPx);
+  const layer = decorativeLayerCache;
+  const key = decorativeLayerCacheKey(state, useSprites, spriteAtlas.version);
   if (layer.key === key) return layer;
   layer.key = key;
   const ctx = layer.ctx;
@@ -6959,6 +7044,7 @@ export function renderWorld(
   const decorativeLayer = ensureDecorativeLayer(state, widthPx, heightPx, spriteAtlas, useSprites);
   drawCachedLayer(ctx, staticLayer.canvas, viewport);
   drawCachedLayer(ctx, decorativeLayer.canvas, viewport);
+  drawFacilitySpriteStateOverlay(ctx, state, visibleTiles, spriteAtlas, useSprites);
   renderSunwardHullRim(ctx, state, visibleTiles, environment);
   // Glow pass paints after the sprite layers (additive blend). Gated on
   // state.controls.showGlow; cache key includes dynamic signatures (med-bed
