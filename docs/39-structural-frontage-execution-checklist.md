@@ -802,7 +802,7 @@ audited checklist with no unsupported checked claims.
 
 ### Phase 8 Gate
 
-- [ ] New game requires a meaningful authored opening decision.
+- [x] New game requires a meaningful authored opening decision.
 - [x] First business operation visibly serves real demand.
 - [ ] First expansion feels constructed rather than painted.
 - [ ] First Berth changes station scale and operating pressure.
@@ -1234,3 +1234,11 @@ Remaining uncertainty:
 - Bad/improved comparison: a wall-adjacent Checkout Bank retains its built investment but remains non-operational with the actionable reason `Leave open floor in front of the Checkout Bank so shoppers can form a line`; moving the same bank one tile inward supplies physical line capacity and completes ordinary shopper sales.
 - Live-browser observation: the normal starter keeps Food, Supplies, and Refuel visible together. Selecting Supplies shows the 24-tile spatial machine and explicitly names Steward checkout duty plus Cargo Handler restocking. The facility-scale showcase reports Supplies operational, while the fuel showcase exposes tank stock, the missing Coupler, and the open pipe requirement on the Refuel card.
 - Remaining uncertainty: Gate A still needs a normal-start player construction pass for Supplies and Refuel, plus a second viable operating/layout choice for Refuel. These focused cycles prove the simulation contracts and truthful diagnosis without claiming that broader playtest complete.
+
+2026-07-28 · Opening choice promoted into the Global Goal
+
+- Commit or files: `src/main.ts` and this execution ledger (pending checkpoint commit at evidence capture).
+- Player-facing contract: the first Global Goal now explicitly requires `Open Food, Supplies, or Refuel` before revenue and served-traveler progress can establish the port. This preserves one north-star progression surface while leaving the three spatial recipes as genuine choices beneath it; the player still authors the room, fixture placement, staffing, utilities, and stock rather than accepting a prefab or modal specialization.
+- Live-browser observation: inspected the ordinary `?scenario=starter` at the normal viewport. The Global Goal reads `Open Food, Supplies, or Refuel · 0/1`, `Earn business revenue · 0/500c`, and `Travelers served · 0/20`; the three comparable business cards remain visible together, and the starter's 320 credits can fund one complete path but not two.
+- Focused checks: `npm run build` and `git diff --check` passed.
+- Remaining uncertainty: this closes the authored-decision requirement, not the whole coherent-opening gate. The user still needs to perform the normal-start Supplies and Refuel construction passes, and legacy tier messaging after the first operation remains a separate reconciliation item.

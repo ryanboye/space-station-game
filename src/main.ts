@@ -5877,7 +5877,7 @@ function checklistRatio(current: number, target: number): { label: string; done:
   };
 }
 
-type StationGoalMetric = 'credits' | 'visitors' | 'turnarounds' | 'perfect-turnarounds';
+type StationGoalMetric = 'businesses' | 'credits' | 'visitors' | 'turnarounds' | 'perfect-turnarounds';
 
 type StationGoalDefinition = {
   title: string;
@@ -5888,8 +5888,9 @@ const STATION_GOALS: StationGoalDefinition[] = [
   {
     title: 'Establish a working port',
     criteria: [
-      { metric: 'credits', label: 'Earn traffic revenue', target: 500 },
-      { metric: 'visitors', label: 'Visitors served', target: 20 }
+      { metric: 'businesses', label: 'Open Food, Supplies, or Refuel', target: 1 },
+      { metric: 'credits', label: 'Earn business revenue', target: 500 },
+      { metric: 'visitors', label: 'Travelers served', target: 20 }
     ]
   },
   {
@@ -5920,6 +5921,7 @@ function lifetimeVisitorsServed(): number {
 }
 
 function stationGoalMetricValue(metric: StationGoalMetric): number {
+  if (metric === 'businesses') return evaluateOpeningRecipes(state).filter((recipe) => recipe.operational).length;
   if (metric === 'credits') return state.metrics.creditsEarnedLifetime;
   if (metric === 'visitors') return lifetimeVisitorsServed();
   if (metric === 'turnarounds') return state.portOps.telemetry.settlements;
