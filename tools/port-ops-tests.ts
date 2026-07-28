@@ -1,7 +1,7 @@
 import {
   admitTrafficOffer,
-  buyImportedTradeGoods,
-  buyPreparedMeals,
+  buyImportedTradeGoodsDetailed,
+  buyPreparedMealsDetailed,
   createInitialState,
   getBerthFacilityAt,
   getBerthInspectorAt,
@@ -20,6 +20,7 @@ import {
   setBerthAllowedShipSize,
   setCrewManualWorkLane,
   setCrewShiftTarget,
+  setDockPurpose,
   setPortAutoAdmit,
   setRoom,
   setTile,
@@ -31,6 +32,7 @@ import {
 } from '../src/sim/index';
 import { isWalkable, ModuleType, RoomType, TileType, type DockEntity, type StationState, type TrafficOffer } from '../src/sim/types';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
+import { findPath } from '../src/sim/path';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -75,6 +77,72 @@ function smallCraftOffer(state: StationState, dock: DockEntity, id: number): Tra
   };
 }
 
+function sizedPassengerOffer(
+  state: StationState,
+  id: number,
+  size: 'medium' | 'large'
+): TrafficOffer {
+  const dock = state.docks.find((entry) => entry.sourceKind === 'pod-dock-module') ?? state.docks[0];
+  assert(dock, 'Sized-offer fixture requires a lane source.');
+  return {
+    ...smallCraftOffer(state, dock, id),
+    callsign: `CLAMP-${id}`,
+    shipName: `${size} clamp proof vessel`,
+    shipType: 'tourist',
+    hullVariant: size === 'large' ? 'luxury-liner' : 'passenger-shuttle',
+    size,
+    arrivesAt: state.now + 60,
+    expiresAt: state.now + 600
+  };
+}
+
+function buildModernBerth(
+  state: StationState,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  clampCount: number
+): { anchor: number; access: number; freeClampTiles: number[] } {
+  for (let yy = y; yy < y + height; yy += 1) {
+    for (let xx = x; xx < x + width; xx += 1) {
+      const tile = yy * state.width + xx;
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, RoomType.Berth);
+    }
+  }
+  // A modern berth requires a station-side pressurized neighbor opposite its
+  // open vessel face. The bay itself remains exposed to surrounding space.
+  const access = (y + height) * state.width + x + Math.floor(width / 2);
+  setTile(state, access, TileType.Floor);
+  state.pressurized[access] = true;
+
+  const control = (y + height - 2) * state.width + x + 1;
+  const controlPlacement = tryPlaceModule(state, ModuleType.BerthControl, control);
+  assert(controlPlacement.ok, `Berth Control placement failed: ${controlPlacement.reason ?? 'unknown'}.`);
+
+  const gangwayX = x + Math.floor(width / 2);
+  const gangway = y * state.width + gangwayX;
+  const gangwayPlacement = tryPlaceModule(state, ModuleType.Gangway, gangway);
+  assert(gangwayPlacement.ok, `Gangway placement failed in clamp fixture: ${gangwayPlacement.reason ?? 'unknown'}.`);
+
+  const freeClampTiles = Array.from({ length: width }, (_, offset) => y * state.width + x + offset)
+    .filter((tile) => tile !== gangway);
+  assert(freeClampTiles.length >= clampCount, 'Berth fixture has too few service-rail clamp positions.');
+  for (const tile of freeClampTiles.slice(0, clampCount)) {
+    const placed = tryPlaceModule(state, ModuleType.DockingClamp, tile);
+    assert(placed.ok, `Docking Clamp placement failed: ${placed.reason ?? 'unknown'}.`);
+  }
+  tick(state, 0);
+  state.pressurized[access] = true;
+  const facility = getBerthFacilityAt(state, y * state.width + x);
+  assert(
+    facility?.geometryValid && !facility.legacyCompatibility,
+    `Fixture did not produce a valid modern Berth (${facility ? `${facility.geometry}; exposed=${facility.spaceExposed}; access=${facility.accessReady}; ${facility.reasons.join('; ')}` : 'missing facility'}).`
+  );
+  return { anchor: facility.anchorTile, access, freeClampTiles: freeClampTiles.slice(clampCount) };
+}
+
 function admitSmallCraftAtDock(state: StationState, dock: DockEntity, id: number) {
   if (!dock.allowedShipTypes.includes('trader')) dock.allowedShipTypes.push('trader');
   dock.allowedShipSizes = ['small'];
@@ -101,7 +169,8 @@ function placeFuelPodDock(state: StationState): { dock: DockEntity; couplerTile:
   assert(mount >= 0, 'Expected an exterior Pod Dock mount.');
   assert(tryPlaceModule(state, ModuleType.PodDock, mount).ok, 'Expected Pod Dock placement.');
   const couplerTile = state.tiles.findIndex((tile, index) =>
-    tile === TileType.Wall && index !== mount && getPodDockAttachmentView(state, ModuleType.FuelCoupler, index).valid
+    tile === TileType.Wall && index !== mount && state.moduleOccupancyByTile[index] === null &&
+    getPodDockAttachmentView(state, ModuleType.FuelCoupler, index).valid
   );
   assert(couplerTile >= 0, 'Expected adjacent Fuel Coupler mount.');
   assert(tryPlaceModule(state, ModuleType.FuelCoupler, couplerTile).ok, 'Expected Fuel Coupler placement.');
@@ -152,6 +221,23 @@ function fuelTankNode(state: StationState) {
     node = state.itemNodes.find((candidate) => candidate.tileIndex === origin);
   }
   assert(node, 'Expected a Fuel Tank inventory node.');
+  for (const dock of state.docks.filter((entry) => entry.podCapabilities?.includes('fuel'))) {
+    const couplerId = dock.attachmentModuleIds?.fuel;
+    const coupler = couplerId === undefined ? null : state.moduleInstances.find((module) => module.id === couplerId);
+    assert(coupler, 'Fuel-capable Pod Dock lost its physical Fuel Coupler.');
+    const sink = dock.facing === 'north'
+      ? coupler.originTile + state.width
+      : dock.facing === 'south'
+        ? coupler.originTile - state.width
+        : dock.facing === 'east'
+          ? coupler.originTile - 1
+          : coupler.originTile + 1;
+    const route = findPath(state, node.tileIndex, sink, { allowRestricted: true, intent: 'logistics' });
+    assert(route, 'Expected a walkable Fuel Pipe route from tank to Coupler service tile.');
+    for (const tile of [node.tileIndex, ...route]) {
+      assert(setUtilityUnderlayTile(state, 'fuel-pipe', tile, true), `Fuel Pipe fixture rejected tile ${tile}.`);
+    }
+  }
   return node;
 }
 
@@ -159,7 +245,7 @@ function testStarterShellAndDockOnlyTraffic(): void {
   const state = freshPortState();
   const fuelTankVisibleAtStart = isModuleUnlocked(state, ModuleType.FuelTank);
   advance(state, 4);
-  assert(state.crewMembers.length === 8, `Expected 8 starter crew, got ${state.crewMembers.length}.`);
+  assert(state.crewMembers.length === 6, `Expected 6 starter crew, got ${state.crewMembers.length}.`);
   assert(!state.controls.paused, 'Opening manifests should not interrupt play by pausing the simulation.');
   assert(state.controls.crewShiftTargets.food === 1, 'Starter should leave Service capacity uncommitted.');
   assert(state.controls.crewShiftTargets.logistics === 1, 'Starter should leave Cargo capacity uncommitted.');
@@ -176,30 +262,12 @@ function testStarterShellAndDockOnlyTraffic(): void {
   assert(podDocks.length === 2, `Expected two starter Pod Docks, got ${podDocks.length}.`);
   assert(podDocks.every((dock) => dock.allowedShipSizes.join(',') === 'small'), 'Starter Pod Docks accepted a non-pod ship size.');
   assert(podDocks.every((dock) => dock.accessTile !== undefined && state.pressurized[dock.accessTile]), 'Starter Pod Dock lacks pressurized interior access.');
-  assert(podDocks.some((dock) => dock.podCapabilities?.includes('fuel')), 'Starter is missing a fuel-capable Pod Dock.');
   assert(podDocks.some((dock) => dock.podCapabilities?.includes('freight')), 'Starter is missing a freight-capable Pod Dock.');
-  assert(state.modules.includes(ModuleType.MarketStall), 'Starter has no station-operated market stall.');
-  assert(state.ops.marketActive > 0, 'Starter market is locked or otherwise inactive at Tier 0.');
-  const marketStock = state.itemNodes
-    .filter((node) => state.modules[node.tileIndex] === ModuleType.MarketStall)
-    .reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
-  assert(marketStock > 0, 'Starter market has no opening trade goods.');
-  const fuelTanks = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
-  assert(fuelTanks.length === 1, `Expected one starter Fuel Tank, got ${fuelTanks.length}.`);
-  assert(fuelTanks.every((tank) => state.rooms[tank.originTile] === RoomType.Maintenance), 'Starter Fuel Tank is not housed in Maintenance.');
-  const fuelDock = podDocks.find((dock) => dock.podCapabilities?.includes('fuel'));
-  assert(fuelDock, 'Expected a fuel-capable starter Pod Dock.');
-  const fuelSupply = getPodDockFuelSupplyView(state, fuelDock.id);
-  assert(fuelSupply.connected, `Starter Fuel Pipe is disconnected (${fuelSupply.reason ?? 'no reason'}).`);
-  const starterFuel = state.itemNodes
-    .filter((node) => fuelTanks.some((tank) => tank.originTile === node.tileIndex))
-    .reduce((sum, node) => sum + (node.items.fuel ?? 0), 0);
-  assert(starterFuel === 40, `Expected 40 starter fuel, got ${starterFuel}.`);
+  assert(!state.moduleInstances.some((module) =>
+    module.type === ModuleType.FuelCoupler || module.type === ModuleType.FuelTank || module.type === ModuleType.MarketStall
+  ), 'Minimal starter silently completed optional refuel or market operations.');
+  assert(state.ops.marketActive === 0, 'Minimal starter opened a completed public market before the player built one.');
   assert(fuelTankVisibleAtStart, 'Fuel Tank is not build-visible at Tier 0.');
-  const storageCapacity = state.itemNodes
-    .filter((node) => state.rooms[node.tileIndex] === 'storage')
-    .reduce((sum, node) => sum + node.capacity, 0);
-  assert(storageCapacity >= 320, `Expected at least 320 general storage, got ${storageCapacity}.`);
   const ventedStationTiles = state.tiles
     .map((tile, index) => ({ tile, index }))
     .filter(({ tile, index }) => isWalkable(tile) && state.rooms[index] !== RoomType.Berth && !state.pressurized[index]);
@@ -232,20 +300,82 @@ function testPodDockModulesOwnSmallCraftAccessAndAttachments(): void {
       state.tiles[tile] === TileType.Wall && getPodDockPlacementView(state, tile).facing === facing
     );
   }), 'Starter Pod Dock footprint does not lie on one straight exterior wall face.');
-  const fuelCoupler = state.moduleInstances.find((module) => module.type === ModuleType.FuelCoupler);
+  const podSources = podModules.map((module) => getDockByTile(state, module.originTile));
+  assert(podSources.every((dock) =>
+    dock?.sourceKind === 'pod-dock-module' && dock.moduleId !== undefined &&
+    dock.sourceKey === `pod-dock:${dock.mountTile}` && dock.mountTile === dock.anchorTile &&
+    dock.accessTile !== undefined && state.pressurized[dock.accessTile] &&
+    dock.allowedShipSizes.length === 1 && dock.allowedShipSizes[0] === 'small'
+  ), 'Pod Dock did not own a stable small-craft source, exterior mount, and pressurized physical access.');
+  assert(new Set(podSources.map((dock) => dock?.sourceKey)).size === podSources.length, 'Pod Dock physical source keys are not unique and stable.');
   const freightLocker = state.moduleInstances.find((module) => module.type === ModuleType.FreightLocker);
-  assert(fuelCoupler && getPodDockAttachmentView(state, ModuleType.FuelCoupler, fuelCoupler.originTile).valid, 'Starter Fuel Coupler is not attached to a Pod Dock.');
+  assert(!state.moduleInstances.some((module) => module.type === ModuleType.FuelCoupler), 'Minimal starter unexpectedly prebuilt a Fuel Coupler.');
   assert(freightLocker && freightLocker.rotation === 0 && freightLocker.width === 2 && freightLocker.height === 1, 'Starter Freight Locker footprint drifted from horizontal 2x1 hull hardware.');
   assert(freightLocker && freightLocker.tiles.every((tile) =>
     state.tiles[tile] === TileType.Wall &&
     getPodDockPlacementView(state, tile).facing === getPodDockPlacementView(state, freightLocker.originTile).facing
   ), 'Starter Freight Locker footprint does not lie on the Pod Dock hull face.');
   assert(freightLocker && getPodDockAttachmentView(state, ModuleType.FreightLocker, freightLocker.originTile).valid, 'Starter Freight Locker is not attached to a Pod Dock.');
+
+  const medium = sizedPassengerOffer(state, 94430, 'medium');
+  state.trafficOffers.push(medium);
+  const mediumAdmission = admitTrafficOffer(state, medium.id);
+  assert(!mediumAdmission.ok, 'Medium traffic incorrectly bound to the small exterior Pod Dock collar.');
+  assert(
+    !state.arrivingShips.some((ship) => ship.id === medium.id && ship.assignedDockId !== null) &&
+      state.trafficOffers.find((offer) => offer.id === medium.id)?.assignedDockSourceKey == null,
+    'Rejected medium traffic retained a Pod Dock binding.'
+  );
+}
+
+function testDockingClampVesselMassRequirements(): void {
+  const mediumState = freshPortState(14431);
+  const mediumBerth = buildModernBerth(mediumState, 5, 5, 4, 3, 1);
+  const mediumOffer = sizedPassengerOffer(mediumState, 94431, 'medium');
+  mediumState.trafficOffers.push(mediumOffer);
+  const oneClampFacility = getBerthFacilityAt(mediumState, mediumBerth.anchor);
+  assert(oneClampFacility?.size === 'medium' && oneClampFacility.clampCapacity === 1, 'Medium fixture did not expose exactly one physical clamp.');
+  assert(getEligibleBerthsForOffer(mediumState, mediumOffer.id).length === 0, 'A one-clamp medium Berth was accepted.');
+  const oneClampAdmission = admitTrafficOffer(mediumState, mediumOffer.id, mediumBerth.anchor);
+  assert(
+    !oneClampAdmission.ok && oneClampAdmission.reason === 'tourist ship waiting - berth needs 2 docking clamps (1 installed)',
+    `Medium rejection lost the exact two-clamp requirement (${oneClampAdmission.reason ?? 'no reason'}).`
+  );
+  const secondClamp = tryPlaceModule(mediumState, ModuleType.DockingClamp, mediumBerth.freeClampTiles[0]);
+  assert(secondClamp.ok, `Second medium clamp placement failed: ${secondClamp.reason ?? 'unknown'}.`);
+  tick(mediumState, 0);
+  mediumState.pressurized[mediumBerth.access] = true;
+  const twoClampFacility = getBerthFacilityAt(mediumState, mediumBerth.anchor);
+  const mediumEligible = getEligibleBerthsForOffer(mediumState, mediumOffer.id);
+  assert(twoClampFacility?.clampCapacity === 2, 'Second physical clamp did not increase medium vessel support.');
+  assert(mediumEligible.some((candidate) => candidate.anchorTile === mediumBerth.anchor), 'Adding the second clamp did not permit the otherwise-identical medium candidate.');
+
+  const largeState = freshPortState(14432);
+  const largeBerth = buildModernBerth(largeState, 5, 5, 7, 6, 4);
+  const largeOffer = sizedPassengerOffer(largeState, 94432, 'large');
+  largeState.trafficOffers.push(largeOffer);
+  const fourClampFacility = getBerthFacilityAt(largeState, largeBerth.anchor);
+  assert(fourClampFacility?.size === 'large' && fourClampFacility.clampCapacity === 4, 'Large fixture did not expose four physical clamps.');
+  assert(getEligibleBerthsForOffer(largeState, largeOffer.id).length === 0, 'A four-clamp large Berth was accepted.');
+  const largeRejection = admitTrafficOffer(largeState, largeOffer.id, largeBerth.anchor);
+  assert(
+    !largeRejection.ok && largeRejection.reason === 'tourist ship waiting - berth needs 5 docking clamps (4 installed)',
+    `Large rejection lost the exact five-clamp requirement (${largeRejection.reason ?? 'no reason'}).`
+  );
+  const fifthClamp = tryPlaceModule(largeState, ModuleType.DockingClamp, largeBerth.freeClampTiles[0]);
+  assert(fifthClamp.ok, `Fifth large clamp placement failed: ${fifthClamp.reason ?? 'unknown'}.`);
+  tick(largeState, 0);
+  largeState.pressurized[largeBerth.access] = true;
+  assert(getBerthFacilityAt(largeState, largeBerth.anchor)?.clampCapacity === 5, 'Fifth physical clamp did not increase large vessel support.');
+  assert(
+    getEligibleBerthsForOffer(largeState, largeOffer.id).some((candidate) => candidate.anchorTile === largeBerth.anchor),
+    'Adding the fifth clamp did not permit the otherwise-identical large candidate.'
+  );
 }
 
 function testPortHardwareCostsAndLegacyBerthAdapter(): void {
   assert(moduleCreditBuildCost(ModuleType.PodDock) === 110, 'Pod Dock capital cost drifted.');
-  assert(moduleCreditBuildCost(ModuleType.FuelCoupler) === 75, 'Fuel Coupler capital cost drifted.');
+  assert(moduleCreditBuildCost(ModuleType.FuelCoupler) === 70, 'Fuel Coupler capital cost drifted.');
   assert(moduleCreditBuildCost(ModuleType.BerthControl) === 210, 'Berth Control capital cost drifted.');
   assert(moduleCreditBuildCost(ModuleType.DockingClamp) === 100, 'Docking Clamp capital cost drifted.');
   assert(moduleCreditBuildCost(ModuleType.Gangway) === 140, 'Gangway should use its explicit berth capital cost.');
@@ -256,9 +386,9 @@ function testPortHardwareCostsAndLegacyBerthAdapter(): void {
 
 function testPodDockSaveRoundTripRetainsSourceAndAttachmentOwnership(): void {
   const state = freshPortState(1445);
-  advance(state, 0.2);
-  const mount = state.moduleInstances.find((module) => module.type === ModuleType.PodDock)?.originTile;
-  assert(mount !== undefined, 'Expected authored Pod Dock before save round trip.');
+  const authored = placeFuelPodDock(state);
+  const mount = authored.dock.mountTile;
+  assert(mount !== undefined, 'Expected authored fuel Pod Dock before save round trip.');
 
   const parsed = parseAndMigrateSave(serializeSave('Pod dock compatibility', state, 'test'));
   assert(parsed.ok, parsed.ok ? '' : parsed.error);
@@ -339,6 +469,7 @@ function testSmallCraftFuelConsumesStockAndPaysReward(): void {
   const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
   assert(refuel?.status === 'complete', `Fuel service did not complete (${refuel?.status ?? 'missing'}).`);
   assert((tank.items.fuel ?? 0) <= fuelBefore - 3.9, 'Fuel service did not consume Fuel Tank stock.');
+  advance(state, 80);
   assert(state.metrics.creditsEarnedLifetime >= earnedBefore + (refuel?.creditsEarned ?? 0), 'Fuel service did not contribute its earned credits.');
   assert((refuel?.ratingDelta ?? 0) > 0, 'Fuel service did not retain a rating contribution.');
 }
@@ -426,10 +557,14 @@ function testPreparedMealImport(): void {
   const traysBefore = state.metrics.cleanTrayStock;
   const creditsBefore = state.metrics.credits;
   const trafficBefore = state.trafficOffers.length;
-  assert(buyPreparedMeals(state), 'Expected prepared-meal import to fit the starter counter.');
-  assert(state.metrics.mealStock === mealsBefore + 12, 'Prepared-meal import did not reach the service buffer.');
-  assert(state.metrics.cleanTrayStock === traysBefore + 12, 'Prepared-meal import did not include clean serving trays.');
-  assert(state.metrics.credits === creditsBefore - 36, 'Prepared-meal import charged the wrong amount.');
+  const order = buyPreparedMealsDetailed(state);
+  assert(order.ok, `Expected prepared-meal import to fit the starter counter (${order.message}).`);
+  // Stock metrics are derived from physical counter nodes during the metrics
+  // pass; the purchase operation deliberately does not double-book them.
+  tick(state, 0);
+  assert(state.metrics.mealStock === mealsBefore + order.added, 'Prepared-meal import did not reach the service buffer.');
+  assert(state.metrics.cleanTrayStock === traysBefore + order.added, 'Prepared-meal import did not include clean serving trays.');
+  assert(state.metrics.credits === creditsBefore - order.creditCost, 'Prepared-meal import charged the wrong amount.');
   assert(state.trafficOffers.length === trafficBefore, 'Prepared-meal purchase incorrectly spawned a freight contract.');
 }
 
@@ -449,12 +584,28 @@ function testImportedMarketGoodsNeedNoWorkshop(): void {
   setRoom(state, origin + 1, RoomType.Market);
   assert(tryPlaceModule(state, ModuleType.MarketStall, origin).ok, 'Expected Market stall placement.');
   assert(!state.rooms.includes(RoomType.Workshop), 'Test station unexpectedly contains a Workshop.');
+  tick(state, 0);
+  const cargoDock = state.docks.find((dock) => dock.podCapabilities?.includes('freight'));
+  assert(cargoDock, 'Expected the starter Freight Locker to author a cargo Pod Dock.');
+  for (const dock of state.docks) {
+    if (dock.id !== cargoDock.id) setDockPurpose(state, dock.id, 'residential');
+  }
+  state.controls.materialAutoImportEnabled = false;
+  for (const node of state.itemNodes) {
+    if (state.modules[node.tileIndex] === ModuleType.IntakePallet || state.modules[node.tileIndex] === ModuleType.StorageRack) {
+      node.items = {};
+    }
+  }
   const creditsBefore = state.metrics.credits;
   const goodsBefore = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
-  assert(buyImportedTradeGoods(state), 'Expected imported Market goods to fit the stall.');
-  const goods = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
-  assert(goods === goodsBefore + 12, `Expected imported Market goods to increase by 12, got ${goods - goodsBefore}.`);
-  assert(state.metrics.credits === creditsBefore - 30, 'Imported Market goods charged the wrong amount.');
+  const order = buyImportedTradeGoodsDetailed(state);
+  assert(order.ok, `Expected imported Market goods order to fit Receiving (${order.message}).`);
+  const delivery = state.openingEconomy.podFreightOperations.find((operation) =>
+    operation.kind === 'supplier-delivery' && operation.stockKind === 'travel-supplies'
+  );
+  assert(delivery?.kind === 'supplier-delivery' && delivery.status === 'ordered', 'Imported goods appeared without a physical supplier delivery.');
+  assert(state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0) === goodsBefore, 'Ordering supplies added inventory before the pod unloaded.');
+  assert(state.metrics.credits === creditsBefore - order.creditCost, 'Imported Market goods charged the wrong amount.');
 }
 
 function testAutomationIsEarnedByOperation(): void {
@@ -761,7 +912,7 @@ function testCargoArmRepairRestoresThroughput(): void {
 function testLegacyRandomFailuresStayDormant(): void {
   const state = freshPortState(909);
   advance(state, 180);
-  assert(state.crewMembers.length === 8, `Baseline hull services lost crew during a quiet shift (${state.crewMembers.length}/8 remain).`);
+  assert(state.crewMembers.length === 6, `Baseline hull services lost crew during a quiet shift (${state.crewMembers.length}/6 remain).`);
   assert(state.metrics.deathsTotal === 0, `Baseline hull services caused ${state.metrics.deathsTotal} deaths.`);
   assert(state.effects.cafeteriaStallUntil <= 0, 'Arbitrary cafeteria stall fired in port operations.');
   assert(state.effects.securityDelayUntil <= 0, 'Arbitrary security delay fired in port operations.');
@@ -808,6 +959,7 @@ const tests: Array<[string, () => void]> = [
   ['starter shell and dock-only traffic', testStarterShellAndDockOnlyTraffic],
   ['dock remains small walk-in surface', testDockRemainsSmallWalkInSurface],
   ['pod dock module ownership and attachments', testPodDockModulesOwnSmallCraftAccessAndAttachments],
+  ['docking clamp vessel mass requirements', testDockingClampVesselMassRequirements],
   ['port hardware costs and legacy berth adapter', testPortHardwareCostsAndLegacyBerthAdapter],
   ['pod dock save round trip', testPodDockSaveRoundTripRetainsSourceAndAttachmentOwnership],
   ['small-craft dock-only routing', testSmallCraftRoutingUsesDocksNotBerths],

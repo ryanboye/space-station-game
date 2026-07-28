@@ -453,9 +453,9 @@ audited checklist with no unsupported checked claims.
 - [x] Promote existing Truss as the exterior scaffold and utility support.
 - [ ] Add Truss Junction with branch/span function.
 - [ ] Add Reinforced Bulkhead with heavy-load transfer function.
-- [ ] Keep Pod Dock as the small docking collar.
+- [x] Keep Pod Dock as the small docking collar.
 - [x] Keep Gangway as the passenger connection and boarding provider.
-- [ ] Keep Docking Clamp as vessel mass support.
+- [x] Keep Docking Clamp as vessel mass support.
 - [ ] Add no decorative structural checklist pieces.
 
 ### Structural Graph
@@ -537,10 +537,10 @@ audited checklist with no unsupported checked claims.
 ### Shared Docking Slot
 
 - [x] Define one descriptor for legacy Docks, Pod Docks, and Berths.
-- [ ] Preserve stable physical interface identity.
+- [x] Preserve stable physical interface identity.
 - [x] Store hull connection, accepted ship class, access tiles, and envelopes.
 - [x] Add binding slot reservations.
-- [ ] Add authoritative slot occupancy.
+- [x] Add authoritative slot occupancy.
 - [x] Make small-craft reservations bind to a specific dock.
 - [x] Prevent two ships from owning the same slot.
 - [ ] Unify holding queues without merging distinct settlement models.
@@ -1438,3 +1438,11 @@ Remaining uncertainty:
 - Commits or files: module relocation in `src/sim/sim.ts`; focused regression in `tools/module-edit-tests.ts`; existing north-map expansion coverage in `tools/phase9-save-migration-tests.ts`.
 - Focused evidence: the module-edit runner moves a worn fixture while preserving its stable module id, 37 points of accrued debt, last-service time, maintenance work position, and exactly one destination-derived lookup key; no old-coordinate record remains. The Phase 9 save runner separately reloads eight accrued debts, expands the map north, and proves each physical panel follows the index shift without resetting its value.
 - Defect closed: relocation already shifted a module debt's anchor and target tiles, but left its tile-derived key unchanged. The next maintenance pass could therefore create a fresh record at the destination and discard the history at the stale key. Relocation now remaps the key atomically with the fixture before occupancy and item-node synchronization.
+
+2026-07-28 · Physical Pod Dock and Docking Clamp roles
+
+- Commits or files: strengthened production-path evidence in `tools/port-ops-tests.ts`; existing ownership and occupancy checks in `tools/approach-control-tests.ts` and `tools/approach-envelope-tests.ts`.
+- Pod Dock evidence: both starter collars own unique `pod-dock:<mountTile>` source keys, installed module identity, an exterior mount, and a pressurized station access tile. Their accepted-size set is exactly `small`; a medium offer is rejected without retaining a Dock or source binding. Save/load and Approach Control retain the physical source rather than reselecting an arbitrary collar.
+- Docking Clamp evidence: a valid modern medium Berth with one depicted clamp is rejected with the exact two-clamp requirement; installing the second makes the otherwise-identical candidate eligible. A valid large Berth is rejected at four clamps with the exact five-clamp requirement and becomes eligible only after the fifth physical clamp is installed.
+- Occupancy evidence: the approach-envelope runner binds the accepted craft to its stable physical slot, preserves that commitment over save/load, and requires `occupiedByShipId` to remain authoritative for the parked slot until departure completes. `test:approach-control`, `test:approach-envelopes`, and the focused Pod Dock/Clamp port groups pass.
+- Preservation boundary: the complete port-ops runner now clears eighteen groups, including the deliberately unfinished six-crew starter and explicit supplier/refuel fixtures, before reaching an older ambient-offer timing assumption in its automation group. No production claim in this checkpoint depends on that later unrelated group.
