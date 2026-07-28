@@ -19,9 +19,10 @@ import { selectShipHullVariant } from './ship-hulls';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { resolveFacilitySlots } from './facility-descriptors';
 import { createVisitorNeeds } from './occupant-demand';
+import { findPath } from './path';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, hireStaffRole, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -353,6 +354,21 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   // stable visual counterpart to the deterministic opening-business runner.
   'opening-food-cycle': (s) => {
     stageOpeningFoodCycle(s);
+  },
+
+  // Gate A proof: the ordinary shell becomes a small public shop. The starter
+  // Steward walks to the Checkout Bank through the real crew assignment path;
+  // nothing is teleported into a fixture. The fixture pauses on the first
+  // physical shelf-to-checkout sale so the player can inspect the machine.
+  'opening-supplies-cycle': (s) => {
+    stageOpeningSuppliesCycle(s);
+  },
+
+  // Gate A proof: construct a real Fuel Coupler/Tank/Pipe chain on the
+  // ordinary starter, procure fuel through the Freight Locker, then wait for
+  // one normal Pod Dock refuel before pausing on the paid result.
+  'opening-refuel-cycle': (s) => {
+    stageOpeningRefuelCycle(s);
   },
 
   // Phase 4 visual fixture: two nearby hull interfaces share the same
@@ -1339,6 +1355,207 @@ function stageOpeningFoodCycle(state: StationState): void {
       event.kind === 'retail-sale' && event.label === 'Prepared meal sold'
     )) break;
   }
+  state.controls.paused = true;
+}
+
+function stageOpeningSuppliesCycle(state: StationState): void {
+  state.metrics.credits = Math.max(state.metrics.credits, 1200);
+  tick(state, 0);
+  const steward = state.crewMembers.find((crew) => crew.staffRole === 'steward');
+  if (!steward) throw new Error('Opening supplies showcase requires the starter Steward.');
+
+  // A 3x8 Market is the authored opening footprint. Its Checkout Bank begins
+  // one tile in from the west edge, leaving legal public counter frontage.
+  // Choose a footprint which the actual Steward can reach before we commit
+  // the room paint, rather than staging a register worker in place.
+  const width = 3;
+  const height = 8;
+  let roomTiles: number[] | null = null;
+  for (let y = 1; y <= state.height - height - 1 && roomTiles === null; y += 1) {
+    for (let x = 1; x <= state.width - width - 1 && roomTiles === null; x += 1) {
+      const candidate: number[] = [];
+      let valid = true;
+      for (let dy = 0; dy < height && valid; dy += 1) {
+        for (let dx = 0; dx < width && valid; dx += 1) {
+          const tile = (y + dy) * state.width + x + dx;
+          if (
+            state.tiles[tile] !== TileType.Floor ||
+            state.rooms[tile] !== RoomType.None ||
+            state.moduleOccupancyByTile[tile] !== null
+          ) valid = false;
+          candidate.push(tile);
+        }
+      }
+      if (!valid) continue;
+      const firstStaffPost = candidate[5];
+      const route = findPath(
+        state,
+        steward.tileIndex,
+        firstStaffPost,
+        { allowRestricted: true, intent: 'crew', routeSeed: steward.id },
+        state.pathOccupancyByTile
+      );
+      if (route) roomTiles = candidate;
+    }
+  }
+  if (!roomTiles) throw new Error('Opening supplies showcase could not find a reachable public Market footprint.');
+  for (const tile of roomTiles) {
+    setRoom(state, tile, RoomType.Market);
+    state.zones[tile] = ZoneType.Public;
+  }
+
+  const checkoutOrigin = roomTiles[1];
+  const shelfOrigin = roomTiles[12];
+  const checkout = tryPlaceModule(state, ModuleType.CheckoutBank, checkoutOrigin, 0);
+  if (!checkout.ok) throw new Error(`Opening supplies showcase could not place Checkout Bank: ${checkout.reason}`);
+  const shelf = tryPlaceModule(state, ModuleType.ShelfAisle, shelfOrigin, 0);
+  if (!shelf.ok) throw new Error(`Opening supplies showcase could not place Shelf Aisle: ${shelf.reason}`);
+  tick(state, 0);
+
+  const shelfNode = state.itemNodes.find((node) => node.tileIndex === shelfOrigin);
+  if (!shelfNode) throw new Error('Opening supplies showcase Shelf Aisle has no inventory node.');
+  shelfNode.items.tradeGood = Math.max(shelfNode.items.tradeGood ?? 0, 16);
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.shipsPerCycle = 8;
+  state.cycleDuration = 20;
+  state.lastCycleTime = 0;
+  for (let elapsed = 0; elapsed < 360; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (state.openingEconomy.ledger.recent.some((event) =>
+      event.kind === 'retail-sale' && event.label === 'Travel supplies sold' && event.credits > 0
+    )) break;
+  }
+  const sale = state.openingEconomy.ledger.recent.find((event) =>
+    event.kind === 'retail-sale' && event.label === 'Travel supplies sold' && event.credits > 0
+  );
+  const checkoutInstance = state.moduleInstances.find((module) => module.originTile === checkoutOrigin);
+  const staffPosts = checkoutInstance
+    ? new Set(resolveFacilitySlots(checkoutInstance, state.width)
+      .filter((slot) => slot.role === 'checkout-staff')
+      .map((slot) => slot.tileIndex))
+    : new Set<number>();
+  const stewardHoldingCheckout = state.crewMembers.some((crew) =>
+    crew.staffRole === 'steward' &&
+    crew.assignedSystem === 'market' &&
+    staffPosts.has(crew.targetTile ?? -1) &&
+    staffPosts.has(crew.tileIndex)
+  );
+  if (!sale) throw new Error('Opening supplies showcase did not produce a paid travel-supplies sale.');
+  if (!stewardHoldingCheckout) throw new Error('Opening supplies showcase sale did not leave a real Steward at the checkout.');
+  state.controls.paused = true;
+}
+
+function stageOpeningRefuelCycle(state: StationState): void {
+  state.metrics.credits = Math.max(state.metrics.credits, 1200);
+
+  let tankOrigin: number | null = null;
+  for (let y = 0; y < state.height - 1 && tankOrigin === null; y += 1) {
+    for (let x = 0; x < state.width - 1 && tankOrigin === null; x += 1) {
+      const origin = y * state.width + x;
+      const tiles = [origin, origin + 1, origin + state.width, origin + state.width + 1];
+      if (!tiles.every((tile) =>
+        state.tiles[tile] === TileType.Floor &&
+        state.rooms[tile] === RoomType.None &&
+        state.moduleOccupancyByTile[tile] === null
+      )) continue;
+      for (const tile of tiles) setRoom(state, tile, RoomType.Maintenance);
+      tankOrigin = origin;
+    }
+  }
+  if (tankOrigin === null) throw new Error('Opening refuel showcase could not find a Fuel Tank maintenance footprint.');
+
+  let couplerOrigin: number | null = null;
+  let fuelDockModuleId: number | null = null;
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    const attachment = getPodDockAttachmentView(state, ModuleType.FuelCoupler, tile);
+    if (!attachment.valid) continue;
+    const placement = tryPlaceModuleWithCredits(state, ModuleType.FuelCoupler, tile);
+    if (!placement.ok) continue;
+    couplerOrigin = tile;
+    fuelDockModuleId = attachment.dockModuleId;
+    break;
+  }
+  if (couplerOrigin === null || fuelDockModuleId === null) {
+    throw new Error('Opening refuel showcase could not mount a Fuel Coupler beside a starter Pod Dock.');
+  }
+  const tank = tryPlaceModuleWithCredits(state, ModuleType.FuelTank, tankOrigin);
+  if (!tank.ok) throw new Error(`Opening refuel showcase could not place Fuel Tank: ${tank.reason}`);
+
+  const couplerX = couplerOrigin % state.width;
+  const couplerY = Math.floor(couplerOrigin / state.width);
+  let couplerServiceTile: number | null = null;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const x = couplerX + dx;
+    const y = couplerY + dy;
+    if (x < 0 || y < 0 || x >= state.width || y >= state.height) continue;
+    const tile = y * state.width + x;
+    if (state.tiles[tile] !== TileType.Wall && canPlaceUtilityUnderlay(state, 'fuel-pipe', tile)) {
+      couplerServiceTile = tile;
+      break;
+    }
+  }
+  if (couplerServiceTile === null) throw new Error('Opening refuel showcase Fuel Coupler has no pipe service tile.');
+
+  const previous = new Int32Array(state.tiles.length).fill(-1);
+  const queue = [tankOrigin];
+  previous[tankOrigin] = tankOrigin;
+  for (let head = 0; head < queue.length; head += 1) {
+    const tile = queue[head];
+    if (tile === couplerServiceTile) break;
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+      const next = ny * state.width + nx;
+      if (previous[next] >= 0 || !canPlaceUtilityUnderlay(state, 'fuel-pipe', next)) continue;
+      previous[next] = tile;
+      queue.push(next);
+    }
+  }
+  if (previous[couplerServiceTile] < 0) throw new Error('Opening refuel showcase could not find a legal Fuel Pipe route.');
+  for (let tile = couplerServiceTile; ; tile = previous[tile]) {
+    if (!state.utilityUnderlay.layers['fuel-pipe'][tile]) {
+      if (!setUtilityUnderlayTile(state, 'fuel-pipe', tile, true)) {
+        throw new Error(`Opening refuel showcase could not place Fuel Pipe at ${tile}.`);
+      }
+    }
+    if (tile === tankOrigin) break;
+  }
+  tick(state, 0);
+
+  const fuelDock = state.docks.find((dock) => dock.moduleId === fuelDockModuleId);
+  if (!fuelDock) throw new Error('Opening refuel showcase lost its attached Pod Dock.');
+  const fuelSupply = getPodDockFuelSupplyView(state, fuelDock.id);
+  if (!fuelSupply.connected) throw new Error(`Opening refuel showcase fuel chain is disconnected: ${fuelSupply.reason ?? 'unknown reason'}`);
+
+  // The Freight Locker carries the first fuel lot. Keep every other starter
+  // dock out of the way until the supplier has completed its ordinary unload.
+  const freightDock = state.docks.find((dock) => dock.podCapabilities?.includes('freight'));
+  if (!freightDock) throw new Error('Opening refuel showcase requires the starter Freight Locker Pod Dock.');
+  for (const dock of state.docks) setDockPurpose(state, dock.id, dock.id === freightDock.id ? 'visitor' : 'residential');
+  const fuelAtTank = (): number => state.itemNodes
+    .filter((node) => state.moduleInstances.some((module) => module.type === ModuleType.FuelTank && module.originTile === node.tileIndex))
+    .reduce((total, node) => total + (node.items.fuel ?? 0), 0);
+  state.controls.paused = false;
+  const fuelBeforeDelivery = fuelAtTank();
+  const order = orderFuelDetailed(state);
+  if (!order.ok) throw new Error(`Opening refuel showcase could not order fuel: ${order.message}`);
+  for (let elapsed = 0; elapsed < 120 && fuelAtTank() < fuelBeforeDelivery + 1; elapsed += 0.1) tick(state, 0.1);
+  if (fuelAtTank() < fuelBeforeDelivery + 1) throw new Error('Opening refuel showcase supplier did not unload fuel into the tank.');
+
+  for (const dock of state.docks) setDockPurpose(state, dock.id, dock.id === fuelDock.id ? 'visitor' : 'residential');
+  const fuelBeforeSale = fuelAtTank();
+  for (let elapsed = 0; elapsed < 180; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (state.openingEconomy.ledger.recent.some((event) => event.kind === 'fuel-sale' && event.credits > 0)) break;
+  }
+  const sale = state.openingEconomy.ledger.recent.find((event) => event.kind === 'fuel-sale' && event.credits > 0);
+  if (!sale) throw new Error('Opening refuel showcase did not produce a paid fuel sale.');
+  if (fuelAtTank() >= fuelBeforeSale) throw new Error('Opening refuel showcase paid sale did not reduce Fuel Tank stock.');
   state.controls.paused = true;
 }
 

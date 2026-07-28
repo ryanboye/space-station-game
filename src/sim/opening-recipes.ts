@@ -404,7 +404,14 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
         return sum + Math.round(step.kind === 'stock' ? step.costCredits : missing * perUnit);
       }, 0);
     const totalCostCredits = steps.reduce((sum, step) => sum + step.costCredits, 0);
-    const stockReady = steps.filter((step) => step.kind === 'stock').every((step) => step.satisfied);
+    const stockSteps = steps.filter((step) => step.kind === 'stock');
+    // Recipe rows use the opening order as a healthy replenishment target,
+    // but an operation remains open while it can serve the next customer.
+    // Otherwise the first ordinary sale immediately erases the player's
+    // completed business from the Global Goal.
+    const serviceStockReady = stockSteps.every((step) =>
+      step.have >= (recipe.id === 'service-ships' ? 4 : 1)
+    );
     const marketCheckout = recipe.id === 'sell-supplies'
       ? marketCheckoutReadiness(state, market)
       : { activeRegisters: 0, queueCapacity: 0 };
@@ -423,12 +430,12 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
         const reason = inactiveReason('Cafeteria needs to be enclosed, reachable, pressurized, and powered', cafeteria);
         if (reason) operationalReasons.push(reason);
       }
-      if (!stockReady) operationalReasons.push('Need ready servings: each pickup needs one meal and one clean tray.');
+      if (!serviceStockReady) operationalReasons.push('Need ready servings: each pickup needs one meal and one clean tray.');
     } else if (recipe.id === 'sell-supplies') {
       const reason = inactiveReason('Market needs enclosure, a door, a path, pressure, and local power', market);
       if (reason) operationalReasons.push(reason);
       if (!market) operationalReasons.push('Build one 24-tile PUBLIC Market with a Checkout Bank and stocked Shelf Aisle.');
-      if (!stockReady) operationalReasons.push('Order travel supplies through the Freight Locker.');
+      if (!serviceStockReady) operationalReasons.push('Order travel supplies through the Freight Locker.');
       if (market && marketCheckout.queueCapacity <= 0) {
         operationalReasons.push('Leave open floor in front of the Checkout Bank so shoppers can form a line.');
       } else if (market && marketCheckout.activeRegisters <= 0) {
@@ -441,7 +448,7 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
         const reason = fuelDocks.find((dock) => dock.hasFuelCoupler)?.reason;
         operationalReasons.push(reason ?? 'Connect a Maintenance Fuel Tank to the attached coupler with fuel pipe.');
       }
-      if (!stockReady) operationalReasons.push('Order a fuel lot to the connected Fuel Tank.');
+      if (!serviceStockReady) operationalReasons.push('Keep at least 4 fuel in the connected Fuel Tank for one pod refuel.');
     }
     return {
       id: recipe.id,
@@ -454,7 +461,7 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
       remainingCostCredits,
       totalCostCredits,
       built,
-      operational: built && stockReady && operationalReasons.length === 0,
+      operational: built && serviceStockReady && operationalReasons.length === 0,
       operationalReasons,
       candidateAccess: coherentCluster === null
         ? null

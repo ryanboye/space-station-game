@@ -13899,7 +13899,15 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
           kind: 'passenger-service',
           credits: 0,
           costBasis: 0,
-          label: `Supplier delivered ${transition.operation.orderedUnits} travel supplies`,
+          label: `Supplier delivered ${transition.operation.orderedUnits} ${
+            transition.operation.stockKind === 'travel-supplies'
+              ? 'travel supplies'
+              : transition.operation.stockKind === 'fuel'
+                ? 'fuel'
+                : transition.operation.stockKind === 'prepared-meals'
+                  ? 'prepared meals'
+                  : 'raw materials'
+          }`,
           sourceId: ship.id,
           tileIndex: dock.tiles[0],
           siteTag: 'pod-dock'

@@ -146,6 +146,10 @@ function testRefuelPodsStartToRevenue(): void {
   );
   const purchaseEvents = state.openingEconomy.ledger.recent.filter((event) => event.kind === 'supplier-purchase');
   assert(purchaseEvents.length === 1, `fuel order charged ${purchaseEvents.length} times`);
+  assert(
+    state.openingEconomy.ledger.recent.some((event) => event.label === `Supplier delivered ${OPENING_BALANCE.fuelLot.units} fuel`),
+    'fuel supplier delivery was mislabeled in the operating ledger'
+  );
 
   const recipe = serviceShipsRecipe(state);
   assert(recipe.operational, `Refuel Pods recipe is not operational: ${recipe.operationalReasons.join('; ')}`);
@@ -163,6 +167,11 @@ function testRefuelPodsStartToRevenue(): void {
   assert(fuelSales.length === 1, `expected exactly one fuel-sale ledger event, got ${fuelSales.length}`);
   assert(fuelSales[0].credits > 0, `fuel sale did not earn positive revenue (${fuelSales[0].credits})`);
   assert(fuelStock(state) < fuelBeforeSale, `fuel stock did not decrease (${fuelBeforeSale} -> ${fuelStock(state)})`);
+  const afterSaleRecipe = serviceShipsRecipe(state);
+  assert(
+    afterSaleRecipe.operational,
+    `one ordinary refuel closed the business despite enough fuel for another call: ${afterSaleRecipe.operationalReasons.join('; ')}`
+  );
 }
 
 testRefuelPodsStartToRevenue();

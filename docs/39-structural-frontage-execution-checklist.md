@@ -843,7 +843,7 @@ audited checklist with no unsupported checked claims.
 ### Full Playthrough
 
 - [ ] Start from the revised bare station.
-- [ ] Choose and build one opening portfolio operation.
+- [x] Choose and build one opening portfolio operation.
 - [ ] Manually compose early traffic through Approach Control.
 - [ ] Experience one successful short-stay flow.
 - [ ] Experience and recover from one failed long stay.
@@ -1249,3 +1249,11 @@ Remaining uncertainty:
 - Design resolution: Global Goals are the player-facing progression spine, while Food, Supplies, and Refuel are authored choices beneath the first goal. The legacy tier ladder remains an internal capability mechanism for now and no longer reappears inside the goal card or normal command UI after the first business opens.
 - Live-browser observation: inspected `?scenario=opening-food-cycle` after a paid meal. The first Global Goal shows the business criterion complete and live revenue/traveler progress (`1/1`, `4/500c`, `1/20`) with no Tier summary, roadmap, specialization branch, or second progression instruction visible.
 - Remaining uncertainty: future facility prerequisites still need to become more concrete as later content is refined, but they no longer compete with the opening objective as an independent ladder.
+
+2026-07-28 · Paused Supplies and Refuel revenue showcases
+
+- Commit or files: `src/sim/cold-start-scenarios.ts`, `src/sim/opening-recipes.ts`, `src/sim/sim.ts`, `tools/opening-refuel-cycle-tests.ts`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:opening-businesses` passes nine checks, `npm run test:opening-refuel-cycle` passes, `npm run build` passes, and the fuel supplier ledger now identifies its cargo as fuel rather than travel supplies.
+- Live-browser observation: `?scenario=opening-supplies-cycle` pauses after a staffed Checkout Bank consumes physical Shelf Aisle stock and records a paid sale. `?scenario=opening-refuel-cycle` pauses after a supplier pod fills a piped Fuel Tank and an ordinary pod consumes four units for a paid refuel. The Refuel card remains `operational` after that sale, and the Global Goal reads `Open Food, Supplies, or Refuel · 1/1`.
+- Design correction: recipe stock rows remain healthy replenishment targets, while operational status now means the machine can serve its next customer. One normal sale can no longer erase the player's completed opening choice.
+- Remaining uncertainty: Gate A still needs a hands-on normal-start construction pass at a small viewport and a second clearly authored Refuel layout choice; the three production cycles themselves are now directly inspectable rather than inferred from tests.
