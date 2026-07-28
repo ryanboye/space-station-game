@@ -199,10 +199,10 @@ audited checklist with no unsupported checked claims.
 
 ### Existing Caps Audit
 
-- [ ] Document current queue-spill and balk limits.
-- [ ] Document current occupancy/congestion cost caps.
-- [ ] Document route-discomfort and walk-penalty saturation.
-- [ ] Document rating-penalty caps that hide severe failure.
+- [x] Document current queue-spill and balk limits.
+- [x] Document current occupancy/congestion cost caps.
+- [x] Document route-discomfort and walk-penalty saturation.
+- [x] Document rating-penalty caps that hide severe failure.
 - [ ] Demonstrate each cap in a controlled scenario before changing it.
 - [ ] Do not remove deadlock safety before movement coordination exists.
 
@@ -1349,3 +1349,8 @@ Remaining uncertainty:
 - Commits or files: existing migration/reconstruction paths in `src/sim/save.ts` and `src/sim/save-recovery.ts`; physical ownership cleanup and batched movement in `src/sim/sim.ts`; `tools/phase9-save-migration-tests.ts`, `tools/movement-coordinator-tests.ts`, `tools/facility-slots-tests.ts`, and `tools/normal-scale-operation-tests.ts`; structural cache commit `4ac6c38` and arbitration-harness commit `a4781a6`.
 - Save evidence: `npm run test:phase9-save` passes five phases with two legacy derivations. A stripped legacy snapshot rebuilds identical grandfathered structural roots/nodes/edges, identical Dock/Berth approach descriptors and conflict groups, and adapted Berth size geometry that yields to the first explicit player edit. Missing occupant fields default to station-side, errand, non-failing, non-stranded state; a missing maintenance block resumes with an undamaged geometry-derived integrity ledger. A live post-load station starts with no stale paths, occupancy, queue theater entries, transfer/service claims, or invalid dock bindings, then replans actor movement and rebuilds its congestion map within three simulated seconds.
 - Ownership and performance evidence: `npm run test:movement-coordinator` passes six groups, including batched deterministic resolution, stale-wait recovery, and save/load clearing of transient claims. Gate F's exclusive-claims group proves provider/staff/seat ownership and cleanup. The 240-second 50/50 normal-scale run maintains 256 exterior targets, profiles every declared top-level simulation phase across 3,600 ticks with no unprofiled phase, keeps p95 path calls below one A* per actor, and reports the cached 2,856-node support graph. These are transferred into the ledger now because the focused evidence predates the unchecked duplicate Phase 9 rows.
+
+2026-07-28 · Current saturation/cap inventory
+
+- Documentation: `docs/40-structural-frontage-cap-audit.md` records the current queue-chain length/spill bounds, service and dock balk timers, intent-specific A* occupancy saturation, walk/route/environment/sanitation penalty ceilings, resident stress bounds, failed-stay event bounds, and the displayed 0-100 station-rating clamp with its uncapped causal ledger.
+- Review boundary: this is a source-backed inventory, not a balance change. The compound controlled-scenario item stays open because existing focused fixtures do not yet drive every documented value through below/at/above saturation in one auditable runner.
