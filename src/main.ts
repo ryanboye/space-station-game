@@ -25,7 +25,8 @@ import { sigilForFaction } from './sim/system-map';
 import { mountCharterScreen } from './ui/charter-screen';
 import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
 import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/opening-economy-panels';
-import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-economy';
+import { marketPolicyEffect } from './sim/opening-economy';
+import { computeCharterOperatingForecast } from './sim/site-charter';
 import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
 import { shipHullAssetPath, shipHullProfile } from './sim/ship-hulls';
@@ -1132,7 +1133,8 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
 });
 
 function openingEconomyPanelView(): OpeningEconomyPanelView {
-  const profile = deriveOpeningEconomyProfile(state.site);
+  const siteForecast = computeCharterOperatingForecast(state.site);
+  const profile = siteForecast.economy;
   const policy = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
   const summary = getOpeningEconomySummary(state, 120);
   const marketTiles = new Set(
@@ -1191,15 +1193,17 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
         ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
         : travelSupplyQuote.message
     },
+    // Same shared forecast the Charter screen rendered before the game
+    // started, so the site reading stays recognizable after opening.
     siteBrief: {
-      title: state.site ? 'Chartered site' : 'Standard orbit',
-      primary: profile.trafficLabel,
-      secondary: profile.resourceLabel ?? 'No dominant local resource advantage.',
-      traits: [
-        { label: 'Supplies', detail: `${Math.round(profile.supplyWholesaleMultiplier * 100)}% wholesale`, tone: profile.supplyWholesaleMultiplier <= 0.95 ? 'good' : profile.supplyWholesaleMultiplier >= 1.08 ? 'warn' : 'neutral' },
-        { label: 'Solar', detail: `${Math.round(profile.solarYieldMultiplier * 100)}% yield`, tone: profile.solarYieldMultiplier >= 1.05 ? 'good' : profile.solarYieldMultiplier <= 0.8 ? 'warn' : 'neutral' },
-        { label: 'Repairs', detail: `${Math.round(profile.repairDemandMultiplier * 100)}% demand`, tone: profile.repairDemandMultiplier >= 1.08 ? 'good' : 'neutral' }
-      ]
+      title: siteForecast.chartered ? 'Chartered site' : 'Standard orbit',
+      primary: siteForecast.headline,
+      secondary: siteForecast.summary,
+      traits: siteForecast.chips.map((chip) => ({
+        label: chip.label,
+        detail: chip.detail,
+        tone: chip.tone
+      }))
     },
     projects: {
       maxActive: 2,

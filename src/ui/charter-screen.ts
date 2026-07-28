@@ -1,8 +1,15 @@
 // A self-contained spatial charter map. System geometry remains owned by the
 // simulation; this module only gives that geometry a readable, tactile view.
 
-import { computeSiteProfile } from '../sim/site-charter';
-import { deriveOpeningEconomyProfile } from '../sim/opening-economy';
+import {
+  CHARTER_LEVEL_LABEL,
+  CHARTER_RESOURCE_LABEL,
+  CHARTER_TRAFFIC_LABEL,
+  charterLevelBand,
+  charterTrafficBand,
+  computeCharterOperatingForecast,
+  computeSiteProfile
+} from '../sim/site-charter';
 import type { LaneRoute, SiteCharter, SpaceLane, SystemMap } from '../sim/types';
 
 export interface CharterScreenOptions {
@@ -109,11 +116,17 @@ const STYLE_TEXT = `
 #charter-screen .key-hab { background: #6f9d57; } #charter-screen .key-cold { background: #4384a7; }
 #charter-screen .key-line { width: 19px; height: 2px; background: #72d5bb; box-shadow: 0 0 7px #72d5bb; }
 #charter-screen .key-gate { width: 11px; height: 11px; border: 1px solid #9ac9ff; transform: rotate(45deg); }
-#charter-screen .charter-actions { right: 36px; bottom: 28px; width: min(290px, calc(100vw - 72px)); display: grid; gap: 8px; }
+/* Bottom-anchored stack: Back, then the site reading, then the two commit
+   controls. The reading is a normal grid row (never an overlay), so it can
+   never sit beneath Back or Recommend. */
+#charter-screen .charter-actions { right: 28px; bottom: 24px; width: min(348px, calc(100vw - 56px)); display: grid; gap: 8px; }
 #charter-screen .charter-selection {
   display: grid;
   gap: 5px;
   min-height: 58px;
+  max-height: min(52vh, 430px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 9px 11px;
   border: 1px solid rgba(126, 158, 177, 0.38);
   background: rgba(5, 13, 20, 0.78);
@@ -123,6 +136,26 @@ const STYLE_TEXT = `
 }
 #charter-screen .charter-selection strong { color: #f0d38d; font-size: 11px; }
 #charter-screen .charter-selection span { color: #c7d7df; }
+#charter-screen .charter-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+#charter-screen .charter-chip {
+  padding: 2px 5px;
+  border: 1px solid rgba(99, 132, 151, 0.5);
+  border-radius: 3px;
+  color: #bccbd3;
+  font-size: 9px;
+  line-height: 1.3;
+}
+#charter-screen .charter-chip b { color: #e4edf0; }
+#charter-screen .charter-chip.good { border-color: rgba(89, 190, 137, 0.6); color: #a5dbbe; }
+#charter-screen .charter-chip.warn { border-color: rgba(232, 174, 73, 0.66); color: #edca8a; }
+#charter-screen .charter-lines { display: grid; gap: 3px; margin-top: 3px; }
+#charter-screen .charter-lines p { margin: 0; color: #a9bac4; font-size: 9px; line-height: 1.4; }
+#charter-screen .charter-advice { margin-top: 4px; }
+#charter-screen .charter-advice em { display: block; color: #90a5b1; font-size: 9px; font-style: normal; letter-spacing: 0.08em; text-transform: uppercase; }
+#charter-screen .charter-advice ul { margin: 3px 0 0; padding-left: 13px; display: grid; gap: 3px; }
+#charter-screen .charter-advice li { color: #b6c6cf; font-size: 9px; line-height: 1.4; }
+#charter-screen .charter-advice li b { color: #f0d38d; font-weight: 500; }
+#charter-screen .charter-viability { margin: 5px 0 0; color: #8fa6b2; font-size: 9px; line-height: 1.4; }
 #charter-screen button {
   min-height: 48px;
   padding: 10px 16px;
@@ -140,7 +173,7 @@ const STYLE_TEXT = `
 #charter-screen button.charter-primary:not(:disabled) { background: rgba(82, 57, 17, 0.9); box-shadow: inset 0 0 0 1px rgba(244, 207, 123, 0.18); }
 #charter-screen button.charter-primary:hover { background: rgba(74, 52, 19, 0.85); }
 #charter-screen button:disabled { cursor: default; color: #63737e; border-color: rgba(104, 122, 133, 0.42); background: rgba(8, 14, 20, 0.65); }
-#charter-screen .charter-back { position: absolute; right: 0; bottom: 112px; min-height: 33px; padding: 6px 12px; font-size: 11px; }
+#charter-screen .charter-back { min-height: 33px; padding: 6px 12px; font-size: 11px; }
 #charter-screen .charter-tooltip {
   display: none;
   z-index: 2;
@@ -161,14 +194,17 @@ const STYLE_TEXT = `
   #charter-screen h1 { font-size: 16px; }
   #charter-screen .charter-header p { font-size: 10px; margin-top: 5px; }
   #charter-screen .charter-legend { left: 18px; bottom: 16px; gap: 5px 12px; padding: 8px 10px; font-size: 8px; }
-  #charter-screen .charter-actions { right: 18px; bottom: 16px; width: 192px; gap: 5px; }
+  #charter-screen .charter-actions { right: 14px; bottom: 14px; width: min(258px, calc(100vw - 28px)); gap: 5px; }
+  #charter-screen .charter-selection { max-height: min(46vh, 250px); padding: 7px 8px; }
   #charter-screen button { min-height: 39px; padding: 7px 9px; font-size: 10px; }
-  #charter-screen .charter-back { bottom: 91px; min-height: 29px; }
+  #charter-screen .charter-back { min-height: 29px; }
   #charter-screen .charter-tooltip { width: 176px; font-size: 10px; }
 }
 @media (max-width: 410px) {
-  #charter-screen .charter-legend { grid-template-columns: auto; }
-  #charter-screen .charter-actions { width: 168px; }
+  /* The reading panel needs the full width here, which is the same corner the
+     legend occupies. The map keys stay readable on the map itself. */
+  #charter-screen .charter-legend { display: none; }
+  #charter-screen .charter-actions { width: calc(100vw - 28px); }
 }
 `;
 
@@ -219,35 +255,34 @@ function distanceToSegment(point: Point, a: Point, b: Point): number {
   return Math.hypot(point.x - (a.x + progress * dx), point.y - (a.y + progress * dy));
 }
 
-function sunBand(value: number): string {
-  if (value >= 0.72) return 'High';
-  if (value >= 0.42) return 'Medium';
-  return 'Low';
+// Banding and naming live with the forecast so this screen and the in-game
+// Site Brief cannot drift into two vocabularies.
+function levelBand(value: number): string {
+  return CHARTER_LEVEL_LABEL[charterLevelBand(value)];
 }
 
-function debrisBand(value: number): string {
-  if (value >= 0.72) return 'High';
-  if (value >= 0.42) return 'Medium';
-  return 'Low';
-}
-
-function trafficBand(value: number): string {
-  if (value >= 1.6) return 'Heavy';
-  if (value >= 1.05) return 'Steady';
-  return 'Quiet';
+function trafficBandLabel(value: number): string {
+  return CHARTER_TRAFFIC_LABEL[charterTrafficBand(value)];
 }
 
 function resourceLabel(value: SiteCharter['resourceType']): string {
-  if (value === 'metal') return 'Metal rich';
-  if (value === 'ice') return 'Ice rich';
-  if (value === 'gas') return 'Gas rich';
-  return 'Open space';
+  return CHARTER_RESOURCE_LABEL[value ?? 'none'];
 }
 
 function peakTraffic(profile: SiteCharter): number {
   let peak = 0;
   for (const lane of LANES) peak = Math.max(peak, profile.laneTrafficFactor[lane]);
   return peak;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  })[character] ?? character);
 }
 
 function makeStars(seed: string): Star[] {
@@ -506,12 +541,12 @@ export function mountCharterScreen(
       <span class="charter-key"><i class="key-dot key-warm"></i>WARM ZONE</span><span class="charter-key"><i class="key-gate"></i>GATE</span>
       <span class="charter-key"><i class="key-dot key-hab"></i>HABITABLE</span><span class="charter-key"><i class="key-dot key-cold"></i>COLD ZONE</span>
     </aside>
-    <div class="charter-tooltip" role="status"><div class="tooltip-title" data-field="title">Survey site</div><div class="tooltip-row"><span>Sunlight</span><span data-field="sun"></span></div><div class="tooltip-row"><span>Traffic</span><span data-field="traffic"></span></div><div class="tooltip-row"><span>Debris</span><span data-field="debris"></span></div><div class="tooltip-row"><span>Resource</span><span data-field="resource"></span></div><div class="tooltip-row"><span>Supply cost</span><span data-field="supply-cost"></span></div><div class="tooltip-row"><span>Retail demand</span><span data-field="retail-demand"></span></div><div class="tooltip-row"><span>Repair demand</span><span data-field="repair-demand"></span></div><div class="tooltip-row"><span>Solar yield</span><span data-field="solar-yield"></span></div></div>
+    <div class="charter-tooltip" role="status"><div class="tooltip-title" data-field="title">Survey site</div><div class="tooltip-row"><span>Sunlight</span><span data-field="sun"></span></div><div class="tooltip-row"><span>Traffic</span><span data-field="traffic"></span></div><div class="tooltip-row"><span>Debris</span><span data-field="debris"></span></div><div class="tooltip-row"><span>Resource</span><span data-field="resource"></span></div><div class="tooltip-row"><span>Lead service</span><span data-field="lead-service"></span></div><div class="tooltip-row"><span>Supply cost</span><span data-field="supply-cost"></span></div><div class="tooltip-row"><span>Retail demand</span><span data-field="retail-demand"></span></div><div class="tooltip-row"><span>Repair demand</span><span data-field="repair-demand"></span></div><div class="tooltip-row"><span>Solar yield</span><span data-field="solar-yield"></span></div><div class="tooltip-row"><span>Expand toward</span><span data-field="expansion"></span></div></div>
     <nav class="charter-actions" aria-label="Charter actions">
+      ${options.allowCancel ? '<button type="button" class="charter-back">Back</button>' : ''}
       <div class="charter-selection" aria-live="polite"><strong>Select a station site</strong><span>Click the map or use the recommended location to compare its operating conditions.</span></div>
       <button type="button" class="charter-recommended">Recommended Site</button>
       <button type="button" class="charter-primary" disabled>Charter This Site</button>
-      ${options.allowCancel ? '<button type="button" class="charter-back">Back</button>' : ''}
     </nav>
   `;
   document.body.appendChild(root);
@@ -524,6 +559,8 @@ export function mountCharterScreen(
   const trafficField = root.querySelector<HTMLElement>('[data-field="traffic"]')!;
   const debrisField = root.querySelector<HTMLElement>('[data-field="debris"]')!;
   const resourceField = root.querySelector<HTMLElement>('[data-field="resource"]')!;
+  const leadServiceField = root.querySelector<HTMLElement>('[data-field="lead-service"]')!;
+  const expansionField = root.querySelector<HTMLElement>('[data-field="expansion"]')!;
   const supplyCostField = root.querySelector<HTMLElement>('[data-field="supply-cost"]')!;
   const retailDemandField = root.querySelector<HTMLElement>('[data-field="retail-demand"]')!;
   const repairDemandField = root.querySelector<HTMLElement>('[data-field="repair-demand"]')!;
@@ -665,21 +702,26 @@ export function mountCharterScreen(
       return;
     }
     const profile = computeSiteProfile(system, point.x, point.y);
-    const economy = deriveOpeningEconomyProfile(profile);
+    const forecast = computeCharterOperatingForecast(profile);
+    const economy = forecast.economy;
     const targetName = target.kind === 'planet' ? system.planets.find((planet) => planet.id === target.id)?.displayName
       : target.kind === 'gate' ? 'Trade gate'
         : target.kind === 'outpost' ? landmarks.find((landmark) => landmark.id === target.id)?.label
           : target.kind === 'belt' ? 'Resource belt'
             : target.kind === 'route' ? 'Traffic route' : 'Survey site';
     titleField.textContent = targetName ?? 'Survey site';
-    sunField.textContent = sunBand(profile.sunFactor);
-    trafficField.textContent = trafficBand(peakTraffic(profile));
-    debrisField.textContent = debrisBand(profile.debrisFactor);
+    sunField.textContent = levelBand(profile.sunFactor);
+    trafficField.textContent = forecast.evenApproaches
+      ? `${trafficBandLabel(peakTraffic(profile))} · even`
+      : `${trafficBandLabel(peakTraffic(profile))} · ${forecast.busiestFace.lane}`;
+    debrisField.textContent = levelBand(profile.debrisFactor);
     resourceField.textContent = resourceLabel(profile.resourceType);
+    leadServiceField.textContent = forecast.services[0].label;
     supplyCostField.textContent = `${Math.round(economy.supplyWholesaleMultiplier * 100)}%`;
     retailDemandField.textContent = `${Math.round(economy.retailDemandMultiplier * 100)}%`;
     repairDemandField.textContent = `${Math.round(economy.repairDemandMultiplier * 100)}%`;
     solarYieldField.textContent = `${Math.round(economy.solarYieldMultiplier * 100)}%`;
+    expansionField.textContent = forecast.shelteredFace.lane;
     const rect = root.getBoundingClientRect();
     const tooltipWidth = tooltip.offsetWidth || 204;
     const tooltipHeight = tooltip.offsetHeight || 154;
@@ -712,8 +754,21 @@ export function mountCharterScreen(
   const select = (point: Point): void => {
     selected = point;
     const profile = computeSiteProfile(system, point.x, point.y);
-    const economy = deriveOpeningEconomyProfile(profile);
-    selectionSummary.innerHTML = `<strong>${trafficBand(peakTraffic(profile))} traffic · ${resourceLabel(profile.resourceType)}</strong><span>Supplies ${Math.round(economy.supplyWholesaleMultiplier * 100)}% · retail ${Math.round(economy.retailDemandMultiplier * 100)}% · repairs ${Math.round(economy.repairDemandMultiplier * 100)}% · solar ${Math.round(economy.solarYieldMultiplier * 100)}%</span>`;
+    // Same forecast object the in-game Site Brief renders: headline, summary
+    // and chips are shared verbatim, and the charter screen adds the fuller
+    // trade-off and mitigation reading on top of them.
+    const forecast = computeCharterOperatingForecast(profile);
+    selectionSummary.innerHTML = `<strong>${escapeHtml(forecast.headline)}</strong>`
+      + `<span>${escapeHtml(forecast.summary)}</span>`
+      + `<div class="charter-chips">${forecast.chips.map((chip) =>
+        `<span class="charter-chip ${chip.tone}"><b>${escapeHtml(chip.label)}</b> ${escapeHtml(chip.detail)}</span>`).join('')}</div>`
+      + `<div class="charter-lines">${[forecast.resourceLine, forecast.powerLine, forecast.exposureLine, forecast.expansionLine]
+        .map((line) => `<p>${escapeHtml(line)}</p>`).join('')}</div>`
+      + `<div class="charter-advice"><em>Mitigations</em><ul>${forecast.mitigations
+        .map((item) => `<li><b>${escapeHtml(item.system)}.</b> ${escapeHtml(item.detail)}</li>`).join('')}</ul></div>`
+      + `<div class="charter-advice"><em>Trade-offs</em><ul>${forecast.tradeoffs
+        .map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul></div>`
+      + `<p class="charter-viability">${escapeHtml(forecast.viability)}</p>`;
     charterButton.disabled = false;
     draw(performance.now());
   };

@@ -11,6 +11,8 @@
 // Everything here is a pure function of (system geometry, x, y): identical
 // inputs always yield an identical profile. No rng, no clock, no globals.
 
+import { charterDebrisFlow } from './map-conditions';
+import { deriveOpeningEconomyProfile, type OpeningEconomyProfile } from './opening-economy';
 import type { LaneRoute, SiteCharter, SpaceLane, SystemMap } from './types';
 
 const LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
@@ -190,5 +192,448 @@ export function computeSiteProfile(system: SystemMap, x: number, y: number): Sit
     debrisFactor,
     resourceType,
     laneTrafficFactor
+  };
+}
+
+// --- Charter operating forecast -------------------------------------------
+//
+// One shared, pure reading of a SiteCharter: what kind of station prospers
+// here, which exterior face carries the traffic, which one is safe to expand
+// into, and what the site costs to operate. The Charter screen and the
+// in-game Site Brief both render this object, so neither surface invents its
+// own labels or recommendations.
+//
+// Every number below traces to either the SiteCharter itself or to
+// deriveOpeningEconomyProfile(). Nothing is decorative.
+
+export const CHARTER_FORECAST_VERSION = 1;
+
+export type CharterLevelBand = 'low' | 'medium' | 'high';
+export type CharterTrafficBand = 'quiet' | 'steady' | 'heavy';
+export type CharterTone = 'good' | 'neutral' | 'warn';
+
+/** Shared 0..1 banding for sunlight and debris. */
+export function charterLevelBand(value: number): CharterLevelBand {
+  if (value >= 0.72) return 'high';
+  if (value >= 0.42) return 'medium';
+  return 'low';
+}
+
+/** Shared banding for a lane traffic multiplier (1 = default volume). */
+export function charterTrafficBand(factor: number): CharterTrafficBand {
+  if (factor >= 1.6) return 'heavy';
+  if (factor >= 1.05) return 'steady';
+  return 'quiet';
+}
+
+export const CHARTER_LEVEL_LABEL: Record<CharterLevelBand, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High'
+};
+
+export const CHARTER_TRAFFIC_LABEL: Record<CharterTrafficBand, string> = {
+  quiet: 'Quiet',
+  steady: 'Steady',
+  heavy: 'Heavy'
+};
+
+export const CHARTER_RESOURCE_LABEL: Record<NonNullable<SiteCharter['resourceType']> | 'none', string> = {
+  metal: 'Metal rich',
+  ice: 'Ice rich',
+  gas: 'Gas rich',
+  none: 'Open space'
+};
+
+export interface CharterFaceForecast {
+  lane: SpaceLane;
+  /** Straight from SiteCharter.laneTrafficFactor; 1 = default lane volume. */
+  trafficFactor: number;
+  trafficBand: CharterTrafficBand;
+  /** debrisFactor scaled by how squarely this face meets the charter's
+   *  debris flow (the same flow map-conditions uses for 'debris-risk'). */
+  debrisExposure: number;
+  /** Arrival contention blended with debris exposure. Lower builds easier. */
+  buildPressure: number;
+}
+
+export type CharterServiceId = 'berths' | 'retail' | 'fuel' | 'repair' | 'freight';
+
+export interface CharterServiceForecast {
+  id: CharterServiceId;
+  label: string;
+  /** Driving multiplier ÷ the same multiplier on an un-chartered orbit. */
+  advantage: number;
+  /** Where `advantage` comes from, e.g. "retail demand 128%". */
+  metric: string;
+}
+
+export interface CharterMitigation {
+  /** An existing station system, named as the player sees it. */
+  system: string;
+  detail: string;
+}
+
+export interface CharterForecastChip {
+  label: string;
+  detail: string;
+  tone: CharterTone;
+}
+
+export interface CharterOperatingForecast {
+  version: typeof CHARTER_FORECAST_VERSION;
+  /** False for legacy saves and un-chartered starts (the neutral orbit). */
+  chartered: boolean;
+  siteTag: string;
+  /** Single-line identity, shared by both surfaces. */
+  headline: string;
+  /** Supporting line, shared by both surfaces. */
+  summary: string;
+  /** Compact traits, shared by both surfaces. */
+  chips: CharterForecastChip[];
+  faces: CharterFaceForecast[];
+  busiestFace: CharterFaceForecast;
+  exposedFace: CharterFaceForecast;
+  shelteredFace: CharterFaceForecast;
+  /** True when no face is meaningfully busier than the rest. */
+  evenApproaches: boolean;
+  /** Ranked best-first. `services[0]` is the opening lead. */
+  services: CharterServiceForecast[];
+  resourceLine: string;
+  powerLine: string;
+  exposureLine: string;
+  expansionLine: string;
+  /** Two-sided consequences, never a single correct build. */
+  tradeoffs: string[];
+  mitigations: CharterMitigation[];
+  /** Why this site is workable, whatever else it costs. */
+  viability: string;
+  economy: OpeningEconomyProfile;
+}
+
+/** The familiar un-chartered start: what deriveOpeningEconomyProfile() and
+ *  map-conditions already fall back to when `state.site` is undefined. */
+const NEUTRAL_SITE: SiteCharter = {
+  version: 1,
+  x: CENTER,
+  y: CENTER,
+  sunFactor: 0.5,
+  debrisFactor: 0,
+  resourceType: null,
+  laneTrafficFactor: { north: 1, east: 1, south: 1, west: 1 }
+};
+
+/** Baseline the site is measured against, so every advantage is a real ratio. */
+const NEUTRAL_ECONOMY = deriveOpeningEconomyProfile();
+
+/** Below this spread, calling one face "the busy one" would be a lie. */
+const EVEN_APPROACH_SPREAD = 0.08;
+
+const LANE_NAME: Record<SpaceLane, string> = {
+  north: 'north',
+  east: 'east',
+  south: 'south',
+  west: 'west'
+};
+
+function percent(value: number): number {
+  return Math.round(value * 100);
+}
+
+/** The same 0..1 normalization deriveOpeningEconomyProfile applies to traffic. */
+function trafficNormalized(factor: number): number {
+  return clamp01((factor - LANE_FLOOR) / (LANE_CEIL - LANE_FLOOR));
+}
+
+function fuelMargin(profile: OpeningEconomyProfile): number {
+  return profile.fuelSaleMultiplier / profile.fuelWholesaleMultiplier;
+}
+
+function faceForecasts(site: SiteCharter): CharterFaceForecast[] {
+  const flow = charterDebrisFlow(site);
+  const debris = clamp01(site.debrisFactor);
+  return LANES.map((lane) => {
+    const dir = LANE_DIRS[lane];
+    // -1 (fully downstream of the debris flow) .. 1 (facing straight into it).
+    const alignment = clamp01((flow.dx * dir.x + flow.dy * dir.y + 1) / 2);
+    const trafficFactor = Math.max(0, site.laneTrafficFactor[lane]);
+    const debrisExposure = alignment * debris;
+    return {
+      lane,
+      trafficFactor,
+      trafficBand: charterTrafficBand(trafficFactor),
+      debrisExposure,
+      buildPressure: trafficNormalized(trafficFactor) * 0.55 + debrisExposure * 0.45
+    };
+  });
+}
+
+function pickFace(
+  faces: CharterFaceForecast[],
+  score: (face: CharterFaceForecast) => number,
+  prefer: 'max' | 'min'
+): CharterFaceForecast {
+  let best = faces[0];
+  for (const face of faces) {
+    const better = prefer === 'max' ? score(face) > score(best) : score(face) < score(best);
+    if (better) best = face;
+  }
+  return best;
+}
+
+function rankedServices(economy: OpeningEconomyProfile): CharterServiceForecast[] {
+  const services: CharterServiceForecast[] = [
+    {
+      id: 'berths',
+      label: 'Passenger berths',
+      advantage: economy.passengerTrafficMultiplier / NEUTRAL_ECONOMY.passengerTrafficMultiplier,
+      metric: `traveler traffic ${percent(economy.passengerTrafficMultiplier)}%`
+    },
+    {
+      id: 'retail',
+      label: 'Travel-supplies retail',
+      advantage: economy.retailDemandMultiplier / NEUTRAL_ECONOMY.retailDemandMultiplier,
+      metric: `retail demand ${percent(economy.retailDemandMultiplier)}%`
+    },
+    {
+      id: 'fuel',
+      label: 'Fuel depot',
+      advantage: fuelMargin(economy) / fuelMargin(NEUTRAL_ECONOMY),
+      metric: `fuel ${percent(economy.fuelSaleMultiplier)}% sale on ${percent(economy.fuelWholesaleMultiplier)}% feedstock`
+    },
+    {
+      id: 'repair',
+      label: 'Repair bay',
+      advantage: economy.repairDemandMultiplier / NEUTRAL_ECONOMY.repairDemandMultiplier,
+      metric: `repair demand ${percent(economy.repairDemandMultiplier)}%`
+    },
+    {
+      id: 'freight',
+      label: 'Courier freight',
+      advantage: economy.courierTrafficMultiplier / NEUTRAL_ECONOMY.courierTrafficMultiplier,
+      metric: `courier traffic ${percent(economy.courierTrafficMultiplier)}%`
+    }
+  ];
+  // Stable: equal advantages keep the declaration order above.
+  return services
+    .map((service, index) => ({ service, index }))
+    .sort((a, b) => b.service.advantage - a.service.advantage || a.index - b.index)
+    .map((entry) => entry.service);
+}
+
+function toneForRatio(value: number, goodAbove: number, warnBelow: number): CharterTone {
+  if (value >= goodAbove) return 'good';
+  if (value <= warnBelow) return 'warn';
+  return 'neutral';
+}
+
+function tradeoffLines(
+  site: SiteCharter,
+  economy: OpeningEconomyProfile,
+  busiest: CharterFaceForecast,
+  sheltered: CharterFaceForecast,
+  evenApproaches: boolean
+): string[] {
+  const lines: string[] = [];
+  if (!evenApproaches && busiest.trafficBand === 'heavy') {
+    lines.push(
+      `The ${LANE_NAME[busiest.lane]} face runs ${percent(busiest.trafficFactor)}% of default arrival volume: `
+      + `more berth, retail and courier revenue, but every berth, gangway and queue competes for that one frontage.`
+    );
+  } else if (!evenApproaches && busiest.trafficBand === 'quiet') {
+    lines.push(
+      `No face gets above ${percent(busiest.trafficFactor)}% of default arrivals: frontage is never contested, `
+      + `but deliveries stay expensive at ${percent(economy.supplyWholesaleMultiplier)}% wholesale, so revenue has to come from work done rather than volume.`
+    );
+  } else {
+    lines.push(
+      `Arrivals sit near ${percent(busiest.trafficFactor)}% of default on the busiest face and spread across the others: `
+      + `no single frontage bottleneck, and no single lane worth over-building either.`
+    );
+  }
+  if (site.resourceType) {
+    lines.push(
+      `${economy.resourceLabel}: supplies land at ${percent(economy.supplyWholesaleMultiplier)}% and fuel feedstock at `
+      + `${percent(economy.fuelWholesaleMultiplier)}% of default, while the same belt pushes debris exposure to `
+      + `${CHARTER_LEVEL_LABEL[charterLevelBand(site.debrisFactor)].toLowerCase()} and repair demand to ${percent(economy.repairDemandMultiplier)}%.`
+    );
+  } else {
+    lines.push(
+      `No belt nearby: supplies cost ${percent(economy.supplyWholesaleMultiplier)}% of default with no local discount, `
+      + `but hull wear stays low and crew time goes into service instead of repair.`
+    );
+  }
+  const sunBand = charterLevelBand(site.sunFactor);
+  if (sunBand === 'high') {
+    lines.push(
+      `Bright orbit: ${percent(economy.solarYieldMultiplier)}% solar yield, and the same sunlight heats the rooms behind it.`
+    );
+  } else if (sunBand === 'low') {
+    lines.push(
+      `Deep shade: ${percent(economy.solarYieldMultiplier)}% solar yield means reactor power, and cool rooms that need no help staying cool.`
+    );
+  } else {
+    lines.push(
+      `Mixed light: ${percent(economy.solarYieldMultiplier)}% solar yield covers early load without making heat a problem yet.`
+    );
+  }
+  lines.push(
+    `Expanding toward the ${LANE_NAME[sheltered.lane]} face is the cheapest ground to hold; expanding toward `
+    + `${LANE_NAME[busiest.lane]} buys traffic at the price of upkeep and contention.`
+  );
+  return lines;
+}
+
+function mitigationList(
+  site: SiteCharter,
+  economy: OpeningEconomyProfile,
+  busiest: CharterFaceForecast,
+  exposed: CharterFaceForecast,
+  sheltered: CharterFaceForecast,
+  evenApproaches: boolean
+): CharterMitigation[] {
+  const candidates: CharterMitigation[] = [];
+  if (charterLevelBand(site.debrisFactor) !== 'low') {
+    candidates.push({
+      system: 'EVA repair capacity',
+      detail:
+        `Debris runs ${CHARTER_LEVEL_LABEL[charterLevelBand(site.debrisFactor)].toLowerCase()} and hits the `
+        + `${LANE_NAME[exposed.lane]} face hardest. Staff maintenance and keep hull stock on hand so EVA repair keeps `
+        + `pace with wear instead of chasing it.`
+    });
+  }
+  if (!evenApproaches && busiest.trafficBand === 'heavy') {
+    candidates.push({
+      system: 'Redundant frontage',
+      detail:
+        `Run truss out to a second berth face rather than stacking every berth on ${LANE_NAME[busiest.lane]}, so one `
+        + `queue cannot hold up ${percent(busiest.trafficFactor)}% of default arrivals.`
+    });
+  }
+  if (charterLevelBand(site.sunFactor) === 'high') {
+    candidates.push({
+      system: 'Cooling',
+      detail:
+        `Solar generation pays ${percent(economy.solarYieldMultiplier)}% here, but insulation panels and vents on the `
+        + `sunlit rooms are what keep guests and crew comfortable behind the panels.`
+    });
+  } else if (charterLevelBand(site.sunFactor) === 'low') {
+    candidates.push({
+      system: 'Solar generation',
+      detail:
+        `Panels only return ${percent(economy.solarYieldMultiplier)}% here, so budget reactor power early and spend the `
+        + `saved panel space on service rooms.`
+    });
+  }
+  candidates.push({
+    system: 'Lower-exposure expansion',
+    detail:
+      `Grow toward the ${LANE_NAME[sheltered.lane]} face first: ${CHARTER_TRAFFIC_LABEL[sheltered.trafficBand].toLowerCase()} `
+      + `arrivals and the least debris of the faces left for growth, which keeps new structure cheap to hold.`
+  });
+  return candidates.slice(0, 2);
+}
+
+/**
+ * Derive the shared operating forecast for a chartered site. Pure and
+ * deterministic: the same SiteCharter always yields the same forecast, and an
+ * absent charter resolves to the neutral orbit the rest of the sim assumes.
+ */
+export function computeCharterOperatingForecast(site?: SiteCharter): CharterOperatingForecast {
+  const chartered = site !== undefined;
+  const charter = site ?? NEUTRAL_SITE;
+  const economy = deriveOpeningEconomyProfile(site);
+  const faces = faceForecasts(charter);
+  const busiestFace = pickFace(faces, (face) => face.trafficFactor, 'max');
+  const quietestFace = pickFace(faces, (face) => face.trafficFactor, 'min');
+  const exposedFace = pickFace(faces, (face) => face.debrisExposure, 'max');
+  const evenApproaches = busiestFace.trafficFactor - quietestFace.trafficFactor < EVEN_APPROACH_SPREAD;
+  // When one face clearly carries the traffic, it is the revenue frontage, so
+  // it is never also the recommended growth direction — that would be two
+  // contradictory instructions about the same face.
+  const shelteredFace = pickFace(
+    evenApproaches ? faces : faces.filter((face) => face.lane !== busiestFace.lane),
+    (face) => face.buildPressure,
+    'min'
+  );
+  const services = rankedServices(economy);
+  const lead = services[0];
+  const support = services[1];
+  const defer = services[services.length - 1];
+
+  const resourceName = CHARTER_RESOURCE_LABEL[charter.resourceType ?? 'none'];
+  const approachPhrase = evenApproaches
+    ? `${CHARTER_TRAFFIC_LABEL[busiestFace.trafficBand]} approaches on every face`
+    : `${CHARTER_TRAFFIC_LABEL[busiestFace.trafficBand]} ${LANE_NAME[busiestFace.lane]} approach`;
+  const headline = chartered
+    ? `${approachPhrase} · ${resourceName}`
+    : `${approachPhrase} · standard orbit`;
+  const summary =
+    `Lead with ${lead.label.toLowerCase()} (${lead.metric}) and back it with ${support.label.toLowerCase()}; `
+    + `${defer.label.toLowerCase()} pays least here. Solar yield ${percent(economy.solarYieldMultiplier)}%, `
+    + `expand toward the ${LANE_NAME[shelteredFace.lane]} face.`;
+
+  const resourceLine = charter.resourceType
+    ? `${economy.resourceLabel}. Supplies ${percent(economy.supplyWholesaleMultiplier)}% wholesale, fuel feedstock ${percent(economy.fuelWholesaleMultiplier)}%.`
+    : `No belt flavor within reach. Supplies ${percent(economy.supplyWholesaleMultiplier)}% wholesale, fuel feedstock ${percent(economy.fuelWholesaleMultiplier)}%.`;
+  const powerLine =
+    `${CHARTER_LEVEL_LABEL[charterLevelBand(charter.sunFactor)]} sunlight · solar yield ${percent(economy.solarYieldMultiplier)}% of default`
+    + `${charterLevelBand(charter.sunFactor) === 'high' ? ' · sunlit rooms run hot' : charterLevelBand(charter.sunFactor) === 'low' ? ' · cold, dim public frontage' : ''}.`;
+  const exposureLine =
+    `${CHARTER_LEVEL_LABEL[charterLevelBand(charter.debrisFactor)]} debris exposure · repair demand `
+    + `${percent(economy.repairDemandMultiplier)}%. The ${LANE_NAME[exposedFace.lane]} face takes the debris flow; `
+    + `the ${LANE_NAME[shelteredFace.lane]} face is the calmest ground to grow into.`;
+  const expansionLine = evenApproaches
+    ? `No face is contested, so expansion is free to follow the ${LANE_NAME[shelteredFace.lane]} face, the calmest mix of arrivals and debris.`
+    : `Keep the ${LANE_NAME[busiestFace.lane]} face for revenue frontage (${percent(busiestFace.trafficFactor)}% of default arrivals) `
+      + `and put growth on the ${LANE_NAME[shelteredFace.lane]} face.`;
+
+  const chips: CharterForecastChip[] = [
+    {
+      label: 'Traffic',
+      detail: evenApproaches
+        ? `${CHARTER_TRAFFIC_LABEL[busiestFace.trafficBand].toLowerCase()} on every face`
+        : `${CHARTER_TRAFFIC_LABEL[busiestFace.trafficBand].toLowerCase()} on ${LANE_NAME[busiestFace.lane]} (${percent(busiestFace.trafficFactor)}%)`,
+      tone: busiestFace.trafficBand === 'heavy' ? 'good' : busiestFace.trafficBand === 'quiet' ? 'warn' : 'neutral'
+    },
+    {
+      label: 'Lead',
+      detail: `${lead.label} · ${lead.metric}`,
+      tone: 'good'
+    },
+    {
+      label: 'Supplies',
+      detail: `${percent(economy.supplyWholesaleMultiplier)}% wholesale`,
+      tone: toneForRatio(1 / economy.supplyWholesaleMultiplier, 1 / 0.95, 1 / 1.08)
+    },
+    {
+      label: 'Exposure',
+      detail: `${CHARTER_LEVEL_LABEL[charterLevelBand(charter.debrisFactor)].toLowerCase()} debris · repairs ${percent(economy.repairDemandMultiplier)}%`,
+      tone: charterLevelBand(charter.debrisFactor) === 'high' ? 'warn' : charterLevelBand(charter.debrisFactor) === 'low' ? 'good' : 'neutral'
+    }
+  ];
+
+  return {
+    version: CHARTER_FORECAST_VERSION,
+    chartered,
+    siteTag: economy.siteTag,
+    headline,
+    summary,
+    chips,
+    faces,
+    busiestFace,
+    exposedFace,
+    shelteredFace,
+    evenApproaches,
+    services,
+    resourceLine,
+    powerLine,
+    exposureLine,
+    expansionLine,
+    tradeoffs: tradeoffLines(charter, economy, busiestFace, shelteredFace, evenApproaches),
+    mitigations: mitigationList(charter, economy, busiestFace, exposedFace, shelteredFace, evenApproaches),
+    viability:
+      `Every face keeps ambient traffic, so no site starves — this one earns through ${lead.label.toLowerCase()}.`,
+    economy
   };
 }
