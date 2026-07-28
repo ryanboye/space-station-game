@@ -194,6 +194,8 @@ export interface RecipeProgress {
   operational: boolean;
   /** Plain player-facing reasons the investment is not live yet. */
   operationalReasons: string[];
+  /** Access of the coherent room candidate whose fixtures feed the progress rows. */
+  candidateAccess: 'public' | 'restricted' | null;
   /**
    * Backward-compatible alias for permanent construction completion. Do not
    * use this to answer whether stock or utilities are currently live.
@@ -428,6 +430,11 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
       built,
       operational: built && stockReady && operationalReasons.length === 0,
       operationalReasons,
+      candidateAccess: coherentCluster === null
+        ? null
+        : clusterIsPublic(state, coherentCluster)
+          ? 'public'
+          : 'restricted',
       complete: built,
       affordable: state.metrics.credits >= remainingCostCredits
     };

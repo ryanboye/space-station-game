@@ -86,6 +86,10 @@ check('fresh station is life-safe but has no operating public business', () => {
   const state = fresh();
   const recipes = evaluateOpeningRecipes(state);
   assert(recipes.every((entry) => !entry.operational), 'fresh station opened a business');
+  assert(
+    recipe(state, 'feed-travelers').candidateAccess === 'restricted',
+    'starter crew-mess progress was not identified as a restricted conversion candidate'
+  );
   const crewMess = state.rooms
     .map((room, tile) => ({ room, tile }))
     .filter((entry) => entry.room === RoomType.Cafeteria);

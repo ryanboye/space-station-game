@@ -1212,3 +1212,10 @@ Remaining uncertainty:
 - Commit or files: EVA classification in `src/sim/construction.ts`; focused contrast in `tools/structural-expansion-tests.ts` (pending checkpoint commit at evidence capture).
 - Focused evidence: `npm run test:structural-expansion` proves a replacement Pod Dock creates an EVA-required module site while a replacement Table on an initialized pressurized interior remains ordinary construction. `npm run build` passed.
 - Remaining uncertainty: the exterior worker animation already exists, but a Pod Dock installation still needs a preserved live capture before the catalogue's visual proof is complete.
+
+2026-07-28 · Restricted crew-mess opening guidance
+
+- Commit or files: `src/sim/opening-recipes.ts`, `src/main.ts`, and `tools/opening-business-tests.ts` (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:opening-businesses` passed all six opening truth checks, including the fresh starter's restricted crew mess remaining non-operational for visitors.
+- Visual/playtest evidence: a normal live starter at 4x admitted its first pod traffic. Food demand was correctly missed rather than forming a phantom queue, but the Food comparison card reported the private counter and seats without naming their access restriction. The readout now labels those fixtures `CREW MESS CANDIDATE`, preserving the deliberate choice between sharing that room and building a separate public cafeteria without implying it already serves travelers.
+- Remaining uncertainty: Gate A still requires the player to complete one public business and observe its first revenue cycle; this checkpoint fixes the guidance discovered before that build, not the gate itself.

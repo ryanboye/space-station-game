@@ -7093,7 +7093,8 @@ function recipeMachineReadout(recipe: ReturnType<typeof evaluateOpeningRecipes>[
   const ready = `${Math.min(stock?.have ?? 0, stock?.count ?? 0)}/${stock?.count ?? 0}`;
   if (recipe.id === 'feed-travelers') {
     const tables = Math.min(step(ModuleType.Table)?.have ?? 0, step(ModuleType.Table)?.count ?? 0);
-    return `${count(ModuleType.ServingStation)} counters · ${tables * 4}/8 seats · ${count(ModuleType.TrayReturn)} tray return · ${ready} ready servings`;
+    const access = recipe.candidateAccess === 'restricted' ? 'CREW MESS CANDIDATE · ' : '';
+    return `${access}${count(ModuleType.ServingStation)} counters · ${tables * 4}/8 seats · ${count(ModuleType.TrayReturn)} tray return · ${ready} ready servings`;
   }
   if (recipe.id === 'sell-supplies') {
     return `${count(ModuleType.CheckoutBank)} checkout bank · ${count(ModuleType.ShelfAisle)} shelf aisle · ${ready} goods on shelves`;
