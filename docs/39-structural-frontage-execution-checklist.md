@@ -433,37 +433,37 @@ compiles is not sufficient for player-facing work.
 
 ### Shared Docking Slot
 
-- [ ] Define one descriptor for legacy Docks, Pod Docks, and Berths.
+- [x] Define one descriptor for legacy Docks, Pod Docks, and Berths.
 - [ ] Preserve stable physical interface identity.
-- [ ] Store hull connection, accepted ship class, access tiles, and envelopes.
-- [ ] Add binding slot reservations.
+- [x] Store hull connection, accepted ship class, access tiles, and envelopes.
+- [x] Add binding slot reservations.
 - [ ] Add authoritative slot occupancy.
-- [ ] Make small-craft reservations bind to a specific dock.
-- [ ] Prevent two ships from owning the same slot.
+- [x] Make small-craft reservations bind to a specific dock.
+- [x] Prevent two ships from owning the same slot.
 - [ ] Unify holding queues without merging distinct settlement models.
 
 ### World-Space Envelopes
 
-- [ ] Derive ingress envelope.
-- [ ] Derive mooring/parked-vessel envelope.
-- [ ] Derive egress envelope.
-- [ ] Size envelopes by interface and ship class.
-- [ ] Represent envelope geometry beyond map boundaries.
-- [ ] Reject mooring overlap with station structure.
-- [ ] Reject incompatible mooring-envelope overlap.
-- [ ] Reject impossible fixed approach obstruction.
-- [ ] Preserve legal placement when only approach paths overlap.
+- [x] Derive ingress envelope.
+- [x] Derive mooring/parked-vessel envelope.
+- [x] Derive egress envelope.
+- [x] Size envelopes by interface and ship class.
+- [x] Represent envelope geometry beyond map boundaries.
+- [x] Reject mooring overlap with station structure.
+- [x] Reject incompatible mooring-envelope overlap.
+- [x] Reject impossible fixed approach obstruction.
+- [x] Preserve legal placement when only approach paths overlap.
 
 ### Approach Conflict Groups
 
-- [ ] Derive conflict groups from overlapping ingress/egress geometry.
-- [ ] Reserve a group during approach.
-- [ ] Reserve a group during departure.
-- [ ] Permit docked coexistence when mooring envelopes are clear.
-- [ ] Serialize conflicting approach/departure operations.
-- [ ] Permit independent approaches concurrently.
+- [x] Derive conflict groups from overlapping ingress/egress geometry.
+- [x] Reserve a group during approach.
+- [x] Reserve a group during departure.
+- [x] Permit docked coexistence when mooring envelopes are clear.
+- [x] Serialize conflicting approach/departure operations.
+- [x] Permit independent approaches concurrently.
 - [ ] Show `WAITING: APPROACH OCCUPIED` at the physical interface.
-- [ ] Keep holding traffic structured and deterministic.
+- [x] Keep holding traffic structured and deterministic.
 
 ### Placement Preview
 
@@ -477,11 +477,11 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 4 Gate
 
-- [ ] Map-edge placement cannot bypass clearance.
+- [x] Map-edge placement cannot bypass clearance.
 - [ ] Overlapping approaches serialize visibly.
-- [ ] Independent sides operate concurrently.
+- [x] Independent sides operate concurrently.
 - [ ] Parked ships never overlap hull or one another.
-- [ ] Save/load resumes durable slot and approach ownership safely.
+- [x] Save/load resumes durable slot and approach ownership safely.
 
 ## Phase 5: Movement Intent, Doors, And Real Queues
 
@@ -886,3 +886,10 @@ Remaining uncertainty:
 - Focused checks: confirmed that local debris/sun/thermal conditions, charter lane traffic, exterior debt, EVA repair routing/oxygen/supplies, thermal drift, and authoritative pressure are real. Confirmed that durable hull-panel identity and `worn` / `damaged` / `breached` / `repaired` states do not yet exist; current debris impacts create debt/effects, not physical component damage.
 - Visual/playtest evidence: current hull wear is an aggregated `6x6` maintenance-sector pressure rather than an inspectable exterior object. Fire can delete modules and must remain separate from future breach/restoration topology. The planned player-facing model uses persistent panel sprites, local integrity rings, directional exposure, anchored breach warnings, pressure overlays, visible EVA supplies/welding, and a brief `PATCHED` restoration state.
 - Remaining uncertainty: implementation needs a durable world-coordinate `ExteriorIntegrityTarget`, repair-job regeneration after hydration, explicit breach thresholds, restoration through authoritative `setTile`, facing-specific charter traffic, and a dedicated runner proving identity, exposure ordering, state transitions, pressure loss/recovery, fire separation, EVA blocks, save/remap, mitigation, and charter-facing tradeoffs.
+
+2026-07-27 · Phase 4 world-space approach simulation
+
+- Commit or files: `src/sim/approach-envelopes.ts`, `src/sim/sim.ts`, `src/sim/types.ts`, `src/sim/save.ts`, `src/sim/expansion.ts`, `src/sim/index.ts`, `tools/approach-envelope-tests.ts`, and `package.json`.
+- Focused checks: `npm run test:approach-envelopes`, `npm run test:approach-control`, `npm run build`, and `git diff --check` passed. Coverage proves full map-edge geometry, fixed obstruction rejection without state mutation, deterministic conflict ownership independent of array order, concurrent independent groups, small-craft Pod Dock binding, departure ownership before slot release, save/resume queue order, west-expansion world stability, and no hidden approach progress while waiting.
+- Visual/playtest evidence: none yet. This change establishes the simulation authority needed by placement and live-operation presentation but intentionally does not claim the preview or world-label requirements.
+- Remaining uncertainty: physical interface IDs are still derived from local anchors and remapped during north/west growth rather than having immutable UUIDs; Berth and dock placement preview does not yet expose red hard obstruction, amber serialization, vessel dimensions, conflict-group identity, lane traffic, throat warnings, or `WAITING: APPROACH OCCUPIED` in the world.

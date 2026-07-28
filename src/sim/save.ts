@@ -7,6 +7,7 @@ import {
   setDockAllowedShipType,
   setDockFacing,
   setDockPurpose,
+  reconcilePhysicalApproachCommitments,
   tick,
   tryPlaceModule
 } from './sim';
@@ -614,6 +615,21 @@ function cloneSmallCraftVisit(visit: SmallCraftVisit | undefined): SmallCraftVis
     : undefined;
 }
 
+function normalizeApproachCommitment(value: unknown): ArrivingShip['approachCommitment'] {
+  if (!isRecord(value) || typeof value.slotId !== 'string' || value.slotId.length === 0) return null;
+  if ((value.phase !== 'approach' && value.phase !== 'depart') || (value.status !== 'waiting' && value.status !== 'active')) return null;
+  const groupIds = Array.isArray(value.groupIds)
+    ? [...new Set(value.groupIds.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0).map((entry) => entry.slice(0, 160)))].sort()
+    : [];
+  return {
+    slotId: value.slotId.slice(0, 160),
+    groupIds,
+    phase: value.phase,
+    status: value.status,
+    queuedAt: Math.max(0, asFiniteNumber(value.queuedAt, 0))
+  };
+}
+
 function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
   if (!isRecord(value) || typeof value.dockSourceKey !== 'string' || !Array.isArray(value.services)) return undefined;
   const services: SmallCraftService[] = [];
@@ -1184,7 +1200,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           outboundRequired: { ...ship.portTurnaround.outboundRequired },
           outboundLoaded: { ...ship.portTurnaround.outboundLoaded }
         } : undefined,
-        smallCraftVisit: cloneSmallCraftVisit(ship.smallCraftVisit)
+        smallCraftVisit: cloneSmallCraftVisit(ship.smallCraftVisit),
+        approachCommitment: ship.approachCommitment
+          ? { ...ship.approachCommitment, groupIds: [...ship.approachCommitment.groupIds] }
+          : null
       })),
     // Chartered site profile, if any. undefined on un-chartered starts, and
     // JSON.stringify drops it so legacy save shape is unchanged.
@@ -2247,7 +2266,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
             : null,
           recallAt: typeof entry.recallAt === 'number' && Number.isFinite(entry.recallAt)
             ? Math.max(0, entry.recallAt)
-            : null
+            : null,
+          approachCommitment: normalizeApproachCommitment(entry.approachCommitment)
         }];
       })
     : [];
@@ -2929,7 +2949,10 @@ export function hydrateStateFromSave(
         fuelRequired: Math.max(0, savedShip.portTurnaround.fuelRequired ?? 0),
         fuelDelivered: Math.max(0, savedShip.portTurnaround.fuelDelivered ?? 0)
       } : undefined,
-      smallCraftVisit: cloneSmallCraftVisit(savedShip.smallCraftVisit)
+      smallCraftVisit: cloneSmallCraftVisit(savedShip.smallCraftVisit),
+      approachCommitment: savedShip.approachCommitment
+        ? { ...savedShip.approachCommitment, groupIds: [...savedShip.approachCommitment.groupIds] }
+        : null
     };
     if (ship.assignedDockId !== null) {
       const dock = (ship.assignedDockSourceKey
@@ -2940,10 +2963,13 @@ export function hydrateStateFromSave(
         // another nearby dock.
         next.docks.find((entry) => entry.id === ship.assignedDockId);
       if (!dock) {
-        warnings.push(`Active ship ${ship.id} could not remap its dock; released unassigned.`);
+        warnings.push(`Active ship ${ship.id} could not remap its dock; returned to holding.`);
         ship.assignedDockId = null;
         ship.assignedDockSourceKey = null;
-        ship.stage = 'depart';
+        ship.assignedBerthAnchor = null;
+        ship.approachCommitment = null;
+        ship.queueState = 'queued';
+        ship.stage = 'approach';
         ship.stageTime = 0;
       } else {
         const mount = fromIndex(dock.mountTile ?? dock.anchorTile, next.width);
@@ -2956,9 +2982,13 @@ export function hydrateStateFromSave(
       }
     }
     if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined && next.rooms[ship.assignedBerthAnchor] !== RoomType.Berth) {
-      warnings.push(`Active ship ${ship.id} could not remap its berth; released unassigned.`);
+      warnings.push(`Active ship ${ship.id} could not remap its berth; returned to holding.`);
       ship.assignedBerthAnchor = null;
-      ship.stage = 'depart';
+      ship.assignedDockId = null;
+      ship.assignedDockSourceKey = null;
+      ship.approachCommitment = null;
+      ship.queueState = 'queued';
+      ship.stage = 'approach';
       ship.stageTime = 0;
     }
     const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
@@ -2994,6 +3024,7 @@ export function hydrateStateFromSave(
     next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1),
     next.trafficOffers.reduce((max, offer) => Math.max(max, offer.id + 1), 1)
   );
+  reconcilePhysicalApproachCommitments(next);
   const activeShipIds = new Set(next.arrivingShips.map((ship) => ship.id));
   next.visitors = (snapshot.visitors ?? [])
     .filter((visitor) => visitor.originShipId === null || activeShipIds.has(visitor.originShipId))

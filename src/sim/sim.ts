@@ -24,6 +24,16 @@ import {
 } from './occupant-demand';
 import { previewTrafficOffer } from './approach-control';
 import {
+  buildDockingSlotDescriptor,
+  deriveApproachConflictGroups,
+  rectanglesOverlap,
+  tilesInWorldRect,
+  type ApproachConflictGroup,
+  type ApproachValidation,
+  type DockingSlotDescriptor,
+  type WorldRect
+} from './approach-envelopes';
+import {
   facilityUsageTilesForModule,
   resolveFacilitySlots,
   type FacilitySlotRole
@@ -101,6 +111,7 @@ import {
 } from './pod-freight';
 import {
   type ArrivingShip,
+  type ApproachCommitment,
   type BerthSizeClass,
   type CapabilityTag,
   type CommercialOffer,
@@ -7407,11 +7418,14 @@ export function rebuildDockEntities(state: StationState): void {
   for (const ship of state.arrivingShips) {
     if (ship.assignedDockId === null || existingIds.has(ship.assignedDockId)) continue;
     // A removed module dock must not silently bind a ship to a different hull
-    // mount on the next rebuild. There is no holding stage in this legacy ship
-    // state machine, so release it as an unassigned departure instead.
+    // mount. Keep it in physical holding until Approach Control decides what
+    // to do, rather than fabricating a nearby replacement interface.
     ship.assignedDockId = null;
     ship.assignedDockSourceKey = null;
-    ship.stage = 'depart';
+    ship.assignedBerthAnchor = null;
+    ship.approachCommitment = null;
+    ship.queueState = 'queued';
+    ship.stage = 'approach';
     ship.stageTime = 0;
   }
   state.dockQueue = state.dockQueue.filter((entry) =>
@@ -7893,6 +7907,222 @@ function deriveBerthFacing(state: StationState, cluster: number[]): SpaceLane | 
     }
   }
   return best;
+}
+
+function worldBoundsForTiles(state: StationState, tiles: number[]): WorldRect {
+  const positions = tiles.map((tile) => fromIndex(tile, state.width));
+  const minX = Math.min(...positions.map((position) => position.x)) + state.mapWorldOriginX;
+  const minY = Math.min(...positions.map((position) => position.y)) + state.mapWorldOriginY;
+  const maxX = Math.max(...positions.map((position) => position.x)) + state.mapWorldOriginX + 1;
+  const maxY = Math.max(...positions.map((position) => position.y)) + state.mapWorldOriginY + 1;
+  return { minX, minY, maxX, maxY };
+}
+
+function shiftWorldBoundsOutward(bounds: WorldRect, facing: SpaceLane): WorldRect {
+  if (facing === 'north') return { ...bounds, minY: bounds.minY - 1, maxY: bounds.maxY - 1 };
+  if (facing === 'south') return { ...bounds, minY: bounds.minY + 1, maxY: bounds.maxY + 1 };
+  if (facing === 'east') return { ...bounds, minX: bounds.minX + 1, maxX: bounds.maxX + 1 };
+  return { ...bounds, minX: bounds.minX - 1, maxX: bounds.maxX - 1 };
+}
+
+function berthAcceptedSizes(state: StationState, candidate: BerthCandidate): ShipSize[] {
+  const config = findBerthConfigByAnchor(state, candidate.anchorTile);
+  const configured = config?.allowedShipSizes ?? ALL_SHIP_SIZES_FOR_BERTH;
+  return configured.filter((size) => shipSizeFitsBerth(size, candidate.size));
+}
+
+/**
+ * Physical frontage descriptors are intentionally rebuilt from the station
+ * each time. They contain world coordinates, not map indices, so north/west
+ * map growth only changes the index binding and never moves a station in space.
+ */
+export function getDockingSlotDescriptors(state: StationState): DockingSlotDescriptor[] {
+  const descriptors: DockingSlotDescriptor[] = [];
+  for (const dock of state.docks) {
+    const kind = dock.sourceKind === 'pod-dock-module' ? 'pod-dock' : 'legacy-dock';
+    const hullTiles = [...dock.tiles];
+    if (hullTiles.length === 0) continue;
+    const anchor = fromIndex(dock.mountTile ?? dock.anchorTile, state.width);
+    descriptors.push(buildDockingSlotDescriptor({
+      id: `dock:${dock.sourceKey}`,
+      kind,
+      sourceKey: dock.sourceKey,
+      anchorTile: dock.anchorTile,
+      facing: dock.facing,
+      acceptedSizes: [...dock.allowedShipSizes],
+      hullTiles,
+      accessTiles: dockAccessTiles(dock),
+      anchorWorldX: anchor.x + state.mapWorldOriginX + 0.5,
+      anchorWorldY: anchor.y + state.mapWorldOriginY + 0.5,
+      // Dock tiles/modules are the station-side interface. The parked hull is
+      // one tile farther out into space, so its clearance must not reject the
+      // deck directly behind the interface.
+      hullBounds: shiftWorldBoundsOutward(worldBoundsForTiles(state, hullTiles), dock.facing)
+    }));
+  }
+  for (const berth of listBerthCandidates(state)) {
+    const facing = deriveBerthFacing(state, berth.tiles);
+    const acceptedSizes = berthAcceptedSizes(state, berth);
+    if (!facing || acceptedSizes.length === 0) continue;
+    const anchor = fromIndex(berth.anchorTile, state.width);
+    descriptors.push(buildDockingSlotDescriptor({
+      id: `berth:${berth.anchorTile}`,
+      kind: 'berth',
+      sourceKey: null,
+      anchorTile: berth.anchorTile,
+      facing,
+      acceptedSizes,
+      hullTiles: [...berth.tiles],
+      accessTiles: [...berth.tiles],
+      anchorWorldX: anchor.x + state.mapWorldOriginX + 0.5,
+      anchorWorldY: anchor.y + state.mapWorldOriginY + 0.5,
+      hullBounds: worldBoundsForTiles(state, berth.tiles)
+    }));
+  }
+  return descriptors.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function getApproachConflictGroups(state: StationState): ApproachConflictGroup[] {
+  return deriveApproachConflictGroups(getDockingSlotDescriptors(state));
+}
+
+function descriptorForShip(state: StationState, ship: ArrivingShip): DockingSlotDescriptor | null {
+  const descriptors = getDockingSlotDescriptors(state);
+  if (ship.assignedDockSourceKey) return descriptors.find((entry) => entry.id === `dock:${ship.assignedDockSourceKey}`) ?? null;
+  if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+    return descriptors.find((entry) => entry.id === `berth:${ship.assignedBerthAnchor}`) ?? null;
+  }
+  return null;
+}
+
+function localTileAtWorld(state: StationState, worldX: number, worldY: number): number | null {
+  const x = worldX - state.mapWorldOriginX;
+  const y = worldY - state.mapWorldOriginY;
+  return inBounds(x, y, state.width, state.height) ? toIndex(x, y, state.width) : null;
+}
+
+/** Validate only fixed physical obstruction; other ships are handled below. */
+export function validateDockingSlot(state: StationState, descriptor: DockingSlotDescriptor, size: ShipSize): ApproachValidation {
+  const envelope = descriptor.envelopesBySize[size];
+  const reasons: string[] = [];
+  if (!descriptor.acceptedSizes.includes(size)) reasons.push('slot does not accept this ship size');
+  const ownHull = new Set(descriptor.hullTiles);
+  for (const part of [envelope.mooring, envelope.ingress, envelope.egress]) {
+    for (const worldTile of tilesInWorldRect(part.bounds)) {
+      const tile = localTileAtWorld(state, worldTile.x, worldTile.y);
+      // Space beyond the map edge is intentionally valid exterior clearance.
+      if (tile === null || ownHull.has(tile)) continue;
+      if (state.tiles[tile] !== TileType.Space) {
+        reasons.push(part.kind === 'mooring' ? 'mooring envelope intersects station structure' : `${part.kind} envelope is obstructed`);
+        break;
+      }
+    }
+  }
+  const descriptors = getDockingSlotDescriptors(state);
+  const groups = deriveApproachConflictGroups(descriptors);
+  const conflictGroupIds = groups.filter((group) => group.slotIds.includes(descriptor.id)).map((group) => group.id);
+  return { valid: reasons.length === 0, hardReasons: [...new Set(reasons)], conflictGroupIds, descriptor };
+}
+
+function activeShipMooringOverlaps(state: StationState, ship: ArrivingShip, descriptor: DockingSlotDescriptor): boolean {
+  const current = descriptor.envelopesBySize[ship.size].mooring.bounds;
+  for (const other of state.arrivingShips) {
+    if (other.id === ship.id || other.stage === 'depart') continue;
+    const otherDescriptor = descriptorForShip(state, other);
+    if (!otherDescriptor) continue;
+    if (otherDescriptor.id === descriptor.id) return true;
+    if (rectanglesOverlap(current, otherDescriptor.envelopesBySize[other.size].mooring.bounds)) return true;
+  }
+  return false;
+}
+
+function commitmentForShip(state: StationState, ship: ArrivingShip, phase: ApproachCommitment['phase']): ApproachCommitment | null {
+  const descriptor = descriptorForShip(state, ship);
+  if (!descriptor || !descriptor.acceptedSizes.includes(ship.size)) return null;
+  const validation = validateDockingSlot(state, descriptor, ship.size);
+  if (!validation.valid || activeShipMooringOverlaps(state, ship, descriptor)) return null;
+  const groups = getApproachConflictGroups(state)
+    .filter((group) => group.slotIds.includes(descriptor.id))
+    .map((group) => group.id);
+  return { slotId: descriptor.id, groupIds: groups, phase, status: 'waiting', queuedAt: state.now };
+}
+
+function releaseApproachCommitment(ship: ArrivingShip): void {
+  ship.approachCommitment = null;
+}
+
+export function resolvePhysicalApproachCommitments(state: StationState): void {
+  const groups = new Map<string, ArrivingShip[]>();
+  for (const ship of state.arrivingShips) {
+    const commitment = ship.approachCommitment;
+    if (!commitment) continue;
+    for (const groupId of commitment.groupIds) {
+      const list = groups.get(groupId) ?? [];
+      list.push(ship);
+      groups.set(groupId, list);
+    }
+  }
+  const activeByGroup = new Map<string, number>();
+  for (const [groupId, ships] of groups.entries()) {
+    ships.sort((a, b) => (a.approachCommitment!.queuedAt - b.approachCommitment!.queuedAt) || a.id - b.id);
+    activeByGroup.set(groupId, ships[0].id);
+  }
+  for (const ship of state.arrivingShips) {
+    const commitment = ship.approachCommitment;
+    if (!commitment) continue;
+    commitment.status = commitment.groupIds.every((groupId) => activeByGroup.get(groupId) === ship.id) ? 'active' : 'waiting';
+  }
+}
+
+/**
+ * Rebuilds durable queue metadata after save hydration or topology rebuild.
+ * Bindings are never substituted: an orphaned ship returns to holding and
+ * waits for a future player decision instead of claiming a nearby interface.
+ */
+export function reconcilePhysicalApproachCommitments(state: StationState): void {
+  const groupsBySlot = new Map<string, string[]>();
+  for (const group of getApproachConflictGroups(state)) {
+    for (const slotId of group.slotIds) {
+      const groups = groupsBySlot.get(slotId) ?? [];
+      groups.push(group.id);
+      groupsBySlot.set(slotId, groups);
+    }
+  }
+  for (const ship of state.arrivingShips) {
+    const descriptor = descriptorForShip(state, ship);
+    if (!descriptor) {
+      if (ship.assignedDockId !== null || ship.assignedDockSourceKey || ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+        ship.assignedDockId = null;
+        ship.assignedDockSourceKey = null;
+        ship.assignedBerthAnchor = null;
+        ship.queueState = 'queued';
+        ship.stage = 'approach';
+        ship.stageTime = 0;
+      }
+      ship.approachCommitment = null;
+      continue;
+    }
+    const phase = ship.stage === 'depart' ? 'depart' : 'approach';
+    const existing = ship.approachCommitment;
+    if (ship.stage === 'docked' && existing?.phase !== 'depart') {
+      ship.approachCommitment = null;
+      continue;
+    }
+    if (ship.stage === 'approach' || ship.stage === 'depart') {
+      ship.approachCommitment = {
+        slotId: descriptor.id,
+        groupIds: [...(groupsBySlot.get(descriptor.id) ?? [])].sort(),
+        phase,
+        status: 'waiting',
+        queuedAt: existing?.queuedAt ?? state.now
+      };
+    }
+  }
+  resolvePhysicalApproachCommitments(state);
+}
+
+function canAdvancePhysicalApproach(ship: ArrivingShip): boolean {
+  return ship.approachCommitment?.status === 'active';
 }
 
 function describeMissingCapabilities(
@@ -13149,15 +13379,26 @@ function updateArrivingShips(state: StationState, dt: number): void {
       i--;
     }
   }
+  resolvePhysicalApproachCommitments(state);
   const keep: ArrivingShip[] = [];
   for (const ship of state.arrivingShips) {
-    ship.stageTime += dt;
+    if (ship.stage === 'approach' && !ship.approachCommitment) {
+      ship.approachCommitment = commitmentForShip(state, ship, 'approach');
+    }
 
-    if (ship.stage === 'approach' && ship.stageTime >= SHIP_APPROACH_TIME) {
+    // Holding is real physical waiting, not hidden progress. A ship must spend
+    // the full movement duration in the corridor after it acquires ownership.
+    const waitingForPhysicalLane =
+      (ship.stage === 'approach' || ship.stage === 'depart') &&
+      !canAdvancePhysicalApproach(ship);
+    if (!waitingForPhysicalLane) ship.stageTime += dt;
+
+    if (ship.stage === 'approach' && canAdvancePhysicalApproach(ship) && ship.stageTime >= SHIP_APPROACH_TIME) {
       ship.stage = 'docked';
       ship.stageTime = 0;
       ship.dockedAt = state.now;
       ship.visitPhase = 'secure';
+      releaseApproachCommitment(ship);
       beginPortTurnaround(state, ship);
     }
 
@@ -13237,6 +13478,16 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ship.stageTime = 0;
     }
 
+    if (ship.stage === 'depart') {
+      if (ship.approachCommitment?.phase !== 'depart') {
+        ship.approachCommitment = commitmentForShip(state, ship, 'depart');
+      }
+      if (!ship.approachCommitment || !canAdvancePhysicalApproach(ship)) {
+        keep.push(ship);
+        continue;
+      }
+    }
+
     if (ship.stage === 'depart' && ship.stageTime >= SHIP_DEPART_TIME) {
       if (ship.kind === 'transient' && ship.portContractId === undefined) {
         if (ship.smallCraftVisit) {
@@ -13274,6 +13525,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
           dock.occupiedByShipId = null;
         }
       }
+      releaseApproachCommitment(ship);
       continue;
     }
 
@@ -13353,7 +13605,7 @@ function spawnShipAtDock(
     );
   const centerX = center.x / Math.max(1, dock.tiles.length) + 0.5;
   const centerY = center.y / Math.max(1, dock.tiles.length) + 0.5;
-  state.arrivingShips.push({
+  const ship: ArrivingShip = {
     id: shipId,
     kind: 'transient',
     size,
@@ -13384,8 +13636,11 @@ function spawnShipAtDock(
     stayClass,
     visitPhase: 'announced',
     extensionUntil: null,
-    recallAt: null
-  });
+    recallAt: null,
+    approachCommitment: null
+  };
+  state.arrivingShips.push(ship);
+  ship.approachCommitment = commitmentForShip(state, ship, 'approach');
   state.usageTotals.shipsByType[shipType] += 1;
 }
 
@@ -13428,7 +13683,7 @@ function spawnShipAtBerth(
     );
   const centerX = center.x / Math.max(1, berth.tiles.length) + 0.5;
   const centerY = center.y / Math.max(1, berth.tiles.length) + 0.5;
-  state.arrivingShips.push({
+  const ship: ArrivingShip = {
     id: shipId,
     kind: 'transient',
     size,
@@ -13458,8 +13713,11 @@ function spawnShipAtBerth(
     stayClass,
     visitPhase: 'announced',
     extensionUntil: null,
-    recallAt: null
-  });
+    recallAt: null,
+    approachCommitment: null
+  };
+  state.arrivingShips.push(ship);
+  ship.approachCommitment = commitmentForShip(state, ship, 'approach');
   state.usageTotals.shipsByType[shipType] += 1;
 }
 

@@ -64,6 +64,17 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     return toIndex(p.x + shiftX, p.y + shiftY, newWidth);
   };
   const remapOptionalIndex = (index: number | null): number | null => (index === null ? null : remapIndex(index));
+  const remapDockSourceKey = (sourceKey: string | null | undefined): string | null | undefined => {
+    if (!sourceKey) return sourceKey;
+    const match = /^(legacy-dock|pod-dock):(\d+)$/.exec(sourceKey);
+    if (!match) return sourceKey;
+    return `${match[1]}:${remapIndex(Number(match[2]))}`;
+  };
+  const remapApproachSlotId = (slotId: string): string => {
+    if (slotId.startsWith('berth:')) return `berth:${remapIndex(Number(slotId.slice('berth:'.length)))}`;
+    if (slotId.startsWith('dock:')) return `dock:${remapDockSourceKey(slotId.slice('dock:'.length)) ?? slotId.slice('dock:'.length)}`;
+    return slotId;
+  };
   const remapIndexMap = (source: Map<number, number>): Map<number, number> => {
     const out = new Map<number, number>();
     for (const [idx, value] of source.entries()) {
@@ -147,6 +158,7 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   }));
   state.docks = state.docks.map((dock) => ({
     ...dock,
+    sourceKey: remapDockSourceKey(dock.sourceKey) ?? dock.sourceKey,
     tiles: dock.tiles.map(remapIndex),
     anchorTile: remapIndex(dock.anchorTile),
     approachTiles: dock.approachTiles.map(remapIndex)
@@ -185,6 +197,21 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
       targets: project.targets.map((target) => ({ ...target, tileIndex: remapIndex(target.tileIndex) }))
     };
   });
+  state.berthConfigs = state.berthConfigs.map((config) => ({
+    ...config,
+    anchorTile: remapIndex(config.anchorTile)
+  }));
+  state.trafficOffers = state.trafficOffers.map((offer) => ({
+    ...offer,
+    assignedBerthAnchor: offer.assignedBerthAnchor === null || offer.assignedBerthAnchor === undefined
+      ? null
+      : remapIndex(offer.assignedBerthAnchor),
+    assignedDockSourceKey: remapDockSourceKey(offer.assignedDockSourceKey) ?? null
+  }));
+  state.portOps.contracts = state.portOps.contracts.map((contract) => ({
+    ...contract,
+    assignedBerthAnchor: remapIndex(contract.assignedBerthAnchor)
+  }));
   state.incidents = state.incidents.map((incident) => ({
     ...incident,
     tileIndex: remapIndex(incident.tileIndex)
@@ -234,6 +261,22 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
   });
   state.arrivingShips = state.arrivingShips.map((ship) => ({
     ...ship,
+    assignedDockSourceKey: remapDockSourceKey(ship.assignedDockSourceKey) ?? null,
+    assignedBerthAnchor: ship.assignedBerthAnchor === null || ship.assignedBerthAnchor === undefined
+      ? ship.assignedBerthAnchor
+      : remapIndex(ship.assignedBerthAnchor),
+    approachCommitment: ship.approachCommitment
+      ? {
+          ...ship.approachCommitment,
+          slotId: remapApproachSlotId(ship.approachCommitment.slotId),
+          groupIds: ship.approachCommitment.groupIds.map((groupId) => {
+            const match = /^approach\|(.+)\|(.+)$/.exec(groupId);
+            return match
+              ? `approach|${remapApproachSlotId(match[1])}|${remapApproachSlotId(match[2])}`
+              : groupId;
+          })
+        }
+      : null,
     bayTiles: ship.bayTiles.map(remapIndex),
     bayCenterX: ship.bayCenterX + shiftX,
     bayCenterY: ship.bayCenterY + shiftY

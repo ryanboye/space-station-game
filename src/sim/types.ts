@@ -1461,6 +1461,19 @@ export interface ArrivingShip {
   // the berth interior, and by sim to look up the cluster on demand.
   // Null for legacy-dock ships.
   assignedBerthAnchor?: number | null;
+  /**
+   * Durable physical-frontage ownership. Offers reserve a compatible
+   * interface; this record serializes the shared space around that interface.
+   */
+  approachCommitment?: ApproachCommitment | null;
+}
+
+export interface ApproachCommitment {
+  slotId: string;
+  groupIds: string[];
+  phase: 'approach' | 'depart';
+  status: 'waiting' | 'active';
+  queuedAt: number;
 }
 
 export interface CoreState {
