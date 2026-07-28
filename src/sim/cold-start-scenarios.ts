@@ -18,8 +18,8 @@ import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
-import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, mapConditionAt, planStationExpansionOnTruss, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -166,12 +166,94 @@ function placeWallMod(state: StationState, x: number, y: number, m: ModuleType):
   tryPlaceModule(state, m, y * GRID_WIDTH + x, 0);
 }
 
+function approachConflictShip(id: number, dock: StationState['docks'][number], status: 'active' | 'waiting', groupIds: string[]): ArrivingShip {
+  const anchor = dock.anchorTile;
+  const x = anchor % GRID_WIDTH;
+  const y = Math.floor(anchor / GRID_WIDTH);
+  return {
+    id,
+    kind: 'transient',
+    size: 'small',
+    bayTiles: [...dock.tiles],
+    bayCenterX: x + 0.5,
+    bayCenterY: y + 0.5,
+    shipType: id === 9403 ? 'trader' : 'tourist',
+    lane: dock.facing,
+    originDockId: dock.id,
+    assignedDockId: dock.id,
+    assignedDockSourceKey: dock.sourceKey,
+    assignedBerthAnchor: null,
+    queueState: 'queued',
+    stage: 'approach',
+    stageTime: status === 'active' ? 0.8 : 0.15,
+    passengersTotal: 0,
+    passengersSpawned: 0,
+    passengersBoarded: 0,
+    minimumBoarding: 0,
+    spawnCarry: 0,
+    dockedAt: 0,
+    residentIds: [],
+    manifestDemand: { cafeteria: 0, market: 0, lounge: 0 },
+    manifestMix: { diner: 0.25, shopper: 0.25, lounger: 0.25, rusher: 0.25 },
+    approachCommitment: {
+      slotId: `dock:${dock.sourceKey}`,
+      groupIds,
+      phase: 'approach',
+      status,
+      queuedAt: id === 9401 ? 1 : id === 9402 ? 2 : 3
+    }
+  };
+}
+
 export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   // Default starter state — no-op. Keeps the registry pattern symmetric
   // so `?scenario=starter` is a valid URL (and differentiates from a
   // mistyped name which falls through to warning).
   starter: () => {},
   'two-berth-shift': () => {},
+
+  // Phase 4 visual fixture: two nearby hull interfaces share the same
+  // approach rectangle, while a third remains clear. Paused deliberately so
+  // the active/waiting state is stable for a screenshot or manual inspection.
+  'approach-conflicts': (s) => {
+    applyDemoStationOverlay(s);
+    for (const y of [20, 22, 31]) {
+      const anchor = y * GRID_WIDTH + 76;
+      s.rooms[anchor] = RoomType.None;
+      setTile(s, anchor, TileType.Dock);
+    }
+    const makeDock = (id: number, y: number, sourceKey: string) => ({
+      id,
+      sourceKind: 'legacy-tile-cluster' as const,
+      sourceKey,
+      purpose: 'visitor' as const,
+      tiles: [y * GRID_WIDTH + 76],
+      anchorTile: y * GRID_WIDTH + 76,
+      area: 1,
+      facing: 'east' as const,
+      lane: 'east' as const,
+      approachTiles: [y * GRID_WIDTH + 77, y * GRID_WIDTH + 78],
+      allowedShipTypes: ['tourist', 'trader'] as StationState['docks'][number]['allowedShipTypes'],
+      allowedShipSizes: ['small' as const],
+      maxSizeByArea: 'small' as const,
+      occupiedByShipId: null
+    });
+    const first = makeDock(9401, 20, `legacy-dock:${20 * GRID_WIDTH + 76}`);
+    const second = makeDock(9402, 22, `legacy-dock:${22 * GRID_WIDTH + 76}`);
+    const independent = makeDock(9403, 31, `legacy-dock:${31 * GRID_WIDTH + 76}`);
+    s.docks = [first, second, independent];
+    const sharedGroup = getApproachConflictGroups(s).find((group) =>
+      group.slotIds.includes(`dock:${first.sourceKey}`) && group.slotIds.includes(`dock:${second.sourceKey}`)
+    );
+    s.arrivingShips = [
+      approachConflictShip(9401, first, 'active', sharedGroup ? [sharedGroup.id] : []),
+      approachConflictShip(9402, second, 'waiting', sharedGroup ? [sharedGroup.id] : []),
+      approachConflictShip(9403, independent, 'active', [])
+    ];
+    s.controls.paused = true;
+    s.controls.spriteMode = 'sprites';
+    s.controls.showSpriteFallback = false;
+  },
 
   // Tier 1 already fired: first visitor archetype seen, T1 unlocked.
   // Useful for sprite/UX iteration that starts "after the first-visitor

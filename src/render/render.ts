@@ -58,8 +58,18 @@ import {
   utilityUnderlayShapeForMask,
   wallMountedModuleServiceTile,
   validateBerthModulePlacement,
-  validateDockPlacement
+  validateDockPlacement,
+  getApproachConflictGroups,
+  getDockingSlotDescriptors,
+  getPodDockPlacementView,
+  validateDockingSlot
 } from '../sim/sim';
+import {
+  buildDockingSlotDescriptor,
+  deriveApproachConflictGroups,
+  type DockingSlotDescriptor,
+  type WorldRect
+} from '../sim/approach-envelopes';
 import {
   DOOR_SPRITE_VARIANT_KEYS,
   MODULE_SPRITE_KEYS,
@@ -92,6 +102,12 @@ import { renderDoorDockDetailLayer } from './door-dock-detail-layer';
 import { renderGlowPass, type GlowRenderViewport } from './glow-pass';
 
 const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile size
+
+/** A world-only approach overlay is supplied only while building or inspecting. */
+export interface ApproachEnvelopePreview {
+  inspectedSlotId?: string | null;
+  berthPlacementTiles?: number[];
+}
 
 const tileColor: Record<TileType, string> = {
   [TileType.Space]: '#071019',
@@ -3289,6 +3305,42 @@ function drawBerthInformationChips(
   return occupied;
 }
 
+function drawApproachWaitingChips(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  occupied: BerthChipRect[]
+): void {
+  const descriptors = new Map(getDockingSlotDescriptors(state).map((descriptor) => [descriptor.id, descriptor]));
+  const text = 'WAITING: APPROACH OCCUPIED';
+  const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.29));
+  const height = Math.max(18, Math.round(TILE_SIZE * 0.78));
+  const padding = Math.max(9, Math.round(TILE_SIZE * 0.42));
+  ctx.save();
+  ctx.font = `bold ${fontSize}px monospace`;
+  const width = Math.max(TILE_SIZE * 4.6, Math.min(TILE_SIZE * 8.5, ctx.measureText(text).width + padding * 2));
+  for (const ship of state.arrivingShips) {
+    if (ship.approachCommitment?.status !== 'waiting') continue;
+    const descriptor = descriptors.get(ship.approachCommitment.slotId);
+    if (!descriptor) continue;
+    const rect = placeBerthChip(state, descriptor.hullTiles, width, height, occupied);
+    if (!rect) continue;
+    ctx.fillStyle = 'rgba(28, 20, 7, 0.94)';
+    ctx.strokeStyle = '#ffd36a';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+    ctx.beginPath();
+    ctx.roundRect(rect.x, rect.y, rect.w, rect.h, Math.max(2, TILE_SIZE * 0.1));
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ffd36a';
+    ctx.fillRect(rect.x, rect.y, Math.max(2, TILE_SIZE * 0.11), rect.h);
+    ctx.fillStyle = '#fff0bd';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, rect.x + padding, rect.y + rect.h * 0.5);
+  }
+  ctx.restore();
+}
+
 type InfrastructureAnimationState = {
   deployment: number;
   updatedAt: number;
@@ -4132,6 +4184,198 @@ function drawPlacementReason(
   ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
   ctx.fillStyle = valid ? '#8fe6b0' : '#ffb0b0';
   ctx.fillText(text, x + padding, y + height - Math.round(4 * PX));
+}
+
+function worldBoundsForApproachTiles(state: StationState, tiles: number[]): WorldRect | null {
+  if (tiles.length === 0) return null;
+  const positions = tiles.map((tile) => fromIndex(tile, state.width));
+  return {
+    minX: Math.min(...positions.map((position) => position.x)) + state.mapWorldOriginX,
+    minY: Math.min(...positions.map((position) => position.y)) + state.mapWorldOriginY,
+    maxX: Math.max(...positions.map((position) => position.x)) + state.mapWorldOriginX + 1,
+    maxY: Math.max(...positions.map((position) => position.y)) + state.mapWorldOriginY + 1
+  };
+}
+
+function shiftApproachBoundsOutward(bounds: WorldRect, facing: SpaceLane): WorldRect {
+  if (facing === 'north') return { ...bounds, minY: bounds.minY - 1, maxY: bounds.maxY - 1 };
+  if (facing === 'south') return { ...bounds, minY: bounds.minY + 1, maxY: bounds.maxY + 1 };
+  if (facing === 'east') return { ...bounds, minX: bounds.minX + 1, maxX: bounds.maxX + 1 };
+  return { ...bounds, minX: bounds.minX - 1, maxX: bounds.maxX - 1 };
+}
+
+function exteriorFacingForPreview(state: StationState, tiles: number[]): SpaceLane {
+  const own = new Set(tiles);
+  const counts: Record<SpaceLane, number> = { north: 0, east: 0, south: 0, west: 0 };
+  for (const tile of tiles) {
+    const { x, y } = fromIndex(tile, state.width);
+    for (const [facing, dx, dy] of [
+      ['north', 0, -1], ['east', 1, 0], ['south', 0, 1], ['west', -1, 0]
+    ] as Array<[SpaceLane, number, number]>) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(nx, ny, state.width, state.height) || state.tiles[toIndex(nx, ny, state.width)] === TileType.Space) {
+        if (!own.has(inBounds(nx, ny, state.width, state.height) ? toIndex(nx, ny, state.width) : -1)) counts[facing]++;
+      }
+    }
+  }
+  return (['north', 'east', 'south', 'west'] as SpaceLane[])
+    .reduce((best, facing) => counts[facing] > counts[best] ? facing : best, 'east');
+}
+
+function previewSlotDescriptor(
+  state: StationState,
+  id: string,
+  kind: 'pod-dock' | 'berth',
+  tiles: number[],
+  facing: SpaceLane,
+  acceptedSizes: ShipSize[]
+): DockingSlotDescriptor | null {
+  const bounds = worldBoundsForApproachTiles(state, tiles);
+  if (!bounds || tiles.length === 0) return null;
+  const anchor = fromIndex(tiles[0], state.width);
+  return buildDockingSlotDescriptor({
+    id,
+    kind,
+    sourceKey: null,
+    anchorTile: tiles[0],
+    facing,
+    acceptedSizes,
+    hullTiles: tiles,
+    accessTiles: tiles,
+    anchorWorldX: anchor.x + state.mapWorldOriginX + 0.5,
+    anchorWorldY: anchor.y + state.mapWorldOriginY + 0.5,
+    hullBounds: kind === 'pod-dock' ? shiftApproachBoundsOutward(bounds, facing) : bounds
+  });
+}
+
+function approachRectPx(state: StationState, bounds: WorldRect): { x: number; y: number; w: number; h: number } {
+  return {
+    x: (bounds.minX - state.mapWorldOriginX) * TILE_SIZE,
+    y: (bounds.minY - state.mapWorldOriginY) * TILE_SIZE,
+    w: (bounds.maxX - bounds.minX) * TILE_SIZE,
+    h: (bounds.maxY - bounds.minY) * TILE_SIZE
+  };
+}
+
+function drawApproachArrow(ctx: CanvasRenderingContext2D, rect: { x: number; y: number; w: number; h: number }, facing: SpaceLane, color: string): void {
+  const cx = rect.x + rect.w * 0.5;
+  const cy = rect.y + rect.h * 0.5;
+  const length = Math.max(TILE_SIZE * 0.7, facing === 'north' || facing === 'south' ? rect.h * 0.36 : rect.w * 0.36);
+  const outward = facing === 'north' ? { x: 0, y: -1 } : facing === 'south' ? { x: 0, y: 1 } : facing === 'east' ? { x: 1, y: 0 } : { x: -1, y: 0 };
+  const start = { x: cx + outward.x * length * 0.5, y: cy + outward.y * length * 0.5 };
+  const end = { x: cx - outward.x * length * 0.5, y: cy - outward.y * length * 0.5 };
+  const head = Math.max(3, TILE_SIZE * 0.15);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(end.x, end.y);
+  ctx.lineTo(end.x + outward.y * head + outward.x * head, end.y - outward.x * head + outward.y * head);
+  ctx.lineTo(end.x - outward.y * head + outward.x * head, end.y + outward.x * head + outward.y * head);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawApproachLabel(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  descriptor: DockingSlotDescriptor,
+  text: string,
+  color: string
+): void {
+  const anchor = descriptor.anchorTile === null ? null : fromIndex(descriptor.anchorTile, state.width);
+  if (!anchor) return;
+  const fontPx = Math.max(8, Math.round(TILE_SIZE * 0.29));
+  const pad = Math.max(4, Math.round(TILE_SIZE * 0.18));
+  ctx.font = `bold ${fontPx}px monospace`;
+  const width = Math.min(TILE_SIZE * 12, ctx.measureText(text).width + pad * 2);
+  const height = Math.max(17, Math.round(TILE_SIZE * 0.7));
+  const gap = Math.max(3, TILE_SIZE * 0.13);
+  const anchorX = (anchor.x + 0.5) * TILE_SIZE;
+  const anchorY = (anchor.y + 0.5) * TILE_SIZE;
+  let x = anchorX - width * 0.5;
+  let y = anchorY - height * 0.5;
+  if (descriptor.facing === 'east') x = anchorX - width - gap;
+  else if (descriptor.facing === 'west') x = anchorX + gap;
+  else if (descriptor.facing === 'north') y = anchorY + gap;
+  else y = anchorY - height - gap;
+  x = Math.max(2, Math.min(state.width * TILE_SIZE - width - 2, x));
+  y = Math.max(2, Math.min(state.height * TILE_SIZE - height - 2, y));
+  ctx.fillStyle = 'rgba(5, 14, 23, 0.92)';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, Math.max(2, TILE_SIZE * 0.1));
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + pad, y + height * 0.5);
+}
+
+function drawApproachEnvelopePreview(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  currentTool: BuildTool,
+  hoveredTile: number | null,
+  preview: ApproachEnvelopePreview
+): void {
+  let descriptor: DockingSlotDescriptor | null = null;
+  let planning = false;
+  if (currentTool.kind === 'module' && currentTool.module === ModuleType.PodDock && hoveredTile !== null) {
+    const modulePreview = previewModulePlacement(state, currentTool.module, hoveredTile, state.controls.moduleRotation);
+    const podPlacement = getPodDockPlacementView(state, hoveredTile);
+    if (podPlacement.facing && modulePreview.tiles.length > 0) {
+      descriptor = previewSlotDescriptor(state, `preview:pod:${hoveredTile}`, 'pod-dock', modulePreview.tiles, podPlacement.facing, ['small']);
+      planning = true;
+    }
+  } else if (currentTool.kind === 'room' && currentTool.room === RoomType.Berth && preview.berthPlacementTiles?.length) {
+    const tiles = preview.berthPlacementTiles;
+    descriptor = previewSlotDescriptor(state, `preview:berth:${tiles[0]}`, 'berth', tiles, exteriorFacingForPreview(state, tiles), ['small', 'medium', 'large']);
+    planning = true;
+  } else if (preview.inspectedSlotId) {
+    descriptor = getDockingSlotDescriptors(state).find((slot) => slot.id === preview.inspectedSlotId) ?? null;
+  }
+  if (!descriptor) return;
+
+  const size = descriptor.acceptedSizes.includes('large')
+    ? 'large'
+    : descriptor.acceptedSizes.includes('medium') ? 'medium' : 'small';
+  const validation = validateDockingSlot(state, descriptor, size);
+  const descriptors = planning ? [...getDockingSlotDescriptors(state), descriptor] : getDockingSlotDescriptors(state);
+  const conflictGroups = planning
+    ? deriveApproachConflictGroups(descriptors).filter((group) => group.slotIds.includes(descriptor!.id))
+    : getApproachConflictGroups(state).filter((group) => group.slotIds.includes(descriptor!.id));
+  const color = !validation.valid ? '#ff7676' : conflictGroups.length > 0 ? '#ffd36a' : '#72dff2';
+  const ingress = approachRectPx(state, descriptor.envelopesBySize[size].ingress.bounds);
+  const mooring = approachRectPx(state, descriptor.envelopesBySize[size].mooring.bounds);
+  ctx.save();
+  ctx.fillStyle = !validation.valid ? 'rgba(255, 82, 82, 0.15)' : conflictGroups.length > 0 ? 'rgba(255, 194, 76, 0.14)' : 'rgba(88, 222, 201, 0.12)';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+  ctx.setLineDash([Math.max(3, TILE_SIZE * 0.15), Math.max(2, TILE_SIZE * 0.11)]);
+  ctx.fillRect(ingress.x, ingress.y, ingress.w, ingress.h);
+  ctx.strokeRect(ingress.x + 0.5, ingress.y + 0.5, ingress.w - 1, ingress.h - 1);
+  ctx.setLineDash([]);
+  ctx.fillStyle = !validation.valid ? 'rgba(255, 90, 90, 0.25)' : conflictGroups.length > 0 ? 'rgba(255, 202, 86, 0.24)' : 'rgba(88, 226, 204, 0.2)';
+  ctx.fillRect(mooring.x, mooring.y, mooring.w, mooring.h);
+  ctx.strokeRect(mooring.x + 0.5, mooring.y + 0.5, mooring.w - 1, mooring.h - 1);
+  drawApproachArrow(ctx, ingress, descriptor.facing, color);
+  ctx.restore();
+
+  const reason = validation.hardReasons[0];
+  const label = reason
+    ? `APPROACH BLOCKED: ${reason}`
+    : conflictGroups.length > 0
+      ? `APPROACH SERIALIZES: ${conflictGroups.length} GROUP${conflictGroups.length === 1 ? '' : 'S'}`
+      : `APPROACH CLEAR: ${size.toUpperCase()} FOOTPRINT`;
+  drawApproachLabel(ctx, state, descriptor, label, color);
 }
 
 function agentOffset(id: number): { x: number; y: number } {
@@ -6107,7 +6351,8 @@ export function renderWorld(
   currentTool: BuildTool,
   hoveredTile: number | null = null,
   spriteAtlas: SpriteAtlas,
-  viewportInput: RenderViewport | null = null
+  viewportInput: RenderViewport | null = null,
+  approachPreview: ApproachEnvelopePreview = {}
 ): void {
   const widthPx = state.width * TILE_SIZE;
   const heightPx = state.height * TILE_SIZE;
@@ -6425,6 +6670,8 @@ export function renderWorld(
     }
     drawPlacementReason(ctx, state, hoveredTile, preview.valid ? `${preview.cost}c` : preview.reason, preview.valid);
   }
+
+  drawApproachEnvelopePreview(ctx, state, currentTool, hoveredTile, approachPreview);
 
   if (currentTool.kind === 'move-module') {
     const selectedModule = currentTool.moveSourceModuleId === undefined
@@ -6777,6 +7024,7 @@ export function renderWorld(
   }
 
   const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);
+  drawApproachWaitingChips(ctx, state, occupiedInfrastructureChips);
   // Pod demand and transaction summaries are drawn by the opening-economy
   // layer after renderWorld so one chip owns the complete visit story.
   drawPortCargoLots(ctx, state);

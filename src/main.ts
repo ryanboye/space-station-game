@@ -1,5 +1,5 @@
 import './styles.css';
-import { renderWorld, type RenderViewport } from './render/render';
+import { renderWorld, type ApproachEnvelopePreview, type RenderViewport } from './render/render';
 import { getStrandedReliefQuote, transferStrandedVisitor } from './sim/sim';
 import { DockEconomyFeedbackLayer, type DockDepartureResult } from './render/dock-economy-feedback';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
@@ -51,6 +51,7 @@ import {
   expandMap,
   fireStaffRole,
   getBerthInspectorAt,
+  getBerthFacilityAt,
   getCommercialUnitAt,
   getTrafficOfferPreview,
   getCrewInspectorById,
@@ -6277,6 +6278,30 @@ let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
 let hoveredTile: number | null = null;
+
+function approachPreviewForRender(): ApproachEnvelopePreview {
+  if (currentTool.kind === 'room' && currentTool.room === RoomType.Berth && isPainting && paintStart && paintCurrent) {
+    const minX = Math.min(paintStart.x, paintCurrent.x);
+    const maxX = Math.max(paintStart.x, paintCurrent.x);
+    const minY = Math.min(paintStart.y, paintCurrent.y);
+    const maxY = Math.max(paintStart.y, paintCurrent.y);
+    const berthPlacementTiles: number[] = [];
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) berthPlacementTiles.push(toIndex(x, y, state.width));
+    }
+    return { berthPlacementTiles };
+  }
+  if (currentTool.kind !== 'none') return {};
+  if (selectedDockId !== null) {
+    const dock = state.docks.find((candidate) => candidate.id === selectedDockId);
+    if (dock) return { inspectedSlotId: `dock:${dock.sourceKey}` };
+  }
+  if (selectedRoomTile !== null) {
+    const berth = getBerthFacilityAt(state, selectedRoomTile);
+    if (berth) return { inspectedSlotId: `berth:${berth.anchorTile}` };
+  }
+  return {};
+}
 // A new station starts with a strategic choice, not a catalog of walls. Keep
 // this in sync with the initially-active markup above. Once the player picks
 // a tool or tab, their choice remains theirs.
@@ -10713,7 +10738,7 @@ function frame(now: number): void {
     : Math.min(1, Math.max(0, (now - lastSimulationStepAt) / SIMULATION_INTERVAL_MS));
   const restoreActorPositions = applyInterpolatedActorPositions(interpolationAlpha);
   try {
-    renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+    renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport, approachPreviewForRender());
     drawOpeningDockFeedback(renderViewport);
     drawPortTurnaroundCallouts();
     drawSelectedAgentRoute(ctx);
@@ -11264,7 +11289,7 @@ window.__harnessPauseAndFlush = () => {
   state.controls.paused = true;
   const renderViewport = getRenderViewport();
   prepareViewportRender(renderViewport);
-  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport);
+  renderWorld(ctx, state, currentTool, hoveredTile, spriteAtlas, renderViewport, approachPreviewForRender());
   drawOpeningDockFeedback(renderViewport);
   drawPortTurnaroundCallouts();
   drawSelectedAgentRoute(ctx);
