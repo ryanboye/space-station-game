@@ -250,6 +250,115 @@ function enqueueStructuralStage(
   }
 }
 
+function isSealCheckSite(site: ConstructionSite): boolean {
+  // `targetTile: Truss` makes the site self-describing for saves created
+  // during the transition to the explicit seal-check stage.
+  return site.structuralStage === 'seal-check' || (
+    site.structuralProjectId !== undefined &&
+    site.kind === 'tile' &&
+    site.targetTile === TileType.Truss &&
+    site.requiredMaterials === 0
+  );
+}
+
+function normaliseSealCheckSite(site: ConstructionSite): boolean {
+  if (!isSealCheckSite(site)) return false;
+  site.structuralStage = 'seal-check';
+  return true;
+}
+
+function structuralSealProblem(
+  state: StationState,
+  project: StructuralExpansionProject
+): string | null {
+  const targetsByTile = new Map(project.targets.map((target) => [target.tileIndex, target]));
+  const interiorTiles = new Set(
+    project.targets
+      .filter((target) => target.targetTile === TileType.Floor)
+      .map((target) => target.tileIndex)
+  );
+  const doorTargets = project.targets.filter((target) => target.targetTile === TileType.Door);
+  const coordinate = (tile: number): string => {
+    const point = fromIndex(tile, state.width);
+    return `${point.x},${point.y}`;
+  };
+
+  if (interiorTiles.size === 0) return `incomplete seal at ${project.bounds.minX},${project.bounds.minY}`;
+  if (project.doorTile === null) {
+    const plannedDoor = doorTargets[0]?.tileIndex ?? [...interiorTiles].sort((left, right) => left - right)[0]!;
+    return `missing doorway at ${coordinate(plannedDoor)}`;
+  }
+  if (doorTargets.length !== 1 || doorTargets[0]!.tileIndex !== project.doorTile) {
+    return `missing doorway at ${coordinate(project.doorTile)}`;
+  }
+
+  const door = doorTargets[0]!;
+  let doorTouchesInterior = false;
+  const requiredPerimeter = new Set<number>();
+  for (const interior of interiorTiles) {
+    const point = fromIndex(interior, state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const neighbor = toIndex(x, y, state.width);
+      if (interiorTiles.has(neighbor)) continue;
+      requiredPerimeter.add(neighbor);
+      if (neighbor === door.tileIndex) doorTouchesInterior = true;
+    }
+  }
+  if (!doorTouchesInterior) return `missing doorway at ${coordinate(door.tileIndex)}`;
+
+  for (const perimeterTile of [...requiredPerimeter].sort((left, right) => left - right)) {
+    const target = targetsByTile.get(perimeterTile);
+    // An expansion may legitimately tie into an already-commissioned interior
+    // floor. That edge has a live station shell already; only newly exposed
+    // space/truss edges must appear in this project's perimeter targets.
+    const existingTile = state.tiles[perimeterTile];
+    if (!target && (isWalkable(existingTile) || existingTile === TileType.Wall || existingTile === TileType.Airlock)) continue;
+    if (!target || (target.targetTile !== TileType.Wall && target.targetTile !== TileType.Door)) {
+      return `incomplete seal at ${coordinate(perimeterTile)}`;
+    }
+  }
+  for (const target of project.targets) {
+    if (target.targetTile === TileType.Floor) continue;
+    if (target.targetTile !== TileType.Wall && target.targetTile !== TileType.Door) {
+      return `incomplete seal at ${coordinate(target.tileIndex)}`;
+    }
+  }
+  return null;
+}
+
+function enqueueStructuralSealCheck(state: StationState, project: StructuralExpansionProject): ConstructionSite {
+  const sealTile = project.doorTile ?? project.targets.find((target) => target.targetTile === TileType.Wall)?.tileIndex;
+  if (sealTile === undefined) throw new Error(`Structural project ${project.id} has no seal-check tile.`);
+  // Do not use createConstructionSite here: the completed perimeter site at
+  // this same tile belongs to the same parent, and its generic replacement
+  // behavior correctly interprets removal as cancelling a structural plan.
+  const site: ConstructionSite = {
+    id: state.constructionSiteSpawnCounter++,
+    kind: 'tile',
+    tileIndex: sealTile,
+    // This is only an EVA inspection/weld marker. The parent remains the sole
+    // topology writer, and Truss makes the intent survive old save payloads.
+    targetTile: TileType.Truss,
+    requiredMaterials: 0,
+    deliveredMaterials: 0,
+    buildProgress: 0,
+    buildWorkRequired: 2,
+    requiresEva: true,
+    structuralProjectId: project.id,
+    structuralStage: 'seal-check',
+    assignedCrewId: null,
+    state: 'planned',
+    blockedReason: null,
+    createdAt: state.now
+  };
+  state.constructionSites.push(site);
+  project.childSiteIds.push(site.id);
+  return site;
+}
+
 /** Creates a deferred expansion project. The caller already validated geometry. */
 export function createStructuralExpansionProject(
   state: StationState,
@@ -298,13 +407,23 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
   for (const project of state.structuralExpansionProjects) {
     if (project.cancelled || project.commissioned) continue;
     const sites = projectSites(state, project.id);
+    for (const site of sites) normaliseSealCheckSite(site);
     updateProjectMaterialProgress(project, sites);
     if (project.phase === 'blocked' && !sites.some((site) => site.state === 'blocked')) {
-      project.phase = sites.some((site) => site.structuralStage === 'interior') ? 'interior' : 'perimeter';
+      project.phase = sites.some((site) => isSealCheckSite(site))
+        ? 'seal-check'
+        : sites.some((site) => site.structuralStage === 'interior') ? 'interior' : 'perimeter';
       project.blockedReason = null;
     }
     markProjectBlocked(project, sites);
     if (project.phase === 'blocked') continue;
+
+    const sealSite = sites.find((site) => isSealCheckSite(site));
+    if (sealSite && project.phase === 'interior') project.phase = 'seal-check';
+    if (sealSite) {
+      if (sealSite.state !== 'done') continue;
+      if (!project.completedSiteIds.includes(sealSite.id)) project.completedSiteIds.push(sealSite.id);
+    }
 
     const currentStage = project.phase;
     const stageSites = sites.filter((site) => site.structuralStage === currentStage);
@@ -316,6 +435,18 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
     if (currentStage === 'perimeter') {
       project.phase = 'interior';
       enqueueStructuralStage(state, project, 'interior');
+      continue;
+    }
+
+    if (!sealSite) {
+      const sealProblem = structuralSealProblem(state, project);
+      if (sealProblem) {
+        project.phase = 'blocked';
+        project.blockedReason = sealProblem;
+        continue;
+      }
+      project.phase = 'seal-check';
+      enqueueStructuralSealCheck(state, project);
       continue;
     }
 

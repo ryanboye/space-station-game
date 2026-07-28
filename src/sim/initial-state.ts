@@ -145,6 +145,17 @@ export function createInitialState(options?: {
     tiles[toIndex(x, coreY + 3, GRID_WIDTH)] = TileType.Wall;
   }
 
+  // The south service apron teaches exterior construction without occupying
+  // either long side reserved for the player's first Berth. One working
+  // Airlock opens onto a small supported truss pad: enough to make EVA access
+  // and structural support visible from the opening frame, but not enough to
+  // hand the player a finished expansion.
+  const starterAirlockX = coreX + 8;
+  tiles[toIndex(starterAirlockX, starterWallMaxY, GRID_WIDTH)] = TileType.Airlock;
+  for (let y = starterWallMaxY + 1; y <= starterWallMaxY + 3; y++) {
+    tiles[toIndex(starterAirlockX, y, GRID_WIDTH)] = TileType.Truss;
+  }
+
   // Port-operations starter: every functional room is an enclosed pod
   // separated from every other zone by walls and a public circulation deck.
   // This makes doors, travel distance, staffing and cargo movement readable
@@ -204,6 +215,15 @@ export function createInitialState(options?: {
   // is deliberately physical: the starter reactor is both a visible system
   // and the first meaningful expansion constraint.
   paintEnclosedRoom(RoomType.LogisticsStock, coreX + 1, coreY + 3, coreX + 4, coreY + 6, coreX, coreY + 5);
+  // The east apron must be part of the live station network. Its only apparent
+  // connection used to be the sealed east wall of Logistics Stock, leaving the
+  // entire future expansion area unreachable and producing misleading
+  // "no path" failures for visitors, crew, and EVA work. A second stock-room
+  // door makes the apron usable while deliberately routing expansion freight
+  // through the logistics room where the crossing is visible to the player.
+  const logisticsApronDoor = toIndex(coreX + 5, coreY + 5, GRID_WIDTH);
+  tiles[logisticsApronDoor] = TileType.Door;
+  rooms[logisticsApronDoor] = RoomType.LogisticsStock;
   addStarterModule(ModuleType.IntakePallet, coreX + 1, coreY + 4, 0);
   // The former Storage room and its racks are gone. Storage and Storage Racks
   // are tier-2 catalog entries, so shipping them in the starter both handed

@@ -1340,10 +1340,14 @@ export interface ConstructionSite {
   createdAt: number;
   /** Structural expansion parent, when this site is one staged piece of a deferred hull commission. */
   structuralProjectId?: number;
-  structuralStage?: 'perimeter' | 'interior';
+  /**
+   * Structural work is deliberately staged. `seal-check` is a real EVA
+   * inspection/weld pass over the proposed shell before it commissions.
+   */
+  structuralStage?: 'perimeter' | 'interior' | 'seal-check';
 }
 
-export type StructuralExpansionPhase = 'perimeter' | 'interior' | 'blocked' | 'commissioned' | 'cancelled';
+export type StructuralExpansionPhase = 'perimeter' | 'interior' | 'seal-check' | 'blocked' | 'commissioned' | 'cancelled';
 
 export interface StructuralExpansionTarget {
   tileIndex: number;

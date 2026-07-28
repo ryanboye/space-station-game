@@ -18539,7 +18539,7 @@ function assignJobsToIdleCrew(state: StationState): void {
         if (job.type === 'construct' && !site) continue;
         if (site?.requiresEva && !hasActiveAirlock) {
           site.state = 'blocked';
-          site.blockedReason = 'no airlock for EVA';
+          site.blockedReason = 'no airlock EVA route';
           pendingByLane[lane].blocked += 1;
           continue;
         }
@@ -19900,8 +19900,35 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         const usingEva = site.requiresEva;
         if (usingEva) {
           updateEvaSuitForRoute(state, crew, dt);
-          if (crew.evaOxygenSec <= EVA_LOW_OXYGEN_SEC && crew.carryingAmount <= 0 && !crewAtConstructionSite(state, crew, site)) {
+          const evaOxygenLow =
+            state.tiles[crew.tileIndex] !== TileType.Airlock &&
+            isEvaTraversalTile(state, crew.tileIndex) &&
+            crew.evaOxygenSec <= EVA_LOW_OXYGEN_SEC &&
+            crew.carryingAmount <= 0 &&
+            !crewAtConstructionSite(state, crew, site);
+          if (evaOxygenLow) {
+            site.state = 'blocked';
+            site.blockedReason = crew.evaOxygenSec <= 0 ? 'EVA oxygen depleted' : 'EVA oxygen low';
             markJobStall(state, job, 'stalled_path_blocked');
+            let bestReturn: number[] | null = null;
+            for (const airlock of activeAirlockTiles(state)) {
+              const path = findSpacePath(state, crew.tileIndex, airlock);
+              if (!path) continue;
+              if (!bestReturn || path.length < bestReturn.length) bestReturn = path;
+            }
+            setCrewPath(state, crew, bestReturn ?? []);
+            const returnMove = moveCrew(crew);
+            if (returnMove === 'moved') crew.blockedTicks = 0;
+            else if (returnMove === 'blocked') crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+            continue;
+          }
+          if (
+            state.tiles[crew.tileIndex] === TileType.Airlock &&
+            (site.blockedReason === 'EVA oxygen low' || site.blockedReason === 'EVA oxygen depleted')
+          ) {
+            site.state = 'building';
+            site.blockedReason = null;
+            markJobStall(state, job, 'none');
           }
         } else if (state.tiles[crew.tileIndex] === TileType.Airlock) {
           crew.evaSuit = false;
@@ -19974,6 +20001,10 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               crew.blockedTicks = 0;
             } else if (moveResult === 'blocked') {
               crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+              if (targetSite && crew.blockedTicks >= MOVEMENT_REPLAN_BLOCKED_TICKS) {
+                site.state = 'blocked';
+                site.blockedReason = 'work position obstructed';
+              }
               markJobStall(state, job, 'stalled_path_blocked');
             }
           }
@@ -19991,11 +20022,17 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             const moveResult = moveCrew(crew);
             if (usingEva) updateEvaSuitForRoute(state, crew, dt);
             if (moveResult === 'moved') {
+              site.state = 'building';
+              site.blockedReason = null;
               job.lastProgressAt = state.now;
               markJobStall(state, job, 'none');
               crew.blockedTicks = 0;
             } else if (moveResult === 'blocked') {
               crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
+              if (crew.blockedTicks >= MOVEMENT_REPLAN_BLOCKED_TICKS) {
+                site.state = 'blocked';
+                site.blockedReason = 'work position obstructed';
+              }
               markJobStall(state, job, 'stalled_path_blocked');
             }
           } else {

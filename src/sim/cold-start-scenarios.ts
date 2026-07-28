@@ -302,6 +302,44 @@ function mixedBerthShowcaseOffer(state: StationState): TrafficOffer {
   };
 }
 
+/** Two ordinary medium passenger manifests for the Phase 6 congestion gate.
+ * The fixture starts them in holding; tests must still admit and dock them
+ * through Approach Control before any passenger, queue, or deadline state
+ * exists. */
+function mealQueueBoardingOffer(
+  state: StationState,
+  label: 'DINERS' | 'RETURN',
+  passengers: number
+): TrafficOffer {
+  const id = state.shipSpawnCounter++;
+  return {
+    id,
+    callsign: `${label}-${String(id).padStart(3, '0')}`,
+    shipName: label === 'DINERS' ? 'Civic Meal Shuttle' : 'Return Window Shuttle',
+    lane: 'east',
+    shipType: 'tourist',
+    hullVariant: 'passenger-shuttle',
+    offerKind: 'passenger',
+    size: 'medium',
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 900,
+    passengersTotal: passengers,
+    manifestDemand: { cafeteria: 1, market: 0, lounge: 0 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    hospitalityDemand: { meal: passengers, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 },
+    inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+    outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    requestedServices: ['cafeteria'],
+    berthTimeSec: 190,
+    dockingFee: 0,
+    projectedSpend: 0,
+    riskLabel: 'low',
+    assignedBerthAnchor: null
+  };
+}
+
 export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   // Default starter state — no-op. Keeps the registry pattern symmetric
   // so `?scenario=starter` is a valid URL (and differentiates from a
@@ -892,6 +930,138 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.portOps.settlements.length = 0;
     const offer = mixedBerthShowcaseOffer(s);
     s.trafficOffers.push(offer);
+    s.controls.paused = true;
+  },
+
+  // Phase 6 production fixture: the only public exit from this compact mess
+  // is also the lower berth's passenger throat. One dining ship can therefore
+  // create a real, stocked service line through that Door while a second ship
+  // later recalls its own passengers through the same physical tile.
+  'meal-queue-boarding-conflict': (s) => {
+    unlockThrough(s, 6);
+    applyDemoStationOverlay(s);
+
+    // Remove the broad demo cafeteria so its counters cannot absorb demand.
+    for (let y = 6; y < 15; y += 1) {
+      for (let x = 15; x < 25; x += 1) {
+        removeModuleAtTile(s, y * GRID_WIDTH + x);
+        setRoom(s, y * GRID_WIDTH + x, RoomType.None);
+      }
+    }
+
+    // Rebuild the east frontage as two separate medium berths. The east face
+    // is exposed to space; each bay has its own Control, clamps and Gangway.
+    // The south berth's public approach is deliberately through the mess door.
+    for (let y = 18; y < 44; y += 1) {
+      for (let x = 55; x < 77; x += 1) {
+        removeModuleAtTile(s, y * GRID_WIDTH + x);
+        setTile(s, y * GRID_WIDTH + x, TileType.Space);
+        setRoom(s, y * GRID_WIDTH + x, RoomType.None);
+      }
+    }
+    for (let y = 18; y < 37; y += 1) {
+      for (let x = 49; x < 68; x += 1) {
+        setTile(s, y * GRID_WIDTH + x, TileType.Floor);
+        setRoom(s, y * GRID_WIDTH + x, RoomType.None);
+      }
+    }
+    // A narrow bridge lets the upper ship's visitors reach the one shared
+    // public door before the meal line seals it.
+    for (let y = 27; y <= 37; y += 1) {
+      const x = 68;
+      setTile(s, y * GRID_WIDTH + x, TileType.Floor);
+      setRoom(s, y * GRID_WIDTH + x, RoomType.None);
+    }
+
+    const paintBerth = (y1: number, y2: number, gangwayY: number): void => {
+      for (let y = y1; y <= y2; y += 1) {
+        for (let x = 68; x <= 74; x += 1) {
+          setTile(s, y * GRID_WIDTH + x, TileType.Floor);
+          setRoom(s, y * GRID_WIDTH + x, RoomType.Berth);
+        }
+      }
+      placeMod(s, 68, y1, ModuleType.BerthControl);
+      placeMod(s, 71, y1, ModuleType.DockingClamp);
+      placeMod(s, 71, y2, ModuleType.DockingClamp);
+      placeMod(s, 74, gangwayY, ModuleType.Gangway);
+    };
+    paintBerth(22, 26, 24);
+    paintBerth(38, 42, 40);
+    // Berth facing is derived from exterior contact. Seal the north/south
+    // edges so the only broad exterior face is east; keep the one-tile bridge
+    // intact between the otherwise-separated bays.
+    for (const y of [21, 27, 37, 43]) {
+      for (let x = 68; x <= 74; x += 1) {
+        if ((y === 27 || y === 37) && x === 68) continue;
+        setTile(s, y * GRID_WIDTH + x, TileType.Wall);
+        setRoom(s, y * GRID_WIDTH + x, RoomType.None);
+      }
+    }
+    // The exposed berth rooms are separated from the inhabited deck by real
+    // pressure barriers. The south Airlock sits directly beyond the cafeteria
+    // Door, so the same one-tile throat governs both the meal line and return
+    // boarding without turning this proof into an oxygen failure.
+    for (const [x, y] of [[68, 24], [68, 40]] as const) {
+      const tile = y * GRID_WIDTH + x;
+      setTile(s, tile, TileType.Airlock);
+      setRoom(s, tile, RoomType.Berth);
+    }
+
+    // Compact but valid public cafeteria: two counters, two four-seat tables,
+    // and a tray return. Its only Door is the lower berth's access throat.
+    paintRoom(s, 58, 36, 68, 44, RoomType.Cafeteria, 'east');
+    const throat = 40 * GRID_WIDTH + 67;
+    setTile(s, throat, TileType.Door);
+    setRoom(s, throat, RoomType.Cafeteria);
+    for (let y = 37; y < 43; y += 1) {
+      for (let x = 59; x < 67; x += 1) s.zones[y * GRID_WIDTH + x] = ZoneType.Public;
+    }
+    s.zones[throat] = ZoneType.Public;
+    placeMod(s, 59, 37, ModuleType.ServingStation);
+    placeMod(s, 62, 37, ModuleType.ServingStation);
+    placeMod(s, 59, 40, ModuleType.Table);
+    placeMod(s, 62, 40, ModuleType.Table);
+    placeMod(s, 65, 40, ModuleType.TrayReturn);
+    seedItemNodeStock(s, 59, 37, 'meal', 56);
+    seedItemNodeStock(s, 59, 37, 'cleanTray', 56);
+    seedItemNodeStock(s, 62, 37, 'meal', 56);
+    seedItemNodeStock(s, 62, 37, 'cleanTray', 56);
+
+    // The sole public route reaches the north berth through its interior and
+    // reaches the south berth only through the cafeteria throat. Seal all
+    // remaining east-frontier shortcuts so a line at the Door has a visible,
+    // causal consequence rather than merely a local cosmetic effect.
+    for (let y = 36; y < 44; y += 1) {
+      const tile = y * GRID_WIDTH + 57;
+      setTile(s, tile, TileType.Wall);
+      setRoom(s, tile, RoomType.None);
+    }
+    for (const [x, y] of [[58, 39], [58, 40], [58, 41], [67, 38], [67, 39], [67, 41], [67, 42]] as const) {
+      const tile = y * GRID_WIDTH + x;
+      setTile(s, tile, TileType.Wall);
+      setRoom(s, tile, RoomType.None);
+    }
+    // The demo overlay authors topology directly. Start this finished fixture
+    // from an intact pressure snapshot so Approach Control reads the bays,
+    // then let ordinary simulation recompute the exterior graph on its first
+    // running tick.
+    for (let tile = 0; tile < s.tiles.length; tile += 1) {
+      if (s.tiles[tile] === TileType.Floor || s.tiles[tile] === TileType.Door || s.tiles[tile] === TileType.Airlock) {
+        s.pressurized[tile] = true;
+      }
+    }
+    s.controls.shipsPerCycle = 0;
+    s.controls.manualTrafficAdmission = true;
+    s.trafficOffers.length = 0;
+    s.arrivingShips.length = 0;
+    s.dockQueue.length = 0;
+    s.portOps.contracts.length = 0;
+    s.portOps.cargoLots.length = 0;
+    s.portOps.settlements.length = 0;
+    s.trafficOffers.push(
+      mealQueueBoardingOffer(s, 'DINERS', 24),
+      mealQueueBoardingOffer(s, 'RETURN', 4)
+    );
     s.controls.paused = true;
   },
 

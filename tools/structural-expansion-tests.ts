@@ -66,6 +66,49 @@ function installBoundaryAirlock(state: StationState): number {
   throw new Error('Could not find a boundary wall for an active Airlock.');
 }
 
+function removeBoundaryAirlocks(state: StationState): void {
+  for (let tile = 0; tile < state.tiles.length; tile++) {
+    if (state.tiles[tile] === TileType.Airlock) setTile(state, tile, TileType.Wall);
+  }
+}
+
+// The authored starter exposes one reachable EVA transition and a supported
+// truss lesson while preserving the long east/west faces for later Berths.
+{
+  const state = createInitialState({ seed: 90100 });
+  const airlocks = state.tiles
+    .map((tile, index) => ({ tile, index }))
+    .filter(({ tile }) => tile === TileType.Airlock)
+    .map(({ index }) => index);
+  assertCondition(airlocks.length === 1, `Starter should author one Airlock, found ${airlocks.length}.`);
+  const airlock = airlocks[0]!;
+  assertCondition(
+    findConstructionPath(state, state.core.serviceTile, {
+      id: -1,
+      kind: 'tile',
+      tileIndex: state.tiles.findIndex((tile, index) => {
+        if (tile !== TileType.Truss) return false;
+        const point = fromIndex(index, state.width);
+        const lock = fromIndex(airlock, state.width);
+        return Math.abs(point.x - lock.x) + Math.abs(point.y - lock.y) === 1;
+      }),
+      targetTile: TileType.Floor,
+      requiredMaterials: 1,
+      deliveredMaterials: 0,
+      buildProgress: 0,
+      buildWorkRequired: 1,
+      requiresEva: true,
+      assignedCrewId: null,
+      state: 'planned',
+      blockedReason: null,
+      createdAt: state.now
+    }) !== null,
+    'Starter Airlock should provide an EVA route to its exterior truss lesson.'
+  );
+  const starterTruss = state.tiles.filter((tile) => tile === TileType.Truss).length;
+  assertCondition(starterTruss === 3, `Starter should expose one short truss finger, found ${starterTruss} tiles.`);
+}
+
 // Deterministic rejection must not touch project state or materials.
 {
   const state = createInitialState({ seed: 90101 });
@@ -119,6 +162,7 @@ function installBoundaryAirlock(state: StationState): number {
 // No airlock means construction cannot produce a route or a partial hull.
 {
   const state = createInitialState({ seed: 90103 });
+  removeBoundaryAirlocks(state);
   const { patch, project } = createProject(state);
   const site = state.constructionSites[0]!;
   assertCondition(findConstructionPath(state, state.core.serviceTile, site) === null, 'Exterior structural site must have no route without an active airlock.');
@@ -155,7 +199,8 @@ function installBoundaryAirlock(state: StationState): number {
   assertCondition(resumed.constructionSites.some((site) => site.structuralProjectId === resumedProject.id), 'Save/resume must retain the active linked work sites.');
 }
 
-// Completion advances perimeter then interior and only commissions atomically.
+// Completion visibly advances perimeter -> interior -> seal check and only
+// commissions atomically after the real zero-material EVA seal work.
 {
   const state = createInitialState({ seed: 90104 });
   const { patch, project } = createProject(state);
@@ -166,7 +211,7 @@ function installBoundaryAirlock(state: StationState): number {
     site.state = 'done';
   }
   advanceStructuralExpansionProjects(state);
-  assertCondition(project.phase === 'interior', 'Finished perimeter should release the interior stage.');
+  assertCondition(String(project.phase) === 'interior', 'Finished perimeter should release the interior stage.');
   assertCondition(patch.every((tile) => state.tiles[tile] === TileType.Truss), 'Perimeter completion must still not mutate topology.');
   for (const site of state.constructionSites.filter((candidate) => candidate.structuralStage === 'interior')) {
     site.deliveredMaterials = site.requiredMaterials;
@@ -174,14 +219,80 @@ function installBoundaryAirlock(state: StationState): number {
     assertCondition(applyConstructionSite(state, site), 'Interior work record should complete.');
     site.state = 'done';
   }
+  advanceStructuralExpansionProjects(state);
+  const sealSite = state.constructionSites.find((candidate) => candidate.structuralStage === 'seal-check');
+  assertCondition(sealSite !== undefined, `Finished interior must release one visible seal-check site (${project.phase}: ${project.blockedReason ?? 'no blocker'}).`);
+  assertCondition(String(project.phase) === 'seal-check', 'Finished interior must advance the parent to seal-check.');
+  assertCondition(sealSite.requiresEva, 'Seal check must require an EVA worker.');
+  assertCondition(sealSite.requiredMaterials === 0 && sealSite.buildWorkRequired > 0, 'Seal check must be short real zero-material work.');
+  assertCondition(patch.every((tile) => state.tiles[tile] === TileType.Truss), 'No topology may mutate before seal completion.');
+  const sealSnapshot = captureSnapshot(state);
+  const sealResumed = hydrateStateFromSave({ schemaVersion: 3, snapshot: sealSnapshot, gameVersion: 'test', name: 'structural-seal-check', createdAt: '2026-01-01T00:00:00.000Z' }).state;
+  assertCondition(
+    sealResumed.constructionSites.some((site) => site.structuralProjectId === project.id && site.structuralStage === 'seal-check'),
+    'Save/resume must retain an in-progress seal-check site.'
+  );
+  sealSite.buildProgress = sealSite.buildWorkRequired * 0.5;
+  assertCondition(applyConstructionSite(state, sealSite), 'Seal check should use the ordinary construction work record.');
+  assertCondition(!project.commissioned, 'Partial seal work must not commission the shell.');
+  sealSite.buildProgress = sealSite.buildWorkRequired;
+  sealSite.state = 'done';
   for (const tile of patch) state.tiles[tile] = TileType.Space;
   advanceStructuralExpansionProjects(state);
-  assertCondition(String(project.phase) === 'blocked' && !project.commissioned, 'Commissioning must revalidate support after construction work.');
+  assertCondition(String(project.phase) === 'blocked' && !project.commissioned, 'Commissioning must revalidate support after seal completion.');
   for (const tile of patch) state.tiles[tile] = TileType.Truss;
   advanceStructuralExpansionProjects(state);
   assertCondition(project.commissioned, 'All completed child work should commission once.');
   assertCondition(patch.every((tile) => state.tiles[tile] === TileType.Floor), 'Atomic commission should produce the planned floor geometry.');
   assertCondition(project.doorTile !== null && state.tiles[project.doorTile] === TileType.Door, 'Atomic commission should apply the planned door.');
+}
+
+// The seal gate validates the whole planned shell before issuing its work.
+{
+  const state = createInitialState({ seed: 901041 });
+  const { project } = createProject(state);
+  for (const site of [...state.constructionSites]) {
+    site.deliveredMaterials = site.requiredMaterials;
+    site.buildProgress = site.buildWorkRequired;
+    site.state = 'done';
+  }
+  advanceStructuralExpansionProjects(state);
+  for (const site of state.constructionSites.filter((candidate) => candidate.structuralStage === 'interior')) {
+    site.deliveredMaterials = site.requiredMaterials;
+    site.buildProgress = site.buildWorkRequired;
+    site.state = 'done';
+  }
+  const missingWall = project.targets.find((target) => target.targetTile === TileType.Wall)!;
+  project.targets = project.targets.filter((target) => target.tileIndex !== missingWall.tileIndex);
+  advanceStructuralExpansionProjects(state);
+  assertCondition(
+    project.phase === 'blocked' && project.blockedReason === `incomplete seal at ${fromIndex(missingWall.tileIndex, state.width).x},${fromIndex(missingWall.tileIndex, state.width).y}`,
+    `Missing perimeter must expose its exact seal blocker (${project.blockedReason ?? 'none'}).`
+  );
+}
+
+{
+  const state = createInitialState({ seed: 901042 });
+  const { project } = createProject(state);
+  for (const site of [...state.constructionSites]) {
+    site.deliveredMaterials = site.requiredMaterials;
+    site.buildProgress = site.buildWorkRequired;
+    site.state = 'done';
+  }
+  advanceStructuralExpansionProjects(state);
+  for (const site of state.constructionSites.filter((candidate) => candidate.structuralStage === 'interior')) {
+    site.deliveredMaterials = site.requiredMaterials;
+    site.buildProgress = site.buildWorkRequired;
+    site.state = 'done';
+  }
+  const door = project.doorTile!;
+  project.doorTile = null;
+  advanceStructuralExpansionProjects(state);
+  const point = fromIndex(door, state.width);
+  assertCondition(
+    project.phase === 'blocked' && project.blockedReason === `missing doorway at ${point.x},${point.y}`,
+    `Missing doorway must expose its exact seal blocker (${project.blockedReason ?? 'none'}).`
+  );
 }
 
 // Cancelling one project removes only its work and returns delivered value once.

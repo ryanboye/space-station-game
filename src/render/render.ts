@@ -6898,7 +6898,10 @@ export function renderWorld(
     ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD', px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
+    const constructionLabel = site.structuralStage === 'seal-check'
+      ? 'SEAL'
+      : site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD';
+    ctx.fillText(constructionLabel, px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
 
     if (site.state === 'blocked' && site.blockedReason) {
       const labelKey = site.structuralProjectId ?? -site.id;

@@ -225,14 +225,14 @@ export interface StationSnapshotV1 {
     requiresEva: boolean;
     state?: 'planned' | 'delivering' | 'building' | 'blocked' | 'done';
     structuralProjectId?: number;
-    structuralStage?: 'perimeter' | 'interior';
+    structuralStage?: 'perimeter' | 'interior' | 'seal-check';
   }>;
   structuralExpansionProjects?: Array<{
     id: number;
     bounds: { minX: number; minY: number; maxX: number; maxY: number };
     doorTile: number | null;
     targets: Array<{ tileIndex: number; targetTile: TileType; requiredMaterials: number }>;
-    phase: 'perimeter' | 'interior' | 'blocked' | 'commissioned' | 'cancelled';
+    phase: 'perimeter' | 'interior' | 'seal-check' | 'blocked' | 'commissioned' | 'cancelled';
     childSiteIds: number[];
     completedSiteIds: number[];
     requiredMaterials: number;
@@ -1770,7 +1770,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         structuralProjectId: Number.isFinite(entry.structuralProjectId)
           ? Math.max(1, Math.floor(asFiniteNumber(entry.structuralProjectId, 0)))
           : undefined,
-        structuralStage: entry.structuralStage === 'perimeter' || entry.structuralStage === 'interior'
+        structuralStage: entry.structuralStage === 'perimeter' || entry.structuralStage === 'interior' || entry.structuralStage === 'seal-check'
           ? entry.structuralStage
           : undefined
       });
@@ -1790,7 +1790,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       const phase = entry.phase;
       if (
         id <= 0 || !bounds ||
-        !['perimeter', 'interior', 'blocked', 'commissioned', 'cancelled'].includes(String(phase)) ||
+        !['perimeter', 'interior', 'seal-check', 'blocked', 'commissioned', 'cancelled'].includes(String(phase)) ||
         !Array.isArray(entry.targets)
       ) {
         warnings.push(`structuralExpansionProjects[${i}] missing required shape; skipped.`);

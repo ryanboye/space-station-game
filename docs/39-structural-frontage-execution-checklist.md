@@ -417,16 +417,16 @@ compiles is not sufficient for player-facing work.
 
 - [x] Remove instant shell conversion from normal expansion.
 - [x] Require structural completion before hull completion.
-- [ ] Require complete perimeter before seal check.
+- [x] Require complete perimeter before seal check.
 - [x] Keep incomplete shell unpressurized.
-- [ ] Perform visible seal check.
-- [ ] Commission and pressurize only a supported sealed shell.
+- [x] Perform visible seal check.
+- [x] Commission and pressurize only a supported sealed shell.
 - [ ] Require EVA construction for exterior/unpressurized modules.
 - [ ] Report missing material.
 - [ ] Report missing staging route.
 - [x] Report missing Airlock/EVA route.
 - [ ] Report low EVA oxygen.
-- [ ] Report incomplete seal.
+- [x] Report incomplete seal.
 - [ ] Report obstructed work position.
 
 ### Phase 3 Gate
@@ -600,7 +600,7 @@ compiles is not sufficient for player-facing work.
 
 - [x] Shared public/cargo corridor performs worse than separated routes.
 - [x] Additional Gangway improves boarding.
-- [ ] Meal queue across an exit creates late boarding.
+- [x] Meal queue across an exit creates late boarding.
 - [x] Diagnosis matches measured actor behavior.
 - [x] No hidden percentage substitutes for physical interference.
 
@@ -1048,7 +1048,13 @@ Remaining uncertainty:
 - Commit or files: movement attribution and telemetry in `src/sim/sim.ts`, `src/sim/types.ts`, `src/sim/initial-state.ts`, and `src/sim/save.ts`; world feedback in `src/render/render.ts`; deterministic fixture `?scenario=cargo-boarding-conflict`; and `tools/physical-cargo-tests.ts` (pending integration commit at evidence capture).
 - Focused evidence: `npm run test:physical-cargo` proves a bulky cart and a boarding passenger cannot exchange through one another, both lose movement time, both receive the correct physical blocker reason, `publicCargoConflictSeconds` records actor-time, and separated lanes allow both actors to move.
 - Visual/playtest evidence: inspected `http://127.0.0.1:5183/?scenario=cargo-boarding-conflict&diag=1`. The paused production state renders the cart and passenger at the collision and displays `PASSENGERS BLOCKING FREIGHT` directly above them; the conflict remains readable with the interface hidden at Fit Station zoom.
-- Remaining uncertainty: the compound boarding gate still needs one visit where a meal queue crosses an exit and causes late boarding; the broader door/queue/cargo box remains open.
+- Remaining uncertainty: the broader boarding checklist still needs a player-facing route/highlight treatment and a combined three-way door, queue, and cargo presentation.
+
+2026-07-28 · Meal queue blocks a real boarding throat
+
+- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=meal-queue-boarding-conflict`), `tools/meal-queue-boarding-conflict-tests.ts`, and `package.json` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:meal-queue-boarding-conflict` passed twice. The runner admits two ordinary medium passenger manifests through production Approach Control, docks and disembarks both, then proves a stocked diner cohort holds distinct live `queue-slot:*` reservations with one actor physically on the Cafeteria Door shared with the second Berth. The return contract enters normal recall/boarding, its passenger records the queue actor as its physical blocker and accumulates transfer wait, boards fewer people than the clear-route comparison under the same deadline, increments `hardDeadlineDepartures`, and strands a passenger with origin provenance. Meal completion is accepted only when the canonical `serviceLog` has the matching meal event; the runner also repeats the seeded conflict and requires identical outcomes.
+- Remaining uncertainty: this is a deterministic interaction proof rather than a polished live player showcase. The broader boarding checklist still needs a player-facing route/highlight treatment and a combined three-way door, queue, and cargo presentation.
 
 2026-07-28 · Directional charter frontage
 
@@ -1078,3 +1084,10 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:structural-expansion` remains green for planning, staging, Airlock/EVA routing, material custody, phased work, cancellation, save/resume, and commissioning.
 - Visual/playtest evidence: `?scenario=structural-expansion-blocked` now anchors `BLOCKED · NO AIRLOCK EVA ROUTE` directly over the red exterior blueprint. `?scenario=structural-expansion-active` shows the corresponding active EVA sites and worker, making the missing physical prerequisite diagnosable without opening a data panel.
 - Remaining uncertainty: missing material, staging, oxygen, seal, and obstructed-position reasons need equivalent live captures; a complete starter expansion still needs to be watched through sealed pressurization.
+
+2026-07-28 · Explicit structural seal commissioning
+
+- Commit or files: structural stages and save migration in `src/sim/types.ts` and `src/sim/save.ts`; commissioning authority in `src/sim/construction.ts`; recoverable EVA and sustained obstruction reporting in `src/sim/sim.ts`; `SEAL` world marker in `src/render/render.ts`; and focused coverage in `tools/structural-expansion-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:structural-expansion` proves perimeter-before-interior staging, whole-shell validation before inspection, a real zero-material EVA seal job, no topology mutation during partial inspection, save/resume during the seal pass, support revalidation, and atomic commission only after the supported shell passes. Missing perimeter and doorway cases report exact tile coordinates.
+- Player-facing behavior: the final exterior worker pass renders as `SEAL`; low oxygen sends the worker back toward an Airlock and exposes `EVA OXYGEN LOW` or `EVA OXYGEN DEPLETED`; incidental crowd contention must persist for the movement replan threshold before it becomes `WORK POSITION OBSTRUCTED`.
+- Remaining uncertainty: low-oxygen and obstructed-position blockers still need dedicated deterministic runners and live captures, so those two checklist claims remain open. A complete player-built starter wing still needs a live end-to-end commissioning pass.
