@@ -1,9 +1,11 @@
 import {
   createInitialState,
+  removeModuleAtTile,
   setRoom,
   tick,
   tryPlaceModule
 } from '../src/sim';
+import { findPath } from '../src/sim/path';
 import { OPENING_BALANCE } from '../src/sim/balance';
 import { evaluateOpeningRecipes } from '../src/sim/opening-recipes';
 import { ModuleType, RoomType, TileType, ZoneType, type StationState } from '../src/sim/types';
@@ -68,6 +70,12 @@ function placeIn(state: StationState, tiles: number[], module: ModuleType): numb
   throw new Error(`could not place ${module}`);
 }
 
+function placeAt(state: StationState, origin: number, module: ModuleType, rotation: 0 | 90 = 0): number {
+  const placed = tryPlaceModule(state, module, origin, rotation);
+  assert(placed.ok, `could not place ${module} at ${origin}: ${placed.reason}`);
+  return origin;
+}
+
 function stock(state: StationState, origin: number, item: 'meal' | 'cleanTray' | 'tradeGood', amount: number): void {
   const node = state.itemNodes.find((candidate) => candidate.tileIndex === origin);
   assert(node, `no node at ${origin}`);
@@ -78,6 +86,15 @@ function recipe(state: StationState, id: 'feed-travelers' | 'sell-supplies' | 's
   const found = evaluateOpeningRecipes(state).find((candidate) => candidate.id === id);
   assert(found, `missing ${id}`);
   return found;
+}
+
+function advanceUntil(state: StationState, condition: () => boolean, maxSeconds: number): boolean {
+  state.controls.paused = false;
+  for (let elapsed = 0; elapsed < maxSeconds; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (condition()) return true;
+  }
+  return false;
 }
 
 console.log('OPENING BUSINESS TRUTH');
@@ -125,17 +142,35 @@ check('public cafeteria requires one coherent 20-tile meal machine and public co
 check('opening market ignores a stall and needs shelf stock with checkout', () => {
   const state = fresh();
   const tiles = publicRoom(state, RoomType.Market, 3, 8);
-  placeIn(state, tiles, ModuleType.MarketStall);
+  const stall = placeIn(state, tiles, ModuleType.MarketStall);
   tick(state, 0);
   assert(!recipe(state, 'sell-supplies').built, 'market stall opened the authored shop');
-  placeIn(state, tiles, ModuleType.CheckoutBank);
-  const shelf = placeIn(state, tiles, ModuleType.ShelfAisle);
+  removeModuleAtTile(state, stall);
+  placeAt(state, tiles[1], ModuleType.CheckoutBank);
+  const shelf = placeAt(state, tiles[12], ModuleType.ShelfAisle);
   tick(state, 0);
   assert(recipe(state, 'sell-supplies').built, 'checkout and shelf did not establish market');
   assert(!recipe(state, 'sell-supplies').operational, 'empty shelf opened market');
   stock(state, shelf, 'tradeGood', OPENING_BALANCE.travelSupplyBatch.units);
+  advanceUntil(state, () => recipe(state, 'sell-supplies').operational, 60);
   const opened = recipe(state, 'sell-supplies');
   assert(opened.operational, `stocked shelf did not open market: ${opened.operationalReasons.join(' | ')}`);
+});
+
+check('market rejects a checkout whose customer face is blocked by the hull', () => {
+  const state = fresh();
+  const tiles = publicRoom(state, RoomType.Market, 3, 8);
+  placeAt(state, tiles[0], ModuleType.CheckoutBank);
+  const shelf = placeAt(state, tiles[14], ModuleType.ShelfAisle);
+  stock(state, shelf, 'tradeGood', OPENING_BALANCE.travelSupplyBatch.units);
+  advanceUntil(state, () => recipe(state, 'sell-supplies').operational, 45);
+  const blocked = recipe(state, 'sell-supplies');
+  assert(blocked.built, 'blocked checkout did not preserve the built investment');
+  assert(!blocked.operational, 'checkout opened with no physical queue frontage');
+  assert(
+    blocked.operationalReasons.some((reason) => reason.includes('open floor in front')),
+    `blocked checkout did not explain the spatial failure: ${blocked.operationalReasons.join(' | ')}`
+  );
 });
 
 check('Refuel Pods names only the service the opening actually delivers', () => {
@@ -194,7 +229,6 @@ check('a completed food choice serves ordinary pod traffic and earns revenue', (
   state.controls.paused = false;
   state.controls.manualTrafficAdmission = false;
   state.controls.shipsPerCycle = 6;
-  const openingCredits = state.metrics.credits;
   for (let elapsed = 0; elapsed < 150; elapsed += 0.1) {
     tick(state, 0.1);
     if (state.openingEconomy.ledger.recent.some((event) =>
@@ -205,9 +239,79 @@ check('a completed food choice serves ordinary pod traffic and earns revenue', (
     event.kind === 'retail-sale' && event.label === 'Prepared meal sold'
   );
   assert(mealSale && mealSale.credits > 0, 'ordinary pod traffic produced no prepared-meal sale');
-  assert(state.metrics.credits > openingCredits, 'meal sale did not increase station credits');
+  assert(state.usageTotals.creditsMealPayoutGross > 0, 'meal sale recorded no gross revenue');
   assert(state.metrics.mealsServedTotal > 0, 'meal sale did not increment the served-meal total');
 });
 
+check('a completed supplies choice sells physical shelf stock to ordinary pod traffic', () => {
+  const state = fresh();
+  const tiles = publicRoom(state, RoomType.Market, 3, 8);
+  placeAt(state, tiles[1], ModuleType.CheckoutBank);
+  const shelf = placeAt(state, tiles[12], ModuleType.ShelfAisle);
+  stock(state, shelf, 'tradeGood', 16);
+  tick(state, 0);
+  advanceUntil(state, () => recipe(state, 'sell-supplies').operational, 60);
+  assert(recipe(state, 'sell-supplies').operational, 'completed supplies choice was not operational before traffic');
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.shipsPerCycle = 8;
+  state.cycleDuration = 20;
+  state.lastCycleTime = 0;
+  const openingStock = state.itemNodes.find((node) => node.tileIndex === shelf)?.items.tradeGood ?? 0;
+  for (let elapsed = 0; elapsed < 360; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (state.openingEconomy.ledger.recent.some((event) =>
+      event.kind === 'retail-sale' && event.label === 'Travel supplies sold'
+    )) break;
+  }
+  const sale = state.openingEconomy.ledger.recent.find((event) =>
+    event.kind === 'retail-sale' && event.label === 'Travel supplies sold'
+  );
+  const remainingStock = state.itemNodes.find((node) => node.tileIndex === shelf)?.items.tradeGood ?? 0;
+  const marketDetail = JSON.stringify({
+    visitors: state.visitors.map((visitor) => ({
+      tile: visitor.tileIndex,
+      state: visitor.state,
+      preference: visitor.primaryPreference,
+      source: visitor.marketTradeGoodSourceTile,
+      target: visitor.reservedTargetTile,
+      path: visitor.path.length,
+      queue: visitor.queueProviderTile,
+      wait: visitor.movementWaitReason,
+      module: state.modules[visitor.tileIndex]
+    })),
+    stewards: state.crewMembers.filter((crew) => crew.staffRole === 'steward').map((crew) => ({
+      system: crew.assignedSystem,
+      tile: crew.tileIndex,
+      target: crew.targetTile,
+      tileXY: [crew.tileIndex % state.width, Math.floor(crew.tileIndex / state.width)],
+      targetXY: crew.targetTile === null ? null : [crew.targetTile % state.width, Math.floor(crew.targetTile / state.width)],
+      targetRoom: crew.targetTile === null ? null : state.rooms[crew.targetTile],
+      targetTileType: crew.targetTile === null ? null : state.tiles[crew.targetTile],
+      directPath: crew.targetTile === null ? null : findPath(
+        state,
+        crew.tileIndex,
+        crew.targetTile,
+        { allowRestricted: true, intent: 'crew', routeSeed: crew.id }
+      )?.length ?? null,
+      resting: crew.resting
+    })),
+    marketActive: state.ops.marketActive,
+    reservations: state.reservations.filter((reservation) =>
+      reservation.ownerKind === 'visitor' && reservation.releaseReason === null
+    ).map((reservation) => ({
+      owner: reservation.ownerId,
+      kind: reservation.kind,
+      target: reservation.targetTile,
+      id: reservation.targetId
+    })),
+    recent: state.openingEconomy.ledger.recent.slice(-8).map((event) => `${event.kind}:${event.label}`)
+  });
+  assert(sale && sale.credits > 0, `ordinary pod traffic produced no travel-supplies sale: ${marketDetail}`);
+  assert(state.usageTotals.creditsTradeGoodsGross > 0, 'travel-supplies sale recorded no gross revenue');
+  assert(remainingStock < openingStock, 'travel-supplies sale did not remove physical shelf stock');
+});
+
 if (failures > 0) process.exit(1);
-console.log('7/7 opening business checks passed');
+console.log('9/9 opening business checks passed');

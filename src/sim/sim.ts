@@ -1295,7 +1295,11 @@ function hasPrivateHousingReady(state: StationState): boolean {
 }
 
 function serviceTagUnlockTier(tag: ShipServiceTag): UnlockTier {
-  if (tag === 'market' || tag === 'lounge') return 1;
+  // Supplies is one of the three opening portfolio choices. Keeping market
+  // demand behind the legacy tier-1 gate made the card buildable at tier 0
+  // while ordinary traffic could never ask for it.
+  if (tag === 'market') return 0;
+  if (tag === 'lounge') return 1;
   if (tag === 'workshop') return 2;
   if (tag === 'security' || tag === 'housing' || tag === 'clinic' || tag === 'recreation') return 3;
   return 0;
@@ -19082,16 +19086,20 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     );
   const cafeteriaCrewPosts = dutyAnchorsForSystem(state, 'cafeteria');
   const marketCheckoutPosts = dutyAnchorsForSystem(state, 'market');
+  const marketHasStockToSell = enhancedMarketSlots(state, 'browse').some(
+    (slot) => itemStockAtNode(state, slot.moduleOriginTile, 'tradeGood') >= 0.95
+  );
   const marketServiceNeeded =
     marketCheckoutPosts.length > 0 &&
-    state.visitors.some(
-      (visitor) =>
-        visitor.primaryPreference === 'market' ||
-        (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) ||
-        (visitor.queueProviderTile !== null &&
-          visitor.queueProviderTile !== undefined &&
-          marketCheckoutAnchors(state).has(visitor.queueProviderTile))
-    );
+    (marketHasStockToSell ||
+      state.visitors.some(
+        (visitor) =>
+          visitor.primaryPreference === 'market' ||
+          (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) ||
+          (visitor.queueProviderTile !== null &&
+            visitor.queueProviderTile !== undefined &&
+            marketCheckoutAnchors(state).has(visitor.queueProviderTile))
+      ));
   const cargoServiceShips = state.arrivingShips.filter(
     (ship) => ship.stage === 'docked' && ship.portTurnaround?.phase === 'unloading'
   );
@@ -21273,6 +21281,7 @@ export function getMarketFixtureStatus(
     return { kind: 'shelf', stock, reserved, available: Math.max(0, stock - reserved) };
   }
   if (module.type !== ModuleType.CheckoutBank) return null;
+  ensureQueueChains(state);
   const registers = enhancedMarketSlots(state, 'checkout').filter((slot) => slot.moduleId === module.id);
   const queued = registers.reduce(
     (total, register) => total + state.visitors.filter(

@@ -16,6 +16,7 @@
 import { MODULE_DEFINITIONS, OPENING_BALANCE, ROOM_DEFINITIONS } from './balance';
 import {
   getPodDockFuelReadiness,
+  getMarketFixtureStatus,
   getRoomClusterOperationalViews,
   quoteFuelOrder,
   quoteTravelSuppliesOrder,
@@ -128,7 +129,7 @@ export function openingRecipes(): OpeningRecipe[] {
           stockKind: 'travel-supplies'
         }
       ],
-      staffing: 'Your Cargo Handler unloads stock; the checkout is the public bottleneck.',
+      staffing: 'One Steward holds the checkout; your Cargo Handler unloads and restocks the shelves.',
       utilities: 'Power, a reachable door, Public zoning, and a clear route from the Freight Locker to shelves.',
       economics: 'Ties up capital in stock. A second shelf expands range and stock buffer, but is not required to open.'
     },
@@ -338,6 +339,23 @@ function countRecipeStock(
   }
 }
 
+function marketCheckoutReadiness(
+  state: StationState,
+  market: RoomClusterOperationalView | null
+): { activeRegisters: number; queueCapacity: number } {
+  if (!market) return { activeRegisters: 0, queueCapacity: 0 };
+  const marketTiles = new Set(market.tiles);
+  return state.moduleInstances
+    .filter((module) => module.type === ModuleType.CheckoutBank && marketTiles.has(module.originTile))
+    .reduce((summary, module) => {
+      const status = getMarketFixtureStatus(state, module.id);
+      if (!status || status.kind !== 'checkout') return summary;
+      summary.activeRegisters += status.activeRegisters;
+      summary.queueCapacity += status.capacity;
+      return summary;
+    }, { activeRegisters: 0, queueCapacity: 0 });
+}
+
 /**
  * How far along each recipe is, measured against what is physically on the
  * station right now. Progress may show the restricted crew mess as a cheap
@@ -387,6 +405,9 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
       }, 0);
     const totalCostCredits = steps.reduce((sum, step) => sum + step.costCredits, 0);
     const stockReady = steps.filter((step) => step.kind === 'stock').every((step) => step.satisfied);
+    const marketCheckout = recipe.id === 'sell-supplies'
+      ? marketCheckoutReadiness(state, market)
+      : { activeRegisters: 0, queueCapacity: 0 };
     const built = recipe.id === 'feed-travelers'
       ? cafeteria !== null
       : recipe.id === 'sell-supplies'
@@ -408,6 +429,11 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
       if (reason) operationalReasons.push(reason);
       if (!market) operationalReasons.push('Build one 24-tile PUBLIC Market with a Checkout Bank and stocked Shelf Aisle.');
       if (!stockReady) operationalReasons.push('Order travel supplies through the Freight Locker.');
+      if (market && marketCheckout.queueCapacity <= 0) {
+        operationalReasons.push('Leave open floor in front of the Checkout Bank so shoppers can form a line.');
+      } else if (market && marketCheckout.activeRegisters <= 0) {
+        operationalReasons.push('A Steward must reach and hold a checkout post.');
+      }
     } else {
       if (!fuelDocks.some((dock) => dock.hasFuelCoupler)) {
         operationalReasons.push('Attach a Fuel Coupler to a real Pod Dock.');

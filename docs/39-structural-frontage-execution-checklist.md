@@ -762,7 +762,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Let player add another Pod Dock or ship service.
 - [ ] Let player build an interior wing or docking finger.
 - [ ] Let player save toward a first Berth.
-- [ ] Make each investment visibly change traffic or operations.
+- [x] Make each investment visibly change traffic or operations.
 - [x] Keep common safety infrastructure orthogonal to portfolio specialization.
 
 ### Economy And Progression
@@ -1226,3 +1226,11 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:opening-businesses` now passes seven checks. Starting from the ordinary life-safe shell, the added operating-cycle contract builds a coherent 21-tile public Cafeteria through production room/module APIs, stocks two physical counters, admits ordinary automatic pod traffic, and requires a real `Prepared meal sold` ledger event, increased credits, and an incremented served-meal total. `npm run build` passed.
 - Visual/playtest evidence: inspected `?scenario=opening-food-cycle`. The paused result shows two active pods, two visitors, `+4c` live revenue, one visitor served, 53 remaining servings across three physical counters, and the authored 2-counter/8-seat public Cafeteria marked operational. While the call remains docked, the Food card now reads `1 sale this visit · report pending` rather than incorrectly claiming no demand; final wanted/served/missed accounting still settles at departure.
 - Remaining uncertainty: this closes the first visible-demand proof, not all of Gate A. Supplies and Refuel still need equivalent start-to-revenue operating-cycle evidence, and a manual small-viewport construction pass remains desirable when the browser driver supports reliable canvas coordinates.
+
+2026-07-28 · Three opening revenue streams and physical market frontage
+
+- Commit or files: `src/sim/sim.ts`, `src/sim/opening-recipes.ts`, `tools/opening-business-tests.ts`, `tools/opening-refuel-cycle-tests.ts`, and `package.json` (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:opening-businesses` passes nine checks and `npm run test:opening-refuel-cycle` passes. Starting from the ordinary physical starter, Food records a paid prepared-meal service, Supplies consumes located Shelf Aisle stock through a physically staffed Checkout Bank and records a paid travel-supplies sale, and Refuel consumes piped Fuel Tank stock at a real Pod Dock and records a positive fuel sale. Market demand is now available at tier 0, matching its role as one of the three opening choices, and a stocked market proactively holds its Steward post instead of dispatching too late for a short shopper visit.
+- Bad/improved comparison: a wall-adjacent Checkout Bank retains its built investment but remains non-operational with the actionable reason `Leave open floor in front of the Checkout Bank so shoppers can form a line`; moving the same bank one tile inward supplies physical line capacity and completes ordinary shopper sales.
+- Live-browser observation: the normal starter keeps Food, Supplies, and Refuel visible together. Selecting Supplies shows the 24-tile spatial machine and explicitly names Steward checkout duty plus Cargo Handler restocking. The facility-scale showcase reports Supplies operational, while the fuel showcase exposes tank stock, the missing Coupler, and the open pipe requirement on the Refuel card.
+- Remaining uncertainty: Gate A still needs a normal-start player construction pass for Supplies and Refuel, plus a second viable operating/layout choice for Refuel. These focused cycles prove the simulation contracts and truthful diagnosis without claiming that broader playtest complete.
