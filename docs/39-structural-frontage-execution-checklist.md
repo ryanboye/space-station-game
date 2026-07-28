@@ -39,7 +39,7 @@ compiles is not sufficient for player-facing work.
   Evidence: `codex/structural-frontage-occupant-loop`.
 - [x] Add this execution checklist to `docs/README.md`.
 - [ ] Record the focused commands and artifacts used for every phase gate.
-- [ ] Keep a running playtest findings section at the bottom of this file.
+- [x] Keep a running playtest findings section at the bottom of this file.
 
 ## Non-Negotiable Design Invariants
 
@@ -638,32 +638,32 @@ compiles is not sufficient for player-facing work.
 ### Starter Contract
 
 - [ ] Begin with a finite unfinished pressure hull.
-- [ ] Include basic life safety and crew support.
-- [ ] Include Receiving and a construction staging route.
+- [x] Include basic life safety and crew support.
+- [x] Include Receiving and a construction staging route.
 - [ ] Include one usable Airlock.
-- [ ] Include two Pod Docks on limited frontage.
-- [ ] Include room to author one opening business.
+- [x] Include two Pod Docks on limited frontage.
+- [x] Include room to author one opening business.
 - [ ] Include one short prebuilt truss/hardpoint lesson.
 - [ ] Preserve one legible side for the first Berth expansion.
-- [ ] Do not start with a completed food and market checklist.
+- [x] Do not start with a completed food and market checklist.
 
 ### Opening Choices
 
-- [ ] Let player choose food, supplies/retail, or pod ship service.
-- [ ] Let player improve that operation spatially.
+- [x] Let player choose food, supplies/retail, or pod ship service.
+- [x] Let player improve that operation spatially.
 - [ ] Let player add another Pod Dock or ship service.
 - [ ] Let player build an interior wing or docking finger.
 - [ ] Let player save toward a first Berth.
 - [ ] Make each investment visibly change traffic or operations.
-- [ ] Keep common safety infrastructure orthogonal to portfolio specialization.
+- [x] Keep common safety infrastructure orthogonal to portfolio specialization.
 
 ### Economy And Progression
 
 - [ ] Price Truss, hull, modules, labor, and maintenance coherently.
 - [ ] Make first Berth a major but attainable capital achievement.
-- [ ] Keep capabilities visible rather than hidden behind arbitrary unlocks.
+- [x] Keep capabilities visible rather than hidden behind arbitrary unlocks.
 - [ ] Use rating to attract more valuable traffic.
-- [ ] Use Capital Projects as optional subsidies, not exclusive gates.
+- [x] Use Capital Projects as optional subsidies, not exclusive gates.
 - [ ] Reconcile global goal, business path, and legacy tier messaging.
 - [ ] Preserve a visible cumulative station rating with causal breakdown.
 
@@ -775,12 +775,12 @@ compiles is not sufficient for player-facing work.
 
 ## User Playtest Review
 
-- [ ] Provide a URL that opens the correct scenario/save.
-- [ ] Provide a short list of new interactions to try.
+- [x] Provide a URL that opens the correct scenario/save.
+- [x] Provide a short list of new interactions to try.
 - [ ] Provide one deliberately bad layout to observe.
 - [ ] Provide the tools to improve that layout in world.
-- [ ] Ensure sprites are enabled by default.
-- [ ] Ensure panels can be hidden for visual inspection.
+- [x] Ensure sprites are enabled by default.
+- [x] Ensure panels can be hidden for visual inspection.
 - [ ] Preserve the user's quicksave separately from deterministic QA saves.
 - [ ] Record user feedback against exact checklist items.
 - [ ] Reopen any checked item whose live behavior does not meet the requirement.
@@ -999,3 +999,10 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:physical-cargo` proves source decrement at pickup exactly once, the same carried stack and job survive save/load, destination increment occurs once, cancellation and crew death return and requeue the stack without duplication, and a shared bulky-cargo corridor completes measurably slower than separated routes. The worker also passed movement-coordinator, passenger-transfer, queue-spill, exterior-integrity, build, and whitespace checks.
 - Physical implementation: a bulky load moves on a visible cart plate, reserves the tile it leaves and enters until its tail clears, and cannot use ordinary actor swaps. Pickup and recent drop-off are marked at their real inventory nodes; no abstract cargo throughput score substitutes for those claims.
 - Remaining uncertainty: the focused contention case demonstrates lower combined shared-corridor throughput but does not yet prove that both individual streams are delayed in the same run; luggage is not an inventory item; conflict lacks a dedicated world warning; and cargo does not yet contend with boarding in the same fixture. Those compound boxes remain open.
+
+2026-07-27 · Authored opening-business choice
+
+- Commit or files: `42fedb4`, `src/sim/initial-state.ts`, `src/sim/opening-recipes.ts`, `src/sim/sim.ts`, `src/main.ts`, `src/styles.css`, and `tools/opening-business-tests.ts`.
+- Focused checks: `npm run test:opening-businesses`, `npm run test:opening-procurement`, `npm run test:pod-demand-accounting`, `npm run build`, and `git diff --check` passed. A fresh station has no operating public business; opening cash funds any one of Food, Supplies, or Refuel Pods but not two; the real starter apron supports a powered public cafeteria or rotated narrow market; and stock at the operation's physical fixtures is required before it opens.
+- Visual/playtest evidence: inspected `http://127.0.0.1:5183/?scenario=starter`. The Businesses palette presents three distinct first investments with current machine capacity and one next world action. The legacy tier summary and later progression button remain hidden until an operation is live; the Global Goal remains the opening north star. Public and Crew-only zoning are visible controls. Sprites load by default and the existing interface-hide control remains available.
+- Remaining uncertainty: the shared crew mess is a cheap food conversion with a deliberate crew/guest traffic tradeoff rather than a completely empty food shell. The first-business service outcome, profitability, and clarity still require the user's fresh playtest; those Phase 8 gate items remain open.

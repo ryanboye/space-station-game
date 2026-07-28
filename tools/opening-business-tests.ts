@@ -140,5 +140,21 @@ check('Refuel Pods names only the service the opening actually delivers', () => 
   assert(refuel.summary.includes('refueling only'), 'refuel card implies unavailable dry-dock work');
 });
 
+check('a missing public cafeteria creates visible missed demand, never a fake doorway queue', () => {
+  const state = fresh();
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.shipsPerCycle = 4;
+  for (let elapsed = 0; elapsed < 45; elapsed += 0.1) tick(state, 0.1);
+  assert(
+    !state.visitors.some((visitor) => visitor.state === 'queueing' && visitor.queueProviderTile === null),
+    'visitor entered a queue without a physical public provider'
+  );
+  assert(
+    state.derived.queueTheater.eventFeed.some((event) => event.text.includes('could not find public food service')),
+    'missing public food produced no visible missed-demand event'
+  );
+});
+
 if (failures > 0) process.exit(1);
-console.log('5/5 opening business checks passed');
+console.log('6/6 opening business checks passed');

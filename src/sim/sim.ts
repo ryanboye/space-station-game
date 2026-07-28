@@ -12152,9 +12152,32 @@ function balkFromServiceQueue(state: StationState, visitor: Visitor): void {
   assignPathToDock(state, visitor);
 }
 
+function abandonUnavailableMealService(state: StationState, visitor: Visitor): void {
+  pushCrowdFloater(state, visitor.x, visitor.y, 'NO PUBLIC FOOD', '#ffb15f');
+  pushCrowdEvent(state, 'warn', `A ${visitor.archetype} could not find public food service`);
+  addVisitorFailurePenalty(state, 0.035, 'shipServicesMissing');
+  removeVisitorFromQueues(state, visitor.id);
+  visitor.serviceBlockedSince = null;
+  visitor.movementWaitReason = undefined;
+  if (!visitor.servedMeal && assignPathToLeisure(state, visitor)) return;
+  visitor.state = VisitorState.ToDock;
+  assignPathToDock(state, visitor);
+}
+
 /** Route a hungry visitor into a physical serving line. A capacity failure is
  * a bounded wait; the existing visitor-failure path owns the eventual exit. */
 function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
+  const hasPublicMealProvider = collectServingPickupTargets(state).length > 0;
+  if (!hasPublicMealProvider) {
+    visitor.state = VisitorState.ToCafeteria;
+    visitor.serviceBlockedSince ??= state.now;
+    visitor.movementWaitReason = 'no public meal service';
+    setVisitorPath(state, visitor, []);
+    if (state.now - visitor.serviceBlockedSince >= VISITOR_SERVICE_ORIENTATION_SEC) {
+      abandonUnavailableMealService(state, visitor);
+    }
+    return;
+  }
   const isStillArriving =
     state.now - visitor.spawnedAt < VISITOR_SERVICE_ORIENTATION_SEC ||
     state.rooms[visitor.tileIndex] === RoomType.Berth ||

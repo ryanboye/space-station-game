@@ -4710,6 +4710,9 @@ function visitorFailureThought(visitor: StationState['visitors'][number]): World
 function visitorWorldThought(state: StationState, visitor: StationState['visitors'][number]): WorldThought | null {
   if (visitor.healthState === 'critical') return { text: 'I need help!', tone: 'negative' };
   if ((visitor.angryUntil ?? 0) > state.now) return { text: "I'm leaving!", tone: 'negative' };
+  if (visitor.movementWaitReason === 'no public meal service') {
+    return { text: 'No public food?', tone: 'negative' };
+  }
   if (visitor.strandedFromShipId !== null && visitor.strandedFromShipId !== undefined) {
     return { text: 'My ship left. I need transport.', tone: 'negative' };
   }
