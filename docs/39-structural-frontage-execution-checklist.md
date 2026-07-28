@@ -615,7 +615,7 @@ audited checklist with no unsupported checked claims.
 - [x] Replan after bounded waiting using congestion.
 - [x] Add route hysteresis to prevent oscillation.
 - [x] Add bounded deadlock recovery.
-- [ ] Release stale movement and service reservations.
+- [x] Release stale movement and service reservations.
 - [ ] Keep interpolation independent from simulation speed.
 
 ### Spatial Capacity
@@ -625,7 +625,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Give narrow corridors low directional capacity.
 - [ ] Give open concourses greater capacity.
 - [x] Make carts/bulky cargo consume more movement capacity.
-- [ ] Preserve exclusive service/work/seat reservations.
+- [x] Preserve exclusive service/work/seat reservations.
 
 ### Real Queue Spill
 
@@ -812,32 +812,32 @@ audited checklist with no unsupported checked claims.
 
 ### Save Compatibility
 
-- [ ] Grandfather legacy hull support.
-- [ ] Derive approach envelopes for legacy Docks.
-- [ ] Adapt existing Berth geometry until edited/replaced.
-- [ ] Add safe defaults for new occupant state.
-- [ ] Add safe defaults for integrity/damage.
+- [x] Grandfather legacy hull support.
+- [x] Derive approach envelopes for legacy Docks.
+- [x] Adapt existing Berth geometry until edited/replaced.
+- [x] Add safe defaults for new occupant state.
+- [x] Add safe defaults for integrity/damage.
 - [x] Persist construction and damage.
 - [x] Persist durable ship visit and slot/queue ownership.
-- [ ] Rebuild structural graphs after load.
-- [ ] Rebuild approach conflict groups after load.
-- [ ] Rebuild congestion and movement intents after load.
+- [x] Rebuild structural graphs after load.
+- [x] Rebuild approach conflict groups after load.
+- [x] Rebuild congestion and movement intents after load.
 - [x] Rebuild interface diagnoses after load.
 - [x] Never persist stale actor paths or transient movement intents.
 - [ ] Preserve maintenance identity through map expansion and module movement.
 
 ### Performance
 
-- [ ] Cache structure by topology/structure version.
+- [x] Cache structure by topology/structure version.
 - [ ] Cache approach groups by interface geometry version.
 - [ ] Recompute interface diagnoses only after relevant change or sustained
   traffic interval.
-- [ ] Resolve movement intents in a batch.
+- [x] Resolve movement intents in a batch.
 - [ ] Update congestion fields at fixed cadence.
 - [ ] Avoid per-actor full A* on render frames.
-- [ ] Maintain an exterior target list for maintenance.
+- [x] Maintain an exterior target list for maintenance.
 - [ ] Keep render interpolation independent of simulation speed.
-- [ ] Profile every phase at baseline scale.
+- [x] Profile every phase at baseline scale.
 - [x] Profile final build at two to three times current station footprint.
 
 ### Full Playthrough
@@ -1343,3 +1343,9 @@ Remaining uncertainty:
 - Commits or files: topology-keyed bounded graph cache in `src/sim/structural-support.ts`; focused invalidation assertions in `tools/structural-support-tests.ts` (checkpoint commit pending at evidence capture).
 - Focused evidence: `npm run test:structural-support` passes. Repeating an unchanged base topology and unchanged proposed Truss plan returns the same graph object without increasing the build count; time, room-version, and module-version changes remain cache hits; a topology-version mutation invalidates and rebuilds exactly once. Cached graph-build problems are copied before load validation so one query cannot contaminate the next, and each state retains at most 32 proposed-plan graphs.
 - Legacy evidence: `npm run test:phase9-save` passes all five phases, including two legacy fixtures. Its structural migration fixture loads a snapshot without modern structural state, rebuilds the same supported node/root/edge graph, and remains valid; the cache is keyed by state identity plus topology version and therefore cannot leak a pre-load graph into a hydrated state.
+
+2026-07-28 · Phase 9 migration and baseline-performance ledger reconciliation
+
+- Commits or files: existing migration/reconstruction paths in `src/sim/save.ts` and `src/sim/save-recovery.ts`; physical ownership cleanup and batched movement in `src/sim/sim.ts`; `tools/phase9-save-migration-tests.ts`, `tools/movement-coordinator-tests.ts`, `tools/facility-slots-tests.ts`, and `tools/normal-scale-operation-tests.ts`; structural cache commit `4ac6c38` and arbitration-harness commit `a4781a6`.
+- Save evidence: `npm run test:phase9-save` passes five phases with two legacy derivations. A stripped legacy snapshot rebuilds identical grandfathered structural roots/nodes/edges, identical Dock/Berth approach descriptors and conflict groups, and adapted Berth size geometry that yields to the first explicit player edit. Missing occupant fields default to station-side, errand, non-failing, non-stranded state; a missing maintenance block resumes with an undamaged geometry-derived integrity ledger. A live post-load station starts with no stale paths, occupancy, queue theater entries, transfer/service claims, or invalid dock bindings, then replans actor movement and rebuilds its congestion map within three simulated seconds.
+- Ownership and performance evidence: `npm run test:movement-coordinator` passes six groups, including batched deterministic resolution, stale-wait recovery, and save/load clearing of transient claims. Gate F's exclusive-claims group proves provider/staff/seat ownership and cleanup. The 240-second 50/50 normal-scale run maintains 256 exterior targets, profiles every declared top-level simulation phase across 3,600 ticks with no unprofiled phase, keeps p95 path calls below one A* per actor, and reports the cached 2,856-node support graph. These are transferred into the ledger now because the focused evidence predates the unchecked duplicate Phase 9 rows.
