@@ -469,7 +469,7 @@ audited checklist with no unsupported checked claims.
 - [x] Require reinforced load transfer for large Berths where appropriate.
 - [x] Validate support while planning.
 - [x] Validate support again before commissioning.
-- [ ] Cache support by structure/topology version.
+- [x] Cache support by structure/topology version.
 - [x] Avoid per-tick structure scans.
 
 ### Planning Feedback
@@ -487,8 +487,8 @@ audited checklist with no unsupported checked claims.
 - [x] Unsupported hull planning is rejected.
 - [x] A Junction enables a branch.
 - [x] Reinforcement enables a heavy interface.
-- [ ] Legacy saves load as structurally valid.
-- [ ] Structural recomputation occurs only after relevant mutations.
+- [x] Legacy saves load as structurally valid.
+- [x] Structural recomputation occurs only after relevant mutations.
 
 ## Phase 3: Physical Expansion And EVA Construction
 
@@ -1337,3 +1337,9 @@ Remaining uncertainty:
 - Commits or files: durable failed-stay episodes and recovery planning in `src/sim/failed-stay.ts`; finite admission decisions in `src/sim/admission-policy.ts`; live seams in `src/sim/sim.ts`; save migration in `src/sim/save.ts`; adversarial coverage in `tools/commitment-recovery-tests.ts`; commits `ab54510`, `83c6a47`, and `fdd7c28`.
 - Focused evidence: `npm run test:commitment-recovery` passes ten checks and `npm run test:gate-e-save-resume` passes six. Direct fixtures prove a bounded 28/75/150-second escalation ladder; exactly-once emergency meal purchase; physical repair expediting; compensation that restores patience without feeding the cohort or resolving its shortage; canonical onward transfer with no orphan reservations; bounded admission closure that the legacy router cannot bypass; disruptive-only security intervention; resident acceptance closed by default and then blocked by absent private housing; and cumulative bed/meal reserves that hold the second otherwise-valid offer.
 - Review boundary: no claim is made yet for incident production, emergency bunk creation, positive cancellation penalty, faction effects, accepted-resident departure, or the player-facing policy/recovery controls. Those remain unchecked until focused or browser evidence exists.
+
+2026-07-28 · Versioned structural-support derivation
+
+- Commits or files: topology-keyed bounded graph cache in `src/sim/structural-support.ts`; focused invalidation assertions in `tools/structural-support-tests.ts` (checkpoint commit pending at evidence capture).
+- Focused evidence: `npm run test:structural-support` passes. Repeating an unchanged base topology and unchanged proposed Truss plan returns the same graph object without increasing the build count; time, room-version, and module-version changes remain cache hits; a topology-version mutation invalidates and rebuilds exactly once. Cached graph-build problems are copied before load validation so one query cannot contaminate the next, and each state retains at most 32 proposed-plan graphs.
+- Legacy evidence: `npm run test:phase9-save` passes all five phases, including two legacy fixtures. Its structural migration fixture loads a snapshot without modern structural state, rebuilds the same supported node/root/edge graph, and remains valid; the cache is keyed by state identity plus topology version and therefore cannot leak a pre-load graph into a hydrated state.

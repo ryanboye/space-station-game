@@ -58,6 +58,22 @@ interface GraphBuild {
   problems: StructuralSupportProblem[];
 }
 
+export interface StructuralSupportCacheStats {
+  topologyVersion: number;
+  entries: number;
+  hits: number;
+  builds: number;
+}
+
+interface StructuralSupportCacheEntry extends StructuralSupportCacheStats {
+  width: number;
+  height: number;
+  graphs: Map<string, GraphBuild>;
+}
+
+const MAX_CACHED_PLANS_PER_STATE = 32;
+const structuralSupportCache = new WeakMap<StationState, StructuralSupportCacheEntry>();
+
 const CARDINAL_OFFSETS = [
   { x: 0, y: -1 },
   { x: 1, y: 0 },
@@ -75,7 +91,7 @@ export function buildStructuralSupportGraph(
   state: StationState,
   proposedPieces: readonly ProposedStructuralPiece[] = []
 ): StructuralSupportGraph {
-  return buildGraph(state, proposedPieces).graph;
+  return cachedGraphBuild(state, proposedPieces).graph;
 }
 
 export function validateStructuralSupportPlan(
@@ -83,8 +99,11 @@ export function validateStructuralSupportPlan(
   proposedPieces: readonly ProposedStructuralPiece[] = [],
   loads: readonly StructuralInterfaceLoad[] = []
 ): StructuralSupportValidation {
-  const built = buildGraph(state, proposedPieces);
-  const { graph, problems } = built;
+  const built = cachedGraphBuild(state, proposedPieces);
+  const graph = built.graph;
+  // Validation appends load/reachability findings. Keep the cached graph-build
+  // result immutable so one query can never contaminate a later query.
+  const problems = [...built.problems];
   const nodeByTile = new Map(graph.nodes.map((node) => [node.tile, node]));
   const reachable = reachableFromRoots(graph);
 
@@ -106,7 +125,63 @@ export function validateStructuralSupportPlan(
   };
 }
 
-function buildGraph(state: StationState, proposedPieces: readonly ProposedStructuralPiece[]): GraphBuild {
+/** Focused diagnostic surface for proving cache invalidation behavior. */
+export function getStructuralSupportCacheStats(state: StationState): StructuralSupportCacheStats {
+  const cached = structuralSupportCache.get(state);
+  return cached
+    ? {
+        topologyVersion: cached.topologyVersion,
+        entries: cached.graphs.size,
+        hits: cached.hits,
+        builds: cached.builds
+      }
+    : { topologyVersion: state.topologyVersion, entries: 0, hits: 0, builds: 0 };
+}
+
+function cachedGraphBuild(
+  state: StationState,
+  proposedPieces: readonly ProposedStructuralPiece[]
+): GraphBuild {
+  let cached = structuralSupportCache.get(state);
+  if (
+    !cached ||
+    cached.topologyVersion !== state.topologyVersion ||
+    cached.width !== state.width ||
+    cached.height !== state.height
+  ) {
+    cached = {
+      topologyVersion: state.topologyVersion,
+      width: state.width,
+      height: state.height,
+      entries: 0,
+      hits: 0,
+      builds: 0,
+      graphs: new Map()
+    };
+    structuralSupportCache.set(state, cached);
+  }
+
+  const key = proposedPieces
+    .map((piece) => `${piece.tile}:${piece.kind}`)
+    .join('|');
+  const hit = cached.graphs.get(key);
+  if (hit) {
+    cached.hits += 1;
+    return hit;
+  }
+
+  const built = buildGraphUncached(state, proposedPieces);
+  cached.builds += 1;
+  if (cached.graphs.size >= MAX_CACHED_PLANS_PER_STATE) {
+    const oldestKey = cached.graphs.keys().next().value as string | undefined;
+    if (oldestKey !== undefined) cached.graphs.delete(oldestKey);
+  }
+  cached.graphs.set(key, built);
+  cached.entries = cached.graphs.size;
+  return built;
+}
+
+function buildGraphUncached(state: StationState, proposedPieces: readonly ProposedStructuralPiece[]): GraphBuild {
   const nodeByTile = new Map<number, StructuralSupportNode>();
   const problems: StructuralSupportProblem[] = [];
   const size = state.width * state.height;

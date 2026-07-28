@@ -2,6 +2,7 @@ import { createInitialState } from '../src/sim/sim';
 import {
   MAX_TRUSS_SPAN,
   buildStructuralSupportGraph,
+  getStructuralSupportCacheStats,
   validateStructuralSupportPlan,
   type ProposedStructuralPiece,
   type StructuralSupportReason
@@ -53,7 +54,35 @@ const at = (offsetX: number, offsetY = 0) => toIndex(x + offsetX, y + offsetY, s
 
 const starter = run(state, []);
 assertCondition(starter.ok, 'Existing starter hull should be grandfathered as supported.');
-assertCondition(buildStructuralSupportGraph(state).rootTiles.length > 0, 'Starter hull should produce support roots.');
+const starterGraph = buildStructuralSupportGraph(state);
+assertCondition(starterGraph.rootTiles.length > 0, 'Starter hull should produce support roots.');
+const cacheBeforeRepeat = getStructuralSupportCacheStats(state);
+const repeatedStarterGraph = buildStructuralSupportGraph(state);
+const cacheAfterRepeat = getStructuralSupportCacheStats(state);
+assertCondition(repeatedStarterGraph === starterGraph, 'An unchanged topology must reuse the structural graph object.');
+assertCondition(
+  cacheAfterRepeat.builds === cacheBeforeRepeat.builds && cacheAfterRepeat.hits === cacheBeforeRepeat.hits + 1,
+  'An unchanged topology must be a cache hit without another graph build.'
+);
+
+state.now += 10;
+state.moduleVersion += 1;
+state.roomVersion += 1;
+const afterUnrelatedMutations = buildStructuralSupportGraph(state);
+assertCondition(
+  afterUnrelatedMutations === starterGraph,
+  'Time, module, and room mutations must not rebuild the topology-only support graph.'
+);
+
+const topologyBuildsBefore = getStructuralSupportCacheStats(state).builds;
+state.topologyVersion += 1;
+const afterTopologyMutation = buildStructuralSupportGraph(state);
+const cacheAfterTopologyMutation = getStructuralSupportCacheStats(state);
+assertCondition(afterTopologyMutation !== starterGraph, 'A topology mutation must invalidate the structural graph.');
+assertCondition(
+  cacheAfterTopologyMutation.builds === 1 && cacheAfterTopologyMutation.topologyVersion === state.topologyVersion,
+  `A topology mutation must rebuild exactly once (previous cache had ${topologyBuildsBefore} builds).`
+);
 
 const shortRun: ProposedStructuralPiece[] = [
   { tile: at(1), kind: 'truss' },
@@ -61,6 +90,11 @@ const shortRun: ProposedStructuralPiece[] = [
   { tile: at(3), kind: 'truss' }
 ];
 assertCondition(run(state, shortRun).ok, 'A short truss extension connected to the hull should be legal.');
+const shortGraph = buildStructuralSupportGraph(state, shortRun);
+assertCondition(
+  buildStructuralSupportGraph(state, shortRun) === shortGraph,
+  'An unchanged proposed support plan must reuse its cached graph.'
+);
 assertCondition(
   validateStructuralSupportPlan(state, shortRun, [{ tile: at(3), kind: 'small' }]).ok,
   'A small load should work on an ordinary supported truss run.'
