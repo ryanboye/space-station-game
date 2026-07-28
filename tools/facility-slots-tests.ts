@@ -538,14 +538,34 @@ function testTemporarySleepAndHydration(): void {
   assert(!state.reservations.some((reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null), 'Completed sleep must release all live temporary claims.');
 
   assert(assignPathToTemporarySleep(state, visitor), 'Visitor should be able to claim a bunk again for save cleanup coverage.');
+  const claimedBunk = visitor.temporarySleepTargetTile;
+  assert(claimedBunk !== null && claimedBunk !== undefined, 'Re-claim should produce a bunk tile.');
   const serialized = serializeSave('facility-slots', state, 'test');
   const parsed = parseAndMigrateSave(serialized);
   assert(parsed.ok, 'Facility-slot save should parse.');
   const restored = hydrateStateFromSave(parsed.save).state;
   const restoredVisitor = restored.visitors.find((candidate) => candidate.id === visitor.id);
   assert(restoredVisitor, 'Long-stay visitor should persist through save/load.');
-  assert(restoredVisitor.temporarySleepTargetTile === null, 'Hydration must clear transient bunk claims.');
-  assert(!restored.reservations.some((reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null), 'Hydration must not retain stale reservations.');
+  // A guest asleep in a bunk owns that bunk, so the claim itself is durable.
+  // What hydration clears is the transient *enforcement* around it: the path,
+  // the old reservation, and any second claimant. save-recovery then re-backs
+  // the surviving claim with exactly one fresh exclusivity reservation.
+  assert(
+    restoredVisitor.temporarySleepTargetTile === claimedBunk,
+    `Hydration must keep a valid bunk claim (expected ${claimedBunk}, got ${restoredVisitor.temporarySleepTargetTile}).`
+  );
+  assert(restoredVisitor.path.length === 0, 'Hydration must clear the transient approach path.');
+  const liveClaims = restored.reservations.filter(
+    (reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null
+  );
+  assert(
+    liveClaims.length === 1 && liveClaims[0].targetTile === claimedBunk,
+    `Hydration must re-back the bunk with exactly one live claim (got ${liveClaims.length}).`
+  );
+  const rivals = restored.visitors.filter(
+    (candidate) => candidate.id !== visitor.id && candidate.temporarySleepTargetTile === claimedBunk
+  );
+  assert(rivals.length === 0, 'Hydration must never leave two guests holding one bunk.');
 }
 
 function testBunkBankHousingPolicyOwnership(): void {

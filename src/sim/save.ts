@@ -39,6 +39,11 @@ import {
   type PassengerTransferPhase,
   type Resident,
   ResidentState,
+  type AsteroidBelt,
+  type Faction,
+  type LaneProfile,
+  type LaneSector,
+  type Planet,
   type SiteCharter,
   type SpecialtyId,
   type SpecialtyProgress,
@@ -56,6 +61,7 @@ import {
   type SpaceLane,
   TileType,
   type StationState,
+  type SystemMap,
   type TrafficOffer,
   type VisitorArchetype,
   type Visitor,
@@ -68,6 +74,9 @@ import {
   isWalkable
 } from './types';
 import { ensureBerthConfig, setBerthCustomsPolicy } from './dock-controls';
+import { generateSystemMap } from './system-map';
+import { MAP_CONDITION_VERSION } from './map-conditions';
+import { reconcileTemporaryLodgingClaims } from './save-recovery';
 import { isCompatibleShipHullVariant, selectShipHullVariant } from './ship-hulls';
 import {
   UTILITY_UNDERLAY_KINDS,
@@ -200,6 +209,29 @@ export interface StationSnapshotV1 {
   height: number;
   mapWorldOriginX?: number;
   mapWorldOriginY?: number;
+  // --- Procedural identity (Gate E) -------------------------------------
+  // All four are optional on the wire: legacy saves predate them and get the
+  // documented deterministic defaults in normalizeSnapshot.
+  /** The seed the station was created with. Identity, not a UI preference. */
+  seedAtCreation?: number;
+  /**
+   * The rolled star system. `laneRoutes` is deliberately omitted — it is a
+   * pure function of the seed (see types.LaneRoute) and is re-derived on load,
+   * so it never bloats a save or drifts from the geometry that generated it.
+   */
+  system?: Omit<SystemMap, 'laneRoutes'> | null;
+  /**
+   * Per-lane traffic volume + ship-type weights. These consume `state.rng`
+   * draws at creation, so they cannot be re-derived without replaying the
+   * whole rng stream; they must be persisted to survive a reload.
+   */
+  laneProfiles?: Record<SpaceLane, LaneProfile>;
+  /**
+   * Overlay cache token, not physics: map conditions are a pure function of
+   * seed + site. Persisted only so a reload does not hand the renderer a
+   * lower version than the one it already cached against.
+   */
+  mapConditionVersion?: number;
   tiles: TileType[];
   zones: ZoneType[];
   rooms: RoomType[];
@@ -224,6 +256,14 @@ export interface StationSnapshotV1 {
     buildWorkRequired: number;
     requiresEva: boolean;
     state?: 'planned' | 'delivering' | 'building' | 'blocked' | 'done';
+    /**
+     * Player-visible reason the site stopped. Durable: without it a reloaded
+     * blocked site silently reads as merely 'planned' and the player loses the
+     * only explanation for why nothing is happening.
+     */
+    blockedReason?: string | null;
+    /** Age drives stall diagnostics and ordering; regenerating it hides stalls. */
+    createdAt?: number;
     structuralProjectId?: number;
     structuralStage?: 'perimeter' | 'interior' | 'seal-check';
   }>;
@@ -841,9 +881,18 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     Number.isFinite(value.transferCrossingStartedAt)
       ? Math.max(0, value.transferCrossingStartedAt)
       : null;
+  // A shelf reservation is genuinely transient: the reserved trade good is
+  // gone with the reservation, so a mid-checkout shopper has to start over.
   const hadTransientFacilityClaim =
-    (typeof value.marketTradeGoodSourceTile === 'number' && Number.isFinite(value.marketTradeGoodSourceTile)) ||
-    (typeof value.temporarySleepTargetTile === 'number' && Number.isFinite(value.temporarySleepTargetTile));
+    typeof value.marketTradeGoodSourceTile === 'number' && Number.isFinite(value.marketTradeGoodSourceTile);
+  // Lodging is not transient in the same way — a guest asleep in a bunk owns
+  // that bunk. The claim is carried through here and then validated and
+  // de-duplicated by reconcileTemporaryLodgingClaims, which is the only place
+  // allowed to decide that a claim is no longer real.
+  const temporarySleepTargetTile =
+    typeof value.temporarySleepTargetTile === 'number' && Number.isFinite(value.temporarySleepTargetTile)
+      ? clamp(Math.floor(value.temporarySleepTargetTile), 0, Math.max(0, tileCount - 1))
+      : null;
   return {
     ...visitor,
     id: Math.floor(visitor.id),
@@ -857,7 +906,7 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     serveTimer: undefined,
     nextPathRetryAt: undefined,
     marketTradeGoodSourceTile: null,
-    temporarySleepTargetTile: null,
+    temporarySleepTargetTile,
     queueProviderTile: typeof value.queueProviderTile === 'number' && Number.isFinite(value.queueProviderTile)
       ? clamp(Math.floor(value.queueProviderTile), 0, Math.max(0, tileCount - 1))
       : null,
@@ -966,6 +1015,34 @@ function requiredUnlockTierForSnapshotContent(
   return required;
 }
 
+/**
+ * Copy the durable half of a rolled system map. `laneRoutes` is dropped on
+ * purpose: it is regenerated from the seed on load, so persisting it would
+ * bloat every save with data that can only go stale.
+ */
+function captureSystemMap(system: SystemMap | null): StationSnapshotV1['system'] {
+  if (!system) return null;
+  return {
+    factions: system.factions.map((faction) => ({ ...faction, shipBias: { ...faction.shipBias } })),
+    planets: system.planets.map((planet) => ({ ...planet })),
+    asteroidBelts: system.asteroidBelts.map((belt) => ({ ...belt })),
+    laneSectors: SPACE_LANES.reduce((acc, lane) => {
+      const sector = system.laneSectors[lane];
+      acc[lane] = { factionIds: [...sector.factionIds], dominantFactionId: sector.dominantFactionId };
+      return acc;
+    }, {} as Record<SpaceLane, LaneSector>),
+    seedAtCreation: system.seedAtCreation
+  };
+}
+
+function captureLaneProfiles(profiles: Record<SpaceLane, LaneProfile>): Record<SpaceLane, LaneProfile> {
+  return SPACE_LANES.reduce((acc, lane) => {
+    const profile = profiles[lane];
+    acc[lane] = { trafficVolume: profile.trafficVolume, weights: { ...profile.weights } };
+    return acc;
+  }, {} as Record<SpaceLane, LaneProfile>);
+}
+
 export function captureSnapshot(state: StationState): StationSnapshotV1 {
   const roleCounts =
     state.crew.roleCounts && totalStaffCount(state.crew.roleCounts) === state.crew.total
@@ -1004,6 +1081,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     height: state.height,
     mapWorldOriginX: state.mapWorldOriginX,
     mapWorldOriginY: state.mapWorldOriginY,
+    seedAtCreation: state.seedAtCreation,
+    system: captureSystemMap(state.system),
+    laneProfiles: captureLaneProfiles(state.laneProfiles),
+    mapConditionVersion: state.mapConditionVersion,
     tiles: state.tiles.slice(),
     zones: state.zones.slice(),
     rooms: state.rooms.slice(),
@@ -1048,6 +1129,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         buildWorkRequired: site.buildWorkRequired,
         requiresEva: site.requiresEva,
         state: site.state,
+        blockedReason: site.blockedReason,
+        createdAt: site.createdAt,
         structuralProjectId: site.structuralProjectId,
         structuralStage: site.structuralStage
       }))
@@ -1123,7 +1206,9 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     },
     residents: state.residents.map(({ movementWaitReason: _movementWaitReason, ...resident }) => ({
       ...resident,
-      path: [...resident.path],
+      // A path is one frame's routing decision against one frame's occupancy.
+      // Hydration discards it anyway, so it is never written to the wire.
+      path: [],
       roleAffinity: { ...resident.roleAffinity },
       lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
     })),
@@ -1137,7 +1222,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       ...visitor
     }) => ({
       ...visitor,
-      path: [...visitor.path],
+      // Transient for the same reason resident paths are: never serialized.
+      path: [],
       needs: visitor.needs ? { ...visitor.needs } : undefined,
       lastRouteExposure: visitor.lastRouteExposure ? { ...visitor.lastRouteExposure } : undefined
     })),
@@ -1600,6 +1686,133 @@ function normalizeCommercialUnits(raw: unknown, expectedLength: number, warnings
   return units;
 }
 
+const FACTION_TEMPLATE_IDS: Faction['templateId'][] = [
+  'trader-guild',
+  'industrial-combine',
+  'colonial-authority',
+  'military-bloc',
+  'free-port',
+  'pleasure-syndicate'
+];
+const BODY_TYPES: Planet['bodyType'][] = ['rocky', 'gas', 'ice'];
+const BELT_RESOURCE_TYPES: AsteroidBelt['resourceType'][] = ['metal', 'ice', 'gas'];
+
+/**
+ * Structural validation of a persisted system map. A save that fails any check
+ * is not silently patched field-by-field: the caller regenerates the whole map
+ * from `seedAtCreation` instead, so the player always gets one coherent system
+ * rather than a half-restored hybrid.
+ */
+function normalizeSystemMap(raw: unknown, warnings: string[]): StationSnapshotV1['system'] | undefined {
+  if (raw === null) return null;
+  if (!isRecord(raw)) return undefined;
+  const reject = (reason: string): undefined => {
+    warnings.push(`system map ${reason}; regenerating it from the saved seed.`);
+    return undefined;
+  };
+  if (!Array.isArray(raw.factions) || !Array.isArray(raw.planets) || !Array.isArray(raw.asteroidBelts)) {
+    return reject('is missing factions/planets/belts');
+  }
+  const factions: Faction[] = [];
+  for (const entry of raw.factions) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.displayName !== 'string') {
+      return reject('has a malformed faction');
+    }
+    if (!isOneOf(entry.templateId, FACTION_TEMPLATE_IDS)) return reject(`has unknown faction template ${String(entry.templateId)}`);
+    // Iterate the saved keys, not SHIP_TYPES, so a round-tripped map is
+    // byte-identical to the one that was saved rather than merely equivalent.
+    const shipBias: Partial<Record<ShipType, number>> = {};
+    if (isRecord(entry.shipBias)) {
+      for (const [key, weight] of Object.entries(entry.shipBias)) {
+        if (!isOneOf(key, SHIP_TYPES) || !Number.isFinite(weight)) continue;
+        shipBias[key] = Math.max(0, weight as number);
+      }
+    }
+    factions.push({
+      id: entry.id,
+      templateId: entry.templateId,
+      displayName: entry.displayName,
+      color: typeof entry.color === 'string' ? entry.color : '#8899aa',
+      shipBias
+    });
+  }
+  if (factions.length === 0) return reject('has no factions');
+  const factionIds = new Set(factions.map((faction) => faction.id));
+
+  const planets: Planet[] = [];
+  for (const entry of raw.planets) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.displayName !== 'string') {
+      return reject('has a malformed planet');
+    }
+    if (!isOneOf(entry.bodyType, BODY_TYPES)) return reject(`has unknown body type ${String(entry.bodyType)}`);
+    if (typeof entry.factionId !== 'string' || !factionIds.has(entry.factionId)) {
+      return reject(`has planet ${entry.id} claimed by an unknown faction`);
+    }
+    planets.push({
+      id: entry.id,
+      factionId: entry.factionId,
+      displayName: entry.displayName,
+      orbitRadius: clamp(asFiniteNumber(entry.orbitRadius, 0.5), 0, 1),
+      orbitAngle: asFiniteNumber(entry.orbitAngle, 0),
+      bodyType: entry.bodyType
+    });
+  }
+
+  const asteroidBelts: AsteroidBelt[] = [];
+  for (const entry of raw.asteroidBelts) {
+    if (!isRecord(entry) || typeof entry.id !== 'string') return reject('has a malformed asteroid belt');
+    if (!isOneOf(entry.resourceType, BELT_RESOURCE_TYPES)) return reject(`has unknown belt resource ${String(entry.resourceType)}`);
+    const innerRadius = clamp(asFiniteNumber(entry.innerRadius, 0), 0, 1);
+    const outerRadius = clamp(asFiniteNumber(entry.outerRadius, innerRadius), innerRadius, 1);
+    asteroidBelts.push({
+      id: entry.id,
+      innerRadius,
+      outerRadius,
+      resourceType: entry.resourceType,
+      factionClaim: typeof entry.factionClaim === 'string' && factionIds.has(entry.factionClaim) ? entry.factionClaim : null
+    });
+  }
+
+  if (!isRecord(raw.laneSectors)) return reject('is missing lane sectors');
+  const laneSectors = {} as Record<SpaceLane, LaneSector>;
+  for (const lane of SPACE_LANES) {
+    const sector = raw.laneSectors[lane];
+    if (!isRecord(sector) || !Array.isArray(sector.factionIds)) return reject(`is missing the ${lane} lane sector`);
+    const ids = sector.factionIds.filter((id): id is string => typeof id === 'string' && factionIds.has(id));
+    const dominant = typeof sector.dominantFactionId === 'string' && factionIds.has(sector.dominantFactionId)
+      ? sector.dominantFactionId
+      : null;
+    laneSectors[lane] = { factionIds: ids, dominantFactionId: dominant };
+  }
+
+  return {
+    factions,
+    planets,
+    asteroidBelts,
+    laneSectors,
+    seedAtCreation: Math.floor(asFiniteNumber(raw.seedAtCreation, 0))
+  };
+}
+
+function normalizeLaneProfiles(raw: unknown, warnings: string[]): Record<SpaceLane, LaneProfile> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const profiles = {} as Record<SpaceLane, LaneProfile>;
+  for (const lane of SPACE_LANES) {
+    const entry = raw[lane];
+    if (!isRecord(entry) || !isRecord(entry.weights)) {
+      warnings.push(`laneProfiles.${lane} missing or malformed; lane profiles re-rolled from the saved seed.`);
+      return undefined;
+    }
+    const weights = {} as Record<ShipType, number>;
+    for (const shipType of SHIP_TYPES) weights[shipType] = Math.max(0, asFiniteNumber(entry.weights[shipType], 0));
+    profiles[lane] = {
+      trafficVolume: Math.max(0, asFiniteNumber(entry.trafficVolume, 1)),
+      weights
+    };
+  }
+  return profiles;
+}
+
 function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: string[]): StationSnapshotV1 | null {
   const defaultState = createInitialState();
   const simTime = Math.max(0, asFiniteNumber(snapshotRaw.simTime, 0));
@@ -1767,6 +1980,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         state: ['planned', 'delivering', 'building', 'blocked', 'done'].includes(String(entry.state))
           ? entry.state as NonNullable<StationSnapshotV1['constructionSites']>[number]['state']
           : undefined,
+        blockedReason: typeof entry.blockedReason === 'string' && entry.blockedReason.length > 0
+          ? entry.blockedReason.slice(0, 160)
+          : null,
+        createdAt: Number.isFinite(entry.createdAt) ? Math.max(0, entry.createdAt as number) : undefined,
         structuralProjectId: Number.isFinite(entry.structuralProjectId)
           ? Math.max(1, Math.floor(asFiniteNumber(entry.structuralProjectId, 0)))
           : undefined,
@@ -2537,12 +2754,31 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const openingEconomy = normalizeOpeningEconomyState(snapshotRaw.openingEconomy, warnings);
   const serviceLog = normalizeServiceLog(snapshotRaw.serviceLog as Partial<ServiceLog> | undefined);
 
+  // Procedural identity. A legacy save carries none of this: `seedAtCreation`
+  // stays undefined and hydration falls back to the documented default seed,
+  // exactly as it behaved before this slot existed.
+  const seedAtCreation = Number.isFinite(snapshotRaw.seedAtCreation)
+    ? Math.floor(snapshotRaw.seedAtCreation as number)
+    : undefined;
+  if (seedAtCreation === undefined && snapshotRaw.seedAtCreation !== undefined) {
+    warnings.push('seedAtCreation is not a number; falling back to the default procedural seed.');
+  }
+  const system = normalizeSystemMap(snapshotRaw.system, warnings);
+  const laneProfiles = normalizeLaneProfiles(snapshotRaw.laneProfiles, warnings);
+  const mapConditionVersion = Number.isFinite(snapshotRaw.mapConditionVersion)
+    ? Math.max(0, Math.floor(snapshotRaw.mapConditionVersion as number))
+    : undefined;
+
   return {
     simTime,
     width,
     height,
     mapWorldOriginX,
     mapWorldOriginY,
+    seedAtCreation,
+    system,
+    laneProfiles,
+    mapConditionVersion,
     tiles,
     zones,
     rooms,
@@ -2776,16 +3012,82 @@ function refreshBasicInventoryMetrics(state: StationState): void {
   state.metrics.materials = Math.max(0, state.legacyMaterialStock + rawMaterial);
 }
 
+/**
+ * Put the station back in the system it was chartered in.
+ *
+ * `createInitialState` always rolls a fresh system from its seed, so without
+ * this pass a reload silently relocates a seed-4242 station into the default
+ * seed-1337 system: different factions, different lane weights, a different
+ * map behind the same charter. The snapshot's own copy wins; a legacy save (or
+ * a structurally invalid one) falls back to regenerating from the seed, which
+ * is exactly the behavior that existed before this slot was persisted.
+ */
+function restoreProceduralIdentity(
+  next: StationState,
+  snapshot: StationSnapshotV1,
+  reseeded: boolean,
+  warnings: string[]
+): void {
+  if (reseeded) {
+    warnings.push(
+      `Save was created under seed ${snapshot.seedAtCreation} but is being loaded under seed ${next.seedAtCreation}; `
+      + 'the current system map and lane profiles were kept.'
+    );
+    return;
+  }
+  if (snapshot.seedAtCreation === undefined) {
+    warnings.push(`Legacy save carries no procedural seed; kept the default seed ${next.seedAtCreation}.`);
+  }
+  // laneRoutes is a pure function of the seed, so it comes from a fresh roll
+  // rather than the wire. Everything else comes from the save when it is
+  // structurally sound.
+  const regenerated = generateSystemMap(next.seedAtCreation);
+  if (snapshot.system === null) {
+    next.system = null;
+  } else if (snapshot.system) {
+    next.system = { ...snapshot.system, laneRoutes: regenerated.laneRoutes };
+  } else {
+    next.system = regenerated;
+  }
+  if (snapshot.laneProfiles) {
+    next.laneProfiles = SPACE_LANES.reduce((acc, lane) => {
+      acc[lane] = {
+        trafficVolume: snapshot.laneProfiles![lane].trafficVolume,
+        weights: { ...snapshot.laneProfiles![lane].weights }
+      };
+      return acc;
+    }, {} as Record<SpaceLane, LaneProfile>);
+  }
+  // Never move the overlay cache token backwards: the renderer may already
+  // hold tiles keyed to a higher version from this session.
+  next.mapConditionVersion = Math.max(
+    MAP_CONDITION_VERSION,
+    snapshot.mapConditionVersion ?? MAP_CONDITION_VERSION
+  );
+}
+
 export function hydrateStateFromSave(
   save: StationSaveEnvelopeV1,
   options?: { seed?: number }
 ): { state: StationState; warnings: string[] } {
-  const next = createInitialState(options);
-  const warnings: string[] = [];
   const snapshot = save.snapshot;
+  const warnings: string[] = [];
+  // Procedural identity comes from the save unless the caller deliberately
+  // forces another seed. main.ts's ordinary Load path passes no seed, so a
+  // chartered station reloads into its own system instead of the default one.
+  // The starter-layout path *does* pass a seed on purpose: it is importing a
+  // template into the seed the current game already booted on.
+  const reseeded = options?.seed !== undefined
+    && snapshot.seedAtCreation !== undefined
+    && options.seed !== snapshot.seedAtCreation;
+  const next = createInitialState({
+    ...options,
+    seed: options?.seed ?? snapshot.seedAtCreation
+  });
   next.now = snapshot.simTime;
   // Restore the chartered site profile if present (absent on legacy saves).
   next.site = snapshot.site;
+  restoreProceduralIdentity(next, snapshot, reseeded, warnings);
 
   if (snapshot.width !== next.width || snapshot.height !== next.height) {
     throw new Error(
@@ -2894,29 +3196,40 @@ export function hydrateStateFromSave(
       return Math.max(max, ...ids, 1);
     }, 1)
   );
-  next.constructionSites = snapshot.constructionSites.map((site) => ({
-    id: site.id ?? next.constructionSiteSpawnCounter++,
-    kind: site.kind,
-    tileIndex: site.tileIndex,
-    targetTile: site.targetTile,
-    targetModule: site.targetModule,
-    rotation: site.rotation,
-    requiredMaterials: site.requiredMaterials,
-    deliveredMaterials: Math.min(site.requiredMaterials, site.deliveredMaterials),
-    buildProgress: Math.min(site.buildWorkRequired, site.buildProgress),
-    buildWorkRequired: site.buildWorkRequired,
-    requiresEva: site.requiresEva,
-    assignedCrewId: null,
-    state: site.state === 'done'
-      ? 'done'
-      : site.deliveredMaterials >= site.requiredMaterials
-        ? 'building'
-        : 'planned',
-    blockedReason: null,
-    createdAt: next.now,
-    structuralProjectId: site.structuralProjectId,
-    structuralStage: site.structuralStage
-  }));
+  next.constructionSites = snapshot.constructionSites.map((site) => {
+    const deliveredMaterials = Math.min(site.requiredMaterials, site.deliveredMaterials);
+    const materialsMet = deliveredMaterials >= site.requiredMaterials;
+    return {
+      id: site.id ?? next.constructionSiteSpawnCounter++,
+      kind: site.kind,
+      tileIndex: site.tileIndex,
+      targetTile: site.targetTile,
+      targetModule: site.targetModule,
+      rotation: site.rotation,
+      requiredMaterials: site.requiredMaterials,
+      deliveredMaterials,
+      buildProgress: Math.min(site.buildWorkRequired, site.buildProgress),
+      buildWorkRequired: site.buildWorkRequired,
+      requiresEva: site.requiresEva,
+      // Ownership is transient: a worker may resume this site or another may
+      // take it over, but the assignment itself is never carried across a load.
+      assignedCrewId: null,
+      // A blocked site stays blocked and keeps saying why. Only the two states
+      // that are pure functions of delivered materials get recomputed, so a
+      // save taken mid-stall does not reload looking like fresh work.
+      state: site.state === 'done'
+        ? 'done'
+        : site.state === 'blocked'
+          ? 'blocked'
+          : materialsMet
+            ? 'building'
+            : 'planned',
+      blockedReason: site.state === 'blocked' ? site.blockedReason ?? null : null,
+      createdAt: site.createdAt ?? next.now,
+      structuralProjectId: site.structuralProjectId,
+      structuralStage: site.structuralStage
+    };
+  });
   next.constructionSiteSpawnCounter = Math.max(
     next.constructionSiteSpawnCounter,
     ...next.constructionSites.map((site) => site.id + 1)
@@ -3389,6 +3702,10 @@ export function hydrateStateFromSave(
     next.crewMembers.reduce((max, crew) => Math.max(max, crew.id + 1), 1)
   );
   rebuildPassengerTransfersAfterHydration(next);
+  // Lodging claims survive the save but their exclusivity reservations do not.
+  // Re-establish exactly one owner per bunk before the reconciliation tick, so
+  // the tick never sees two guests holding the same bed.
+  reconcileTemporaryLodgingClaims(next, warnings);
   tick(next, 0);
 
   // The final reconciliation tick refreshes derived facility state, but it
