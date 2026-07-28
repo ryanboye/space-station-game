@@ -225,6 +225,15 @@ function removeBoundaryAirlocks(state: StationState): void {
   assertCondition(resumedProject?.phase === project.phase, 'Save/resume must preserve the active structural phase.');
   assertCondition(resumedProject.deliveredMaterials === project.deliveredMaterials, 'Save/resume must preserve material accounting.');
   assertCondition(resumed.constructionSites.some((site) => site.structuralProjectId === resumedProject.id), 'Save/resume must retain the active linked work sites.');
+  // Loads intentionally open paused. Model the player resuming construction.
+  resumed.controls.paused = false;
+  for (let step = 0; step < 8000 && !resumedProject.commissioned; step++) tick(resumed, 0.1);
+  assertCondition(resumedProject.commissioned, 'A resumed EVA crew must complete every delivery, weld, seal check, and commission the wing.');
+  for (let step = 0; step < 400; step++) tick(resumed, 0.1);
+  assertCondition(
+    resumed.crewMembers.every((crew) => !crew.evaSuit || resumed.tiles[crew.tileIndex] === TileType.Airlock),
+    'Idle EVA workers must return through an Airlock after the project finishes.'
+  );
 }
 
 // Completion visibly advances perimeter -> interior -> seal check and only

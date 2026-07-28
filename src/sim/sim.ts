@@ -2611,7 +2611,15 @@ export function getCrewFacilityReachability(state: StationState): CrewFacilityRe
     }
   }
 
-  const crewRegions = state.crewMembers.map((crew) => region[crew.tileIndex] ?? -1);
+  // A suited worker on an EVA route is intentionally outside the walkable
+  // interior network. Do not diagnose that as a sealed-off crew wing.
+  const crewRegions = state.crewMembers
+    .filter((crew) => !(
+      crew.evaSuit &&
+      state.tiles[crew.tileIndex] !== TileType.Airlock &&
+      isEvaTraversalTile(state, crew.tileIndex)
+    ))
+    .map((crew) => region[crew.tileIndex] ?? -1);
   const crewTotal = crewRegions.length;
   const summarize = (
     facility: CrewFacilityReachability['facility'],
@@ -17835,6 +17843,40 @@ function findRepairPath(state: StationState, crewTile: number, job: StationState
   return best;
 }
 
+/**
+ * A construction courier can finish one EVA site while still outside. Its
+ * next delivery must route back through an Airlock before ordinary interior
+ * pathfinding can reach the material source.
+ */
+function findConstructionMaterialPath(
+  state: StationState,
+  crewTile: number,
+  sourceTile: number,
+  site: ConstructionSite
+): number[] | null {
+  if (!site.requiresEva || !isEvaTraversalTile(state, crewTile) || state.tiles[crewTile] === TileType.Airlock) {
+    return findPath(
+      state,
+      crewTile,
+      sourceTile,
+      { allowRestricted: true, intent: 'logistics' },
+      state.pathOccupancyByTile
+    );
+  }
+  let best: number[] | null = null;
+  for (const airlock of activeAirlockTiles(state)) {
+    const outside = findSpacePath(state, crewTile, airlock);
+    if (!outside) continue;
+    const inside =
+      findPath(state, airlock, sourceTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ??
+      findPath(state, airlock, sourceTile, { allowRestricted: true, intent: 'logistics' });
+    if (!inside) continue;
+    const combined = [...outside, ...inside];
+    if (!best || combined.length < best.length) best = combined;
+  }
+  return best;
+}
+
 function commandTerminalTypeForRole(role: StaffRole): ModuleType | null {
   if (role === 'captain') return ModuleType.CaptainConsole;
   return SPECIALTY_DEFINITIONS.find((def) => def.officerRole === role)?.terminal ?? null;
@@ -18575,8 +18617,10 @@ function assignJobsToIdleCrew(state: StationState): void {
       rankedJobs.sort((a, b) => b.approximateScore - a.approximateScore || a.job.id - b.job.id);
       for (const { job, site } of rankedJobs.slice(0, JOB_ASSIGNMENT_SHORTLIST_SIZE)) {
         let path =
-          job.type === 'construct' && job.constructionMode === 'build' && site
-            ? findConstructionPath(state, crew.tileIndex, site)
+          job.type === 'construct' && site
+            ? job.constructionMode === 'build'
+              ? findConstructionPath(state, crew.tileIndex, site)
+              : findConstructionMaterialPath(state, crew.tileIndex, job.fromTile, site)
             : job.type === 'repair'
               ? findRepairPath(state, crew.tileIndex, job)
               : findPath(
@@ -18588,8 +18632,10 @@ function assignJobsToIdleCrew(state: StationState): void {
                 );
         if (!path && (ownLane || staffRoleWorkLane(crew.staffRole) === lane)) {
           path =
-            job.type === 'construct' && job.constructionMode === 'build' && site
-              ? findConstructionPath(state, crew.tileIndex, site)
+            job.type === 'construct' && site
+              ? job.constructionMode === 'build'
+                ? findConstructionPath(state, crew.tileIndex, site)
+                : findConstructionMaterialPath(state, crew.tileIndex, job.fromTile, site)
               : job.type === 'repair'
                 ? findRepairPath(state, crew.tileIndex, job)
                 : findPath(state, crew.tileIndex, jobWorkTile(state, job), { allowRestricted: true, intent: 'logistics' });
@@ -20001,7 +20047,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             const targetSite = crew.carryingAmount > 0;
             const nextPath = targetSite
               ? findConstructionPath(state, crew.tileIndex, site)
-              : findPath(state, crew.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile);
+              : findConstructionMaterialPath(state, crew.tileIndex, job.fromTile, site);
             if (crew.path.length === 0) setCrewPath(state, crew, nextPath ?? []);
             if (crew.path.length === 0) {
               const reason = targetSite && site.requiresEva ? 'no EVA route' : targetSite ? 'stalled_unreachable_dropoff' : 'stalled_unreachable_source';

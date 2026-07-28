@@ -525,7 +525,7 @@ audited checklist with no unsupported checked claims.
 
 ### Phase 3 Gate
 
-- [ ] Build a complete pressurized wing from a live starter.
+- [x] Build a complete pressurized wing from a live starter.
 - [x] No Airlock visibly blocks exterior work.
 - [ ] Missing material visibly blocks work.
 - [ ] Exterior module installation uses EVA.
@@ -848,7 +848,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Experience one successful short-stay flow.
 - [ ] Experience and recover from one failed long stay.
 - [ ] Build temporary guest lodging.
-- [ ] Build a physical expansion through EVA construction.
+- [x] Build a physical expansion through EVA construction.
 - [ ] Build the first medium Berth.
 - [ ] Operate overlapping Pod and Berth traffic.
 - [ ] Separate a harmful public/cargo route.
@@ -1257,3 +1257,11 @@ Remaining uncertainty:
 - Live-browser observation: `?scenario=opening-supplies-cycle` pauses after a staffed Checkout Bank consumes physical Shelf Aisle stock and records a paid sale. `?scenario=opening-refuel-cycle` pauses after a supplier pod fills a piped Fuel Tank and an ordinary pod consumes four units for a paid refuel. The Refuel card remains `operational` after that sale, and the Global Goal reads `Open Food, Supplies, or Refuel · 1/1`.
 - Design correction: recipe stock rows remain healthy replenishment targets, while operational status now means the machine can serve its next customer. One normal sale can no longer erase the player's completed opening choice.
 - Remaining uncertainty: Gate A still needs a hands-on normal-start construction pass at a small viewport and a second clearly authored Refuel layout choice; the three production cycles themselves are now directly inspectable rather than inferred from tests.
+
+2026-07-28 · Live EVA expansion completion and resumed-worker routing
+
+- Commit or files: `src/sim/sim.ts`, `tools/structural-expansion-tests.ts`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Correctness fix: after completing an exterior site, an EVA courier can now route back through an active Airlock to collect the next construction kit instead of asking interior pathfinding to cross open space. Suited workers intentionally outside on an active EVA route are excluded from crew-facility reachability warnings, preventing a false sealed-wing diagnosis while they work.
+- Focused evidence: `npm run test:structural-expansion` passes. The runner saves a partially delivered structural project, hydrates it in the intentionally paused load state, resumes play, completes every perimeter/interior/seal job, atomically commissions the wing, and verifies idle EVA workers return through an Airlock.
+- Live-browser evidence: `?scenario=structural-expansion-active` was reloaded from the normal starter-derived fixture and run at 4x. Its visible Work Queue fell from seven construction jobs to two and then `No queued work`; the exterior project commissioned without a stranded worker or false crew-quarters alert.
+- Remaining uncertainty: the fixture begins with its valid Truss patch already placed, so visible player-built Truss welding remains open. Dedicated live captures are still required for low EVA oxygen, obstructed work position, and the subjective first-expansion presentation claim.
