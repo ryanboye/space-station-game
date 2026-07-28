@@ -830,7 +830,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] Cache structure by topology/structure version.
 - [x] Cache approach groups by interface geometry version.
-- [ ] Recompute interface diagnoses only after relevant change or sustained
+- [x] Recompute interface diagnoses only after relevant change or sustained
   traffic interval.
 - [x] Resolve movement intents in a batch.
 - [ ] Update congestion fields at fixed cadence.
@@ -1446,3 +1446,9 @@ Remaining uncertainty:
 - Docking Clamp evidence: a valid modern medium Berth with one depicted clamp is rejected with the exact two-clamp requirement; installing the second makes the otherwise-identical candidate eligible. A valid large Berth is rejected at four clamps with the exact five-clamp requirement and becomes eligible only after the fifth physical clamp is installed.
 - Occupancy evidence: the approach-envelope runner binds the accepted craft to its stable physical slot, preserves that commitment over save/load, and requires `occupiedByShipId` to remain authoritative for the parked slot until departure completes. `test:approach-control`, `test:approach-envelopes`, and the focused Pod Dock/Clamp port groups pass.
 - Preservation boundary: the complete port-ops runner now clears eighteen groups, including the deliberately unfinished six-crew starter and explicit supplier/refuel fixtures, before reaching an older ambient-offer timing assumption in its automation group. No production claim in this checkpoint depends on that later unrelated group.
+
+2026-07-28 · Relevant-change interface-diagnosis cache
+
+- Commits or files: per-station cache and narrow statistics seam in `src/sim/interface-diagnosis.ts`; focused invalidation/isolation matrix in `tools/interface-diagnosis-tests.ts`.
+- Cache contract: repeated UI-style reads of one Dock/Berth identity return the exact same diagnosis object while topology, rooms, modules, docks, selected ship/contract, passenger transfer/service state, and interface-owned cargo work remain unchanged. Irrelevant credit churn does not rebuild it. Active interfaces receive a bounded two-second refresh so time-threshold waits cannot remain stale; idle interfaces remain cached until relevant state changes.
+- Focused evidence: `test:interface-diagnosis` proves one build and two hits across repeated reads/economy churn; immediate rebuild for topology, Door queue, blocked late boarding, cargo reroute, and approach commitment changes; a 20-second transfer-wait threshold discovered on the next traffic bucket; and strict isolation between StationState instances and interface identities. The signature scans only cargo handlers owned by the selected ship rather than every actor route.

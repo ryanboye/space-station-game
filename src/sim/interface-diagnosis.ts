@@ -50,6 +50,124 @@ const PUBLIC_ROOMS = new Set<RoomType>([
 ]);
 
 const ACTIVE_JOB_STATES = new Set<TransportJob['state']>(['pending', 'assigned', 'in_progress']);
+const DIAGNOSIS_TRAFFIC_REFRESH_SECONDS = 2;
+
+type CachedInterfaceDiagnosis = {
+  relevantSignature: string;
+  trafficBucket: number;
+  diagnosis: InterfaceDiagnosis;
+};
+
+const diagnosisCache = new WeakMap<StationState, Map<string, CachedInterfaceDiagnosis>>();
+const diagnosisCacheStats = {
+  hits: 0,
+  builds: 0
+};
+
+export interface InterfaceDiagnosisCacheStats {
+  hits: number;
+  builds: number;
+}
+
+export function getInterfaceDiagnosisCacheStats(): InterfaceDiagnosisCacheStats {
+  return { ...diagnosisCacheStats };
+}
+
+export function resetInterfaceDiagnosisCacheForTests(state: StationState): void {
+  diagnosisCacheStats.hits = 0;
+  diagnosisCacheStats.builds = 0;
+  diagnosisCache.delete(state);
+}
+
+function identityKey(identity: InterfaceIdentity): string {
+  return identity.kind === 'dock' ? `dock:${identity.dockId}` : `berth:${identity.anchorTile}`;
+}
+
+function interfaceShip(state: StationState, identity: InterfaceIdentity): ArrivingShip | null {
+  return state.arrivingShips.find((ship) =>
+    ship.stage !== 'depart' &&
+    (identity.kind === 'dock'
+      ? ship.assignedDockId === identity.dockId
+      : ship.assignedBerthAnchor === identity.anchorTile)
+  ) ?? null;
+}
+
+/**
+ * This deliberately fingerprints only data capable of changing the selected
+ * interface diagnosis. In particular it does not walk every actor route; only
+ * cargo handlers assigned to this interface's live ship contribute paths.
+ */
+function relevantChangeSignature(
+  state: StationState,
+  identity: InterfaceIdentity
+): { value: string; sustainedTraffic: boolean } {
+  const ship = interfaceShip(state, identity);
+  const shipId = ship?.id;
+  const contract = shipId === undefined
+    ? null
+    : state.portOps.contracts.find((candidate) => candidate.shipId === shipId) ?? null;
+  const passengers = shipId === undefined
+    ? []
+    : state.visitors
+      .filter((visitor) => visitor.originShipId === shipId)
+      .sort((a, b) => a.id - b.id)
+      .map((visitor) => [
+        visitor.id,
+        visitor.transferPhase ?? '',
+        visitor.transferQueueTile ?? '',
+        visitor.transferBlockedTile ?? '',
+        visitor.transferQueuedAt ?? '',
+        visitor.queueProviderTile ?? '',
+        visitor.queueJoinedAt ?? '',
+        visitor.serviceBlockedSince ?? '',
+        visitor.tileIndex
+      ].join(','))
+      .join(';');
+  const cargoJobs = shipId === undefined
+    ? []
+    : state.jobs
+      .filter((job) =>
+        job.portShipId === shipId &&
+        job.portCargoDirection !== undefined &&
+        ACTIVE_JOB_STATES.has(job.state)
+      )
+      .sort((a, b) => a.id - b.id)
+      .map((job) => {
+        const handler = state.crewMembers.find((crew) => crew.activeJobId === job.id);
+        return [
+          job.id,
+          job.state,
+          job.fromTile,
+          job.toTile,
+          job.stallReason ?? '',
+          handler?.id ?? '',
+          handler?.path.join('.') ?? ''
+        ].join(',');
+      })
+      .join(';');
+
+  return {
+    value: [
+      state.topologyVersion,
+      state.roomVersion,
+      state.moduleVersion,
+      state.dockVersion,
+      state.width,
+      state.height,
+      ship?.id ?? '',
+      ship?.stage ?? '',
+      ship?.assignedDockId ?? '',
+      ship?.assignedBerthAnchor ?? '',
+      ship?.approachCommitment?.status ?? '',
+      ship?.approachCommitment?.queuedAt ?? '',
+      contract?.status ?? '',
+      contract?.hardDepartureAt ?? '',
+      passengers,
+      cargoJobs
+    ].join('|'),
+    sustainedTraffic: ship !== null
+  };
+}
 
 function tileLabel(state: StationState, tile: number): string {
   const { x, y } = fromIndex(tile, state.width);
@@ -155,7 +273,7 @@ function unavailableDiagnosis(context: InterfaceContext | null): InterfaceDiagno
  * interface. It deliberately reads current actors, jobs, queues and routes;
  * it does not store a score or create a second operations dashboard.
  */
-export function deriveInterfaceDiagnosis(state: StationState, identity: InterfaceIdentity): InterfaceDiagnosis {
+function computeInterfaceDiagnosis(state: StationState, identity: InterfaceIdentity): InterfaceDiagnosis {
   const context = contextFor(state, identity);
   if (!context) return unavailableDiagnosis(context);
   const passengers = passengersFor(state, context.ship);
@@ -355,4 +473,30 @@ export function deriveInterfaceDiagnosis(state: StationState, identity: Interfac
     implicatedTile: context.accessTiles[0] ?? context.anchorTile,
     metricCode: 'healthy'
   };
+}
+
+export function deriveInterfaceDiagnosis(state: StationState, identity: InterfaceIdentity): InterfaceDiagnosis {
+  let stateCache = diagnosisCache.get(state);
+  if (!stateCache) {
+    stateCache = new Map();
+    diagnosisCache.set(state, stateCache);
+  }
+  const key = identityKey(identity);
+  const relevant = relevantChangeSignature(state, identity);
+  const trafficBucket = relevant.sustainedTraffic
+    ? Math.floor(state.now / DIAGNOSIS_TRAFFIC_REFRESH_SECONDS)
+    : 0;
+  const cached = stateCache.get(key);
+  if (
+    cached &&
+    cached.relevantSignature === relevant.value &&
+    cached.trafficBucket === trafficBucket
+  ) {
+    diagnosisCacheStats.hits += 1;
+    return cached.diagnosis;
+  }
+  const diagnosis = computeInterfaceDiagnosis(state, identity);
+  diagnosisCacheStats.builds += 1;
+  stateCache.set(key, { relevantSignature: relevant.value, trafficBucket, diagnosis });
+  return diagnosis;
 }
