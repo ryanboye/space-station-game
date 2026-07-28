@@ -406,10 +406,10 @@ function testEveryDepictedPositionIsReservable(): string {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Reception helps without gating
+// 9. Reception reveals demand without gating
 // ---------------------------------------------------------------------------
 
-function testReceptionHelpsAndNeverGates(): string {
+function testReceptionRevealsAndNeverGates(): string {
   const without = scenario('reception-absent');
   const withDesk = scenario('reception-staffed');
 
@@ -453,13 +453,21 @@ function testReceptionHelpsAndNeverGates(): string {
   const processed = arrivals(withDesk).filter(
     (visitor) => visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined
   ).length;
-  // KNOWN GAP: guests are not yet walking to the desk in this fixture, so the
-  // reveal-on-processing path is unproven end to end. What IS asserted here is
-  // everything that must hold regardless: the desk is optional, an unstaffed
-  // one offers nothing and says why, and no guest's full itinerary is exposed.
   assert(
-    revealedWith >= revealedWithout,
-    `A staffed desk must never reveal LESS than no desk (${revealedWithout} vs ${revealedWith}).`
+    processed > 0,
+    'A staffed desk must physically process at least one of the identical arrivals.'
+  );
+  assert(
+    revealedWith > revealedWithout,
+    `A staffed desk must reveal demand earlier than no desk (${revealedWithout} vs ${revealedWith}).`
+  );
+  assert(
+    revealedWith === revealedBefore + processed,
+    `Each completed desk session must reveal exactly one additional want (${revealedBefore} + ${processed} != ${revealedWith}).`
+  );
+  assert(
+    processed < arrivals(withDesk).length,
+    'Finite Reception capacity must leave some traffic on the ordinary bypass path.'
   );
 
   // And it must never publish the whole itinerary.
@@ -472,16 +480,13 @@ function testReceptionHelpsAndNeverGates(): string {
   const fullyExposed = arrivals(withDesk).filter(
     (visitor) => (visitor.revealedServices?.length ?? 0) >= visitor.servicePlan.length && visitor.servicePlan.length > 1
   ).length;
-  assert(
-    fullyExposed < arrivals(withDesk).length,
-    'Reception must never expose every guest\'s complete itinerary.'
-  );
+  assert(fullyExposed === 0, 'Reception must reveal part of demand, never a guest\'s complete itinerary.');
 
   // Bypass: the deskless station keeps moving just as well.
   assert(without.now > 0 && withDesk.now > 0, 'Both layouts must keep simulating.');
 
   return `identical arrivals: wants known after 40s ${revealedWithout} without a desk vs ${revealedWith} with one `
-    + `(${processed} processed, from ${revealedBefore} at spawn — reveal-on-processing NOT yet demonstrated); `
+    + `(${processed} processed, ${arrivals(withDesk).length - processed} bypassed, one additional want revealed per session); `
     + `unstaffed variant reports '${unstaffedStatus.blockedReason}' and offers 0 positions, so arrivals bypass it`;
 }
 
@@ -593,7 +598,7 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '5 connected bar geometry', run: testConnectedBarGeometry },
   { name: '6+7 throughput vs dwell, dry vs staffed', run: testThroughputAndDwellAreIndependent },
   { name: '8 every depicted position reservable', run: testEveryDepictedPositionIsReservable },
-  { name: '9 reception helps without gating', run: testReceptionHelpsAndNeverGates },
+  { name: '9 reception reveals without gating', run: testReceptionRevealsAndNeverGates },
   { name: '10 long-stay repeat sessions', run: testLongStayWingSupportsRepeatSessions },
   { name: '11 save/load rebuilds fixtures', run: testSaveLoadRebuildsFixtures }
 ];

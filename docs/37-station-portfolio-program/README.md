@@ -40,6 +40,11 @@ Read these before implementing a package:
     reconstruction, and normal-scale resume evidence.
 11. `13-gate-f-facility-scale-and-reception-handoff.md` - the follow-on large
     facility, market, cantina, physical-slot, and optional Reception tranche.
+12. `14-gate-f-facility-art-handoff.md` - exact curated artwork dimensions,
+    depicted-position counts, state variants, and safe atlas workflow.
+13. `15-gate-g-commitment-recovery-admission-handoff.md` - the next large
+    implementation tranche: long-stay pressure, explicit recovery, Approach
+    Control forecasting, and finite admission policy.
 
 Code is the source of truth when implementation and prose disagree. Report the
 conflict instead of silently choosing a new product direction.

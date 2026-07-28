@@ -1437,8 +1437,10 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   'reception-absent': (s) => {
     readyFacilityScenario(s);
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
-    placeFixture(s, ModuleType.BoothBank, 43, 50);
-    placeFixture(s, ModuleType.StandingRail, 46, 50);
+    placeFixture(s, ModuleType.Couch, 43, 50);
+    placeFixture(s, ModuleType.Couch, 43, 52);
+    placeFixture(s, ModuleType.GameStation, 46, 50);
+    placeFixture(s, ModuleType.GameStation, 46, 52);
     tick(s, 0);
     // Mixed demand: three different wants arriving together, and nobody to ask.
     stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['leisure', 'drink', 'comfort'], 99500);
@@ -1453,8 +1455,10 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   'reception-staffed': (s) => {
     readyFacilityScenario(s);
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
-    placeFixture(s, ModuleType.BoothBank, 43, 50);
-    placeFixture(s, ModuleType.StandingRail, 46, 50);
+    placeFixture(s, ModuleType.Couch, 43, 50);
+    placeFixture(s, ModuleType.Couch, 43, 52);
+    placeFixture(s, ModuleType.GameStation, 46, 50);
+    placeFixture(s, ModuleType.GameStation, 46, 52);
     placeFixture(s, ModuleType.ArrivalDesk, 50, 50);
     tick(s, 0);
     // The SAME arrivals as `reception-absent`, same ids and same wants.
@@ -2653,6 +2657,11 @@ function readyFacilityScenario(state: StationState): void {
   state.metrics.credits = 6000;
   state.metrics.materials = 400;
   state.pressurized.fill(true);
+  // These are controlled before/after facility comparisons. Ambient pod
+  // traffic adds unrelated food and departure failures after the first bank,
+  // obscuring the authored shoppers and guests the scenario is measuring.
+  state.controls.manualTrafficAdmission = true;
+  state.controls.portAutoAdmitEnabled = false;
 }
 
 export function applyColdStartScenario(

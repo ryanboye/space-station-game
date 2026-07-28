@@ -2411,7 +2411,7 @@ const CANTINA_BAR_MODULES = new Set<ModuleType>([
 
 function isCantinaBarServiceTile(state: StationState, tileIndex: number): boolean {
   return state.rooms[tileIndex] === RoomType.Cantina &&
-    CANTINA_BAR_MODULES.has(state.modules[tileIndex]) &&
+    CANTINA_BAR_MODULES.has(moduleAtTile(state, tileIndex)?.type ?? state.modules[tileIndex]) &&
     collectCantinaBarTargets(state).includes(tileIndex);
 }
 
@@ -21175,7 +21175,7 @@ function assignPathToCantinaPickup(state: StationState, visitor: Visitor): boole
   return false;
 }
 
-const RECEPTION_REVEAL_COUNT = 2;
+const RECEPTION_REVEAL_COUNT = 1;
 
 /**
  * Show one more of a guest's wants.
@@ -21186,8 +21186,9 @@ const RECEPTION_REVEAL_COUNT = 2;
  */
 function revealVisitorServices(visitor: Visitor, count: number): void {
   const revealed = visitor.revealedServices ?? [];
+  const targetCount = Math.min(visitor.servicePlan.length, revealed.length + Math.max(0, count));
   for (const service of visitor.servicePlan) {
-    if (revealed.length >= (visitor.revealedServices?.length ?? 0) + count) break;
+    if (revealed.length >= targetCount) break;
     if (!revealed.includes(service)) revealed.push(service);
   }
   visitor.revealedServices = revealed;
@@ -22624,7 +22625,11 @@ function updateVisitorLogic(
         hasActiveDrinkPickupReservation(state, 'visitor', visitor.id, visitor.tileIndex) &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
       const needsDrinkPickup = visitor.activeService === 'drink' && !visitor.carryingDrink;
-      const currentModule = state.modules[visitor.tileIndex];
+      // Large fixtures expose usable positions across their whole footprint,
+      // while `state.modules` only stores the type at the origin tile. Resolve
+      // through occupancy so a depicted processor/register/shelf position is
+      // recognized no matter which footprint tile it occupies.
+      const currentModule = moduleAtTile(state, visitor.tileIndex)?.type ?? state.modules[visitor.tileIndex];
       const atLoungeModule =
         currentModule === ModuleType.Couch ||
         currentModule === ModuleType.GameStation ||
@@ -22692,6 +22697,7 @@ function updateVisitorLogic(
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
       if (
         atLoungeModule ||
+        atArrivalDesk ||
         atMarketModule ||
         atCheckoutBank ||
         atTemporarySleep ||
@@ -22806,13 +22812,15 @@ function updateVisitorLogic(
         // ahead of behaviour, and it reveals part of the plan, never all of it.
         // Recomputed here because the arrival-side flag lives in the sibling
         // block that starts the dwell.
+        const completedModule = moduleAtTile(state, visitor.tileIndex)?.type ?? state.modules[visitor.tileIndex];
         const completedReception =
-          state.modules[visitor.tileIndex] === ModuleType.ArrivalDesk &&
+          completedModule === ModuleType.ArrivalDesk &&
           (visitor.receptionProcessedAt === null || visitor.receptionProcessedAt === undefined);
         if (completedReception) {
           completeReceptionSession(state, visitor);
           visitor.state = VisitorState.ToLeisure;
           assignPathToLeisure(state, visitor);
+          keep.push(visitor);
           continue;
         }
         const completedTemporarySleep =
@@ -22840,7 +22848,7 @@ function updateVisitorLogic(
         }
 
         const completedMarketBrowse =
-          state.modules[visitor.tileIndex] === ModuleType.ShelfAisle &&
+          completedModule === ModuleType.ShelfAisle &&
           visitor.marketTradeGoodSourceTile !== null &&
           visitor.marketTradeGoodSourceTile !== undefined &&
           visitor.reservedTargetTile === visitor.tileIndex;
@@ -22856,7 +22864,7 @@ function updateVisitorLogic(
         }
 
         const completedMarketCheckout =
-          state.modules[visitor.tileIndex] === ModuleType.CheckoutBank &&
+          completedModule === ModuleType.CheckoutBank &&
           visitor.marketTradeGoodSourceTile !== null &&
           visitor.marketTradeGoodSourceTile !== undefined &&
           visitor.reservedTargetTile === visitor.tileIndex;

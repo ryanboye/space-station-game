@@ -290,7 +290,7 @@ audited checklist with no unsupported checked claims.
   cafeteria behavior.
 - [ ] Give every active need/want a physical slot and duration.
 - [x] Prevent two actors from owning one exclusive use slot.
-- [ ] Make depicted table seats individually reservable.
+- [x] Make depicted table seats individually reservable.
 - [x] Make bed positions individually claimable for a sleep session.
 - [x] Support temporary bed claims separately from permanent home assignment.
 - [ ] Make hygiene fixtures hold exclusive sessions for visible durations.
@@ -300,12 +300,12 @@ audited checklist with no unsupported checked claims.
 
 ### Market Depth
 
-- [ ] Replace unlimited one-tile Market Stall behavior with limited checkout
+- [x] Replace unlimited one-tile Market Stall behavior with limited checkout
   throughput.
 - [x] Add stocked shelf or aisle browsing positions.
 - [x] Require physical inventory for positive market feedback and sales.
 - [x] Add stock collection from visible shelf/display inventory.
-- [ ] Add a staff-side restock route.
+- [x] Add a staff-side restock route.
 - [x] Add a real customer queue at checkout.
 - [ ] Make a second checkout produce a visible throughput improvement.
 - [ ] Make shelf mix or goods category affect demand without creating a checklist.
@@ -313,16 +313,16 @@ audited checklist with no unsupported checked claims.
 
 ### Demand Discovery And Reception
 
-- [ ] Stop exposing a complete pre-rolled itinerary at spawn.
+- [x] Stop exposing a complete pre-rolled itinerary at spawn.
 - [ ] Keep ship-level demand cues strong and learnable.
 - [ ] Reveal individual wants progressively through behavior.
-- [ ] Add optional Reception/Customs processing slots.
-- [ ] Make Reception reveal some demand earlier, never all of it.
+- [x] Add optional Reception/Customs processing slots.
+- [x] Make Reception reveal some demand earlier, never all of it.
 - [ ] Allow unprocessed occupants to enter and make a plausible choice.
 - [ ] Bound wrong-choice behavior to a readable redirect rather than random
   wandering.
 - [ ] Show the need or realization that caused redirection.
-- [ ] Make saturated Reception bypassable rather than a hard arrival gate.
+- [x] Make saturated Reception bypassable rather than a hard arrival gate.
 - [ ] Demonstrate that Reception improves routing in a mixed-demand crowd.
 
 ### Large Functional Modules
@@ -332,24 +332,24 @@ audited checklist with no unsupported checked claims.
 - [x] Implement tileable Shelf Aisle, initial target 1x4.
 - [x] Give Shelf Aisle three visible browsing positions.
 - [ ] Implement Display or Cold Case, initial target 1x3.
-- [ ] Implement Backroom Stock Bank, initial target 2x3.
-- [ ] Implement Service Bar, initial target 2x5.
-- [ ] Give Service Bar a staff lane and four guest service positions.
-- [ ] Implement Bar Corner and End pieces, initial target 2x2.
-- [ ] Group connected bar runs into one provider system.
-- [ ] Implement Booth Bank, initial target 2x4.
-- [ ] Implement Standing Rail, initial target 1x4.
-- [ ] Implement Serving Line, initial target 2x5.
-- [ ] Implement Community Table, initial target 3x4 with eight depicted seats.
+- [x] Implement Backroom Stock Bank, initial target 2x3.
+- [x] Implement Service Bar, initial target 2x5.
+- [x] Give Service Bar a staff lane and four guest service positions.
+- [x] Implement Bar Corner and End pieces, initial target 2x2.
+- [x] Group connected bar runs into one provider system.
+- [x] Implement Booth Bank, initial target 2x4.
+- [x] Implement Standing Rail, initial target 1x4.
+- [x] Implement Serving Line, initial target 2x5.
+- [x] Implement Community Table, initial target 3x4 with eight depicted seats.
 - [x] Implement Bunk Bank, initial target 2x4 with four temporary beds.
-- [ ] Implement Guest Cabin, initial target 3x4 with two quality beds.
-- [ ] Implement Arrival Desk, initial target 2x4 with two processors.
-- [ ] Implement Wash Bank, initial target 2x5.
-- [ ] Validate every footprint at actual play zoom before locking dimensions.
+- [x] Implement Guest Cabin, initial target 3x4 with two quality beds.
+- [x] Implement Arrival Desk, initial target 2x4 with two processors.
+- [x] Implement Wash Bank, initial target 2x5.
+- [x] Validate every footprint at actual play zoom before locking dimensions.
 - [ ] Ensure each fixture has a public use face.
-- [ ] Ensure staffed fixtures have a staff work face.
+- [x] Ensure staffed fixtures have a staff work face.
 - [ ] Ensure stocked fixtures have a delivery/service route.
-- [ ] Give larger fixtures greater absolute capacity and useful staffing
+- [x] Give larger fixtures greater absolute capacity and useful staffing
   efficiency.
 - [ ] Charge larger fixtures through footprint, staffing, stock, utilities,
   cleaning, maintenance, and queue frontage.
@@ -366,7 +366,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Add low-stock/empty state where applicable.
 - [ ] Add dirty state.
 - [ ] Add damaged state.
-- [ ] Add connected straight/corner/end bar rendering.
+- [x] Add connected straight/corner/end bar rendering.
 - [x] Verify sprites in the live game rather than only as source images.
 
 ### Phase 1B Gate
@@ -822,7 +822,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Rebuild structural graphs after load.
 - [ ] Rebuild approach conflict groups after load.
 - [ ] Rebuild congestion and movement intents after load.
-- [ ] Rebuild interface diagnoses after load.
+- [x] Rebuild interface diagnoses after load.
 - [x] Never persist stale actor paths or transient movement intents.
 - [ ] Preserve maintenance identity through map expansion and module movement.
 
@@ -874,7 +874,7 @@ audited checklist with no unsupported checked claims.
 - [x] Add ship visit/settlement runner.
   Evidence: `npm run test:mixed-berth-visit`.
 - [x] Add occupant tenure/needs runner.
-- [ ] Add fixture-slot/reception runner.
+- [x] Add fixture-slot/reception runner.
 - [x] Add failed-stay/stranding runner.
 - [x] Add movement/queue/deadlock runner.
 - [x] Add cargo/boarding/support runner.
@@ -1281,3 +1281,18 @@ Remaining uncertainty:
 - Live-browser evidence: inspected `?scenario=normal-scale-50&diag=1&seed=915502` at Fit Station zoom and 4x. The station remained legible with two reactor cells, the observatory solar field, eight legal Pod Docks, both Berths, and dense crew/visitor traffic. The guaranteed mixed call progressed from zero to four to all ten inbound units unloaded and reached `OPEN`; observed occupancy moved from 73 to 63 to 51 visitors while departures recovered to four per minute, without a persistent exit-backup warning at cargo completion.
 - Design and correctness notes: the scenario now seeds near-full physical storage after demo migration instead of relying on the obsolete full legacy stock scalar; the cafeteria is explicitly self-service rather than parking cooks at counters; dock access requires a legal station-interior route; traffic job assignment uses a bounded rotating candidate budget; idle job boards refresh on cadence; and already correctly sized utility-underlay arrays retain identity until a map resize requires rebuilding them.
 - Remaining uncertainty: this authored active fixture is not the required organic start-to-large-station playthrough. The browser observation did not archive raw renderer/rAF sample distributions, and the guaranteed mixed call was observed through cargo completion rather than final passenger settlement. Gate E and Gate F integration review and the final opening-to-large-station report remain open.
+
+2026-07-28 · Gate E durable live-shift integration
+
+- Commits or files: integrated Claude commit `9bdbcc2` as `ebba2d7`; durable reconstruction in `src/sim/save.ts` and `src/sim/save-recovery.ts`; focused coverage in `tools/gate-e-save-resume-tests.ts` and the existing facility-slot runner.
+- Focused evidence: `npm run test:gate-e-save-resume` passes six fixtures. Seed 4242 restores byte-identical system, lane, site, and forecast identity; a partially blocked structural project retains phase, progress, reason, and age; three ships and their passengers preserve a unique approach commitment while four interfaces are re-diagnosed; held cargo remains exactly once, one valid repair job regenerates, and one of three competing bunk claims survives; the 50-crew/54-visitor stress save restores 8 Docks, 2 Berths, 28 jobs, live transfers, no duplicate ownership, and no pathless actors after 20 seconds; a stripped legacy snapshot falls back deterministically and remains playable. `npm run test:facility-slots`, `npm run test:occupant-loop`, `npm run test:mixed-berth-visit`, and `npm run build` also pass on the integrated branch.
+- Review judgment: the ledger checks interface-diagnosis reconstruction because the runner proves it directly. It does not check broad structural-graph, approach-group, congestion, legacy Dock/Berth geometry, or full-playthrough save claims whose present evidence is indirect or too weak.
+- Remaining uncertainty: the Gate E runner's approach-group assertion only proves reconstruction returns a valid count, not a nontrivial conflict topology. Legacy occupant-field defaults and edited/replaced legacy Berth geometry still require dedicated fixtures.
+
+2026-07-28 · Gate F physical-facility integration and lead review
+
+- Commits or files: integrated Claude commit `aa532c7` as `6fc92a5`; shared descriptors and exclusivity in `src/sim/facility-descriptors.ts`, `src/sim/facility-slots.ts`, and `src/sim/facility-machines.ts`; market/bar/reception behavior in `src/sim/sim.ts`; seven scenarios in `src/sim/cold-start-scenarios.ts`; `tools/gate-f-facility-scale-tests.ts`; renderer, palette, atlas, and sprite-key integration.
+- Focused evidence: `npm run test:gate-f-facility` passes nine grouped checks. It proves exclusive slot claims and cleanup, 102 units of market stock conserved through receiving/backroom/shelf/sale, two versus four registers, compact restock crossing versus separated routing, one connected three-piece bar with seven guest and three staff positions, independent service/dwell limits, dry versus stocked service, every depicted large-fixture position, partial Reception reveal with four processed and four bypassed guests, and save/load reconstruction without stale claims or stock duplication. The strengthened Reception check requires physical processing, exactly one additional revealed want per completed session, finite bypass, and zero fully exposed multi-want itineraries.
+- Lead corrections: multi-tile service completion now resolves the placed module through footprint occupancy rather than reading only the origin tile; completed Reception visitors remain in the actor update instead of being dropped; Reception reveals one additional want rather than the whole remaining plan; the comparison uses real Lounge/comfort fixtures and disables unrelated ambient traffic; connected-bar service recognizes every depicted footprint position. `npm run test:normal-scale-operation` remains green at 50 crew/50 visitors with all 10 inbound units handled, seven meals, a queue recovering from 15 to zero, and 8.395 ms simulation p95.
+- Live-browser evidence: inspected `market-compact-conflict`, `market-improved-flow`, `cantina-expanded`, `reception-staffed`, and `long-stay-guest-wing` in the integrated build at the normal viewport with panels hidden. Checkout count, backroom separation, connected Service Bar/Corner/End geometry, Booth/Standing capacity, two Arrival Desk processors, Guest Cabins, Serving Line, Community Table, and Wash Bank are legible at gameplay scale. The staffed Reception comparison was run at 4x after the lead fixes without the earlier false `nowhere to sit` diagnosis.
+- Remaining uncertainty reopened by review: Reception processing/reveal is proven, but measured routing improvement and readable redirection are not; canonical drink completion remains broken for connected-bar seats and optional legacy drinks; Community Table meal truth likely has the same fixture-identity gap; the long-stay showcase contains no authored cohort and its separate room blocks are not a connected service loop; all 46 Gate F PNGs are correctly sized procedural placeholders rather than final curated art; `Fit Station` does not reliably frame the detached scenario blocks. Those claims remain unchecked and are explicit follow-up work.
