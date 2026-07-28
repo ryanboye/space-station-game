@@ -9313,6 +9313,94 @@ function noteResidentConversionResult(state: StationState, result: string, chanc
   state.usageTotals.residentConversionLastShip = ship ? `${ship.shipType} ${ship.size}` : 'none';
 }
 
+function finalizeVisitorResidentConversion(
+  state: StationState,
+  visitor: Visitor,
+  ship: ArrivingShip,
+  residentialDock: DockEntity,
+  housing: { unit: PrivateHousingUnit; pathToBed: number[] }
+): Resident {
+  if (ship.kind === 'transient') {
+    if (ship.originDockId === null) ship.originDockId = ship.assignedDockId;
+    moveShipToDock(state, ship, residentialDock);
+    ship.kind = 'resident_home';
+    ship.stage = 'docked';
+    ship.stageTime = 0;
+  }
+
+  const resident = makeResident(
+    state.residentSpawnCounter++,
+    visitor.tileIndex,
+    state.width,
+    state.rng,
+    ship.id,
+    ship.assignedDockId ?? residentialDock.id,
+    housing.unit.cabinTile,
+    housing.unit.bedModuleId
+  );
+  setResidentPath(state, resident, housing.pathToBed);
+  state.residents.push(resident);
+  if (!ship.residentIds.includes(resident.id)) ship.residentIds.push(resident.id);
+  state.usageTotals.residentConversionSuccesses += 1;
+  recordResidentConversionSuccess(state);
+  state.metrics.residentsConvertedLifetime += 1;
+  return resident;
+}
+
+export interface ExplicitResidentAcceptanceResult {
+  ok: boolean;
+  reason: string;
+  residentId: number | null;
+  homeShipId: number | null;
+}
+
+/**
+ * Explicitly accept one named visitor under the player's open immigration
+ * policy. This is deterministic because the choice itself is the consent
+ * gate; ambient simulation never calls this function.
+ */
+export function acceptVisitorAsResident(
+  state: StationState,
+  visitorId: number
+): ExplicitResidentAcceptanceResult {
+  const acceptance = evaluateResidentAcceptance(state);
+  if (!acceptance.ok) {
+    return { ok: false, reason: acceptance.reason, residentId: null, homeShipId: null };
+  }
+  const visitor = state.visitors.find((entry) => entry.id === visitorId);
+  if (!visitor) {
+    return { ok: false, reason: 'visitor is no longer on station', residentId: null, homeShipId: null };
+  }
+  const ship = visitor.originShipId === null
+    ? null
+    : state.arrivingShips.find((entry) => entry.id === visitor.originShipId) ?? null;
+  if (!ship || ship.stage !== 'docked') {
+    return { ok: false, reason: 'visitor has no docked origin ship', residentId: null, homeShipId: null };
+  }
+  const housing = pickPrivateHousingUnitForResident(state, visitor.tileIndex);
+  if (!housing) {
+    return {
+      ok: false,
+      reason: 'no available private resident bed with hygiene path',
+      residentId: null,
+      homeShipId: ship.id
+    };
+  }
+  const residentialDock = ship.kind === 'resident_home'
+    ? state.docks.find((dock) => dock.id === ship.assignedDockId) ?? null
+    : findResidentialDockForShip(state, ship);
+  if (!residentialDock) {
+    return { ok: false, reason: 'no matching free residential dock', residentId: null, homeShipId: ship.id };
+  }
+
+  state.usageTotals.residentConversionAttempts += 1;
+  const resident = finalizeVisitorResidentConversion(state, visitor, ship, residentialDock, housing);
+  removeOccupantFromStation(state, visitor.id);
+  noteResidentConversionResult(state, 'accepted explicitly', 100, ship);
+  pushCrowdEvent(state, 'info', `Visitor ${visitor.id} accepted as resident ${resident.id} · home ship may depart`);
+  return { ok: true, reason: 'accepted explicitly', residentId: resident.id, homeShipId: ship.id };
+}
+
 function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, ship: ArrivingShip): Resident | null {
   if (ship.stage !== 'docked') return null;
   const housing = pickPrivateHousingUnitForResident(state, visitor.tileIndex);
@@ -9349,30 +9437,7 @@ function maybeConvertVisitorToResident(state: StationState, visitor: Visitor, sh
     return null;
   }
 
-  if (ship.kind === 'transient') {
-    if (ship.originDockId === null) ship.originDockId = ship.assignedDockId;
-    moveShipToDock(state, ship, residentialDock);
-    ship.kind = 'resident_home';
-    ship.stage = 'docked';
-    ship.stageTime = 0;
-  }
-
-  const resident = makeResident(
-    state.residentSpawnCounter++,
-    visitor.tileIndex,
-    state.width,
-    state.rng,
-    ship.id,
-    ship.assignedDockId ?? residentialDock.id,
-    housing.unit.cabinTile,
-    housing.unit.bedModuleId
-  );
-  setResidentPath(state, resident, housing.pathToBed);
-  state.residents.push(resident);
-  ship.residentIds.push(resident.id);
-  state.usageTotals.residentConversionSuccesses += 1;
-  recordResidentConversionSuccess(state);
-  state.metrics.residentsConvertedLifetime += 1;
+  const resident = finalizeVisitorResidentConversion(state, visitor, ship, residentialDock, housing);
   noteResidentConversionResult(state, 'converted', chancePct, ship);
   return resident;
 }
@@ -13541,7 +13606,13 @@ function updateCommitmentMetrics(state: StationState, dt: number): void {
     berthSeconds += Math.max(0, contract.hardDepartureAt - state.now);
     const ship = state.arrivingShips.find((entry) => entry.id === contract.shipId);
     if (!ship) continue;
-    const preview = ship.portManifest ? getTrafficOfferPreview(state, ship.portManifest.id) : null;
+    const preview = ship.portManifest
+      ? getTrafficOfferPreview(state, ship.portManifest.id) ?? previewTrafficOffer({
+          offer: ship.portManifest,
+          interfaces: [],
+          now: state.now
+        })
+      : null;
     if (preview) {
       beds += preview.committedLoad.bedNights;
       meals += preview.committedLoad.meals;
@@ -13595,7 +13666,12 @@ function updateFailureEpisodes(state: StationState): void {
       kind === 'mess' ? 'MESS' : kind === 'complaint' ? 'COMPLAINT' : 'REFUSED WORK',
       kind === 'refusal-to-work' ? '#ff827a' : '#ffad65'
     );
-    void incident;
+    const point = fromIndex(incident.tileIndex, state.width);
+    pushCrowdEvent(
+      state,
+      kind === 'refusal-to-work' ? 'danger' : 'warn',
+      `${kind === 'mess' ? 'Mess' : kind === 'complaint' ? 'Complaint' : 'Refusal to work'} at ${point.x},${point.y} · ${episode.cause}`
+    );
   }
 }
 
@@ -13606,15 +13682,139 @@ function availablePreparedMeals(state: StationState): number {
   return total;
 }
 
-/** Free depicted guest beds. Never a hidden capacity number. */
+/** Existing depicted guest beds that are not currently claimed. */
 function freeGuestBedCount(state: StationState): number {
-  const slots = temporarySleepSlots(state);
-  const taken = new Set(
-    state.visitors
-      .map((visitor) => visitor.temporarySleepTargetTile)
-      .filter((tile): tile is number => tile !== null && tile !== undefined)
+  const claimed = new Set(
+    state.reservations
+      .filter((entry) =>
+        entry.releaseReason === null &&
+        entry.expiresAt > state.now &&
+        entry.targetTile !== null &&
+        (entry.kind === 'provider-slot' || entry.kind === 'seat-use-slot')
+      )
+      .map((entry) => entry.targetTile as number)
   );
-  return slots.filter((slot) => !taken.has(slot.tileIndex)).length;
+  return temporarySleepSlots(state).filter((slot) => !claimed.has(slot.tileIndex)).length;
+}
+
+type TemporaryBunkAssignment = {
+  episodeId: number;
+  visitorId: number;
+  tileIndex: number;
+  path: number[];
+};
+
+/**
+ * Match a failing cohort to genuinely free Dorm floor before any money moves.
+ *
+ * A candidate tile is rejected when an actor, module, or live reservation
+ * already owns it. The small bipartite match also proves every selected guest
+ * can physically reach a distinct tile; a greedy nearest-only assignment can
+ * reject a valid two-guest arrangement when one guest has only one route.
+ */
+function temporaryBunkAssignments(
+  state: StationState,
+  episodes: readonly FailureEpisode[]
+): TemporaryBunkAssignment[] {
+  const occupied = new Set<number>([
+    ...state.visitors.map((visitor) => visitor.tileIndex),
+    ...state.residents.map((resident) => resident.tileIndex),
+    ...state.crewMembers.map((crew) => crew.tileIndex)
+  ]);
+  const reserved = new Set(
+    state.reservations
+      .filter((entry) => entry.releaseReason === null && entry.expiresAt > state.now && entry.targetTile !== null)
+      .map((entry) => entry.targetTile as number)
+  );
+  const candidates = state.tiles
+    .map((tile, tileIndex) => ({ tile, tileIndex }))
+    .filter(({ tile, tileIndex }) =>
+      tile === TileType.Floor &&
+      state.rooms[tileIndex] === RoomType.Dorm &&
+      state.moduleOccupancyByTile[tileIndex] === null &&
+      !occupied.has(tileIndex) &&
+      !reserved.has(tileIndex)
+    )
+    .map(({ tileIndex }) => tileIndex)
+    .sort((a, b) => a - b);
+
+  const subjects = episodes
+    .map((episode) => ({ episode, visitor: state.visitors.find((entry) => entry.id === episode.subjectId) ?? null }))
+    .filter((entry): entry is { episode: FailureEpisode; visitor: Visitor } => entry.visitor !== null);
+  const paths = subjects.map(({ visitor }) => {
+    const byTile = new Map<number, number[]>();
+    for (const tileIndex of candidates) {
+      const path = findPath(
+        state,
+        visitor.tileIndex,
+        tileIndex,
+        { allowRestricted: true, intent: 'visitor', routeSeed: visitor.id },
+        state.pathOccupancyByTile
+      );
+      if (path) byTile.set(tileIndex, path);
+    }
+    return byTile;
+  });
+  const subjectByTile = new Map<number, number>();
+  const assign = (subjectIndex: number, seen: Set<number>): boolean => {
+    for (const tileIndex of paths[subjectIndex].keys()) {
+      if (seen.has(tileIndex)) continue;
+      seen.add(tileIndex);
+      const previous = subjectByTile.get(tileIndex);
+      if (previous === undefined || assign(previous, seen)) {
+        subjectByTile.set(tileIndex, subjectIndex);
+        return true;
+      }
+    }
+    return false;
+  };
+  for (let index = 0; index < subjects.length; index++) assign(index, new Set<number>());
+
+  const tileBySubject = new Map<number, number>();
+  for (const [tileIndex, subjectIndex] of subjectByTile) tileBySubject.set(subjectIndex, tileIndex);
+  return subjects.flatMap(({ episode, visitor }, index) => {
+    const tileIndex = tileBySubject.get(index);
+    if (tileIndex === undefined) return [];
+    return [{ episodeId: episode.id, visitorId: visitor.id, tileIndex, path: paths[index].get(tileIndex) ?? [] }];
+  });
+}
+
+function recoveryTargetEpisodes(
+  ledger: StationState['failureEpisodes'],
+  request: RecoveryActionRequest
+): FailureEpisode[] {
+  const all = request.episodeId === undefined
+    ? ledger.episodes.filter((episode) => episode.resolvedAt === null && episode.shipId === request.shipId)
+    : ledger.episodes.filter((episode) => episode.id === request.episodeId);
+  const wanted = Math.min(all.length, Math.max(1, Math.floor(request.amount ?? all.length)));
+  return all.slice(0, wanted);
+}
+
+/** Remaining value is proportional to unfinished work, not all-or-nothing. */
+function incompleteContractValue(contract: PortContract | null, ship: ArrivingShip | null): number {
+  if (!contract) return 0;
+  let value = contract.promises.reduce((sum, promise) => {
+    if (promise.target <= 0) return sum;
+    const incompleteShare = clamp((promise.target - promise.completed) / promise.target, 0, 1);
+    return sum + Math.max(0, promise.payoutCredits) * incompleteShare;
+  }, 0);
+  // Legacy/synthetic passenger contracts can predate the explicit return
+  // promise. Their minimum boarding count is still a real accepted obligation,
+  // so price that unfinished fraction from the contract's stated value.
+  if (
+    ship &&
+    !contract.promises.some((promise) => promise.kind === 'passengers-returned') &&
+    ship.minimumBoarding > 0 &&
+    ship.passengersBoarded < ship.minimumBoarding
+  ) {
+    const statedValue = contract.promises.reduce((sum, promise) => sum + Math.max(0, promise.payoutCredits), 0);
+    value += Math.max(1, statedValue) * clamp(
+      (ship.minimumBoarding - ship.passengersBoarded) / ship.minimumBoarding,
+      0,
+      1
+    );
+  }
+  return value;
 }
 
 /**
@@ -13653,16 +13853,14 @@ export function applyRecoveryAction(
   const contract = ship?.portContractId === undefined
     ? null
     : state.portOps.contracts.find((entry) => entry.id === ship?.portContractId) ?? null;
-  const remainingValue = contract
-    ? contract.promises.reduce(
-        (sum, promise) => sum + Math.max(0, promise.payoutCredits) * (promise.completed >= promise.target ? 0 : 1),
-        0
-      )
-    : 0;
+  const remainingValue = incompleteContractValue(contract, ship);
+  const temporaryAssignments = request.kind === 'temporary-lodging'
+    ? temporaryBunkAssignments(state, recoveryTargetEpisodes(ledger, request))
+    : [];
 
   const plan = planRecoveryAction(state, ledger, request, {
     availableMeals: availablePreparedMeals(state),
-    freeGuestBeds: freeGuestBedCount(state),
+    eligibleTemporaryBunkTiles: temporaryAssignments.length,
     contractRemainingValue: remainingValue,
     repairIncomplete: ship?.portTurnaround !== undefined && ship.portTurnaround.phase !== 'open'
   });
@@ -13707,9 +13905,26 @@ export function applyRecoveryAction(
       break;
     }
     case 'temporary-lodging': {
-      for (const episode of touched) {
-        const visitor = state.visitors.find((entry) => entry.id === episode.subjectId);
-        if (visitor) assignPathToTemporarySleep(state, visitor);
+      const placements = temporaryAssignments.filter((assignment) =>
+        plan.affectedEpisodeIds.includes(assignment.episodeId)
+      );
+      for (const placement of placements) {
+        state.moduleInstances.push({
+          id: state.moduleSpawnCounter++,
+          type: ModuleType.Bunk,
+          originTile: placement.tileIndex,
+          rotation: 0,
+          width: 1,
+          height: 1,
+          tiles: [placement.tileIndex],
+          purchaseCost: RECOVERY_COSTS.temporaryLodgingUnit
+        });
+        state.roomHousingPolicies[placement.tileIndex] = 'visitor';
+      }
+      syncModuleOccupancy(state);
+      for (const placement of placements) {
+        const visitor = state.visitors.find((entry) => entry.id === placement.visitorId);
+        if (visitor) assignPathToTemporarySleepSlot(state, visitor, placement.tileIndex, placement.path);
       }
       break;
     }
@@ -13741,7 +13956,11 @@ export function applyRecoveryAction(
       break;
     }
     case 'cancel-contract': {
-      if (ship) beginShipRecall(state, ship);
+      if (ship) {
+        ship.visitScheduleReason = 'service-failure';
+        if (contract) contract.visitScheduleReason = 'service-failure';
+        beginShipRecall(state, ship);
+      }
       break;
     }
     case 'close-admissions': {
@@ -13768,7 +13987,7 @@ export function applyRecoveryAction(
       }
     }
   }
-  pushCrowdEvent(state, 'info', plan.summary);
+  pushCrowdEvent(state, request.kind === 'cancel-contract' ? 'warn' : 'info', plan.summary);
   return plan;
 }
 
@@ -22424,16 +22643,25 @@ function temporarySleepSlots(state: StationState): FacilitySlotTarget[] {
     }));
 }
 
-export function assignPathToTemporarySleep(state: StationState, visitor: Visitor): boolean {
-  const slots = temporarySleepSlots(state);
-  if (slots.length === 0) return false;
+function assignPathToTemporarySleepSlot(
+  state: StationState,
+  visitor: Visitor,
+  tileIndex: number,
+  preparedPath?: number[]
+): boolean {
+  const slot = temporarySleepSlots(state).find((candidate) => candidate.tileIndex === tileIndex);
+  if (!slot) return false;
   releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
   visitor.reservedTargetTile = null;
   visitor.temporarySleepTargetTile = null;
-  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, slots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
-  if (!choice) return false;
-  const slot = slots.find((candidate) => candidate.tileIndex === choice.target);
-  if (!slot) return false;
+  const path = preparedPath ?? findPath(
+    state,
+    visitor.tileIndex,
+    tileIndex,
+    { allowRestricted: true, intent: 'visitor', routeSeed: visitor.id },
+    state.pathOccupancyByTile
+  );
+  if (!path) return false;
   const reservation = tryCreateReservation(state, {
     ownerKind: 'visitor',
     ownerId: visitor.id,
@@ -22449,9 +22677,17 @@ export function assignPathToTemporarySleep(state: StationState, visitor: Visitor
   visitor.reservedTargetTile = slot.tileIndex;
   visitor.temporarySleepTargetTile = slot.tileIndex;
   visitor.reservedServingTile = null;
-  setVisitorPath(state, visitor, choice.path);
+  setVisitorPath(state, visitor, path);
   visitor.state = VisitorState.ToLeisure;
-  return visitor.path.length > 0 || visitor.tileIndex === slot.tileIndex;
+  return path.length > 0 || visitor.tileIndex === slot.tileIndex;
+}
+
+export function assignPathToTemporarySleep(state: StationState, visitor: Visitor): boolean {
+  const slots = temporarySleepSlots(state);
+  if (slots.length === 0) return false;
+  const choice = chooseLeastLoadedPath(state, visitor.tileIndex, slots.map((slot) => slot.tileIndex), false, 'visitor', undefined, visitor.id);
+  if (!choice) return false;
+  return assignPathToTemporarySleepSlot(state, visitor, choice.target, choice.path);
 }
 
 export function completeMarketCheckout(state: StationState, visitor: Visitor): boolean {

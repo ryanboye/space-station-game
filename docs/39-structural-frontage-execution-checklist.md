@@ -182,17 +182,17 @@ audited checklist with no unsupported checked claims.
 
 ### Metrics
 
-- [ ] Record real-time ship visit duration by class.
+- [x] Record real-time ship visit duration by class.
 - [x] Record concurrent ships and occupants.
-- [ ] Record holding-orbit and approach-group wait.
-- [ ] Record disembark and boarding duration.
+- [x] Record holding-orbit and approach-group wait.
+- [x] Record disembark and boarding duration.
 - [ ] Record queue length, spill length, balks, and provider utilization.
 - [ ] Record door wait and corridor congestion.
 - [x] Record public/cargo conflicts.
-- [ ] Record recurring need demand and fixture utilization.
+- [x] Record recurring need demand and fixture utilization.
 - [ ] Record reception reveal and redirection time.
-- [ ] Record committed future Berth, bed, service, and staff load.
-- [ ] Record missed departures and stranded occupants.
+- [x] Record committed future Berth, bed, service, and staff load.
+- [x] Record missed departures and stranded occupants.
 - [ ] Record maintenance work, damage, and EVA time.
 - [x] Record average and p95 simulation-step cost.
 - [ ] Record render frame time and visible animation smoothness.
@@ -204,7 +204,7 @@ audited checklist with no unsupported checked claims.
 - [x] Document route-discomfort and walk-penalty saturation.
 - [x] Document rating-penalty caps that hide severe failure.
 - [ ] Demonstrate each cap in a controlled scenario before changing it.
-- [ ] Do not remove deadlock safety before movement coordination exists.
+- [x] Do not remove deadlock safety before movement coordination exists.
 
 ### Phase 0 Gate
 
@@ -394,24 +394,24 @@ audited checklist with no unsupported checked claims.
 - [x] Implement visible `balking` escalation.
 - [x] Implement visible `distressed` escalation.
 - [x] Implement bounded `disruptive` escalation.
-- [ ] Let prolonged failure cause mess, complaints, arguments, theft, vandalism,
+- [x] Let prolonged failure cause mess, complaints, arguments, theft, vandalism,
   medical demand, or refusal to work as appropriate.
 - [x] Ensure one missed meal cannot immediately trigger a serious incident.
 - [x] Make distressed repair crews extend repair and Berth occupation.
 - [ ] Make extended occupation block or delay subsequent accepted traffic.
 - [x] Allow emergency meal purchase.
-- [ ] Allow emergency temporary bunk capacity.
+- [x] Allow emergency temporary bunk capacity.
 - [x] Allow repair prioritization or expediting.
 - [x] Allow cohort compensation.
 - [x] Allow evacuation or onward-transfer charter.
-- [ ] Allow contract cancellation with an explicit penalty.
+- [x] Allow contract cancellation with an explicit penalty.
 - [x] Allow admission closure while recovering.
 - [x] Reserve security intervention for genuinely disruptive occupants.
 - [x] Give stranded occupants temporary accommodation and future departure.
 - [x] Add an expensive relief transfer after a generous maximum disruption window.
 - [x] Never silently convert a failed visitor into a resident.
 - [x] Require housing availability and explicit policy for resident acceptance.
-- [ ] Let an accepted resident's origin ship depart normally.
+- [x] Let an accepted resident's origin ship depart normally.
 - [ ] Apply rating/faction effects at meaningful milestones or resolution.
 - [ ] Verify every rating change traces back to visible behavior.
 
@@ -436,14 +436,14 @@ audited checklist with no unsupported checked claims.
 
 ### Scaling Automation
 
-- [ ] Add simple auto-admission by ship class.
-- [ ] Add auto-admission conditions based on free compatible interface.
+- [x] Add simple auto-admission by ship class.
+- [x] Add auto-admission conditions based on free compatible interface.
 - [x] Add reserve-capacity conditions for beds or core services.
-- [ ] Add minimum-margin and maximum-stay conditions.
+- [x] Add minimum-margin and maximum-stay conditions.
 - [ ] Add risk/faction conditions only when those systems are legible.
-- [ ] Allow manual override of an automation decision.
-- [ ] Keep large, uncertain, negotiated, military, and migrant commitments visible.
-- [ ] Aggregate routine lane pressure at large scale.
+- [x] Allow manual override of an automation decision.
+- [x] Keep large, uncertain, negotiated, military, and migrant commitments visible.
+- [x] Aggregate routine lane pressure at large scale.
 - [ ] Avoid a priority spreadsheet.
 
 ## Phase 2: Structural Graph And Planning Overlay
@@ -616,7 +616,7 @@ audited checklist with no unsupported checked claims.
 - [x] Add route hysteresis to prevent oscillation.
 - [x] Add bounded deadlock recovery.
 - [x] Release stale movement and service reservations.
-- [ ] Keep interpolation independent from simulation speed.
+- [x] Keep interpolation independent from simulation speed.
 
 ### Spatial Capacity
 
@@ -834,9 +834,9 @@ audited checklist with no unsupported checked claims.
   traffic interval.
 - [x] Resolve movement intents in a batch.
 - [ ] Update congestion fields at fixed cadence.
-- [ ] Avoid per-actor full A* on render frames.
+- [x] Avoid per-actor full A* on render frames.
 - [x] Maintain an exterior target list for maintenance.
-- [ ] Keep render interpolation independent of simulation speed.
+- [x] Keep render interpolation independent of simulation speed.
 - [x] Profile every phase at baseline scale.
 - [x] Profile final build at two to three times current station footprint.
 
@@ -1354,3 +1354,21 @@ Remaining uncertainty:
 
 - Documentation: `docs/40-structural-frontage-cap-audit.md` records the current queue-chain length/spill bounds, service and dock balk timers, intent-specific A* occupancy saturation, walk/route/environment/sanitation penalty ceilings, resident stress bounds, failed-stay event bounds, and the displayed 0-100 station-rating clamp with its uncapped causal ledger.
 - Review boundary: this is a source-backed inventory, not a balance change. The compound controlled-scenario item stays open because existing focused fixtures do not yet drive every documented value through below/at/above saturation in one auditable runner.
+
+2026-07-28 · Render/simulation separation audit
+
+- Commits or files: fixed-step loop and presentation-only interpolation in `src/main.ts`; batched movement/path budgets in `src/sim/sim.ts`; intent costs in `src/sim/path.ts`; focused scale and movement evidence in `tools/normal-scale-operation-tests.ts` and `tools/movement-coordinator-tests.ts`.
+- Architecture evidence: simulation advances from its own fixed 15 Hz timer. `requestAnimationFrame` computes a real-time alpha between the last and next simulation snapshots, temporarily applies visual actor positions for `renderWorld`, and restores authoritative coordinates in a `finally` block. Render and UI code contain no `findPath` calls. Pathfinding occurs only inside simulation work, is cached/budgeted, and measured at p95 27 calls for 74 actors in the latest 50/50 run.
+- Safety ordering: movement coordination, deterministic fairness, bounded replanning, safe/unsafe swap handling, and stale-claim cleanup are present and green while the documented queue, spill, occupancy-cost, and route-penalty caps remain in place. No deadlock guard was removed to claim scale.
+
+2026-07-28 · Gate G commitment metrics and finite admission matrix
+
+- Commits or files: live counters and admission application in `src/sim/sim.ts`; pure policy in `src/sim/admission-policy.ts`; focused production-path runner `tools/gate-g-metrics-admission-tests.ts`; `test:gate-g-metrics-admission` package script (checkpoint commit pending at evidence capture).
+- Focused evidence: the runner passes 8/8. It records one completed contract visit at 10.4 seconds; 0.2 ship-seconds of holding and grouped approach wait; one 1.2-second disembark crossing; four boarding clears totaling 4.8 seconds; 27 of 29 recurring demands satisfied across all four long-stay need families; 1,957.2 occupied of 12,780 depicted fixture-capacity seconds; one missed departure with four stranded occupants; and a live future commitment of 899.8 Berth-seconds, one bed, four meals, and two staff-minutes from an accepted manifest retained after its offer leaves the live list.
+- Admission evidence: a deterministic matrix proves routine class acceptance, busy/interface/bed/meal reserve holds, maximum-stay and minimum-margin rejection, and manual preservation for military, migrant, large, negotiated, and uncertain calls. A 60-call aggregate reports exactly 40 acceptable, ten held, and ten manual commitments. In a live tick, one routine Pod auto-admits, its military peer remains visible with an explanation, and the player can manually pass it. The compact player controls and world projection are committed separately in `ba80440`; their visual claims remain for the bundled browser pass.
+
+2026-07-28 · Gate G physical recovery-depth evidence
+
+- Commits or files: physical emergency-bunk placement, cancellation/recall, and explicit resident acceptance in `src/sim/sim.ts`; refusal and proportional-penalty contracts in `src/sim/failed-stay.ts`; focused runner `tools/gate-g-recovery-depth-tests.ts`; `test:gate-g-recovery-depth` package script (checkpoint commit pending at evidence capture).
+- Focused evidence: the runner passes 4/4. Two distressed visitors receive two real 1x1 Bunk fixtures on distinct free Dorm floor tiles, distinct fixture claims, and distinct routed destinations for an exact 28c cost; zero eligible floor tiles produce an exact refusal with no hidden capacity. Cancelling a contract with 135c of unfinished promised value charges the documented 45% share (61c), records its durable cause, and recalls both ship and contract, while a zero-value cancellation is refused. A single physical tile then produces the bounded mess → complaint → refusal-to-work incident ladder with a 45-second cooldown and cap of three.
+- Resident departure evidence: explicit policy-gated acceptance converts one depicted visitor only after a private Bed and residential dock are available. The accepted resident retains the same physical Bed after their home ship departs normally and releases its dock; no silent ambient conversion path calls the explicit acceptance operation.

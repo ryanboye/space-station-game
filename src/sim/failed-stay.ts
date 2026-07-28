@@ -489,8 +489,8 @@ export function planRecoveryAction(
   context: {
     /** Prepared meals physically available across the station. */
     availableMeals: number;
-    /** Free, depicted guest bed positions. Never a hidden capacity number. */
-    freeGuestBeds: number;
+    /** Free 1x1 Dorm floor positions that can receive a depicted emergency bunk. */
+    eligibleTemporaryBunkTiles: number;
     /** Remaining promised value of the targeted contract, for cancellation. */
     contractRemainingValue: number;
     /** True when a repair/turnaround job for the ship still has work left. */
@@ -554,9 +554,13 @@ export function planRecoveryAction(
     }
     case 'temporary-lodging': {
       const wanted = Math.min(targets.length, Math.max(1, Math.floor(request.amount ?? targets.length)));
-      if (context.freeGuestBeds < wanted) {
-        // Lodging uses depicted bed positions only. No hidden bed capacity.
-        return refuse(request.kind, `only ${context.freeGuestBeds} free guest beds`);
+      if (context.eligibleTemporaryBunkTiles < wanted) {
+        // Each unit becomes one depicted 1x1 fixture on free Dorm floor. The
+        // count is therefore a placement limit, never hidden bed capacity.
+        return refuse(
+          request.kind,
+          `only ${context.eligibleTemporaryBunkTiles} eligible free Dorm tile(s) for ${wanted} temporary bunk(s)`
+        );
       }
       if (already('temporary-lodging')) return refuse(request.kind, 'temporary lodging already arranged for this cohort');
       const selected = targets.slice(0, wanted);
@@ -635,7 +639,13 @@ export function planRecoveryAction(
     }
     case 'cancel-contract': {
       if (request.shipId === undefined) return refuse(request.kind, 'cancellation needs a contract');
-      const penalty = Math.round(Math.max(0, context.contractRemainingValue) * RECOVERY_COSTS.cancelPenaltyShare);
+      if (context.contractRemainingValue <= 0) {
+        return refuse(request.kind, 'contract has no incomplete promised value');
+      }
+      const penalty = Math.max(
+        1,
+        Math.round(context.contractRemainingValue * RECOVERY_COSTS.cancelPenaltyShare)
+      );
       return {
         ok: true,
         reason: null,
@@ -649,7 +659,7 @@ export function planRecoveryAction(
           sourceId: request.shipId
         }],
         affectedEpisodeIds: ids,
-        summary: `Cancelled the contract for ${penalty}c`
+        summary: `Cancelled contract · ${penalty}c penalty on ${Math.round(context.contractRemainingValue)}c unfinished value · recall started`
       };
     }
     case 'close-admissions': {
