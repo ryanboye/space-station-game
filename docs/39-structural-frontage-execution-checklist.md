@@ -270,7 +270,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] Persist tenure, recurring needs, wants, origin ship, and departure contract.
 - [x] Persist durable visit phase and timing.
-- [ ] Hydrate legacy visitors and residents with safe defaults.
+- [x] Hydrate legacy visitors and residents with safe defaults.
 - [x] Save/load a contract crew mid-stay.
 - [x] Save/load during recall and boarding.
 - [x] Verify settlement remains exactly once.
@@ -1414,3 +1414,9 @@ Remaining uncertainty:
 - Commits or files: production-driven runner `tools/saturation-cap-tests.ts`; `test:saturation-caps` package script (checkpoint commit pending at evidence capture); source inventory `docs/40-structural-frontage-cap-audit.md`.
 - Focused evidence: the 8/8 runner distinguishes below/at/above behavior for the 24-position queue chain, six-position outside spill, 16-second ordinary balk, 14-second staffed-market abandonment, 18-second Dock timeout, all five intent-specific A* occupancy saturations, visitor walk and cargo-route penalties, resident route stress, the 45-second/three-incident failed-stay bounds, and both ends of the 0-100 station-rating display while retaining the unclamped causal ledger. Queue, movement, and recovery preservation runners remain green.
 - Deliberate open boundary: the checklist's all-caps controlled-scenario row remains unchecked. Three nominal source ceilings are not reachable through live inputs: visitor environment tops out at `.144` before its `.24` guard, sanitation at `.0952` before `.18`, and resident stress above 100 immediately produces an incident/reset before the nominal 120 clamp can be observed. These are now explicit design/implementation gaps rather than falsely checked evidence.
+
+2026-07-28 · Stripped legacy-Resident hydration evidence
+
+- Commits or files: extended combined occupant fixture in `tools/phase9-save-migration-tests.ts`; existing adapters in `src/sim/save.ts` (no production change required).
+- Focused evidence: the fixture now saves a real Resident with durable home-dock/housing/Bed identity plus deliberately stale path, targets, live facility reservation, carrying state, route exposure, movement wait/cooldown, incident, agitation, confrontation, and home-ship departure state, then strips the later-phase fields from the wire snapshot. Hydration floors its fractional legacy index onto the same walkable Floor/world position; preserves identity, home dock, housing, Bed, and satisfaction; clears every transient route/claim; defaults neutral carrying/incident state; and converts obsolete `ToHomeShip` into `Idle` with no invented ship or departure. The Resident remains after resumed ticks and never duplicates into the visitor population.
+- Preservation evidence: `test:phase9-save`, `test:occupant-loop`, and all 6/6 Gate E save/resume checks pass; the production build remains clean.

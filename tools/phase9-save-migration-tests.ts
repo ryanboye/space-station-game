@@ -15,10 +15,13 @@ import { auditSaveRecovery } from '../src/sim/save-recovery';
 import { buildStructuralSupportGraph } from '../src/sim/structural-support';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
+  ModuleType,
   TileType,
+  ResidentState,
   VisitorState,
   type ArrivingShip,
   type PortContract,
+  type Resident,
   type StationState,
   type TrafficOffer,
   type Visitor
@@ -339,6 +342,69 @@ function makeVisitor(state: StationState, ship: ArrivingShip, id: number, buildT
   };
 }
 
+/**
+ * A resident with durable identity/housing but deliberately stale, transient
+ * route and interaction state. The legacy-wire test strips the newer fields
+ * entirely so hydration, rather than this constructor, supplies the defaults.
+ */
+function makeLegacyResidentFixture(
+  state: StationState,
+  ship: ArrivingShip,
+  id: number,
+  tileIndex: number
+): Resident {
+  const dock = state.docks.find((entry) => entry.id === ship.originDockId) ?? state.docks[0];
+  const bed = state.moduleInstances.find((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk);
+  return {
+    id,
+    x: (tileIndex % state.width) + 0.5,
+    y: Math.floor(tileIndex / state.width) + 0.5,
+    tileIndex,
+    path: [Math.min(state.tiles.length - 1, tileIndex + 1)],
+    speed: 1.8,
+    hunger: 70,
+    energy: 72,
+    hygiene: 74,
+    social: 62,
+    safety: 66,
+    stress: 18,
+    routinePhase: 'errands',
+    role: 'none',
+    roleAffinity: {},
+    state: ResidentState.ToHomeShip,
+    carryingMeal: true,
+    reservedServingTile: tileIndex,
+    serveTimer: 9,
+    actionTimer: 0,
+    retargetAt: state.now + 90,
+    reservedTargetTile: tileIndex,
+    homeShipId: ship.id,
+    homeDockId: dock?.id ?? null,
+    housingUnitId: tileIndex,
+    bedModuleId: bed?.id ?? null,
+    satisfaction: 64,
+    leaveIntent: 0,
+    blockedTicks: 8,
+    movementWaitReason: 'stale legacy resident claim',
+    movementReplanCooldownUntil: state.now + 90,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    agitation: 23,
+    activeIncidentId: 90599,
+    confrontationUntil: state.now + 90,
+    lastRouteExposure: {
+      distance: 12,
+      publicTiles: 2,
+      serviceTiles: 2,
+      cargoTiles: 2,
+      residentialTiles: 2,
+      securityTiles: 2,
+      socialTiles: 2,
+      crowdCost: 4
+    }
+  };
+}
+
 function testInvalidDockBindingReturnsToHolding(): void {
   const state = fixture(9030);
   const dock = state.docks.find((entry) => entry.sourceKind === 'pod-dock-module' && entry.purpose === 'visitor');
@@ -460,6 +526,29 @@ function testLegacyOccupantAndIntegrityDefaults(): void {
   const ship = dockedVisit(state, 90501, 'visit-service');
   const buildTile = state.tiles.findIndex((tile) => tile === TileType.Floor);
   state.visitors.push(makeVisitor(state, ship, 90502, buildTile));
+  const resident = makeLegacyResidentFixture(state, ship, 90503, buildTile);
+  state.residents.push(resident);
+  state.reservations.push({
+    id: 90504,
+    ownerKind: 'resident',
+    ownerId: resident.id,
+    kind: 'provider-slot',
+    targetTile: buildTile,
+    targetId: 'legacy-resident-stale-claim',
+    itemType: null,
+    amount: 1,
+    capacity: 1,
+    createdAt: state.now,
+    expiresAt: state.now + 999,
+    releaseReason: null
+  });
+  const expectedResidentDurable = {
+    id: resident.id,
+    homeDockId: resident.homeDockId,
+    housingUnitId: resident.housingUnitId,
+    bedModuleId: resident.bedModuleId,
+    satisfaction: resident.satisfaction
+  };
 
   const legacy = legacyLoad(state, 9050, (snapshot) => {
     delete snapshot.maintenance;
@@ -470,6 +559,17 @@ function testLegacyOccupantAndIntegrityDefaults(): void {
         'transferQueuedAt', 'transferCrossingStartedAt', 'queueProviderTile',
         'queueJoinedAt', 'temporarySleepTargetTile'
       ]) delete visitor[field];
+    }
+    for (const savedResident of snapshot.residents as Array<Record<string, unknown>>) {
+      // Fractional-but-in-bounds reproduces a permissive old snapshot while
+      // still giving hydration one physically walkable canonical tile.
+      savedResident.tileIndex = buildTile + 0.75;
+      for (const field of [
+        'path', 'reservedTargetTile', 'reservedServingTile', 'serveTimer',
+        'movementWaitReason', 'movementReplanCooldownUntil', 'carryingMeal',
+        'lastRouteExposure', 'activeIncidentId', 'confrontationUntil',
+        'agitation', 'homeShipId'
+      ]) delete savedResident[field];
     }
   });
 
@@ -486,6 +586,46 @@ function testLegacyOccupantAndIntegrityDefaults(): void {
     'Legacy occupant did not default the rest of the new occupant state safely.'
   );
 
+  const loadedResident = legacy.state.residents.find((entry) => entry.id === resident.id);
+  assert(loadedResident, 'A real legacy Resident was dropped or converted into a visitor.');
+  assert(
+    !legacy.state.visitors.some((entry) => entry.id === resident.id) &&
+      legacy.state.residents.filter((entry) => entry.id === resident.id).length === 1,
+    'Legacy Resident identity changed population or duplicated during hydration.'
+  );
+  assert(
+    loadedResident.tileIndex === buildTile && legacy.state.tiles[loadedResident.tileIndex] === TileType.Floor &&
+      loadedResident.x === (buildTile % legacy.state.width) + 0.5 &&
+      loadedResident.y === Math.floor(buildTile / legacy.state.width) + 0.5,
+    'Legacy Resident tile was not clamped onto its physically valid station position.'
+  );
+  assert(
+    loadedResident.path.length === 0 && loadedResident.reservedTargetTile === null &&
+      loadedResident.reservedServingTile === null && loadedResident.serveTimer === undefined &&
+      loadedResident.movementWaitReason === undefined && loadedResident.movementReplanCooldownUntil === undefined &&
+      loadedResident.lastRouteExposure === undefined &&
+      !legacy.state.reservations.some((entry) => entry.ownerKind === 'resident' && entry.ownerId === resident.id),
+    'Legacy Resident retained a stale route, target, interaction, exposure, or reservation claim.'
+  );
+  assert(
+    loadedResident.carryingMeal === false && loadedResident.activeIncidentId === null &&
+      (loadedResident.agitation ?? 0) === 0 && loadedResident.confrontationUntil === undefined,
+    'Legacy Resident did not default to neutral carrying and incident state.'
+  );
+  assert(
+    loadedResident.id === expectedResidentDurable.id &&
+      loadedResident.homeDockId === expectedResidentDurable.homeDockId &&
+      loadedResident.housingUnitId === expectedResidentDurable.housingUnitId &&
+      loadedResident.bedModuleId === expectedResidentDurable.bedModuleId &&
+      loadedResident.satisfaction === expectedResidentDurable.satisfaction,
+    'Legacy Resident lost durable identity, home-dock, housing, bed, or satisfaction state.'
+  );
+  assert(
+    loadedResident.state === ResidentState.Idle && loadedResident.homeShipId === null &&
+      !legacy.state.arrivingShips.some((entry) => entry.kind === 'resident_home' && entry.id === loadedResident.homeShipId),
+    'Legacy Resident resumed a forced departure toward a departed home ship.'
+  );
+
   const audit = auditSaveRecovery(legacy.state);
   assert(
     legacy.state.exteriorIntegrityTargets.length === 0 && legacy.state.maintenanceDebts.length === 0 &&
@@ -498,6 +638,11 @@ function testLegacyOccupantAndIntegrityDefaults(): void {
     legacy.state.exteriorIntegrityTargets.length === state.exteriorIntegrityTargets.length &&
       auditSaveRecovery(legacy.state).breachedIntegrityTargets === 0,
     'Resuming a legacy save did not rebuild an undamaged integrity ledger from geometry.'
+  );
+  assert(
+    legacy.state.residents.some((entry) => entry.id === resident.id) &&
+      legacy.state.usageTotals.residentDepartures === state.usageTotals.residentDepartures,
+    'Legacy Resident was forced to depart after the first resumed simulation ticks.'
   );
   evidence.legacyDerivations += 1;
 }
