@@ -253,9 +253,9 @@ audited checklist with no unsupported checked claims.
 - [x] Give scheduled traffic firm windows.
 - [x] Let freight wait for promised work until its explicit deadline.
   Evidence: `tools/mixed-berth-visit-tests.ts`.
-- [ ] Let repair traffic remain until work completes, aborts, or is cancelled.
+- [x] Let repair traffic remain until work completes, aborts, or is cancelled.
 - [ ] Tune Pod visits toward observable minutes rather than 10-30-second churn.
-- [ ] Tune traffic generation for useful concurrent occupancy.
+- [x] Tune traffic generation for useful concurrent occupancy.
 - [x] Prevent any ship or Berth from remaining pinned after terminal resolution.
 
 ### World Feedback
@@ -280,7 +280,7 @@ audited checklist with no unsupported checked claims.
   Evidence: `npm run test:mixed-berth-visit`.
 - [ ] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
 - [ ] Focused check: fixed and flexible schedules behave differently.
-- [ ] Focused check: concurrent visits overlap without rapid replacement.
+- [x] Focused check: concurrent visits overlap without rapid replacement.
 
 ## Phase 1B: Physical Slots, Demand Discovery, And Facility Scale
 
@@ -1402,3 +1402,15 @@ Remaining uncertainty:
 - Commits or files: per-state derived descriptor/group cache in `src/sim/sim.ts`; no-op and Berth-size version discipline in `src/sim/dock-controls.ts`; focused runner `tools/approach-geometry-cache-tests.ts`; `test:approach-geometry-cache` package script (checkpoint commit pending at evidence capture).
 - Focused evidence: the 5/5 runner records 261 hits and one derivation miss across 128 repeated descriptor/group projections plus ordinary tick, time, actor, and credit churn, returning the exact same descriptor and group objects. A real Dock edit, Berth accepted-size edit, topology edit, and west map expansion each invalidate immediately; repeated no-op edits reuse. Every cached group equals a fresh pure derivation, and west expansion preserves exact world-space envelopes and conflict semantics despite local index remapping.
 - Migration evidence: a legacy snapshot without modern Berth configs/source keys hydrates into a fresh StationState with no inherited cache objects or counters, derives semantically identical descriptors/groups, then reuses them. `test:approach-control`, `test:approach-envelopes`, and `test:phase9-save` all pass with the cache active.
+
+2026-07-28 · Visit-lifecycle overlap and legacy-default reconciliation
+
+- Commits or files: visit scheduling/extension/recall in `src/sim/sim.ts`; visitor and resident adapters in `src/sim/save.ts`; focused evidence in `tools/mixed-berth-visit-tests.ts`, `tools/gate-g-recovery-depth-tests.ts`, `tools/normal-scale-operation-tests.ts`, and `tools/phase9-save-migration-tests.ts`.
+- Lifecycle evidence: unfinished real contract-owned work buys one bounded extension with `remaining-work` as its durable cause; work completion permits ordinary recall, sustained service failure exercises explicit abort/early recall, and the Gate G cancellation path charges a positive unfinished-value penalty before recalling the ship and contract. Terminal cleanup expires every remaining contract job and settles once. The 240-second 50/50 normal-scale run admits a guaranteed eight-minute medium mixed visit while ordinary Pod traffic continues, observes real Pod/Berth overlap, and reaches six simultaneous ships rather than rapid one-for-one replacement.
+- Legacy evidence: the Phase 9 migration fixture removes modern transfer, tenure, recurring-need, failure, stranding, and route fields from a live visitor. Hydration restores station-side transfer, `errand` tenure, no failure/stranding, and safe null route state without manufacturing a Resident. The combined visitor-and-resident row remains open until the corresponding stripped legacy-Resident fixture directly proves its source-backed adapter defaults.
+
+2026-07-28 · Controlled saturation/cap runner (partial gate evidence)
+
+- Commits or files: production-driven runner `tools/saturation-cap-tests.ts`; `test:saturation-caps` package script (checkpoint commit pending at evidence capture); source inventory `docs/40-structural-frontage-cap-audit.md`.
+- Focused evidence: the 8/8 runner distinguishes below/at/above behavior for the 24-position queue chain, six-position outside spill, 16-second ordinary balk, 14-second staffed-market abandonment, 18-second Dock timeout, all five intent-specific A* occupancy saturations, visitor walk and cargo-route penalties, resident route stress, the 45-second/three-incident failed-stay bounds, and both ends of the 0-100 station-rating display while retaining the unclamped causal ledger. Queue, movement, and recovery preservation runners remain green.
+- Deliberate open boundary: the checklist's all-caps controlled-scenario row remains unchecked. Three nominal source ceilings are not reachable through live inputs: visitor environment tops out at `.144` before its `.24` guard, sanitation at `.0952` before `.18`, and resident stress above 100 immediately produces an incident/reset before the nominal 120 clamp can be observed. These are now explicit design/implementation gaps rather than falsely checked evidence.
