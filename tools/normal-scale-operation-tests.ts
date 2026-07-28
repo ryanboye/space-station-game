@@ -110,20 +110,39 @@ function measureCacheGuarantees(state: StationState, actorCount: number, pathCal
 
   // Batched movement arbitration: at baseline scale the outcome of one whole
   // pass must not depend on the order actors are visited in.
-  type MovementSnapshotActor = { x: number; y: number; tileIndex: number; path: number[]; blockedTicks: number };
+  type MovementSnapshotActor = {
+    x: number;
+    y: number;
+    tileIndex: number;
+    path: number[];
+    blockedTicks: number;
+    movementWaitReason?: string;
+    movementReplanCooldownUntil?: number;
+    movementBlockedTile?: number | null;
+    retargetAt?: number;
+  };
   const movementActorList = [...state.crewMembers, ...state.residents, ...state.visitors] as MovementSnapshotActor[];
   const snapshot = movementActorList.map((actor) => ({ actor, ...actor, path: [...actor.path] }));
   const conflictSeconds = state.portOps.telemetry.publicCargoConflictSeconds;
   const restoreMovement = (): void => {
     for (const entry of snapshot) {
-      Object.assign(entry.actor, { x: entry.x, y: entry.y, tileIndex: entry.tileIndex, blockedTicks: entry.blockedTicks });
+      Object.assign(entry.actor, {
+        x: entry.x,
+        y: entry.y,
+        tileIndex: entry.tileIndex,
+        blockedTicks: entry.blockedTicks,
+        movementWaitReason: entry.movementWaitReason,
+        movementReplanCooldownUntil: entry.movementReplanCooldownUntil,
+        movementBlockedTile: entry.movementBlockedTile
+      });
+      if (entry.retargetAt !== undefined && 'retargetAt' in entry.actor) entry.actor.retargetAt = entry.retargetAt;
       entry.actor.path = [...entry.path];
     }
     state.portOps.telemetry.publicCargoConflictSeconds = conflictSeconds;
   };
-  const forward = runMovementCoordinatorTestTick(state, 1 / 15, false);
+  const forward = runMovementCoordinatorTestTick(state, 1 / 15, false, true);
   restoreMovement();
-  const reversed = runMovementCoordinatorTestTick(state, 1 / 15, true);
+  const reversed = runMovementCoordinatorTestTick(state, 1 / 15, true, true);
   restoreMovement();
   const fingerprint = (results: Map<string, string>): string =>
     [...results.entries()].map(([key, value]) => `${key}=${value}`).sort().join(',');

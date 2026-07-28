@@ -15949,8 +15949,10 @@ function moveAlongPath(
 export function runMovementCoordinatorTestTick(
   state: StationState,
   dt: number,
-  reverseOrder = false
+  reverseOrder = false,
+  isolateCoordinator = false
 ): Map<string, MoveResult> {
+  if (isolateCoordinator) movementCoordinatorByState.delete(state);
   const occupancyByTile = buildOccupancyMap(state);
   beginMovementCoordinator(state, dt, occupancyByTile);
   const actors = movementActors(state);
