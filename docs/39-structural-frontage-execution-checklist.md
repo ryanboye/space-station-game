@@ -442,6 +442,21 @@ compiles is not sufficient for player-facing work.
 - [x] Prevent two ships from owning the same slot.
 - [ ] Unify holding queues without merging distinct settlement models.
 
+### Fleet Shape And Scale
+
+- [x] Generate a native-resolution fleet with clearly distinct compact, broad,
+  and long silhouettes.
+- [ ] Keep economic purpose (`tourist`, `trader`, `industrial`, `military`,
+  `colonist`) separate from physical hull variant.
+- [ ] Assign hull variants deterministically so save/load preserves vessel identity.
+- [ ] Support at least two Pod Dock silhouettes and six Berth silhouettes.
+- [ ] Let ship size and hull shape affect rendered mooring and approach footprints.
+- [ ] Make long freighters and liners visibly require deeper open approach space.
+- [ ] Keep compact craft useful where frontage or approach clearance is constrained.
+- [ ] Show the same silhouette in Approach Control, holding orbit, approach, docking,
+  and departure.
+- [ ] Verify every fleet sprite at actual gameplay zoom and on every lane rotation.
+
 ### World-Space Envelopes
 
 - [x] Derive ingress envelope.
@@ -942,3 +957,9 @@ Remaining uncertainty:
 - Confirmed evidence: long-stay hunger/energy/hygiene decay and recovery; tenure derivation; one-shot versus recurring demand; contract-crew save/load; exactly-once cleanup; exclusive facility claims; temporary bunks separate from resident homes; stocked shelf browsing and exactly-once checkout; native Checkout Bank, Shelf Aisle, and Bunk Bank footprints/art.
 - Corrected overclaim: `test:facility-slots` does not test Reception, so the compound fixture-slot/Reception runner box was reopened. Resident permanence was clarified as the separate Resident actor contract.
 - Remaining uncertainty: normal long-stay energy does not yet choose temporary bunks, repeated repair crews have not completed multiple meal/sleep/wash/leisure cycles, recall/boarding save-load remains open, Reception does not exist, Checkout Bank is not staffed or physically queued, restocking is not physical, and large fixtures lack occupied/unstaffed/low-stock/dirty/damaged render states.
+
+2026-07-27 · Fleet shape and scale artwork
+
+- Commit or files: `3a42acd`, eight new native-resolution sprites under `public/assets/ships/` covering courier pod, crew launch, passenger shuttle, repair tender, long freighter, colonist transport, luxury liner, and corvette.
+- Visual evidence: all eight source sprites were inspected at original resolution. Each is one coherent alpha silhouette with transparent corners; the long freighter and luxury liner are materially deeper than the medium hulls, while the repair tender and colonist transport are materially broader.
+- Remaining uncertainty: these assets are not yet selected by the simulation or renderer. Deterministic hull identity, approach-envelope dimensions, holding-orbit parity, lane rotations, and live gameplay-scale validation remain unchecked.
