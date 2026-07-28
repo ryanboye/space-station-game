@@ -7133,6 +7133,17 @@ function refreshOpeningRecipeCatalog(force = false): void {
   if (!host) return;
   const demand = getPodDemandSummary(state, null);
   const recipes = evaluateOpeningRecipes(state);
+  const recentCapturedSales = (recipeId: typeof recipes[number]['id']): number =>
+    state.openingEconomy.ledger.recent.filter((event) => {
+      if (event.at < state.now - 120) return false;
+      if (recipeId === 'feed-travelers') {
+        return event.kind === 'retail-sale' && event.label === 'Prepared meal sold';
+      }
+      if (recipeId === 'sell-supplies') {
+        return event.kind === 'retail-sale' && event.label === 'Travel supplies sold';
+      }
+      return event.kind === 'fuel-sale' || event.kind === 'repair-service';
+    }).length;
   if (!recipes.some((recipe) => recipe.id === selectedOpeningRecipeId)) {
     selectedOpeningRecipeId = recipes[0]?.id ?? 'feed-travelers';
   }
@@ -7146,7 +7157,8 @@ function refreshOpeningRecipeCatalog(force = false): void {
       recipe.operationalReasons,
       recipe.steps.map((step) => step.have)
     ]),
-    demand.rows.map((row) => [row.served, row.wanted, row.missedCredits])
+    demand.rows.map((row) => [row.served, row.wanted, row.missedCredits]),
+    recipes.map((recipe) => recentCapturedSales(recipe.id))
   ]);
   if (signature === renderedRecipeSignature) return;
   // Demand can change while the player is deciding which step to click. Keep
@@ -7164,7 +7176,9 @@ function refreshOpeningRecipeCatalog(force = false): void {
       // so it sits in the heading rather than behind a metrics panel.
       const demandNote = demandRow && demandRow.wanted > 0
         ? `${demandRow.served}/${demandRow.wanted} served recently${demandRow.missedCredits > 0 ? ` · est. ${demandRow.missedCredits}c missed` : ''}`
-        : 'no demand seen yet';
+        : recentCapturedSales(recipe.id) > 0
+          ? `${recentCapturedSales(recipe.id)} sale${recentCapturedSales(recipe.id) === 1 ? '' : 's'} this visit · report pending`
+          : 'no demand seen yet';
       const status = recipe.operational
         ? 'Live now.'
         : recipe.operationalReasons[0] ?? 'Finish the remaining build steps.';

@@ -176,5 +176,38 @@ check('a missing public cafeteria creates visible missed demand, never a fake do
   assert(firstStationVisitorId !== null && clearedArrivalTile, 'unsupported diner waited on the passenger arrival tile');
 });
 
+check('a completed food choice serves ordinary pod traffic and earns revenue', () => {
+  const state = fresh();
+  const tiles = publicRoom(state, RoomType.Cafeteria, 3, 7);
+  const counterA = placeIn(state, tiles, ModuleType.ServingStation);
+  const counterB = placeIn(state, tiles, ModuleType.ServingStation);
+  placeIn(state, tiles, ModuleType.Table);
+  placeIn(state, tiles, ModuleType.Table);
+  placeIn(state, tiles, ModuleType.TrayReturn);
+  stock(state, counterA, 'meal', 12);
+  stock(state, counterA, 'cleanTray', 12);
+  stock(state, counterB, 'meal', 12);
+  stock(state, counterB, 'cleanTray', 12);
+  tick(state, 0);
+  assert(recipe(state, 'feed-travelers').operational, 'completed food choice was not operational before traffic');
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.shipsPerCycle = 6;
+  const openingCredits = state.metrics.credits;
+  for (let elapsed = 0; elapsed < 150; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (state.openingEconomy.ledger.recent.some((event) =>
+      event.kind === 'retail-sale' && event.label === 'Prepared meal sold'
+    )) break;
+  }
+  const mealSale = state.openingEconomy.ledger.recent.find((event) =>
+    event.kind === 'retail-sale' && event.label === 'Prepared meal sold'
+  );
+  assert(mealSale && mealSale.credits > 0, 'ordinary pod traffic produced no prepared-meal sale');
+  assert(state.metrics.credits > openingCredits, 'meal sale did not increase station credits');
+  assert(state.metrics.mealsServedTotal > 0, 'meal sale did not increment the served-meal total');
+});
+
 if (failures > 0) process.exit(1);
-console.log('6/6 opening business checks passed');
+console.log('7/7 opening business checks passed');

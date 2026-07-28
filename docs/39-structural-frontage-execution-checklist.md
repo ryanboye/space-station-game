@@ -803,7 +803,7 @@ audited checklist with no unsupported checked claims.
 ### Phase 8 Gate
 
 - [ ] New game requires a meaningful authored opening decision.
-- [ ] First business operation visibly serves real demand.
+- [x] First business operation visibly serves real demand.
 - [ ] First expansion feels constructed rather than painted.
 - [ ] First Berth changes station scale and operating pressure.
 - [ ] UI explains current pressure without becoming a spreadsheet.
@@ -1219,3 +1219,10 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:opening-businesses` passed all six opening truth checks, including the fresh starter's restricted crew mess remaining non-operational for visitors.
 - Visual/playtest evidence: a normal live starter at 4x admitted its first pod traffic. Food demand was correctly missed rather than forming a phantom queue, but the Food comparison card reported the private counter and seats without naming their access restriction. The readout now labels those fixtures `CREW MESS CANDIDATE`, preserving the deliberate choice between sharing that room and building a separate public cafeteria without implying it already serves travelers.
 - Remaining uncertainty: Gate A still requires the player to complete one public business and observe its first revenue cycle; this checkpoint fixes the guidance discovered before that build, not the gate itself.
+
+2026-07-28 · First public food revenue cycle
+
+- Commit or files: `tools/opening-business-tests.ts`, `src/sim/cold-start-scenarios.ts`, and `src/main.ts` (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:opening-businesses` now passes seven checks. Starting from the ordinary life-safe shell, the added operating-cycle contract builds a coherent 21-tile public Cafeteria through production room/module APIs, stocks two physical counters, admits ordinary automatic pod traffic, and requires a real `Prepared meal sold` ledger event, increased credits, and an incremented served-meal total. `npm run build` passed.
+- Visual/playtest evidence: inspected `?scenario=opening-food-cycle`. The paused result shows two active pods, two visitors, `+4c` live revenue, one visitor served, 53 remaining servings across three physical counters, and the authored 2-counter/8-seat public Cafeteria marked operational. While the call remains docked, the Food card now reads `1 sale this visit · report pending` rather than incorrectly claiming no demand; final wanted/served/missed accounting still settles at departure.
+- Remaining uncertainty: this closes the first visible-demand proof, not all of Gate A. Supplies and Refuel still need equivalent start-to-revenue operating-cycle evidence, and a manual small-viewport construction pass remains desirable when the browser driver supports reliable canvas coordinates.

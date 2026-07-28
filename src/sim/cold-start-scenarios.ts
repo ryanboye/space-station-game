@@ -347,6 +347,14 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   starter: () => {},
   'two-berth-shift': () => {},
 
+  // Gate A proof: start from the ordinary safe shell, build one complete
+  // public food operation through production room/module APIs, then run normal
+  // pod traffic until the first paid meal is recorded. The paused result is a
+  // stable visual counterpart to the deterministic opening-business runner.
+  'opening-food-cycle': (s) => {
+    stageOpeningFoodCycle(s);
+  },
+
   // Phase 4 visual fixture: two nearby hull interfaces share the same
   // approach rectangle, while a third remains clear. Paused deliberately so
   // the active/waiting state is stable for a screenshot or manual inspection.
@@ -1268,6 +1276,70 @@ function seedItemNodeStock(state: StationState, x: number, y: number, itemType: 
   if (added <= 0) return 0;
   node.items[itemType] = (node.items[itemType] ?? 0) + added;
   return added;
+}
+
+function stageOpeningFoodCycle(state: StationState): void {
+  state.metrics.credits = Math.max(state.metrics.credits, 1200);
+  const width = 3;
+  const height = 7;
+  let roomTiles: number[] | null = null;
+  for (let y = 1; y <= state.height - height - 1 && roomTiles === null; y += 1) {
+    for (let x = 1; x <= state.width - width - 1 && roomTiles === null; x += 1) {
+      const candidate: number[] = [];
+      let valid = true;
+      for (let dy = 0; dy < height && valid; dy += 1) {
+        for (let dx = 0; dx < width && valid; dx += 1) {
+          const tile = (y + dy) * state.width + x + dx;
+          if (
+            state.tiles[tile] !== TileType.Floor ||
+            state.rooms[tile] !== RoomType.None ||
+            state.moduleOccupancyByTile[tile] !== null
+          ) valid = false;
+          candidate.push(tile);
+        }
+      }
+      if (valid) roomTiles = candidate;
+    }
+  }
+  if (!roomTiles) throw new Error('Opening food showcase could not find a public Cafeteria footprint.');
+  for (const tile of roomTiles) {
+    setRoom(state, tile, RoomType.Cafeteria);
+    state.zones[tile] = ZoneType.Public;
+  }
+  tick(state, 0);
+
+  const placeInRoom = (module: ModuleType): number => {
+    for (const rotation of [0, 90] as const) {
+      for (const tile of roomTiles ?? []) {
+        const placed = tryPlaceModule(state, module, tile, rotation);
+        if (placed.ok) return tile;
+      }
+    }
+    throw new Error(`Opening food showcase could not place ${module}.`);
+  };
+  const counterA = placeInRoom(ModuleType.ServingStation);
+  const counterB = placeInRoom(ModuleType.ServingStation);
+  placeInRoom(ModuleType.Table);
+  placeInRoom(ModuleType.Table);
+  placeInRoom(ModuleType.TrayReturn);
+  tick(state, 0);
+  for (const counter of [counterA, counterB]) {
+    const node = state.itemNodes.find((candidate) => candidate.tileIndex === counter);
+    if (!node) throw new Error('Opening food showcase Serving Station has no inventory node.');
+    node.items.meal = 12;
+    node.items.cleanTray = 12;
+  }
+
+  state.controls.paused = false;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.shipsPerCycle = 6;
+  for (let elapsed = 0; elapsed < 150; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (state.openingEconomy.ledger.recent.some((event) =>
+      event.kind === 'retail-sale' && event.label === 'Prepared meal sold'
+    )) break;
+  }
+  state.controls.paused = true;
 }
 
 function stageMarketShowcase(state: StationState, shopperCount: number): void {
