@@ -251,10 +251,11 @@ export interface StationSnapshotV1 {
   commercialUnits?: CommercialUnit[];
   constructionSites: Array<{
     id?: number;
-    kind: 'tile' | 'module';
+    kind: 'tile' | 'module' | 'structural-piece';
     tileIndex: number;
     targetTile?: TileType;
     targetModule?: ModuleType;
+    structuralPieceId?: number;
     rotation?: ModuleRotation;
     requiredMaterials: number;
     deliveredMaterials: number;
@@ -272,6 +273,15 @@ export interface StationSnapshotV1 {
     createdAt?: number;
     structuralProjectId?: number;
     structuralStage?: 'perimeter' | 'interior' | 'seal-check';
+  }>;
+  structuralPieces?: Array<{
+    id: number;
+    kind: 'junction' | 'reinforced-bulkhead';
+    originTile: number;
+    rotation: ModuleRotation;
+    tiles: number[];
+    completed: boolean;
+    creditCost: number;
   }>;
   structuralExpansionProjects?: Array<{
     id: number;
@@ -1139,6 +1149,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         tileIndex: site.tileIndex,
         targetTile: site.targetTile,
         targetModule: site.targetModule,
+        structuralPieceId: site.structuralPieceId,
         rotation: site.rotation,
         requiredMaterials: site.requiredMaterials,
         deliveredMaterials: site.deliveredMaterials,
@@ -1152,6 +1163,9 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         structuralStage: site.structuralStage
       }))
       .sort((a, b) => a.tileIndex - b.tileIndex),
+    structuralPieces: state.structuralPieces
+      .map((piece) => ({ ...piece, tiles: [...piece.tiles] }))
+      .sort((left, right) => left.id - right.id),
     structuralExpansionProjects: state.structuralExpansionProjects.map((project) => ({
       ...project,
       bounds: { ...project.bounds },
@@ -1972,7 +1986,13 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         warnings.push(`constructionSites[${i}] invalid; skipped.`);
         continue;
       }
-      const kind = entry.kind === 'module' ? 'module' : entry.kind === 'tile' ? 'tile' : null;
+      const kind = entry.kind === 'module'
+        ? 'module'
+        : entry.kind === 'tile'
+          ? 'tile'
+          : entry.kind === 'structural-piece'
+            ? 'structural-piece'
+            : null;
       const tileIndex = Math.floor(asFiniteNumber(entry.tileIndex, -1));
       if (!kind || tileIndex < 0 || tileIndex >= expectedLength) {
         warnings.push(`constructionSites[${i}] has invalid kind/tile; skipped.`);
@@ -1988,6 +2008,13 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         warnings.push(`constructionSites[${i}] missing target module; skipped.`);
         continue;
       }
+      const structuralPieceId = Number.isFinite(entry.structuralPieceId)
+        ? Math.max(1, Math.floor(asFiniteNumber(entry.structuralPieceId, 0)))
+        : undefined;
+      if (kind === 'structural-piece' && structuralPieceId === undefined) {
+        warnings.push(`constructionSites[${i}] missing structural piece identity; skipped.`);
+        continue;
+      }
       const rawRotation = Math.round(asFiniteNumber(entry.rotation, 0));
       constructionSites.push({
         id: Math.max(1, Math.floor(asFiniteNumber(entry.id, 0))) || undefined,
@@ -1995,6 +2022,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         tileIndex,
         targetTile,
         targetModule,
+        structuralPieceId,
         rotation: rawRotation === 90 ? 90 : 0,
         requiredMaterials: Math.max(0, asFiniteNumber(entry.requiredMaterials, 0)),
         deliveredMaterials: Math.max(0, asFiniteNumber(entry.deliveredMaterials, 0)),
@@ -2014,6 +2042,39 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         structuralStage: entry.structuralStage === 'perimeter' || entry.structuralStage === 'interior' || entry.structuralStage === 'seal-check'
           ? entry.structuralStage
           : undefined
+      });
+    }
+  }
+
+  const structuralPieces: NonNullable<StationSnapshotV1['structuralPieces']> = [];
+  if (Array.isArray(snapshotRaw.structuralPieces)) {
+    for (let i = 0; i < snapshotRaw.structuralPieces.length; i++) {
+      const entry = snapshotRaw.structuralPieces[i];
+      if (!isRecord(entry)) {
+        warnings.push(`structuralPieces[${i}] invalid; skipped.`);
+        continue;
+      }
+      const id = Math.max(1, Math.floor(asFiniteNumber(entry.id, 0)));
+      const kind = entry.kind === 'junction' || entry.kind === 'reinforced-bulkhead' ? entry.kind : null;
+      const originTile = Math.floor(asFiniteNumber(entry.originTile, -1));
+      const expectedTiles = kind === 'junction' ? 1 : 2;
+      const tiles = Array.isArray(entry.tiles)
+        ? entry.tiles
+            .map((tile) => Math.floor(asFiniteNumber(tile, -1)))
+            .filter((tile) => tile >= 0 && tile < expectedLength)
+        : [];
+      if (!kind || originTile < 0 || originTile >= expectedLength || tiles.length !== expectedTiles || new Set(tiles).size !== expectedTiles) {
+        warnings.push(`structuralPieces[${i}] has invalid identity or footprint; skipped.`);
+        continue;
+      }
+      structuralPieces.push({
+        id,
+        kind,
+        originTile,
+        rotation: Math.abs(Math.round(asFiniteNumber(entry.rotation, 0)) % 180) === 90 ? 90 : 0,
+        tiles,
+        completed: entry.completed === true,
+        creditCost: Math.max(0, asFiniteNumber(entry.creditCost, 0))
       });
     }
   }
@@ -2823,6 +2884,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     modules,
     commercialUnits,
     constructionSites,
+    structuralPieces,
     structuralExpansionProjects,
     mapExpansion,
     dockConfigs,
@@ -3248,6 +3310,7 @@ export function hydrateStateFromSave(
       tileIndex: site.tileIndex,
       targetTile: site.targetTile,
       targetModule: site.targetModule,
+      structuralPieceId: site.structuralPieceId,
       rotation: site.rotation,
       requiredMaterials: site.requiredMaterials,
       deliveredMaterials,
@@ -3276,6 +3339,14 @@ export function hydrateStateFromSave(
   next.constructionSiteSpawnCounter = Math.max(
     next.constructionSiteSpawnCounter,
     ...next.constructionSites.map((site) => site.id + 1)
+  );
+  next.structuralPieces = (snapshot.structuralPieces ?? []).map((piece) => ({
+    ...piece,
+    tiles: [...piece.tiles]
+  }));
+  next.structuralPieceSpawnCounter = Math.max(
+    1,
+    ...next.structuralPieces.map((piece) => piece.id + 1)
   );
   next.structuralExpansionProjects = (snapshot.structuralExpansionProjects ?? []).map((project) => ({
     ...project,

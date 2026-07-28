@@ -180,6 +180,11 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     ...site,
     tileIndex: remapIndex(site.tileIndex)
   }));
+  state.structuralPieces = state.structuralPieces.map((piece) => ({
+    ...piece,
+    originTile: remapIndex(piece.originTile),
+    tiles: piece.tiles.map(remapIndex)
+  }));
   state.structuralExpansionProjects = state.structuralExpansionProjects.map((project) => {
     const topLeft = fromIndex(toIndex(project.bounds.minX, project.bounds.minY, oldWidth), oldWidth);
     const bottomRight = fromIndex(toIndex(project.bounds.maxX, project.bounds.maxY, oldWidth), oldWidth);

@@ -2,6 +2,7 @@ import {
   buildStationExpansionOnTruss,
   createInitialState,
   expandMap,
+  planStructuralPieceConstruction,
   planStationExpansionOnTruss,
   removeModuleAtTile,
   setTile,
@@ -11,10 +12,12 @@ import {
   advanceStructuralExpansionProjects,
   applyConstructionSite,
   cancelConstructionAtTile,
+  cleanupConstructionSites,
   findConstructionPath,
   planModuleConstruction,
   planTileConstruction
 } from '../src/sim/construction';
+import { validateStructuralSupportPlan } from '../src/sim/structural-support';
 import { captureSnapshot, hydrateStateFromSave } from '../src/sim/save';
 import { ModuleType, TileType, fromIndex, inBounds, isWalkable, toIndex, type StationState } from '../src/sim/types';
 
@@ -72,13 +75,28 @@ function expansionPatch(state: StationState): number[] {
     for (let x = 1; x < state.width - 2; x++) {
       const patch = [
         toIndex(x, y, state.width),
-        toIndex(x + 1, y, state.width),
-        toIndex(x, y + 1, state.width),
-        toIndex(x + 1, y + 1, state.width)
+        toIndex(x + 1, y, state.width)
       ];
       if (patch.some((tile) => state.tiles[tile] !== TileType.Space)) continue;
       for (const tile of patch) setTile(state, tile, TileType.Truss);
-      if (planStationExpansionOnTruss(state, patch).ok) return patch;
+      let preview = planStationExpansionOnTruss(state, patch);
+      if (!preview.ok && preview.reason === 'structural support: branch-requires-junction') {
+        const branchTiles = validateStructuralSupportPlan(state).problems
+          .filter((problem) => problem.reason === 'branch-requires-junction')
+          .map((problem) => problem.tile);
+        for (const tile of branchTiles) {
+          const junction = planStructuralPieceConstruction(state, tile, 'junction');
+          assertCondition(junction.ok && junction.pieceId !== undefined, `Could not plan required expansion Junction (${junction.reason ?? 'no reason'}).`);
+          const site = state.constructionSites.find((candidate) => candidate.structuralPieceId === junction.pieceId)!;
+          site.deliveredMaterials = site.requiredMaterials;
+          site.buildProgress = site.buildWorkRequired;
+          assertCondition(applyConstructionSite(state, site), 'Required expansion Junction should complete.');
+          site.state = 'done';
+        }
+        cleanupConstructionSites(state);
+        preview = planStationExpansionOnTruss(state, patch);
+      }
+      if (preview.ok) return patch;
       for (const tile of patch) setTile(state, tile, TileType.Space);
     }
   }
@@ -286,7 +304,10 @@ function removeBoundaryAirlocks(state: StationState): void {
   // Loads intentionally open paused. Model the player resuming construction.
   resumed.controls.paused = false;
   for (let step = 0; step < 8000 && !resumedProject.commissioned; step++) tick(resumed, 0.1);
-  assertCondition(resumedProject.commissioned, 'A resumed EVA crew must complete every delivery, weld, seal check, and commission the wing.');
+  assertCondition(
+    resumedProject.commissioned,
+    `A resumed EVA crew must complete every delivery, weld, seal check, and commission the wing (${resumedProject.phase}: ${resumedProject.blockedReason ?? 'none'}; ${resumed.constructionSites.filter((site) => site.structuralProjectId === resumedProject.id).map((site) => `${site.id}:${site.structuralStage}:${site.state}:${site.deliveredMaterials}/${site.requiredMaterials}:${site.buildProgress}/${site.buildWorkRequired}:${site.blockedReason ?? 'none'}`).join('|')}; jobs=${resumed.jobs.filter((job) => job.state !== 'done' && job.state !== 'expired').map((job) => `${job.id}:${job.type}:${job.state}:${job.constructionSiteId ?? 'none'}:${job.stallReason ?? 'none'}`).join('|')}).`
+  );
   for (let step = 0; step < 400; step++) tick(resumed, 0.1);
   assertCondition(
     resumed.crewMembers.every((crew) => !crew.evaSuit || resumed.tiles[crew.tileIndex] === TileType.Airlock),
@@ -332,10 +353,29 @@ function removeBoundaryAirlocks(state: StationState): void {
   assertCondition(!project.commissioned, 'Partial seal work must not commission the shell.');
   sealSite.buildProgress = sealSite.buildWorkRequired;
   sealSite.state = 'done';
+  const patchPieces = state.structuralPieces.filter((piece) => piece.tiles.some((tile) => patch.includes(tile)));
+  const severedRoots = new Map<number, TileType>();
+  for (const tile of patch) {
+    const point = fromIndex(tile, state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const neighbor = toIndex(x, y, state.width);
+      const type = state.tiles[neighbor]!;
+      if (!patch.includes(neighbor) && type !== TileType.Space && type !== TileType.Truss) severedRoots.set(neighbor, type);
+    }
+  }
   for (const tile of patch) state.tiles[tile] = TileType.Space;
+  for (const tile of severedRoots.keys()) state.tiles[tile] = TileType.Space;
+  for (const piece of patchPieces) piece.completed = false;
+  state.topologyVersion += 1;
   advanceStructuralExpansionProjects(state);
   assertCondition(String(project.phase) === 'blocked' && !project.commissioned, 'Commissioning must revalidate support after seal completion.');
   for (const tile of patch) state.tiles[tile] = TileType.Truss;
+  for (const [tile, type] of severedRoots) state.tiles[tile] = type;
+  for (const piece of patchPieces) piece.completed = true;
+  state.topologyVersion += 1;
   advanceStructuralExpansionProjects(state);
   assertCondition(project.commissioned, 'All completed child work should commission once.');
   assertCondition(patch.every((tile) => state.tiles[tile] === TileType.Floor), 'Atomic commission should produce the planned floor geometry.');

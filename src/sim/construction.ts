@@ -9,8 +9,11 @@
 import {
   JOB_TTL_SEC,
   adjacentWalkableTiles,
+  applyEconomyTransaction,
+  bumpTopologyVersion,
   consumeConstructionMaterials,
   footprintTiles,
+  ensureStructuralPieceMaintenanceTarget,
   isModuleUnlocked,
   itemStockAtNode,
   materialInventoryTiles,
@@ -32,6 +35,7 @@ import {
   type CrewMember,
   ModuleType,
   type ModuleRotation,
+  type PlaceableStructuralPieceKind,
   RoomType,
   type StationState,
   type StructuralExpansionProject,
@@ -45,6 +49,7 @@ import {
 } from './types';
 import { MODULE_DEFINITIONS } from './balance';
 import { validateStructuralSupportPlan } from './structural-support';
+import { structuralPieceTiles } from './structural-support';
 // setTile, setRoom, setZone live in sim.ts and are NOT exported there yet.
 // applyConstructionSite uses them at the end of the file. Import from sim.
 import { findPath, moduleCreditBuildCost, setRoom, setTile, setZone } from './sim';
@@ -55,6 +60,10 @@ export const EVA_OXYGEN_MAX_SEC = 240;
 export const EVA_LOW_OXYGEN_SEC = 18;
 const TRUSS_CONSTRUCTION_MATERIAL_COST = 1;
 const TRUSS_CONSTRUCTION_WORK_REQUIRED = 0.8;
+const STRUCTURAL_PIECE_COST: Record<PlaceableStructuralPieceKind, { credits: number; materials: number; work: number }> = {
+  junction: { credits: 12, materials: 3, work: 6 },
+  'reinforced-bulkhead': { credits: 28, materials: 8, work: 14 }
+};
 const EXTERIOR_HULL_MODULES = new Set<ModuleType>([
   ModuleType.PodDock,
   ModuleType.FuelCoupler,
@@ -119,6 +128,9 @@ function refundConstructionMaterials(state: StationState, amount: number): void 
 
 function constructionSiteCoversTile(state: StationState, site: ConstructionSite, tileIndex: number): boolean {
   if (site.tileIndex === tileIndex) return true;
+  if (site.kind === 'structural-piece' && site.structuralPieceId !== undefined) {
+    return state.structuralPieces.find((piece) => piece.id === site.structuralPieceId)?.tiles.includes(tileIndex) ?? false;
+  }
   if (site.kind !== 'module' || site.targetModule === undefined) return false;
   const footprint = moduleFootprint(site.targetModule, site.rotation ?? 0);
   return footprintTiles(state, site.tileIndex, footprint.width, footprint.height).includes(tileIndex);
@@ -139,6 +151,28 @@ export function removeConstructionAtTile(state: StationState, tileIndex: number,
     );
   }
   state.constructionSites = state.constructionSites.filter((site) => !removedIds.has(site.id));
+  const removedPieceIds = new Set(
+    removedSites
+      .map((site) => site.structuralPieceId)
+      .filter((id): id is number => id !== undefined)
+  );
+  if (removedPieceIds.size > 0) {
+    if (refundMaterials) {
+      for (const piece of state.structuralPieces) {
+        if (!removedPieceIds.has(piece.id) || piece.completed || piece.creditCost <= 0) continue;
+        applyEconomyTransaction(state, {
+          at: state.now,
+          kind: 'construction',
+          credits: piece.creditCost,
+          costBasis: 0,
+          label: `${piece.kind} construction cancelled`,
+          tileIndex: piece.originTile
+        }, { countAsEarned: false });
+      }
+    }
+    state.structuralPieces = state.structuralPieces.filter((piece) => !removedPieceIds.has(piece.id));
+    bumpTopologyVersion(state);
+  }
   for (const job of state.jobs) {
     if (job.constructionSiteId === undefined || !removedIds.has(job.constructionSiteId)) continue;
     if (job.state === 'done' || job.state === 'expired') continue;
@@ -520,7 +554,7 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
         .filter((target) => target.targetTile === TileType.Floor)
         .map((target) => ({ tile: target.tileIndex, kind: 'small' as const }))
     );
-    const supportProblem = support.problems.find((problem) => problem.reason !== 'branch-requires-junction');
+    const supportProblem = support.problems[0];
     if (supportProblem) {
       project.phase = 'blocked';
       project.blockedReason = `structural support: ${supportProblem.reason}`;
@@ -661,6 +695,108 @@ export function planModuleConstruction(
     requiresEva
   });
   return { ok: true };
+}
+
+export function validateStructuralPiecePlacement(
+  state: StationState,
+  originTile: number,
+  kind: PlaceableStructuralPieceKind,
+  rotation: ModuleRotation | 180 | 270 = 0
+): { ok: true; tiles: number[] } | { ok: false; reason: string; tiles: number[] } {
+  const appliedRotation: ModuleRotation = kind === 'reinforced-bulkhead' && Math.abs(rotation % 180) === 90 ? 90 : 0;
+  const tiles = structuralPieceTiles(state, originTile, kind, appliedRotation);
+  if (tiles.length === 0) return { ok: false, reason: 'structural piece runs off map', tiles: [originTile] };
+  const actors = new Set([
+    ...state.crewMembers.map((actor) => actor.tileIndex),
+    ...state.residents.map((actor) => actor.tileIndex),
+    ...state.visitors.map((actor) => actor.tileIndex)
+  ]);
+  for (const tile of tiles) {
+    const base = state.tiles[tile];
+    const allowed = kind === 'junction'
+      ? base === TileType.Space || base === TileType.Truss
+      : base === TileType.Space || base === TileType.Truss || base === TileType.Wall || base === TileType.Door || base === TileType.Airlock;
+    if (!allowed) {
+      return { ok: false, reason: kind === 'junction' ? 'junction needs a space or truss support tile' : 'bulkhead must bridge truss/space and the exterior hull face', tiles };
+    }
+    if (state.moduleOccupancyByTile[tile] !== null) return { ok: false, reason: 'structural piece overlaps a module', tiles };
+    if (actors.has(tile)) return { ok: false, reason: 'structural piece overlaps an actor', tiles };
+    if (state.structuralPieces.some((piece) => piece.tiles.includes(tile))) {
+      return { ok: false, reason: 'structural piece overlaps another structural piece', tiles };
+    }
+    if (state.constructionSites.some((site) => site.state !== 'done' && constructionSiteCoversTile(state, site, tile))) {
+      return { ok: false, reason: 'structural piece overlaps a construction site', tiles };
+    }
+  }
+  if (kind === 'reinforced-bulkhead') {
+    const hasExteriorHalf = tiles.some((tile) => state.tiles[tile] === TileType.Space || state.tiles[tile] === TileType.Truss);
+    const hasHullHalf = tiles.some((tile) =>
+      state.tiles[tile] === TileType.Wall || state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock
+    );
+    if (!hasExteriorHalf || !hasHullHalf) {
+      return { ok: false, reason: 'bulkhead must bridge truss/space and the exterior hull face', tiles };
+    }
+  }
+  const footprint = new Set(tiles);
+  const anchored = tiles.some((tile) => state.tiles[tile] !== TileType.Space) || tiles.some((tile) => {
+    const point = fromIndex(tile, state.width);
+    return ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([dx, dy]) => {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) return false;
+      const neighbor = toIndex(x, y, state.width);
+      return !footprint.has(neighbor) && (
+        state.tiles[neighbor] !== TileType.Space ||
+        state.structuralPieces.some((piece) => piece.tiles.includes(neighbor))
+      );
+    });
+  });
+  if (!anchored) return { ok: false, reason: 'structural piece must connect to hull, truss, or another piece', tiles };
+  return { ok: true, tiles };
+}
+
+export function planStructuralPieceConstruction(
+  state: StationState,
+  originTile: number,
+  kind: PlaceableStructuralPieceKind,
+  rotation: ModuleRotation | 180 | 270 = 0
+): { ok: boolean; reason?: string; pieceId?: number } {
+  const preview = validateStructuralPiecePlacement(state, originTile, kind, rotation);
+  if (!preview.ok) return { ok: false, reason: preview.reason };
+  const cost = STRUCTURAL_PIECE_COST[kind];
+  if (state.metrics.credits < cost.credits) return { ok: false, reason: `needs ${cost.credits} credits` };
+  const appliedRotation: ModuleRotation = kind === 'reinforced-bulkhead' && Math.abs(rotation % 180) === 90 ? 90 : 0;
+  const piece = {
+    id: state.structuralPieceSpawnCounter++,
+    kind,
+    originTile,
+    rotation: appliedRotation,
+    tiles: [...preview.tiles],
+    completed: false,
+    creditCost: cost.credits
+  };
+  applyEconomyTransaction(state, {
+    at: state.now,
+    kind: 'construction',
+    credits: -cost.credits,
+    costBasis: cost.credits,
+    label: `${kind} construction`,
+    tileIndex: originTile
+  }, { countAsEarned: false });
+  state.structuralPieces.push(piece);
+  createConstructionSite(state, {
+    kind: 'structural-piece',
+    tileIndex: originTile,
+    structuralPieceId: piece.id,
+    rotation: appliedRotation,
+    requiredMaterials: cost.materials,
+    deliveredMaterials: 0,
+    buildProgress: 0,
+    buildWorkRequired: cost.work,
+    requiresEva: true
+  });
+  bumpTopologyVersion(state);
+  return { ok: true, pieceId: piece.id };
 }
 
 export function validateModulePlacementForConstruction(
@@ -815,6 +951,12 @@ function hasOpenConstructionJob(state: StationState, siteId: number): boolean {
 }
 
 function constructionWorkTile(state: StationState, site: ConstructionSite): number {
+  if (site.kind === 'structural-piece' && site.structuralPieceId !== undefined) {
+    const piece = state.structuralPieces.find((candidate) => candidate.id === site.structuralPieceId);
+    if (piece) {
+      return piece.tiles.find((tile) => state.tiles[tile] === TileType.Space || state.tiles[tile] === TileType.Truss) ?? piece.originTile;
+    }
+  }
   if (site.kind === 'module' && site.targetModule !== undefined && moduleMount(site.targetModule) === 'wall') {
     if (site.requiresEva && EXTERIOR_HULL_MODULES.has(site.targetModule)) {
       const footprint = moduleFootprint(site.targetModule, site.rotation ?? 0);
@@ -1049,6 +1191,18 @@ export function applyConstructionSite(state: StationState, site: ConstructionSit
       site.blockedReason = result.reason ?? 'module placement failed';
       return false;
     }
+    return true;
+  }
+  if (site.kind === 'structural-piece' && site.structuralPieceId !== undefined) {
+    const piece = state.structuralPieces.find((candidate) => candidate.id === site.structuralPieceId);
+    if (!piece) {
+      site.state = 'blocked';
+      site.blockedReason = 'structural piece record missing';
+      return false;
+    }
+    piece.completed = true;
+    ensureStructuralPieceMaintenanceTarget(state, piece);
+    bumpTopologyVersion(state);
     return true;
   }
   return false;

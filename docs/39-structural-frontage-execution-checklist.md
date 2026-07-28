@@ -727,10 +727,10 @@ audited checklist with no unsupported checked claims.
 - [x] Make directional lane traffic affect frontage value and approach pressure.
 - [x] Make dense debris increase directional wear/impact risk.
 - [x] Make sunlight increase generation and thermal load.
-- [ ] Make thermal-sink quality affect high-load expansion.
-- [ ] Make trade composition affect useful interface/service mix.
+- [x] Make thermal-sink quality affect high-load expansion.
+- [x] Make trade composition affect useful interface/service mix.
 - [ ] Keep each effect visible in Charter and station-world feedback.
-- [ ] Provide mitigation through shielding, redundancy, cooling, safer expansion,
+- [x] Provide mitigation through shielding, redundancy, cooling, safer expansion,
   or policy.
 
 ### Phase 7 Gate
@@ -739,7 +739,7 @@ audited checklist with no unsupported checked claims.
 - [x] EVA repair visibly restores damage.
 - [x] A true breach changes pressure and restores correctly.
 - [x] Different charters make different expansion geometry attractive.
-- [ ] Risk remains forecastable and recoverable.
+- [x] Risk remains forecastable and recoverable.
 
 ## Phase 8: Starter, Economy, Progression, UI, And Art
 
@@ -1452,3 +1452,23 @@ Remaining uncertainty:
 - Commits or files: per-station cache and narrow statistics seam in `src/sim/interface-diagnosis.ts`; focused invalidation/isolation matrix in `tools/interface-diagnosis-tests.ts`.
 - Cache contract: repeated UI-style reads of one Dock/Berth identity return the exact same diagnosis object while topology, rooms, modules, docks, selected ship/contract, passenger transfer/service state, and interface-owned cargo work remain unchanged. Irrelevant credit churn does not rebuild it. Active interfaces receive a bounded two-second refresh so time-threshold waits cannot remain stale; idle interfaces remain cached until relevant state changes.
 - Focused evidence: `test:interface-diagnosis` proves one build and two hits across repeated reads/economy churn; immediate rebuild for topology, Door queue, blocked late boarding, cargo reroute, and approach commitment changes; a 20-second transfer-wait threshold discovered on the next traffic bucket; and strict isolation between StationState instances and interface identities. The signature scans only cargo handlers owned by the selected ship rather than every actor route.
+
+2026-07-28 · Thermal-sink expansion consequence and physical mitigation
+
+- Commit or files: focused production-path runner `tools/thermal-sink-expansion-tests.ts`; `test:thermal-sink-expansion` package script (checkpoint commit pending at evidence capture).
+- Focused evidence: the same seed supplies two expansion sites with nearly identical sunlight (`0.589`/`0.594`) but sharply different thermal sink (`0.692`/`0.246`). Identical active Stove kitchens settle at `79.85` versus `85.41` heat and accrue `1.792` versus `1.967` production maintenance debt, proving the Charter field changes real high-load expansion operation rather than only a forecast label.
+- Physical mitigation: installing a real wall-mounted Vent in the poor-sink comparison lowers heat to `82.55` and debt to `1.876` through the production tick path. `npm run test:thermal-sink-expansion` passes deterministically.
+- Deliberate boundary: this checks the thermal-sink consequence itself. The combined Charter/world presentation, broader shielding/redundancy/safer-expansion mitigation row, and full forecastable/recoverable Phase 7 gate remain open for direct UI and browser evidence.
+
+2026-07-28 · Composition-aware Charter service advice
+
+- Commit or files: system-aware forecast model in `src/sim/site-charter.ts` and `tools/charter-forecast-tests.ts` (`904776d`); Charter selection projection in `src/ui/charter-screen.ts` and its focused markup evidence (pending checkpoint commit at evidence capture).
+- Production contract: expected ship mix is the normalized sum of each site lane's traffic factor multiplied by the same faction-derived lane weights that generate traffic. Berths favor tourist/colonist calls; retail favors tourist/trader/colonist; fuel favors industrial/trader/military; repair favors industrial/military; and freight favors trader/industrial. The adjustment is deliberately bounded to `0.82–1.18`, so composition changes useful service ordering without eliminating ambient ship diversity.
+- Focused evidence: `npm run test:charter-forecast` proves exact agreement with production lane weights, normalized positive shares for all five ship types, unchanged legacy output when no SystemMap is supplied, and contrasting tourist- versus industrial-facing fixtures that recommend different leading services. The site-selection hover and detail markup pass the actual SystemMap and expose the concise mix plus the bounded reason.
+- Remaining boundary: the in-station Site Brief still needs the system-backed projection and live-browser inspection, so the combined Charter-and-world visibility row remains open.
+
+2026-07-28 · Forecastable and recoverable environmental expansion risk
+
+- Commit or files: production-path evidence in `tools/phase7-risk-recovery-tests.ts` (pending checkpoint commit at evidence capture), backed by the live map-condition, thermal-diagnostic, module-placement, maintenance, and tick APIs.
+- Focused evidence: before wear exists, the map and inspector identify sunlight heat/wear pressure, poor natural cooling, the loaded Kitchen source, and the physical `vents/insulation` remedy. The predicted bad same-seed location then reaches `80.53` heat and `1.806` wear; adding a real Vent to that already-hot state lowers it to `77.67`, with the inspector attributing Vent relief. A sunlight-matched higher-sink location (`0.720` versus `0.273`) remains materially safer at `75.07` heat.
+- Review judgment: this proves both an in-world cooling remedy and a viable safer expansion choice, and closes the Phase 7 forecastable/recoverable gate. It does not claim the still-open requirement to show every Charter effect in both the Charter UI and station-world presentation.

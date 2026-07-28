@@ -13,6 +13,7 @@ import {
   type CharterOperatingForecast
 } from '../src/sim/site-charter';
 import type { ShipType, SiteCharter, SpaceLane, SystemMap } from '../src/sim/types';
+import { renderCharterSelectionHtml } from '../src/ui/charter-screen';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -335,6 +336,46 @@ test('different system/site composition changes useful service ordering without 
       'composition adjustment escaped its moderate bounds'
     );
   }
+});
+
+test('charter selection renders contrasting composition and leading-service advice', () => {
+  const touristSite: SiteCharter = {
+    version: 1,
+    x: 0.5,
+    y: 0.5,
+    sunFactor: 0.5,
+    debrisFactor: 0,
+    resourceType: null,
+    laneTrafficFactor: { north: 2.5, east: 0.6, south: 0.6, west: 0.6 }
+  };
+  const industrialSite: SiteCharter = {
+    ...touristSite,
+    laneTrafficFactor: { north: 0.6, east: 0.6, south: 2.5, west: 0.6 }
+  };
+  const touristSystem = polarizedSystem(6611, false);
+  const industrialSystem = polarizedSystem(7722, false);
+  const touristForecast = computeCharterOperatingForecast(touristSite, touristSystem);
+  const industrialForecast = computeCharterOperatingForecast(industrialSite, industrialSystem);
+  const touristMarkup = renderCharterSelectionHtml(touristSite, touristSystem);
+  const industrialMarkup = renderCharterSelectionHtml(industrialSite, industrialSystem);
+
+  assert(touristMarkup !== industrialMarkup, 'contrasting compositions rendered identical selection advice');
+  assert(touristMarkup.includes('Expected traffic mix:'), 'tourist selection omitted expected traffic mix');
+  assert(industrialMarkup.includes('Expected traffic mix:'), 'industrial selection omitted expected traffic mix');
+  assert(
+    touristMarkup.includes(touristForecast.services[0].label),
+    'tourist selection omitted its composition-aware leading service'
+  );
+  assert(
+    industrialMarkup.includes(industrialForecast.services[0].label),
+    'industrial selection omitted its composition-aware leading service'
+  );
+  assert(touristMarkup.includes('traffic mix '), 'tourist selection omitted its bounded composition reason');
+  assert(industrialMarkup.includes('traffic mix '), 'industrial selection omitted its bounded composition reason');
+  assert(
+    touristForecast.services[0].id !== industrialForecast.services[0].id,
+    'contrasting selection fixtures did not produce different leading services'
+  );
 });
 
 // --- 4. Neither site reads as a trap --------------------------------------

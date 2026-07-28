@@ -8,7 +8,8 @@ import {
   charterLevelBand,
   charterTrafficBand,
   computeCharterOperatingForecast,
-  computeSiteProfile
+  computeSiteProfile,
+  type CharterOperatingForecast
 } from '../sim/site-charter';
 import type { LaneRoute, SiteCharter, SpaceLane, SystemMap } from '../sim/types';
 
@@ -150,6 +151,8 @@ const STYLE_TEXT = `
 #charter-screen .charter-chip.warn { border-color: rgba(232, 174, 73, 0.66); color: #edca8a; }
 #charter-screen .charter-lines { display: grid; gap: 3px; margin-top: 3px; }
 #charter-screen .charter-lines p { margin: 0; color: #a9bac4; font-size: 9px; line-height: 1.4; }
+#charter-screen .charter-lines .charter-composition { color: #b9d7d0; }
+#charter-screen .charter-lines .charter-composition b { color: #f0d38d; font-weight: 500; }
 #charter-screen .charter-advice { margin-top: 4px; }
 #charter-screen .charter-advice em { display: block; color: #90a5b1; font-size: 9px; font-style: normal; letter-spacing: 0.08em; text-transform: uppercase; }
 #charter-screen .charter-advice ul { margin: 3px 0 0; padding-left: 13px; display: grid; gap: 3px; }
@@ -283,6 +286,35 @@ function escapeHtml(value: string): string {
     "'": '&#39;',
     '"': '&quot;'
   })[character] ?? character);
+}
+
+function leadServiceCompositionText(forecast: CharterOperatingForecast): string {
+  const lead = forecast.services[0];
+  const multiplier = lead.compositionMultiplier;
+  if (multiplier === undefined) return lead.label;
+  const delta = Math.round((multiplier - 1) * 100);
+  const fit = delta === 0 ? 'traffic mix neutral' : `traffic mix ${delta > 0 ? '+' : ''}${delta}%`;
+  return `${lead.label} · ${fit}`;
+}
+
+/** Pure markup seam used by the live selection panel and focused UI evidence. */
+export function renderCharterSelectionHtml(profile: SiteCharter, system: SystemMap): string {
+  const forecast = computeCharterOperatingForecast(profile, system);
+  const lead = forecast.services[0];
+  const composition = forecast.compositionLine
+    ? `<p class="charter-composition">${escapeHtml(forecast.compositionLine)} <b>${escapeHtml(leadServiceCompositionText(forecast))}</b> leads here.</p>`
+    : '';
+  return `<strong>${escapeHtml(forecast.headline)}</strong>`
+    + `<span>${escapeHtml(forecast.summary)}</span>`
+    + `<div class="charter-chips">${forecast.chips.map((chip) =>
+      `<span class="charter-chip ${chip.tone}"><b>${escapeHtml(chip.label)}</b> ${escapeHtml(chip.detail)}</span>`).join('')}</div>`
+    + `<div class="charter-lines">${composition}${[forecast.resourceLine, forecast.powerLine, forecast.exposureLine, forecast.expansionLine]
+      .map((line) => `<p>${escapeHtml(line)}</p>`).join('')}</div>`
+    + `<div class="charter-advice"><em>Mitigations</em><ul>${forecast.mitigations
+      .map((item) => `<li><b>${escapeHtml(item.system)}.</b> ${escapeHtml(item.detail)}</li>`).join('')}</ul></div>`
+    + `<div class="charter-advice"><em>Trade-offs</em><ul>${forecast.tradeoffs
+      .map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul></div>`
+    + `<p class="charter-viability">${escapeHtml(forecast.viability)}</p>`;
 }
 
 function makeStars(seed: string): Star[] {
@@ -702,7 +734,7 @@ export function mountCharterScreen(
       return;
     }
     const profile = computeSiteProfile(system, point.x, point.y);
-    const forecast = computeCharterOperatingForecast(profile);
+    const forecast = computeCharterOperatingForecast(profile, system);
     const economy = forecast.economy;
     const targetName = target.kind === 'planet' ? system.planets.find((planet) => planet.id === target.id)?.displayName
       : target.kind === 'gate' ? 'Trade gate'
@@ -716,7 +748,7 @@ export function mountCharterScreen(
       : `${trafficBandLabel(peakTraffic(profile))} · ${forecast.busiestFace.lane}`;
     debrisField.textContent = levelBand(profile.debrisFactor);
     resourceField.textContent = resourceLabel(profile.resourceType);
-    leadServiceField.textContent = forecast.services[0].label;
+    leadServiceField.textContent = leadServiceCompositionText(forecast);
     supplyCostField.textContent = `${Math.round(economy.supplyWholesaleMultiplier * 100)}%`;
     retailDemandField.textContent = `${Math.round(economy.retailDemandMultiplier * 100)}%`;
     repairDemandField.textContent = `${Math.round(economy.repairDemandMultiplier * 100)}%`;
@@ -754,21 +786,9 @@ export function mountCharterScreen(
   const select = (point: Point): void => {
     selected = point;
     const profile = computeSiteProfile(system, point.x, point.y);
-    // Same forecast object the in-game Site Brief renders: headline, summary
-    // and chips are shared verbatim, and the charter screen adds the fuller
-    // trade-off and mitigation reading on top of them.
-    const forecast = computeCharterOperatingForecast(profile);
-    selectionSummary.innerHTML = `<strong>${escapeHtml(forecast.headline)}</strong>`
-      + `<span>${escapeHtml(forecast.summary)}</span>`
-      + `<div class="charter-chips">${forecast.chips.map((chip) =>
-        `<span class="charter-chip ${chip.tone}"><b>${escapeHtml(chip.label)}</b> ${escapeHtml(chip.detail)}</span>`).join('')}</div>`
-      + `<div class="charter-lines">${[forecast.resourceLine, forecast.powerLine, forecast.exposureLine, forecast.expansionLine]
-        .map((line) => `<p>${escapeHtml(line)}</p>`).join('')}</div>`
-      + `<div class="charter-advice"><em>Mitigations</em><ul>${forecast.mitigations
-        .map((item) => `<li><b>${escapeHtml(item.system)}.</b> ${escapeHtml(item.detail)}</li>`).join('')}</ul></div>`
-      + `<div class="charter-advice"><em>Trade-offs</em><ul>${forecast.tradeoffs
-        .map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul></div>`
-      + `<p class="charter-viability">${escapeHtml(forecast.viability)}</p>`;
+    // The pure renderer consumes the same system-backed forecast as hover, so
+    // a click cannot lose the directional traffic mix the player just saw.
+    selectionSummary.innerHTML = renderCharterSelectionHtml(profile, system);
     charterButton.disabled = false;
     draw(performance.now());
   };

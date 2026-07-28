@@ -1368,7 +1368,19 @@ export interface JobBoardSummary {
   labels: string[];
 }
 
-export type ConstructionKind = 'tile' | 'module';
+export type PlaceableStructuralPieceKind = 'junction' | 'reinforced-bulkhead';
+
+export interface StructuralPiece {
+  id: number;
+  kind: PlaceableStructuralPieceKind;
+  originTile: number;
+  rotation: ModuleRotation;
+  tiles: number[];
+  completed: boolean;
+  creditCost: number;
+}
+
+export type ConstructionKind = 'tile' | 'module' | 'structural-piece';
 export type ConstructionState = 'planned' | 'delivering' | 'building' | 'blocked' | 'done';
 
 export interface ConstructionSite {
@@ -1377,6 +1389,7 @@ export interface ConstructionSite {
   tileIndex: number;
   targetTile?: TileType;
   targetModule?: ModuleType;
+  structuralPieceId?: number;
   rotation?: ModuleRotation;
   requiredMaterials: number;
   deliveredMaterials: number;
@@ -2919,6 +2932,7 @@ export interface StationState {
   jobs: TransportJob[];
   reservations: Reservation[];
   constructionSites: ConstructionSite[];
+  structuralPieces: StructuralPiece[];
   structuralExpansionProjects: StructuralExpansionProject[];
   itemNodes: ItemNode[];
   legacyMaterialStock: number;
@@ -2956,6 +2970,7 @@ export interface StationState {
   jobSpawnCounter: number;
   reservationSpawnCounter: number;
   constructionSiteSpawnCounter: number;
+  structuralPieceSpawnCounter: number;
   structuralExpansionProjectSpawnCounter: number;
   incidentSpawnCounter: number;
   incidentHeat: number;
@@ -3115,6 +3130,7 @@ export interface BuildTool {
     | 'zone'
     | 'room'
     | 'module'
+    | 'structural-piece'
     | 'move-module'
     | 'utility-underlay'
     | 'copy-room'
@@ -3125,6 +3141,7 @@ export interface BuildTool {
   zone?: ZoneType;
   room?: RoomType;
   module?: ModuleType;
+  structuralPiece?: PlaceableStructuralPieceKind;
   moveSourceModuleId?: number;
   utilityKind?: UtilityUnderlayKind;
   utilityErase?: boolean;

@@ -1,4 +1,14 @@
-import { TileType, type StationState } from './types';
+import {
+  TileType,
+  ModuleType,
+  RoomType,
+  fromIndex,
+  inBounds,
+  toIndex,
+  type PlaceableStructuralPieceKind,
+  type StationState
+} from './types';
+import { BERTH_SIZE_MIN } from './balance';
 
 export const MAX_TRUSS_SPAN = 6;
 
@@ -10,9 +20,105 @@ export interface ProposedStructuralPiece {
   kind: StructuralPieceKind;
 }
 
+export function structuralPieceDimensions(
+  kind: PlaceableStructuralPieceKind,
+  rotation: number
+): { width: number; height: number } {
+  if (kind === 'junction') return { width: 1, height: 1 };
+  return Math.abs(rotation % 180) === 90 ? { width: 1, height: 2 } : { width: 2, height: 1 };
+}
+
+export function structuralPieceTiles(
+  state: Pick<StationState, 'width' | 'height'>,
+  originTile: number,
+  kind: PlaceableStructuralPieceKind,
+  rotation: number
+): number[] {
+  if (originTile < 0 || originTile >= state.width * state.height) return [];
+  const origin = fromIndex(originTile, state.width);
+  const size = structuralPieceDimensions(kind, rotation);
+  const tiles: number[] = [];
+  for (let dy = 0; dy < size.height; dy++) {
+    for (let dx = 0; dx < size.width; dx++) {
+      const x = origin.x + dx;
+      const y = origin.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) return [];
+      tiles.push(toIndex(x, y, state.width));
+    }
+  }
+  return tiles;
+}
+
 export interface StructuralInterfaceLoad {
   tile: number;
   kind: StructuralLoadKind;
+}
+
+/** Actual built frontage interfaces, never forecast/demo load tokens. */
+export function deriveStructuralInterfaceLoads(state: StationState): StructuralInterfaceLoad[] {
+  const loads: StructuralInterfaceLoad[] = state.moduleInstances
+    .filter((module) => module.type === ModuleType.PodDock)
+    .map((module) => ({ tile: module.originTile, kind: 'small' as const }));
+  const visited = new Set<number>();
+  for (let start = 0; start < state.rooms.length; start++) {
+    if (visited.has(start) || state.rooms[start] !== RoomType.Berth) continue;
+    const cluster: number[] = [];
+    const queue = [start];
+    visited.add(start);
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const tile = queue[cursor]!;
+      cluster.push(tile);
+      for (const neighbor of neighboringTiles(tile, state.width, state.height)) {
+        if (visited.has(neighbor) || state.rooms[neighbor] !== RoomType.Berth) continue;
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+    const clusterSet = new Set(cluster);
+    const clamps = state.moduleInstances
+      .filter((module) => module.type === ModuleType.DockingClamp && module.tiles.some((tile) => clusterSet.has(tile)))
+      .sort((left, right) => left.originTile - right.originTile);
+    if (clamps.length < 2) continue;
+    const heavy = cluster.length >= BERTH_SIZE_MIN.large && clamps.length >= 5;
+    loads.push({ tile: clamps[0]!.originTile, kind: heavy ? 'heavy' : 'medium' });
+  }
+  return loads.sort((left, right) => left.tile - right.tile || left.kind.localeCompare(right.kind));
+}
+
+export function validateLiveStructuralInterfaces(state: StationState): StructuralSupportValidation {
+  return validateStructuralSupportPlan(state, [], deriveStructuralInterfaceLoads(state));
+}
+
+/** Attribute real support failures to the nearest relevant completed transfer piece. */
+export function overloadedStructuralPieceIds(
+  state: StationState,
+  validation: StructuralSupportValidation = validateLiveStructuralInterfaces(state)
+): Set<number> {
+  const overloaded = new Set<number>();
+  const completed = state.structuralPieces.filter((piece) => piece.completed);
+  const distance = (tile: number, piece: StationState['structuralPieces'][number]): number => {
+    const from = fromIndex(tile, state.width);
+    return Math.min(...piece.tiles.map((candidate) => {
+      const to = fromIndex(candidate, state.width);
+      return Math.abs(from.x - to.x) + Math.abs(from.y - to.y);
+    }));
+  };
+  for (const problem of validation.problems) {
+    for (const piece of completed) {
+      if (piece.tiles.includes(problem.tile)) overloaded.add(piece.id);
+    }
+    const requiredKind = problem.reason === 'heavy-load-requires-reinforced-transfer'
+      ? 'reinforced-bulkhead'
+      : problem.reason === 'medium-load-requires-junction'
+        ? 'junction'
+        : null;
+    if (!requiredKind) continue;
+    const nearest = completed
+      .filter((piece) => piece.kind === requiredKind)
+      .sort((left, right) => distance(problem.tile, left) - distance(problem.tile, right) || left.id - right.id)[0];
+    if (nearest) overloaded.add(nearest.id);
+  }
+  return overloaded;
 }
 
 export type StructuralSupportReason =
@@ -31,7 +137,7 @@ export interface StructuralSupportProblem {
   reason: StructuralSupportReason;
 }
 
-export type StructuralNodeKind = 'root' | StructuralPieceKind;
+export type StructuralNodeKind = 'root' | 'expansion-hull' | StructuralPieceKind;
 
 export interface StructuralSupportNode {
   tile: number;
@@ -82,16 +188,15 @@ const CARDINAL_OFFSETS = [
 ] as const;
 
 /**
- * Builds a planning-time support graph. Every pre-existing pressurized/hull
- * tile is grandfathered as a root because StationState does not yet record a
- * construction-era structural layer. New construction is represented only by
- * the supplied pieces and is never written back to StationState.
+ * Builds a planning-time support graph. Legacy hull is grandfathered as root,
+ * while tiles authored by a durable commissioned expansion retain their
+ * construction provenance and must transfer load back to that original hull.
  */
 export function buildStructuralSupportGraph(
   state: StationState,
   proposedPieces: readonly ProposedStructuralPiece[] = []
 ): StructuralSupportGraph {
-  return cachedGraphBuild(state, proposedPieces).graph;
+  return cachedGraphBuild(state, proposedPieces, true).graph;
 }
 
 export function validateStructuralSupportPlan(
@@ -99,7 +204,9 @@ export function validateStructuralSupportPlan(
   proposedPieces: readonly ProposedStructuralPiece[] = [],
   loads: readonly StructuralInterfaceLoad[] = []
 ): StructuralSupportValidation {
-  const built = cachedGraphBuild(state, proposedPieces);
+  // Durable pieces under construction appear in the planning graph, but only
+  // completed pieces may satisfy live branch/span/load validation.
+  const built = cachedGraphBuild(state, proposedPieces, false);
   const graph = built.graph;
   // Validation appends load/reachability findings. Keep the cached graph-build
   // result immutable so one query can never contaminate a later query.
@@ -140,7 +247,8 @@ export function getStructuralSupportCacheStats(state: StationState): StructuralS
 
 function cachedGraphBuild(
   state: StationState,
-  proposedPieces: readonly ProposedStructuralPiece[]
+  proposedPieces: readonly ProposedStructuralPiece[],
+  includePendingStatePieces: boolean
 ): GraphBuild {
   let cached = structuralSupportCache.get(state);
   if (
@@ -161,7 +269,7 @@ function cachedGraphBuild(
     structuralSupportCache.set(state, cached);
   }
 
-  const key = proposedPieces
+  const key = `${includePendingStatePieces ? 'planning' : 'live'}|` + proposedPieces
     .map((piece) => `${piece.tile}:${piece.kind}`)
     .join('|');
   const hit = cached.graphs.get(key);
@@ -170,7 +278,7 @@ function cachedGraphBuild(
     return hit;
   }
 
-  const built = buildGraphUncached(state, proposedPieces);
+  const built = buildGraphUncached(state, proposedPieces, includePendingStatePieces);
   cached.builds += 1;
   if (cached.graphs.size >= MAX_CACHED_PLANS_PER_STATE) {
     const oldestKey = cached.graphs.keys().next().value as string | undefined;
@@ -181,17 +289,49 @@ function cachedGraphBuild(
   return built;
 }
 
-function buildGraphUncached(state: StationState, proposedPieces: readonly ProposedStructuralPiece[]): GraphBuild {
+function buildGraphUncached(
+  state: StationState,
+  proposedPieces: readonly ProposedStructuralPiece[],
+  includePendingStatePieces: boolean
+): GraphBuild {
   const nodeByTile = new Map<number, StructuralSupportNode>();
   const problems: StructuralSupportProblem[] = [];
   const size = state.width * state.height;
+  const rootTiles = new Set<number>();
+  const commissionedExpansionTiles = new Set(
+    state.structuralExpansionProjects
+      .filter((project) => project.commissioned && !project.cancelled)
+      .flatMap((project) => project.targets
+        .filter((target) => target.tileIndex !== project.doorTile)
+        .map((target) => target.tileIndex))
+  );
 
   for (let tile = 0; tile < size; tile++) {
     const type = state.tiles[tile];
     if (type !== TileType.Space && type !== TileType.Truss) {
-      nodeByTile.set(tile, { tile, kind: 'root', existing: true });
+      if (commissionedExpansionTiles.has(tile)) {
+        nodeByTile.set(tile, { tile, kind: 'expansion-hull', existing: true });
+      } else {
+        nodeByTile.set(tile, { tile, kind: 'root', existing: true });
+        rootTiles.add(tile);
+      }
     } else if (type === TileType.Truss) {
       nodeByTile.set(tile, { tile, kind: 'truss', existing: true });
+    }
+  }
+
+  for (const piece of state.structuralPieces ?? []) {
+    if (!piece.completed && !includePendingStatePieces) continue;
+    for (const tile of piece.tiles) {
+      if (!isInBounds(tile, size)) {
+        problems.push({ tile, reason: 'piece-out-of-bounds' });
+        continue;
+      }
+      nodeByTile.set(tile, {
+        tile,
+        kind: piece.kind,
+        existing: piece.completed
+      });
     }
   }
 
@@ -225,7 +365,7 @@ function buildGraphUncached(state: StationState, proposedPieces: readonly Propos
   return {
     graph: {
       nodes,
-      rootTiles: nodes.filter((node) => node.kind === 'root').map((node) => node.tile),
+      rootTiles: [...rootTiles].sort((left, right) => left - right),
       adjacency,
       width: state.width,
       height: state.height
@@ -240,7 +380,10 @@ function validateBranches(
   problems: StructuralSupportProblem[]
 ): void {
   for (const node of graph.nodes) {
-    if (node.kind !== 'truss' && node.kind !== 'reinforced-bulkhead') continue;
+    // A reinforced bulkhead is itself the heavy hull transfer face. Its hull
+    // half naturally touches several grandfathered root tiles; that is not a
+    // scaffold branch and must not make every installed 2x1 transfer invalid.
+    if (node.kind !== 'truss') continue;
     const degree = (graph.adjacency.get(node.tile) ?? []).length;
     if (degree > 2) problems.push({ tile: node.tile, reason: 'branch-requires-junction' });
   }
@@ -302,6 +445,10 @@ function validateLoads(
       continue;
     }
     if (load.kind === 'small') continue;
+    // Pre-program hull predates explicit structural-piece accounting. Preserve
+    // those interfaces as grandfathered; only commissioned frontage carries
+    // the new transfer requirements.
+    if (nodeByTile.get(load.tile)?.kind === 'root') continue;
 
     if (load.kind === 'medium') {
       const hasTransferPoint = supportedAnchors.some((tile) => {
@@ -348,6 +495,7 @@ function hasReinforcedPathToRoot(
   graph: StructuralSupportGraph,
   nodeByTile: ReadonlyMap<number, StructuralSupportNode>
 ): boolean {
+  const roots = new Set(graph.rootTiles);
   const queue: Array<{ tile: number; reinforced: boolean }> = [{
     tile: anchor,
     reinforced: nodeByTile.get(anchor)?.kind === 'reinforced-bulkhead'
@@ -359,7 +507,12 @@ function hasReinforcedPathToRoot(
     const key = `${current.tile}:${current.reinforced}`;
     if (visited.has(key)) continue;
     visited.add(key);
-    if (current.reinforced && nodeByTile.get(current.tile)?.kind === 'root') return true;
+    if (roots.has(current.tile)) {
+      if (current.reinforced) return true;
+      // Never walk through grandfathered hull and discover an unrelated
+      // Bulkhead elsewhere. Reinforcement must occur before the root transfer.
+      continue;
+    }
     for (const neighbor of graph.adjacency.get(current.tile) ?? []) {
       queue.push({
         tile: neighbor,

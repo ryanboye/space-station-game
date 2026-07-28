@@ -104,6 +104,7 @@ export {
   orderFoodSupply,
   orderFuelDetailed,
   planModuleConstruction,
+  planStructuralPieceConstruction,
   planTileConstruction,
   previewCommercialOffer,
   passTrafficOffer,
@@ -149,5 +150,6 @@ export {
   tryMoveModule,
   trySetTile,
   trySetTileWithCredits,
-  validateDockPlacement
+  validateDockPlacement,
+  validateStructuralPiecePlacement
 } from './sim';

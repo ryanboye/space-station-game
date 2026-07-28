@@ -113,6 +113,7 @@ import {
   holdTrafficOffer,
   openCommercialUnitForOffers,
   planModuleConstruction,
+  planStructuralPieceConstruction,
   planTileConstruction,
   previewCommercialOffer,
   quoteMaterialImportCost,
@@ -178,6 +179,7 @@ import {
   type JobStallReason,
   type JobStatusCounts,
   type ModuleRotation,
+  type PlaceableStructuralPieceKind,
   type StationState,
   type TrafficOffer,
   type TrafficOfferPreview,
@@ -530,6 +532,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room-paste="1" title="Paste copied station stamp — tiles, room settings, zones, docks, and fresh furniture"><span class="tool-key">▣</span>Paste</button>
         <button class="tool-btn" data-tool-tile="floor" title="${STRUCTURAL_EXPANSION_ENABLED ? 'Floor (1) - paint over truss to plan a sealed station expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
         ${STRUCTURAL_EXPANSION_ENABLED ? '<button class="tool-btn" data-tool-tile="truss" title="Truss - plan an EVA-built structural scaffold in open space"><span class="tool-key">.</span>Truss</button>' : ''}
+        <button class="tool-btn" data-tool-structural-piece="junction" title="Truss Junction — 1x1 branch/span support node"><span class="tool-key">·</span>Junction</button>
+        <button class="tool-btn" data-tool-structural-piece="reinforced-bulkhead" title="Reinforced Bulkhead — rotatable 2x1 heavy berth transfer"><span class="tool-key">·</span>Bulkhead</button>
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
@@ -2728,6 +2732,13 @@ function selectModuleTool(module: ModuleType): void {
     : module === ModuleType.FuelCoupler || module === ModuleType.FreightLocker || module === ModuleType.MaintenanceSocket
       ? 'Dock attachment: place on an exterior hull wall near a Pod Dock.'
       : '';
+}
+
+function selectStructuralPieceTool(piece: PlaceableStructuralPieceKind): void {
+  currentTool = { kind: 'structural-piece', structuralPiece: piece };
+  toolLockMessage = piece === 'junction'
+    ? 'Junction: place on connected space or truss to renew span and support a branch.'
+    : 'Bulkhead: bridge truss/space and the exterior hull face; rotate with [ or ].';
 }
 
 function selectModuleMoveTool(): void {
@@ -7532,6 +7543,7 @@ function refreshModulePaletteSprites(): void {
 function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'copy-room' || tool.kind === 'paste-room') return 'structure';
   if (tool.kind === 'utility-underlay') return 'structure';
+  if (tool.kind === 'structural-piece') return 'structure';
   if (tool.kind === 'room') return 'rooms';
   if (tool.kind === 'module' || tool.kind === 'move-module') return 'modules';
   if (tool.kind === 'hire-staff') return 'crew';
@@ -7545,6 +7557,7 @@ function toolPaletteKey(tool: BuildTool): string {
   if (tool.kind === 'copy-room') return 'copy-room';
   if (tool.kind === 'paste-room') return 'paste-room';
   if (tool.kind === 'module') return `module:${tool.module}`;
+  if (tool.kind === 'structural-piece') return `structural-piece:${tool.structuralPiece}`;
   if (tool.kind === 'move-module') return `move-module:${tool.moveSourceModuleId ?? 'select'}`;
   if (tool.kind === 'utility-underlay') return `utility:${tool.utilityKind}:${tool.utilityErase ? 'erase' : 'draw'}`;
   if (tool.kind === 'zone') return `zone:${tool.zone}`;
@@ -7675,6 +7688,7 @@ function wireToolbar(): void {
       const roomCopyKey = btn.dataset.toolRoomCopy;
       const roomPasteKey = btn.dataset.toolRoomPaste;
       const moduleKey = btn.dataset.toolModule;
+      const structuralPieceKey = btn.dataset.toolStructuralPiece as PlaceableStructuralPieceKind | undefined;
       const moduleMoveKey = btn.dataset.toolModuleMove;
       const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
       const rotateKey = btn.dataset.toolRotate;
@@ -7704,6 +7718,8 @@ function wireToolbar(): void {
       } else if (moduleKey) {
         const module = TOOLBAR_MODULE_MAP[moduleKey];
         if (module !== undefined) selectModuleTool(module);
+      } else if (structuralPieceKey === 'junction' || structuralPieceKey === 'reinforced-bulkhead') {
+        selectStructuralPieceTool(structuralPieceKey);
       } else if (utilityUnderlayKey) {
         if (utilityUnderlayKey === 'erase') {
           selectUtilityUnderlayTool('air-duct', true);
@@ -7753,6 +7769,7 @@ function refreshToolbar(): void {
     const roomCopyKey = btn.dataset.toolRoomCopy;
     const roomPasteKey = btn.dataset.toolRoomPaste;
     const moduleKey = btn.dataset.toolModule;
+    const structuralPieceKey = btn.dataset.toolStructuralPiece as PlaceableStructuralPieceKind | undefined;
     const moduleMoveKey = btn.dataset.toolModuleMove;
     const utilityUnderlayKey = btn.dataset.toolUtilityUnderlay;
     const diagnosticOverlayKey = btn.dataset.diagnosticOverlay;
@@ -7789,6 +7806,8 @@ function refreshToolbar(): void {
       }
     } else if (moduleMoveKey) {
       active = toolKind === 'move-module';
+    } else if (structuralPieceKey) {
+      active = toolKind === 'structural-piece' && currentTool.structuralPiece === structuralPieceKey;
     } else if (roomKey) {
       const room = TOOLBAR_ROOM_MAP[roomKey];
       if (room !== undefined) {
@@ -9278,6 +9297,22 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       return;
     }
     if (currentTool.staffRole) placeHiredStaffAt(currentTool.staffRole, toIndex(a.x, a.y, state.width));
+    return;
+  }
+  if (currentTool.kind === 'structural-piece' && currentTool.structuralPiece) {
+    if (a.x !== b.x || a.y !== b.y) {
+      toolLockMessage = 'Place structural pieces one at a time.';
+      return;
+    }
+    const planned = planStructuralPieceConstruction(
+      state,
+      toIndex(a.x, a.y, state.width),
+      currentTool.structuralPiece,
+      state.controls.moduleRotation
+    );
+    toolLockMessage = planned.ok
+      ? `${currentTool.structuralPiece === 'junction' ? 'Junction' : 'Reinforced Bulkhead'} planned for delivery and EVA welding.`
+      : planned.reason ?? 'Structural piece placement rejected.';
     return;
   }
   if (!starterLayoutEditorMode && currentTool.kind === 'room' && currentTool.room && currentTool.room !== RoomType.None && !isRoomUnlocked(state, currentTool.room)) {

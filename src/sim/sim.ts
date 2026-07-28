@@ -325,7 +325,7 @@ import {
   updateEvaSuitForRoute,
   validateModulePlacementForConstruction
 } from './construction';
-import { validateStructuralSupportPlan } from './structural-support';
+import { deriveStructuralInterfaceLoads, validateStructuralSupportPlan } from './structural-support';
 import {
   ALL_SHIP_SIZES_FOR_BERTH,
   ALL_SHIP_TYPES_FOR_BERTH,
@@ -8509,6 +8509,18 @@ export function pickBerthForShip(
     .filter((b) => shipSizeFitsBerth(shipSize, b.size))
     .filter((b) => b.spaceExposed)
     .filter((b) => berthHardwareReason(b.facility, shipSize) === null)
+    .filter((b) => {
+      const berthTiles = new Set(b.tiles);
+      const authoredInterface = deriveStructuralInterfaceLoads(state).find(
+        (load) => load.kind !== 'small' && berthTiles.has(load.tile)
+      );
+      if (!authoredInterface) return false;
+      const requiredInterface = {
+        tile: authoredInterface.tile,
+        kind: shipSize === 'large' ? 'heavy' as const : 'medium' as const
+      };
+      return validateStructuralSupportPlan(state, [], [requiredInterface]).ok;
+    })
     .filter((b) => isCapabilitySuperset(b.capabilities, required))
     // Per-berth player allowlist (dock-modal parity follow-up): a
     // berth with no config row defaults to "all allowed" (legacy
@@ -10537,6 +10549,30 @@ const MODULE_MAINTENANCE_ROOMS = new Map<ModuleType, { domain: MaintenanceDomain
   [ModuleType.CustomsCounter, { domain: 'berth', room: RoomType.Berth, label: 'customs counter', effect: 'ship processing slowed at high wear' }]
 ]);
 
+export function ensureStructuralPieceMaintenanceTarget(
+  state: StationState,
+  piece: StationState['structuralPieces'][number]
+): StationState['maintenanceDebts'][number] {
+  const key = `structural-piece:${piece.id}`;
+  let debt = state.maintenanceDebts.find((candidate) => candidate.key === key);
+  if (!debt) {
+    debt = {
+      key,
+      domain: 'module',
+      source: 'idle',
+      anchorTile: piece.originTile,
+      targetTile: piece.originTile,
+      exterior: true,
+      label: piece.kind === 'junction' ? 'truss junction' : 'reinforced bulkhead',
+      effect: piece.kind === 'junction' ? 'branch and span support strained' : 'heavy berth transfer weakened',
+      debt: 0,
+      lastServicedAt: state.now
+    };
+    state.maintenanceDebts.push(debt);
+  }
+  return debt;
+}
+
 function processModuleMaintenance(state: StationState, minutes: number, ensureDebt: EnsureMaintenanceDebt): void {
   if (minutes <= 0) return;
   const activeByRoom = new Map<RoomType, Set<number>>();
@@ -10700,6 +10736,34 @@ function updateMaintenanceDebt(state: StationState, dt: number): void {
   processSystem('life-support');
   processExteriorMaintenance(state, minutes, ensureDebt);
   processModuleMaintenance(state, minutes, ensureDebt);
+  const liveInterfaces = deriveStructuralInterfaceLoads(state);
+  const liveInterfaceTiles = new Set(liveInterfaces.map((load) => load.tile));
+  for (const piece of state.structuralPieces) {
+    if (!piece.completed) continue;
+    const underLoad = piece.tiles.some((tile) => liveInterfaceTiles.has(tile)) || piece.tiles.some((tile) =>
+      liveInterfaces.some((load) => {
+        const from = fromIndex(load.tile, state.width);
+        const to = fromIndex(tile, state.width);
+        return Math.abs(from.x - to.x) + Math.abs(from.y - to.y) <= 2;
+      })
+    );
+    const debt = ensureDebt({
+      key: `structural-piece:${piece.id}`,
+      domain: 'module',
+      source: underLoad ? 'high-load' : 'idle',
+      anchorTile: piece.originTile,
+      targetTile: piece.originTile,
+      exterior: true,
+      label: piece.kind === 'junction' ? 'truss junction' : 'reinforced bulkhead',
+      effect: piece.kind === 'junction' ? 'branch and span support strained' : 'heavy berth transfer weakened'
+    });
+    debt.debt = clamp(
+      debt.debt + (MAINTENANCE_MODULE_IDLE_RISE_PER_MIN + (underLoad ? MAINTENANCE_MODULE_LOAD_RISE_PER_MIN : 0)) * minutes,
+      0,
+      100
+    );
+    if (shouldEnqueueRepairJob(state, debt)) enqueueRepairJobForDebt(state, debt);
+  }
   for (const leak of state.plumbing.leaks) {
     seenKeys.add(maintenanceTargetKey('plumbing', leak.tileIndex));
   }
@@ -17228,8 +17292,8 @@ export {
   removeConstructionAtTile,
   shouldSuitUpFromAirlock,
   updateEvaSuitForRoute,
-  validateModulePlacementForConstruction
-  ,validateStructuralPiecePlacement
+  validateModulePlacementForConstruction,
+  validateStructuralPiecePlacement
 } from './construction';
 
 function enqueueTransportJob(
@@ -19715,6 +19779,15 @@ function extendActiveReservationsForOwner(
 
 function pendingJobStillViable(state: StationState, job: StationState['jobs'][number]): boolean {
   if (job.state !== 'pending') return false;
+  if (job.type === 'construct' && job.constructionSiteId !== undefined) {
+    const site = state.constructionSites.find((candidate) => candidate.id === job.constructionSiteId);
+    if (!site || site.state === 'done') return false;
+    if (job.constructionMode === 'deliver') {
+      const sourceAvailable = itemStockAtNode(state, job.fromTile, 'rawMaterial') > 0.05 || state.legacyMaterialStock > 0.05;
+      return site.deliveredMaterials + 0.05 < site.requiredMaterials && sourceAvailable;
+    }
+    return site.deliveredMaterials + 0.05 >= site.requiredMaterials && site.buildProgress + 0.05 < site.buildWorkRequired;
+  }
   if (job.portCargoDirection === 'inbound' && job.portCargoLotId !== undefined) {
     const lot = state.portOps.cargoLots.find((candidate) => candidate.id === job.portCargoLotId);
     const shipActive = state.arrivingShips.some((ship) => ship.id === job.portShipId && ship.stage === 'docked');
@@ -26912,10 +26985,7 @@ export function planStationExpansionOnTruss(
     [],
     [...expansionFloors].map((tile) => ({ tile, kind: 'small' as const }))
   );
-  // Legacy expansion paints a contiguous deck of Truss tiles and has no
-  // placeable Junction yet. Enforce reachability and span now; the explicit
-  // branch rule becomes authoritative when Junction enters the build palette.
-  const blockingStructuralProblem = structural.problems.find((problem) => problem.reason !== 'branch-requires-junction');
+  const blockingStructuralProblem = structural.problems[0];
   if (blockingStructuralProblem) {
     return { ok: false, reason: `structural support: ${blockingStructuralProblem.reason}` };
   }

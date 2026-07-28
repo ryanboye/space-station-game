@@ -20,6 +20,7 @@ import {
   toIndex,
   isWalkable,
   type ItemType,
+  type PlaceableStructuralPieceKind,
   type BuildTool,
   type StationState
 } from '../sim/types';
@@ -64,7 +65,8 @@ import {
   getApproachConflictGroups,
   getDockingSlotDescriptors,
   getPodDockPlacementView,
-  validateDockingSlot
+  validateDockingSlot,
+  validateStructuralPiecePlacement
 } from '../sim/sim';
 import {
   barGroupStatus,
@@ -94,8 +96,14 @@ import {
   MODULE_SPRITE_KEYS,
   ROOM_SPRITE_KEYS,
   TILE_SPRITE_KEYS,
-  WALL_SPRITE_VARIANT_KEYS
+  WALL_SPRITE_VARIANT_KEYS,
+  STRUCTURAL_SPRITE_KEYS
 } from './sprite-keys';
+import {
+  structuralPieceDimensions,
+  overloadedStructuralPieceIds,
+  validateLiveStructuralInterfaces
+} from '../sim/structural-support';
 import { shipHullAssetPath, shipHullProfile } from '../sim/ship-hulls';
 import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
 import { drawEnvironmentAtlasCell, getEnvironmentPiece } from './environment-pieces';
@@ -2473,6 +2481,94 @@ function drawFacilitySpriteStateOverlay(
       if (candidate.moduleId === module.id) debt = Math.max(debt, candidate.debt);
     }
     drawModuleConditionDecal(ctx, state, module, debt);
+  }
+}
+
+export type StructuralPieceVisualState = 'planned' | 'delivered' | 'welding' | 'complete' | 'overloaded' | 'damaged';
+
+/** Purely selects from construction, support validation, and maintenance debt. */
+export function structuralPieceVisualState(
+  state: StationState,
+  piece: StationState['structuralPieces'][number],
+  overloadedPieceIds?: ReadonlySet<number>
+): StructuralPieceVisualState {
+  if (!piece.completed) {
+    const site = state.constructionSites.find((candidate) => candidate.structuralPieceId === piece.id);
+    if (!site || site.deliveredMaterials + 0.05 < site.requiredMaterials) return 'planned';
+    return site.buildProgress > 0 ? 'welding' : 'delivered';
+  }
+  const damaged = state.maintenanceDebts.some(
+    (debt) => debt.key === `structural-piece:${piece.id}` && debt.debt >= MODULE_WEAR_FAILING
+  );
+  if (damaged && piece.kind === 'reinforced-bulkhead') return 'damaged';
+  const overloaded = overloadedPieceIds ?? overloadedStructuralPieceIds(state);
+  if (overloaded.has(piece.id)) return 'overloaded';
+  return 'complete';
+}
+
+export function structuralPieceSpriteKey(
+  piece: StationState['structuralPieces'][number],
+  visualState: StructuralPieceVisualState
+): string {
+  const family = piece.kind === 'junction'
+    ? STRUCTURAL_SPRITE_KEYS.trussJunction
+    : STRUCTURAL_SPRITE_KEYS.reinforcedBulkhead;
+  if (visualState === 'damaged' && piece.kind === 'junction') return family.complete;
+  return family[visualState as keyof typeof family] ?? family.complete;
+}
+
+function drawStructuralPieces(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  if (state.structuralPieces.length === 0) return;
+  const liveSupport = validateLiveStructuralInterfaces(state);
+  const overloadedPieceIds = overloadedStructuralPieceIds(state, liveSupport);
+  for (const piece of state.structuralPieces) {
+    if (!piece.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+    const origin = fromIndex(piece.originTile, state.width);
+    const occupied = structuralPieceDimensions(piece.kind, piece.rotation);
+    const occupiedWidth = occupied.width * TILE_SIZE;
+    const occupiedHeight = occupied.height * TILE_SIZE;
+    const drawWidth = piece.rotation === 90 ? occupiedHeight : occupiedWidth;
+    const drawHeight = piece.rotation === 90 ? occupiedWidth : occupiedHeight;
+    const x = origin.x * TILE_SIZE + (occupiedWidth - drawWidth) * 0.5;
+    const y = origin.y * TILE_SIZE + (occupiedHeight - drawHeight) * 0.5;
+    const visualState = structuralPieceVisualState(state, piece, overloadedPieceIds);
+    const drew = useSprites && drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      structuralPieceSpriteKey(piece, visualState),
+      x,
+      y,
+      drawWidth,
+      drawHeight,
+      piece.rotation
+    );
+    if (!drew) {
+      ctx.save();
+      ctx.fillStyle = piece.completed ? 'rgba(72, 113, 132, 0.9)' : 'rgba(74, 215, 235, 0.25)';
+      ctx.strokeStyle = piece.completed ? '#93d8ed' : '#6fd8ff';
+      ctx.setLineDash(piece.completed ? [] : [4 * PX, 3 * PX]);
+      ctx.fillRect(origin.x * TILE_SIZE + 2 * PX, origin.y * TILE_SIZE + 2 * PX, occupiedWidth - 4 * PX, occupiedHeight - 4 * PX);
+      ctx.strokeRect(origin.x * TILE_SIZE + 2.5 * PX, origin.y * TILE_SIZE + 2.5 * PX, occupiedWidth - 5 * PX, occupiedHeight - 5 * PX);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+    if (!piece.completed) {
+      const site = state.constructionSites.find((candidate) => candidate.structuralPieceId === piece.id);
+      if (!site) continue;
+      const delivered = site.requiredMaterials > 0 ? site.deliveredMaterials / site.requiredMaterials : 1;
+      const built = site.buildWorkRequired > 0 ? site.buildProgress / site.buildWorkRequired : 0;
+      const progress = Math.max(0, Math.min(1, site.state === 'building' ? built : delivered));
+      ctx.fillStyle = 'rgba(7, 12, 18, 0.88)';
+      ctx.fillRect(origin.x * TILE_SIZE + 4 * PX, (origin.y + occupied.height) * TILE_SIZE - 8 * PX, occupiedWidth - 8 * PX, 4 * PX);
+      ctx.fillStyle = site.state === 'blocked' ? '#ff7676' : '#6edb8f';
+      ctx.fillRect(origin.x * TILE_SIZE + 4 * PX, (origin.y + occupied.height) * TILE_SIZE - 8 * PX, (occupiedWidth - 8 * PX) * progress, 4 * PX);
+    }
   }
 }
 
@@ -7224,8 +7320,11 @@ export function renderWorld(
 
   drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
 
+  drawStructuralPieces(ctx, state, spriteAtlas, useSprites, visibleTiles);
+
   const labeledBlockedConstruction = new Set<number>();
   for (const site of state.constructionSites) {
+    if (site.kind === 'structural-piece') continue;
     if (!tileInRange(site.tileIndex, state, visibleTiles)) continue;
     const p = fromIndex(site.tileIndex, state.width);
     const px = p.x * TILE_SIZE;
@@ -7275,6 +7374,32 @@ export function renderWorld(
         ctx.textBaseline = 'middle';
         ctx.fillText(reason, labelX, labelY + Math.round(5.5 * PX));
       }
+    }
+  }
+
+  if (currentTool.kind === 'structural-piece' && currentTool.structuralPiece && hoveredTile !== null) {
+    const preview = validateStructuralPiecePlacement(
+      state,
+      hoveredTile,
+      currentTool.structuralPiece,
+      state.controls.moduleRotation
+    );
+    for (const tile of preview.tiles) {
+      if (!tileInRange(tile, state, visibleTiles)) continue;
+      const point = fromIndex(tile, state.width);
+      ctx.fillStyle = preview.ok ? 'rgba(88, 220, 236, 0.24)' : 'rgba(255, 92, 92, 0.3)';
+      ctx.fillRect(point.x * TILE_SIZE + PX, point.y * TILE_SIZE + PX, TILE_SIZE - 2 * PX, TILE_SIZE - 2 * PX);
+      ctx.strokeStyle = preview.ok ? '#6fd8ff' : '#ff7676';
+      ctx.strokeRect(point.x * TILE_SIZE + 1.5 * PX, point.y * TILE_SIZE + 1.5 * PX, TILE_SIZE - 3 * PX, TILE_SIZE - 3 * PX);
+    }
+    if (!preview.ok) {
+      ctx.fillStyle = 'rgba(21, 8, 12, 0.92)';
+      ctx.fillRect(8 * PX, 20 * PX, Math.max(180 * PX, preview.reason.length * 5.5 * PX), 14 * PX);
+      ctx.fillStyle = '#ffd7d7';
+      ctx.font = `bold ${Math.round(9 * PX)}px monospace`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(preview.reason, 12 * PX, 27 * PX);
     }
   }
 
@@ -7767,6 +7892,8 @@ export function renderWorld(
                   : `Tool: ${currentTool.utilityKind ?? 'utility'}`
           : currentTool.kind === 'module'
             ? `Tool: Module ${currentTool.module} (${state.controls.moduleRotation}deg)`
+            : currentTool.kind === 'structural-piece'
+              ? `Tool: ${currentTool.structuralPiece} (${state.controls.moduleRotation}deg)`
             : currentTool.kind === 'move-module'
               ? currentTool.moveSourceModuleId === undefined
                 ? 'Tool: Move Module - select fixture'
