@@ -157,7 +157,7 @@ export interface PodDemandSummary {
 const FAMILY_LABELS: Record<PodDemandFamily, string> = {
   food: 'Feed Travelers',
   supplies: 'Sell Supplies',
-  shipService: 'Service Ships'
+  shipService: 'Refuel Pods'
 };
 
 /**

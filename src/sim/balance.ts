@@ -143,7 +143,8 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Cafeteria],
     itemNodeCapacity: 30,
     storageClass: 'dish',
-    facilityActivities: ['dishwash']
+    facilityActivities: ['dishwash'],
+    capitalCost: 30
   },
   [ModuleType.Dishwasher]: {
     width: 2,
@@ -219,7 +220,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     height: 5,
     rotatable: true,
     allowedRooms: [RoomType.Market],
-    capitalCost: 180
+    capitalCost: 120
   },
   [ModuleType.ShelfAisle]: {
     width: 1,
@@ -228,7 +229,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Market],
     itemNodeCapacity: 72,
     storageClass: 'ambient',
-    capitalCost: 90
+    capitalCost: 70
   },
   [ModuleType.IntakePallet]: {
     width: 2,
@@ -280,7 +281,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     storageClass: 'fuel',
     // OPEN-04: opening-business hardware is priced against OPENING_BALANCE so
     // Feed Travelers, Sell Supplies and Service Ships cost comparable money.
-    capitalCost: 60
+    capitalCost: 125
   },
   [ModuleType.FuelPump]: {
     width: 2,
@@ -307,7 +308,7 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     rotatable: false,
     allowedRooms: null,
     mount: 'wall',
-    capitalCost: 35
+    capitalCost: 70
   },
   [ModuleType.FreightLocker]: {
     width: 2,
@@ -702,7 +703,7 @@ export const OPENING_BALANCE: {
   fuelLot: OpeningStockBatch;
 } = {
   /** Cash a chartered station opens with. */
-  startingCredits: 220,
+  startingCredits: 320,
   /** Basic pod access fee, per call. Recoverable, never a growth engine. */
   podAccessFeeCredits: 3,
   /** Per-unit fee for handling consigned courier freight. */

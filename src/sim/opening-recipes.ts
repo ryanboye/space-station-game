@@ -4,7 +4,7 @@
  * OPEN-03. The build catalog is a flat list of every module, which answers
  * "what can I place" but not "what does a business need". These recipes group
  * the catalog under the three decisions the opening actually offers — Feed
- * Travelers, Sell Supplies, Service Ships — and state each one's cost,
+ * Travelers, Sell Supplies, Refuel Pods — and state each one's cost,
  * footprint, utilities, staff and stock up front.
  *
  * This is decision and placement guidance, not a one-click builder: every step
@@ -21,7 +21,7 @@ import {
   quoteTravelSuppliesOrder,
   type RoomClusterOperationalView
 } from './sim';
-import { ModuleType, RoomType, type ItemType, type StationState } from './types';
+import { ModuleType, RoomType, ZoneType, type ItemType, type StationState } from './types';
 
 export type OpeningRecipeId = 'feed-travelers' | 'sell-supplies' | 'service-ships';
 
@@ -72,8 +72,8 @@ function moduleStep(module: ModuleType, count: number, label: string): RecipeSte
   return { kind: 'module', module, count, label, costCredits: moduleCost(module) * count };
 }
 
-function roomStep(room: RoomType, label: string): RecipeStep {
-  return { kind: 'room', room, count: ROOM_DEFINITIONS[room].minTiles, label, costCredits: 0 };
+function roomStep(room: RoomType, count: number, label: string): RecipeStep {
+  return { kind: 'room', room, count, label, costCredits: 0 };
 }
 
 /** Opening stock batches, read from the one balance location (OPEN-04). */
@@ -88,35 +88,38 @@ export function openingRecipes(): OpeningRecipe[] {
     {
       id: 'feed-travelers',
       title: 'Feed Travelers',
-      summary: 'Sell prepared meals to arriving pods. Simplest operation, thinnest margin.',
+      summary: 'Turn a public cafeteria into a real meal line: counter frontage, seating, tray flow, and stock all matter.',
       steps: [
-        roomStep(RoomType.Cafeteria, `Build one ${ROOM_DEFINITIONS[RoomType.Cafeteria].minTiles}-tile Cafeteria cluster`),
-        moduleStep(ModuleType.ServingStation, 2, 'Two Serving Stations (one more counter)'),
-        moduleStep(ModuleType.Table, 2, 'Two Tables (eight seats)'),
+        roomStep(RoomType.Cafeteria, 20, 'Shape one 20-tile PUBLIC Cafeteria cluster'),
+        moduleStep(ModuleType.ServingStation, 2, 'Two Serving Stations'),
+        moduleStep(ModuleType.Table, 2, 'Two Tables (eight visible seats)'),
+        moduleStep(ModuleType.TrayReturn, 1, 'One Tray Return for the meal loop'),
         {
           kind: 'stock',
           label: `Keep ${OPENING_BALANCE.preparedMealBatch.units} ready servings stocked (meal + clean tray)`,
-          // This is operating readiness, not purchase provenance. The crew
-          // reserve may satisfy it; depletion below one batch reopens it.
+          // Public stock must sit at the public counters. The crew reserve is
+          // deliberately private until the player accepts a shared mess.
           count: OPENING_BALANCE.preparedMealBatch.units,
           costCredits: OPENING_STOCK_COST.preparedMeals,
           stockKind: 'prepared-meals'
         }
       ],
-      staffing: 'No dedicated staff yet — pickup is self-service.',
-      utilities: 'Power and a reachable door. Adds dirty trays and cleaning load.',
-      economics: 'Steady small sales. Margin is capped by what prepared meals cost to buy.'
+      staffing: 'No dedicated staff yet — guests collect from the counters.',
+      utilities: 'Power, a reachable door, and Public zoning. A shared crew mess is cheaper but creates traffic conflict.',
+      economics: 'Steady small sales. More counters reduce queues; more seats prevent a beautiful bottleneck.'
     },
     {
       id: 'sell-supplies',
       title: 'Sell Supplies',
-      summary: 'Stock travel goods and sell them to passing travellers.',
+      summary: 'Build a real shop: cargo reaches stocked shelves, shoppers browse, then check out.',
       steps: [
         roomStep(
           RoomType.Market,
-          `Paint one ${ROOM_DEFINITIONS[RoomType.Market].minTiles}-tile Market cluster`
+          24,
+          'Shape one 24-tile PUBLIC Market cluster'
         ),
-        moduleStep(ModuleType.MarketStall, 1, 'Place a Market Stall'),
+        moduleStep(ModuleType.CheckoutBank, 1, 'One Checkout Bank'),
+        moduleStep(ModuleType.ShelfAisle, 1, 'One Shelf Aisle (stocked by cargo)'),
         {
           kind: 'stock',
           label: 'Order opening stock through the Freight Locker',
@@ -125,17 +128,17 @@ export function openingRecipes(): OpeningRecipe[] {
           stockKind: 'travel-supplies'
         }
       ],
-      staffing: 'Your starting Cargo Handler unloads the first lot from receiving.',
-      utilities: 'Power, a reachable door, and a clear route from the Freight Locker.',
-      economics: 'Ties up capital in stock. Pricing policy trades margin against volume.'
+      staffing: 'Your Cargo Handler unloads stock; the checkout is the public bottleneck.',
+      utilities: 'Power, a reachable door, Public zoning, and a clear route from the Freight Locker to shelves.',
+      economics: 'Ties up capital in stock. A second shelf expands range and stock buffer, but is not required to open.'
     },
     {
       id: 'service-ships',
-      title: 'Service Ships',
-      summary: 'Refuel arriving craft. Strongest per-call revenue, most hardware.',
+      title: 'Refuel Pods',
+      summary: 'Sell fuel to arriving pods. This is refueling only; repair and dry-dock work come later.',
       steps: [
         moduleStep(ModuleType.FuelCoupler, 1, 'Install a Fuel Coupler beside a Pod Dock'),
-        roomStep(RoomType.Maintenance, `Paint ${ROOM_DEFINITIONS[RoomType.Maintenance].minTiles} Maintenance tiles`),
+        roomStep(RoomType.Maintenance, ROOM_DEFINITIONS[RoomType.Maintenance].minTiles, `Paint ${ROOM_DEFINITIONS[RoomType.Maintenance].minTiles} Maintenance tiles`),
         moduleStep(ModuleType.FuelTank, 1, 'Place a Fuel Tank'),
         { kind: 'utility', label: 'Draw fuel pipe from the tank to the coupler', count: 1, costCredits: 0 },
         {
@@ -216,14 +219,20 @@ function moduleCountInCluster(state: StationState, cluster: number[], module: Mo
   return state.moduleInstances.filter((instance) => instance.type === module && tiles.has(instance.originTile)).length;
 }
 
+function clusterIsPublic(state: StationState, cluster: RoomClusterOperationalView): boolean {
+  return cluster.tiles.every((tile) => state.zones[tile] === ZoneType.Public);
+}
+
 function matchingRoomCluster(
   state: StationState,
   room: RoomType,
-  requirements: FacilityRequirement
+  requirements: FacilityRequirement,
+  minimumTiles = ROOM_DEFINITIONS[room].minTiles,
+  requirePublic = false
 ): RoomClusterOperationalView | null {
-  const minTiles = ROOM_DEFINITIONS[room].minTiles;
   const matches = getRoomClusterOperationalViews(state, room).filter((cluster) =>
-    cluster.tiles.length >= minTiles &&
+    cluster.tiles.length >= minimumTiles &&
+    (!requirePublic || clusterIsPublic(state, cluster)) &&
     requirements.every(([module, count]) => moduleCountInCluster(state, cluster.tiles, module) >= count)
   );
   return matches.find((cluster) => cluster.active) ?? matches[0] ?? null;
@@ -237,15 +246,18 @@ function matchingRoomCluster(
 function bestRoomCluster(
   state: StationState,
   room: RoomType,
-  requirements: FacilityRequirement
+  requirements: FacilityRequirement,
+  minimumTiles = ROOM_DEFINITIONS[room].minTiles
 ): RoomClusterOperationalView | null {
-  const candidates = getRoomClusterOperationalViews(state, room).map((cluster) => {
+  const candidates = getRoomClusterOperationalViews(state, room)
+    .filter((cluster) => cluster.tiles.length >= Math.min(minimumTiles, ROOM_DEFINITIONS[room].minTiles))
+    .map((cluster) => {
     const progress = requirements.reduce(
       (total, [module, count]) => total + Math.min(count, moduleCountInCluster(state, cluster.tiles, module)) / count,
       0
     );
-    return { cluster, progress };
-  });
+      return { cluster, progress };
+    });
   candidates.sort((a, b) =>
     Number(b.cluster.active) - Number(a.cluster.active) ||
     b.progress - a.progress ||
@@ -313,7 +325,7 @@ function countRecipeStock(
     case 'feed-travelers':
       return countUsableCounterServings(state, facility);
     case 'sell-supplies':
-      return countStockInCluster(state, facility, ModuleType.MarketStall, 'tradeGood');
+      return countStockInCluster(state, facility, ModuleType.ShelfAisle, 'tradeGood');
     case 'service-ships': {
       const connectedTanks = new Set(getPodDockFuelReadiness(state).flatMap((dock) => dock.connected ? dock.tankTiles : []));
       return state.itemNodes.reduce(
@@ -326,32 +338,25 @@ function countRecipeStock(
 
 /**
  * How far along each recipe is, measured against what is physically on the
- * station right now. The starter crew mess counts toward the room, fixture and
- * stock requirements; the deliberate capital choice is the added public
- * capacity, while stock remains a live operating-readiness check.
+ * station right now. Progress may show the restricted crew mess as a cheap
+ * conversion candidate, but completion always requires a coherent PUBLIC
+ * commercial cluster and stock at that operation's own fixtures.
  */
 export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
   return openingRecipes().map((recipe) => {
     const cafeteria = recipe.id === 'feed-travelers'
-      ? matchingRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2]])
-      : null;
-    // The starter crew mess already holds the opening meal/tray reserve. It
-    // counts as stock on hand before the second counter and table turn that
-    // same room into a public business; otherwise the card incorrectly adds a
-    // future 70c restock to the initial 130c capital decision.
-    const cafeteriaStockCluster = recipe.id === 'feed-travelers'
-      ? matchingRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 1], [ModuleType.Table, 1]])
+      ? matchingRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2], [ModuleType.TrayReturn, 1]], 20, true)
       : null;
     const market = recipe.id === 'sell-supplies'
-      ? matchingRoomCluster(state, RoomType.Market, [[ModuleType.MarketStall, 1]])
+      ? matchingRoomCluster(state, RoomType.Market, [[ModuleType.CheckoutBank, 1], [ModuleType.ShelfAisle, 1]], 24, true)
       : null;
     const fuelDocks = recipe.id === 'service-ships' ? getPodDockFuelReadiness(state) : [];
     const fuelNetworkReady = fuelDocks.some((dock) => dock.hasFuelCoupler && dock.connected);
-    const facility = recipe.id === 'feed-travelers' ? cafeteriaStockCluster : market;
+    const facility = recipe.id === 'feed-travelers' ? cafeteria : market;
     const coherentCluster = recipe.id === 'feed-travelers'
-      ? bestRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2]])
+      ? bestRoomCluster(state, RoomType.Cafeteria, [[ModuleType.ServingStation, 2], [ModuleType.Table, 2], [ModuleType.TrayReturn, 1]], 20)
       : recipe.id === 'sell-supplies'
-        ? bestRoomCluster(state, RoomType.Market, [[ModuleType.MarketStall, 1]])
+        ? bestRoomCluster(state, RoomType.Market, [[ModuleType.CheckoutBank, 1], [ModuleType.ShelfAisle, 1]], 24)
         : null;
     const steps: RecipeStepProgress[] = recipe.steps.map((step) => {
       const coherentRoomStep = coherentCluster !== null && (step.kind === 'room' || step.kind === 'module');
@@ -390,7 +395,7 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
     const operationalReasons: string[] = [];
     if (recipe.id === 'feed-travelers') {
       if (!cafeteria) {
-        operationalReasons.push('Keep two Serving Stations and two Tables together in one Cafeteria.');
+        operationalReasons.push('Build one 20-tile PUBLIC Cafeteria with two Serving Stations, two Tables, and a Tray Return.');
       } else {
         const reason = inactiveReason('Cafeteria needs to be enclosed, reachable, pressurized, and powered', cafeteria);
         if (reason) operationalReasons.push(reason);
@@ -399,7 +404,7 @@ export function evaluateOpeningRecipes(state: StationState): RecipeProgress[] {
     } else if (recipe.id === 'sell-supplies') {
       const reason = inactiveReason('Market needs enclosure, a door, a path, pressure, and local power', market);
       if (reason) operationalReasons.push(reason);
-      if (!market) operationalReasons.push('Put the Market Stall inside one 10-tile Market cluster.');
+      if (!market) operationalReasons.push('Build one 24-tile PUBLIC Market with a Checkout Bank and stocked Shelf Aisle.');
       if (!stockReady) operationalReasons.push('Order travel supplies through the Freight Locker.');
     } else {
       if (!fuelDocks.some((dock) => dock.hasFuelCoupler)) {

@@ -213,7 +213,7 @@ export function createInitialState(options?: {
 
   // Prepared meals arrive as station stock. The cafeteria is the first public
   // service; Kitchen and Hydroponics return later as optional margin choices.
-  // OPEN-01: a crew mess, not a completed hospitality business. Twelve tiles
+  // OPEN-01: a restricted crew mess, not a completed hospitality business. Twelve tiles
   // is the smallest a Cafeteria can be and still operate at all
   // (ROOM_DEFINITIONS minTiles), so that is exactly what the crew get: one
   // counter and one four-seat table, stocked as a crew food buffer. Choice A
@@ -222,6 +222,9 @@ export function createInitialState(options?: {
   // while it remains above the operating floor; until the fixtures are added,
   // a pod wave's worth of travellers leaves without eating.
   paintEnclosedRoom(RoomType.Cafeteria, coreX + 3, coreY, coreX + 6, coreY + 2, coreX + 2, coreY);
+  for (let y = coreY; y <= coreY + 2; y++) {
+    for (let x = coreX + 2; x <= coreX + 6; x++) zones[toIndex(x, y, GRID_WIDTH)] = ZoneType.Restricted;
+  }
   addStarterModule(ModuleType.ServingStation, coreX + 3, coreY, 0);
   addStarterModule(ModuleType.Table, coreX + 5, coreY + 1, 0);
 
@@ -347,6 +350,11 @@ export function createInitialState(options?: {
   const reactorY = coreY - 3;
   addPowerRun(reactorX, reactorY, coreX + 6, coreY);
   addPowerRun(reactorX, reactorY, coreX + 12, coreY - 3);
+  // Shared opening infrastructure reaches the empty commercial apron. The
+  // first business still needs its own room, fixtures and stock, but a player
+  // who follows that authored path should not discover an unmentioned power
+  // prerequisite after spending the opening bankroll.
+  addPowerRun(coreX + 10, coreY - 3, coreX + 10, coreY + 7);
   addPowerRun(reactorX, reactorY, coreX - 9, coreY - 3);
   addPowerRun(coreX - 9, coreY - 3, coreX - 9, coreY + 3);
   for (const tile of starterPowerTiles) {

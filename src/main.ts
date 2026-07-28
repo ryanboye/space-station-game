@@ -501,7 +501,11 @@ app.innerHTML = `
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="businesses">
         <span class="tool-row-label">Opening businesses</span>
-        <small class="market-status">Each step is an ordinary paint or place tool. Nothing here builds for you.</small>
+        <small class="market-status">Choose by shaping a working space. These controls only select world tools.</small>
+        <div class="opening-zone-controls" aria-label="Opening access zoning">
+          <button class="tool-btn recipe-zone-control" data-tool-zone="public" title="Paint guest access onto an existing room">Public access</button>
+          <button class="tool-btn recipe-zone-control" data-tool-zone="restricted" title="Reserve an existing room for crew only">Crew only</button>
+        </div>
         <div id="opening-recipe-list" class="recipe-list"></div>
         <span class="tool-row-label">Later, once you can afford it</span>
         <div id="future-facility-list" class="recipe-future"></div>
@@ -595,6 +599,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="couch" title="Place Couch (6)"><span class="tool-key">6</span>Couch</button>
         <button class="tool-btn" data-tool-module="game-station" title="Place Game Station (=)"><span class="tool-key">=</span>Game</button>
         <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
+        <button class="tool-btn" data-tool-module="checkout-bank" title="Place Checkout Bank — two customer lanes for a Market"><span class="tool-key">·</span>Checkout</button>
+        <button class="tool-btn" data-tool-module="shelf-aisle" title="Place Shelf Aisle — cargo stocks travel goods here"><span class="tool-key">·</span>Shelf Aisle</button>
         <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
         <button class="tool-btn" data-tool-module="intake-pallet" title="Place Intake Pallet (,)"><span class="tool-key">,</span>Intake</button>
         <button class="tool-btn" data-tool-module="storage-rack" title="Place Storage Rack (.)"><span class="tool-key">.</span>Rack</button>
@@ -6885,6 +6891,8 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   couch: ModuleType.Couch,
   'game-station': ModuleType.GameStation,
   'market-stall': ModuleType.MarketStall,
+  'checkout-bank': ModuleType.CheckoutBank,
+  'shelf-aisle': ModuleType.ShelfAisle,
   workbench: ModuleType.Workbench,
   'intake-pallet': ModuleType.IntakePallet,
   'storage-rack': ModuleType.StorageRack,
@@ -7073,6 +7081,37 @@ function recipeOperationalLabel(recipe: ReturnType<typeof evaluateOpeningRecipes
   return `${recipe.remainingCostCredits}c remaining`;
 }
 
+function recipeMachineReadout(recipe: ReturnType<typeof evaluateOpeningRecipes>[number]): string {
+  const step = (module: ModuleType) => recipe.steps.find((candidate) => candidate.module === module);
+  const stock = recipe.steps.find((candidate) => candidate.kind === 'stock');
+  const count = (module: ModuleType) => `${Math.min(step(module)?.have ?? 0, step(module)?.count ?? 0)}/${step(module)?.count ?? 0}`;
+  const ready = `${Math.min(stock?.have ?? 0, stock?.count ?? 0)}/${stock?.count ?? 0}`;
+  if (recipe.id === 'feed-travelers') {
+    const tables = Math.min(step(ModuleType.Table)?.have ?? 0, step(ModuleType.Table)?.count ?? 0);
+    return `${count(ModuleType.ServingStation)} counters · ${tables * 4}/8 seats · ${count(ModuleType.TrayReturn)} tray return · ${ready} ready servings`;
+  }
+  if (recipe.id === 'sell-supplies') {
+    return `${count(ModuleType.CheckoutBank)} checkout bank · ${count(ModuleType.ShelfAisle)} shelf aisle · ${ready} goods on shelves`;
+  }
+  return `${count(ModuleType.FuelCoupler)} coupler · ${count(ModuleType.FuelTank)} tank · ${ready} fuel · pipe ${recipe.steps.find((candidate) => candidate.kind === 'utility')?.satisfied ? 'live' : 'open'}`;
+}
+
+function recipeNextControl(recipe: ReturnType<typeof evaluateOpeningRecipes>[number]): string {
+  const roomReady = recipe.steps.find((step) => step.kind === 'room')?.satisfied ?? true;
+  if (
+    roomReady &&
+    !recipe.operational &&
+    recipe.operationalReasons.some((reason) => reason.includes('PUBLIC'))
+  ) {
+    return '<button class="tool-btn recipe-step recipe-action" data-tool-zone="public" title="Paint Public access over the whole guest-facing cluster">Paint Public access <span>zone the whole cluster</span></button>';
+  }
+  const next = recipe.steps.find((step) => !step.satisfied);
+  if (next) {
+    return `<button class="tool-btn recipe-step recipe-action"${recipeStepAttributes(next)} title="${escapeHtml(next.label)}">${escapeHtml(next.label)} <span>${escapeHtml(recipeStepDetail(recipe.id, next))}</span></button>`;
+  }
+  return '';
+}
+
 /**
  * Signature of the last rendered catalog. refreshToolbar runs every frame, and
  * replacing the list's innerHTML that often detached each step button between
@@ -7116,14 +7155,6 @@ function refreshOpeningRecipeCatalog(): void {
       const demandNote = demandRow && demandRow.wanted > 0
         ? `${demandRow.served}/${demandRow.wanted} served recently${demandRow.missedCredits > 0 ? ` · est. ${demandRow.missedCredits}c missed` : ''}`
         : 'no demand seen yet';
-      const steps = recipe.steps
-        .map((step) => `
-          <button class="tool-btn recipe-step${step.satisfied ? ' recipe-step-done' : ''}"${recipeStepAttributes(step)} title="${escapeHtml(step.label)}">
-            <span class="recipe-step-mark">${step.satisfied ? '✓' : '·'}</span>
-            <span class="recipe-step-label">${escapeHtml(step.label)}</span>
-            <span class="recipe-step-detail">${escapeHtml(recipeStepDetail(recipe.id, step))}</span>
-          </button>`)
-        .join('');
       const status = recipe.operational
         ? 'Live now.'
         : recipe.operationalReasons[0] ?? 'Finish the remaining build steps.';
@@ -7137,8 +7168,9 @@ function refreshOpeningRecipeCatalog(): void {
           </div>
           <small class="recipe-card-summary">${escapeHtml(recipe.summary)}</small>
           <small class="recipe-card-demand">${escapeHtml(demandNote)}</small>
+          <small class="recipe-card-machine">${escapeHtml(recipeMachineReadout(recipe))}</small>
           <small class="recipe-card-status">${escapeHtml(status)}</small>
-          <div class="recipe-steps">${steps}</div>
+          ${recipe.operational ? '' : `<div class="recipe-action-row">${recipeNextControl(recipe)}</div>`}
           <small class="recipe-card-note">Staff: ${escapeHtml(recipe.staffing)}</small>
           <small class="recipe-card-note">Utilities: ${escapeHtml(recipe.utilities)}</small>
           <small class="recipe-card-note">${escapeHtml(recipe.economics)}</small>
@@ -7299,6 +7331,7 @@ function wireToolbar(): void {
     const roomKey = step.dataset.toolRoom;
     const moduleKey = step.dataset.toolModule;
     const utilityKey = step.dataset.toolUtilityUnderlay;
+    const zoneKey = step.dataset.toolZone;
     const stockKind = step.dataset.recipeStockKind;
     if (stockKind === 'prepared-meals') {
       const result = buyPreparedMealsDetailed(state);
@@ -7327,6 +7360,9 @@ function wireToolbar(): void {
       selectModuleTool(TOOLBAR_MODULE_MAP[moduleKey]);
     } else if (utilityKey && TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey] !== undefined) {
       selectUtilityUnderlayTool(TOOLBAR_UTILITY_UNDERLAY_MAP[utilityKey]);
+    } else if (zoneKey && TOOLBAR_ZONE_MAP[zoneKey] !== undefined) {
+      currentTool = { kind: 'zone', zone: TOOLBAR_ZONE_MAP[zoneKey] };
+      toolLockMessage = '';
     }
     // The palette follows the selection to the section that owns the tool, so
     // the player also learns where that tool lives for next time.
@@ -7397,6 +7433,9 @@ function wireToolbar(): void {
 function refreshToolbar(): void {
   refreshOpeningRecipeCatalog();
   refreshPaletteMenu();
+  const hasOpeningOperation = evaluateOpeningRecipes(state).some((recipe) => recipe.operational);
+  openProgressionSummaryBtn.classList.toggle('hidden', !hasOpeningOperation);
+  openProgressionModalBtn.classList.toggle('hidden', !hasOpeningOperation);
   openCapitalProjectsBtn.classList.toggle('hidden', !shouldShowCapitalProjects());
   const hasBerth = state.rooms.includes(RoomType.Berth);
   document.querySelectorAll<HTMLElement>('[data-berth-hardware]').forEach((element) => {

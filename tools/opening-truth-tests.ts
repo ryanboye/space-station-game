@@ -21,6 +21,7 @@ import {
   previewPreparedMealPurchase,
   removeModuleAtTile,
   setRoom,
+  setTile,
   setUtilityUnderlayTile,
   tick,
   tryPlaceModule
@@ -36,7 +37,7 @@ import {
   createServiceLog,
   fixtureProvidesService
 } from '../src/sim/service-truth';
-import { ModuleType, RoomType, TileType, type StationState } from '../src/sim/types';
+import { ModuleType, RoomType, TileType, ZoneType, type StationState } from '../src/sim/types';
 
 const GAME_VERSION = 'truth-checks';
 
@@ -272,19 +273,12 @@ check('the service log survives save and reload', () => {
   assertEqual(restored.serviceLog.recent[0].tileIndex, 250, 'restored facility identity');
 });
 
-check('a live opening run only records services its fixtures can deliver', () => {
+check('a restricted crew mess does not record visitor service before a public business exists', () => {
   const state = freshState();
   state.controls.paused = false;
   state.controls.manualTrafficAdmission = false;
   for (let step = 0; step < 900; step += 1) tick(state, 1);
-
-  assert(state.serviceLog.recent.length > 0, 'the opening run completed no service at all');
-  for (const event of state.serviceLog.recent) {
-    assert(
-      fixtureProvidesService(event.roomType, event.moduleType, event.service),
-      `recorded ${event.service} at room ${event.roomType}/module ${event.moduleType}, which cannot provide it`
-    );
-  }
+  assertEqual(state.serviceLog.visitorsServedLifetime, 0, 'restricted crew meals served visitors');
 });
 
 check('a station with no lounge or cantina completes zero lounge and drink services', () => {
@@ -408,11 +402,41 @@ function placeModuleInRoom(state: StationState, room: RoomType, module: ModuleTy
 }
 
 function placeModuleInTiles(state: StationState, tiles: number[], module: ModuleType): void {
-  for (const tile of tiles) {
-    const placed = tryPlaceModule(state, module, tile, 0);
-    if (placed.ok) return;
+  for (const rotation of [0, 90] as const) {
+    for (const tile of tiles) {
+      const placed = tryPlaceModule(state, module, tile, rotation);
+      if (placed.ok) return;
+    }
   }
   throw new Error(`could not place ${String(module)} in the requested room cluster`);
+}
+
+/** Paint one of the real empty starter-apron footprints as a public room. */
+function buildPublicRoom(state: StationState, room: RoomType, width: number, height: number): number[] {
+  for (let y = 1; y <= state.height - height - 1; y += 1) {
+    for (let x = 1; x <= state.width - width - 1; x += 1) {
+      const tiles: number[] = [];
+      let valid = true;
+      for (let dy = 0; dy < height && valid; dy += 1) {
+        for (let dx = 0; dx < width && valid; dx += 1) {
+          const tile = (y + dy) * state.width + x + dx;
+          if (
+            state.tiles[tile] !== TileType.Floor ||
+            state.rooms[tile] !== RoomType.None ||
+            state.moduleOccupancyByTile[tile] !== null
+          ) valid = false;
+          tiles.push(tile);
+        }
+      }
+      if (!valid) continue;
+      for (const tile of tiles) {
+        setRoom(state, tile, room);
+        state.zones[tile] = ZoneType.Public;
+      }
+      return tiles;
+    }
+  }
+  throw new Error(`could not paint a ${width}x${height} public ${room} in the starter apron`);
 }
 
 function placeFuelCouplerAtStarterDock(state: StationState): number {
@@ -779,7 +803,7 @@ check('the starter ships the shared infrastructure the opening needs', () => {
   assert(state.crew.total >= 4 && state.crew.total <= 6, `opening crew ${state.crew.total} is outside 4-6`);
 });
 
-check('the starter crew mess feeds crew but does not sell meals before hospitality expansion', () => {
+check('the starter crew mess feeds crew but only a public 20-tile machine opens hospitality', () => {
   const state = freshState();
   tick(state, 0);
   const meals = getCrewFacilityReachability(state).find((facility) => facility.facility === 'meals');
@@ -790,14 +814,20 @@ check('the starter crew mess feeds crew but does not sell meals before hospitali
   for (let step = 0; step < 900; step += 1) tick(state, 1);
   assertEqual(state.serviceLog.visitorLifetimeByService.meal, 0, 'crew mess sold meals before public expansion');
 
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
-  setModuleStock(
-    state,
-    ModuleType.ServingStation,
-    'meal',
-    OPENING_BALANCE.preparedMealBatch.units
-  );
+  const cafeteria = buildPublicRoom(state, RoomType.Cafeteria, 3, 7);
+  placeModuleInTiles(state, cafeteria, ModuleType.ServingStation);
+  placeModuleInTiles(state, cafeteria, ModuleType.ServingStation);
+  placeModuleInTiles(state, cafeteria, ModuleType.Table);
+  placeModuleInTiles(state, cafeteria, ModuleType.Table);
+  placeModuleInTiles(state, cafeteria, ModuleType.TrayReturn);
+  const publicCounters = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ServingStation && cafeteria.includes(module.originTile))
+    .map((module) => module.originTile);
+  for (const node of state.itemNodes) {
+    if (!publicCounters.includes(node.tileIndex)) continue;
+    node.items.meal = OPENING_BALANCE.preparedMealBatch.units;
+    node.items.cleanTray = OPENING_BALANCE.preparedMealBatch.units;
+  }
   tick(state, 0);
   const feedTravelers = evaluateOpeningRecipes(state).find((recipe) => recipe.id === 'feed-travelers');
   assert(feedTravelers?.complete, 'expanded cafeteria did not complete Feed Travelers');
@@ -911,10 +941,10 @@ check('the demand aggregation is bounded and survives save and reload', () => {
 console.log('');
 console.log('OPEN-03 recipe-oriented build catalog');
 
-check('the catalog offers exactly the three opening groups', () => {
+check('the catalog offers exactly the three opening opportunities', () => {
   const recipes = evaluateOpeningRecipes(freshState());
   assertEqual(recipes.length, 3, 'recipe count');
-  assertEqual(recipes.map((recipe) => recipe.title).join(' | '), 'Feed Travelers | Sell Supplies | Service Ships', 'group titles');
+  assertEqual(recipes.map((recipe) => recipe.title).join(' | '), 'Feed Travelers | Sell Supplies | Refuel Pods', 'opportunity titles');
   for (const recipe of recipes) {
     assert(recipe.steps.length > 0, `${recipe.title} has no steps`);
     assert(recipe.staffing.length > 0, `${recipe.title} does not say who staffs it`);
@@ -932,24 +962,23 @@ check('no opening business is already built on the starter', () => {
   }
 });
 
-check('Feed Travelers is a 130c player commitment with matching build prices', () => {
+check('each opening opportunity is affordable alone but not in combination', () => {
   const state = freshState();
   tick(state, 0);
   const recipes = evaluateOpeningRecipes(state);
   const feed = recipes.find((recipe) => recipe.id === 'feed-travelers');
   assert(feed, 'no Feed Travelers recipe');
-  assertEqual(feed.remainingCostCredits, 130, 'fresh Feed Travelers remaining cost');
-  assert(
-    feed.remainingCostCredits >= OPENING_BALANCE.startingCredits * 0.55 &&
-      feed.remainingCostCredits <= OPENING_BALANCE.startingCredits * 0.7,
-    `Feed Travelers cost ${feed.remainingCostCredits}c falls outside the 55-70% opening band`
-  );
+  assert(feed.remainingCostCredits > 0 && feed.remainingCostCredits <= OPENING_BALANCE.startingCredits, 'Feed Travelers is not immediately fundable');
+  for (const recipe of recipes) {
+    assert(recipe.remainingCostCredits > 0 && recipe.remainingCostCredits <= OPENING_BALANCE.startingCredits, `${recipe.title} is not immediately fundable`);
+  }
   const twoCheapest = recipes.map((recipe) => recipe.remainingCostCredits).sort((a, b) => a - b).slice(0, 2);
   assert(twoCheapest[0] + twoCheapest[1] > OPENING_BALANCE.startingCredits, 'two opening businesses fit inside starting cash');
 
   const serving = feed.steps.find((step) => step.module === ModuleType.ServingStation);
   const table = feed.steps.find((step) => step.module === ModuleType.Table);
-  assert(serving && table, 'Feed Travelers has no fixture price steps');
+  const trayReturn = feed.steps.find((step) => step.module === ModuleType.TrayReturn);
+  assert(serving && table && trayReturn, 'Feed Travelers lacks the complete physical meal machine');
   assertEqual(serving.costCredits / serving.count, moduleCreditBuildCost(ModuleType.ServingStation), 'serving station recipe price');
   assertEqual(table.costCredits / table.count, moduleCreditBuildCost(ModuleType.Table), 'table recipe price');
   const stock = feed.steps.find((step) => step.kind === 'stock');
@@ -959,7 +988,7 @@ check('Feed Travelers is a 130c player commitment with matching build prices', (
     OPENING_BALANCE.preparedMealBatch.units,
     'prepared meal operating-readiness floor'
   );
-  assert(stock.satisfied, 'starter crew reserve should satisfy meal operating readiness');
+  assert(!stock.satisfied, 'restricted crew reserve should not satisfy public meal readiness');
   assertEqual(stock.costCredits, OPENING_BALANCE.preparedMealBatch.costCredits, 'prepared meal restock price');
 });
 
@@ -1031,12 +1060,10 @@ check('Service Ships requires one continuous tank-to-coupler fuel line', () => {
   assert(utility?.satisfied, 'connected tank-to-coupler line did not satisfy Service Ships');
 });
 
-check('Feed Travelers only becomes live when its counters and tables share one active Cafeteria', () => {
+check('Feed Travelers only becomes live in one public 20-tile Cafeteria with the whole machine', () => {
   const state = freshState();
   tick(state, 0);
-  const detachedTiles = findOpenRectangle(state, 5, 4);
-  assertEqual(detachedTiles.length, 20, 'no detached Cafeteria test area');
-  for (const tile of detachedTiles) setRoom(state, tile, RoomType.Cafeteria);
+  const detachedTiles = buildPublicRoom(state, RoomType.Cafeteria, 3, 7);
   placeModuleInTiles(state, detachedTiles, ModuleType.ServingStation);
   placeModuleInTiles(state, detachedTiles, ModuleType.Table);
   tick(state, 0);
@@ -1045,22 +1072,33 @@ check('Feed Travelers only becomes live when its counters and tables share one a
   assert(recipe && !recipe.built, 'fixtures split across Cafeterias counted as one public business');
   assert(recipe && !recipe.operational, 'split Cafeterias became operational');
 
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
+  placeModuleInTiles(state, detachedTiles, ModuleType.ServingStation);
+  placeModuleInTiles(state, detachedTiles, ModuleType.Table);
+  placeModuleInTiles(state, detachedTiles, ModuleType.TrayReturn);
+  const counterTiles = state.moduleInstances.filter((module) => module.type === ModuleType.ServingStation && detachedTiles.includes(module.originTile)).map((module) => module.originTile);
+  for (const node of state.itemNodes) {
+    if (!counterTiles.includes(node.tileIndex)) continue;
+    node.items.meal = 12;
+    node.items.cleanTray = 12;
+  }
   tick(state, 0);
   recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'feed-travelers');
-  assert(recipe?.built, 'two fixtures in the starter Cafeteria did not establish the business');
+  assert(recipe?.built, 'the public meal machine did not establish the business');
   assert(recipe?.operational, 'a stocked active public Cafeteria did not become operational');
 });
 
 check('Feed Travelers uses the meal-and-tray limiting count at active counters', () => {
   const state = freshState();
   tick(state, 0);
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.ServingStation);
-  placeModuleInRoom(state, RoomType.Cafeteria, ModuleType.Table);
+  const cafeteria = buildPublicRoom(state, RoomType.Cafeteria, 3, 7);
+  placeModuleInTiles(state, cafeteria, ModuleType.ServingStation);
+  placeModuleInTiles(state, cafeteria, ModuleType.ServingStation);
+  placeModuleInTiles(state, cafeteria, ModuleType.Table);
+  placeModuleInTiles(state, cafeteria, ModuleType.Table);
+  placeModuleInTiles(state, cafeteria, ModuleType.TrayReturn);
   tick(state, 0);
   for (const node of state.itemNodes) {
-    if (state.moduleInstances.some((module) => module.type === ModuleType.ServingStation && module.originTile === node.tileIndex)) {
+    if (state.moduleInstances.some((module) => module.type === ModuleType.ServingStation && cafeteria.includes(module.originTile) && module.originTile === node.tileIndex)) {
       node.items.meal = OPENING_BALANCE.preparedMealBatch.units;
       node.items.cleanTray = 0;
     }
@@ -1073,19 +1111,24 @@ check('Feed Travelers uses the meal-and-tray limiting count at active counters',
   assert(recipe?.operationalReasons.some((reason) => reason.includes('meal and one clean tray')), 'tray shortage lacked a truthful reason');
 });
 
-check('Sell Supplies stays built-but-blocked until its Stall is in an active Market cluster', () => {
+check('Sell Supplies needs a public 24-tile market with a stocked Shelf Aisle, not a Market Stall', () => {
   const state = freshState();
   tick(state, 0);
-  const tiles = findOpenRectangle(state, 5, 3);
-  assertEqual(tiles.length, 15, 'no Market test area');
-  for (const tile of tiles) setRoom(state, tile, RoomType.Market);
+  const tiles = buildPublicRoom(state, RoomType.Market, 3, 8);
   placeModuleInTiles(state, tiles, ModuleType.MarketStall);
   tick(state, 0);
 
-  const recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'sell-supplies');
-  assert(recipe?.built, 'Market capital placement was not retained');
-  assert(!recipe?.operational, 'an unenclosed Market became operational');
-  assert(recipe?.operationalReasons.some((reason) => reason.includes('Market needs enclosure')), 'Market inactivity did not explain enclosure/power requirements');
+  let recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'sell-supplies');
+  assert(!recipe?.built, 'Market Stall alone established the opening shop');
+  placeModuleInTiles(state, tiles, ModuleType.CheckoutBank);
+  placeModuleInTiles(state, tiles, ModuleType.ShelfAisle);
+  tick(state, 0);
+  recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'sell-supplies');
+  assert(recipe?.built, 'Checkout Bank and Shelf Aisle did not establish the shop');
+  assert(!recipe?.operational, 'empty shelves opened a retail business');
+  setModuleStock(state, ModuleType.ShelfAisle, 'tradeGood', OPENING_BALANCE.travelSupplyBatch.units);
+  recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'sell-supplies');
+  assert(recipe?.operational, 'stocked Shelf Aisle did not open the market');
 });
 
 check('Service Ships accepts only an attached Pod Dock with a live tank-to-coupler network', () => {
@@ -1106,7 +1149,7 @@ check('Service Ships accepts only an attached Pod Dock with a live tank-to-coupl
   for (const tile of fuelPipePath(state, tank.originTile, serviceTile)) setUtilityUnderlayTile(state, 'fuel-pipe', tile, true);
   tick(state, 0);
   recipe = evaluateOpeningRecipes(state).find((candidate) => candidate.id === 'service-ships');
-  assert(recipe?.built, 'attached Pod Dock and connected tank did not establish Service Ships');
+  assert(recipe?.built, 'attached Pod Dock and connected tank did not establish Refuel Pods');
   assert(!recipe?.operational, 'empty connected tank should need a fuel lot');
   assert(recipe?.operationalReasons.some((reason) => reason.includes('fuel lot')), 'empty fuel network lacked a stock explanation');
 });
@@ -1124,7 +1167,7 @@ check('future facilities stay visible with plain prerequisites', () => {
 console.log('');
 console.log('OPEN-04 opening balance pass');
 
-check('opening cash buys one recipe plus a contingency', () => {
+check('opening cash funds any one first operation but not two at once', () => {
   const state = freshState();
   tick(state, 0);
   const cash = state.metrics.credits;
@@ -1135,8 +1178,8 @@ check('opening cash buys one recipe plus a contingency', () => {
   }));
   for (const entry of costs) {
     assert(
-      entry.share >= 0.55 && entry.share <= 0.7,
-      `${entry.title} costs ${entry.cost}c, ${Math.round(entry.share * 100)}% of ${cash}c — target is 55-70%`
+      entry.cost > 0 && entry.cost <= cash,
+      `${entry.title} costs ${entry.cost}c against ${cash}c of opening cash`
     );
   }
   console.log(

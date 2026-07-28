@@ -703,7 +703,7 @@ small {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .modal-card {
@@ -4805,10 +4805,8 @@ button.alert-item {
   }
 }
 
-/* OPEN-03: opening-business recipe catalog.
-   A compact decision surface, not another permanent spreadsheet: three cards
-   that fit the existing palette column and whose steps are ordinary tool
-   buttons. */
+/* OPEN-03: opening-business decision surface. The cards show live demand,
+   machine readiness, and one next physical action instead of a checklist. */
 .recipe-list {
   display: flex;
   flex-direction: column;
@@ -4823,9 +4821,6 @@ button.alert-item {
   border: 1px solid rgba(120, 160, 190, 0.28);
   border-radius: 5px;
   background: rgba(9, 17, 26, 0.72);
-}
-.recipe-card-done {
-  border-color: rgba(110, 219, 143, 0.45);
 }
 .recipe-card-operational {
   box-shadow: inset 3px 0 0 rgba(110, 219, 143, 0.72);
@@ -4859,33 +4854,33 @@ button.alert-item {
 .recipe-card-demand {
   color: #72bff2;
 }
-.recipe-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 4px 0 2px;
+.recipe-card-machine {
+  color: #b8c7d1;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
 }
-.tool-btn.recipe-step {
-  display: grid;
-  grid-template-columns: 14px 1fr auto;
-  align-items: center;
-  gap: 6px;
+.recipe-action-row { margin: 3px 0; }
+.tool-btn.recipe-action {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  min-height: 34px;
   text-align: left;
 }
-.recipe-step-mark {
-  color: #6b8199;
-}
-.recipe-step-done .recipe-step-mark {
-  color: #6edb8f;
-}
-.recipe-step-done .recipe-step-label {
+.tool-btn.recipe-action span {
   color: #8ea2bd;
+  font-size: 10px;
+  white-space: nowrap;
 }
-.recipe-step-detail {
-  color: #8ea2bd;
-  font-variant-numeric: tabular-nums;
+.opening-zone-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  width: 100%;
 }
+.tool-btn.recipe-zone-control { min-height: 30px; }
 .recipe-future {
   display: flex;
   flex-direction: column;
@@ -4917,6 +4912,7 @@ button.alert-item {
 
 #toolbar .tool-row.palette-section[data-palette-section="businesses"] > .tool-row-label,
 #toolbar .tool-row.palette-section[data-palette-section="businesses"] > small,
+#toolbar .tool-row.palette-section[data-palette-section="businesses"] > .opening-zone-controls,
 #toolbar .tool-row.palette-section[data-palette-section="businesses"] > .recipe-list,
 #toolbar .tool-row.palette-section[data-palette-section="businesses"] > .recipe-future {
   grid-column: 1 / -1;
@@ -4944,25 +4940,6 @@ button.alert-item {
   overflow-wrap: anywhere;
 }
 
-#toolbar .tool-row.palette-section[data-palette-section="businesses"] .recipe-card-cost,
-#toolbar .tool-row.palette-section[data-palette-section="businesses"] .recipe-step-detail {
+#toolbar .tool-row.palette-section[data-palette-section="businesses"] .recipe-card-cost {
   white-space: nowrap;
-}
-
-#toolbar .tool-row.palette-section[data-palette-section="businesses"] .recipe-steps {
-  gap: 4px;
-  margin: 5px 0 3px;
-}
-
-#toolbar .tool-row.palette-section[data-palette-section="businesses"] .tool-btn.recipe-step {
-  min-width: 0;
-  min-height: 32px;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  gap: 7px;
-  padding: 6px 7px;
-}
-
-#toolbar .tool-row.palette-section[data-palette-section="businesses"] .recipe-step-label {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }

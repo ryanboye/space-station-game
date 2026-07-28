@@ -2246,7 +2246,14 @@ function collectServingPickupTargets(state: StationState): number[] {
     const tables = state.moduleInstances.filter(
       (module) => module.type === ModuleType.Table && clusterTiles.has(module.originTile)
     );
-    if (servingStations.length < 2 || tables.length < 2) continue;
+    // Crew may use a Restricted mess, but visitor service is a deliberate
+    // public-facing operation. A private crew mess must never become a
+    // visitor cafeteria simply because it happens to have enough furniture.
+    if (cluster.some((tile) => state.zones[tile] !== ZoneType.Public)) continue;
+    const trayReturns = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.TrayReturn && clusterTiles.has(module.originTile)
+    );
+    if (servingStations.length < 2 || tables.length < 2 || trayReturns.length < 1) continue;
     for (const module of servingStations) publicServingOrigins.add(module.originTile);
   }
   const out: number[] = [];
@@ -26002,9 +26009,16 @@ export function previewPreparedMealPurchase(
   creditCost = OPENING_BALANCE.preparedMealBatch.costCredits,
   mealGain = OPENING_BALANCE.preparedMealBatch.units
 ): BuyPreparedMealsResult {
-  const destinations = state.moduleInstances
+  const allDestinations = state.moduleInstances
     .filter((module) => module.type === ModuleType.ServingStation)
     .map((module) => module.originTile);
+  const publicDestinations = [...new Set(
+    collectServingPickupTargets(state).map((pickupTile) => servingInventoryTileForPickup(state, pickupTile))
+  )];
+  // Once a public cafeteria exists, bought meals go there. The starter crew
+  // mess remains a real crew buffer, but it must not swallow the stock the
+  // player explicitly bought to open a visitor business.
+  const destinations = publicDestinations.length > 0 ? publicDestinations : allDestinations;
   const freeCapacity = destinations.length === 0 ? 0 : totalItemCapacityAtTargets(state, destinations);
   const base = {
     added: 0,
@@ -26059,9 +26073,13 @@ export function buyPreparedMealsDetailed(
   rebuildItemNodes(state);
   const preview = previewPreparedMealPurchase(state, creditCost, mealGain);
   if (!preview.ok) return preview;
-  const destinations = state.moduleInstances
+  const allDestinations = state.moduleInstances
     .filter((module) => module.type === ModuleType.ServingStation)
     .map((module) => module.originTile);
+  const publicDestinations = [...new Set(
+    collectServingPickupTargets(state).map((pickupTile) => servingInventoryTileForPickup(state, pickupTile))
+  )];
+  const destinations = publicDestinations.length > 0 ? publicDestinations : allDestinations;
   const base = {
     added: 0,
     requestedAmount: mealGain,
@@ -26132,10 +26150,21 @@ export interface SupplierOrderResult {
 type SupplierOrderKind = 'travel-supplies' | 'fuel';
 
 function supplierOrderDestinations(state: StationState, stockKind: SupplierOrderKind): number[] {
-  const moduleType = stockKind === 'travel-supplies' ? ModuleType.MarketStall : ModuleType.FuelTank;
-  return state.moduleInstances
-    .filter((module) => module.type === moduleType)
+  const moduleTypes = stockKind === 'travel-supplies'
+    ? [ModuleType.ShelfAisle, ModuleType.MarketStall]
+    : [ModuleType.FuelTank];
+  const shelfDestinations = state.moduleInstances
+    .filter((module) => module.type === ModuleType.ShelfAisle)
     .map((module) => module.originTile);
+  // Shelves are the authored shop destination. Keep stalls as a later small
+  // retail fallback so existing stations and commercial tenants do not lose
+  // their procurement route.
+  const destinations = stockKind === 'travel-supplies' && shelfDestinations.length > 0
+    ? shelfDestinations
+    : state.moduleInstances
+      .filter((module) => moduleTypes.includes(module.type))
+      .map((module) => module.originTile);
+  return destinations
 }
 
 function hasFreightPodDock(state: StationState): boolean {
@@ -26176,7 +26205,7 @@ function previewSupplierOrder(
   const freeCapacity = destinations.length === 0 ? 0 : totalItemCapacityAtTargets(state, destinations);
   const creditCost = supplierOrderQuote(state, stockKind, baseCost);
   const stockLabel = stockKind === 'travel-supplies' ? 'travel supplies' : 'fuel';
-  const fixtureLabel = stockKind === 'travel-supplies' ? 'Market Stall' : 'Fuel Tank';
+  const fixtureLabel = stockKind === 'travel-supplies' ? 'Shelf Aisle' : 'Fuel Tank';
   const destinationWord = destinations.length === 1 ? fixtureLabel : `${fixtureLabel}s`;
   const base = { requestedAmount: units, creditCost, freeCapacity, destinationCount: destinations.length };
   if (destinations.length === 0) {
