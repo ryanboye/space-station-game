@@ -22,7 +22,7 @@ import { createVisitorNeeds } from './occupant-demand';
 import { findPath } from './path';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -1097,6 +1097,33 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   },
   'structural-expansion-active': (s) => {
     planScenarioStructuralExpansion(s, true);
+    s.controls.paused = false;
+  },
+  'structural-expansion-material-blocked': (s) => {
+    planScenarioStructuralExpansion(s, true);
+    s.legacyMaterialStock = 0;
+    for (const node of s.itemNodes) node.items.rawMaterial = 0;
+    s.metrics.materials = 0;
+    s.controls.materialAutoImportEnabled = false;
+    s.controls.paused = false;
+  },
+  'structural-truss-active': (s) => {
+    const candidate = s.tiles.findIndex((tile, index) => {
+      if (tile !== TileType.Space) return false;
+      const x = index % s.width;
+      const y = Math.floor(index / s.width);
+      return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
+        const nextX = x + dx;
+        const nextY = y + dy;
+        if (nextX < 0 || nextY < 0 || nextX >= s.width || nextY >= s.height) return false;
+        return s.tiles[nextY * s.width + nextX] === TileType.Truss;
+      });
+    });
+    if (candidate < 0) throw new Error('Truss showcase could not find an open extension tile.');
+    const planned = planTileConstruction(s, candidate, TileType.Truss);
+    if (!planned.ok) throw new Error(`Truss showcase failed: ${planned.reason ?? 'unknown'}`);
+    const site = s.constructionSites.find((entry) => entry.tileIndex === candidate);
+    if (site) site.buildWorkRequired = 60;
     s.controls.paused = false;
   },
 

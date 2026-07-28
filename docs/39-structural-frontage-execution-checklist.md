@@ -498,7 +498,7 @@ audited checklist with no unsupported checked claims.
 - [x] Plan Truss in space.
 - [x] Route construction kits to reachable staging.
 - [x] Route EVA workers through an Airlock.
-- [ ] Build Truss through visible EVA welding.
+- [x] Build Truss through visible EVA welding.
 - [x] Plan Pressure Hull over completed or planned support.
 - [x] Derive floor-plate blueprints.
 - [x] Derive perimeter wall/bulkhead blueprints.
@@ -516,7 +516,7 @@ audited checklist with no unsupported checked claims.
 - [x] Perform visible seal check.
 - [x] Commission and pressurize only a supported sealed shell.
 - [x] Require EVA construction for exterior/unpressurized modules.
-- [ ] Report missing material.
+- [x] Report missing material.
 - [ ] Report missing staging route.
 - [x] Report missing Airlock/EVA route.
 - [ ] Report low EVA oxygen.
@@ -527,8 +527,8 @@ audited checklist with no unsupported checked claims.
 
 - [x] Build a complete pressurized wing from a live starter.
 - [x] No Airlock visibly blocks exterior work.
-- [ ] Missing material visibly blocks work.
-- [ ] Exterior module installation uses EVA.
+- [x] Missing material visibly blocks work.
+- [x] Exterior module installation uses EVA.
 - [x] Save/load preserves partially delivered and partially built sites.
 - [x] Topology mutations continue through authoritative invalidation paths.
 
@@ -1265,3 +1265,11 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:structural-expansion` passes. The runner saves a partially delivered structural project, hydrates it in the intentionally paused load state, resumes play, completes every perimeter/interior/seal job, atomically commissions the wing, and verifies idle EVA workers return through an Airlock.
 - Live-browser evidence: `?scenario=structural-expansion-active` was reloaded from the normal starter-derived fixture and run at 4x. Its visible Work Queue fell from seven construction jobs to two and then `No queued work`; the exterior project commissioned without a stranded worker or false crew-quarters alert.
 - Remaining uncertainty: the fixture begins with its valid Truss patch already placed, so visible player-built Truss welding remains open. Dedicated live captures are still required for low EVA oxygen, obstructed work position, and the subjective first-expansion presentation claim.
+
+2026-07-28 · Physical EVA frontage work and material diagnosis
+
+- Commit or files: exterior work-face resolution in `src/sim/construction.ts`; focused behavior in `tools/structural-expansion-tests.ts`; live fixtures in `src/sim/cold-start-scenarios.ts`; and this execution ledger (pending checkpoint commit at evidence capture).
+- Correctness fix: exterior wall hardware was classified as EVA work but resolved its target to the pressurized interior service face. Pod Docks, Fuel Couplers, Freight Lockers, and Maintenance Sockets now select an actual space-facing work tile, allowing suited workers to deliver and install them from outside.
+- Focused evidence: `npm run test:structural-expansion` passes. It plans a new Truss extension through the normal construction API, observes a suited worker, and waits for the real tile commission; it separately rebuilds a starter Pod Dock through physical delivery and exterior work, while retaining the contrast that an interior Table does not require EVA. A zero-stock project asserts `no construction materials` on its blocked site.
+- Live-browser evidence: `?scenario=structural-expansion-material-blocked` renders `BLOCKED · NO CONSTRUCTION MATERIALS` over the affected exterior blueprints. `?scenario=structural-truss-active` starts a normal EVA-required Truss extension from the starter scaffold, with its world blueprint and construction progress visible when panels are hidden.
+- Remaining uncertainty: the Pod Dock completion contract reduces that test site's material/work totals so the runner proves route and custody without spending minutes on balance-scale hauling. Production costs remain unchanged and need a later construction-economy pass. Low EVA oxygen and sustained work-position obstruction still need dedicated proof.

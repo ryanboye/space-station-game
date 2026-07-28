@@ -759,6 +759,23 @@ function hasOpenConstructionJob(state: StationState, siteId: number): boolean {
 
 function constructionWorkTile(state: StationState, site: ConstructionSite): number {
   if (site.kind === 'module' && site.targetModule !== undefined && moduleMount(site.targetModule) === 'wall') {
+    if (site.requiresEva && EXTERIOR_HULL_MODULES.has(site.targetModule)) {
+      const footprint = moduleFootprint(site.targetModule, site.rotation ?? 0);
+      const occupied = new Set(footprintTiles(state, site.tileIndex, footprint.width, footprint.height));
+      const exteriorFaces: number[] = [];
+      for (const tile of occupied) {
+        const point = fromIndex(tile, state.width);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const x = point.x + dx;
+          const y = point.y + dy;
+          if (!inBounds(x, y, state.width, state.height)) continue;
+          const neighbor = toIndex(x, y, state.width);
+          if (occupied.has(neighbor) || !isEvaTraversalTile(state, neighbor)) continue;
+          exteriorFaces.push(neighbor);
+        }
+      }
+      if (exteriorFaces.length > 0) return Math.min(...exteriorFaces);
+    }
     return wallMountedModuleServiceTile(state, site.tileIndex) ?? site.tileIndex;
   }
   return site.tileIndex;

@@ -12,7 +12,8 @@ import {
   applyConstructionSite,
   cancelConstructionAtTile,
   findConstructionPath,
-  planModuleConstruction
+  planModuleConstruction,
+  planTileConstruction
 } from '../src/sim/construction';
 import { captureSnapshot, hydrateStateFromSave } from '../src/sim/save';
 import { ModuleType, TileType, fromIndex, inBounds, isWalkable, toIndex, type StationState } from '../src/sim/types';
@@ -44,6 +45,25 @@ function assertCondition(condition: unknown, message: string): asserts condition
   assertCondition(
     state.constructionSites.find((site) => site.tileIndex === table.originTile)?.requiresEva === false,
     'Pressurized interior furniture must not require EVA.'
+  );
+  assertCondition(cancelConstructionAtTile(state, table.originTile), 'Could not clear the contrast Table site before the EVA completion check.');
+
+  const dockSite = state.constructionSites.find((site) => site.tileIndex === podDock.originTile);
+  assertCondition(dockSite !== undefined, 'Replacement Pod Dock needs a durable construction site.');
+  // This focused contract proves routing and custody, not the current capital
+  // balance. Keep it to one delivery and a short exterior work session.
+  dockSite.requiredMaterials = 8;
+  dockSite.buildWorkRequired = 8;
+  state.controls.paused = false;
+  let sawDockEvaWorker = false;
+  for (let step = 0; step < 4000 && !state.moduleInstances.some((module) => module.originTile === podDock.originTile && module.type === ModuleType.PodDock); step++) {
+    tick(state, 0.1);
+    sawDockEvaWorker ||= state.crewMembers.some((crew) => crew.evaSuit && crew.activeJobId !== null);
+  }
+  assertCondition(sawDockEvaWorker, 'Exterior Pod Dock installation must visibly dispatch a suited EVA worker.');
+  assertCondition(
+    state.moduleInstances.some((module) => module.originTile === podDock.originTile && module.type === ModuleType.PodDock),
+    'Exterior Pod Dock construction must complete through the real job loop.'
   );
 }
 
@@ -135,6 +155,27 @@ function removeBoundaryAirlocks(state: StationState): void {
   );
   const starterTruss = state.tiles.filter((tile) => tile === TileType.Truss).length;
   assertCondition(starterTruss === 3, `Starter should expose one short truss finger, found ${starterTruss} tiles.`);
+
+  const trussTip = state.tiles.findIndex((tile, index) => {
+    if (tile !== TileType.Space) return false;
+    const point = fromIndex(index, state.width);
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      return inBounds(x, y, state.width, state.height) && state.tiles[toIndex(x, y, state.width)] === TileType.Truss;
+    });
+  });
+  assertCondition(trussTip >= 0, 'Starter Truss finger should have an adjacent space tile for its first extension.');
+  const trussPlan = planTileConstruction(state, trussTip, TileType.Truss);
+  assertCondition(trussPlan.ok, `Player Truss extension should plan (${trussPlan.reason ?? 'no reason'}).`);
+  state.controls.paused = false;
+  let sawTrussEvaWorker = false;
+  for (let step = 0; step < 2000 && state.tiles[trussTip] !== TileType.Truss; step++) {
+    tick(state, 0.1);
+    sawTrussEvaWorker ||= state.crewMembers.some((crew) => crew.evaSuit && crew.activeJobId !== null);
+  }
+  assertCondition(sawTrussEvaWorker, 'Building a Truss extension must visibly dispatch a suited EVA worker.');
+  assertCondition(state.tiles[trussTip] === TileType.Truss, 'EVA welding must commission the planned Truss tile.');
 }
 
 // Deterministic rejection must not touch project state or materials.
@@ -199,6 +240,23 @@ function removeBoundaryAirlocks(state: StationState): void {
   assertCondition(state.constructionSites.some((candidate) => candidate.state === 'blocked'), 'No material/EVA route should visibly block structural work.');
   assertCondition(patch.every((tile) => state.tiles[tile] === TileType.Truss), 'Blocked project must leave the station topology unchanged.');
   assertCondition(!project.commissioned, 'Blocked project must not commission.');
+}
+
+// A planned shell with no stock reports the missing physical prerequisite.
+{
+  const state = createInitialState({ seed: 901035 });
+  installBoundaryAirlock(state);
+  const { project } = createProject(state);
+  state.legacyMaterialStock = 0;
+  for (const node of state.itemNodes) node.items.rawMaterial = 0;
+  state.metrics.materials = 0;
+  state.controls.materialAutoImportEnabled = false;
+  state.controls.paused = false;
+  tick(state, 1);
+  assertCondition(
+    state.constructionSites.some((site) => site.structuralProjectId === project.id && site.state === 'blocked' && site.blockedReason === 'no construction materials'),
+    'A material-starved expansion must report no construction materials on its world site.'
+  );
 }
 
 // Existing logistics and EVA movement perform real delivery and build work.
