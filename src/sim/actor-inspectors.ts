@@ -224,7 +224,9 @@ export function getVisitorInspectorById(state: StationState, visitorId: number):
     carryingMeal: visitor.carryingMeal,
     reservedServingTile: visitor.reservedServingTile,
     reservedTargetTile: visitor.reservedTargetTile,
-    servicePlan: [...visitor.servicePlan],
+    // Only what the guest has actually shown. The full plan stays internal so
+    // the player reads behaviour and ship cues, not a manifest.
+    servicePlan: [...(visitor.revealedServices ?? visitor.servicePlan.slice(0, 1))],
     completedServices: [...visitor.completedServices],
     activeService: visitor.activeService,
     desire: visitorInspectorDesire(state, visitor)

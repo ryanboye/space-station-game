@@ -67,6 +67,21 @@ import {
   validateDockingSlot
 } from '../sim/sim';
 import {
+  barGroupStatus,
+  barGroups,
+  fixtureCapacityReport,
+  marketChainStatus,
+  type MarketChainStatus,
+  barGroupAtTile,
+  barGroupStock,
+  shelfAppealFor
+} from '../sim/facility-machines';
+import {
+  FACILITY_BLOCKED_LABEL,
+  firstBlockedReason,
+  type FacilityBlockedReason
+} from '../sim/facility-slots';
+import {
   approachLaneAlignment,
   buildDockingSlotDescriptor,
   deriveApproachConflictGroups,
@@ -254,6 +269,17 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.CheckoutBank]: '$',
   [ModuleType.ShelfAisle]: '=',
   [ModuleType.BunkBank]: 'B',
+  [ModuleType.BackroomStockBank]: '#',
+  [ModuleType.ServiceBar]: 'Y',
+  [ModuleType.BarCorner]: 'L',
+  [ModuleType.BarEnd]: 'J',
+  [ModuleType.BoothBank]: 'U',
+  [ModuleType.StandingRail]: 'I',
+  [ModuleType.ServingLine]: 'E',
+  [ModuleType.CommunityTable]: 'O',
+  [ModuleType.GuestCabin]: 'G',
+  [ModuleType.ArrivalDesk]: '?',
+  [ModuleType.WashBank]: 'W',
   [ModuleType.IntakePallet]: 'P',
   [ModuleType.StorageRack]: 'R',
   // Dock-migration v0: capability-module letters for vector fallback.
@@ -4835,10 +4861,24 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
   }
   if (visitor.state === VisitorState.Leisure) {
     if (room === RoomType.Observatory) return { text: 'What a view!', tone: 'positive' };
-    if (room === RoomType.Cantina) return { text: 'Great drinks!', tone: 'positive' };
+    if (room === RoomType.Cantina) {
+      // Only praise the drinks if the bar this guest is standing at can
+      // actually pour one. A dry bar gets no compliment.
+      const barHere = barGroupAtTile(state, visitor.tileIndex);
+      const barStock = barHere ? barGroupStock(state, barHere) : 1;
+      if (barStock > 0) return { text: 'Great drinks!', tone: 'positive' };
+      return { text: 'The bar is dry', tone: 'negative' };
+    }
     if (room === RoomType.Market) {
-      if (visitorRecentlyCompletedRetail(state, visitor.id)) return { text: 'Good selection!', tone: 'positive' };
+      // Praise the SELECTION only when a shelf this guest would actually want
+      // is stocked. `shelfAppealFor` returns 0 when nothing suitable exists,
+      // which is what stops the station complimenting itself on empty shelves.
+      const suitable = shelfAppealFor(state, visitor.primaryPreference);
+      if (visitorRecentlyCompletedRetail(state, visitor.id) && suitable > 0) {
+        return { text: 'Good selection!', tone: 'positive' };
+      }
       if (marketStockAtTile(state, visitor.tileIndex) === 0) return { text: 'These shelves are empty', tone: 'negative' };
+      if (suitable === 0) return { text: 'Nothing here I want', tone: 'negative' };
     }
     if (room === RoomType.Hygiene && sanitation?.severity === 'clean') {
       return { text: 'These facilities are spotless!', tone: 'positive' };
@@ -6414,6 +6454,185 @@ function drawMarketFixtureFeedback(
   }
 }
 
+const FACILITY_CHIP_ACCENT = {
+  /** Serving somebody right now. */
+  busy: '#72e7ad',
+  /** Built and free. Nothing wrong, nothing happening. */
+  idle: '#72dff2',
+  /** Blocked but recoverable: unstaffed, saturated, no seat. */
+  warn: '#ffad65',
+  /** Blocked on missing stock, the one thing that stops service outright. */
+  empty: '#ff827a'
+} as const;
+
+const FACILITY_CHIP_MODULES: ReadonlySet<ModuleType> = new Set<ModuleType>([
+  ModuleType.BoothBank,
+  ModuleType.StandingRail,
+  ModuleType.ServingLine,
+  ModuleType.CommunityTable,
+  ModuleType.GuestCabin,
+  ModuleType.ArrivalDesk,
+  ModuleType.WashBank,
+  ModuleType.BackroomStockBank
+]);
+
+/**
+ * World chips for the Phase 1B facility fixtures.
+ *
+ * Same visual idiom as `drawMarketFixtureFeedback`, extended to two rows: the
+ * first row is always users over physical capacity, the second is either the
+ * one blocked reason — in the shared `FACILITY_BLOCKED_LABEL` wording, so a
+ * chip can never disagree with an inspector — or the supporting fact
+ * (staffing, stock, dwell seating) that explains why the fixture is fine.
+ *
+ * Everything shown is read back from the pure facility helpers. Nothing here
+ * recomputes capacity, occupancy or blockers, because a chip that derived its
+ * own numbers would be the first thing to drift from the simulation.
+ */
+function drawFacilityFixtureChips(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const drawChip = (tileIndex: number, lines: readonly string[], accent: string): void => {
+    if (!tileInRange(tileIndex, state, visibleTiles)) return;
+    const rows = lines.filter((line) => line.length > 0);
+    if (rows.length === 0) return;
+    const point = fromIndex(tileIndex, state.width);
+    const font = Math.max(7, Math.round(TILE_SIZE * 0.23));
+    ctx.save();
+    ctx.font = `bold ${font}px monospace`;
+    let widest = 0;
+    for (const row of rows) widest = Math.max(widest, ctx.measureText(row).width);
+    const width = Math.max(TILE_SIZE * 1.45, widest + TILE_SIZE * 0.38);
+    const rowHeight = Math.max(13, TILE_SIZE * 0.46);
+    const height = rowHeight * rows.length;
+    const x = (point.x + 0.5) * TILE_SIZE - width / 2;
+    const y = point.y * TILE_SIZE - height - TILE_SIZE * 0.08;
+    ctx.fillStyle = 'rgba(5, 12, 20, 0.9)';
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.035);
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, Math.max(2, TILE_SIZE * 0.08));
+    ctx.fill();
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let row = 0; row < rows.length; row++) {
+      ctx.fillStyle = row === 0 ? accent : 'rgba(223, 236, 248, 0.86)';
+      ctx.fillText(rows[row], x + width / 2, y + rowHeight * (row + 0.53));
+    }
+    ctx.restore();
+  };
+
+  const blockedCopy = (reason: FacilityBlockedReason | null): string =>
+    reason === null ? '' : FACILITY_BLOCKED_LABEL[reason].toUpperCase();
+
+  const accentFor = (reason: FacilityBlockedReason | null, inUse: number): string =>
+    reason === 'no-stock'
+      ? FACILITY_CHIP_ACCENT.empty
+      : reason !== null
+        ? FACILITY_CHIP_ACCENT.warn
+        : inUse > 0
+          ? FACILITY_CHIP_ACCENT.busy
+          : FACILITY_CHIP_ACCENT.idle;
+
+  // A connected run is one bar: one chip, anchored on the lowest module id in
+  // the group, never one chip per segment.
+  for (const group of barGroups(state)) {
+    const anchor = state.moduleInstances.find((module) => module.id === group.id);
+    if (!anchor) continue;
+    if (!tileInRange(anchor.originTile, state, visibleTiles)) continue;
+    // Staffing is read from the lane positions a worker is physically standing
+    // in rather than from a room-wide headcount, which is the same physical
+    // reading the fixture itself serves on.
+    const status = barGroupStatus(state, group, 0);
+    const inUse = group.guestSlots.length - status.freeGuestSlots;
+    const head = `BAR ${inUse}/${group.guestSlots.length} · DRINKS ${Math.floor(status.stock + 0.0001)}`;
+    const detail = status.blockedReason !== null
+      ? blockedCopy(status.blockedReason)
+      : `STAFF ${status.staffedPositions}/${group.staffSlots.length} · SEATS ${status.dwellCapacity}`;
+    drawChip(anchor.originTile, [head, detail], accentFor(status.blockedReason, inUse));
+  }
+
+  let chain: MarketChainStatus | null = null;
+  for (const module of state.moduleInstances) {
+    if (!FACILITY_CHIP_MODULES.has(module.type)) continue;
+    if (!tileInRange(module.originTile, state, visibleTiles)) continue;
+    const report = fixtureCapacityReport(state, module);
+    if (!report) continue;
+    const inUse = report.publicInUse;
+    const total = report.publicSlots;
+    const full = total > 0 && inUse >= total;
+
+    if (module.type === ModuleType.BackroomStockBank) {
+      // Back-of-house: no public positions at all, so the useful facts are what
+      // it holds and whether the shelves it feeds are actually being fed.
+      chain ??= marketChainStatus(state);
+      const held = Math.floor(itemStockAtNode(state, module.originTile, 'tradeGood') + 0.0001);
+      const shelves = Math.floor(chain.shelves + 0.0001);
+      const reason: FacilityBlockedReason | null = held < 0.95 ? 'no-stock' : null;
+      const accent = reason !== null
+        ? FACILITY_CHIP_ACCENT.empty
+        : shelves < 1
+          ? FACILITY_CHIP_ACCENT.warn
+          : FACILITY_CHIP_ACCENT.busy;
+      drawChip(
+        module.originTile,
+        [`BACKROOM ${held}`, reason !== null ? blockedCopy(reason) : `SHELVES ${shelves}`],
+        accent
+      );
+      continue;
+    }
+
+    // Seating and standing room buy dwell capacity, never throughput, so their
+    // chips carry a count and nothing else until every position is taken.
+    if (
+      module.type === ModuleType.BoothBank ||
+      module.type === ModuleType.StandingRail ||
+      module.type === ModuleType.CommunityTable
+    ) {
+      const label = module.type === ModuleType.BoothBank
+        ? 'BOOTHS'
+        : module.type === ModuleType.StandingRail
+          ? 'RAIL'
+          : 'TABLE';
+      const reason = firstBlockedReason({ 'no-free-seat': full });
+      drawChip(
+        module.originTile,
+        [`${label} ${inUse}/${total}`, blockedCopy(reason)],
+        accentFor(reason, inUse)
+      );
+      continue;
+    }
+
+    // Staffed service fixtures: an unstaffed counter is more actionable than a
+    // busy one, which is exactly the order `firstBlockedReason` reports.
+    if (module.type === ModuleType.ServingLine || module.type === ModuleType.ArrivalDesk) {
+      const label = module.type === ModuleType.ServingLine ? 'SERVING' : 'DESK';
+      const reason = firstBlockedReason({
+        'no-staff': report.staffSlots > 0 && report.staffed <= 0,
+        'no-free-provider': full
+      });
+      const detail = reason !== null
+        ? blockedCopy(reason)
+        : `STAFF ${report.staffed}/${report.staffSlots}`;
+      drawChip(module.originTile, [`${label} ${inUse}/${total}`, detail], accentFor(reason, inUse));
+      continue;
+    }
+
+    // Beds and wash stalls are unstaffed providers: capacity is the whole story
+    // until they saturate.
+    const label = module.type === ModuleType.GuestCabin ? 'CABIN' : 'WASH';
+    const reason = firstBlockedReason({ 'no-free-provider': full });
+    drawChip(
+      module.originTile,
+      [`${label} ${inUse}/${total}`, blockedCopy(reason)],
+      accentFor(reason, inUse)
+    );
+  }
+}
+
 function drawCommercialTenantStaff(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -7047,6 +7266,7 @@ export function renderWorld(
   drawIncidentMarkers(ctx, state, visibleTiles);
   drawCommercialUnitStatusChips(ctx, state, visibleTiles);
   drawMarketFixtureFeedback(ctx, state, visibleTiles);
+  drawFacilityFixtureChips(ctx, state, visibleTiles);
 
   const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
     x >= visibleTiles.minX - marginTiles &&

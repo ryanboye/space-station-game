@@ -55,6 +55,7 @@ import {
   ModuleType,
   type ModuleRotation,
   RoomType,
+  type ShelfMix,
   type ShipSize,
   type ShipType,
   type SecurityPosture,
@@ -241,6 +242,8 @@ export interface StationSnapshotV1 {
     originTile: number;
     rotation: ModuleRotation;
     purchaseCost?: number;
+    /** Shelf Aisle stocking choice. Absent on other modules and legacy saves. */
+    shelfMix?: ShelfMix;
   }>;
   commercialUnits?: CommercialUnit[];
   constructionSites: Array<{
@@ -1094,7 +1097,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         type: module.type,
         originTile: module.originTile,
         rotation: module.rotation,
-        purchaseCost: module.purchaseCost
+        purchaseCost: module.purchaseCost,
+        shelfMix: module.shelfMix
       }))
       .sort((a, b) => a.originTile - b.originTile || a.type.localeCompare(b.type)),
     commercialUnits: state.commercialUnits.map((unit) => ({
@@ -1903,7 +1907,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       if (rawRotation !== 0 && rawRotation !== 90) {
         warnings.push(`modules[${i}] has unsupported rotation ${rawRotation}; defaulted to ${rotation}.`);
       }
-      modules.push({ type, originTile, rotation, purchaseCost });
+      const shelfMix = entry.shelfMix === 'gifts' || entry.shelfMix === 'technical' || entry.shelfMix === 'essentials'
+        ? entry.shelfMix
+        : undefined;
+      modules.push({ type, originTile, rotation, purchaseCost, shelfMix });
     }
   }
 
@@ -3159,8 +3166,10 @@ export function hydrateStateFromSave(
     const result = tryPlaceModule(next, module.type, module.originTile, module.rotation);
     if (!result.ok) {
       warnings.push(`Module ${index} (${module.type} @ ${module.originTile}) skipped: ${result.reason ?? 'invalid'}.`);
-    } else if (module.purchaseCost !== undefined) {
-      next.moduleInstances[next.moduleInstances.length - 1].purchaseCost = module.purchaseCost;
+    } else {
+      const placed = next.moduleInstances[next.moduleInstances.length - 1];
+      if (module.purchaseCost !== undefined) placed.purchaseCost = module.purchaseCost;
+      if (module.shelfMix !== undefined) placed.shelfMix = module.shelfMix;
     }
   }
   next.commercialUnits = (snapshot.commercialUnits ?? []).map((unit) => {

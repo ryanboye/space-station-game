@@ -214,6 +214,19 @@ export const MODULE_UNLOCK_TIER: Record<ModuleType, UnlockTier> = {
   [ModuleType.CheckoutBank]: 0,
   [ModuleType.ShelfAisle]: 0,
   [ModuleType.BunkBank]: 0,
+  // Phase 1B second wave. Tier 1 matches the rooms that host them (Cantina is
+  // tier 1); the market and cafeteria fixtures stay at 0 like their siblings.
+  [ModuleType.BackroomStockBank]: 0,
+  [ModuleType.ServiceBar]: 1,
+  [ModuleType.BarCorner]: 1,
+  [ModuleType.BarEnd]: 1,
+  [ModuleType.BoothBank]: 1,
+  [ModuleType.StandingRail]: 1,
+  [ModuleType.ServingLine]: 0,
+  [ModuleType.CommunityTable]: 0,
+  [ModuleType.GuestCabin]: 1,
+  [ModuleType.ArrivalDesk]: 1,
+  [ModuleType.WashBank]: 0,
   [ModuleType.IntakePallet]: 0,
   [ModuleType.StorageRack]: 2,
   // Dock-migration v0: capability modules at T0 for testing.

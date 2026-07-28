@@ -183,6 +183,347 @@ const assets = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Multi-tile content fixtures (occupant loop).
+//
+// Each fixture is authored UNROTATED at exactly 64px per tile, on a fully
+// transparent background, with >= 3px of clear margin on every edge so the
+// atlas validator's border checks (opaqueRatio <= 0.5, brightOpaqueRatio
+// <= 0.22) stay at zero. Everything is inset by 8px; the shared `panel()`
+// drop shadow only reaches 3px past the panel bottom.
+//
+// The atlas is authored at 64px/tile but rasterizes to 32px/tile in game, so
+// every reservable position is drawn as a chunky, clearly separated repeated
+// element and variants read as silhouette / colour / frame changes.
+// ---------------------------------------------------------------------------
+
+const TILE = 64;
+
+const CONTENT_VARIANTS = {
+  base: {
+    body: '#2b3545', frame: '#7f91a7', seat: '#c98a4f', counter: '#8d5a38',
+    lane: '#26343d', accent: '#6fd8ff', steel: '#5c6b7d', stock: true, staff: true
+  },
+  active: {
+    body: '#2f3f4a', frame: '#6edb8f', seat: '#e0a463', counter: '#a26a42',
+    lane: '#27403a', accent: '#8ef2b4', steel: '#65808a', stock: true, staff: true
+  },
+  unstaffed: {
+    body: '#242c37', frame: '#6c7787', seat: '#8a7256', counter: '#6a4a34',
+    lane: '#212a30', accent: '#5c6a7a', steel: '#4c5865', stock: true, staff: false
+  },
+  empty: {
+    body: '#232b38', frame: '#7f91a7', seat: '#7d6a58', counter: '#6f4c33',
+    lane: '#26343d', accent: '#4d5a6b', steel: '#4f5d6b', stock: false, staff: true
+  },
+  dirty: {
+    body: '#38382a', frame: '#9a8f5a', seat: '#9a7a4a', counter: '#6f5330',
+    lane: '#31342a', accent: '#c9b46a', steel: '#5d5f45', stock: true, staff: true
+  },
+  damaged: {
+    body: '#3a2a2c', frame: '#df4b47', seat: '#8a5a48', counter: '#6b4230',
+    lane: '#33262a', accent: '#ff7a7a', steel: '#5a4448', stock: true, staff: true
+  }
+};
+
+function crate(x, y, size, fill, top) {
+  return `
+    <rect x="${x}" y="${y}" width="${size}" height="${size}" fill="${fill}" stroke="#1a2230" stroke-width="3"/>
+    <rect x="${x + 5}" y="${y + 5}" width="${size - 10}" height="${Math.max(4, Math.round(size / 3))}" fill="${top}"/>`;
+}
+
+function seatPad(x, y, w, h, fill, accent) {
+  return `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${fill}" stroke="#141c26" stroke-width="4"/>
+    <rect x="${x + 6}" y="${y + 6}" width="${w - 12}" height="${h - 12}" rx="4" fill="none" stroke="${accent}" stroke-width="3" opacity="0.85"/>`;
+}
+
+function stool(cx, cy, r, fill, accent) {
+  return `
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="#141c26" stroke-width="4"/>
+    <circle cx="${cx}" cy="${cy}" r="${Math.max(4, r - 7)}" fill="none" stroke="${accent}" stroke-width="3" opacity="0.9"/>`;
+}
+
+function variantOverlay(variant, width, height) {
+  if (variant === 'active') {
+    const a = 14;
+    const bx = Math.min(42, Math.round(width * 0.5) - 8);
+    const by = Math.min(42, Math.round(height * 0.5) - 8);
+    return `
+    <path d="M${a} ${by} V${a} H${bx} M${width - bx} ${a} H${width - a} V${by} M${width - a} ${height - by} V${height - a} H${width - bx} M${bx} ${height - a} H${a} V${height - by}"
+      fill="none" stroke="#6edb8f" stroke-width="6" stroke-linecap="square"/>`;
+  }
+  if (variant === 'unstaffed') {
+    const x0 = Math.round(width * 0.58);
+    const x1 = width - 16;
+    return `
+    <rect x="${x0}" y="20" width="${x1 - x0}" height="${height - 40}" fill="none" stroke="#8b93a1" stroke-width="5" stroke-dasharray="14 10"/>
+    <path d="M${x0 + 6} 30 L${x1 - 6} ${height - 30} M${x1 - 6} 30 L${x0 + 6} ${height - 30}" stroke="#8b93a1" stroke-width="6" stroke-linecap="square"/>`;
+  }
+  if (variant === 'empty') {
+    return `
+    <rect x="20" y="20" width="${width - 40}" height="${height - 40}" fill="none" stroke="#5f6c7d" stroke-width="6" stroke-dasharray="18 14"/>`;
+  }
+  if (variant === 'dirty') {
+    const count = Math.max(4, Math.min(9, Math.round((width * height) / 7000)));
+    const spanX = Math.max(1, width - 56);
+    const spanY = Math.max(1, height - 56);
+    const blobs = [];
+    for (let i = 0; i < count; i++) {
+      const x = 26 + ((i * 53 + 17) % spanX);
+      const y = 26 + ((i * 97 + 31) % spanY);
+      const r = 9 + ((i * 5) % 5);
+      blobs.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="#8f8a45" opacity="0.88"/>`);
+      blobs.push(
+        `<circle cx="${x + r}" cy="${y + Math.round(r * 0.6)}" r="${Math.max(5, r - 4)}" fill="#6d6a34" opacity="0.88"/>`
+      );
+    }
+    return blobs.join('');
+  }
+  if (variant === 'damaged') {
+    const path = `M18 ${Math.round(height * 0.28)} L${Math.round(width * 0.38)} ${Math.round(height * 0.5) - 14} L${Math.round(width * 0.56)} ${Math.round(height * 0.5) + 16} L${width - 18} ${Math.round(height * 0.72)}`;
+    return `
+    <path d="${path}" fill="none" stroke="#2a0d10" stroke-width="12" stroke-linejoin="miter" stroke-linecap="square"/>
+    <path d="${path}" fill="none" stroke="#ff5a52" stroke-width="6" stroke-linejoin="miter" stroke-linecap="square"/>
+    <rect x="${width - 46}" y="18" width="28" height="28" fill="#2a0d10" stroke="#ff5a52" stroke-width="4"/>
+    <rect x="18" y="${height - 46}" width="28" height="28" fill="#2a0d10" stroke="#ff5a52" stroke-width="4"/>`;
+  }
+  return '';
+}
+
+const CONTENT_FIXTURES = {
+  // 2x3 back-of-house shelving. Three shelf runs, nine crates. No customer side.
+  'module.backroom_stock_bank': {
+    tiles: [2, 3],
+    variants: ['empty', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const rows = [22, 78, 134];
+      const shelves = rows
+        .map(
+          (y) => `
+      <rect x="18" y="${y}" width="92" height="40" fill="#1c242f" stroke="#0f151d" stroke-width="4"/>
+      <rect x="18" y="${y + 33}" width="92" height="7" fill="${s.frame}" opacity="0.6"/>`
+        )
+        .join('');
+      const goods = s.stock
+        ? rows.map((y) => [22, 54, 86].map((x) => crate(x, y + 5, 24, s.counter, s.seat)).join('')).join('')
+        : '';
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${shelves}${goods}`;
+    }
+  },
+  // 2x5 bar. WEST column = four guest stools, EAST column = staff lane.
+  'module.service_bar': {
+    tiles: [2, 5],
+    variants: ['active', 'unstaffed', 'empty', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const seats = [52, 124, 196, 268];
+      const counter = `
+      <rect x="46" y="18" width="38" height="${h - 36}" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="46" y="18" width="10" height="${h - 36}" fill="${s.seat}" opacity="0.8"/>`;
+      const lane = `
+      <rect x="88" y="20" width="28" height="${h - 40}" fill="${s.lane}" stroke="#111a22" stroke-width="4"/>
+      <path d="M90 60h24M90 150h24M90 240h24" stroke="${s.frame}" stroke-width="3" opacity="0.5"/>`;
+      const stools = seats.map((cy) => stool(30, cy, 18, s.seat, s.accent)).join('');
+      const glasses = s.stock
+        ? seats
+            .map(
+              (cy) =>
+                `<rect x="58" y="${cy - 9}" width="16" height="18" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`
+            )
+            .join('')
+        : '';
+      const staff = s.staff
+        ? [64, 152, 240]
+            .map(
+              (y) =>
+                `<rect x="92" y="${y}" width="20" height="34" rx="3" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`
+            )
+            .join('')
+        : '';
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${counter}${lane}${stools}${glasses}${staff}`;
+    }
+  },
+  // 2x2 L-junction of the bar run. No reservable positions.
+  'module.bar_corner': {
+    tiles: [2, 2],
+    variants: ['active', 'dirty', 'damaged'],
+    body: (s, w, h) => `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}
+      <rect x="16" y="14" width="22" height="100" fill="${s.body}" stroke="${s.frame}" stroke-width="3" opacity="0.9"/>
+      <path d="M44 14 H84 V46 H114 V86 H44 Z" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="44" y="14" width="10" height="72" fill="${s.seat}" opacity="0.85"/>
+      <rect x="54" y="76" width="60" height="10" fill="${s.seat}" opacity="0.85"/>
+      <rect x="90" y="14" width="24" height="26" fill="${s.lane}" stroke="#111a22" stroke-width="4"/>
+      <rect x="96" y="20" width="12" height="14" fill="${s.accent}" opacity="0.9"/>
+      <rect x="44" y="96" width="70" height="18" fill="${s.body}" stroke="${s.frame}" stroke-width="3" opacity="0.9"/>`
+  },
+  // 2x2 end cap of the bar run. No reservable positions.
+  'module.bar_end': {
+    tiles: [2, 2],
+    variants: ['active', 'dirty', 'damaged'],
+    body: (s, w, h) => `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}
+      <rect x="16" y="14" width="22" height="82" fill="${s.body}" stroke="${s.frame}" stroke-width="3" opacity="0.9"/>
+      <rect x="44" y="14" width="40" height="80" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="36" y="92" width="56" height="20" rx="8" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="44" y="14" width="10" height="80" fill="${s.seat}" opacity="0.85"/>
+      <rect x="88" y="28" width="26" height="44" fill="${s.lane}" stroke="#111a22" stroke-width="4"/>
+      <path d="M90 30 L112 70" stroke="${s.accent}" stroke-width="5" stroke-linecap="square" opacity="0.9"/>`
+  },
+  // 2x4 booth bank. Two booths, three seat pads each = six seats.
+  'module.booth_bank': {
+    tiles: [2, 4],
+    variants: ['active', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const booth = (top) => `
+      <rect x="22" y="${top}" width="84" height="44" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="28" y="${top + 6}" width="72" height="10" fill="${s.seat}" opacity="0.8"/>
+      ${[24, 54, 84].map((x) => seatPad(x, top + 52, 24, 32, s.seat, s.accent)).join('')}`;
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${booth(22)}
+      <rect x="18" y="118" width="92" height="8" fill="${s.frame}" opacity="0.5"/>
+      ${booth(138)}`;
+    }
+  },
+  // 1x4 standing rail. Four standing pads beside a continuous rail.
+  'module.standing_rail': {
+    tiles: [1, 4],
+    variants: ['active', 'dirty'],
+    body: (s, w, h) => {
+      const pads = [26, 84, 142, 200].map((y) => seatPad(12, y, 24, 34, s.seat, s.accent)).join('');
+      const rail = `
+      <rect x="42" y="18" width="10" height="${h - 36}" fill="#9aa7b8" stroke="#141c26" stroke-width="3"/>
+      <path d="M42 60h10M42 120h10M42 180h10" stroke="${s.accent}" stroke-width="3" opacity="0.8"/>`;
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${pads}${rail}`;
+    }
+  },
+  // 2x5 cafeteria serving line. WEST = three meal pickup slots, EAST = staff lane.
+  'module.serving_line': {
+    tiles: [2, 5],
+    variants: ['active', 'unstaffed', 'empty', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const slots = [46, 132, 218];
+      const pads = slots.map((y) => seatPad(14, y, 30, 56, '#7f93a8', s.accent)).join('');
+      const counter = `
+      <rect x="48" y="18" width="38" height="${h - 36}" fill="${s.steel}" stroke="#1b2530" stroke-width="4"/>
+      <rect x="48" y="18" width="10" height="${h - 36}" fill="${s.frame}" opacity="0.55"/>`;
+      const meals = s.stock
+        ? slots
+            .map(
+              (y) =>
+                `<rect x="56" y="${y + 14}" width="26" height="26" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`
+            )
+            .join('')
+        : '';
+      const lane = `
+      <rect x="92" y="20" width="24" height="${h - 40}" fill="${s.lane}" stroke="#111a22" stroke-width="4"/>`;
+      const staff = s.staff
+        ? [70, 155, 240]
+            .map(
+              (y) =>
+                `<rect x="95" y="${y}" width="18" height="32" rx="3" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`
+            )
+            .join('')
+        : '';
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${counter}${lane}${pads}${meals}${staff}`;
+    }
+  },
+  // 3x4 community table. Four seats WEST, four seats EAST, table core centred.
+  'module.community_table': {
+    tiles: [3, 4],
+    variants: ['active', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const rows = [26, 82, 138, 194];
+      const west = rows.map((y) => seatPad(16, y, 38, 44, s.seat, s.accent)).join('');
+      const east = rows.map((y) => seatPad(138, y, 38, 44, s.seat, s.accent)).join('');
+      const table = `
+      <rect x="66" y="20" width="60" height="${h - 40}" fill="${s.counter}" stroke="#2a1a10" stroke-width="4"/>
+      <rect x="72" y="26" width="48" height="${h - 52}" fill="none" stroke="${s.seat}" stroke-width="3" opacity="0.7"/>`;
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${table}${west}${east}`;
+    }
+  },
+  // 3x4 private guest cabin with exactly two beds.
+  'module.guest_cabin': {
+    tiles: [3, 4],
+    variants: ['active', 'dirty'],
+    body: (s, w, h) => {
+      const bed = (x) => `
+      <rect x="${x}" y="30" width="62" height="112" rx="6" fill="${s.seat}" stroke="#141c26" stroke-width="4"/>
+      <rect x="${x + 8}" y="38" width="46" height="26" fill="#c8d3e2"/>
+      <rect x="${x + 8}" y="74" width="46" height="60" fill="none" stroke="${s.accent}" stroke-width="3" opacity="0.8"/>`;
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}
+      <rect x="18" y="18" width="${w - 36}" height="${h - 36}" fill="#1b2430" stroke="#0f151d" stroke-width="3"/>
+      ${bed(26)}${bed(104)}
+      <rect x="26" y="158" width="46" height="38" fill="${s.counter}" stroke="#1a2230" stroke-width="4"/>
+      <rect x="96" y="158" width="70" height="38" fill="${s.steel}" stroke="#1b2530" stroke-width="4"/>
+      <rect x="76" y="212" width="40" height="18" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`;
+    }
+  },
+  // 2x4 arrival desk. WEST = two customer slots, EAST = two staff processors.
+  'module.arrival_desk': {
+    tiles: [2, 4],
+    variants: ['active', 'unstaffed', 'dirty'],
+    body: (s, w, h) => {
+      const rows = [36, 140];
+      const desk = `
+      <rect x="48" y="18" width="34" height="${h - 36}" fill="${s.steel}" stroke="#1b2530" stroke-width="4"/>
+      <rect x="48" y="18" width="9" height="${h - 36}" fill="${s.frame}" opacity="0.55"/>`;
+      const customers = rows
+        .map(
+          (y) => `${seatPad(14, y, 30, 84, '#3c4d61', s.accent)}
+      <path d="M20 ${y + 30}h18M20 ${y + 50}h18" stroke="${s.accent}" stroke-width="4" opacity="0.85"/>`
+        )
+        .join('');
+      const staff = rows
+        .map(
+          (y) => `
+      <rect x="86" y="${y}" width="30" height="84" rx="5" fill="${s.lane}" stroke="#141c26" stroke-width="4"/>
+      ${s.staff ? `<rect x="92" y="${y + 10}" width="18" height="28" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>
+      <rect x="92" y="${y + 48}" width="18" height="26" rx="4" fill="${s.seat}" stroke="#141c26" stroke-width="3"/>` : ''}`
+        )
+        .join('');
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${desk}${customers}${staff}`;
+    }
+  },
+  // 2x5 wash bank. Four basins along the WEST column, plumbing spine EAST.
+  'module.wash_bank': {
+    tiles: [2, 5],
+    variants: ['active', 'dirty', 'damaged'],
+    body: (s, w, h) => {
+      const rows = [32, 104, 176, 248];
+      const basins = rows
+        .map(
+          (y) => `
+      <rect x="16" y="${y}" width="46" height="56" rx="8" fill="#3d5368" stroke="#141c26" stroke-width="4"/>
+      <rect x="24" y="${y + 12}" width="30" height="30" rx="4" fill="${s.accent}" opacity="0.85"/>
+      <rect x="34" y="${y - 2}" width="10" height="14" fill="#9aa7b8" stroke="#141c26" stroke-width="3"/>`
+        )
+        .join('');
+      const spine = `
+      <rect x="92" y="20" width="18" height="${h - 40}" fill="#7b8795" stroke="#141c26" stroke-width="4"/>`;
+      const branches = rows
+        .map(
+          (y) => `
+      <rect x="62" y="${y + 22}" width="32" height="10" fill="#7b8795" stroke="#141c26" stroke-width="3"/>
+      <circle cx="101" cy="${y + 27}" r="8" fill="${s.accent}" stroke="#141c26" stroke-width="3"/>`
+        )
+        .join('');
+      return `${panel(8, 8, w - 16, h - 16, s.body, s.frame)}${spine}${branches}${basins}`;
+    }
+  }
+};
+
+for (const [key, fixture] of Object.entries(CONTENT_FIXTURES)) {
+  const width = fixture.tiles[0] * TILE;
+  const height = fixture.tiles[1] * TILE;
+  for (const variant of ['base', ...fixture.variants]) {
+    const style = CONTENT_VARIANTS[variant];
+    if (!style) throw new Error(`Unknown content variant: ${variant}`);
+    const assetKey = variant === 'base' ? key : `${key}.${variant}`;
+    assets[assetKey] = {
+      size: [width, height],
+      body: `${fixture.body(style, width, height)}${variantOverlay(variant, width, height)}`
+    };
+  }
+}
+
 await fs.mkdir(OUT_DIR, { recursive: true });
 for (const [key, asset] of Object.entries(assets)) {
   const [width, height] = asset.size;

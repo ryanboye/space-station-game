@@ -1204,3 +1204,149 @@ sprites:
   icon.tier6_unlock:
     prompt: Top-down pixel art icon. Style of rimworld. Tier 6 unlock icon for "Specialization" — a stylized star cluster or radiant crown symbol representing mastery / endgame. Simple iconographic composition, centered, bright gold with subtle outer glow. Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "mastery / end-of-tutorial".
     rotation: 0
+  # ---------------------------------------------------------------------------
+  # Occupant-loop content fixtures. Authored UNROTATED at 64px per tile and
+  # rendered at 32px per tile in game. The depicted position count is load
+  # bearing: each stool / seat / bed / pad / basin is a real reservable slot in
+  # the simulation and the art is the player's only clue how many exist.
+  # State variants must read as silhouette, colour or frame changes, never as
+  # fine detail.
+  # ---------------------------------------------------------------------------
+  module.backroom_stock_bank:
+    prompt: "Top-down low-resolution pixel art station module: back-of-house stock bank. 2x3 footprint (128x192 authored, readable at 64x96). Three horizontal shelf runs stacked front to back, each carrying three chunky supply crates (nine crates total). Purely back-of-house - no customer side, no seating, no counter. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.backroom_stock_bank.empty:
+    prompt: "Top-down low-resolution pixel art station module: back-of-house stock bank, EMPTY state. 2x3 footprint (128x192 authored, readable at 64x96). Same three shelf runs as the base sprite but every crate removed so the bare shelf slats read as a hollow silhouette. Dimmer, cooler palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.backroom_stock_bank.dirty:
+    prompt: "Top-down low-resolution pixel art station module: back-of-house stock bank, DIRTY state. 2x3 footprint (128x192 authored, readable at 64x96). Three shelf runs with nine crates, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Grime marks must be big enough to survive downscaling to 64x96. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.backroom_stock_bank.damaged:
+    prompt: "Top-down low-resolution pixel art station module: back-of-house stock bank, DAMAGED state. 2x3 footprint (128x192 authored, readable at 64x96). Three shelf runs with nine crates, a bold red structural fracture cutting diagonally across the unit, two blown-out dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar:
+    prompt: "Top-down low-resolution pixel art station module: service bar run. 2x5 footprint (128x320 authored, readable at 64x160). WEST column shows EXACTLY FOUR round guest stools evenly spaced down the column - four and only four, clearly separated. A timber bar slab runs down the middle. EAST column is the staff working lane and must look obviously different from the guest side: dark deck grating, back-bar equipment blocks, no stools. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar.active:
+    prompt: "Top-down low-resolution pixel art station module: service bar run, ACTIVE state. 2x5 footprint (128x320 authored, readable at 64x160). Same layout as the base sprite - EXACTLY FOUR guest stools on the WEST column, timber bar slab centre, staff lane EAST - with a bright green operating frame: bold green corner brackets and a warmed-up palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar.unstaffed:
+    prompt: "Top-down low-resolution pixel art station module: service bar run, UNSTAFFED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR guest stools still present on the WEST column, but the EAST staff lane is stripped of its crew equipment and marked with a large grey dashed box and a bold grey cross. Desaturated palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar.empty:
+    prompt: "Top-down low-resolution pixel art station module: service bar run, EMPTY state (out of stock). 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR guest stools on the WEST column and the staff lane EAST, but the bar slab carries no glassware or drinks and a large dashed hollow outline covers the unit. Cold, drained palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar.dirty:
+    prompt: "Top-down low-resolution pixel art station module: service bar run, DIRTY state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR guest stools WEST, staff lane EAST, overlaid with large olive-green spill and grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.service_bar.damaged:
+    prompt: "Top-down low-resolution pixel art station module: service bar run, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR guest stools WEST, staff lane EAST, with a bold red fracture running diagonally across the bar slab, two dark blown-out breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_corner:
+    prompt: "Top-down low-resolution pixel art station module: bar run L-JUNCTION corner piece. 2x2 footprint (128x128 authored, readable at 64x64). Same timber slab, lip highlight and palette as module.service_bar so the pieces read as one continuous run. The slab turns a right angle; the outer side of the L is the pale guest approach, the inner side of the L holds a small dark staff lane stub. No stools and no seats - this piece has zero reservable positions. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_corner.active:
+    prompt: "Top-down low-resolution pixel art station module: bar run L-junction corner, ACTIVE state. 2x2 footprint (128x128 authored, readable at 64x64). Identical L-shaped timber slab to the base sprite with a bright green operating frame - bold green corner brackets and a warmed palette. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_corner.dirty:
+    prompt: "Top-down low-resolution pixel art station module: bar run L-junction corner, DIRTY state. 2x2 footprint (128x128 authored, readable at 64x64). L-shaped timber slab overlaid with large olive-green grime blobs and a muddied yellow-green frame. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_corner.damaged:
+    prompt: "Top-down low-resolution pixel art station module: bar run L-junction corner, DAMAGED state. 2x2 footprint (128x128 authored, readable at 64x64). L-shaped timber slab split by a bold red fracture with two dark breach patches and a red warning frame. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_end:
+    prompt: "Top-down low-resolution pixel art station module: bar run END CAP piece. 2x2 footprint (128x128 authored, readable at 64x64). Same timber slab, lip highlight and palette as module.service_bar. The slab terminates in a rounded end flare; the WEST side is the pale guest approach and the EAST side carries a hinged staff pass-through gate. No stools and no seats - this piece has zero reservable positions. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_end.active:
+    prompt: "Top-down low-resolution pixel art station module: bar run end cap, ACTIVE state. 2x2 footprint (128x128 authored, readable at 64x64). Identical terminating timber slab and staff gate to the base sprite with a bright green operating frame - bold green corner brackets and a warmed palette. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_end.dirty:
+    prompt: "Top-down low-resolution pixel art station module: bar run end cap, DIRTY state. 2x2 footprint (128x128 authored, readable at 64x64). Terminating timber slab overlaid with large olive-green grime blobs and a muddied yellow-green frame. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bar_end.damaged:
+    prompt: "Top-down low-resolution pixel art station module: bar run end cap, DAMAGED state. 2x2 footprint (128x128 authored, readable at 64x64). Terminating timber slab split by a bold red fracture with two dark breach patches and a red warning frame. No seats. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.booth_bank:
+    prompt: "Top-down low-resolution pixel art station module: dining booth bank. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY TWO booths stacked north to south, separated by a visible divider rail. Each booth is one table slab with EXACTLY THREE distinct seat pads in a row beneath it, so the sprite depicts SIX seats in total - three, then three. Seats must be clearly separated blocks, never a continuous bench. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.booth_bank.active:
+    prompt: "Top-down low-resolution pixel art station module: dining booth bank, ACTIVE state. 2x4 footprint (128x256 authored, readable at 64x128). Two booths, three seat pads each, six seats total, with a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.booth_bank.dirty:
+    prompt: "Top-down low-resolution pixel art station module: dining booth bank, DIRTY state. 2x4 footprint (128x256 authored, readable at 64x128). Two booths, three seat pads each, six seats total, overlaid with large olive-green food-spill blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.booth_bank.damaged:
+    prompt: "Top-down low-resolution pixel art station module: dining booth bank, DAMAGED state. 2x4 footprint (128x256 authored, readable at 64x128). Two booths, three seat pads each, six seats total, split by a bold red fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.standing_rail:
+    prompt: "Top-down low-resolution pixel art station module: narrow standing rail. 1x4 footprint (64x256 authored, readable at 32x128). A single continuous metal rail runs the full length down the EAST edge; alongside it on the WEST are EXACTLY FOUR standing pads evenly spaced with clear gaps between them - four and only four. Narrow silhouette, nothing spills sideways. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.standing_rail.active:
+    prompt: "Top-down low-resolution pixel art station module: narrow standing rail, ACTIVE state. 1x4 footprint (64x256 authored, readable at 32x128). Continuous rail plus EXACTLY FOUR standing pads, with a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.standing_rail.dirty:
+    prompt: "Top-down low-resolution pixel art station module: narrow standing rail, DIRTY state. 1x4 footprint (64x256 authored, readable at 32x128). Continuous rail plus EXACTLY FOUR standing pads, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line. 2x5 footprint (128x320 authored, readable at 64x160). WEST column shows EXACTLY THREE meal pickup positions - three separated tray bays with a plated meal on the counter beside each. A brushed steel counter runs down the middle. EAST column is the staff hot line and must look obviously different from the guest side: dark deck lane with warming wells, no tray bays. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line.active:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line, ACTIVE state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY THREE meal pickup positions WEST, staff hot line EAST, with a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line.unstaffed:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line, UNSTAFFED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY THREE meal pickup positions still present WEST, but the EAST staff hot line is stripped of its warming wells and marked with a large grey dashed box and a bold grey cross. Desaturated palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line.empty:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line, EMPTY state (no food). 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY THREE meal pickup positions WEST and the staff lane EAST, but every plated meal is gone from the counter and a large dashed hollow outline covers the unit. Cold, drained palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line.dirty:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line, DIRTY state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY THREE meal pickup positions WEST, staff hot line EAST, overlaid with large olive-green food-spill blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.serving_line.damaged:
+    prompt: "Top-down low-resolution pixel art station module: cafeteria serving line, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY THREE meal pickup positions WEST, staff hot line EAST, split by a bold red fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.community_table:
+    prompt: "Top-down low-resolution pixel art station module: large community dining table. 3x4 footprint (192x256 authored, readable at 96x128). A long table core runs down the centre column. EXACTLY FOUR seat pads sit in the WEST column and EXACTLY FOUR seat pads sit in the EAST column, evenly spaced with clear gaps, giving EIGHT depicted seats in total - four plus four, no more, no fewer. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.community_table.active:
+    prompt: "Top-down low-resolution pixel art station module: large community dining table, ACTIVE state. 3x4 footprint (192x256 authored, readable at 96x128). Table core centre with FOUR seats WEST and FOUR seats EAST (eight total), plus a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.community_table.dirty:
+    prompt: "Top-down low-resolution pixel art station module: large community dining table, DIRTY state. 3x4 footprint (192x256 authored, readable at 96x128). Table core centre with FOUR seats WEST and FOUR seats EAST (eight total), overlaid with large olive-green food-spill blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.community_table.damaged:
+    prompt: "Top-down low-resolution pixel art station module: large community dining table, DAMAGED state. 3x4 footprint (192x256 authored, readable at 96x128). Table core centre with FOUR seats WEST and FOUR seats EAST (eight total), split by a bold red fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.guest_cabin:
+    prompt: "Top-down low-resolution pixel art station module: small private guest cabin. 3x4 footprint (192x256 authored, readable at 96x128). Enclosed cabin shell with a darker interior floor. EXACTLY TWO beds side by side in the northern half, each with a pale pillow at its head - two and only two sleeping positions. A locker and a small desk sit along the south wall, with a hatch marker at the south edge. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.guest_cabin.active:
+    prompt: "Top-down low-resolution pixel art station module: small private guest cabin, ACTIVE state. 3x4 footprint (192x256 authored, readable at 96x128). Enclosed cabin with EXACTLY TWO beds, locker, desk and hatch, plus a bright green occupied frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.guest_cabin.dirty:
+    prompt: "Top-down low-resolution pixel art station module: small private guest cabin, DIRTY state. 3x4 footprint (192x256 authored, readable at 96x128). Enclosed cabin with EXACTLY TWO beds, locker, desk and hatch, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.arrival_desk:
+    prompt: "Top-down low-resolution pixel art station module: arrivals reception desk. 2x4 footprint (128x256 authored, readable at 64x128). A steel desk slab runs down the middle. The WEST column holds EXACTLY TWO customer positions - two separated queue bays with floor chevrons. The EAST column holds EXACTLY TWO staff processor stations, each an obviously different shape: a lit console screen plus a crew chair. Two customers, two processors, clearly distinguishable from one another. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.arrival_desk.active:
+    prompt: "Top-down low-resolution pixel art station module: arrivals reception desk, ACTIVE state. 2x4 footprint (128x256 authored, readable at 64x128). TWO customer positions WEST and TWO staffed processor stations EAST, with a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.arrival_desk.unstaffed:
+    prompt: "Top-down low-resolution pixel art station module: arrivals reception desk, UNSTAFFED state. 2x4 footprint (128x256 authored, readable at 64x128). TWO customer positions still present WEST, but both EAST processor stations are dark and empty - no screens, no chairs - and are marked with a large grey dashed box and a bold grey cross. Desaturated palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.arrival_desk.dirty:
+    prompt: "Top-down low-resolution pixel art station module: arrivals reception desk, DIRTY state. 2x4 footprint (128x256 authored, readable at 64x128). TWO customer positions WEST and TWO staffed processor stations EAST, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.wash_bank:
+    prompt: "Top-down low-resolution pixel art station module: communal wash bank. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR wash positions run down the WEST column - four separated basins, each with its own faucet and water pool, evenly spaced with clear gaps. A vertical plumbing spine runs down the EAST column with one branch pipe and shutoff valve per basin. Four basins, four branches, no more. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.wash_bank.active:
+    prompt: "Top-down low-resolution pixel art station module: communal wash bank, ACTIVE state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR basins WEST with the plumbing spine EAST, plus a bright green operating frame - bold green corner brackets and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.wash_bank.dirty:
+    prompt: "Top-down low-resolution pixel art station module: communal wash bank, DIRTY state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR basins WEST with the plumbing spine EAST, overlaid with large olive-green scum blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.wash_bank.damaged:
+    prompt: "Top-down low-resolution pixel art station module: communal wash bank, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR basins WEST with the plumbing spine EAST, split by a bold red pipe fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0

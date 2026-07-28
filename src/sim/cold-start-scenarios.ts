@@ -17,12 +17,18 @@
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
 import { selectShipHullVariant } from './ship-hulls';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
-import { resolveFacilitySlots } from './facility-descriptors';
+import { resolveFacilitySlots, type FacilitySlotRole } from './facility-descriptors';
+import { buildSlotReservationRequest } from './facility-slots';
 import { createVisitorNeeds } from './occupant-demand';
 import { findPath } from './path';
-import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
+import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType,
+  type ModuleInstance,
+  type ModuleRotation,
+  type VisitorPreference,
+  type HospitalityServiceKind
+} from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
+import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryCreateReservation, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -1347,6 +1353,154 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.simSpeed = 1;
   },
 
+  // --- Market: one checkout, restock crosses the shop floor ---------------
+  // Legal and cheap. The single register forms a line, and the only route
+  // from the backroom to the shelves runs straight through it.
+  // Compare with `?scenario=market-improved-flow`.
+  'market-compact-conflict': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Market);
+    const checkout = placeFixture(s, ModuleType.CheckoutBank, 46, 50);
+    const shelf = placeFixture(s, ModuleType.ShelfAisle, 43, 50);
+    // Backroom sits BEHIND the customer frontage, so every restock bundle has
+    // to cross the queue that forms west of the register.
+    const backroom = placeFixture(s, ModuleType.BackroomStockBank, 43, 55);
+    tick(s, 0);
+    stockNode(s, shelf.originTile, 'tradeGood', 6);
+    stockNode(s, backroom.originTile, 'tradeGood', 90);
+    void checkout;
+    stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
+    stageFacilityVisitors(s, 8, 51, 52, 'market');
+    s.controls.paused = true;
+  },
+
+  // --- Market: two checkouts, restock kept off the customer floor ---------
+  // Same demand, same stock, more money spent on a second register AND on a
+  // backroom placed against the shelf's stock face instead of behind the line.
+  'market-improved-flow': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Market);
+    placeFixture(s, ModuleType.CheckoutBank, 46, 50);
+    placeFixture(s, ModuleType.CheckoutBank, 49, 50);
+    const shelf = placeFixture(s, ModuleType.ShelfAisle, 43, 50);
+    const shelfTwo = placeFixture(s, ModuleType.ShelfAisle, 44, 50);
+    // Backroom on the shelves' service side: restock never enters the queue.
+    const backroom = placeFixture(s, ModuleType.BackroomStockBank, 55, 50);
+    tick(s, 0);
+    stockNode(s, shelf.originTile, 'tradeGood', 6);
+    stockNode(s, shelfTwo.originTile, 'tradeGood', 6);
+    stockNode(s, backroom.originTile, 'tradeGood', 90);
+    shelfTwo.shelfMix = 'gifts';
+    stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
+    stageFacilityVisitors(s, 8, 51, 52, 'market');
+    s.controls.paused = true;
+  },
+
+  // --- Cantina: service capacity with nowhere to sit ----------------------
+  // A full Service Bar and no dwell positions. Drinks get poured; drinkers
+  // have nowhere to go, so the bar jams behind its own guests.
+  'cantina-undersized': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 14, 9, RoomType.Cantina);
+    const bar = placeFixture(s, ModuleType.ServiceBar, 44, 50);
+    tick(s, 0);
+    stockNode(s, bar.originTile, 'rawMaterial', 40);
+    stageFacilityStaff(s, ModuleType.ServiceBar, 'bar-staff');
+    stageFacilityVisitors(s, 8, 50, 52, 'lounge', ['drink'], 99600);
+    s.controls.paused = true;
+  },
+
+  // --- Cantina: a connected run plus real dwell capacity ------------------
+  // The same bar extended with a Corner and an End into one provider run,
+  // backed by Booth Banks and a Standing Rail.
+  'cantina-expanded': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 16, 12, RoomType.Cantina);
+    const bar = placeFixture(s, ModuleType.ServiceBar, 44, 50);
+    const corner = placeFixture(s, ModuleType.BarCorner, 44, 55);
+    const end = placeFixture(s, ModuleType.BarEnd, 44, 57);
+    placeFixture(s, ModuleType.BoothBank, 50, 50);
+    placeFixture(s, ModuleType.BoothBank, 53, 50);
+    placeFixture(s, ModuleType.StandingRail, 56, 50);
+    tick(s, 0);
+    stockNode(s, bar.originTile, 'rawMaterial', 40);
+    stockNode(s, corner.originTile, 'rawMaterial', 10);
+    stockNode(s, end.originTile, 'rawMaterial', 6);
+    stageFacilityStaff(s, ModuleType.ServiceBar, 'bar-staff');
+    stageFacilityVisitors(s, 8, 50, 60, 'lounge', ['drink'], 99600);
+    s.controls.paused = true;
+  },
+
+  // --- Reception: mixed demand, nobody to ask -----------------------------
+  // Arrivals with several different wants and no Arrival Desk. Every guest
+  // guesses its first destination from its own preference alone.
+  'reception-absent': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
+    placeFixture(s, ModuleType.BoothBank, 43, 50);
+    placeFixture(s, ModuleType.StandingRail, 46, 50);
+    tick(s, 0);
+    // Mixed demand: three different wants arriving together, and nobody to ask.
+    stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['leisure', 'drink', 'comfort'], 99500);
+    stageFacilityVisitors(s, 4, 52, 52, 'market', ['comfort', 'leisure', 'drink'], 99520);
+    s.controls.paused = true;
+  },
+
+  // --- Reception: the identical arrivals, with a staffed desk -------------
+  // Same rooms, same demand, plus one Arrival Desk. It reveals part of each
+  // guest's demand earlier and improves the first routing choice. A full or
+  // unstaffed desk is bypassed, never a gate.
+  'reception-staffed': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
+    placeFixture(s, ModuleType.BoothBank, 43, 50);
+    placeFixture(s, ModuleType.StandingRail, 46, 50);
+    placeFixture(s, ModuleType.ArrivalDesk, 50, 50);
+    tick(s, 0);
+    // The SAME arrivals as `reception-absent`, same ids and same wants.
+    stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['leisure', 'drink', 'comfort'], 99500);
+    stageFacilityVisitors(s, 4, 52, 52, 'market', ['comfort', 'leisure', 'drink'], 99520);
+    stageFacilityStaff(s, ModuleType.ArrivalDesk, 'reception-staff');
+    s.controls.paused = true;
+  },
+
+  // --- Long stay: one cohort using the guest wing repeatedly --------------
+  // Guest Cabins, a Serving Line, a Service Bar and a Wash Bank in reach of
+  // each other, so an extended-stay cohort cycles food, drink, hygiene and
+  // sleep through real physical sessions rather than a needs meter.
+  'long-stay-guest-wing': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 12, 9, RoomType.Dorm);
+    for (let y = 49; y < 58; y++) {
+      for (let x = 42; x < 54; x++) s.roomHousingPolicies[y * s.width + x] = 'visitor';
+    }
+    placeFixture(s, ModuleType.GuestCabin, 43, 50);
+    placeFixture(s, ModuleType.GuestCabin, 47, 50);
+    placeFixture(s, ModuleType.BunkBank, 51, 50);
+
+    paintFacilityBlock(s, 58, 49, 12, 9, RoomType.Cafeteria);
+    const line = placeFixture(s, ModuleType.ServingLine, 59, 50);
+    placeFixture(s, ModuleType.CommunityTable, 63, 50);
+    placeFixture(s, ModuleType.TrayReturn, 67, 50);
+
+    paintFacilityBlock(s, 74, 49, 12, 9, RoomType.Cantina);
+    const bar = placeFixture(s, ModuleType.ServiceBar, 75, 50);
+    placeFixture(s, ModuleType.BoothBank, 79, 50);
+
+    paintFacilityBlock(s, 42, 60, 10, 8, RoomType.Hygiene);
+    placeFixture(s, ModuleType.WashBank, 43, 61);
+    placeFixture(s, ModuleType.Toilet, 47, 61);
+    placeFixture(s, ModuleType.Sink, 48, 61);
+    for (let y = 60; y < 68; y++) {
+      for (let x = 42; x < 52; x++) s.roomHousingPolicies[y * s.width + x] = 'visitor';
+    }
+
+    tick(s, 0);
+    stockNode(s, line.originTile, 'meal', 40);
+    stockNode(s, bar.originTile, 'rawMaterial', 40);
+    s.controls.paused = true;
+  },
+
   'reputation-slice': (s) => {
     unlockThrough(s, 3);
     completeSpecialtyForScenario(s, 'sanitation-program');
@@ -2320,6 +2474,187 @@ function applyDemoStationOverlay(state: StationState): void {
 /** Apply a named scenario to a fresh state. Returns true if the name
  *  matched a whitelisted fixture, false otherwise. Caller decides
  *  whether to warn on mismatch. */
+
+// --- Phase 1B facility-scale showcases -------------------------------------
+//
+// Each pair below is a deliberate before/after: the first layout is legal,
+// buildable and visibly worse; the second answers the same demand with a
+// different SPATIAL decision, not a bigger number. They are painted south of
+// the starter hull so they never disturb the shared demo overlay geometry.
+
+/** Paint a pressurized, powered, public room block with one door. */
+function paintFacilityBlock(
+  state: StationState,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  room: RoomType,
+  zone: ZoneType = ZoneType.Public
+): void {
+  for (let yy = y - 1; yy <= y + height; yy++) {
+    for (let xx = x - 1; xx <= x + width; xx++) {
+      const index = yy * state.width + xx;
+      const boundary = xx === x - 1 || xx === x + width || yy === y - 1 || yy === y + height;
+      state.tiles[index] = boundary ? TileType.Wall : TileType.Floor;
+      state.rooms[index] = boundary ? RoomType.None : room;
+      if (!boundary) {
+        state.pressurized[index] = true;
+        state.zones[index] = zone;
+      }
+    }
+  }
+  const door = (y - 1) * state.width + x + 1;
+  state.tiles[door] = TileType.Door;
+  state.rooms[door] = RoomType.None;
+  state.utilityUnderlay.layers['power-conduit'].fill(1);
+  state.utilityUnderlay.version += 1;
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+}
+
+/** Place a multi-tile fixture, failing loudly rather than degrading to 1x1. */
+function placeFixture(
+  state: StationState,
+  type: ModuleType,
+  x: number,
+  y: number,
+  rotation: ModuleRotation = 0
+): ModuleInstance {
+  const result = tryPlaceModule(state, type, y * state.width + x, rotation);
+  if (!result.ok) throw new Error(`facility showcase could not place ${type} at ${x},${y}: ${result.reason}`);
+  return state.moduleInstances[state.moduleInstances.length - 1];
+}
+
+function stockNode(state: StationState, tileIndex: number, itemType: ItemType, amount: number): void {
+  const node = state.itemNodes.find((entry) => entry.tileIndex === tileIndex);
+  if (!node) throw new Error(`facility showcase expected an inventory node at ${tileIndex}`);
+  node.items[itemType] = amount;
+}
+
+/**
+ * Put real shoppers on the floor of a facility showcase.
+ *
+ * The before/after market pairs are only honest if somebody actually buys
+ * something, so these are ordinary visitors with a market preference standing
+ * inside the room, not scripted sale events.
+ */
+function stageFacilityVisitors(
+  state: StationState,
+  count: number,
+  originX: number,
+  originY: number,
+  preference: VisitorPreference,
+  servicePlan: HospitalityServiceKind[] = [],
+  idBase = 99400
+): Visitor[] {
+  const staged: Visitor[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const x = originX + (index % 4);
+    const y = originY + Math.floor(index / 4);
+    const tileIndex = y * state.width + x;
+    const visitor: Visitor = {
+      id: idBase + index,
+      name: `Guest ${index + 1}`,
+      trait: index % 2 === 0 ? 'patient' : 'social',
+      x: x + 0.5,
+      y: y + 0.5,
+      tileIndex,
+      state: VisitorState.ToLeisure,
+      path: [],
+      speed: 2,
+      patience: 0,
+      eatTimer: 0,
+      trespassed: false,
+      servedMeal: false,
+      carryingMeal: false,
+      reservedServingTile: null,
+      reservedTargetTile: null,
+      blockedTicks: 0,
+      archetype: preference === 'market' ? 'shopper' : 'lounger',
+      taxSensitivity: 1,
+      spendMultiplier: 1,
+      patienceMultiplier: 1,
+      primaryPreference: preference,
+      spawnedAt: state.now,
+      originShipId: null,
+      airExposureSec: 0,
+      healthState: 'healthy',
+      leisureLegsRemaining: 1,
+      leisureLegsPlanned: 1,
+      lastLeisureKind: null,
+      servicePlan,
+      completedServices: [],
+      activeService: servicePlan[0] ?? null,
+      stayClass: servicePlan.length > 0 ? 'contract' : 'errand',
+      needs: undefined,
+      recurringNeedActive: null,
+      marketTradeGoodSourceTile: null,
+      temporarySleepTargetTile: null,
+      queueProviderTile: null,
+      queueJoinedAt: null,
+      // Arrive knowing only what they are already acting on.
+      revealedServices: servicePlan.slice(0, 1),
+      receptionProcessedAt: null,
+      redirectedFrom: null
+    };
+    state.visitors.push(visitor);
+    staged.push(visitor);
+  }
+  return staged;
+}
+
+/** Put stewards physically on every staff work position of a fixture type. */
+function stageFacilityStaff(state: StationState, moduleType: ModuleType, role: FacilitySlotRole): number {
+  while ((state.crew.roleCounts.steward ?? 0) < 4) {
+    if (!hireStaffRole(state, 'steward')) break;
+  }
+  const slots = state.moduleInstances
+    .filter((module) => module.type === moduleType)
+    .flatMap((module) => resolveFacilitySlots(module, state.width).filter((slot) => slot.role === role));
+  const stewards = state.crewMembers.filter((crew) => crew.staffRole === 'steward');
+  let staffed = 0;
+  for (let index = 0; index < Math.min(slots.length, stewards.length); index += 1) {
+    const crew = stewards[index];
+    const slot = slots[index];
+    crew.assignedSystem = moduleType === ModuleType.CheckoutBank ? 'market' : 'lounge';
+    crew.lastSystem = crew.assignedSystem;
+    crew.role = 'cafeteria';
+    crew.targetTile = slot.tileIndex;
+    crew.tileIndex = slot.tileIndex;
+    crew.x = (slot.tileIndex % state.width) + 0.5;
+    crew.y = Math.floor(slot.tileIndex / state.width) + 0.5;
+    crew.path = [];
+    crew.resting = false;
+    crew.energy = 100;
+    crew.hunger = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.morale = 100;
+    crew.retargetAt = state.now + 240;
+    crew.taskLockUntil = state.now + 240;
+    // Holding the position is what opens it. Standing next to a register or a
+    // reception console serves nobody.
+    const request = buildSlotReservationRequest({
+      ownerKind: 'crew',
+      ownerId: crew.id,
+      slot: { ...slot, moduleId: state.moduleOccupancyByTile[slot.tileIndex] ?? -1, moduleType, moduleOriginTile: slot.tileIndex },
+      replace: true
+    });
+    if (request) tryCreateReservation(state, request);
+    staffed += 1;
+  }
+  return staffed;
+}
+
+function readyFacilityScenario(state: StationState): void {
+  unlockThrough(state, 3);
+  state.metrics.credits = 6000;
+  state.metrics.materials = 400;
+  state.pressurized.fill(true);
+}
+
 export function applyColdStartScenario(
   state: StationState,
   name: string

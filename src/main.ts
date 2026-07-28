@@ -582,9 +582,12 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="logistics-terminal" title="Place Logistics Terminal"><span class="tool-key">·</span>Log.</button>
         <button class="tool-btn" data-tool-module="bed" title="Place Bed (Q)"><span class="tool-key">Q</span>Bed</button>
         <button class="tool-btn" data-tool-module="bunk" title="Place Bunk — two sleep slots, slower recovery"><span class="tool-key">·</span>Bunk</button>
+        <button class="tool-btn" data-tool-module="guest-cabin" title="Place Guest Cabin (Dorm-only) · ${MODULE_DEFINITIONS[ModuleType.GuestCabin].capitalCost}c — two private guest beds"><span class="tool-key">·</span>Guest Cabin · ${MODULE_DEFINITIONS[ModuleType.GuestCabin].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="locker" title="Place Locker — improves crew quarters quality"><span class="tool-key">·</span>Locker</button>
         <button class="tool-btn" data-tool-module="table" title="Place Dining Table (T) — includes four visible seats"><span class="tool-key">T</span>Table + 4 seats</button>
+        <button class="tool-btn" data-tool-module="community-table" title="Place Community Table · ${MODULE_DEFINITIONS[ModuleType.CommunityTable].capitalCost}c — eight seats for a Cafeteria or Cantina"><span class="tool-key">·</span>Community Table · ${MODULE_DEFINITIONS[ModuleType.CommunityTable].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="serving-station" title="Place Serving Station (5)"><span class="tool-key">5</span>Serving</button>
+        <button class="tool-btn" data-tool-module="serving-line" title="Place Serving Line (Cafeteria-only) · ${MODULE_DEFINITIONS[ModuleType.ServingLine].capitalCost}c — three meal pickup positions on one staff lane"><span class="tool-key">·</span>Serving Line · ${MODULE_DEFINITIONS[ModuleType.ServingLine].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="fridge" title="Place Fridge — cold ingredient buffer"><span class="tool-key">·</span>Fridge</button>
         <button class="tool-btn" data-tool-module="cold-store" title="Place Cold Store — large raw-food buffer"><span class="tool-key">·</span>Cold</button>
         <button class="tool-btn" data-tool-module="prep-counter" title="Place Prep Counter — staffed ingredient prep"><span class="tool-key">·</span>Prep</button>
@@ -595,6 +598,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="toilet" title="Place Toilet (Bathroom-only) — relieves bladder, one user at a time"><span class="tool-key">·</span>Toilet</button>
         <button class="tool-btn" data-tool-module="shower" title="Place Shower (;)"><span class="tool-key">;</span>Shower</button>
         <button class="tool-btn" data-tool-module="sink" title="Place Sink (')"><span class="tool-key">'</span>Sink</button>
+        <button class="tool-btn" data-tool-module="wash-bank" title="Place Wash Bank (Bathroom-only) · ${MODULE_DEFINITIONS[ModuleType.WashBank].capitalCost}c — four exclusive wash positions on one plumbing spine"><span class="tool-key">·</span>Wash Bank · ${MODULE_DEFINITIONS[ModuleType.WashBank].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="floor-drain" title="Place Floor Drain — flood relief"><span class="tool-key">·</span>Drain</button>
         <button class="tool-btn" data-tool-module="water-valve" title="Place Water Valve — local pipe isolation"><span class="tool-key">·</span>Valve</button>
         <button class="tool-btn" data-tool-module="wall-light" title="Place Wall Light (\`)"><span class="tool-key">\`</span>Light</button>
@@ -603,6 +607,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
         <button class="tool-btn" data-tool-module="checkout-bank" title="Place Checkout Bank — two customer lanes for a Market"><span class="tool-key">·</span>Checkout</button>
         <button class="tool-btn" data-tool-module="shelf-aisle" title="Place Shelf Aisle — cargo stocks travel goods here"><span class="tool-key">·</span>Shelf Aisle</button>
+        <button class="tool-btn" data-tool-module="backroom-stock-bank" title="Place Backroom Stock Bank · ${MODULE_DEFINITIONS[ModuleType.BackroomStockBank].capitalCost}c — bulk stock for a Market, Storage, or Logistics room; serves no customers"><span class="tool-key">·</span>Backroom Stock · ${MODULE_DEFINITIONS[ModuleType.BackroomStockBank].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="arrival-desk" title="Place Arrival Desk · ${MODULE_DEFINITIONS[ModuleType.ArrivalDesk].capitalCost}c — optional reception for a Lounge, Market, or Cafeteria"><span class="tool-key">·</span>Arrival Desk · ${MODULE_DEFINITIONS[ModuleType.ArrivalDesk].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
         <button class="tool-btn" data-tool-module="intake-pallet" title="Place Intake Pallet (,)"><span class="tool-key">,</span>Intake</button>
         <button class="tool-btn" data-tool-module="storage-rack" title="Place Storage Rack (.)"><span class="tool-key">.</span>Rack</button>
@@ -619,6 +625,11 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="bench" title="Place Bench (T1+) — two seats for lounges and cantinas"><span class="tool-key">·</span>Bench · 2 seats</button>
         <button class="tool-btn" data-tool-module="bar-counter" title="Place Bar Counter (Cantina-only) — drink service anchor"><span class="tool-key">·</span>Bar</button>
         <button class="tool-btn" data-tool-module="tap" title="Place Tap (Cantina-only) — increases drink throughput"><span class="tool-key">·</span>Tap</button>
+        <button class="tool-btn" data-tool-module="service-bar" title="Place Service Bar (Cantina-only) · ${MODULE_DEFINITIONS[ModuleType.ServiceBar].capitalCost}c — four guest stools on a two-position staff lane"><span class="tool-key">·</span>Service Bar · ${MODULE_DEFINITIONS[ModuleType.ServiceBar].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="bar-corner" title="Place Bar Corner (Cantina-only) · ${MODULE_DEFINITIONS[ModuleType.BarCorner].capitalCost}c — turns a bar run 90°"><span class="tool-key">·</span>Bar Corner · ${MODULE_DEFINITIONS[ModuleType.BarCorner].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="bar-end" title="Place Bar End (Cantina-only) · ${MODULE_DEFINITIONS[ModuleType.BarEnd].capitalCost}c — caps a bar run with one more stool"><span class="tool-key">·</span>Bar End · ${MODULE_DEFINITIONS[ModuleType.BarEnd].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="booth-bank" title="Place Booth Bank · ${MODULE_DEFINITIONS[ModuleType.BoothBank].capitalCost}c — six comfortable seats for a Cantina or Lounge"><span class="tool-key">·</span>Booth Bank · ${MODULE_DEFINITIONS[ModuleType.BoothBank].capitalCost}c</button>
+        <button class="tool-btn" data-tool-module="standing-rail" title="Place Standing Rail · ${MODULE_DEFINITIONS[ModuleType.StandingRail].capitalCost}c — four cheap standing positions for a Cantina or Lounge"><span class="tool-key">·</span>Standing Rail · ${MODULE_DEFINITIONS[ModuleType.StandingRail].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="telescope" title="Place Telescope (Observatory-only, T3+) — wonder leisure bonus"><span class="tool-key">·</span>Telesc.</button>
         <button class="tool-btn" data-tool-module="water-fountain" title="Place Water Fountain — basic crew thirst relief"><span class="tool-key">·</span>Water</button>
         <button class="tool-btn" data-tool-module="plant" title="Place Plant (T1+) — small comfort/appeal bonus"><span class="tool-key">·</span>Plant</button>
@@ -6883,9 +6894,12 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'records-terminal': ModuleType.RecordsTerminal,
   bed: ModuleType.Bed,
   bunk: ModuleType.Bunk,
+  'guest-cabin': ModuleType.GuestCabin,
   locker: ModuleType.Locker,
   table: ModuleType.Table,
+  'community-table': ModuleType.CommunityTable,
   'serving-station': ModuleType.ServingStation,
+  'serving-line': ModuleType.ServingLine,
   fridge: ModuleType.Fridge,
   'cold-store': ModuleType.ColdStore,
   'prep-counter': ModuleType.PrepCounter,
@@ -6896,6 +6910,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   toilet: ModuleType.Toilet,
   shower: ModuleType.Shower,
   sink: ModuleType.Sink,
+  'wash-bank': ModuleType.WashBank,
   'floor-drain': ModuleType.FloorDrain,
   'water-valve': ModuleType.WaterValve,
   'wall-light': ModuleType.WallLight,
@@ -6904,6 +6919,8 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'market-stall': ModuleType.MarketStall,
   'checkout-bank': ModuleType.CheckoutBank,
   'shelf-aisle': ModuleType.ShelfAisle,
+  'backroom-stock-bank': ModuleType.BackroomStockBank,
+  'arrival-desk': ModuleType.ArrivalDesk,
   workbench: ModuleType.Workbench,
   'intake-pallet': ModuleType.IntakePallet,
   'storage-rack': ModuleType.StorageRack,
@@ -6931,6 +6948,11 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   bench: ModuleType.Bench,
   'bar-counter': ModuleType.BarCounter,
   tap: ModuleType.Tap,
+  'service-bar': ModuleType.ServiceBar,
+  'bar-corner': ModuleType.BarCorner,
+  'bar-end': ModuleType.BarEnd,
+  'booth-bank': ModuleType.BoothBank,
+  'standing-rail': ModuleType.StandingRail,
   telescope: ModuleType.Telescope,
   'water-fountain': ModuleType.WaterFountain,
   plant: ModuleType.Plant,
@@ -6991,6 +7013,17 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.CheckoutBank]: 'CB',
   [ModuleType.ShelfAisle]: 'SA',
   [ModuleType.BunkBank]: 'BB',
+  [ModuleType.BackroomStockBank]: 'SB',
+  [ModuleType.ServiceBar]: 'BAR',
+  [ModuleType.BarCorner]: 'BC',
+  [ModuleType.BarEnd]: 'BE',
+  [ModuleType.BoothBank]: 'BO',
+  [ModuleType.StandingRail]: 'SR',
+  [ModuleType.ServingLine]: 'SL',
+  [ModuleType.CommunityTable]: 'CT',
+  [ModuleType.GuestCabin]: 'GC',
+  [ModuleType.ArrivalDesk]: 'AD',
+  [ModuleType.WashBank]: 'WB',
   [ModuleType.IntakePallet]: 'IN',
   [ModuleType.StorageRack]: 'SR',
   [ModuleType.Gangway]: 'GW',

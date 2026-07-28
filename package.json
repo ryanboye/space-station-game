@@ -26,6 +26,7 @@
     "test:approach-control": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/approach-control-tests.js",
     "test:approach-envelopes": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/approach-envelope-tests.js",
     "test:facility-slots": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/facility-slots-tests.js",
+    "test:gate-f-facility": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/gate-f-facility-scale-tests.js",
     "test:failed-stay": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/failed-stay-tests.js",
     "test:movement-coordinator": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/movement-coordinator-tests.js",
     "test:queue-spill": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/queue-spill-tests.js",

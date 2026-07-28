@@ -366,7 +366,28 @@ export enum ModuleType {
   // footprints and saved stations remain valid.
   CheckoutBank = 'checkout-bank',
   ShelfAisle = 'shelf-aisle',
-  BunkBank = 'bunk-bank'
+  BunkBank = 'bunk-bank',
+  // Phase 1B, second wave. Every one of these is descriptor-driven: its
+  // depicted counters, stools, seats, beds and wash positions are real
+  // exclusive slots (see facility-descriptors.ts), never a room-wide guess.
+  // Market back-of-house: the shelf's supply source and the reason a restock
+  // route can be made to cross the customer floor.
+  BackroomStockBank = 'backroom-stock-bank',
+  // Cantina. ServiceBar is the provider; Corner and End extend the same
+  // connected run rather than acting as independent mini-bars.
+  ServiceBar = 'service-bar',
+  BarCorner = 'bar-corner',
+  BarEnd = 'bar-end',
+  // Dwell capacity, deliberately separate from service throughput.
+  BoothBank = 'booth-bank',
+  StandingRail = 'standing-rail',
+  // Cafeteria at scale.
+  ServingLine = 'serving-line',
+  CommunityTable = 'community-table',
+  // Lodging, reception and hygiene.
+  GuestCabin = 'guest-cabin',
+  ArrivalDesk = 'arrival-desk',
+  WashBank = 'wash-bank'
 }
 
 export type ModuleRotation = 0 | 90;
@@ -382,7 +403,20 @@ export interface ModuleInstance {
   /** Credits originally paid by the station. Older/scenario modules fall back to the current catalog price. */
   purchaseCost?: number;
   legacyForced?: boolean;
+  /**
+   * What a Shelf Aisle stocks. A strategic choice, not a checklist item: a
+   * market may open with one category and simply miss the other demand.
+   * Absent on every other module type and on pre-Phase-1B saves, which read
+   * as the default 'essentials'.
+   */
+  shelfMix?: ShelfMix;
 }
+
+/**
+ * Broad retail categories. Deliberately few and broad — this is a stocking
+ * decision the player makes at the shelf, not an inventory spreadsheet.
+ */
+export type ShelfMix = 'essentials' | 'gifts' | 'technical';
 
 export type CommercialBusinessKind = 'market-stall' | 'cantina' | 'restaurant' | 'gift-shop';
 export type CommercialUnitPhase = 'vacant' | 'offers' | 'fitting-out' | 'open' | 'closed';
@@ -617,6 +651,18 @@ export interface Visitor {
   marketTradeGoodSourceTile?: number | null;
   /** Current temporary lodging slot. This is never resident housing identity. */
   temporarySleepTargetTile?: number | null;
+  /**
+   * Wants this guest has actually shown, in the order they surfaced.
+   *
+   * The full `servicePlan` stays internal: a visitor arrives with plausible
+   * needs, not a published itinerary. Only what is revealed here may be shown
+   * to the player, which is what an Arrival Desk accelerates.
+   */
+  revealedServices?: HospitalityServiceKind[];
+  /** When a reception desk processed this guest. null = never processed. */
+  receptionProcessedAt?: number | null;
+  /** Set once a guest has walked to a wrong first choice and been redirected. */
+  redirectedFrom?: HospitalityServiceKind | null;
   /** Durable service-failure state for long-stay and stranded occupants. */
   serviceFailureStage?: VisitorServiceFailureStage;
   failureSince?: number | null;

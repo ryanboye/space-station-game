@@ -73,6 +73,114 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     allowedRooms: [RoomType.Dorm],
     capitalCost: 150
   },
+  // --- Phase 1B facility scale, second wave --------------------------------
+  // Costs are deliberately above the footprint fallback (w*h*3): a larger
+  // fixture buys absolute capacity, never free efficiency.
+  /** Backroom supply for the shelf run. Holds a lot of stock, serves nobody. */
+  [ModuleType.BackroomStockBank]: {
+    width: 2,
+    height: 3,
+    rotatable: true,
+    allowedRooms: [RoomType.Market, RoomType.Storage, RoomType.LogisticsStock],
+    itemNodeCapacity: 180,
+    storageClass: 'ambient',
+    capitalCost: 90
+  },
+  /** The cantina provider. Four guest stools against a two-position staff lane. */
+  [ModuleType.ServiceBar]: {
+    width: 2,
+    height: 5,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina],
+    itemNodeCapacity: 48,
+    storageClass: 'serving',
+    capitalCost: 140
+  },
+  /** Turns a bar run 90°. Small stock buffer so a corner is not a dead spot. */
+  [ModuleType.BarCorner]: {
+    width: 2,
+    height: 2,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina],
+    itemNodeCapacity: 12,
+    storageClass: 'serving',
+    capitalCost: 55
+  },
+  /** Caps a bar run. Adds a stool, adds no service throughput. */
+  [ModuleType.BarEnd]: {
+    width: 2,
+    height: 2,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina],
+    itemNodeCapacity: 8,
+    storageClass: 'serving',
+    capitalCost: 45
+  },
+  /** Six seats of comfortable dwell. Buys time-in-room, not drinks-per-minute. */
+  [ModuleType.BoothBank]: {
+    width: 2,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina, RoomType.Lounge],
+    capitalCost: 110
+  },
+  /** Four cheap standing positions. High density, short dwell, low comfort. */
+  [ModuleType.StandingRail]: {
+    width: 1,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Cantina, RoomType.Lounge],
+    capitalCost: 40
+  },
+  /** Three meal pickup positions on one staff lane. */
+  [ModuleType.ServingLine]: {
+    width: 2,
+    height: 5,
+    rotatable: true,
+    allowedRooms: [RoomType.Cafeteria],
+    itemNodeCapacity: 120,
+    storageClass: 'serving',
+    facilityActivities: ['serve'],
+    capitalCost: 150
+  },
+  /** Eight depicted seats. Efficient floor use, heavier cleaning burden. */
+  [ModuleType.CommunityTable]: {
+    width: 3,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Cafeteria, RoomType.Cantina],
+    visitorCapacity: 8,
+    reservationCapacity: 8,
+    capitalCost: 160
+  },
+  /** Two private guest beds. Better comfort per bed than a Bunk Bank. */
+  [ModuleType.GuestCabin]: {
+    width: 3,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Dorm],
+    capitalCost: 220
+  },
+  /**
+   * Optional reception. Allowed in the public rooms an arrivals concourse
+   * actually uses; never required, and never an admission gate.
+   */
+  [ModuleType.ArrivalDesk]: {
+    width: 2,
+    height: 4,
+    rotatable: true,
+    allowedRooms: [RoomType.Lounge, RoomType.Market, RoomType.Cafeteria],
+    capitalCost: 130
+  },
+  /** Four exclusive wash positions on one plumbing spine. */
+  [ModuleType.WashBank]: {
+    width: 2,
+    height: 5,
+    rotatable: true,
+    allowedRooms: [RoomType.Hygiene],
+    facilityActivities: ['shower'],
+    capitalCost: 130
+  },
   [ModuleType.Locker]: {
     width: 1,
     height: 1,
@@ -549,7 +657,7 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   [RoomType.Dorm]: {
     minTiles: 6,
     requiredModules: [],
-    requiredAnyOf: [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank],
+    requiredAnyOf: [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank, ModuleType.GuestCabin],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },
@@ -632,8 +740,10 @@ export const ROOM_DEFINITIONS: Record<RoomType, RoomDefinition> = {
   },
   [RoomType.Cantina]: {
     minTiles: 8,
-    requiredModules: [{ module: ModuleType.BarCounter, count: 1 }],
-    requiredAnyOf: [],
+    requiredModules: [],
+    // A modular Service Bar activates a Cantina on its own; the compact Bar
+    // Counter stays valid for cramped layouts.
+    requiredAnyOf: [ModuleType.BarCounter, ModuleType.ServiceBar],
     activationChecks: { door: true, path: true, pressurization: true },
     staffedPostMode: 'none'
   },

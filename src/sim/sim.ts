@@ -41,6 +41,25 @@ import {
   resolveFacilitySlots,
   type FacilitySlotRole
 } from './facility-descriptors';
+import {
+  FACILITY_SESSIONS,
+  releaseOrphanedFacilityClaims,
+  slotIsOccupied,
+  slotsOfRole,
+  buildSlotReservationRequest,
+  type FacilitySlotTarget as SharedFacilitySlotTarget
+} from './facility-slots';
+import {
+  backroomOrigins,
+  barGroupAtTile,
+  barGroups,
+  dwellSlotsInRoom,
+  receivingOrigins,
+  shelfOrigins,
+  freeReceptionSlots,
+  shelfMixOf,
+  stockedShelfSlots
+} from './facility-machines';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import {
   SPECIALTY_BY_ID,
@@ -251,6 +270,7 @@ import {
   isWalkable,
   makeRng,
   toIndex,
+  type ShelfMix,
   type StationState,
   type Visitor
 } from './types';
@@ -1751,6 +1771,24 @@ function moduleUsageSlotCount(moduleType: ModuleType): number {
       return 3;
     case ModuleType.BunkBank:
       return 4;
+    case ModuleType.CommunityTable:
+      return 8;
+    case ModuleType.BoothBank:
+      return 6;
+    case ModuleType.ServiceBar:
+      return 4;
+    case ModuleType.StandingRail:
+    case ModuleType.WashBank:
+      return 4;
+    case ModuleType.ServingLine:
+      return 3;
+    case ModuleType.ArrivalDesk:
+    case ModuleType.BackroomStockBank:
+    case ModuleType.GuestCabin:
+    case ModuleType.BarEnd:
+      return 2;
+    case ModuleType.BarCorner:
+      return 1;
     case ModuleType.Bunk:
       return 2;
     case ModuleType.Table:
@@ -1800,9 +1838,9 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
       ModuleType.LogisticsTerminal
     ];
   }
-  if (room === RoomType.Dorm) return [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank];
-  if (room === RoomType.Hygiene) return [ModuleType.Toilet, ModuleType.Shower, ModuleType.Sink];
-  if (room === RoomType.Cafeteria) return [ModuleType.ServingStation];
+  if (room === RoomType.Dorm) return [ModuleType.Bed, ModuleType.Bunk, ModuleType.BunkBank, ModuleType.GuestCabin];
+  if (room === RoomType.Hygiene) return [ModuleType.Toilet, ModuleType.Shower, ModuleType.Sink, ModuleType.WashBank];
+  if (room === RoomType.Cafeteria) return [ModuleType.ServingStation, ModuleType.ServingLine];
   if (room === RoomType.Kitchen) return [ModuleType.Stove];
   if (room === RoomType.Workshop) return [ModuleType.Workbench];
   if (room === RoomType.Clinic) return [ModuleType.MedBed];
@@ -1810,9 +1848,9 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
   if (room === RoomType.RecHall) return [ModuleType.RecUnit];
   if (room === RoomType.Hydroponics) return [ModuleType.GrowStation];
   if (room === RoomType.Security) return [ModuleType.Terminal];
-  if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation];
-  if (room === RoomType.Market) return [ModuleType.MarketStall, ModuleType.ShelfAisle, ModuleType.CheckoutBank];
-  if (room === RoomType.Cantina) return [ModuleType.BarCounter];
+  if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation, ModuleType.BoothBank, ModuleType.StandingRail];
+  if (room === RoomType.Market) return [ModuleType.MarketStall, ModuleType.ShelfAisle, ModuleType.CheckoutBank, ModuleType.BackroomStockBank];
+  if (room === RoomType.Cantina) return [ModuleType.BarCounter, ModuleType.ServiceBar, ModuleType.BarCorner, ModuleType.BarEnd];
   if (room === RoomType.Observatory) return [ModuleType.Telescope];
   if (room === RoomType.LogisticsStock) return [ModuleType.IntakePallet];
   if (room === RoomType.Storage) return [ModuleType.StorageRack];
@@ -2252,6 +2290,15 @@ function collectServingPickupTargets(state: StationState): number[] {
     const servingStations = state.moduleInstances.filter(
       (module) => module.type === ModuleType.ServingStation && clusterTiles.has(module.originTile)
     );
+    // A Serving Line is the deliberate public-scale counter: its three pickup
+    // positions already clear the "two counters" bar on their own, and a
+    // Community Table's eight seats clear the two-table bar.
+    const servingLines = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.ServingLine && clusterTiles.has(module.originTile)
+    );
+    const communityTables = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.CommunityTable && clusterTiles.has(module.originTile)
+    );
     const tables = state.moduleInstances.filter(
       (module) => module.type === ModuleType.Table && clusterTiles.has(module.originTile)
     );
@@ -2262,12 +2309,18 @@ function collectServingPickupTargets(state: StationState): number[] {
     const trayReturns = state.moduleInstances.filter(
       (module) => module.type === ModuleType.TrayReturn && clusterTiles.has(module.originTile)
     );
-    if (servingStations.length < 2 || tables.length < 2 || trayReturns.length < 1) continue;
+    const counterScore = servingStations.length + servingLines.length * 2;
+    const seatScore = tables.length + communityTables.length * 2;
+    if (counterScore < 2 || seatScore < 2 || trayReturns.length < 1) continue;
     for (const module of servingStations) publicServingOrigins.add(module.originTile);
+    for (const module of servingLines) publicServingOrigins.add(module.originTile);
   }
   const out: number[] = [];
   for (const module of state.moduleInstances) {
-    if (module.type === ModuleType.ServingStation && publicServingOrigins.has(module.originTile)) {
+    if (
+      (module.type === ModuleType.ServingStation || module.type === ModuleType.ServingLine) &&
+      publicServingOrigins.has(module.originTile)
+    ) {
       out.push(...moduleUsageTiles(module));
     }
   }
@@ -2281,7 +2334,9 @@ function servingInventoryTileForPickup(state: StationState, pickupTile: number):
   const module = moduleId === null
     ? null
     : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
-  return module?.type === ModuleType.ServingStation ? module.originTile : pickupTile;
+  return module?.type === ModuleType.ServingStation || module?.type === ModuleType.ServingLine
+    ? module.originTile
+    : pickupTile;
 }
 
 function collectColdFoodTargets(state: StationState): number[] {
@@ -2312,20 +2367,51 @@ function collectDishwasherTargets(state: StationState): number[] {
 }
 
 function collectCafeteriaTableTargets(state: StationState): number[] {
-  return collectModuleUsageTargets(state, ModuleType.Table, RoomType.Cafeteria);
+  // A Community Table's eight depicted seats are eight reservations; it is a
+  // denser Table, never a room-wide capacity bonus.
+  const communitySeats = slotsOfRole(state, [ModuleType.CommunityTable], 'seat')
+    .filter((slot) => state.rooms[slot.tileIndex] === RoomType.Cafeteria)
+    .map((slot) => slot.tileIndex);
+  const tables = collectModuleUsageTargets(state, ModuleType.Table, RoomType.Cafeteria);
+  return [...new Set([...tables, ...communitySeats])].sort((a, b) => a - b);
 }
 
+/**
+ * Where a guest can be served a drink.
+ *
+ * A connected Service Bar run publishes its depicted stools as real slots, so
+ * those win outright. The legacy Bar Counter path stays as the compatibility
+ * fallback for stations that never built a modular bar.
+ */
 function collectCantinaBarTargets(state: StationState): number[] {
+  const groupSlots = barGroups(state)
+    .flatMap((group) => group.guestSlots)
+    .filter((slot) => state.rooms[slot.tileIndex] === RoomType.Cantina)
+    .map((slot) => slot.tileIndex);
+  if (groupSlots.length > 0) return [...new Set(groupSlots)].sort((a, b) => a - b);
   return collectServiceTargets(state, RoomType.Cantina);
 }
 
+/**
+ * Where a guest can sit and drink. Deliberately separate from the bar: seating
+ * buys dwell capacity, never service throughput.
+ */
 function collectCantinaSeatTargets(state: StationState): number[] {
-  return activeModuleUsageTargets(state, [ModuleType.Bench], [RoomType.Cantina]);
+  const dwellSlots = dwellSlotsInRoom(state, RoomType.Cantina).map((slot) => slot.tileIndex);
+  const benches = activeModuleUsageTargets(state, [ModuleType.Bench], [RoomType.Cantina]);
+  return [...new Set([...dwellSlots, ...benches])].sort((a, b) => a - b);
 }
+
+const CANTINA_BAR_MODULES = new Set<ModuleType>([
+  ModuleType.BarCounter,
+  ModuleType.ServiceBar,
+  ModuleType.BarCorner,
+  ModuleType.BarEnd
+]);
 
 function isCantinaBarServiceTile(state: StationState, tileIndex: number): boolean {
   return state.rooms[tileIndex] === RoomType.Cantina &&
-    state.modules[tileIndex] === ModuleType.BarCounter &&
+    CANTINA_BAR_MODULES.has(state.modules[tileIndex]) &&
     collectCantinaBarTargets(state).includes(tileIndex);
 }
 
@@ -2358,7 +2444,14 @@ function tapCountInCantinaCluster(state: StationState, cluster: number[]): numbe
 
 function cantinaServiceRateForBar(state: StationState, barTile: number): number {
   const cluster = clusterForRoomTile(state, RoomType.Cantina, barTile);
-  const stewardCount = activeStewardsInCantinaCluster(state, cluster);
+  // A steward physically standing in a bar's staff lane is worth a full
+  // server, which is what makes extra connected bar length pay off only when
+  // it brought a staff position somebody actually occupies.
+  const group = barGroupAtTile(state, barTile);
+  const laneStaff = group
+    ? group.staffSlots.filter((slot) => slotIsOccupied(state, slot.tileIndex)).length
+    : 0;
+  const stewardCount = Math.max(activeStewardsInCantinaCluster(state, cluster), laneStaff);
   const taps = tapCountInCantinaCluster(state, cluster);
   if (stewardCount <= 0) {
     return CANTINA_UNSTAFFED_SERVICE_RATE * (1 + Math.min(0.18, taps * 0.06));
@@ -7152,6 +7245,12 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     queueProviderTile: null,
     queueJoinedAt: null,
     serviceBlockedSince: null,
+    // Arrive with plausible needs, not a published itinerary: only the want
+    // the guest is already acting on is visible until behaviour or a
+    // reception desk reveals more.
+    revealedServices: servicePlan.slice(0, 1),
+    receptionProcessedAt: null,
+    redirectedFrom: null,
     stayClass,
     needs: isLongStayClass(stayClass) ? createVisitorNeeds(visitorId + (ship?.id ?? 0) * 31) : undefined,
     recurringNeedActive: null
@@ -15584,9 +15683,16 @@ function preferredVisitorToiletTargets(state: StationState): number[] {
 
 function preferredVisitorWashTargets(state: StationState): number[] {
   const water = computeWaterPipeRuntime(state);
-  return activeModuleUsageTargets(state, [ModuleType.Shower, ModuleType.Sink], [RoomType.Hygiene]).filter(
-    (idx) => state.roomHousingPolicies[idx] === 'visitor' && state.zones[idx] !== ZoneType.Restricted && (!water.pipeMode || water.poweredFixtures.has(idx))
-  );
+  // A Wash Bank's four depicted stalls are exclusive positions like any loose
+  // Shower, so they extend the same pool rather than forming a second system.
+  const washBankSlots = activeFacilitySlotTargets(state, [ModuleType.WashBank], RoomType.Hygiene, 'hygiene')
+    .map((slot) => slot.tileIndex);
+  const loose = activeModuleUsageTargets(state, [ModuleType.Shower, ModuleType.Sink], [RoomType.Hygiene]);
+  return [...new Set([...washBankSlots, ...loose])]
+    .filter(
+      (idx) => state.roomHousingPolicies[idx] === 'visitor' && state.zones[idx] !== ZoneType.Restricted && (!water.pipeMode || water.poweredFixtures.has(idx))
+    )
+    .sort((a, b) => a - b);
 }
 
 function crewLeisureTargets(state: StationState): number[] {
@@ -16023,9 +16129,15 @@ function consumeTradeGoodsFromMarket(state: StationState, amount: number): numbe
 
 function consumeCantinaSupplies(state: StationState, amount: number, barTile?: number): number {
   if (amount <= 0) return 0;
-  const targets = barTile === undefined
-    ? collectServiceTargets(state, RoomType.Cantina)
-    : collectCantinaBarTargets(state).filter((tile) => clusterForRoomTile(state, RoomType.Cantina, tile).includes(barTile));
+  // A connected run pools its stock: a guest served at the far end draws from
+  // whichever segment actually holds beverages, so a corner piece is not a
+  // separate dry bar.
+  const group = barTile === undefined ? null : barGroupAtTile(state, barTile);
+  const targets = group
+    ? group.stockTiles
+    : barTile === undefined
+      ? collectServiceTargets(state, RoomType.Cantina)
+      : collectCantinaBarTargets(state).filter((tile) => clusterForRoomTile(state, RoomType.Cantina, tile).includes(barTile));
   if (targets.length === 0) return 0;
   return takeItemAcrossTargets(state, targets, 'rawMaterial', amount);
 }
@@ -17525,7 +17637,64 @@ function createRawMaterialTransportJobs(state: StationState): void {
   }
 }
 
+/**
+ * Move retail stock from receiving into the backroom, and from the backroom
+ * onto the shelves.
+ *
+ * This is the leg that makes a market a machine rather than a teleport: goods
+ * land at receiving, a hauler carries them to a Backroom Stock Bank, and a
+ * clerk carries visible bundles out to the shelf bays. A player who puts the
+ * backroom on the far side of the customer floor pays for it in walking time
+ * and in a restock route that fights the queue.
+ */
+function createMarketRestockJobs(state: StationState): void {
+  const backroom = backroomOrigins(state);
+  const shelves = shelfOrigins(state);
+  if (shelves.length === 0) return;
+
+  const openRestockJobs = state.jobs.filter(
+    (job) =>
+      (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress') &&
+      job.itemType === 'tradeGood'
+  ).length;
+  if (openRestockJobs >= MAX_PENDING_TRADE_JOBS) return;
+
+  // Receiving -> backroom. Only worth doing once a backroom exists; without
+  // one the supplier lot stays at receiving and the shelves starve, which is
+  // exactly the pressure that should push a player to build one.
+  if (backroom.length > 0) {
+    const receiving = receivingOrigins(state);
+    if (receiving.length > 0) {
+      dispatchTransportJobs(state, 'tradeGood', receiving, backroom, {
+        cap: MAX_PENDING_TRADE_JOBS,
+        openCount: openRestockJobs,
+        targetStock: MARKET_TRADE_GOOD_TARGET_STOCK * 2,
+        nearAmount: 6,
+        farAmount: 4,
+        nearDistance: 10
+      });
+    }
+  }
+
+  // Backroom -> shelf. The shelf is the only stock a shopper can buy, so this
+  // leg is what a stockout actually measures.
+  const shelfStock = shelves.reduce((total, tile) => total + itemStockAtNode(state, tile, 'tradeGood'), 0);
+  const incoming = shelves.reduce((total, tile) => total + openJobAmountToTile(state, tile, 'tradeGood'), 0);
+  if (shelfStock + incoming >= MARKET_TRADE_GOOD_TARGET_STOCK) return;
+  const sources = backroom.length > 0 ? backroom : receivingOrigins(state);
+  if (sources.length === 0) return;
+  dispatchTransportJobs(state, 'tradeGood', sources, shelves, {
+    cap: MAX_PENDING_TRADE_JOBS,
+    openCount: openRestockJobs,
+    targetStock: MARKET_TRADE_GOOD_TARGET_STOCK,
+    nearAmount: 4,
+    farAmount: 3,
+    nearDistance: 8
+  });
+}
+
 function createTradeGoodTransportJobs(state: StationState): void {
+  createMarketRestockJobs(state);
   const workshopTargets = collectServiceTargets(state, RoomType.Workshop);
   const marketTargets = collectServiceTargets(state, RoomType.Market);
   if (workshopTargets.length === 0 || marketTargets.length === 0) return;
@@ -21006,7 +21175,87 @@ function assignPathToCantinaPickup(state: StationState, visitor: Visitor): boole
   return false;
 }
 
+const RECEPTION_REVEAL_COUNT = 2;
+
+/**
+ * Show one more of a guest's wants.
+ *
+ * Called when behaviour makes a want obvious — the guest starts that service,
+ * or a reception desk asks. Never called with the whole plan, which is what
+ * keeps demand inferable rather than published.
+ */
+function revealVisitorServices(visitor: Visitor, count: number): void {
+  const revealed = visitor.revealedServices ?? [];
+  for (const service of visitor.servicePlan) {
+    if (revealed.length >= (visitor.revealedServices?.length ?? 0) + count) break;
+    if (!revealed.includes(service)) revealed.push(service);
+  }
+  visitor.revealedServices = revealed;
+}
+
+/** A guest who has not been processed and is still early in their visit. */
+function visitorWantsReception(state: StationState, visitor: Visitor): boolean {
+  if (visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined) return false;
+  if (visitor.servicePlan.length <= 1) return false;
+  // Reception is worth a detour only on arrival; a guest already mid-visit has
+  // learned the station by walking it.
+  return visitorVisitAge(state, visitor) <= 30;
+}
+
+/**
+ * Send an arriving guest to a free, staffed reception position.
+ *
+ * Optional by construction: a full, unstaffed or absent desk simply returns
+ * false and the guest picks a plausible facility themselves. Reception never
+ * gates entry.
+ */
+function assignPathToReception(state: StationState, visitor: Visitor): boolean {
+  if (!visitorWantsReception(state, visitor)) return false;
+  const slots = freeReceptionSlots(state);
+  if (slots.length === 0) return false;
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
+  const choice = chooseLeastLoadedPath(
+    state,
+    visitor.tileIndex,
+    slots.map((slot) => slot.tileIndex),
+    false,
+    'visitor',
+    undefined,
+    visitor.id
+  );
+  if (!choice) return false;
+  const slot = slots.find((candidate) => candidate.tileIndex === choice.target);
+  if (!slot) return false;
+  const request = buildSlotReservationRequest({
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    slot,
+    replace: true
+  });
+  if (!request) return false;
+  const reservation = tryCreateReservation(state, request);
+  if (!reservation.ok) return false;
+  visitor.reservedTargetTile = slot.tileIndex;
+  visitor.state = VisitorState.ToLeisure;
+  setVisitorPath(state, visitor, choice.path);
+  return true;
+}
+
+/**
+ * Finish a reception session: reveal more of the guest's wants and let their
+ * next routing choice be made with that knowledge.
+ */
+function completeReceptionSession(state: StationState, visitor: Visitor): void {
+  visitor.receptionProcessedAt = state.now;
+  revealVisitorServices(visitor, RECEPTION_REVEAL_COUNT);
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot']);
+  visitor.reservedTargetTile = null;
+}
+
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
+  // An optional first stop. Returns false whenever no desk is free and staffed,
+  // so an absent or saturated Reception is a bypass, never a block.
+  if (assignPathToReception(state, visitor)) return true;
   // A browsed item is a real, reserved physical good. Do not let a generic
   // leisure reroute abandon it or skip the checkout stage.
   if (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) {
@@ -21533,9 +21782,11 @@ function updateMarketCheckoutQueue(
 }
 
 function temporarySleepSlots(state: StationState): FacilitySlotTarget[] {
+  // Guest Cabins and Bunk Banks are the same claim machinery; the cabin simply
+  // trades floor area for privacy, so both feed one pool of guest beds.
   const bunkBankSlots = activeFacilitySlotTargets(
     state,
-    [ModuleType.BunkBank],
+    [ModuleType.BunkBank, ModuleType.GuestCabin],
     RoomType.Dorm,
     'temporary-sleep'
   ).filter((slot) => state.roomHousingPolicies[slot.tileIndex] === 'visitor');
@@ -21759,6 +22010,15 @@ function walkInServiceKindAt(state: StationState, tile: number, visitor: Visitor
   if (module === ModuleType.GameStation || module === ModuleType.Telescope) return 'comfort';
   if (room === RoomType.Lounge || room === RoomType.RecHall || room === RoomType.Observatory) return 'leisure';
   return null;
+}
+
+function noteVisitorServiceObserved(visitor: Visitor, service: HospitalityServiceKind | null): void {
+  if (!service) return;
+  const revealed = visitor.revealedServices ?? [];
+  if (!revealed.includes(service)) {
+    revealed.push(service);
+    visitor.revealedServices = revealed;
+  }
 }
 
 function completeVisitorHospitalityService(
@@ -22370,6 +22630,10 @@ function updateVisitorLogic(
         currentModule === ModuleType.GameStation ||
         currentModule === ModuleType.RecUnit ||
         currentModule === ModuleType.Bench;
+      const atArrivalDesk =
+        currentModule === ModuleType.ArrivalDesk &&
+        visitor.reservedTargetTile === visitor.tileIndex &&
+        (visitor.receptionProcessedAt === null || visitor.receptionProcessedAt === undefined);
       const atShelfAisle =
         currentModule === ModuleType.ShelfAisle &&
         visitor.marketTradeGoodSourceTile !== null &&
@@ -22477,7 +22741,9 @@ function updateVisitorLogic(
         const baseDwell = TASK_TIMINGS.visitorLeisureBaseSec[visitor.archetype];
         // Observatory: longer dwell (wonder). Cantina: shorter (drink + go).
         const dwellMult = atObservatoryModule ? 1.45 : atCantinaModule ? 0.85 : 1;
-        const contractDwell = atTemporarySleep
+        const contractDwell = atArrivalDesk
+          ? FACILITY_SESSIONS.reception.durationSec
+          : atTemporarySleep
           ? TEMPORARY_SLEEP_DWELL_SEC
           : atShelfAisle
             ? MARKET_BROWSE_DWELL_SEC
@@ -22536,6 +22802,19 @@ function updateVisitorLogic(
         updateActorHealthFromExposure(state, visitor);
       }
       if (visitor.eatTimer <= 0) {
+        // A finished reception session is the only place demand is revealed
+        // ahead of behaviour, and it reveals part of the plan, never all of it.
+        // Recomputed here because the arrival-side flag lives in the sibling
+        // block that starts the dwell.
+        const completedReception =
+          state.modules[visitor.tileIndex] === ModuleType.ArrivalDesk &&
+          (visitor.receptionProcessedAt === null || visitor.receptionProcessedAt === undefined);
+        if (completedReception) {
+          completeReceptionSession(state, visitor);
+          visitor.state = VisitorState.ToLeisure;
+          assignPathToLeisure(state, visitor);
+          continue;
+        }
         const completedTemporarySleep =
           visitor.temporarySleepTargetTile === visitor.tileIndex &&
           state.reservations.some(
@@ -25664,6 +25943,10 @@ export function setRoom(state: StationState, index: number, room: RoomType): voi
   if (room !== RoomType.None && !isRoomUnlocked(state, room)) return;
   if (state.rooms[index] === room) return;
   state.rooms[index] = room;
+  // Repainting a room does not delete its fixtures, so module-removal cleanup
+  // never runs — but a claim on a position that is no longer part of a working
+  // facility must not survive. Sweep the orphans the repaint just created.
+  releaseOrphanedFacilityClaims(state);
   if (room !== RoomType.Dorm && room !== RoomType.Hygiene) {
     state.roomHousingPolicies[index] = defaultHousingPolicyForRoom(room);
   } else if (!isHousingPolicyAllowedForRoom(room, state.roomHousingPolicies[index])) {
@@ -26169,6 +26452,25 @@ export function getModuleMovePreview(
   return validation.ok
     ? { ok: true, tiles, module }
     : { ok: false, reason: validation.reason, tiles, module };
+}
+
+/**
+ * Choose what a Shelf Aisle stocks.
+ *
+ * A local decision made at the fixture, not a global policy screen: a market
+ * may run three different mixes across three aisles, or bet the whole shop on
+ * one category and simply miss the other demand.
+ */
+export function setShelfMix(state: StationState, tileIndex: number, mix: ShelfMix): boolean {
+  const moduleId = state.moduleOccupancyByTile[tileIndex];
+  const module = moduleId === null
+    ? null
+    : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
+  if (!module || module.type !== ModuleType.ShelfAisle) return false;
+  if (module.shelfMix === mix) return true;
+  module.shelfMix = mix;
+  state.moduleVersion += 1;
+  return true;
 }
 
 export function tryMoveModule(
@@ -26812,9 +27114,16 @@ function supplierOrderDestinations(state: StationState, stockKind: SupplierOrder
   const moduleTypes = stockKind === 'travel-supplies'
     ? [ModuleType.ShelfAisle, ModuleType.MarketStall]
     : [ModuleType.FuelTank];
-  const shelfDestinations = state.moduleInstances
-    .filter((module) => module.type === ModuleType.ShelfAisle)
-    .map((module) => module.originTile);
+  // A supplier lot is unloaded into RECEIVING, not onto the shop floor. Once a
+  // station has any back-of-house capacity, goods land there and crew carry
+  // them to the backroom and out to the shelves as visible bundles
+  // (createMarketRestockJobs). Shelves stay the destination only for stations
+  // with no receiving at all, so a small early shop still works.
+  const backOfHouse = stockKind === 'travel-supplies'
+    ? [...receivingOrigins(state), ...backroomOrigins(state)]
+    : [];
+  if (backOfHouse.length > 0) return backOfHouse;
+  const shelfDestinations = shelfOrigins(state);
   // Shelves are the authored shop destination. Keep stalls as a later small
   // retail fallback so existing stations and commercial tenants do not lose
   // their procurement route.
