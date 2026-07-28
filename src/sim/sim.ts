@@ -141,6 +141,9 @@ import {
   type BerthConfig,
   type BerthFacility,
   type DockEntity,
+  type ExteriorIntegrityPanel,
+  type ExteriorIntegrityState,
+  type ExteriorIntegrityTarget,
   type PodDockAttachmentView,
   type PodDockCapability,
   type PodDockPlacementView,
@@ -2980,7 +2983,9 @@ function maintenanceDebtTargetTile(debt: { targetTile?: number; anchorTile: numb
 function normalizeMaintenanceDebt(debt: StationState['maintenanceDebts'][number]): StationState['maintenanceDebts'][number] {
   const domain = maintenanceDebtDomain(debt);
   const targetTile = maintenanceDebtTargetTile(debt);
-  const key = maintenanceTargetKey(domain, debt.anchorTile, debt.system);
+  // Exterior integrity panels use a world-coordinate identity. Do not collapse
+  // them back to a local tile key during routine maintenance normalization.
+  const key = debt.key.startsWith('integrity:') ? debt.key : maintenanceTargetKey(domain, debt.anchorTile, debt.system);
   if (debt.key !== key) debt.key = key;
   debt.domain = domain;
   debt.source = maintenanceDebtSource(debt);
@@ -5849,8 +5854,8 @@ function computePressurization(state: StationState): void {
   const queue: number[] = [];
   const isBarrierAt = (idx: number): boolean => {
     const tile = state.tiles[idx];
-    if (isPressureBarrier(tile)) return true;
-    return tile === TileType.Dock && isOuterHullTile(state, idx);
+    if (isPressureBarrier(tile)) return !exteriorIntegrityBreachedAt(state, idx);
+    return tile === TileType.Dock && isOuterHullTile(state, idx) && !exteriorIntegrityBreachedAt(state, idx);
   };
   const pushIfOpen = (idx: number): void => {
     if (vacuumReachable[idx]) return;
@@ -9809,12 +9814,18 @@ type MaintenanceEnsureTarget = {
 
 type EnsureMaintenanceDebt = (target: MaintenanceEnsureTarget) => StationState['maintenanceDebts'][number];
 
-type ExteriorMaintenanceCandidate = {
+type ExteriorIntegrityCandidate = {
+  id: string;
+  panel: ExteriorIntegrityPanel;
+  worldX: number;
+  worldY: number;
+  face: CardinalDirection;
   domain: Extract<MaintenanceDomain, 'hull' | 'dock' | 'berth'>;
   anchorTile: number;
   targetTile: number;
   risk: number;
   traffic: number;
+  mitigation: number;
   label: string;
   effect: string;
 };
@@ -9844,6 +9855,109 @@ function exteriorRepairWorkTile(state: StationState, targetTile: number): number
   return exterior ?? targetTile;
 }
 
+const EXTERIOR_INTEGRITY_WORN = 12;
+const EXTERIOR_INTEGRITY_DAMAGED = 45;
+const EXTERIOR_INTEGRITY_BREACHED = 78;
+
+const EXTERIOR_FACES: Array<{ face: CardinalDirection; dx: number; dy: number }> = [
+  { face: 'north', dx: 0, dy: -1 },
+  { face: 'east', dx: 1, dy: 0 },
+  { face: 'south', dx: 0, dy: 1 },
+  { face: 'west', dx: -1, dy: 0 }
+];
+
+function exteriorIntegrityTargetId(panel: ExteriorIntegrityPanel, worldX: number, worldY: number, face: CardinalDirection): string {
+  return `${panel}:${worldX}:${worldY}:${face}`;
+}
+
+function exteriorIntegrityDebtKey(id: string): string {
+  return `integrity:${id}`;
+}
+
+export function exteriorIntegrityTargetAtTile(state: StationState, tileIndex: number): ExteriorIntegrityTarget | null {
+  const pos = fromIndex(tileIndex, state.width);
+  const worldX = pos.x + state.mapWorldOriginX;
+  const worldY = pos.y + state.mapWorldOriginY;
+  return state.exteriorIntegrityTargets.find((target) => target.worldX === worldX && target.worldY === worldY) ?? null;
+}
+
+export function exteriorIntegrityTargetsAtTile(state: StationState, tileIndex: number): ExteriorIntegrityTarget[] {
+  const pos = fromIndex(tileIndex, state.width);
+  const worldX = pos.x + state.mapWorldOriginX;
+  const worldY = pos.y + state.mapWorldOriginY;
+  return state.exteriorIntegrityTargets.filter((target) => target.worldX === worldX && target.worldY === worldY);
+}
+
+function exteriorIntegrityBreachedAt(state: StationState, tileIndex: number): boolean {
+  return exteriorIntegrityTargetsAtTile(state, tileIndex).some((target) => target.state === 'breached');
+}
+
+function exteriorIntegrityStateForWear(target: ExteriorIntegrityTarget, wear: number): ExteriorIntegrityState {
+  if (wear >= EXTERIOR_INTEGRITY_BREACHED) return 'breached';
+  if (wear >= EXTERIOR_INTEGRITY_DAMAGED) return 'damaged';
+  if (wear >= EXTERIOR_INTEGRITY_WORN) return 'worn';
+  return target.state === 'patched' ? 'patched' : 'worn';
+}
+
+/**
+ * The only mutation path for a panel's sealing state. The tile remains intact;
+ * pressure consults this durable panel state and topology is invalidated only
+ * when the breach boundary changes.
+ */
+export function setExteriorIntegrityTargetState(
+  state: StationState,
+  id: string,
+  nextState: ExteriorIntegrityState,
+  wear?: number
+): boolean {
+  const target = state.exteriorIntegrityTargets.find((entry) => entry.id === id);
+  if (!target) return false;
+  const wasBreached = target.state === 'breached';
+  const stateChanged = target.state !== nextState;
+  target.state = nextState;
+  if (wear !== undefined) target.wear = clamp(wear, 0, 100);
+  if (stateChanged) target.lastTransitionAt = state.now;
+  if (wasBreached !== (nextState === 'breached')) bumpTopologyVersion(state);
+  return true;
+}
+
+export function setExteriorIntegrityTargetWear(state: StationState, id: string, wear: number): boolean {
+  const target = state.exteriorIntegrityTargets.find((entry) => entry.id === id);
+  if (!target) return false;
+  const normalizedWear = clamp(wear, 0, 100);
+  const nextState = exteriorIntegrityStateForWear(target, normalizedWear);
+  return setExteriorIntegrityTargetState(state, id, nextState, normalizedWear);
+}
+
+function repairExteriorIntegrityDebt(state: StationState, debt: StationState['maintenanceDebts'][number]): boolean {
+  const target = state.exteriorIntegrityTargets.find((entry) => exteriorIntegrityDebtKey(entry.id) === debt.key);
+  if (!target) return false;
+  debt.debt = 0;
+  debt.lastServicedAt = state.now;
+  return setExteriorIntegrityTargetState(state, target.id, 'patched', 0);
+}
+
+function exteriorRepairWorkTileForDebt(
+  state: StationState,
+  debt: StationState['maintenanceDebts'][number],
+  targetTile: number
+): number {
+  const integrityTarget = state.exteriorIntegrityTargets.find((target) => exteriorIntegrityDebtKey(target.id) === debt.key);
+  if (integrityTarget) {
+    const delta = EXTERIOR_FACES.find((entry) => entry.face === integrityTarget.face);
+    const targetPos = fromIndex(targetTile, state.width);
+    if (delta) {
+      const x = targetPos.x + delta.dx;
+      const y = targetPos.y + delta.dy;
+      if (inBounds(x, y, state.width, state.height)) {
+        const exterior = toIndex(x, y, state.width);
+        if (isEvaTraversalTile(state, exterior)) return exterior;
+      }
+    }
+  }
+  return exteriorRepairWorkTile(state, targetTile);
+}
+
 function openRepairJobsForDomain(state: StationState, domain: MaintenanceDomain | null): number {
   return state.jobs.filter((job) => {
     if (job.type !== 'repair') return false;
@@ -9867,118 +9981,127 @@ function maybeRecordDebrisImpact(
   debt: StationState['maintenanceDebts'][number],
   risk: number,
   risePerMin: number
-): void {
-  if (risk < 0.42 || risePerMin <= MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN) return;
+): boolean {
+  if (risk < 0.42 || risePerMin <= MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN) return false;
   const cadence = clamp(20 - risk * 14, 4, 18);
   const last = debt.lastImpactAt ?? -9999;
-  if (state.now - last < cadence) return;
+  if (state.now - last < cadence) return false;
   const phase = Math.floor(state.now / cadence);
   const trigger = (Math.sin(debt.anchorTile * 19.17 + state.seedAtCreation * 0.013 + phase * 5.31) + 1) / 2;
-  if (trigger > 0.58) debt.lastImpactAt = state.now;
+  if (trigger <= 0.58) return false;
+  debt.lastImpactAt = state.now;
+  return true;
 }
 
-function addExteriorCandidate(
-  candidates: Map<string, ExteriorMaintenanceCandidate>,
-  key: string,
-  candidate: ExteriorMaintenanceCandidate
-): void {
-  const existing = candidates.get(key);
-  if (!existing || candidate.risk + candidate.traffic * 0.2 > existing.risk + existing.traffic * 0.2) {
-    candidates.set(key, candidate);
-  }
+function isExteriorFace(state: StationState, x: number, y: number): boolean {
+  if (!inBounds(x, y, state.width, state.height)) return true;
+  const tile = state.tiles[toIndex(x, y, state.width)];
+  return tile === TileType.Space || tile === TileType.Truss;
 }
 
-function collectExteriorMaintenanceCandidates(state: StationState): ExteriorMaintenanceCandidate[] {
+function collectExteriorIntegrityCandidates(state: StationState): ExteriorIntegrityCandidate[] {
   ensureRoomClustersCache(state);
   ensureDockEntitiesUpToDate(state);
   ensureDockByTileCache(state);
-  const candidates = new Map<string, ExteriorMaintenanceCandidate>();
+  const candidates: ExteriorIntegrityCandidate[] = [];
 
   for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] !== TileType.Wall) continue;
-    const exposedNeighbors = exteriorNeighborTiles(state, i);
-    if (exposedNeighbors.length <= 0) continue;
     const pos = fromIndex(i, state.width);
-    const sector = `${Math.floor(pos.x / 6)}:${Math.floor(pos.y / 6)}`;
-    const risk = Math.max(mapConditionAt(state, 'debris-risk', i), ...exposedNeighbors.map((tile) => mapConditionAt(state, 'debris-risk', tile)));
-    addExteriorCandidate(candidates, `hull:${sector}`, {
-      domain: 'hull',
-      anchorTile: i,
-      targetTile: i,
-      risk,
-      traffic: 0,
-      label: 'exterior hull',
-      effect: 'EVA repair pressure'
-    });
+    const panel: ExteriorIntegrityPanel | null =
+      state.tiles[i] === TileType.Wall ? 'hull' : state.tiles[i] === TileType.Dock ? 'dock' : state.rooms[i] === RoomType.Berth ? 'berth' : null;
+    if (!panel) continue;
+    const domain: Extract<MaintenanceDomain, 'hull' | 'dock' | 'berth'> = panel;
+    const dock = panel === 'dock' ? getDockByTile(state, i) : null;
+    const berthAnchor = panel === 'berth' ? clusterAnchor(clusterForRoomTile(state, RoomType.Berth, i)) : null;
+    for (const { face, dx, dy } of EXTERIOR_FACES) {
+      const nx = pos.x + dx;
+      const ny = pos.y + dy;
+      if (!isExteriorFace(state, nx, ny)) continue;
+      const neighbor = inBounds(nx, ny, state.width, state.height) ? toIndex(nx, ny, state.width) : null;
+      const risk = Math.max(mapConditionAt(state, 'debris-risk', i), neighbor === null ? 0 : mapConditionAt(state, 'debris-risk', neighbor));
+      const mitigation = neighbor !== null && state.tiles[neighbor] === TileType.Truss ? 0.45 : 1;
+      const traffic =
+        panel === 'dock'
+          ? (dock?.occupiedByShipId !== null && dock?.occupiedByShipId !== undefined ? 1 : 0) +
+            state.arrivingShips.filter((ship) => ship.assignedDockId === dock?.id && ship.stage !== 'depart').length * 0.5
+          : panel === 'berth'
+            ? state.arrivingShips.filter((ship) => ship.assignedBerthAnchor === berthAnchor && ship.stage !== 'depart').length
+            : 0;
+      const worldX = pos.x + state.mapWorldOriginX;
+      const worldY = pos.y + state.mapWorldOriginY;
+      candidates.push({
+        id: exteriorIntegrityTargetId(panel, worldX, worldY, face),
+        panel,
+        worldX,
+        worldY,
+        face,
+        domain,
+        anchorTile: i,
+        targetTile: i,
+        risk,
+        traffic,
+        mitigation,
+        label: panel === 'hull' ? 'exterior hull panel' : panel === 'dock' ? 'dock hull panel' : 'berth perimeter panel',
+        effect: panel === 'hull' ? 'EVA repair pressure' : 'ship service slowed at high wear'
+      });
+    }
   }
 
-  const dockAnchors = new Set<number>();
-  for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] !== TileType.Dock) continue;
-    const dock = getDockByTile(state, i);
-    const anchor = dock?.anchorTile ?? i;
-    if (dockAnchors.has(anchor)) continue;
-    dockAnchors.add(anchor);
-    const tiles = dock?.tiles ?? [i];
-    const exposed = tiles.filter((tile) => exteriorNeighborTiles(state, tile).length > 0);
-    const sampleTiles = exposed.length > 0 ? exposed : tiles;
-    const risk = sampleTiles.reduce((max, tile) => Math.max(max, mapConditionAt(state, 'debris-risk', tile)), 0);
-    const traffic =
-      (dock?.occupiedByShipId !== null && dock?.occupiedByShipId !== undefined ? 1 : 0) +
-      state.arrivingShips.filter((ship) => ship.assignedDockId === dock?.id && ship.stage !== 'depart').length * 0.5;
-    addExteriorCandidate(candidates, `dock:${anchor}`, {
-      domain: 'dock',
-      anchorTile: anchor,
-      targetTile: sampleTiles[0] ?? anchor,
-      risk,
-      traffic,
-      label: 'dock hull',
-      effect: 'ship service slowed at high wear'
-    });
-  }
+  return candidates.sort((a, b) => a.id.localeCompare(b.id));
+}
 
-  for (const cluster of roomClusters(state, RoomType.Berth)) {
-    const exposed = cluster.filter((tile) => exteriorNeighborTiles(state, tile).length > 0);
-    if (exposed.length <= 0) continue;
-    const anchor = clusterAnchor(cluster);
-    const risk = exposed.reduce((max, tile) => Math.max(max, mapConditionAt(state, 'debris-risk', tile)), 0);
-    const traffic = state.arrivingShips.filter((ship) => ship.assignedBerthAnchor === anchor && ship.stage !== 'depart').length;
-    addExteriorCandidate(candidates, `berth:${anchor}`, {
-      domain: 'berth',
-      anchorTile: anchor,
-      targetTile: exposed[0],
-      risk,
-      traffic,
-      label: 'berth perimeter',
-      effect: 'berth service slowed at high wear'
-    });
-  }
-
-  return [...candidates.values()];
+/** Rebuild runtime panel bindings from the currently exposed station shell. */
+export function reconcileExteriorIntegrityTargets(state: StationState): ExteriorIntegrityCandidate[] {
+  const candidates = collectExteriorIntegrityCandidates(state);
+  const previous = new Map(state.exteriorIntegrityTargets.map((target) => [target.id, target]));
+  state.exteriorIntegrityTargets = candidates.map((candidate) => {
+    const existing = previous.get(candidate.id);
+    return existing
+      ? { ...existing }
+      : {
+          id: candidate.id,
+          panel: candidate.panel,
+          worldX: candidate.worldX,
+          worldY: candidate.worldY,
+          face: candidate.face,
+          wear: 0,
+          state: 'worn',
+          lastTransitionAt: state.now
+        };
+  });
+  return candidates;
 }
 
 function processExteriorMaintenance(state: StationState, minutes: number, ensureDebt: EnsureMaintenanceDebt): void {
+  const candidates = reconcileExteriorIntegrityTargets(state);
   if (minutes <= 0) return;
-  for (const target of collectExteriorMaintenanceCandidates(state)) {
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  for (const target of state.exteriorIntegrityTargets) {
+    const candidate = candidateById.get(target.id);
+    if (!candidate) continue;
     const debt = ensureDebt({
-      key: maintenanceTargetKey(target.domain, target.anchorTile),
-      domain: target.domain,
-      source: target.traffic > 0.2 ? 'traffic' : 'debris',
-      anchorTile: target.anchorTile,
-      targetTile: target.targetTile,
+      key: exteriorIntegrityDebtKey(target.id),
+      domain: candidate.domain,
+      source: candidate.traffic > 0.2 ? 'traffic' : 'debris',
+      anchorTile: candidate.anchorTile,
+      targetTile: candidate.targetTile,
       exterior: true,
-      label: target.label,
-      effect: target.effect
+      label: candidate.label,
+      effect: candidate.effect
     });
-    const wasOpen = debt.debt >= MAINTENANCE_DEBT_WARNING;
+    const wasOpen = target.wear >= MAINTENANCE_DEBT_WARNING;
     const risePerMin =
       MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN +
-      target.risk * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN +
-      target.traffic * MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN;
-    debt.source = target.traffic > 0.2 ? 'traffic' : 'debris';
-    debt.debt = clamp(debt.debt + risePerMin * minutes, 0, 100);
-    maybeRecordDebrisImpact(state, debt, target.risk, risePerMin);
-    if (wasOpen && debt.debt < MAINTENANCE_DEBT_WARNING) state.usageTotals.maintenanceJobsResolved += 1;
+      candidate.risk * candidate.mitigation * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN +
+      candidate.traffic * MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN;
+    debt.source = candidate.traffic > 0.2 ? 'traffic' : 'debris';
+    const impact = maybeRecordDebrisImpact(state, debt, candidate.risk * candidate.mitigation, risePerMin) ? 2 + candidate.risk * 4 : 0;
+    target.lastImpactAt = debt.lastImpactAt;
+    const nextWear = clamp(Math.max(target.wear, debt.debt) + risePerMin * minutes + impact, 0, 100);
+    debt.debt = nextWear;
+    const nextState = exteriorIntegrityStateForWear(target, nextWear);
+    if (target.state !== nextState || target.wear !== nextWear) setExteriorIntegrityTargetState(state, target.id, nextState, nextWear);
+    if (wasOpen && target.wear < MAINTENANCE_DEBT_WARNING) state.usageTotals.maintenanceJobsResolved += 1;
     if (shouldEnqueueRepairJob(state, debt)) enqueueRepairJobForDebt(state, debt);
   }
 }
@@ -15910,7 +16033,7 @@ function enqueueRepairJobForDebt(state: StationState, rawDebt: StationState['mai
   const domain = maintenanceDebtDomain(debt);
   const source = maintenanceDebtSource(debt);
   const targetTile = maintenanceDebtTargetTile(debt);
-  const workTile = debt.exterior ? exteriorRepairWorkTile(state, targetTile) : targetTile;
+  const workTile = debt.exterior ? exteriorRepairWorkTileForDebt(state, debt, targetTile) : targetTile;
   state.jobs.push({
     id: state.jobSpawnCounter++,
     type: 'repair',
@@ -19539,6 +19662,18 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         // and reports through engineering job metrics.
         const workTile = job.fromTile;
         const usingEva = job.repairExterior === true;
+        // An exterior repair can only continue in a suit that was issued via
+        // an Airlock. Never conjure a fresh suit for a stranded EVA worker.
+        if (
+          usingEva &&
+          isEvaTraversalTile(state, crew.tileIndex) &&
+          state.tiles[crew.tileIndex] !== TileType.Airlock &&
+          (!crew.evaSuit || crew.evaOxygenSec <= 0)
+        ) {
+          job.blockedReason = crew.evaSuit ? 'EVA oxygen depleted' : 'EVA suit not issued through airlock';
+          markJobStall(state, job, 'stalled_unreachable_source');
+          continue;
+        }
         if (usingEva) updateEvaSuitForRoute(state, crew, dt);
         else if (state.tiles[crew.tileIndex] === TileType.Airlock) {
           crew.evaSuit = false;
@@ -19573,6 +19708,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             job.state = 'in_progress';
           }
           if (!job.repairSupplyChecked) {
+            if (usingEva && rawMaterialStockTotal(state) < REPAIR_SUPPLY_PARTS) {
+              job.blockedReason = 'no repair supplies';
+              markJobStall(state, job, 'stalled_no_supply');
+              continue;
+            }
             job.repairSuppliesUsed = consumeOperationalSupplies(state, REPAIR_SUPPLY_PARTS);
             job.repairSupplyChecked = true;
             job.blockedReason =
@@ -19584,11 +19724,16 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             const routeMultiplier = usingEva ? (mechanicalDepartmentActive(state) ? 0.82 : 0.48) : 1;
             const reduction = Math.min(debtEntry.debt, REPAIR_JOB_RATE_PER_SEC * supplyMultiplier * routeMultiplier * dt);
             debtEntry.debt = Math.max(0, debtEntry.debt - reduction);
+            const integrityTarget = state.exteriorIntegrityTargets.find(
+              (target) => exteriorIntegrityDebtKey(target.id) === debtEntry.key
+            );
+            if (integrityTarget) integrityTarget.wear = debtEntry.debt;
             debtEntry.lastServicedAt = state.now;
             job.repairProgress = (job.repairProgress ?? 0) + reduction;
             job.lastProgressAt = state.now;
             markJobStall(state, job, 'none');
             if ((job.repairProgress ?? 0) >= job.amount || debtEntry.debt <= REPAIR_JOB_COMPLETE_DEBT) {
+              repairExteriorIntegrityDebt(state, debtEntry);
               job.state = 'done';
               job.completedAt = state.now;
               crew.activeJobId = null;

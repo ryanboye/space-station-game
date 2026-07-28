@@ -29,6 +29,7 @@ import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-e
 import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
 import { shipHullAssetPath, shipHullProfile } from './sim/ship-hulls';
+import { deriveInterfaceDiagnosis, type InterfaceDiagnosis } from './sim/interface-diagnosis';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -946,6 +947,7 @@ app.innerHTML = `
         <div id="dock-modal-stock" class="port-inspection-note"></div>
         <div id="dock-modal-blocker" class="port-inspection-blocker"></div>
       </section>
+      <section id="dock-modal-diagnosis" class="port-inspection interface-diagnosis hidden" aria-live="polite"></section>
       <section id="dock-modal-routing">
       <div class="row" style="margin-top:8px;"><span>Purpose</span><span class="value" id="dock-modal-purpose-label">Visitor</span></div>
       <select id="dock-modal-purpose">
@@ -1009,6 +1011,7 @@ app.innerHTML = `
         <div id="room-modal-berth-readiness-rows" class="port-readiness-grid"></div>
         <div id="room-modal-berth-readiness-reason" class="port-inspection-blocker"></div>
       </section>
+      <section id="room-modal-berth-diagnosis" class="port-inspection interface-diagnosis hidden" aria-live="polite"></section>
       <div id="room-modal-berth-config" class="hidden">
         <div class="section-title" style="margin-top:10px;">Berth Config</div>
         <div class="row compact list-row"><span>Purpose</span><span class="value" id="room-modal-berth-purpose">Visitor</span></div>
@@ -2292,6 +2295,7 @@ const dockModalIdEl = document.querySelector<HTMLElement>('#dock-modal-id')!;
 const dockModalAreaEl = document.querySelector<HTMLElement>('#dock-modal-area')!;
 const dockModalMaxSizeEl = document.querySelector<HTMLElement>('#dock-modal-max-size')!;
 const dockModalInspectionEl = document.querySelector<HTMLElement>('#dock-modal-inspection')!;
+const dockModalDiagnosisEl = document.querySelector<HTMLElement>('#dock-modal-diagnosis')!;
 const dockModalRoutingEl = document.querySelector<HTMLElement>('#dock-modal-routing')!;
 const dockModalTitleEl = document.querySelector<HTMLElement>('#dock-modal-title')!;
 const dockModalAreaLabelEl = document.querySelector<HTMLElement>('#dock-modal-area-label')!;
@@ -2350,6 +2354,7 @@ const roomModalBerthEl = document.querySelector<HTMLElement>('#room-modal-berth'
 const roomModalBerthReadinessEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness')!;
 const roomModalBerthReadinessRowsEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness-rows')!;
 const roomModalBerthReadinessReasonEl = document.querySelector<HTMLElement>('#room-modal-berth-readiness-reason')!;
+const roomModalBerthDiagnosisEl = document.querySelector<HTMLElement>('#room-modal-berth-diagnosis')!;
 const roomModalBerthConfigEl = document.querySelector<HTMLDivElement>('#room-modal-berth-config')!;
 const roomModalBerthPurposeEl = document.querySelector<HTMLElement>('#room-modal-berth-purpose')!;
 const roomModalBerthFacingEl = document.querySelector<HTMLElement>('#room-modal-berth-facing')!;
@@ -5037,6 +5042,16 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c] as string));
+}
+
+function renderInterfaceDiagnosis(target: HTMLElement, diagnosis: InterfaceDiagnosis): void {
+  target.classList.remove('hidden');
+  target.dataset.severity = diagnosis.severity;
+  target.innerHTML = `
+    <div class="section-title">Operating Diagnosis</div>
+    <div class="interface-diagnosis-title">${escapeHtml(diagnosis.title)}</div>
+    <div class="interface-diagnosis-evidence">${escapeHtml(diagnosis.evidence)}</div>
+    <div class="interface-diagnosis-remedy">${escapeHtml(diagnosis.remedy)}</div>`;
 }
 
 function needBarHtml(label: string, value: number, threshold: number, criticalThreshold: number | null, hint: string): string {
@@ -7965,7 +7980,9 @@ function refreshDockModal(): void {
   dockModalSizeLabelEl.textContent = moduleBacked ? 'Craft Class' : 'Max Size';
   dockModalInspectionEl.classList.toggle('hidden', !moduleBacked);
   dockModalRoutingEl.classList.toggle('hidden', moduleBacked);
+  dockModalDiagnosisEl.classList.toggle('hidden', !moduleBacked);
   if (moduleBacked) {
+    renderInterfaceDiagnosis(dockModalDiagnosisEl, deriveInterfaceDiagnosis(state, { kind: 'dock', dockId: dock.id }));
     const capabilities = ['Passenger access', ...(dock.podCapabilities ?? []).map((capability) =>
       capability === 'fuel' ? 'Fuel' : capability === 'freight' ? 'Freight' : 'Maintenance'
     )];
@@ -8392,6 +8409,10 @@ function refreshRoomModal(): void {
       ).join('');
       roomModalBerthReadinessReasonEl.textContent = `First action: ${readinessReason}`;
       roomModalBerthReadinessReasonEl.classList.toggle('clear', readinessReason === 'no physical berth blocker');
+      renderInterfaceDiagnosis(
+        roomModalBerthDiagnosisEl,
+        deriveInterfaceDiagnosis(state, { kind: 'berth', anchorTile: berth.anchorTile })
+      );
       const caps = berth.capabilities.length > 0 ? berth.capabilities.join(', ') : 'none installed';
       const accepts = berth.acceptedShipTypes.length > 0 ? berth.acceptedShipTypes.join(', ') : 'none yet — install capability modules';
       const exposure = berth.spaceExposed ? 'open to space' : 'sealed inside - expose one edge to space';
@@ -8439,6 +8460,7 @@ function refreshRoomModal(): void {
       roomModalBerthEl.style.color = '#ff7676';
       selectedBerthAnchor = null;
       roomModalBerthReadinessEl.classList.add('hidden');
+      roomModalBerthDiagnosisEl.classList.add('hidden');
       roomModalBerthConfigEl.classList.add('hidden');
     }
   } else {
@@ -8446,6 +8468,7 @@ function refreshRoomModal(): void {
     roomModalBerthEl.style.color = '#8ea2bd';
     selectedBerthAnchor = null;
     roomModalBerthReadinessEl.classList.add('hidden');
+    roomModalBerthDiagnosisEl.classList.add('hidden');
     roomModalBerthConfigEl.classList.add('hidden');
   }
   roomModalReasonsEl.textContent = `Inactive reasons: ${inspector.reasons.join(', ') || 'none'}`;

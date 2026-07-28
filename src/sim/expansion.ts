@@ -245,8 +245,9 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     const anchorTile = remapIndex(debt.anchorTile);
     const targetTile = debt.targetTile !== undefined ? remapIndex(debt.targetTile) : anchorTile;
     const domain = debt.domain ?? (debt.system ? 'utility' : 'module');
-    const key =
-      domain === 'utility' && debt.system
+    const key = debt.key.startsWith('integrity:')
+      ? debt.key
+      : domain === 'utility' && debt.system
         ? maintenanceKey(debt.system, anchorTile)
         : debt.moduleId !== undefined
           ? `${domain}:module:${debt.moduleId}`

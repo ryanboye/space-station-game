@@ -54,10 +54,18 @@ function testDeterministicPurposeMapping(): void {
   assert(selectShipHullVariant(101, 'tourist', 'large') === 'luxury-liner', 'Large tourists should select the luxury liner.');
   assert(selectShipHullVariant(101, 'colonist', 'large') === 'colonist-transport', 'Large colonist ships should select the colonist transport.');
   assert(selectShipHullVariant(101, 'military', 'large') === 'corvette', 'Large military ships should select the corvette.');
-  assert(
-    selectShipHullVariant(901, 'trader', 'large') === selectShipHullVariant(901, 'trader', 'large'),
-    'Immutable identity must always select the same hull.'
-  );
+  const representativeCalls: Array<[number | string, Parameters<typeof selectShipHullVariant>[1], Parameters<typeof selectShipHullVariant>[2], string]> = [
+    [901, 'trader', 'small', 'courier-pod'],
+    ['repair-call-22', 'industrial', 'medium', 'repair-tender'],
+    [903, 'tourist', 'large', 'luxury-liner'],
+    ['convoy-7', 'military', 'large', 'corvette']
+  ];
+  for (const [identity, type, size, expected] of representativeCalls) {
+    assert(
+      selectShipHullVariant(identity, type, size) === expected,
+      `${String(identity)} did not retain the expected ${expected} hull mapping.`
+    );
+  }
   assert(
     hullVariantsFor('trader', 'large').includes('long-freighter') && hullVariantsFor('industrial', 'large').includes('long-freighter'),
     'The same long-freighter silhouette must support different economic purposes.'
@@ -103,11 +111,23 @@ function testOfferToShipAndSaveIdentity(): void {
   assert(admitTrafficOffer(state, traffic.id).ok, 'A compatible fleet offer should be admitted.');
   const ship = state.arrivingShips.find((entry) => entry.id === traffic.id);
   assert(ship?.hullVariant === traffic.hullVariant, 'Accepted ship must carry the offer hull unchanged.');
+  state.trafficOffers.push({
+    ...offer(70303, state),
+    id: 70303,
+    callsign: 'FLEET-70303',
+    shipName: 'Long Identity Witness',
+    shipType: 'trader',
+    hullVariant: 'long-freighter',
+    size: 'large',
+    assignedDockSourceKey: null
+  });
   const parsed = parseAndMigrateSave(serializeSave('fleet-test', state, 'test'));
   assert(parsed.ok, parsed.ok ? '' : parsed.error);
   const restored = hydrateStateFromSave(parsed.save, { seed: 70302 }).state;
   const restoredShip = restored.arrivingShips.find((entry) => entry.id === traffic.id);
   assert(restoredShip?.hullVariant === 'courier-pod', 'Save/load must preserve the exact physical hull.');
+  const restoredLongOffer = restored.trafficOffers.find((entry) => entry.id === 70303);
+  assert(restoredLongOffer?.hullVariant === 'long-freighter', 'Save/load collapsed a non-default long hull into its economic purpose.');
 }
 
 function main(): void {

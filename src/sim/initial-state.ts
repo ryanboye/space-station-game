@@ -487,6 +487,7 @@ export function createInitialState(options?: {
       departments: createInitialDepartments()
     },
     maintenanceDebts: [],
+    exteriorIntegrityTargets: [],
     arrivingShips: [],
     pendingSpawns: [],
     metrics: {

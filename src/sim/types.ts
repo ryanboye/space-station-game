@@ -832,6 +832,24 @@ export interface MaintenanceDebt {
   ignitionRiskSince?: number;
 }
 
+/**
+ * Durable condition of one exposed station panel. Coordinates are in world
+ * space so map growth can remap local tile indices without moving the panel.
+ */
+export type ExteriorIntegrityState = 'worn' | 'damaged' | 'breached' | 'patched';
+export type ExteriorIntegrityPanel = 'hull' | 'dock' | 'berth';
+export interface ExteriorIntegrityTarget {
+  id: string;
+  panel: ExteriorIntegrityPanel;
+  worldX: number;
+  worldY: number;
+  face: CardinalDirection;
+  wear: number;
+  state: ExteriorIntegrityState;
+  lastTransitionAt: number;
+  lastImpactAt?: number;
+}
+
 export interface LifeSupportCoverageDiagnostic {
   distanceByTile: Int16Array;
   sourceCount: number;
@@ -2792,6 +2810,8 @@ export interface StationState {
   crewMembers: CrewMember[];
   command: CommandState;
   maintenanceDebts: MaintenanceDebt[];
+  /** Durable exterior panels. Repair jobs and paths are rebuilt from these. */
+  exteriorIntegrityTargets: ExteriorIntegrityTarget[];
   arrivingShips: ArrivingShip[];
   pendingSpawns: PendingSpawn[];
   metrics: Metrics;

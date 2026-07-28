@@ -94,6 +94,7 @@ import {
   IMPACT_DEBRIS_SPRITE_KEYS,
   SPACE_DEBRIS_SPRITE_KEYS,
   STAFF_ROLE_SPRITE_KEYS,
+  STRUCTURAL_FRONTAGE_SPRITE_KEYS,
   UTILITY_UNDERLAY_SPRITE_KEYS
 } from './sprite-keys-extended';
 import { resolveDoorVariantForTile, resolveWallVariantForTile } from './tile-variants';
@@ -1321,8 +1322,67 @@ function renderHullWearOverlays(
   useSprites: boolean,
   viewport: RenderViewport | null
 ): void {
+  const stateKey = {
+    worn: 'overlay.wall.hull.worn',
+    damaged: 'overlay.wall.hull.damaged',
+    breached: 'overlay.wall.hull.breached',
+    patched: 'overlay.wall.hull.patched'
+  } as const;
+  const faceRotation: Record<'north' | 'east' | 'south' | 'west', number> = {
+    north: 0,
+    east: 90,
+    south: 180,
+    west: 270
+  };
+  const repairingKeys = new Set(
+    state.jobs
+      .filter((job) => job.type === 'repair' && job.state === 'in_progress' && job.repairTargetKey?.startsWith('integrity:'))
+      .map((job) => job.repairTargetKey!)
+  );
+  for (const target of state.exteriorIntegrityTargets) {
+    if (target.state === 'worn' && target.wear < 12) continue;
+    const xTile = target.worldX - state.mapWorldOriginX;
+    const yTile = target.worldY - state.mapWorldOriginY;
+    if (!inBounds(xTile, yTile, state.width, state.height)) continue;
+    const x = xTile * TILE_SIZE;
+    const y = yTile * TILE_SIZE;
+    if (viewport && (x + TILE_SIZE < viewport.x || x > viewport.x + viewport.width || y + TILE_SIZE < viewport.y || y > viewport.y + viewport.height)) continue;
+    const alpha = target.state === 'breached' ? 0.96 : target.state === 'damaged' ? 0.82 : target.state === 'patched' ? 0.7 : 0.56;
+    if (!useSprites || !drawSpriteByKey(ctx, spriteAtlas, stateKey[target.state], x, y, TILE_SIZE, TILE_SIZE, faceRotation[target.face], alpha)) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = target.state === 'breached' ? '#ff625f' : target.state === 'damaged' ? '#ffb15b' : target.state === 'patched' ? '#79e6c0' : '#d4a66a';
+      ctx.lineWidth = Math.max(1, TILE_SIZE * 0.08);
+      ctx.strokeRect(x + TILE_SIZE * 0.16, y + TILE_SIZE * 0.16, TILE_SIZE * 0.68, TILE_SIZE * 0.68);
+      if (target.state === 'breached') {
+        ctx.beginPath();
+        ctx.moveTo(x + TILE_SIZE * 0.24, y + TILE_SIZE * 0.3);
+        ctx.lineTo(x + TILE_SIZE * 0.76, y + TILE_SIZE * 0.7);
+        ctx.moveTo(x + TILE_SIZE * 0.7, y + TILE_SIZE * 0.22);
+        ctx.lineTo(x + TILE_SIZE * 0.34, y + TILE_SIZE * 0.78);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (!repairingKeys.has(`integrity:${target.id}`)) continue;
+    const frames = STRUCTURAL_FRONTAGE_SPRITE_KEYS.evaWeldFrames;
+    const frame = frames[Math.floor(state.now * 10 + xTile + yTile) % frames.length];
+    const sparkSize = TILE_SIZE * 1.2;
+    if (useSprites && drawSpriteByKey(ctx, spriteAtlas, frame, x - TILE_SIZE * 0.1, y - TILE_SIZE * 0.1, sparkSize, sparkSize, 0, 0.9)) continue;
+    ctx.save();
+    ctx.strokeStyle = '#ffe089';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
+    ctx.beginPath();
+    ctx.moveTo(x + TILE_SIZE * 0.25, y + TILE_SIZE * 0.5);
+    ctx.lineTo(x + TILE_SIZE * 0.75, y + TILE_SIZE * 0.5);
+    ctx.moveTo(x + TILE_SIZE * 0.5, y + TILE_SIZE * 0.25);
+    ctx.lineTo(x + TILE_SIZE * 0.5, y + TILE_SIZE * 0.75);
+    ctx.stroke();
+    ctx.restore();
+  }
   for (const debt of state.maintenanceDebts) {
     if (!debt.exterior || debt.debt < 35) continue;
+    if (debt.key.startsWith('integrity:')) continue;
     const target = debt.targetTile ?? debt.anchorTile;
     const pos = fromIndex(target, state.width);
     const x = pos.x * TILE_SIZE;

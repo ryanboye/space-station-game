@@ -20,7 +20,7 @@ import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -255,6 +255,26 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
     s.controls.spriteMode = 'sprites';
     s.controls.showSpriteFallback = false;
+  },
+
+  // Phase 7 visual fixture: four distinct exposed hull tiles demonstrate the
+  // full integrity language without waiting through hours of natural wear.
+  // The breach uses the real pressure barrier path; this scenario only seeds
+  // durable condition and leaves the underlying wall intact.
+  'exterior-integrity-showcase': (s) => {
+    reconcileExteriorIntegrityTargets(s);
+    const distinctHullTargets = s.exteriorIntegrityTargets
+      .filter((target) => target.panel === 'hull')
+      .sort((a, b) => a.worldY - b.worldY || a.worldX - b.worldX || a.face.localeCompare(b.face))
+      .filter((target, index, targets) =>
+        targets.findIndex((candidate) => candidate.worldX === target.worldX && candidate.worldY === target.worldY) === index
+      )
+      .slice(0, 4);
+    if (distinctHullTargets[0]) setExteriorIntegrityTargetWear(s, distinctHullTargets[0].id, 20);
+    if (distinctHullTargets[1]) setExteriorIntegrityTargetWear(s, distinctHullTargets[1].id, 58);
+    if (distinctHullTargets[2]) setExteriorIntegrityTargetWear(s, distinctHullTargets[2].id, 88);
+    if (distinctHullTargets[3]) setExteriorIntegrityTargetState(s, distinctHullTargets[3].id, 'patched', 0);
+    s.controls.paused = true;
   },
 
   // Tier 1 already fired: first visitor archetype seen, T1 unlocked.

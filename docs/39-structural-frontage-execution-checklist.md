@@ -570,16 +570,16 @@ compiles is not sufficient for player-facing work.
 ### Per-Interface Diagnosis
 
 - [ ] Measure disembark throughput.
-- [ ] Identify door and Airlock choke points.
-- [ ] Identify queue spill across arrival/boarding routes.
+- [x] Identify door and Airlock choke points.
+- [x] Identify queue spill across arrival/boarding routes.
 - [ ] Measure boarding distance and duration.
 - [ ] Measure reachable service and seating capacity.
-- [ ] Identify public/cargo route intersections.
-- [ ] Measure freight staging/storage distance.
-- [ ] Measure staff access to ship hardware.
+- [x] Identify public/cargo route intersections.
+- [x] Measure freight staging/storage distance.
+- [x] Measure staff access to ship hardware.
 - [ ] Check utility and maintenance access.
-- [ ] Measure approach wait and Berth overstay.
-- [ ] Show only the most actionable diagnosis by default.
+- [x] Measure approach wait and Berth overstay.
+- [x] Show only the most actionable diagnosis by default.
 - [ ] Highlight the physical route, door, queue, or interface when selected.
 
 ### Phase 6 Gate
@@ -587,32 +587,32 @@ compiles is not sufficient for player-facing work.
 - [ ] Shared public/cargo corridor performs worse than separated routes.
 - [ ] Additional Gangway improves boarding.
 - [ ] Meal queue across an exit creates late boarding.
-- [ ] Diagnosis matches measured actor behavior.
-- [ ] No hidden percentage substitutes for physical interference.
+- [x] Diagnosis matches measured actor behavior.
+- [x] No hidden percentage substitutes for physical interference.
 
 ## Phase 7: Exposure, Integrity, And Charter Differentiation
 
 ### Exterior Integrity
 
-- [ ] Reuse seeded debris exposure and existing maintenance targets.
-- [ ] Add stable integrity identity for exterior targets.
-- [ ] Add `worn` state.
-- [ ] Add `damaged` state.
-- [ ] Add explicit thresholded `breached` state.
-- [ ] Add `repaired` restoration state.
-- [ ] Keep ordinary wear distinct from catastrophic breach.
-- [ ] Never silently reuse fire tile-deletion semantics.
-- [ ] Route integrity mutations through authoritative topology paths.
+- [x] Reuse seeded debris exposure and existing maintenance targets.
+- [x] Add stable integrity identity for exterior targets.
+- [x] Add `worn` state.
+- [x] Add `damaged` state.
+- [x] Add explicit thresholded `breached` state.
+- [x] Add `repaired` restoration state.
+- [x] Keep ordinary wear distinct from catastrophic breach.
+- [x] Never silently reuse fire tile-deletion semantics.
+- [x] Route integrity mutations through authoritative topology paths.
 
 ### EVA Repair
 
-- [ ] Generate exterior repair work from visible damage.
-- [ ] Require Airlock access.
-- [ ] Consume EVA oxygen.
-- [ ] Consume repair supplies where appropriate.
-- [ ] Block and explain unsafe/unreachable repair.
-- [ ] Restore pressure boundary correctly after breach repair.
-- [ ] Render impact, damage, welding, and patch states.
+- [x] Generate exterior repair work from visible damage.
+- [x] Require Airlock access.
+- [x] Consume EVA oxygen.
+- [x] Consume repair supplies where appropriate.
+- [x] Block and explain unsafe/unreachable repair.
+- [x] Restore pressure boundary correctly after breach repair.
+- [x] Render impact, damage, welding, and patch states.
 
 ### Charter Effects
 
@@ -627,9 +627,9 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 7 Gate
 
-- [ ] Debris-facing wing wears faster than protected comparison.
-- [ ] EVA repair visibly restores damage.
-- [ ] A true breach changes pressure and restores correctly.
+- [x] Debris-facing wing wears faster than protected comparison.
+- [x] EVA repair visibly restores damage.
+- [x] A true breach changes pressure and restores correctly.
 - [ ] Different charters make different expansion geometry attractive.
 - [ ] Risk remains forecastable and recoverable.
 
@@ -977,3 +977,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:ship-fleet`, `npm run test:approach-envelopes`, `npm run test:passenger-transfer`, `npm run test:movement-coordinator`, `npm run test:occupant-loop`, `npm run sprites:validate:v1`, `npm run build`, and `git diff --check` passed. Passenger coverage includes nonzero crossing time, single-slot exclusivity, two-Gangway arrival throughput, recall cancellation, mid-disembark and mid-boarding hydration, exactly-once settlement, and FIFO reconstruction.
 - Visual/playtest evidence: the durable hull variant is the same authored silhouette in Approach Control, holding orbit, approach, docked, and departure presentation. A live starter inspection showed each north-facing Pod Dock composed from two independent authored halves: its caution-framed pressure door remains on the traversable hull tile while the clamp occupies the exterior tile and rotates from the real wall service direction. Idle and active infrastructure states use the same directional assembly.
 - Remaining uncertainty: every ship silhouette and Pod Dock orientation still needs a single all-rotations gameplay-zoom fixture; additional-Gangway evidence currently measures disembark throughput rather than the Phase 6 gate's boarding-specific comparison; passenger transfer does not yet contend with visible cargo; and the broader port-operations runner contains stale assumptions about the current six-crew, no-market, no-fuel starter shell.
+
+2026-07-27 · Exterior integrity, EVA repair, and contextual interface diagnosis
+
+- Commit or files: `src/sim/interface-diagnosis.ts`, exterior-integrity state and simulation paths in `src/sim/types.ts`, `src/sim/sim.ts`, `src/sim/save.ts`, and `src/sim/expansion.ts`, contextual selected-interface UI in `src/main.ts`, render treatment in `src/render/render.ts`, and focused runners `tools/exterior-integrity-tests.ts` and `tools/interface-diagnosis-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:exterior-integrity`, `npm run test:interface-diagnosis`, `npm run test:ship-fleet`, `npm run test:passenger-transfer`, and `npm run test:structural-expansion` passed. Coverage proves world-stable face identity, thresholded worn/damaged/breached states, pressure loss without deleting the wall, patched pressure restoration, Airlock/oxygen/supply repair gates, exactly-once material consumption, save/load and map-expansion remapping, debris exposure with Truss mitigation, and diagnosis derived from real transfer queues and active cargo routes rather than a hidden score.
+- Visual/playtest evidence: `?scenario=exterior-integrity-showcase` seeds worn, damaged, breached, and patched targets on one paused starter hull. Damage overlays render in the world and repair workers use the existing external EVA/weld presentation. The interface card is contextual to the selected Pod Dock or Berth and returns one prioritized problem with a concrete physical coordinate and remedy.
+- Remaining uncertainty: integrity overlay readability needs tuning at Fit Station zoom; automatic wear rates need a sustained live balance pass; the current charter evidence proves debris-density weighting but not a lane-direction comparison; diagnosis does not yet highlight the implicated route or calculate explicit reachable seat counts; and physical cargo persistence remains Phase 6 work.

@@ -14,6 +14,9 @@ import {
 } from './sim';
 import {
   type DockPurpose,
+  type CardinalDirection,
+  type ExteriorIntegrityPanel,
+  type ExteriorIntegrityState,
   type BerthScreeningLevel,
   type CustomsPolicy,
   type CrewShiftTargets,
@@ -411,6 +414,17 @@ export interface StationSnapshotV1 {
       lastServicedAt: number;
       lastImpactAt?: number;
       ignitionRiskSince?: number;
+    }>;
+    exteriorIntegrityTargets?: Array<{
+      id: string;
+      panel: ExteriorIntegrityPanel;
+      worldX: number;
+      worldY: number;
+      face: CardinalDirection;
+      wear: number;
+      state: ExteriorIntegrityState;
+      lastTransitionAt: number;
+      lastImpactAt?: number;
     }>;
   };
   /** Optional for legacy v3 saves; hydration supplies a neutral default. */
@@ -1212,7 +1226,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           lastServicedAt: entry.lastServicedAt,
           lastImpactAt: entry.lastImpactAt,
           ignitionRiskSince: entry.ignitionRiskSince
-        }))
+        })),
+      exteriorIntegrityTargets: state.exteriorIntegrityTargets.map((target) => ({ ...target }))
     },
     openingEconomy: normalizeOpeningEconomyState(state.openingEconomy, []),
     serviceLog: normalizeServiceLog(state.serviceLog),
@@ -2251,6 +2266,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
 
   const maintenanceRaw = isRecord(snapshotRaw.maintenance) ? snapshotRaw.maintenance : null;
   const maintenanceDebts: NonNullable<StationSnapshotV1['maintenance']>['debts'] = [];
+  const exteriorIntegrityTargets: NonNullable<StationSnapshotV1['maintenance']>['exteriorIntegrityTargets'] = [];
   if (maintenanceRaw && Array.isArray(maintenanceRaw.debts)) {
     for (let i = 0; i < maintenanceRaw.debts.length; i++) {
       const entry = maintenanceRaw.debts[i];
@@ -2294,6 +2310,39 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
             ? Math.max(0, entry.ignitionRiskSince)
             : undefined
       });
+    }
+    if (Array.isArray(maintenanceRaw.exteriorIntegrityTargets)) {
+      const seenIntegrityIds = new Set<string>();
+      for (let i = 0; i < maintenanceRaw.exteriorIntegrityTargets.length; i++) {
+        const entry = maintenanceRaw.exteriorIntegrityTargets[i];
+        if (!isRecord(entry) || typeof entry.id !== 'string' || entry.id.length <= 0 || seenIntegrityIds.has(entry.id)) {
+          warnings.push(`maintenance.exteriorIntegrityTargets[${i}] invalid; skipped.`);
+          continue;
+        }
+        if (
+          !isOneOf(entry.panel, ['hull', 'dock', 'berth'] as const) ||
+          !isOneOf(entry.face, ['north', 'east', 'south', 'west'] as const) ||
+          !isOneOf(entry.state, ['worn', 'damaged', 'breached', 'patched'] as const)
+        ) {
+          warnings.push(`maintenance.exteriorIntegrityTargets[${i}] has invalid panel state; skipped.`);
+          continue;
+        }
+        seenIntegrityIds.add(entry.id);
+        exteriorIntegrityTargets.push({
+          id: entry.id,
+          panel: entry.panel,
+          worldX: Math.round(asFiniteNumber(entry.worldX, 0)),
+          worldY: Math.round(asFiniteNumber(entry.worldY, 0)),
+          face: entry.face,
+          wear: clamp(asFiniteNumber(entry.wear, 0), 0, 100),
+          state: entry.state,
+          lastTransitionAt: Math.max(0, asFiniteNumber(entry.lastTransitionAt, simTime)),
+          lastImpactAt:
+            typeof entry.lastImpactAt === 'number' && Number.isFinite(entry.lastImpactAt)
+              ? Math.max(0, entry.lastImpactAt)
+              : undefined
+        });
+      }
     }
   }
 
@@ -2429,7 +2478,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       nextLeakId: plumbingNextLeakId
     },
     maintenance: {
-      debts: maintenanceDebts
+      debts: maintenanceDebts,
+      exteriorIntegrityTargets
     },
     openingEconomy,
     serviceLog,
@@ -2650,6 +2700,7 @@ export function hydrateStateFromSave(
     targetTile: entry.targetTile ?? entry.anchorTile,
     exterior: entry.exterior ?? false
   }));
+  next.exteriorIntegrityTargets = (snapshot.maintenance?.exteriorIntegrityTargets ?? []).map((target) => ({ ...target }));
   const hydratedTier = normalizeUnlockTier(snapshot.unlocks.tier);
   // v1→v2 migration: pre-v2 saves used the old id strings (tier1_stability,
   // tier2_logistics, tier3_civic). Those won't match the new UNLOCK_IDS,
