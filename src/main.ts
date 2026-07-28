@@ -37,6 +37,7 @@ import {
   buyMaterialsDetailed,
   buyPreparedMealsDetailed,
   previewPreparedMealPurchase,
+  rebuildDockEntities,
   orderFuelDetailed,
   quoteTravelSuppliesOrder,
   admitTrafficOffer,
@@ -1523,6 +1524,10 @@ function applyStarterLayout(target: StationState, authored: StationState): void 
   target.dockVersion = Math.max(target.dockVersion, authored.dockVersion) + 1;
   target.mapConditionVersion = Math.max(target.mapConditionVersion, authored.mapConditionVersion) + 1;
   target.derived = authored.derived;
+  // Dock capabilities belong to the physical Pod Dock attachments in the
+  // applied layout. Rebuild them now instead of trusting metadata serialized
+  // by an older starter template (or waiting for a later simulation frame).
+  rebuildDockEntities(target);
   seedFreshStarterInventory(target, freshInventory);
   target.metrics.materials = target.legacyMaterialStock + target.itemNodes.reduce(
     (sum, node) => sum + (node.items.rawMaterial ?? 0),

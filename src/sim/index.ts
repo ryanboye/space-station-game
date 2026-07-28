@@ -17,6 +17,7 @@ export {
   buyPreparedMeals,
   buyPreparedMealsDetailed,
   previewPreparedMealPurchase,
+  rebuildDockEntities,
   buyRawFoodDetailed,
   buildStationExpansionOnTruss,
   cancelConstructionAtTile,
