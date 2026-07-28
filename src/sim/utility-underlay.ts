@@ -66,17 +66,14 @@ export function ensureUtilityUnderlay(state: StationState): UtilityUnderlayState
     maybeState.utilityUnderlay = createEmptyUtilityUnderlay(tileCount);
     return maybeState.utilityUnderlay;
   }
-  let resized = false;
-  const nextLayers: Partial<Record<UtilityUnderlayKind, Uint8Array>> = {};
-  for (const kind of UTILITY_UNDERLAY_KINDS) {
-    const layer = maybeState.utilityUnderlay.layers?.[kind];
-    if (!layer || layer.length !== tileCount) resized = true;
-    nextLayers[kind] = cloneUtilityUnderlayLayer(layer, tileCount);
-  }
+  const resized = UTILITY_UNDERLAY_KINDS.some((kind) => {
+    const layer = maybeState.utilityUnderlay?.layers?.[kind];
+    return !layer || layer.length !== tileCount;
+  });
   if (resized) {
     maybeState.utilityUnderlay = createUtilityUnderlayFromLayers(
       tileCount,
-      nextLayers,
+      maybeState.utilityUnderlay.layers,
       (maybeState.utilityUnderlay.version ?? 0) + 1
     );
   }

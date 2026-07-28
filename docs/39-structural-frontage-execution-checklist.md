@@ -177,13 +177,13 @@ audited checklist with no unsupported checked claims.
   Evidence: `mixed-berth-visit`, `tools/mixed-berth-visit-tests.ts`.
 - [ ] Add reception-bypass and reception-assisted variants.
 - [ ] Add a debris-facing exterior wing.
-- [ ] Add a scale baseline with at least 50 crew, 50 simultaneous visitors, and
+- [x] Add a scale baseline with at least 50 crew, 50 simultaneous visitors, and
   5-10 active interfaces.
 
 ### Metrics
 
 - [ ] Record real-time ship visit duration by class.
-- [ ] Record concurrent ships and occupants.
+- [x] Record concurrent ships and occupants.
 - [ ] Record holding-orbit and approach-group wait.
 - [ ] Record disembark and boarding duration.
 - [ ] Record queue length, spill length, balks, and provider utilization.
@@ -645,7 +645,7 @@ audited checklist with no unsupported checked claims.
 - [x] A second entrance measurably improves throughput.
 - [x] Head-on and cyclic traffic recovers.
 - [x] No actor remains indefinitely stuck in a stale reservation.
-- [ ] Target-scale movement remains performant.
+- [x] Target-scale movement remains performant.
 
 ## Phase 6: Physical Cargo, Boarding, And Interior Support
 
@@ -1147,7 +1147,7 @@ Remaining uncertainty:
 2026-07-28 · Meal queue blocks a real boarding throat
 
 - Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=meal-queue-boarding-conflict`), `tools/meal-queue-boarding-conflict-tests.ts`, and `package.json` (pending integration commit at evidence capture).
-- Focused evidence: `npm run test:meal-queue-boarding-conflict` passed twice. The runner admits two ordinary medium passenger manifests through production Approach Control, docks and disembarks both, then proves a stocked diner cohort holds distinct live `queue-slot:*` reservations with one actor physically on the Cafeteria Door shared with the second Berth. The return contract enters normal recall/boarding, its passenger records the queue actor as its physical blocker and accumulates transfer wait, boards fewer people than the clear-route comparison under the same deadline, increments `hardDeadlineDepartures`, and strands a passenger with origin provenance. Meal completion is accepted only when the canonical `serviceLog` has the matching meal event; the runner also repeats the seeded conflict and requires identical outcomes.
+- Focused evidence: `npm run test:meal-queue-boarding-conflict` passed twice. The runner admits two ordinary medium passenger manifests through production Approach Control, docks and disembarks both, then proves a stocked diner cohort holds distinct live queue reservations with one diner in the active meal line physically on the Cafeteria Door shared with the second Berth. The return contract enters normal recall/boarding, its passenger records the meal-line actor as its physical blocker and accumulates transfer wait, boards fewer people than the clear-route comparison under the same deadline, increments `hardDeadlineDepartures`, and strands a passenger with origin provenance. Meal completion is accepted only when the canonical `serviceLog` has the matching meal event; the runner also repeats the seeded conflict and requires identical outcomes.
 - Remaining uncertainty: this is a deterministic interaction proof rather than a polished live player showcase. The broader boarding checklist still needs a player-facing route/highlight treatment and a combined three-way door, queue, and cargo presentation.
 
 2026-07-28 · Directional charter frontage
@@ -1273,3 +1273,11 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:structural-expansion` passes. It plans a new Truss extension through the normal construction API, observes a suited worker, and waits for the real tile commission; it separately rebuilds a starter Pod Dock through physical delivery and exterior work, while retaining the contrast that an interior Table does not require EVA. A zero-stock project asserts `no construction materials` on its blocked site.
 - Live-browser evidence: `?scenario=structural-expansion-material-blocked` renders `BLOCKED · NO CONSTRUCTION MATERIALS` over the affected exterior blueprints. `?scenario=structural-truss-active` starts a normal EVA-required Truss extension from the starter scaffold, with its world blueprint and construction progress visible when panels are hidden.
 - Remaining uncertainty: the Pod Dock completion contract reduces that test site's material/work totals so the runner proves route and custody without spending minutes on balance-scale hauling. Production costs remain unchanged and need a later construction-economy pass. Low EVA oxygen and sustained work-position obstruction still need dedicated proof.
+
+2026-07-28 · Active 50/50 mixed-operation scale checkpoint
+
+- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=normal-scale-50`), active traffic and path-budget work in `src/sim/sim.ts`, utility-underlay identity reuse in `src/sim/utility-underlay.ts`, `tools/normal-scale-operation-tests.ts`, `tools/meal-queue-boarding-conflict-tests.ts`, `package.json`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:normal-scale-operation` starts with exactly 50 crew, 50 visitors, eight Pod Docks, two Berths, and 40 units of free physical storage. During 240 simulated seconds it completes inspection and both physical inbound lots (six raw materials plus four trade goods), serves seven meals, overlaps Pod and Berth traffic, records 61 peak visitors and five simultaneous ships, keeps at least 9.5 power in reserve, and drains a queue that peaks at 15 to zero. Simulation p95 is 8.771 ms, path-call p95 is 27, and the utility-underlay resize/identity regression passes. `npm run perf:target-scale` remains deterministic at roughly 8.3 ms p95 with 50 crew, 50 visitors, and ten interfaces. `npm run test:physical-cargo`, `npm run test:mixed-berth-visit`, `npm run test:movement-coordinator`, `npm run test:meal-queue-boarding-conflict`, `npm run test:queue-spill`, and `npm run build` pass.
+- Live-browser evidence: inspected `?scenario=normal-scale-50&diag=1&seed=915502` at Fit Station zoom and 4x. The station remained legible with two reactor cells, the observatory solar field, eight legal Pod Docks, both Berths, and dense crew/visitor traffic. The guaranteed mixed call progressed from zero to four to all ten inbound units unloaded and reached `OPEN`; observed occupancy moved from 73 to 63 to 51 visitors while departures recovered to four per minute, without a persistent exit-backup warning at cargo completion.
+- Design and correctness notes: the scenario now seeds near-full physical storage after demo migration instead of relying on the obsolete full legacy stock scalar; the cafeteria is explicitly self-service rather than parking cooks at counters; dock access requires a legal station-interior route; traffic job assignment uses a bounded rotating candidate budget; idle job boards refresh on cadence; and already correctly sized utility-underlay arrays retain identity until a map resize requires rebuilding them.
+- Remaining uncertainty: this authored active fixture is not the required organic start-to-large-station playthrough. The browser observation did not archive raw renderer/rAF sample distributions, and the guaranteed mixed call was observed through cargo completion rather than final passenger settlement. Gate E and Gate F integration review and the final opening-to-large-station report remain open.

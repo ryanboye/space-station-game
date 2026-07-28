@@ -885,6 +885,8 @@ const MAX_USERS_PER_USAGE_TILE = 1;
 const MAX_PENDING_FOOD_JOBS = 10;
 const PATH_TARGET_SHORTLIST_SIZE = 4;
 const JOB_ASSIGNMENT_SHORTLIST_SIZE = 6;
+const JOB_ASSIGNMENT_PATH_BUDGET = 30;
+const JOB_ASSIGNMENT_LANE_PATH_BUDGET = 6;
 export const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
 const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const JOB_BOARD_CADENCE_SEC = 0.35;
@@ -5127,9 +5129,10 @@ function computeCriticalCapacityTargets(state: StationState): CriticalCapacityTa
     requiredKitchenPosts: foodPressure && configuredFoodFloor > 0
       ? Math.min(1, dutyAnchorsForSystem(state, 'kitchen').length)
       : 0,
-    requiredCafeteriaPosts: foodPressure && configuredFoodFloor > 0
-      ? Math.min(1, dutyAnchorsForSystem(state, 'cafeteria').length)
-      : 0
+    // Stocked meal counters are self-service. Food staff create and deliver
+    // meals and recover trays; parking one at the customer pickup face only
+    // obstructs the physical line.
+    requiredCafeteriaPosts: 0
   };
 }
 
@@ -5685,6 +5688,10 @@ export function validateDockPlacementAt(state: StationState, tileIndex: number, 
   }
   if (!dockFacingOutward(state, tileIndex, facing)) {
     return { valid: false, reason: 'dock facing is not outward', approachTiles: [] };
+  }
+  const accessTile = laneNeighbor(state, tileIndex, oppositeLane(facing));
+  if (accessTile === null || !isWalkable(state.tiles[accessTile])) {
+    return { valid: false, reason: 'dock needs a station interior access tile', approachTiles: [] };
   }
   const p = fromIndex(tileIndex, state.width);
   const step = laneStep(facing);
@@ -15030,6 +15037,7 @@ function canYieldMovementTile(state: StationState, kind: MovementActorKind, acto
     !visitor.carryingDrink &&
     (visitor.state === VisitorState.ToCafeteria ||
       visitor.state === VisitorState.ToLeisure ||
+      visitor.state === VisitorState.Leisure ||
       visitor.state === VisitorState.ToDock)
   );
 }
@@ -17186,7 +17194,11 @@ function dispatchTransportJobs(
     if (pathLenCache.has(key)) return pathLenCache.get(key) ?? null;
     // This only verifies permanent station connectivity. The assigned crew
     // handles transient actor occupancy when they execute the job.
-    const path = findPath(state, from, to, { allowRestricted: false, intent: 'logistics' });
+    // Transport crews are authorized to use staff-only logistics, storage,
+    // kitchen, and workshop routes. Validating those same routes as a public
+    // actor made every restricted pair look permanently disconnected, so the
+    // dispatcher retried hundreds of doomed A* probes on each board refresh.
+    const path = findPath(state, from, to, { allowRestricted: true, intent: 'logistics' });
     const len = path ? path.length : null;
     pathLenCache.set(key, len);
     return len;
@@ -18376,6 +18388,9 @@ function releaseCrewJobForCommandDuty(state: StationState, crew: CrewMember): vo
 }
 
 function assignJobsToIdleCrew(state: StationState): void {
+  const assignmentPathCallsStarted = state.metrics.pathCallsPerTick;
+  const hasAssignmentPathBudget = (): boolean =>
+    state.metrics.pathCallsPerTick - assignmentPathCallsStarted < JOB_ASSIGNMENT_PATH_BUDGET;
   const pendingJobs = state.jobs.filter((j) => j.state === 'pending');
   const openJobs = state.jobs.filter((j) => j.state === 'pending' || j.state === 'assigned' || j.state === 'in_progress');
   const nonRestingCrew = state.crewMembers.filter((c) => !c.resting);
@@ -18528,6 +18543,10 @@ function assignJobsToIdleCrew(state: StationState): void {
         criticalAirEmergency
     )
     .sort((a, b) => a.id - b.id);
+  const assignmentRound = Math.floor(state.now / JOB_BOARD_CADENCE_SEC);
+  const rotation = candidates.length > 0 ? assignmentRound % candidates.length : 0;
+  const rotatedCandidates = [...candidates.slice(rotation), ...candidates.slice(0, rotation)];
+  const candidateOrder = new Map(rotatedCandidates.map((crew, index) => [crew.id, index]));
 
   const lanePriority = [...SPECIALIST_WORK_LANES].sort((a, b) => {
     const ap = pendingByLane[a].pending / Math.max(1, targets[a]);
@@ -18544,6 +18563,9 @@ function assignJobsToIdleCrew(state: StationState): void {
 
   const dispatchLane = (lane: CrewWorkLane, maxAssignments: number, allowFallback: boolean): number => {
     let dispatched = 0;
+    const lanePathCallsStarted = state.metrics.pathCallsPerTick;
+    const hasLanePathBudget = (): boolean =>
+      state.metrics.pathCallsPerTick - lanePathCallsStarted < JOB_ASSIGNMENT_LANE_PATH_BUDGET;
     const candidatesForLane = [...candidates].sort((a, b) => {
       const aHomeLane = staffRoleWorkLane(a.staffRole);
       const bHomeLane = staffRoleWorkLane(b.staffRole);
@@ -18558,10 +18580,11 @@ function assignJobsToIdleCrew(state: StationState): void {
         (b.workLane === 'flex' ? 120 : 0) +
         (staffRoleAllowsFallback(b.staffRole) ? 20 : 0);
       if (aRank !== bRank) return bRank - aRank;
-      return a.id - b.id;
+      return (candidateOrder.get(a.id) ?? 0) - (candidateOrder.get(b.id) ?? 0);
     });
     for (const crew of candidatesForLane) {
       if (dispatched >= maxAssignments) break;
+      if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
       if (crew.activeJobId !== null) continue;
       const ownLane = crew.workLane === lane;
       const flex = crew.workLane === 'flex';
@@ -18575,7 +18598,6 @@ function assignJobsToIdleCrew(state: StationState): void {
       const crewNeedsFoodOverride = hasProtectedSelfCare(crew) && canInterruptSelfCareForFood(crew);
       let bestJob: (typeof pendingJobs)[number] | null = null;
       let bestPath: number[] | null = null;
-      let bestScore = Number.NEGATIVE_INFINITY;
       const rankedJobs: Array<{
         job: (typeof pendingJobs)[number];
         site: StationState['constructionSites'][number] | null;
@@ -18616,6 +18638,7 @@ function assignJobsToIdleCrew(state: StationState): void {
 
       rankedJobs.sort((a, b) => b.approximateScore - a.approximateScore || a.job.id - b.job.id);
       for (const { job, site } of rankedJobs.slice(0, JOB_ASSIGNMENT_SHORTLIST_SIZE)) {
+        if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
         let path =
           job.type === 'construct' && site
             ? job.constructionMode === 'build'
@@ -18631,6 +18654,7 @@ function assignJobsToIdleCrew(state: StationState): void {
                   state.pathOccupancyByTile
                 );
         if (!path && (ownLane || staffRoleWorkLane(crew.staffRole) === lane)) {
+          if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
           path =
             job.type === 'construct' && site
               ? job.constructionMode === 'build'
@@ -18648,17 +18672,15 @@ function assignJobsToIdleCrew(state: StationState): void {
           }
           continue;
         }
-        const age = Math.max(0, state.now - job.createdAt);
-        const laneBonus = ownLane ? 45 : flex ? 18 : emergencyBorrow ? -8 : -24;
-        const suitability = crewSuitabilityForJob(crew, job);
-        const needsPenalty = (100 - crew.energy) * 0.08 + (100 - crew.hygiene) * 0.04;
-        const workplaceBonus = homeWorkplaceMatchesTarget(state, crew, jobWorkTile(state, job)) ? 32 : 0;
-        const score = logisticsJobPriority(state, job) * 100 + laneBonus + suitability + workplaceBonus + Math.min(30, age / 6) - path.length - needsPenalty;
-        if (score > bestScore) {
-          bestScore = score;
-          bestJob = job;
-          bestPath = path;
-        }
+        // Priority, suitability, workplace affinity, age, needs, and an
+        // estimated distance already establish this deterministic order.
+        // Resolve only until the highest-ranked reachable job is found;
+        // comparing six full A* routes for every idle crew member made the
+        // 50-person job board dominate the fixed-step budget without changing
+        // the work that ultimately gets performed.
+        bestJob = job;
+        bestPath = path;
+        break;
       }
       if (!bestJob || !bestPath) continue;
       if (!ownLane && !flex) borrowedNow += 1;
@@ -18671,6 +18693,7 @@ function assignJobsToIdleCrew(state: StationState): void {
   };
 
   for (const lane of lanePriority) {
+    if (!hasAssignmentPathBudget()) break;
     const slots = Math.max(0, targets[lane] - laneActive[lane]);
     if (slots > 0) dispatchLane(lane, slots, false);
   }
@@ -18683,6 +18706,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     fallbackBudget;
   let flexRemaining = flexBudget;
   for (const lane of lanePriority) {
+    if (!hasAssignmentPathBudget()) break;
     if (lane === 'food' || lane === 'logistics') continue;
     if (flexRemaining <= 0) break;
     const before = assignedNow;
@@ -19127,18 +19151,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
   const mealSeatTargets = collectCafeteriaTableTargets(state);
   const leisureTargets = crewLeisureTargets(state);
   const quarters = buildCrewQuartersSnapshot(state, dormTargets);
-  const passengerServiceNeeded =
-    state.portOps.contracts.some((contract) => {
-      if (contract.status !== 'accepted' && contract.status !== 'active') return false;
-      const mealPromise = contract.promises.find((promise) => promise.kind === 'passengers-served');
-      return !!mealPromise && mealPromise.completed + 0.01 < mealPromise.target;
-    }) ||
-    state.visitors.some(
-      (visitor) =>
-        !visitor.servedMeal &&
-        (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing)
-    );
-  const cafeteriaCrewPosts = dutyAnchorsForSystem(state, 'cafeteria');
   const marketCheckoutPosts = dutyAnchorsForSystem(state, 'market');
   const marketHasStockToSell = enhancedMarketSlots(state, 'browse').some(
     (slot) => itemStockAtNode(state, slot.moduleOriginTile, 'tradeGood') >= 0.95
@@ -19842,10 +19854,13 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         const customsTile = turnaround.customsTile;
         if (crew.tileIndex !== customsTile) {
           if (crew.path.length === 0) {
+            const pathOptions = { allowRestricted: true, intent: 'logistics' as const };
             setCrewPath(
               state,
               crew,
-              findPath(state, crew.tileIndex, customsTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+              findPath(state, crew.tileIndex, customsTile, pathOptions, state.pathOccupancyByTile) ??
+                findPath(state, crew.tileIndex, customsTile, pathOptions) ??
+                []
             );
           }
           const moveResult = moveCrew(crew);
@@ -19854,7 +19869,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             markJobStall(state, job, 'none');
           } else if (moveResult === 'blocked') {
             markJobStall(state, job, 'stalled_path_blocked');
-            setCrewPath(state, crew, []);
           }
         } else {
           job.state = 'in_progress';
@@ -20489,10 +20503,13 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
           }
         } else {
           if (crew.path.length === 0) {
+            const pathOptions = { allowRestricted: true, intent: 'logistics' as const };
             setCrewPath(
               state,
               crew,
-              findPath(state, crew.tileIndex, targetTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+              findPath(state, crew.tileIndex, targetTile, pathOptions, state.pathOccupancyByTile) ??
+                findPath(state, crew.tileIndex, targetTile, pathOptions) ??
+                []
             );
             if (crew.path.length === 0) {
               markJobStall(
@@ -20512,10 +20529,13 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
             markJobStall(state, job, 'stalled_path_blocked');
             if (crew.path.length === 0 || state.now - job.lastProgressAt > 2) {
+              const pathOptions = { allowRestricted: true, intent: 'logistics' as const };
               setCrewPath(
                 state,
                 crew,
-                findPath(state, crew.tileIndex, targetTile, { allowRestricted: true, intent: 'logistics' }, state.pathOccupancyByTile) ?? []
+                findPath(state, crew.tileIndex, targetTile, pathOptions, state.pathOccupancyByTile) ??
+                  findPath(state, crew.tileIndex, targetTile, pathOptions) ??
+                  []
               );
             }
           }
@@ -20556,25 +20576,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       if (crew.assignedSystem !== 'market' || crew.targetTile !== post) {
         crew.assignedSystem = 'market';
         crew.lastSystem = 'market';
-        crew.role = 'cafeteria';
-        crew.targetTile = post;
-        setCrewPath(state, crew, []);
-      }
-    } else if (
-      crew.activeJobId === null &&
-      !crew.resting &&
-      !crew.cleaning &&
-      !crew.toileting &&
-      !crew.drinking &&
-      !crew.leisure &&
-      crew.workLane === 'food' &&
-      passengerServiceNeeded &&
-      cafeteriaCrewPosts.length > 0
-    ) {
-      const post = cafeteriaCrewPosts[crew.id % cafeteriaCrewPosts.length];
-      if (crew.assignedSystem !== 'cafeteria' || crew.targetTile !== post) {
-        crew.assignedSystem = 'cafeteria';
-        crew.lastSystem = 'cafeteria';
         crew.role = 'cafeteria';
         crew.targetTile = post;
         setCrewPath(state, crew, []);
@@ -24734,8 +24735,17 @@ function computeMetrics(state: StationState): void {
   // Departures are backing up: visitors piling with no exit in ~3 cycles.
   // Correct feedback for a too-far berth or a broken exit route, and it clears
   // itself the moment the loop starts flowing again.
+  const visitorsExpectedToExit = state.visitors.filter(
+    (visitor) => visitor.originShipId !== null || visitor.strandedFromShipId !== null
+  );
+  const oldestActiveVisitorAge = visitorsExpectedToExit.reduce(
+    (oldest, visitor) => Math.max(oldest, state.now - visitor.spawnedAt),
+    0
+  );
   state.metrics.visitorExitStalled =
-    state.visitors.length >= 10 && !state.recentExitTimes.some((t) => state.now - t <= 45);
+    visitorsExpectedToExit.length >= 10 &&
+    oldestActiveVisitorAge >= 45 &&
+    !state.recentExitTimes.some((t) => state.now - t <= 45);
   const openIncidents = state.incidents.filter((incident) => isIncidentActive(incident)).length;
   const resolvedIncidents = state.usageTotals.securityResolved;
   const failedIncidents = state.usageTotals.incidentsFailed;
@@ -27386,8 +27396,11 @@ export function tick(state: StationState, frameDt: number): void {
   cadence.nextResidentMoveInAt = residentMoveInCadence.nextAt;
   const thermalDriftCadence = consumeCadence(state.now, cadence.nextThermalDriftAt, THERMAL_DRIFT_CADENCE_SEC);
   cadence.nextThermalDriftAt = thermalDriftCadence.nextAt;
-  const hasLiveJobs = state.jobs.some((job) => job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress');
-  const refreshJobBoard = jobBoardCadence.due || frameDt <= 0 || !hasLiveJobs;
+  // An empty board is not an emergency. Re-running every producer until one
+  // invents work made an idle 50-crew station perform 120+ full path probes on
+  // every simulation tick. The 350ms cadence is already short enough for
+  // newly available work to feel immediate, while keeping idle shifts cheap.
+  const refreshJobBoard = jobBoardCadence.due || frameDt <= 0;
   finishPhase('setup');
 
   updateTrafficArrivalSchedule(state);
@@ -27403,6 +27416,8 @@ export function tick(state: StationState, frameDt: number): void {
   applyResidentTaxes(state);
   if (materialImportCadence.due) updateMaterialAutoImport(state);
   if (refreshJobBoard) {
+    const jobProductionStarted = perfNowMs();
+    const jobProductionPathCallsStarted = state.metrics.pathCallsPerTick;
     createFoodTransportJobs(state);
     createKitchenPrepJobs(state);
     createKitchenCookJobs(state);
@@ -27414,7 +27429,13 @@ export function tick(state: StationState, frameDt: number): void {
     createPortFuelTransportJobs(state);
     createConstructionJobs(state);
     createSanitationJobs(state);
+    phaseMs.trafficJobProduction = perfNowMs() - jobProductionStarted;
+    phasePathCalls.trafficJobProduction = state.metrics.pathCallsPerTick - jobProductionPathCallsStarted;
+    const jobAssignmentStarted = perfNowMs();
+    const jobAssignmentPathCallsStarted = state.metrics.pathCallsPerTick;
     assignJobsToIdleCrew(state);
+    phaseMs.trafficJobAssignment = perfNowMs() - jobAssignmentStarted;
+    phasePathCalls.trafficJobAssignment = state.metrics.pathCallsPerTick - jobAssignmentPathCallsStarted;
   }
   requeueStalledJobs(state);
   expireJobs(state);

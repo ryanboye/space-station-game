@@ -111,6 +111,21 @@ function queueReservationsFor(state: StationState, shipId: number): Array<{ visi
     }));
 }
 
+function visitorOwnsLiveMealLineReservation(state: StationState, visitor: Visitor): boolean {
+  return state.reservations.some((reservation) => {
+    if (reservation.releaseReason !== null || reservation.ownerKind !== 'visitor' || reservation.ownerId !== visitor.id) {
+      return false;
+    }
+    if (visitor.state === VisitorState.Queueing && visitor.queueProviderTile !== null) {
+      return reservation.targetId?.startsWith('queue-slot:') ?? false;
+    }
+    if (visitor.state === VisitorState.ToCafeteria && visitor.reservedServingTile !== null) {
+      return reservation.targetId === `meal-pickup:${visitor.reservedServingTile}`;
+    }
+    return false;
+  });
+}
+
 function sharedThroat(state: StationState): number {
   const candidates: number[] = [];
   for (let tile = 0; tile < state.tiles.length; tile += 1) {
@@ -178,18 +193,15 @@ function runConflict(seed: number, withDiningShip: boolean): RunOutcome {
       'dining ship physical disembark and real queue spilling through shared throat',
       () => {
         const reservations = queueReservationsFor(state, dinerOffer);
-        const queuedDinerAtThroat = state.visitors.find((visitor) =>
+        const mealLineDinerAtThroat = state.visitors.find((visitor) =>
           visitor.originShipId === dinerOffer &&
-          visitor.state === VisitorState.Queueing &&
-          visitor.queueProviderTile !== null &&
-          visitor.tileIndex === throat
+          visitor.tileIndex === throat &&
+          visitorOwnsLiveMealLineReservation(state, visitor)
         );
-        const ownsLiveQueueSlot = queuedDinerAtThroat !== undefined &&
-          reservations.some((entry) => entry.visitor.id === queuedDinerAtThroat.id);
         const ready = diner!.passengersSpawned >= 10 &&
           reservations.length >= 3 &&
           new Set(reservations.map((entry) => entry.tile)).size === reservations.length &&
-          ownsLiveQueueSlot;
+          mealLineDinerAtThroat !== undefined;
         if (ready) {
           queueCountAtThroat = reservations.length;
           queuedDinerOccupiedThroat = true;
@@ -213,16 +225,27 @@ function runConflict(seed: number, withDiningShip: boolean): RunOutcome {
     tick(state, STEP);
     const activeReturn = state.arrivingShips.find((candidate) => candidate.id === returnOffer);
     sawRecallOrBoarding ||= activeReturn?.visitPhase === 'recall' || activeReturn?.visitPhase === 'boarding';
-    const dinerQueueActors = new Set(queueReservationsFor(state, dinerOffer).map((entry) => entry.visitor.id));
+    const dinerMealLineActors = new Set(
+      visitorsFor(state, dinerOffer)
+        .filter((visitor) => visitorOwnsLiveMealLineReservation(state, visitor))
+        .map((visitor) => visitor.id)
+    );
     transferBlocked ||= visitorsFor(state, returnOffer).some((visitor) =>
       visitor.transferBlockedTile === throat &&
       visitor.movementWaitReason !== undefined &&
       state.visitors.some((candidate) =>
         candidate.tileIndex === throat &&
-        candidate.state === VisitorState.Queueing &&
-        candidate.queueProviderTile !== null &&
-        dinerQueueActors.has(candidate.id)
+        dinerMealLineActors.has(candidate.id)
       )
+    );
+  }
+
+  if (withDiningShip) {
+    waitFor(
+      state,
+      'canonical meal service after the shared throat clears',
+      () => state.serviceLog.recent.some((event) => event.service === 'meal' && event.shipId === dinerOffer),
+      30
     );
   }
 
@@ -243,7 +266,7 @@ function runConflict(seed: number, withDiningShip: boolean): RunOutcome {
   if (withDiningShip) {
     assert(diner !== null && diner.passengersSpawned >= 10, `diner did not physically disembark a substantial cohort. ${diagnostics(state)}`);
     assert(outcome.queueCount >= 3, `diner queue never established three live queue slots. ${diagnostics(state)}`);
-    assert(outcome.throatOccupied, `no queued diner holding a live queue reservation physically occupied the throat. ${diagnostics(state)}`);
+    assert(outcome.throatOccupied, `no diner holding a live meal-line reservation physically occupied the throat. ${diagnostics(state)}`);
     assert(sawRecallOrBoarding, `return ship never entered production recall/boarding. ${diagnostics(state)}`);
     assert(outcome.transferBlocked, `returning passenger never recorded production blockage at the diner throat. ${diagnostics(state)}`);
     assert(outcome.transferWaitSeconds > 0, `passenger transfer wait telemetry did not increase. ${diagnostics(state)}`);

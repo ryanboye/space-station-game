@@ -37,6 +37,7 @@
     "test:mixed-berth-visit": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/mixed-berth-visit-tests.js",
     "test:meal-queue-boarding-conflict": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/meal-queue-boarding-conflict-tests.js",
     "test:phase9-save": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/phase9-save-migration-tests.js",
+    "test:normal-scale-operation": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-operation-tests.js",
     "test:harness": "playwright test",
     "test:harness:update-snapshots": "playwright test --update-snapshots",
     "perf:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-perf.js",

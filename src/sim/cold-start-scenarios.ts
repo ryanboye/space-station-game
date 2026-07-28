@@ -22,7 +22,7 @@ import { createVisitorNeeds } from './occupant-demand';
 import { findPath } from './path';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits } from './sim';
+import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -1127,6 +1127,125 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = false;
   },
 
+  // A player-visible counterpart to the deterministic target-scale runner.
+  // It deliberately uses real rooms, modules, roles, needs, and interfaces so
+  // frame pacing and operational failures can be judged in the live client.
+  'normal-scale-50': (s) => {
+    unlockThrough(s, 3);
+    completeSpecialtyForScenario(s, 'sanitation-program');
+    completeSpecialtyForScenario(s, 'security-command');
+    completeSpecialtyForScenario(s, 'mechanical-maintenance');
+    applyDemoStationOverlay(s);
+    installScalePowerReserve(s);
+    tick(s, 0);
+    installScaleDockInterfaces(s, 8);
+    // Add the live receiving face after legacy demo inventory has migrated so
+    // the pallet remains available to the guaranteed mixed call.
+    placeMod(s, 64, 34, ModuleType.IntakePallet);
+    tick(s, 0);
+    seedScaleStorageReserve(s, 40);
+
+    const counts = createEmptyStaffRoleCounts();
+    counts.captain = 1;
+    counts.cook = 6;
+    counts.steward = 6;
+    counts['cargo-handler'] = 12;
+    counts.cleaner = 5;
+    counts.janitor = 3;
+    counts.botanist = 3;
+    counts.technician = 4;
+    counts.engineer = 4;
+    counts['security-guard'] = 3;
+    counts.assistant = 3;
+    s.crew.roleCounts = counts;
+    s.crew.total = totalStaffCount(counts);
+    s.crew.free = s.crew.total;
+    s.crew.assigned = 0;
+    s.command.officers.captain = true;
+    tick(s, 0);
+    for (const crew of s.crewMembers) {
+      crew.energy = 100;
+      crew.hunger = 100;
+      crew.hygiene = 100;
+      crew.bladder = 100;
+      crew.thirst = 100;
+      crew.morale = 100;
+      crew.missedPayrollCycles = 0;
+      crew.needsStrainSec = 0;
+      crew.resignationNoticeAt = null;
+      crew.airExposureSec = 0;
+      crew.healthState = 'healthy';
+    }
+    // Keep a small receiving watch physically near the Berths. The rest of
+    // the twelve-person logistics pool still follows ordinary shift and job
+    // assignment rules, but the scale proof must not depend on whether every
+    // qualified handler begins at the far end of the 70-tile deck.
+    const receivingWatch = s.crewMembers
+      .filter((crew) => crew.staffRole === 'cargo-handler')
+      .sort((left, right) => left.id - right.id)
+      .slice(0, 4);
+    for (let index = 0; index < receivingWatch.length; index += 1) {
+      const crew = receivingWatch[index]!;
+      const tile = 40 * s.width + 52 + index;
+      crew.shiftBucket = 0;
+      crew.tileIndex = tile;
+      crew.x = (tile % s.width) + 0.5;
+      crew.y = Math.floor(tile / s.width) + 0.5;
+      crew.targetTile = null;
+      crew.path = [];
+      crew.activeJobId = null;
+    }
+
+    const publicFloors = s.tiles
+      .map((tile, index) => ({ tile, index }))
+      .filter(
+        ({ tile, index }) =>
+          tile === TileType.Floor &&
+          s.zones[index] === ZoneType.Public &&
+          s.moduleOccupancyByTile[index] === null &&
+          s.rooms[index] !== RoomType.None &&
+          s.rooms[index] !== RoomType.Berth
+      )
+      .map(({ index }) => index);
+    if (publicFloors.length === 0) throw new Error('Normal-scale fixture needs public floor tiles.');
+    s.visitors = Array.from({ length: 50 }, (_, index) =>
+      createScaleVisitor(s, 950_000 + index, publicFloors[(index * 17) % publicFloors.length]!, index)
+    );
+    seedItemNodeStock(s, 7, 22, 'tradeGood', 32);
+    seedItemNodeStock(s, 10, 22, 'tradeGood', 32);
+    s.metrics.credits = 20_000;
+    s.controls.shipsPerCycle = 6;
+    s.controls.manualTrafficAdmission = false;
+    s.controls.portAutoAdmitEnabled = true;
+    // Keep ordinary small-craft traffic, but guarantee that the benchmark
+    // also exercises a real medium Berth, cargo custody, passenger transfer,
+    // and overlapping approach pressure instead of being eight idle doors.
+    const mixedOffer = mixedBerthShowcaseOffer(s);
+    // The compact demo Berths accept a medium shuttle but do not have the
+    // four-tile exterior service clearance required by the repair-tender hull.
+    // Keep the mixed cargo/passenger contract while using compatible geometry.
+    mixedOffer.hullVariant = 'passenger-shuttle';
+    mixedOffer.shipName = 'Longwatch Cargo Shuttle';
+    // This scale proof isolates the interaction under test: one passenger
+    // meal cohort sharing the deck with inbound freight. The broader mixed
+    // visit fixture already covers the 14-unit manifest, drinks, leisure,
+    // hygiene, comfort, and outbound loading. Repeating every promise here
+    // made the benchmark call fail for unrelated reasons before the loaded
+    // cafeteria could recover.
+    mixedOffer.hospitalityDemand = { meal: 5, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 };
+    mixedOffer.inboundCargo = { rawMaterial: 6, rawMeal: 0, tradeGood: 4 };
+    mixedOffer.outboundRequest = { rawMaterial: 0, meal: 0, tradeGood: 0 };
+    mixedOffer.requestedServices = ['cafeteria'];
+    mixedOffer.berthTimeSec = 480;
+    s.trafficOffers.push(mixedOffer);
+    const admitted = admitTrafficOffer(s, mixedOffer.id);
+    if (!admitted.ok) {
+      throw new Error(`Normal-scale fixture could not admit its mixed call: ${admitted.reason ?? 'unknown'}`);
+    }
+    s.controls.paused = true;
+    s.controls.simSpeed = 1;
+  },
+
   // Commercial-unit prototype: a mature station with one large vacant shell
   // ready for the player to solicit and compare tenant proposals.
   'commercial-units': (s) => {
@@ -1726,6 +1845,168 @@ function addFailureShowcaseVisitor(
   state.visitors.push(visitor);
 }
 
+function createScaleVisitor(
+  state: StationState,
+  id: number,
+  tileIndex: number,
+  ordinal: number
+): Visitor {
+  const needs = createVisitorNeeds(id);
+  const seekingMeal = ordinal % 3 === 0;
+  const seekingHygiene = ordinal % 5 === 0;
+  const seekingLeisure = !seekingMeal && !seekingHygiene;
+  needs.hunger = seekingMeal ? 18 : 88;
+  needs.hygiene = seekingHygiene ? 22 : 90;
+  needs.energy = 88;
+  needs.active = seekingMeal ? 'hunger' : seekingHygiene ? 'hygiene' : null;
+  needs.unmetSince = needs.active ? state.now : null;
+  const activeService: Visitor['activeService'] = seekingMeal ? 'meal' : seekingHygiene ? 'hygiene' : null;
+  const servicePlan: Visitor['servicePlan'] = activeService ? [activeService] : seekingLeisure ? ['leisure'] : [];
+  return {
+    id,
+    name: `Scale Visitor ${ordinal + 1}`,
+    trait: ordinal % 4 === 0 ? 'impatient' : ordinal % 3 === 0 ? 'social' : 'patient',
+    x: (tileIndex % state.width) + 0.5,
+    y: Math.floor(tileIndex / state.width) + 0.5,
+    tileIndex,
+    state: seekingMeal ? VisitorState.ToCafeteria : VisitorState.Leisure,
+    path: [],
+    speed: 2,
+    patience: 0,
+    eatTimer: seekingMeal ? 0 : 1_000_000,
+    trespassed: false,
+    servedMeal: !seekingMeal,
+    carryingMeal: false,
+    carryingDrink: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: seekingMeal ? 'diner' : seekingHygiene ? 'lounger' : 'shopper',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: seekingMeal ? 'cafeteria' : seekingHygiene ? 'lounge' : 'market',
+    spawnedAt: state.now,
+    originShipId: null,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    hygieneStopUsed: false,
+    leisureLegsRemaining: seekingLeisure ? 2 : 0,
+    leisureLegsPlanned: seekingLeisure ? 2 : 0,
+    lastLeisureKind: null,
+    servicePlan,
+    completedServices: [],
+    activeService,
+    optionalDrinkActive: ordinal % 7 === 0,
+    repeatDrinksServed: 0,
+    queueProviderTile: null,
+    queueJoinedAt: null,
+    transferPhase: 'station',
+    transferSlotKey: null,
+    transferQueuedAt: null,
+    transferQueueTile: null,
+    transferAccessTile: null,
+    transferStationTile: null,
+    transferCrossingStartedAt: null,
+    transferBlockedTile: null,
+    serviceBlockedSince: null,
+    activeIncidentId: null,
+    stayClass: 'extended',
+    needs,
+    recurringNeedActive: null,
+    marketTradeGoodSourceTile: null,
+    temporarySleepTargetTile: null,
+    serviceFailureStage: 'none',
+    failureSince: null,
+    failureNeed: null,
+    strandedFromShipId: null,
+    strandedAt: null,
+    reliefEligibleAt: null
+  };
+}
+
+function installScaleDockInterfaces(state: StationState, target: number): void {
+  tick(state, 0);
+  const placed = state.docks.map((dock) => dock.anchorTile);
+  const farEnough = (candidate: number): boolean => {
+    const x = candidate % state.width;
+    const y = Math.floor(candidate / state.width);
+    return placed.every((other) => {
+      const otherX = other % state.width;
+      const otherY = Math.floor(other / state.width);
+      return Math.abs(x - otherX) + Math.abs(y - otherY) >= 4;
+    });
+  };
+  for (let y = 0; y < state.height && state.docks.length < target; y++) {
+    for (let x = 0; x < state.width && state.docks.length < target; x++) {
+      const tile = y * state.width + x;
+      if (state.tiles[tile] === TileType.Space || state.tiles[tile] === TileType.Dock) continue;
+      if (!farEnough(tile) || !validateDockPlacement(state, tile).valid) continue;
+      setTile(state, tile, TileType.Dock);
+      tick(state, 0);
+      const dock = state.docks.find((candidate) => candidate.anchorTile === tile);
+      if (dock) placed.push(tile);
+    }
+  }
+  if (state.docks.length < target) {
+    throw new Error(`Normal-scale fixture could place only ${state.docks.length}/${target} small docks.`);
+  }
+}
+
+function installScalePowerReserve(state: StationState): void {
+  // One room cluster represents one operating plant, no matter how many cores
+  // are packed into it. Divide the demo reactor into two accessible cells so
+  // this sustained-load fixture has honest redundant generation rather than a
+  // wall of passive panels hidden inside a public observatory.
+  for (let y = 32; y <= 40; y += 1) {
+    const divider = y * state.width + 12;
+    removeModuleAtTile(state, divider);
+    setTile(state, divider, TileType.Wall);
+    setRoom(state, divider, RoomType.None);
+  }
+  const eastDoor = 31 * state.width + 13;
+  setTile(state, eastDoor, TileType.Door);
+  setRoom(state, eastDoor, RoomType.Reactor);
+  placeMod(state, 13, 37, ModuleType.ReactorCore);
+  // A compact solar reserve covers the temporary passenger load of an
+  // overlapping Pod/Berth arrival while preserving the observatory's authored
+  // telescope, bench, and clear circulation spine.
+  for (const [x, y] of [
+    [36, 22], [38, 22], [40, 22], [42, 22], [36, 24],
+    [38, 24], [40, 24], [42, 24], [36, 26], [42, 26]
+  ] as const) {
+    placeMod(state, x, y, ModuleType.SolarPanel);
+  }
+}
+
+function seedScaleStorageReserve(state: StationState, freeCapacityTarget: number): void {
+  const receivingTile = 34 * state.width + 64;
+  const physicalStorage = state.itemNodes.filter(
+    (node) => state.rooms[node.tileIndex] === RoomType.LogisticsStock || state.rooms[node.tileIndex] === RoomType.Storage
+  );
+  const freeCapacity = (node: StationState['itemNodes'][number]): number => {
+    const used = Object.values(node.items).reduce((sum, amount) => sum + (amount ?? 0), 0);
+    return Math.max(0, node.capacity - used);
+  };
+  let excessFree = physicalStorage.reduce((sum, node) => sum + freeCapacity(node), 0) - freeCapacityTarget;
+  // Fill the older, distant stores first. The receiving pallet stays available
+  // for the guaranteed inbound call, but the station as a whole begins with a
+  // finite and explicitly physical reserve rather than a legacy scalar pool.
+  for (const node of [...physicalStorage].sort((left, right) => {
+    if (left.tileIndex === receivingTile) return 1;
+    if (right.tileIndex === receivingTile) return -1;
+    return left.tileIndex - right.tileIndex;
+  })) {
+    if (excessFree <= 0) break;
+    const added = Math.min(excessFree, freeCapacity(node));
+    node.items.rawMaterial = (node.items.rawMaterial ?? 0) + added;
+    excessFree -= added;
+  }
+  if (excessFree > 0.01) {
+    throw new Error(`Normal-scale fixture could not reduce storage reserve to ${freeCapacityTarget}.`);
+  }
+}
+
 function planScenarioStructuralExpansion(state: StationState, withAirlock: boolean): void {
   let patch: number[] | null = null;
   for (let y = 1; y < state.height - 2 && patch === null; y++) {
@@ -1840,11 +2121,44 @@ function applyDemoStationOverlay(state: StationState): void {
       setRoom(state, idx, RoomType.None);
     }
   }
+  // Keep a compact receiving room beside the Berths so the healthy scale
+  // baseline does not force every inbound cart through the full public band
+  // before it can establish custody. The remaining arrival corridor still
+  // wraps south of the room and keeps passenger/cargo interaction visible.
+  paintRoom(state, 58, 32, 67, 38, RoomType.LogisticsStock, 'east');
+
+  // This fixture replaces the starter shell, so it must replace its access
+  // policy too. Leaving old zone bytes behind made visually public rooms
+  // unreachable depending on which starter tiles happened to occupy them.
+  const staffOnlyRooms = new Set<RoomType>([
+    RoomType.Dorm,
+    RoomType.Kitchen,
+    RoomType.Hydroponics,
+    RoomType.Workshop,
+    RoomType.Storage,
+    RoomType.Reactor,
+    RoomType.LifeSupport,
+    RoomType.LogisticsStock,
+    RoomType.Brig,
+    RoomType.Security
+  ]);
+  for (let index = 0; index < state.tiles.length; index++) {
+    if (state.tiles[index] !== TileType.Floor && state.tiles[index] !== TileType.Door) continue;
+    state.zones[index] = staffOnlyRooms.has(state.rooms[index]) ? ZoneType.Restricted : ZoneType.Public;
+  }
 
   // Room-specific floor variants
   for (let y = 7; y < 14; y++) for (let x = 16; x < 24; x++) {
     paintFloorTile(state, x, y, TileType.Cafeteria);
     setRoom(state, y * GRID_WIDTH + x, RoomType.Cafeteria);
+  }
+  // This is the healthy scale baseline, not the single-door comparison.
+  // Give each counter a direct public throat and a third door for diners
+  // returning trays, so crowd pressure remains physical without making one
+  // doorway the only possible answer.
+  for (const x of [17, 20, 23]) {
+    setTile(state, 14 * GRID_WIDTH + x, TileType.Door);
+    setRoom(state, 14 * GRID_WIDTH + x, RoomType.Cafeteria);
   }
   for (let y = 32; y < 41; y++) for (let x = 6; x < 15; x++) {
     paintFloorTile(state, x, y, TileType.Reactor);
@@ -1951,6 +2265,7 @@ function applyDemoStationOverlay(state: StationState): void {
   // Logistics stock
   placeMod(state, 29, 34, ModuleType.IntakePallet);
   placeMod(state, 33, 34, ModuleType.IntakePallet);
+  placeMod(state, 60, 34, ModuleType.IntakePallet);
   // Brig
   placeMod(state, 40, 34, ModuleType.CellConsole);
   placeMod(state, 43, 34, ModuleType.CellConsole);
@@ -1980,6 +2295,8 @@ function applyDemoStationOverlay(state: StationState): void {
     seedItemNodeStock(state, 19, 13, 'meal', 24) +
     seedItemNodeStock(state, 27, 8, 'meal', 12) +
     seedItemNodeStock(state, 30, 8, 'meal', 12);
+  seedItemNodeStock(state, 16, 13, 'cleanTray', 24);
+  seedItemNodeStock(state, 19, 13, 'cleanTray', 24);
   state.metrics.mealStock = seededMeals;
 
   // This fixture replaces the starter shell, so its logical spawn point and
