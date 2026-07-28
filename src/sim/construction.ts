@@ -224,7 +224,7 @@ function projectSites(state: StationState, projectId: number): ConstructionSite[
 function projectStageTargets(project: StructuralExpansionProject, stage: 'perimeter' | 'interior'): StructuralExpansionTarget[] {
   return project.targets.filter((target) =>
     stage === 'perimeter'
-      ? target.targetTile === TileType.Wall || target.targetTile === TileType.Door
+      ? target.targetTile === TileType.Wall || target.targetTile === TileType.Door || target.targetTile === TileType.Airlock
       : target.targetTile === TileType.Floor
   );
 }
@@ -283,7 +283,9 @@ function structuralSealProblem(
       .filter((target) => target.targetTile === TileType.Floor)
       .map((target) => target.tileIndex)
   );
-  const doorTargets = project.targets.filter((target) => target.targetTile === TileType.Door);
+  const doorTargets = project.targets.filter(
+    (target) => target.targetTile === TileType.Door || target.targetTile === TileType.Airlock
+  );
   const coordinate = (tile: number): string => {
     const point = fromIndex(tile, state.width);
     return `${point.x},${point.y}`;
@@ -322,13 +324,21 @@ function structuralSealProblem(
     // space/truss edges must appear in this project's perimeter targets.
     const existingTile = state.tiles[perimeterTile];
     if (!target && (isWalkable(existingTile) || existingTile === TileType.Wall || existingTile === TileType.Airlock)) continue;
-    if (!target || (target.targetTile !== TileType.Wall && target.targetTile !== TileType.Door)) {
+    if (!target || (
+      target.targetTile !== TileType.Wall &&
+      target.targetTile !== TileType.Door &&
+      target.targetTile !== TileType.Airlock
+    )) {
       return `incomplete seal at ${coordinate(perimeterTile)}`;
     }
   }
   for (const target of project.targets) {
     if (target.targetTile === TileType.Floor) continue;
-    if (target.targetTile !== TileType.Wall && target.targetTile !== TileType.Door) {
+    if (
+      target.targetTile !== TileType.Wall &&
+      target.targetTile !== TileType.Door &&
+      target.targetTile !== TileType.Airlock
+    ) {
       return `incomplete seal at ${coordinate(target.tileIndex)}`;
     }
   }
@@ -370,15 +380,16 @@ export function createStructuralExpansionProject(
   state: StationState,
   geometry: StructuralExpansionGeometry
 ): StructuralExpansionProject {
+  const derivedGeometry = deriveStructuralTieInWork(state, geometry);
   const project: StructuralExpansionProject = {
     id: state.structuralExpansionProjectSpawnCounter++,
-    bounds: { ...geometry.bounds },
-    doorTile: geometry.doorTile,
-    targets: geometry.targets.map((target) => ({ ...target })),
+    bounds: { ...derivedGeometry.bounds },
+    doorTile: derivedGeometry.doorTile,
+    targets: derivedGeometry.targets.map((target) => ({ ...target })),
     phase: 'perimeter',
     childSiteIds: [],
     completedSiteIds: [],
-    requiredMaterials: geometry.requiredMaterials,
+    requiredMaterials: derivedGeometry.requiredMaterials,
     deliveredMaterials: 0,
     refundedMaterials: 0,
     blockedReason: null,
@@ -390,6 +401,52 @@ export function createStructuralExpansionProject(
   state.structuralExpansionProjects.push(project);
   enqueueStructuralStage(state, project, 'perimeter');
   return project;
+}
+
+/**
+ * Existing Doors and Airlocks are already walkable, so the legacy geometry
+ * extractor can connect a new floor through them without emitting a target.
+ * Preserve atomic commissioning while still creating visible tie-in work by
+ * adding one zero-material perimeter child at that live boundary fixture.
+ */
+export function deriveStructuralTieInWork(
+  state: StationState,
+  geometry: StructuralExpansionGeometry
+): StructuralExpansionGeometry {
+  const targets = geometry.targets.map((target) => ({ ...target }));
+  const authoredTieIn = targets.find(
+    (target) => target.targetTile === TileType.Door || target.targetTile === TileType.Airlock
+  );
+  if (authoredTieIn) return { ...geometry, doorTile: authoredTieIn.tileIndex, targets };
+
+  const floorTiles = new Set(
+    targets.filter((target) => target.targetTile === TileType.Floor).map((target) => target.tileIndex)
+  );
+  const candidates = new Set<number>();
+  for (const floorTile of floorTiles) {
+    const point = fromIndex(floorTile, state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const boundary = toIndex(x, y, state.width);
+      if (state.tiles[boundary] !== TileType.Door && state.tiles[boundary] !== TileType.Airlock) continue;
+      const boundaryPoint = fromIndex(boundary, state.width);
+      const joinsLiveInterior = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([ix, iy]) => {
+        const insideX = boundaryPoint.x + ix;
+        const insideY = boundaryPoint.y + iy;
+        if (!inBounds(insideX, insideY, state.width, state.height)) return false;
+        const inside = toIndex(insideX, insideY, state.width);
+        return !floorTiles.has(inside) && isWalkable(state.tiles[inside]);
+      });
+      if (joinsLiveInterior) candidates.add(boundary);
+    }
+  }
+  const tieInTile = [...candidates].sort((left, right) => left - right)[0] ?? null;
+  if (tieInTile === null) return { ...geometry, targets };
+  targets.push({ tileIndex: tieInTile, targetTile: state.tiles[tieInTile]!, requiredMaterials: 0 });
+  targets.sort((left, right) => left.tileIndex - right.tileIndex);
+  return { ...geometry, doorTile: tieInTile, targets };
 }
 
 function markProjectBlocked(project: StructuralExpansionProject, sites: readonly ConstructionSite[]): void {
@@ -811,6 +868,41 @@ function enqueueConstructionJob(
   state.metrics.createdJobs += 1;
 }
 
+function hasWalkableTopologyRoute(state: StationState, start: number, goal: number): boolean {
+  if (start === goal) return true;
+  const queue = [start];
+  const seen = new Uint8Array(state.tiles.length);
+  seen[start] = 1;
+  for (let head = 0; head < queue.length; head++) {
+    const point = fromIndex(queue[head]!, state.width);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const x = point.x + dx;
+      const y = point.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const next = toIndex(x, y, state.width);
+      if (seen[next] || (next !== goal && !isWalkable(state.tiles[next]))) continue;
+      if (next === goal) return true;
+      seen[next] = 1;
+      queue.push(next);
+    }
+  }
+  return false;
+}
+
+/** Topology-only staging check: no actor occupancy and no path-budget charge. */
+function hasConstructionStagingRoute(state: StationState, sourceTile: number, site: ConstructionSite): boolean {
+  const workTile = constructionWorkTile(state, site);
+  if (site.requiresEva) {
+    return activeAirlockTiles(state).some(
+      (airlock) =>
+        hasWalkableTopologyRoute(state, sourceTile, airlock) &&
+        findSpacePath(state, airlock, workTile) !== null
+    );
+  }
+  if (isWalkable(state.tiles[workTile])) return hasWalkableTopologyRoute(state, sourceTile, workTile);
+  return adjacentWalkableTiles(state, workTile).some((target) => hasWalkableTopologyRoute(state, sourceTile, target));
+}
+
 export function createConstructionJobs(state: StationState): void {
   for (const site of state.constructionSites) {
     if (site.state === 'done') continue;
@@ -833,7 +925,14 @@ export function createConstructionJobs(state: StationState): void {
         site.blockedReason = 'no construction materials';
         continue;
       }
-      const source = sources[0];
+      const source = sources.find(
+        (candidate) => hasConstructionStagingRoute(state, candidate.tile, site)
+      );
+      if (!source) {
+        site.state = 'blocked';
+        site.blockedReason = 'no construction staging route';
+        continue;
+      }
       site.state = 'planned';
       site.blockedReason = null;
       enqueueConstructionJob(state, site, 'deliver', source.tile, Math.min(CONSTRUCTION_CARRY_AMOUNT, remaining, source.available));

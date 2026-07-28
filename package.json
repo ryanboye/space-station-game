@@ -10,6 +10,7 @@
     "test:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-tests.js",
     "test:structural-support": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/structural-support-tests.js",
     "test:structural-expansion": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/structural-expansion-tests.js",
+    "test:commissioning-diagnostics": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/commissioning-diagnostics-tests.js",
     "test:port-ops": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/port-ops-tests.js",
     "test:commercial": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/commercial-unit-tests.js",
     "test:site-charter": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/site-charter-tests.js",

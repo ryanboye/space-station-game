@@ -502,7 +502,7 @@ audited checklist with no unsupported checked claims.
 - [x] Plan Pressure Hull over completed or planned support.
 - [x] Derive floor-plate blueprints.
 - [x] Derive perimeter wall/bulkhead blueprints.
-- [ ] Derive tie-in and doorway/airlock work.
+- [x] Derive tie-in and doorway/airlock work.
 - [ ] Preserve editable plans before work completes.
 - [x] Preserve cancellation and define material salvage/refund.
 - [ ] Preserve module movement and resale.
@@ -517,11 +517,11 @@ audited checklist with no unsupported checked claims.
 - [x] Commission and pressurize only a supported sealed shell.
 - [x] Require EVA construction for exterior/unpressurized modules.
 - [x] Report missing material.
-- [ ] Report missing staging route.
+- [x] Report missing staging route.
 - [x] Report missing Airlock/EVA route.
-- [ ] Report low EVA oxygen.
+- [x] Report low EVA oxygen.
 - [x] Report incomplete seal.
-- [ ] Report obstructed work position.
+- [x] Report obstructed work position.
 
 ### Phase 3 Gate
 
@@ -1384,3 +1384,9 @@ Remaining uncertainty:
 - Commits or files: shared depicted-position contract in `src/sim/facility-slots.ts`; provider, seat, market, bar, reception, and recurring-need machines in `src/sim/facility-machines.ts` and `src/sim/sim.ts`; focused runners `tools/facility-slots-tests.ts` and `tools/gate-f-facility-scale-tests.ts`.
 - Focused evidence: `test:facility-slots` passes and the expanded Gate F runner passes 10/10. Every eight-seat Community Table position, four Guest Cabin bed positions, four Wash Bank hygiene positions, three Serving Line pickups, six Booth Bank seats, and both Arrival Desk processors are individually claimable and exclusive. Long-stay meal, drink, hygiene, comfort, and leisure each use a distinct production session duration and all five complete at named physical fixtures while all eight guests remain present for 180 seconds. A one-register/two-register production comparison records real sales and requires the second staffed register to complete more in the same 12-second window.
 - Route and discovery evidence: the physical market chain conserves 102 units across backroom, carried stock, shelves, and exactly-once sales; its compact layout crosses the customer frontage while the improved layout separates the delivery path. Same-seed Reception variants begin with identical fully hidden plans, reveal fewer wants than the full plan, and prove progressive behavior-led discovery: correct first choices improve from 4/8 to 6/8, redirects fall from four to two, and every wrong choice names its realized need once without oscillation. Claims about every removal/death path and live visual overwhelm remain open for narrower evidence or the browser bundle.
+
+2026-07-28 · Phase 3 commissioning diagnostics
+
+- Commits or files: tie-in derivation and staging-route validation in `src/sim/construction.ts`; focused production runner `tools/commissioning-diagnostics-tests.ts`; `test:commissioning-diagnostics` package script (checkpoint commit pending at evidence capture).
+- Focused evidence: an isolated but stocked interior site reports exactly `no construction staging route` and creates no fictional job; opening one real floor gateway clears the diagnosis and enqueues the physical delivery. Reusing the live starter Airlock derives a zero-material EVA perimeter tie-in while an explicitly authored Door remains authoritative. A low/depleted-oxygen EVA worker reports the exact blocker, returns through the Airlock to refill, and advances the same build job. Sustained occupancy of the only real work face reports `work position obstructed`; moving the occupying worker clears it and resumes progress. `test:commissioning-diagnostics` and `test:structural-support` pass.
+- Preservation boundary: the legacy structural-expansion runner's final 8,000-step save/resume commissioning assertion still stalls. The worker reproduced the identical failure with the entire production diff disabled and the new runner removed from compilation, so it is recorded as pre-existing and is not used as evidence for this tranche.
