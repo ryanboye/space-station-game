@@ -7670,6 +7670,23 @@ function rebuildPassengerTransferQueues(state: StationState): void {
 
     for (const slot of slots) {
       const queue = queueBySlot.get(slot.key) ?? [];
+      // A recall can begin while the last-emerged passenger is still standing
+      // on the station-side Gangway tile. Strict timestamp FIFO would then
+      // route the nominal head into that occupied tile while giving the
+      // physical occupant no spill target: both wait forever. Clear the person
+      // already at the interface first, then resume durable FIFO for everyone
+      // behind them. This choice is spatial and deterministic, not actor-array
+      // order, and survives save/resume because tile + queue intent are saved.
+      let interfaceOccupant: Visitor | null = null;
+      if (!activeBySlot.has(slot.key)) {
+        const interfaceOccupantIndex = queue.findIndex((visitor) =>
+          passengerTransferPhase(visitor) === 'boarding-queued' && visitor.tileIndex === slot.stationTile
+        );
+        if (interfaceOccupantIndex >= 0) {
+          [interfaceOccupant] = queue.splice(interfaceOccupantIndex, 1);
+          queue.unshift(interfaceOccupant);
+        }
+      }
       let boardingRank = 0;
       let disembarkRank = 0;
       for (const visitor of queue) {
@@ -7683,11 +7700,19 @@ function rebuildPassengerTransferQueues(state: StationState): void {
         // The station-side Gangway tile is itself a valid head position. A
         // cramped berth may have no additional spill tile, but that must not
         // prevent the passenger already at the interface from boarding.
-        const queueTile = slot.queueTiles[rank] ?? (rank === 0 ? slot.stationTile : null);
+        const queueTile = visitor === interfaceOccupant
+          ? slot.stationTile
+          : slot.queueTiles[rank] ?? (rank === 0 ? slot.stationTile : null);
         visitor.transferQueueTile = queueTile;
         if (queueTile === null) {
           clearPassengerTransferReservation(state, visitor);
-          setVisitorPath(state, visitor, []);
+          // A cramped Berth may have no depicted spill positions beyond the
+          // head. Followers still need movement intent toward the interface;
+          // freezing them where recall found them can turn those actors into
+          // permanent obstacles on the head's only route. They make an
+          // unreserved approach to the station tile, while the exclusive head
+          // reservation + movement coordinator serialize the actual line.
+          passengerTransferPath(state, visitor, slot.stationTile);
           continue;
         }
         refreshPassengerTransferReservation(state, visitor, slot.key, queueTile);

@@ -454,7 +454,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Add Truss Junction with branch/span function.
 - [ ] Add Reinforced Bulkhead with heavy-load transfer function.
 - [ ] Keep Pod Dock as the small docking collar.
-- [ ] Keep Gangway as the passenger connection and boarding provider.
+- [x] Keep Gangway as the passenger connection and boarding provider.
 - [ ] Keep Docking Clamp as vessel mass support.
 - [ ] Add no decorative structural checklist pieces.
 
@@ -1420,3 +1420,9 @@ Remaining uncertainty:
 - Commits or files: extended combined occupant fixture in `tools/phase9-save-migration-tests.ts`; existing adapters in `src/sim/save.ts` (no production change required).
 - Focused evidence: the fixture now saves a real Resident with durable home-dock/housing/Bed identity plus deliberately stale path, targets, live facility reservation, carrying state, route exposure, movement wait/cooldown, incident, agitation, confrontation, and home-ship departure state, then strips the later-phase fields from the wire snapshot. Hydration floors its fractional legacy index onto the same walkable Floor/world position; preserves identity, home dock, housing, Bed, and satisfaction; clears every transient route/claim; defaults neutral carrying/incident state; and converts obsolete `ToHomeShip` into `Idle` with no invented ship or departure. The Resident remains after resumed ticks and never duplicates into the visitor population.
 - Preservation evidence: `test:phase9-save`, `test:occupant-loop`, and all 6/6 Gate E save/resume checks pass; the production build remains clean.
+
+2026-07-28 · Deterministic Gangway recall recovery
+
+- Commits or files: cramped-interface queue recovery in the passenger-transfer region of `src/sim/sim.ts`; higher-signal diagnostics and capacity window in `tools/passenger-transfer-tests.ts` (checkpoint commit pending at evidence capture).
+- Root cause and fix: a recall could begin while the last-emerged passenger still occupied the station-side Gangway tile. Strict timestamp FIFO selected an earlier actor as head even though that actor could not enter the occupied tile, while the physical occupant had no spill position and no movement intent. With no crossing active, the rebuild now deterministically clears the boarding-queued actor already at the interface first, then resumes durable FIFO. Followers without a depicted spill slot approach the interface under movement arbitration while the exclusive head reservation serializes the actual crossing.
+- Focused evidence: `test:passenger-transfer` passes three consecutive worker runs plus the lead rerun, including visible 0.8-second crossings, one-vs-two Gangway throughput, recall cancellation of ship-side arrivals, save/resume mid-disembark and mid-boarding, deterministic array-order independence, and stale-claim cleanup. Physical cargo, mixed Berth visit, movement coordinator, occupant loop, and build preservation remain green. This directly preserves Gangway as the physical passenger provider; boarding-distance measurement remains open.

@@ -257,12 +257,46 @@ function boardWithinRecallWindow(state: StationState, shipId: number, windowSec:
   // snapshot. Let each otherwise-identical variant reach a real Gangway
   // crossing before starting the capacity clock, so the measured window is
   // boarding throughput rather than the walk back from hospitality rooms.
-  waitFor(
-    state,
-    'first production boarding crossing',
-    () => visitorsFor(state, ship.id).some((visitor) => visitorPhase(visitor) === 'boarding-crossing'),
-    18
-  );
+  for (let elapsed = 0; elapsed < 18; elapsed += STEP) {
+    if (visitorsFor(state, ship.id).some((visitor) => visitorPhase(visitor) === 'boarding-crossing')) break;
+    tick(state, STEP);
+  }
+  const reachedCrossing = visitorsFor(state, ship.id).some((visitor) => visitorPhase(visitor) === 'boarding-crossing');
+  if (!reachedCrossing) {
+    const cohort = visitorsFor(state, ship.id).map((visitor) => ({
+      id: visitor.id,
+      state: visitor.state,
+      phase: visitorPhase(visitor),
+      tile: visitor.tileIndex,
+      path: visitor.path.slice(0, 4),
+      queue: visitor.transferQueueTile,
+      access: visitor.transferAccessTile,
+      station: visitor.transferStationTile,
+      slot: visitor.transferSlotKey,
+      wait: visitor.movementWaitReason,
+      blocked: visitor.movementBlockedTile,
+      reservation: visitor.reservedTargetTile
+    }));
+    const liveReservations = state.reservations
+      .filter((reservation) => reservation.releaseReason === null)
+      .map((reservation) => ({
+        owner: `${reservation.ownerKind}:${reservation.ownerId}`,
+        kind: reservation.kind,
+        tile: reservation.targetTile,
+        target: reservation.targetId,
+        expiresAt: reservation.expiresAt
+      }));
+    throw new Error(
+      `Timed out waiting for first production boarding crossing: ship=${JSON.stringify({
+        phase: ship.visitPhase,
+        stage: ship.stage,
+        boarded: ship.passengersBoarded,
+        spawned: ship.passengersSpawned,
+        recallAt: ship.recallAt,
+        now: state.now
+      })}; cohort=${JSON.stringify(cohort)}; liveReservations=${JSON.stringify(liveReservations)}`
+    );
+  }
   const boardedAtStart = shipById(state, ship.id).passengersBoarded;
   advance(state, windowSec);
   return shipById(state, ship.id).passengersBoarded - boardedAtStart;
@@ -275,7 +309,10 @@ function testTwoGangwaysIncreaseBoardingThroughput(): void {
   const twoGangwayFacility = berth(twoGangways);
   setGangwayCount(twoGangways, twoGangwayFacility.anchorTile, 2);
 
-  const windowSec = 7;
+  // Nine seconds includes a real corridor approach plus several visible
+  // 0.8-second crossings. It is long enough to measure Gangway capacity, but
+  // still far inside the 30-second hard-departure guard above.
+  const windowSec = 9;
   const oneBoarded = boardWithinRecallWindow(oneGangway, 10801, windowSec);
   const twoBoarded = boardWithinRecallWindow(twoGangways, 10801, windowSec);
   assert(
