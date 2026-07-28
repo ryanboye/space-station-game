@@ -171,3 +171,47 @@ design benchmark and the replacement for stale port-operation tests.
 The recommended next implementation target is one deterministic mixed Berth
 visit fixture and focused runner. It has more design value than another isolated
 module because it tests whether the station now behaves as one physical machine.
+
+## 2026-07-28 Mixed-Call Integration Update
+
+Open:
+`http://127.0.0.1:5183/?scenario=mixed-berth-visit&diag=1`
+
+This scenario starts paused with one medium `Longwatch Repair Tender` in
+Approach Control. Its offer communicates a 5-7-person, 161-219-second mixed
+repair call. Accepting it uses one physically legal east-facing Berth with a
+Gangway, Customs Counter and Cargo Arm; no lifecycle state is staged after
+admission.
+
+The new focused gate is `npm run test:mixed-berth-visit`. It proves, through
+production behavior:
+
+- approach, docking and secure phases;
+- six physical Gangway disembarkations;
+- a planned meal completed at a depicted table and credited to the matching
+  contract promise through the canonical service log;
+- consigned inbound freight represented by real cargo lots and jobs, with
+  custody progress and nonzero station tile distance;
+- exactly one bounded extension while real promised work remains;
+- recall, a physical boarding crossing and returned-passenger credit;
+- hard-departure stranding with explicit origin provenance and no live transfer
+  reservation left behind;
+- contract-job expiry, cargo-lot closure and exactly-once settlement.
+
+Two production bugs fell out of this integration. Berth clearance previously
+grew from the whole room footprint and collided with the bay's own walls;
+Berths now grow hull clearance from a centered mooring core. Separately, a
+ten-second route timeout wrote an unmet hospitality stop into
+`completedServices` without a physical fixture session. Unreachable passengers
+now remain visibly unmet and retry instead of creating false service credit.
+
+Focused neighboring checks also pass:
+
+- `npm run test:approach-envelopes`
+- `npm run test:passenger-transfer`
+- `npm run test:physical-cargo`
+- `npm run test:failed-stay`
+
+The scenario still exposes one fixture-quality warning: the demo station has
+only 5 sleep slots for 18 crew. That is intentionally not counted as a closed
+crew-sustainability gate.

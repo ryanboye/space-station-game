@@ -77,6 +77,10 @@ compiles is not sufficient for player-facing work.
 - [x] Add an overwhelmed one-checkout market.
 - [x] Add a redesigned two-checkout market.
 - [ ] Add short errands, shore leave, and a long repair crew in one scenario.
+- [x] Add one medium mixed passenger/freight repair-tender call that uses the
+  production Approach Control, Berth, transfer, cargo, service, extension,
+  recall, stranding, and settlement lifecycle.
+  Evidence: `mixed-berth-visit`, `tools/mixed-berth-visit-tests.ts`.
 - [ ] Add reception-bypass and reception-assisted variants.
 - [ ] Add a debris-facing exterior wing.
 - [ ] Add a scale baseline with at least 50 crew, 50 simultaneous visitors, and
@@ -153,7 +157,8 @@ compiles is not sufficient for player-facing work.
 - [x] Support early departure after sustained service failure.
 - [x] Support bounded extension while useful spend or work continues.
 - [x] Give scheduled traffic firm windows.
-- [ ] Let freight wait for promised work until its explicit deadline.
+- [x] Let freight wait for promised work until its explicit deadline.
+  Evidence: `tools/mixed-berth-visit-tests.ts`.
 - [ ] Let repair traffic remain until work completes, aborts, or is cancelled.
 - [ ] Tune Pod visits toward observable minutes rather than 10-30-second churn.
 - [ ] Tune traffic generation for useful concurrent occupancy.
@@ -175,6 +180,10 @@ compiles is not sufficient for player-facing work.
 - [x] Save/load a contract crew mid-stay.
 - [x] Save/load during recall and boarding.
 - [x] Verify settlement remains exactly once.
+- [x] Focused check: a medium mixed call physically approaches, disembarks,
+  serves a planned need, moves consigned freight, extends once, recalls,
+  boards, strands missed passengers, cleans up and settles once.
+  Evidence: `npm run test:mixed-berth-visit`.
 - [ ] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
 - [ ] Focused check: fixed and flexible schedules behave differently.
 - [ ] Focused check: concurrent visits overlap without rapid replacement.
@@ -565,7 +574,12 @@ compiles is not sufficient for player-facing work.
 - [x] Make additional Gangways improve real throughput.
 - [x] Make recall route people physically back to origin ship.
 - [ ] Make boarding contend with doors, queues, and cargo.
-- [ ] Make late boarding extend occupation or trigger explicit missed departure.
+- [x] Make boarding and bulky cargo contend physically in a shared route.
+  Evidence: `npm run test:physical-cargo` case
+  `passenger-transfer-and-cargo-block-each-other-visibly`.
+- [x] Make late boarding extend occupation or trigger explicit missed departure.
+  Evidence: bounded extension plus stranded-passenger branch in
+  `npm run test:mixed-berth-visit`.
 
 ### Per-Interface Diagnosis
 
@@ -763,7 +777,8 @@ compiles is not sufficient for player-facing work.
 - [x] Add structural support runner.
 - [x] Add phased construction/EVA runner.
 - [x] Add approach geometry/reservation runner.
-- [ ] Add ship visit/settlement runner.
+- [x] Add ship visit/settlement runner.
+  Evidence: `npm run test:mixed-berth-visit`.
 - [x] Add occupant tenure/needs runner.
 - [ ] Add fixture-slot/reception runner.
 - [x] Add failed-stay/stranding runner.
@@ -796,6 +811,13 @@ Focused checks:
 Visual/playtest evidence:
 Remaining uncertainty:
 ```
+
+2026-07-28 · Production mixed-call lifecycle
+
+- Commit or files: `src/sim/approach-envelopes.ts`, `src/sim/cold-start-scenarios.ts`, `src/sim/sim.ts`, `tools/mixed-berth-visit-tests.ts`, and `package.json` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:mixed-berth-visit` proves a legal medium repair tender, six physical passenger transfers, a planned table meal credited through the canonical service log, contract-owned freight jobs with custody progress and nonzero tile distance, one bounded extension, recall and collar boarding, explicit stranded provenance, cleanup, and exactly-once settlement. `npm run test:approach-envelopes`, `npm run test:passenger-transfer`, `npm run test:physical-cargo`, and `npm run test:failed-stay` remain green.
+- Correctness fixes: Berth clearance previously expanded from the whole room footprint and collided with the bay's own U-shaped walls; it now grows from a centered mooring core. A ten-second route timeout also wrote an unmet hospitality stop into `completedServices` without a fixture session; unreachable passengers now remain visibly unmet and retry until service or recall.
+- Live evidence: `?scenario=mixed-berth-visit&diag=1` presents one medium `Longwatch Repair Tender` in Approach Control beside the authored east-facing repair bay. The fixture remains deliberately short on crew beds (5/18) and does not close the crew-sustainability gate.
 
 2026-07-27 · Program setup and implementation authority
 

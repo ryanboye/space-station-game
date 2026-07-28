@@ -132,10 +132,13 @@ export function buildDockingSlotDescriptor(input: EnvelopeSlotInput): DockingSlo
   for (const size of ['small', 'medium', 'large'] as ShipSize[]) {
     const scale = SIZE_CLEARANCE[size];
     const mooring = expandLateral(input.hullBounds, input.facing, scale.lateral);
-    const ingress = directionalCorridor(mooring, input.facing, scale.depth, scale.lateral);
+    // A Berth's room already provides its lateral bay clearance. Free-flying
+    // Pod Docks retain a wider merge corridor outside the hull.
+    const approachLateral = input.kind === 'berth' ? 0 : scale.lateral;
+    const ingress = directionalCorridor(mooring, input.facing, scale.depth, approachLateral);
     // Egress shares the physical corridor today. Keeping a distinct object is
     // intentional: later traffic choreography can give it a separate lane.
-    const egress = directionalCorridor(mooring, input.facing, scale.depth, scale.lateral);
+    const egress = directionalCorridor(mooring, input.facing, scale.depth, approachLateral);
     envelopesBySize[size] = {
       ingress: { kind: 'ingress', bounds: ingress, facing: input.facing, clearance: scale.lateral },
       mooring: { kind: 'mooring', bounds: mooring, facing: input.facing, clearance: scale.lateral },
@@ -146,8 +149,9 @@ export function buildDockingSlotDescriptor(input: EnvelopeSlotInput): DockingSlo
   for (const hullVariant of SHIP_HULL_VARIANTS) {
     const profile = shipHullProfile(hullVariant);
     const mooring = expandLateral(input.hullBounds, input.facing, profile.lateralClearance);
-    const ingress = directionalCorridor(mooring, input.facing, profile.approachDepth, profile.lateralClearance);
-    const egress = directionalCorridor(mooring, input.facing, profile.approachDepth, profile.lateralClearance);
+    const approachLateral = input.kind === 'berth' ? 0 : profile.lateralClearance;
+    const ingress = directionalCorridor(mooring, input.facing, profile.approachDepth, approachLateral);
+    const egress = directionalCorridor(mooring, input.facing, profile.approachDepth, approachLateral);
     envelopesByHull[hullVariant] = {
       ingress: { kind: 'ingress', bounds: ingress, facing: input.facing, clearance: profile.lateralClearance },
       mooring: { kind: 'mooring', bounds: mooring, facing: input.facing, clearance: profile.lateralClearance },

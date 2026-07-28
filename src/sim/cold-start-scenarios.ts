@@ -20,7 +20,7 @@ import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { resolveFacilitySlots } from './facility-descriptors';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType } from './types';
-import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
+import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
 import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, hireStaffRole, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
@@ -269,6 +269,36 @@ function visitScheduleShowcaseShip(
     extensionUntil: reason === 'remaining-work' ? state.now + 150 : null,
     recallAt: reason === 'service-failure' ? state.now : null,
     visitScheduleReason: reason
+  };
+}
+
+function mixedBerthShowcaseOffer(state: StationState): TrafficOffer {
+  const id = state.shipSpawnCounter++;
+  return {
+    id,
+    callsign: `MIX-${String(id).padStart(3, '0')}`,
+    shipName: 'Longwatch Repair Tender',
+    lane: 'east',
+    shipType: 'industrial',
+    hullVariant: 'repair-tender',
+    offerKind: 'mixed',
+    size: 'medium',
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 900,
+    passengersTotal: 6,
+    manifestDemand: { cafeteria: 0.8, market: 0.15, lounge: 0.55 },
+    manifestMix: { diner: 0.35, shopper: 0.1, lounger: 0.4, rusher: 0.15 },
+    hospitalityDemand: { meal: 5, drink: 2, leisure: 3, restroom: 3, hygiene: 2, comfort: 2 },
+    inboundCargo: { rawMaterial: 10, rawMeal: 0, tradeGood: 4 },
+    outboundRequest: { rawMaterial: 4, meal: 4, tradeGood: 2 },
+    requestedServices: ['cafeteria', 'lounge', 'workshop'],
+    berthTimeSec: 190,
+    dockingFee: 180,
+    projectedSpend: 150,
+    riskLabel: 'guarded',
+    assignedBerthAnchor: null
   };
 }
 
@@ -730,6 +760,131 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // Integration fixture for the full medium-call loop. It begins before
+  // admission so the player still makes the Approach Control decision; every
+  // later ship, passenger, cargo and settlement state is production-owned.
+  'mixed-berth-visit': (s) => {
+    unlockThrough(s, 3);
+    applyDemoStationOverlay(s);
+
+    // The ordinary demo packs two compact bays onto one frontage. This call
+    // uses a broad repair tender, so give it one honest bay with four tiles of
+    // lateral approach clearance instead of weakening the hull envelope.
+    for (let y = 27; y <= 46; y++) {
+      const outsidePrimaryBerth = y < 31 || y > 42;
+      if (!outsidePrimaryBerth) continue;
+      for (let x = 68; x <= 75; x++) {
+        const tile = y * s.width + x;
+        removeModuleAtTile(s, tile);
+        setTile(s, tile, TileType.Space);
+        setRoom(s, tile, RoomType.None);
+      }
+    }
+    // Crop the east half of Security back to a sealed vertical bulkhead. The
+    // repair bay's approach margin must be exterior space without opening the
+    // public deck behind it to vacuum.
+    for (let y = 20; y <= 30; y++) {
+      for (let x = 68; x <= 75; x++) {
+        const tile = y * s.width + x;
+        removeModuleAtTile(s, tile);
+        setTile(s, tile, TileType.Space);
+        setRoom(s, tile, RoomType.None);
+      }
+      const seal = y * s.width + 67;
+      removeModuleAtTile(s, seal);
+      setTile(s, seal, TileType.Wall);
+      setRoom(s, seal, RoomType.None);
+    }
+    // Merge the former stacked compact bays into one ten-tile-deep repair bay.
+    // Its room area is usable clearance; the west bulkhead seals the station
+    // and the east edge remains open to the vessel.
+    for (let y = 31; y <= 42; y++) {
+      for (let x = 68; x <= 75; x++) {
+        const tile = y * s.width + x;
+        removeModuleAtTile(s, tile);
+        const bulkhead = x === 68 || y === 31 || y === 42;
+        setTile(s, tile, bulkhead ? TileType.Wall : TileType.Floor);
+        setRoom(s, tile, bulkhead ? RoomType.None : RoomType.Berth);
+      }
+      if (y > 31 && y < 42) {
+        setTile(s, y * s.width + 76, TileType.Space);
+        setRoom(s, y * s.width + 76, RoomType.None);
+      }
+    }
+    setTile(s, 36 * s.width + 68, TileType.Door);
+    setRoom(s, 36 * s.width + 68, RoomType.Berth);
+    placeMod(s, 68, 36, ModuleType.AccessGate);
+    placeMod(s, 75, 36, ModuleType.Gangway);
+    placeMod(s, 69, 34, ModuleType.CustomsCounter);
+    placeMod(s, 73, 33, ModuleType.CargoArm);
+
+    // Seal the cropped Security room and arrival corridor where the broad
+    // bay's exterior clearance replaces the old lower berth.
+    for (let y = 43; y <= 46; y++) setTile(s, y * s.width + 67, TileType.Wall);
+
+    const publicRooms = new Set<RoomType>([
+      RoomType.Cafeteria,
+      RoomType.Market,
+      RoomType.Lounge,
+      RoomType.Cantina,
+      RoomType.Observatory,
+      RoomType.RecHall,
+      RoomType.Hygiene
+    ]);
+    for (let tile = 0; tile < s.rooms.length; tile += 1) {
+      if (publicRooms.has(s.rooms[tile])) s.zones[tile] = ZoneType.Public;
+    }
+
+    // Guest bunks are separate from crew quarters. A six-person repair call
+    // can fill this small public lodging room rather than commandeering the
+    // crew's sleep capacity.
+    for (let y = 31; y < 42; y++) {
+      for (let x = 38; x < 49; x++) removeModuleAtTile(s, y * s.width + x);
+    }
+    paintRoom(s, 38, 31, 49, 42, RoomType.Dorm, 'north');
+    placeMod(s, 40, 34, ModuleType.BunkBank);
+    placeMod(s, 44, 34, ModuleType.BunkBank);
+    for (let y = 32; y < 41; y++) {
+      for (let x = 39; x < 48; x++) {
+        const tile = y * s.width + x;
+        s.zones[tile] = ZoneType.Public;
+        s.roomHousingPolicies[tile] = 'visitor';
+      }
+    }
+
+    // Preserve visible cafeteria custody: meals and trays start at counters,
+    // while later replenishment still has to move through the station.
+    seedItemNodeStock(s, 16, 13, 'cleanTray', 18);
+    seedItemNodeStock(s, 19, 13, 'cleanTray', 18);
+
+    // Materialize the expanded crew pool before traffic is admitted, then put
+    // the roles this mixed call exercises on Alpha Watch. The customs gate is
+    // intentionally real, but a deterministic showcase must not deadlock only
+    // because its sole Cargo Handler rolled onto the next watch.
+    const addedHandlers = Math.min(2, s.crew.roleCounts.assistant);
+    s.crew.roleCounts.assistant -= addedHandlers;
+    s.crew.roleCounts['cargo-handler'] += addedHandlers;
+    tick(s, 0);
+    for (const crew of s.crewMembers) {
+      if (crew.staffRole === 'cargo-handler' || crew.staffRole === 'engineer' ||
+        crew.staffRole === 'steward' || crew.staffRole === 'cook') {
+        crew.shiftBucket = 0;
+      }
+    }
+
+    s.controls.shipsPerCycle = 0;
+    s.controls.manualTrafficAdmission = true;
+    s.trafficOffers.length = 0;
+    s.arrivingShips.length = 0;
+    s.dockQueue.length = 0;
+    s.portOps.contracts.length = 0;
+    s.portOps.cargoLots.length = 0;
+    s.portOps.settlements.length = 0;
+    const offer = mixedBerthShowcaseOffer(s);
+    s.trafficOffers.push(offer);
+    s.controls.paused = true;
+  },
+
   // Paired construction fixtures: one makes the missing-Airlock block easy
   // to inspect; the other runs the same project through real logistics/EVA.
   'structural-expansion-blocked': (s) => {
@@ -1163,6 +1318,15 @@ function applyDemoStationOverlay(state: StationState): void {
   paintRoom(state, 45, 20, 55, 29, RoomType.RecHall, 'north');
   paintRoom(state, 55, 20, 65, 29, RoomType.Hygiene, 'north');
   paintRoom(state, 65, 20, 75, 29, RoomType.Security, 'north');
+  // The public band otherwise forms an unbroken bulkhead between the main
+  // concourse and the lower operations deck. This second rec-hall door is the
+  // deliberate public-to-arrivals circulation route.
+  for (const x of [49, 50, 51]) {
+    setTile(state, 20 * state.width + x, TileType.Door);
+    setRoom(state, 20 * state.width + x, RoomType.RecHall);
+    setTile(state, 28 * state.width + x, TileType.Door);
+    setRoom(state, 28 * state.width + x, RoomType.RecHall);
+  }
 
   // Back-of-house / arrival band.
   paintRoom(state, 5, 31, 16, 42, RoomType.Reactor, 'north');
@@ -1221,7 +1385,7 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 22, 11, ModuleType.Table);
   placeMod(state, 16, 13, ModuleType.ServingStation);
   placeMod(state, 19, 13, ModuleType.ServingStation);
-  placeMod(state, 22, 13, ModuleType.VendingMachine);
+  placeMod(state, 22, 13, ModuleType.TrayReturn);
   // Kitchen
   placeMod(state, 27, 8, ModuleType.Stove);
   placeMod(state, 30, 8, ModuleType.Stove);
@@ -1282,6 +1446,7 @@ function applyDemoStationOverlay(state: StationState): void {
   placeWallMod(state, 65, 23, ModuleType.SecurityCamera);
   // Reactor
   placeMod(state, 7, 33, ModuleType.WaterFountain);
+  placeMod(state, 10, 34, ModuleType.ReactorCore);
   placeMod(state, 15, 33, ModuleType.FireExtinguisher);
   // Life support
   placeMod(state, 16, 33, ModuleType.Vent);
@@ -1320,6 +1485,23 @@ function applyDemoStationOverlay(state: StationState): void {
     seedItemNodeStock(state, 27, 8, 'meal', 12) +
     seedItemNodeStock(state, 30, 8, 'meal', 12);
   state.metrics.mealStock = seededMeals;
+
+  // This fixture replaces the starter shell, so its logical spawn point and
+  // existing actors must move with it. Otherwise crew remain marooned on
+  // coordinates that are now exterior space and every service looks broken.
+  state.core.serviceTile = 17 * state.width + 40;
+  for (let index = 0; index < state.crewMembers.length; index++) {
+    const crew = state.crewMembers[index];
+    const tile = 17 * state.width + 30 + index;
+    crew.tileIndex = tile;
+    crew.x = (tile % state.width) + 0.5;
+    crew.y = Math.floor(tile / state.width) + 0.5;
+    crew.targetTile = null;
+    crew.path = [];
+  }
+  for (let y = 7; y < 14; y++) {
+    for (let x = 6; x < 14; x++) state.roomHousingPolicies[y * state.width + x] = 'crew';
+  }
 }
 
 /** Apply a named scenario to a fresh state. Returns true if the name

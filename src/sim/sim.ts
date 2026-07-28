@@ -8509,6 +8509,22 @@ function shiftWorldBoundsOutward(bounds: WorldRect, facing: SpaceLane): WorldRec
   return { ...bounds, minX: bounds.minX - 1, maxX: bounds.maxX - 1 };
 }
 
+/**
+ * A Berth room is the bay around a vessel, not the vessel itself. Approach
+ * clearance therefore grows from a one-tile mooring centreline inside the
+ * bay. Using the whole room as the hull made every positive-clearance craft
+ * collide with the U-shaped bay walls regardless of how large the player
+ * built it.
+ */
+function berthMooringCoreBounds(bounds: WorldRect, facing: SpaceLane): WorldRect {
+  if (facing === 'north' || facing === 'south') {
+    const x = Math.floor((bounds.minX + bounds.maxX - 1) / 2);
+    return { ...bounds, minX: x, maxX: x + 1 };
+  }
+  const y = Math.floor((bounds.minY + bounds.maxY - 1) / 2);
+  return { ...bounds, minY: y, maxY: y + 1 };
+}
+
 function berthAcceptedSizes(state: StationState, candidate: BerthCandidate): ShipSize[] {
   const config = findBerthConfigByAnchor(state, candidate.anchorTile);
   const configured = config?.allowedShipSizes ?? ALL_SHIP_SIZES_FOR_BERTH;
@@ -8556,6 +8572,7 @@ export function getDockingSlotDescriptors(state: StationState): DockingSlotDescr
     const mooringTiles = berth.tiles.filter((tile) =>
       state.tiles[tile] !== TileType.Door && state.tiles[tile] !== TileType.Airlock
     );
+    const roomBounds = worldBoundsForTiles(state, mooringTiles.length > 0 ? mooringTiles : berth.tiles);
     descriptors.push(buildDockingSlotDescriptor({
       id: `berth:${berth.anchorTile}`,
       kind: 'berth',
@@ -8567,7 +8584,7 @@ export function getDockingSlotDescriptors(state: StationState): DockingSlotDescr
       accessTiles: [...berth.tiles],
       anchorWorldX: anchor.x + state.mapWorldOriginX + 0.5,
       anchorWorldY: anchor.y + state.mapWorldOriginY + 0.5,
-      hullBounds: worldBoundsForTiles(state, mooringTiles.length > 0 ? mooringTiles : berth.tiles)
+      hullBounds: berthMooringCoreBounds(roomBounds, facing)
     }));
   }
   return descriptors.sort((a, b) => a.id.localeCompare(b.id));
@@ -22180,7 +22197,14 @@ function updateVisitorLogic(
               visitor.activeService = null;
               visitor.carryingDrink = false;
             } else {
-              visitor.completedServices.push(missedService);
+              // A path timeout is not a completed service. Keep the promised
+              // stop active so the passenger remains visibly unmet and can
+              // retry if capacity or circulation recovers before recall.
+              if (state.now - visitor.serviceBlockedSince < 10 + dt) {
+                registerVisitorServiceFailure(state, 1);
+              }
+              keep.push(visitor);
+              continue;
             }
             if (missedService === 'drink') {
               visitor.carryingDrink = false;
