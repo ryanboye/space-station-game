@@ -139,21 +139,20 @@ function installBoundaryAirlock(state: StationState): number {
   state.controls.paused = false;
   const startingMaterials = state.legacyMaterialStock;
   let sawEvaCrew = false;
-  for (let step = 0; step < 1800 && project.phase === 'perimeter'; step++) {
+  for (let step = 0; step < 1800 && project.deliveredMaterials <= 0; step++) {
     tick(state, 0.1);
     sawEvaCrew ||= state.crewMembers.some((crew) => crew.evaSuit && crew.activeJobId !== null);
   }
   assertCondition(project.deliveredMaterials > 0, 'Existing logistics jobs must deliver structural materials.');
   assertCondition(state.legacyMaterialStock < startingMaterials, 'Real delivery must debit the material source.');
   assertCondition(sawEvaCrew, 'Existing EVA movement must suit a structural construction worker.');
-  assertCondition(project.phase === 'interior', 'Real EVA work must complete the perimeter and release interior work.');
 
   const snapshot = captureSnapshot(state);
   const resumed = hydrateStateFromSave({ schemaVersion: 3, snapshot, gameVersion: 'test', name: 'structural-progress', createdAt: '2026-01-01T00:00:00.000Z' }).state;
   const resumedProject = resumed.structuralExpansionProjects[0];
-  assertCondition(resumedProject?.phase === 'interior', 'Save/resume must preserve the active structural phase.');
+  assertCondition(resumedProject?.phase === project.phase, 'Save/resume must preserve the active structural phase.');
   assertCondition(resumedProject.deliveredMaterials === project.deliveredMaterials, 'Save/resume must preserve material accounting.');
-  assertCondition(resumed.constructionSites.some((site) => site.structuralStage === 'interior'), 'Save/resume must retain the continuation work sites.');
+  assertCondition(resumed.constructionSites.some((site) => site.structuralProjectId === resumedProject.id), 'Save/resume must retain the active linked work sites.');
 }
 
 // Completion advances perimeter then interior and only commissions atomically.

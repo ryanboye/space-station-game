@@ -234,10 +234,10 @@ function occupancyPenaltyForIntent(options: PathOptions, occupancy: number): num
       return Math.min(1, occupancy * 0.15);
     case 'crew':
     case 'logistics':
-      return Math.min(2.5, occupancy * 0.35);
+      return Math.min(16, occupancy * 8);
     case 'visitor':
     case 'resident':
-      return Math.min(3, occupancy * 0.45);
+      return Math.min(10, occupancy * 5);
   }
 }
 

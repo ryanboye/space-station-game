@@ -7291,10 +7291,28 @@ function ensureCrewPool(state: StationState): void {
 
   const floors = collectTiles(state, TileType.Floor);
   const fallbackTiles = floors.length > 0 ? floors : collectTiles(state, TileType.Dock);
-  const spawnTile = fallbackTiles[0] ?? 0;
+  const spawnOrigin = state.core.serviceTile;
+  const spawnX = spawnOrigin % state.width;
+  const spawnY = Math.floor(spawnOrigin / state.width);
+  const spawnTiles = fallbackTiles
+    .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+    .sort((a, b) => {
+      const ax = a % state.width;
+      const ay = Math.floor(a / state.width);
+      const bx = b % state.width;
+      const by = Math.floor(b / state.width);
+      return Math.abs(ax - spawnX) + Math.abs(ay - spawnY) - (Math.abs(bx - spawnX) + Math.abs(by - spawnY)) || a - b;
+    });
+  const occupiedSpawnTiles = new Set<number>([
+    ...state.crewMembers.map((crew) => crew.tileIndex),
+    ...state.residents.map((resident) => resident.tileIndex),
+    ...state.visitors.map((visitor) => visitor.tileIndex)
+  ]);
 
   while (state.crewMembers.length < state.crew.total) {
+    const spawnTile = spawnTiles.find((tile) => !occupiedSpawnTiles.has(tile)) ?? spawnTiles[0] ?? fallbackTiles[0] ?? 0;
     state.crewMembers.push(makeCrewMember(state.crewSpawnCounter++, spawnTile, state.width));
+    occupiedSpawnTiles.add(spawnTile);
   }
   if (state.crewMembers.length > state.crew.total) {
     state.crewMembers.length = state.crew.total;
@@ -13737,9 +13755,323 @@ function buildOccupancyMap(state: StationState): Map<number, number> {
 
 type MoveResult = 'moved' | 'blocked' | 'idle';
 
+type MovementActorKind = 'crew' | 'resident' | 'visitor';
+type MovementActor = (CrewMember | Resident | Visitor) & {
+  movementWaitReason?: string;
+  movementReplanCooldownUntil?: number;
+};
+
+type MovementIntent = {
+  actor: MovementActor;
+  kind: MovementActorKind;
+  key: string;
+  origin: number;
+  target: number;
+  narrowTiles: number[];
+  priority: number;
+};
+
+type MovementCoordinator = {
+  approved: Set<string>;
+  blockedReasonByKey: Map<string, string>;
+  narrowCooldownUntil: Map<number, number>;
+  kindByActor: Map<MovementActor, MovementActorKind>;
+};
+
+const MOVEMENT_REPLAN_BLOCKED_TICKS = 8;
+const MOVEMENT_REPLAN_COOLDOWN_SEC = 1.25;
+const NARROW_CROSSING_COOLDOWN_SEC = 0.35;
+const movementCoordinatorByState: WeakMap<StationState, MovementCoordinator> = new WeakMap();
+
+function movementActorKey(kind: MovementActorKind, actor: MovementActor): string {
+  return `${kind}:${actor.id}`;
+}
+
+function movementActorPriority(actor: MovementActor, kind: MovementActorKind): number {
+  // Urgency gets a small, finite head start. A long-waiting ordinary actor
+  // eventually overtakes a stream of fresh urgent work instead of starving.
+  let urgency = 0;
+  const crew = kind === 'crew' ? actor as CrewMember : null;
+  if (actor.healthState === 'critical' || (crew !== null && crew.evaSuit)) {
+    urgency = 3;
+  } else if (crew !== null && (crew.staffRole === 'security-guard' || crew.role === 'security')) {
+    urgency = 1;
+  }
+  return Math.min(9999, Math.max(0, actor.blockedTicks)) + urgency;
+}
+
+function isMovementHazard(state: StationState, tileIndex: number): boolean {
+  return state.effects.fires.some((fire) => fire.anchorTile === tileIndex) || (state.plumbing.floodByTile[tileIndex] ?? 0) >= 3;
+}
+
+function isServiceTarget(actor: MovementActor, tileIndex: number): boolean {
+  const candidate = actor as unknown as {
+    reservedTargetTile?: number | null;
+    reservedServingTile?: number | null;
+    targetTile?: number | null;
+  };
+  return candidate.reservedTargetTile === tileIndex || candidate.reservedServingTile === tileIndex || candidate.targetTile === tileIndex;
+}
+
+function clearMovementWait(actor: MovementActor): void {
+  actor.movementWaitReason = undefined;
+}
+
+function movementActors(state: StationState): Array<{ kind: MovementActorKind; actor: MovementActor }> {
+  return [
+    ...state.crewMembers.map((actor) => ({ kind: 'crew' as const, actor: actor as MovementActor })),
+    ...state.residents.map((actor) => ({ kind: 'resident' as const, actor: actor as MovementActor })),
+    ...state.visitors.map((actor) => ({ kind: 'visitor' as const, actor: actor as MovementActor }))
+  ];
+}
+
+function canYieldMovementTile(state: StationState, kind: MovementActorKind, actor: MovementActor): boolean {
+  if (actor.path.length > 0) return false;
+  if (kind === 'crew') {
+    const crew = actor as CrewMember;
+    // A staffed post is not a solid obstacle. When the only route is through
+    // that work tile, the worker briefly steps aside and then retargets it.
+    if (crew.activeJobId !== null || crew.resting) return false;
+    const activeSession = crew.eating || crew.cleaning || crew.toileting || crew.drinking || crew.leisure;
+    const usingCurrentTile = crew.targetTile === crew.tileIndex || state.modules[crew.tileIndex] !== ModuleType.None;
+    return !activeSession || !usingCurrentTile;
+  }
+  if (kind === 'resident') return (actor as Resident).state === ResidentState.Idle;
+  // A stationary visitor is usually in a queue or service session. Moving it
+  // without changing that state would break the provider reservation.
+  return false;
+}
+
+function assignMovementYieldPaths(
+  state: StationState,
+  actors: Array<{ kind: MovementActorKind; actor: MovementActor }>,
+  occupancyByTile: Map<number, number>
+): Set<MovementActor> {
+  const relievedInbound = new Set<MovementActor>();
+  const occupantByTile = new Map<number, Array<{ kind: MovementActorKind; actor: MovementActor }>>();
+  for (const entry of actors) {
+    const bucket = occupantByTile.get(entry.actor.tileIndex) ?? [];
+    bucket.push(entry);
+    occupantByTile.set(entry.actor.tileIndex, bucket);
+  }
+  const claimedYieldTiles = new Set<number>();
+  const blockedInbound = actors
+    .filter(({ actor }) => actor.path.length > 0)
+    .sort((a, b) => b.actor.blockedTicks - a.actor.blockedTicks || a.kind.localeCompare(b.kind) || a.actor.id - b.actor.id);
+  for (const inbound of blockedInbound) {
+    const target = inbound.actor.path[0];
+    const blockers = occupantByTile.get(target) ?? [];
+    for (const blocker of blockers) {
+      if (!canYieldMovementTile(state, blocker.kind, blocker.actor)) continue;
+      const point = fromIndex(blocker.actor.tileIndex, state.width);
+      const sidestepCandidates = ([[1, 0], [0, 1], [-1, 0], [0, -1]] as Array<[number, number]>)
+        .map(([dx, dy]) => ({ x: point.x + dx, y: point.y + dy }))
+        .filter(({ x, y }) => inBounds(x, y, state.width, state.height))
+        .map(({ x, y }) => toIndex(x, y, state.width));
+      const emptySidestep = sidestepCandidates.find((tile) =>
+          tile !== inbound.actor.tileIndex &&
+          !claimedYieldTiles.has(tile) &&
+          (occupancyByTile.get(tile) ?? 0) === 0 &&
+          isWalkable(state.tiles[tile]) &&
+          state.moduleOccupancyByTile[tile] === null &&
+          !isMovementHazard(state, tile)
+        );
+      // A one-tile corridor has nowhere to step aside. Permit a deliberate
+      // exchange with the inbound actor only when the normal swap safety rules
+      // can validate it later (plain floor, no fixture, no hazard/narrow tile).
+      const exchangeTile = inbound.actor.tileIndex;
+      const canExchange =
+        sidestepCandidates.includes(exchangeTile) &&
+        !claimedYieldTiles.has(exchangeTile) &&
+        (occupancyByTile.get(exchangeTile) ?? 0) === 1 &&
+        isWalkable(state.tiles[exchangeTile]) &&
+        state.tiles[exchangeTile] !== TileType.Door &&
+        state.tiles[exchangeTile] !== TileType.Airlock &&
+        state.tiles[blocker.actor.tileIndex] !== TileType.Door &&
+        state.tiles[blocker.actor.tileIndex] !== TileType.Airlock &&
+        state.moduleOccupancyByTile[exchangeTile] === null &&
+        state.moduleOccupancyByTile[blocker.actor.tileIndex] === null &&
+        !isMovementHazard(state, exchangeTile) &&
+        !isMovementHazard(state, blocker.actor.tileIndex);
+      const sidestep = emptySidestep ?? (canExchange ? exchangeTile : undefined);
+      if (sidestep === undefined) continue;
+      blocker.actor.path = [sidestep];
+      blocker.actor.movementWaitReason = 'making room';
+      if (blocker.kind === 'crew') {
+        const crew = blocker.actor as CrewMember;
+        crew.retargetAt = Math.max(crew.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
+      } else if (blocker.kind === 'resident') {
+        const resident = blocker.actor as Resident;
+        resident.retargetAt = Math.max(resident.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
+      }
+      claimedYieldTiles.add(sidestep);
+      relievedInbound.add(inbound.actor);
+      break;
+    }
+  }
+  return relievedInbound;
+}
+
+function beginMovementCoordinator(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
+  const previous = movementCoordinatorByState.get(state);
+  const coordinator: MovementCoordinator = {
+    approved: new Set<string>(),
+    blockedReasonByKey: new Map<string, string>(),
+    narrowCooldownUntil: new Map(),
+    kindByActor: new Map()
+  };
+  for (const [tile, until] of previous?.narrowCooldownUntil ?? []) {
+    if (until > state.now) coordinator.narrowCooldownUntil.set(tile, until);
+  }
+
+  const actors = movementActors(state);
+  for (const { kind, actor } of actors) coordinator.kindByActor.set(actor, kind);
+  const yieldingFor = assignMovementYieldPaths(state, actors, occupancyByTile);
+  for (const { actor } of actors) {
+    if (actor.path.length === 0) {
+      clearMovementWait(actor);
+      actor.blockedTicks = 0;
+      continue;
+    }
+    if (
+      actor.blockedTicks >= MOVEMENT_REPLAN_BLOCKED_TICKS &&
+      !yieldingFor.has(actor) &&
+      state.now >= (actor.movementReplanCooldownUntil ?? 0)
+    ) {
+      // This is the next-tick consequence of waiting, never a mutation made
+      // while returning a blocked movement result.
+      actor.path = [];
+      actor.movementReplanCooldownUntil = state.now + MOVEMENT_REPLAN_COOLDOWN_SEC;
+      actor.movementWaitReason = 'rerouting around congestion';
+    }
+  }
+
+  const intents: MovementIntent[] = [];
+  for (const { kind, actor } of actors) {
+    if (actor.path.length === 0) continue;
+    const target = actor.path[0];
+    const center = tileCenter(target, state.width);
+    // The prepass only claims crossings that can happen with the actor's
+    // unmodified speed. Crew modifiers only slow movement, never speed it up.
+    if (Math.hypot(center.x - actor.x, center.y - actor.y) > actor.speed * dt + 0.001) continue;
+    const narrowTiles = [actor.tileIndex, target].filter(
+      (tile, index, values) => values.indexOf(tile) === index && (state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock)
+    );
+    intents.push({
+      actor,
+      kind,
+      key: movementActorKey(kind, actor),
+      origin: actor.tileIndex,
+      target,
+      narrowTiles,
+      priority: movementActorPriority(actor, kind)
+    });
+  }
+
+  const compare = (a: MovementIntent, b: MovementIntent): number =>
+    b.priority - a.priority || a.kind.localeCompare(b.kind) || a.actor.id - b.actor.id;
+  const byTarget = new Map<number, MovementIntent[]>();
+  for (const intent of intents) {
+    const bucket = byTarget.get(intent.target) ?? [];
+    bucket.push(intent);
+    byTarget.set(intent.target, bucket);
+  }
+  const candidates = new Set<MovementIntent>();
+  for (const bucket of byTarget.values()) {
+    bucket.sort(compare);
+    candidates.add(bucket[0]);
+    for (const loser of bucket.slice(1)) coordinator.blockedReasonByKey.set(loser.key, 'yielding to another traveler');
+  }
+
+  // A door/airlock is a single simulation-time crossing, even when one actor
+  // is entering while another would leave. Resolve this after target buckets
+  // so the capacity is independent of loop/array order.
+  const byNarrowTile = new Map<number, MovementIntent[]>();
+  for (const intent of candidates) {
+    for (const tile of intent.narrowTiles) {
+      const bucket = byNarrowTile.get(tile) ?? [];
+      bucket.push(intent);
+      byNarrowTile.set(tile, bucket);
+    }
+  }
+  for (const [tile, bucket] of byNarrowTile) {
+    bucket.sort(compare);
+    const cooldownUntil = coordinator.narrowCooldownUntil.get(tile) ?? 0;
+    const winner = cooldownUntil > state.now ? undefined : bucket[0];
+    for (const intent of bucket) {
+      if (intent === winner) continue;
+      candidates.delete(intent);
+      coordinator.blockedReasonByKey.set(intent.key, cooldownUntil > state.now ? 'narrow crossing occupied' : 'yielding at narrow crossing');
+    }
+  }
+
+  const occupantByTile = new Map<number, MovementActor[]>();
+  for (const { actor } of actors) {
+    const bucket = occupantByTile.get(actor.tileIndex) ?? [];
+    bucket.push(actor);
+    occupantByTile.set(actor.tileIndex, bucket);
+  }
+  const byKey = new Map(intents.map((intent) => [intent.key, intent]));
+  const canSwap = (a: MovementIntent, b: MovementIntent): boolean => {
+    if (a.origin !== b.target || a.target !== b.origin) return false;
+    if (a.narrowTiles.length > 0 || b.narrowTiles.length > 0) return false;
+    if (isServiceTarget(a.actor, a.target) || isServiceTarget(b.actor, b.target)) return false;
+    if (state.modules[a.target] !== ModuleType.None || state.modules[b.target] !== ModuleType.None) return false;
+    if (isMovementHazard(state, a.origin) || isMovementHazard(state, a.target)) return false;
+    const aCrew = a.kind === 'crew' ? a.actor as CrewMember : null;
+    const bCrew = b.kind === 'crew' ? b.actor as CrewMember : null;
+    const aBulkyCargo = aCrew !== null && aCrew.carryingItemType !== null && aCrew.carryingAmount > 1;
+    const bBulkyCargo = bCrew !== null && bCrew.carryingItemType !== null && bCrew.carryingAmount > 1;
+    return !aBulkyCargo && !bBulkyCargo;
+  };
+  const approved = new Set<string>();
+  const visiting = new Set<string>();
+  const rejected = new Set<string>();
+  const approve = (intent: MovementIntent): boolean => {
+    if (approved.has(intent.key)) return true;
+    if (rejected.has(intent.key) || !candidates.has(intent)) return false;
+    if (visiting.has(intent.key)) {
+      rejected.add(intent.key);
+      coordinator.blockedReasonByKey.set(intent.key, 'cycle yields');
+      return false;
+    }
+    visiting.add(intent.key);
+    const occupants = occupantByTile.get(intent.target) ?? [];
+    let allowed = occupants.length === 0;
+    if (occupants.length > 0) {
+      allowed = occupants.every((occupant) => {
+        const occupantKind = coordinator.kindByActor.get(occupant);
+        const occupantIntent = occupantKind ? byKey.get(movementActorKey(occupantKind, occupant)) : undefined;
+        if (!occupantIntent || !candidates.has(occupantIntent)) return false;
+        if (visiting.has(occupantIntent.key)) {
+          return occupants.length === 1 && canSwap(intent, occupantIntent);
+        }
+        return approve(occupantIntent);
+      });
+    }
+    visiting.delete(intent.key);
+    if (!allowed) {
+      rejected.add(intent.key);
+      if (!coordinator.blockedReasonByKey.has(intent.key)) coordinator.blockedReasonByKey.set(intent.key, 'destination occupied');
+      return false;
+    }
+    approved.add(intent.key);
+    return true;
+  };
+  for (const intent of [...candidates].sort(compare)) approve(intent);
+  for (const intent of intents) {
+    if (!approved.has(intent.key) && !coordinator.blockedReasonByKey.has(intent.key)) {
+      coordinator.blockedReasonByKey.set(intent.key, 'destination occupied');
+    }
+  }
+  coordinator.approved = approved;
+  movementCoordinatorByState.set(state, coordinator);
+  void occupancyByTile;
+}
+
 function moveAlongPath(
   state: StationState,
-  actor: { x: number; y: number; tileIndex: number; path: number[]; speed: number },
+  actor: MovementActor,
   dt: number,
   occupancyByTile: Map<number, number>
 ): MoveResult {
@@ -13754,24 +14086,58 @@ function moveAlongPath(
   const step = actor.speed * speedFactor * dt;
 
   if (dist <= step || dist < 0.001) {
+    const coordinator = movementCoordinatorByState.get(state);
+    const kind = coordinator?.kindByActor.get(actor);
+    const key = kind ? movementActorKey(kind, actor) : '';
+    if (!coordinator?.approved.has(key)) {
+      actor.movementWaitReason = coordinator?.blockedReasonByKey.get(key) ?? 'awaiting movement arbitration';
+      return 'blocked';
+    }
     const occupied = occupancyByTile.get(nextTile) ?? 0;
     // Crowds should influence route choice and diagnostics, but should not
     // become hard physics. A hard occupancy cap made busy doors/service rooms
     // turn into permanent deadlocks as agents kept retrying the same blocked
     // step. True blockers still come from topology, zoning, and temporary
     // tile effects in the pathfinder.
-    occupancyByTile.set(actor.tileIndex, Math.max(0, (occupancyByTile.get(actor.tileIndex) ?? 1) - 1));
+    const originTile = actor.tileIndex;
+    occupancyByTile.set(originTile, Math.max(0, (occupancyByTile.get(originTile) ?? 1) - 1));
     occupancyByTile.set(nextTile, occupied + 1);
     actor.x = target.x;
     actor.y = target.y;
     actor.tileIndex = nextTile;
     actor.path.shift();
+    clearMovementWait(actor);
+    for (const tile of [originTile, nextTile]) {
+      if (state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock) {
+        coordinator?.narrowCooldownUntil.set(tile, state.now + NARROW_CROSSING_COOLDOWN_SEC);
+      }
+    }
     return 'moved';
   }
 
   actor.x += (dx / dist) * step;
   actor.y += (dy / dist) * step;
   return 'moved';
+}
+
+/** Focused deterministic harness hook; production ticks use the same coordinator and adapter. */
+export function runMovementCoordinatorTestTick(
+  state: StationState,
+  dt: number,
+  reverseOrder = false
+): Map<string, MoveResult> {
+  const occupancyByTile = buildOccupancyMap(state);
+  beginMovementCoordinator(state, dt, occupancyByTile);
+  const actors = movementActors(state);
+  if (reverseOrder) actors.reverse();
+  const results = new Map<string, MoveResult>();
+  for (const { kind, actor } of actors) {
+    const result = moveAlongPath(state, actor, dt, occupancyByTile);
+    results.set(movementActorKey(kind, actor), result);
+    if (result === 'blocked') actor.blockedTicks = Math.min(9999, actor.blockedTicks + 1);
+    else if (result === 'moved') actor.blockedTicks = 0;
+  }
+  return results;
 }
 
 function preferredDormTargets(state: StationState): number[] {
@@ -18195,7 +18561,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             } else if (moveResult === 'blocked') {
               crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
               markJobStall(state, job, 'stalled_path_blocked');
-              setCrewPath(state, crew, []);
             }
           }
         } else {
@@ -18218,7 +18583,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
             } else if (moveResult === 'blocked') {
               crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
               markJobStall(state, job, 'stalled_path_blocked');
-              setCrewPath(state, crew, []);
             }
           } else {
             site.state = 'building';
@@ -20208,6 +20572,8 @@ function updateVisitorLogic(
         }
       }
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+      if (moveResult === 'blocked') visitor.blockedTicks = Math.min(visitor.blockedTicks + 1, 9999);
+      else if (moveResult === 'moved') visitor.blockedTicks = 0;
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt * 0.4);
       if (waitingInCantinaLine && moveResult !== 'moved') addVisitorPatience(state, visitor, dt * 0.25);
       const collectingDrink =
@@ -20558,6 +20924,8 @@ function updateVisitorLogic(
         assignPathToDock(state, visitor);
       }
       const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+      if (moveResult === 'blocked') visitor.blockedTicks = Math.min(visitor.blockedTicks + 1, 9999);
+      else if (moveResult === 'moved') visitor.blockedTicks = 0;
       if (moveResult !== 'moved') addVisitorPatience(state, visitor, dt);
       if (isVisitorExitTile(state, visitor.tileIndex)) {
         const boardedResult = tryBoardVisitorOriginShipAtTile(state, visitor, visitor.tileIndex);
@@ -25262,6 +25630,7 @@ export function tick(state: StationState, frameDt: number): void {
 
   const occupancyByTile = buildOccupancyMap(state);
   state.pathOccupancyByTile = occupancyByTile;
+  beginMovementCoordinator(state, dt, occupancyByTile);
   updateCrewLogic(state, dt, occupancyByTile);
   finishPhase('crew');
   updateCargoArmException(state, dt);

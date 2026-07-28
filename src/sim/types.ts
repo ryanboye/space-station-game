@@ -522,6 +522,10 @@ export interface Visitor {
   reservedServingTile: number | null;
   reservedTargetTile: number | null;
   blockedTicks: number;
+  /** Runtime-facing reason for a physical movement wait. Never serialized. */
+  movementWaitReason?: string;
+  /** Simulation-time hysteresis for congestion-triggered path invalidation. */
+  movementReplanCooldownUntil?: number;
   archetype: VisitorArchetype;
   taxSensitivity: number;
   spendMultiplier: number;
@@ -638,6 +642,8 @@ export interface Resident {
   satisfaction: number;
   leaveIntent: number;
   blockedTicks: number;
+  movementWaitReason?: string;
+  movementReplanCooldownUntil?: number;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
   agitation?: number;
@@ -1009,6 +1015,8 @@ export interface CrewMember {
   carryingItemType: ItemType | null;
   carryingAmount: number;
   blockedTicks: number;
+  movementWaitReason?: string;
+  movementReplanCooldownUntil?: number;
   idleReason: CrewIdleReason;
   restSessionActive: boolean;
   eatSessionActive: boolean;

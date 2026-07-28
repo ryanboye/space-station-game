@@ -281,6 +281,8 @@ export interface StationSnapshotV1 {
       resignationNoticeAt: number | null;
       airExposureSec: number;
       healthState: 'healthy' | 'distressed' | 'critical';
+      blockedTicks?: number;
+      movementReplanCooldownUntil?: number;
     }>;
   };
   residents?: Resident[];
@@ -1035,16 +1037,18 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         needsStrainSec: crew.needsStrainSec,
         resignationNoticeAt: crew.resignationNoticeAt,
         airExposureSec: crew.airExposureSec,
-        healthState: crew.healthState
+        healthState: crew.healthState,
+        blockedTicks: crew.blockedTicks,
+        movementReplanCooldownUntil: crew.movementReplanCooldownUntil
       }))
     },
-    residents: state.residents.map((resident) => ({
+    residents: state.residents.map(({ movementWaitReason: _movementWaitReason, ...resident }) => ({
       ...resident,
       path: [...resident.path],
       roleAffinity: { ...resident.roleAffinity },
       lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
     })),
-    visitors: state.visitors.map((visitor) => ({
+    visitors: state.visitors.map(({ movementWaitReason: _movementWaitReason, ...visitor }) => ({
       ...visitor,
       path: [...visitor.path],
       needs: visitor.needs ? { ...visitor.needs } : undefined,
@@ -1828,7 +1832,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         airExposureSec: Math.max(0, asFiniteNumber(entry.airExposureSec, 0)),
         healthState: isOneOf(entry.healthState, ['healthy', 'distressed', 'critical'] as const)
           ? entry.healthState
-          : 'healthy'
+          : 'healthy',
+        blockedTicks: Math.max(0, Math.floor(asFiniteNumber(entry.blockedTicks, 0))),
+        movementReplanCooldownUntil: Math.max(0, asFiniteNumber(entry.movementReplanCooldownUntil, 0))
       });
     }
   }
@@ -3031,6 +3037,7 @@ export function hydrateStateFromSave(
     .map((visitor) => ({
       ...visitor,
       path: [],
+      movementWaitReason: undefined,
       reservedServingTile: null,
       reservedTargetTile: null,
       serveTimer: undefined,
@@ -3046,6 +3053,7 @@ export function hydrateStateFromSave(
     ...resident,
     tileIndex: clamp(Math.floor(resident.tileIndex), 0, next.tiles.length - 1),
     path: [],
+    movementWaitReason: undefined,
     roleAffinity: { ...resident.roleAffinity },
     state: resident.state === ResidentState.ToHomeShip ? ResidentState.Idle : resident.state,
     reservedTargetTile: null,
@@ -3116,6 +3124,8 @@ export function hydrateStateFromSave(
     crew.resignationNoticeAt = saved.resignationNoticeAt;
     crew.airExposureSec = saved.airExposureSec;
     crew.healthState = saved.healthState;
+    crew.blockedTicks = Math.max(0, Math.floor(saved.blockedTicks ?? 0));
+    crew.movementReplanCooldownUntil = Math.max(0, saved.movementReplanCooldownUntil ?? 0);
   }
   next.crewSpawnCounter = Math.max(
     next.crewSpawnCounter,

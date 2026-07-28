@@ -37,6 +37,7 @@ export {
   validateDockingSlot,
   resolvePhysicalApproachCommitments,
   reconcilePhysicalApproachCommitments,
+  runMovementCoordinatorTestTick,
   getCommercialUnitAt,
   getEligibleBerthsForOffer,
   getCrewInspectorById,

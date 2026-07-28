@@ -462,48 +462,48 @@ compiles is not sufficient for player-facing work.
 - [x] Permit docked coexistence when mooring envelopes are clear.
 - [x] Serialize conflicting approach/departure operations.
 - [x] Permit independent approaches concurrently.
-- [ ] Show `WAITING: APPROACH OCCUPIED` at the physical interface.
+- [x] Show `WAITING: APPROACH OCCUPIED` at the physical interface.
 - [x] Keep holding traffic structured and deterministic.
 
 ### Placement Preview
 
-- [ ] Render approach direction arrows.
-- [ ] Render vessel width and depth.
-- [ ] Render hard obstruction in red.
-- [ ] Render shared/serialized approach in amber.
-- [ ] Show resulting conflict group.
+- [x] Render approach direction arrows.
+- [x] Render vessel width and depth.
+- [x] Render hard obstruction in red.
+- [x] Render shared/serialized approach in amber.
+- [x] Show resulting conflict group.
 - [ ] Show charter-facing lane traffic.
 - [ ] Show obvious interior throat or boarding warning.
 
 ### Phase 4 Gate
 
 - [x] Map-edge placement cannot bypass clearance.
-- [ ] Overlapping approaches serialize visibly.
+- [x] Overlapping approaches serialize visibly.
 - [x] Independent sides operate concurrently.
-- [ ] Parked ships never overlap hull or one another.
+- [x] Parked ships never overlap hull or one another.
 - [x] Save/load resumes durable slot and approach ownership safely.
 
 ## Phase 5: Movement Intent, Doors, And Real Queues
 
 ### Movement Coordinator
 
-- [ ] Collect next-tile intents in a batched simulation pass.
-- [ ] Resolve by tile capacity and occupant departure intent.
-- [ ] Include role/urgency without starving ordinary actors.
-- [ ] Accumulate wait age for fairness.
-- [ ] Use deterministic tie-breaking.
-- [ ] Allow controlled safe head-on swaps.
+- [x] Collect next-tile intents in a batched simulation pass.
+- [x] Resolve by tile capacity and occupant departure intent.
+- [x] Include role/urgency without starving ordinary actors.
+- [x] Accumulate wait age for fairness.
+- [x] Use deterministic tie-breaking.
+- [x] Allow controlled safe head-on swaps.
 - [ ] Make one actor yield when a swap is unsafe.
-- [ ] Replan after bounded waiting using congestion.
-- [ ] Add route hysteresis to prevent oscillation.
-- [ ] Add bounded deadlock recovery.
+- [x] Replan after bounded waiting using congestion.
+- [x] Add route hysteresis to prevent oscillation.
+- [x] Add bounded deadlock recovery.
 - [ ] Release stale movement and service reservations.
 - [ ] Keep interpolation independent from simulation speed.
 
 ### Spatial Capacity
 
-- [ ] Give doors one crossing resource and crossing time.
-- [ ] Give Airlocks explicit crossing capacity.
+- [x] Give doors one crossing resource and crossing time.
+- [x] Give Airlocks explicit crossing capacity.
 - [ ] Give narrow corridors low directional capacity.
 - [ ] Give open concourses greater capacity.
 - [ ] Make carts/bulky cargo consume more movement capacity.
@@ -522,7 +522,7 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 5 Gate
 
-- [ ] A narrow terminal congests without permanently freezing.
+- [x] A narrow terminal congests without permanently freezing.
 - [ ] A queue visibly covers and slows a door.
 - [ ] A second entrance measurably improves throughput.
 - [ ] Head-on and cyclic traffic recovers.
@@ -893,3 +893,24 @@ Remaining uncertainty:
 - Focused checks: `npm run test:approach-envelopes`, `npm run test:approach-control`, `npm run build`, and `git diff --check` passed. Coverage proves full map-edge geometry, fixed obstruction rejection without state mutation, deterministic conflict ownership independent of array order, concurrent independent groups, small-craft Pod Dock binding, departure ownership before slot release, save/resume queue order, west-expansion world stability, and no hidden approach progress while waiting.
 - Visual/playtest evidence: none yet. This change establishes the simulation authority needed by placement and live-operation presentation but intentionally does not claim the preview or world-label requirements.
 - Remaining uncertainty: physical interface IDs are still derived from local anchors and remapped during north/west growth rather than having immutable UUIDs; Berth and dock placement preview does not yet expose red hard obstruction, amber serialization, vessel dimensions, conflict-group identity, lane traffic, throat warnings, or `WAITING: APPROACH OCCUPIED` in the world.
+
+2026-07-27 · Phase 6 cargo, boarding, and diagnosis architecture audit
+
+- Commit or files: read-only audit of `src/sim/sim.ts`, `src/sim/types.ts`, `src/sim/save.ts`, `src/render/render.ts`, `src/sim/balance.ts`, existing logistics/port documentation, and focused cargo/visitor tests. No Phase 6 behavior changed and no checklist item was checked.
+- Focused findings: meals, trade goods, materials, fuel, and berth freight already use item nodes, transport jobs, crew-held quantities, and durable `PortCargoLot` ownership. The implementation boundary is therefore physical custody and throughput, not a new inventory system: attach a visible carried-load/cart record to the authoritative job and actor, then consume Phase 5 movement capacity. Gangways currently provide only capability/anchor data; passenger spawn and boarding have no crossing slots or service duration. Existing recall and hard-departure/stranding state can drive a real boarding queue.
+- Visual/playtest evidence: current freight renders as static crate stacks and current meal/trade movement has no carried world object. Multiple Gangways do not improve passenger throughput, and route-pressure percentages cannot identify a specific blocking door, queue, or cargo crossing.
+- Remaining uncertainty: jobs, reservations, active crew loads, and carried quantities are not fully persisted. A future cargo slice must reconcile interrupted pickup/carry/drop exactly once, preserve consigned ownership, avoid inflating station stock, and rebuild ephemeral paths/claims after hydration. Minimum diagnosis should record actual wait/service times, queue span, blocker tile/reason, public-versus-cargo contention, and per-interface boarding/cargo outcomes.
+
+2026-07-27 · Phase 4 world-space approach presentation
+
+- Commit or files: `src/render/render.ts`, `src/main.ts`, and `src/sim/cold-start-scenarios.ts` (pending integration commit at time of evidence capture).
+- Focused checks: `npm run test:approach-envelopes`, `npm run build`, and live `?scenario=approach-conflicts` inspection passed. The fixture now uses physical Dock tiles and durable `legacy-dock:<anchor>` identities, so normal dock rebuilding cannot orphan its ship commitments.
+- Visual/playtest evidence: at fit and ordinary play zoom, the waiting craft shows `WAITING: APPROACH OCCUPIED` beside the physical hull interface. Pod Dock placement renders a world-space footprint, mooring area, directional arrow, and `APPROACH CLEAR`, `APPROACH BLOCKED`, or `APPROACH SERIALIZES: N GROUPS` label using cyan, red, and amber states.
+- Remaining uncertainty: charter-facing traffic weight and interior throat/boarding warnings are not yet part of the placement label; those requirements remain unchecked.
+
+2026-07-27 · Phase 5 movement coordinator foundation
+
+- Commit or files: `src/sim/sim.ts`, `src/sim/path.ts`, `src/sim/construction.ts`, `src/sim/types.ts`, `src/sim/save.ts`, `src/sim/index.ts`, `tools/movement-coordinator-tests.ts`, `tools/structural-expansion-tests.ts`, and `package.json` (pending integration commit at time of evidence capture).
+- Focused checks: `npm run test:movement-coordinator`, `npm run test:structural-expansion`, `npm run test:occupant-loop`, `npm run test:facility-slots`, `npm run test:failed-stay`, `npm run test:approach-envelopes`, and `npm run build` passed. Coverage proves order-independent contested-tile ownership, bounded urgency with wait-age fairness, safe floor swaps, unsafe Door serialization, narrow-crossing cooldown, bounded congestion replanning, hysteresis, an idle-blocker sidestep, a one-tile hand-courier exchange, distinct fresh crew spawn tiles, and save/resume of durable wait age without stale transient claims.
+- Visual/playtest evidence: construction regression tracing exposed two real physical cases rather than lost inventory: the legacy starter spawned all crew on one tile, and a pathless worker could occupy the only square in a one-tile corridor. Fresh crew now spawn on distinct nearby walkable tiles; idle blockers step aside or perform a safety-checked exchange. Interrupted construction loads still return to their authoritative source exactly once.
+- Remaining uncertainty: real queue floor slots, queue spill through doors, general narrow-corridor directional capacity, rendered actor wait reasons, bulky-cart capacity beyond swap safety, and target-scale performance remain Phase 5/6 work and stay unchecked.

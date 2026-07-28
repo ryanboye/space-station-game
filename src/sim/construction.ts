@@ -581,8 +581,25 @@ function constructionMaterialSources(state: StationState): Array<{ tile: number;
     .map((tile) => ({ tile, available: itemStockAtNode(state, tile, 'rawMaterial'), legacy: false }))
     .filter((source) => source.available > 0.05);
   if (state.legacyMaterialStock > 0.05) {
-    const reachableCacheTile =
-      state.crewMembers.find((crew) => state.tiles[crew.tileIndex] !== TileType.Space)?.tileIndex ?? state.core.serviceTile;
+    // Legacy stock has no physical ItemNode. Give it a deterministic open
+    // interaction position near the core instead of pretending it sits under
+    // the first crew member; hard movement occupancy would make that source
+    // permanently unreachable.
+    const occupied = new Set([
+      ...state.crewMembers.map((crew) => crew.tileIndex),
+      ...state.residents.map((resident) => resident.tileIndex),
+      ...state.visitors.map((visitor) => visitor.tileIndex)
+    ]);
+    const cacheCandidates = [
+      ...adjacentWalkableTiles(state, state.core.serviceTile),
+      state.core.serviceTile
+    ];
+    const reachableCacheTile = cacheCandidates.find(
+      (tile) =>
+        !occupied.has(tile) &&
+        isWalkable(state.tiles[tile]) &&
+        state.moduleOccupancyByTile[tile] === null
+    ) ?? state.core.serviceTile;
     sources.push({ tile: reachableCacheTile, available: state.legacyMaterialStock, legacy: true });
   }
   return sources.sort((a, b) => b.available - a.available);
