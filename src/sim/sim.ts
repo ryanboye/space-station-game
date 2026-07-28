@@ -21677,6 +21677,9 @@ function revealVisitorServices(visitor: Visitor, count: number): void {
 function visitorWantsReception(state: StationState, visitor: Visitor): boolean {
   if (visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined) return false;
   if (visitor.servicePlan.length <= 1) return false;
+  // Once a guest has made a physical first choice, Reception has missed its
+  // useful window. Do not let an ordinary bypass loop back to the desk later.
+  if (visitor.lastLeisureKind !== null || visitor.redirectedFrom) return false;
   // Reception is worth a detour only on arrival; a guest already mid-visit has
   // learned the station by walking it.
   return visitorVisitAge(state, visitor) <= 30;
@@ -21728,14 +21731,151 @@ function assignPathToReception(state: StationState, visitor: Visitor): boolean {
 function completeReceptionSession(state: StationState, visitor: Visitor): void {
   visitor.receptionProcessedAt = state.now;
   revealVisitorServices(visitor, RECEPTION_REVEAL_COUNT);
+  // Authored hidden-demand arrivals do not select their actual service until
+  // somebody asks. Reception turns that partial reveal into an exact next
+  // stop without exposing anything after the first outstanding want.
+  visitor.activeService ??=
+    visitor.servicePlan.find((service) => !visitor.completedServices.includes(service)) ?? null;
   releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot']);
   visitor.reservedTargetTile = null;
+}
+
+/** The kind of hospitality a guest can reasonably infer from a first stop. */
+function firstChoiceServiceAt(state: StationState, tileIndex: number): HospitalityServiceKind | null {
+  const module = moduleAtTile(state, tileIndex)?.type ?? state.modules[tileIndex];
+  if (module === ModuleType.GameStation || module === ModuleType.Telescope) return 'comfort';
+  if (module === ModuleType.Toilet) return 'restroom';
+  if (module === ModuleType.Shower || module === ModuleType.Sink || module === ModuleType.WashBank) return 'hygiene';
+  if (
+    module === ModuleType.Couch ||
+    module === ModuleType.RecUnit ||
+    module === ModuleType.Bench
+  ) return 'leisure';
+  return null;
+}
+
+/**
+ * Give a guest with hidden demand a plausible physical first choice.
+ *
+ * This is intentionally preference-led rather than omniscient. A lounge
+ * guest tries an ordinary social seat; only arriving there makes a different
+ * need visible. The reservation keeps the choice concrete and bounded.
+ */
+function assignPathToUnprocessedFirstChoice(state: StationState, visitor: Visitor): boolean {
+  if (visitor.activeService !== null || visitor.servicePlan.length === 0) return false;
+  if ((visitor.revealedServices?.length ?? 0) > 0 || visitor.redirectedFrom) return false;
+
+  const plausibleTargets = visitor.primaryPreference === 'market'
+    ? activeModuleUsageTargets(state, [ModuleType.MarketStall], [RoomType.Market])
+    : visitor.primaryPreference === 'cafeteria'
+      ? activeModuleUsageTargets(
+          state,
+          [ModuleType.VendingMachine, ModuleType.Bench],
+          [RoomType.Cafeteria]
+        )
+      : [
+          ...activeModuleUsageTargets(state, [ModuleType.Couch, ModuleType.Bench], [RoomType.Lounge]),
+          ...activeModuleUsageTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall])
+        ];
+  // A missing preferred room is not a gate: the ordinary leisure fallback
+  // below can still find another plausible public fixture.
+  if (plausibleTargets.length === 0) return false;
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
+  const choice = chooseLeastLoadedPath(
+    state,
+    visitor.tileIndex,
+    plausibleTargets,
+    false,
+    'visitor',
+    undefined,
+    visitor.id
+  );
+  if (!choice) return false;
+  const guessedService = firstChoiceServiceAt(state, choice.target) ?? 'leisure';
+  const reservation = tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'provider-slot',
+    targetTile: choice.target,
+    targetId: `first-choice:${guessedService}:${choice.target}`,
+    amount: 1,
+    capacity: leisureTargetCapacity(state, choice.target),
+    ttlSec: 75,
+    replaceOwnerReservations: true
+  });
+  if (!reservation.ok) return false;
+  visitor.reservedTargetTile = choice.target;
+  visitor.reservedServingTile = null;
+  visitor.state = VisitorState.ToLeisure;
+  setVisitorPath(state, visitor, choice.path);
+  return visitor.path.length > 0 || visitor.tileIndex === choice.target;
+}
+
+function activeVisitorFirstChoiceReservation(state: StationState, visitor: Visitor): Reservation | null {
+  return state.reservations.find(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.expiresAt > state.now &&
+      reservation.ownerKind === 'visitor' &&
+      reservation.ownerId === visitor.id &&
+      reservation.kind === 'provider-slot' &&
+      reservation.targetId?.startsWith('first-choice:')
+  ) ?? null;
+}
+
+/**
+ * Realize hidden demand at the first physical stop. A correct guess simply
+ * begins the service. A wrong guess redirects exactly once and leaves both a
+ * durable cause on the guest and visible world feedback.
+ */
+function realizeVisitorNeedAtFirstChoice(state: StationState, visitor: Visitor): boolean {
+  if (visitor.activeService !== null || visitor.redirectedFrom) return false;
+  if (visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined) return false;
+  if (visitor.servicePlan.length === 0) return false;
+  const firstChoiceReservation = activeVisitorFirstChoiceReservation(state, visitor);
+  if (!firstChoiceReservation) return false;
+  const firstChoiceTile = firstChoiceReservation.targetTile;
+  if (firstChoiceTile === null) return false;
+  // Large fixtures expose several footprint tiles. Only reaching the fixture
+  // actually chosen counts; merely crossing another amenity en route cannot
+  // magically reveal the need early.
+  const chosenModule = moduleAtTile(state, firstChoiceTile);
+  const currentModule = moduleAtTile(state, visitor.tileIndex);
+  if (chosenModule && currentModule?.id !== chosenModule.id) return false;
+  if (!chosenModule && visitor.tileIndex !== firstChoiceTile) return false;
+  const guessedService = firstChoiceServiceAt(state, firstChoiceTile);
+  if (!guessedService) return false;
+  const wanted = visitor.servicePlan.find((service) => !visitor.completedServices.includes(service)) ?? null;
+  if (!wanted) return false;
+  visitor.activeService = wanted;
+  revealVisitorServices(visitor, 1);
+  if (guessedService === wanted) return false;
+
+  visitor.redirectedFrom = guessedService;
+  const from = tileCenter(visitor.tileIndex, state.width);
+  pushCrowdFloater(state, from.x, from.y - 0.35, `Need: ${wanted} ↪`, '#f5c86a');
+  pushCrowdEvent(
+    state,
+    'info',
+    `${visitor.name ?? `Guest ${visitor.id}`} realized they need ${wanted}; redirecting from ${guessedService}.`
+  );
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
+  visitor.reservedTargetTile = null;
+  visitor.reservedServingTile = null;
+  setVisitorPath(state, visitor, []);
+  visitor.state = wanted === 'meal' ? VisitorState.ToCafeteria : VisitorState.ToLeisure;
+  if (wanted === 'meal') {
+    assignPathToCafeteria(state, visitor);
+    return true;
+  }
+  return assignPathToPreferredLeisure(state, visitor);
 }
 
 function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): boolean {
   // An optional first stop. Returns false whenever no desk is free and staffed,
   // so an absent or saturated Reception is a bypass, never a block.
   if (assignPathToReception(state, visitor)) return true;
+  if (assignPathToUnprocessedFirstChoice(state, visitor)) return true;
   // A browsed item is a real, reserved physical good. Do not let a generic
   // leisure reroute abandon it or skip the checkout stage.
   if (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) {
@@ -23167,11 +23307,23 @@ function updateVisitorLogic(
       // through occupancy so a depicted processor/register/shelf position is
       // recognized no matter which footprint tile it occupies.
       const currentModule = moduleAtTile(state, visitor.tileIndex)?.type ?? state.modules[visitor.tileIndex];
+      if (realizeVisitorNeedAtFirstChoice(state, visitor)) {
+        keep.push(visitor);
+        continue;
+      }
+      const reservedLeisureModule = visitor.reservedTargetTile === null
+        ? null
+        : moduleAtTile(state, visitor.reservedTargetTile);
+      const atReservedLeisureFixture =
+        visitor.reservedTargetTile === null ||
+        visitor.tileIndex === visitor.reservedTargetTile ||
+        (reservedLeisureModule != null && moduleAtTile(state, visitor.tileIndex)?.id === reservedLeisureModule.id);
       const atLoungeModule =
-        currentModule === ModuleType.Couch ||
-        currentModule === ModuleType.GameStation ||
-        currentModule === ModuleType.RecUnit ||
-        currentModule === ModuleType.Bench;
+        atReservedLeisureFixture &&
+        (currentModule === ModuleType.Couch ||
+          currentModule === ModuleType.GameStation ||
+          currentModule === ModuleType.RecUnit ||
+          currentModule === ModuleType.Bench);
       const atArrivalDesk =
         currentModule === ModuleType.ArrivalDesk &&
         visitor.reservedTargetTile === visitor.tileIndex &&

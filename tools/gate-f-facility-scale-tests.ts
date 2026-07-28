@@ -583,61 +583,117 @@ function testReceptionRevealsAndNeverGates(): string {
     'An unstaffed desk must offer no processing positions, so guests bypass it.'
   );
 
-  // The two layouts carry the SAME arrivals with the same ids and wants.
+  // The two layouts carry the SAME arrivals with the same ids and hidden wants.
   const arrivals = (target: StationState): Visitor[] =>
     target.visitors.filter((visitor) => visitor.id >= 99500 && visitor.id < 99540);
   assert(arrivals(without).length === arrivals(withDesk).length, 'Both layouts must receive identical arrivals.');
   assert(arrivals(without).length > 0, 'The reception comparison needs arrivals.');
+  for (let index = 0; index < arrivals(without).length; index += 1) {
+    const left = arrivals(without)[index];
+    const right = arrivals(withDesk)[index];
+    assert(left.id === right.id, 'Reception variants must preserve arrival identity and order.');
+    assert(
+      JSON.stringify(left.servicePlan) === JSON.stringify(right.servicePlan),
+      `Guest ${left.id} must carry the same hidden demand in both variants.`
+    );
+    assert(
+      left.activeService === null && (left.revealedServices?.length ?? 0) === 0,
+      `Guest ${left.id} must begin with demand hidden.`
+    );
+  }
 
-  const revealed = (target: StationState): number =>
-    arrivals(target).reduce((sum, visitor) => sum + (visitor.revealedServices?.length ?? 0), 0);
-  const revealedBefore = revealed(withDesk);
+  // Nobody is gated by the missing desk. On the first live tick every guest
+  // commits to a real, preference-led lounge fixture instead.
+  advance(without, 0.2);
+  const firstChoiceReservations = without.reservations.filter(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.ownerKind === 'visitor' &&
+      arrivals(without).some((visitor) => visitor.id === reservation.ownerId) &&
+      reservation.targetId?.startsWith('first-choice:leisure:')
+  );
+  assert(
+    firstChoiceReservations.length === arrivals(without).length,
+    `Every deskless guest must select a plausible physical first stop (${firstChoiceReservations.length}/${arrivals(without).length}).`
+  );
 
-  advance(without, 40);
-  advance(withDesk, 40);
+  advance(without, 59.8);
+  advance(withDesk, 60);
 
-  // Reception's measured job: reveal demand EARLIER. Nothing else about the
-  // two stations differs.
-  const revealedWithout = revealed(without);
-  const revealedWith = revealed(withDesk);
+  // Reception's measured job is routing correctness, not itinerary exposure.
   const processed = arrivals(withDesk).filter(
     (visitor) => visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined
+  ).length;
+  const redirectsWithout = arrivals(without).filter((visitor) => visitor.redirectedFrom !== null).length;
+  const redirectsWith = arrivals(withDesk).filter((visitor) => visitor.redirectedFrom !== null).length;
+  const resolvedWithout = arrivals(without).filter((visitor) => (visitor.revealedServices?.length ?? 0) > 0).length;
+  const resolvedWith = arrivals(withDesk).filter((visitor) => (visitor.revealedServices?.length ?? 0) > 0).length;
+  const correctWithout = arrivals(without).filter(
+    (visitor) => (visitor.revealedServices?.length ?? 0) > 0 && visitor.redirectedFrom === null
+  ).length;
+  const correctWith = arrivals(withDesk).filter(
+    (visitor) => (visitor.revealedServices?.length ?? 0) > 0 && visitor.redirectedFrom === null
   ).length;
   assert(
     processed > 0,
     'A staffed desk must physically process at least one of the identical arrivals.'
   );
   assert(
-    revealedWith > revealedWithout,
-    `A staffed desk must reveal demand earlier than no desk (${revealedWithout} vs ${revealedWith}).`
-  );
-  assert(
-    revealedWith === revealedBefore + processed,
-    `Each completed desk session must reveal exactly one additional want (${revealedBefore} + ${processed} != ${revealedWith}).`
-  );
-  assert(
     processed < arrivals(withDesk).length,
     'Finite Reception capacity must leave some traffic on the ordinary bypass path.'
   );
+  assert(
+    arrivals(withDesk).some(
+      (visitor) => visitor.receptionProcessedAt === null && (visitor.revealedServices?.length ?? 0) > 0
+    ),
+    'Some guests must make an ordinary physical first choice before Reception can process them.'
+  );
+  assert(
+    correctWith / Math.max(1, resolvedWith) > correctWithout / Math.max(1, resolvedWithout),
+    `Reception must improve correct first routing (${correctWithout}/${resolvedWithout} vs ${correctWith}/${resolvedWith}).`
+  );
+  assert(redirectsWithout > 0, 'At least one hidden need must cause a wrong first choice and redirect.');
+  assert(redirectsWith < redirectsWithout, `Reception must prevent redirects (${redirectsWithout} vs ${redirectsWith}).`);
 
-  // And it must never publish the whole itinerary.
+  const redirectEvents = without.derived.queueTheater.eventFeed.filter((event) => event.text.includes('redirecting from'));
+  assert(
+    redirectEvents.length === redirectsWithout,
+    `Each redirected guest must emit exactly one causal event (${redirectEvents.length} events for ${redirectsWithout} redirects).`
+  );
+  assert(
+    arrivals(without).filter((visitor) => visitor.redirectedFrom !== null).every(
+      (visitor) => visitor.redirectedFrom === 'leisure' && visitor.activeService === 'comfort'
+    ),
+    'A wrong lounge guess must retain redirectedFrom=leisure and the realized comfort need.'
+  );
+  const eventCountBefore = redirectEvents.length;
+  advance(without, 20);
+  assert(
+    without.derived.queueTheater.eventFeed.filter((event) => event.text.includes('redirecting from')).length === eventCountBefore,
+    'A realized need must not oscillate or emit a second redirect.'
+  );
+
+  const floaterProbe = scenario('reception-absent');
+  for (let elapsed = 0; elapsed < 20 && floaterProbe.derived.queueTheater.floaters.length === 0; elapsed += 0.2) {
+    advance(floaterProbe, 0.2);
+  }
+  assert(
+    floaterProbe.derived.queueTheater.floaters.some((floater) => floater.text.startsWith('Need: comfort')),
+    'The need realization must be visible in world space when the redirect happens.'
+  );
+
+  // And neither processing nor behavior may publish the whole itinerary.
   for (const visitor of arrivals(withDesk)) {
     assert(
-      (visitor.revealedServices?.length ?? 0) <= visitor.servicePlan.length,
-      'A visitor must never reveal more wants than it has.'
+      (visitor.revealedServices?.length ?? 0) < visitor.servicePlan.length,
+      'A visitor must retain at least one hidden want.'
     );
   }
-  const fullyExposed = arrivals(withDesk).filter(
-    (visitor) => (visitor.revealedServices?.length ?? 0) >= visitor.servicePlan.length && visitor.servicePlan.length > 1
-  ).length;
-  assert(fullyExposed === 0, 'Reception must reveal part of demand, never a guest\'s complete itinerary.');
 
-  // Bypass: the deskless station keeps moving just as well.
-  assert(without.now > 0 && withDesk.now > 0, 'Both layouts must keep simulating.');
-
-  return `identical arrivals: wants known after 40s ${revealedWithout} without a desk vs ${revealedWith} with one `
-    + `(${processed} processed, ${arrivals(withDesk).length - processed} bypassed, one additional want revealed per session); `
-    + `unstaffed variant reports '${unstaffedStatus.blockedReason}' and offers 0 positions, so arrivals bypass it`;
+  return `same-seed hidden demand: correct first routes ${correctWithout}/${resolvedWithout} without Reception vs `
+    + `${correctWith}/${resolvedWith} with it; ${redirectsWithout} redirects fell to ${redirectsWith}; `
+    + `${processed} processed while other guests chose physical fixtures, each wrong choice emitted one event + need floater; `
+    + `unstaffed '${unstaffedStatus.blockedReason}' still bypasses`;
 }
 
 // ---------------------------------------------------------------------------

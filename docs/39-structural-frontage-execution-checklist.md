@@ -175,7 +175,7 @@ audited checklist with no unsupported checked claims.
   production Approach Control, Berth, transfer, cargo, service, extension,
   recall, stranding, and settlement lifecycle.
   Evidence: `mixed-berth-visit`, `tools/mixed-berth-visit-tests.ts`.
-- [ ] Add reception-bypass and reception-assisted variants.
+- [x] Add reception-bypass and reception-assisted variants.
 - [ ] Add a debris-facing exterior wing.
 - [x] Add a scale baseline with at least 50 crew, 50 simultaneous visitors, and
   5-10 active interfaces.
@@ -318,12 +318,12 @@ audited checklist with no unsupported checked claims.
 - [ ] Reveal individual wants progressively through behavior.
 - [x] Add optional Reception/Customs processing slots.
 - [x] Make Reception reveal some demand earlier, never all of it.
-- [ ] Allow unprocessed occupants to enter and make a plausible choice.
-- [ ] Bound wrong-choice behavior to a readable redirect rather than random
+- [x] Allow unprocessed occupants to enter and make a plausible choice.
+- [x] Bound wrong-choice behavior to a readable redirect rather than random
   wandering.
-- [ ] Show the need or realization that caused redirection.
+- [x] Show the need or realization that caused redirection.
 - [x] Make saturated Reception bypassable rather than a hard arrival gate.
-- [ ] Demonstrate that Reception improves routing in a mixed-demand crowd.
+- [x] Demonstrate that Reception improves routing in a mixed-demand crowd.
 
 ### Large Functional Modules
 
@@ -377,7 +377,7 @@ audited checklist with no unsupported checked claims.
 - [x] Large fixtures create meaningful queue, route, stock, staffing, and floor
   tradeoffs.
 - [x] Beds cannot be double-claimed.
-- [ ] Reception helps without becoming mandatory.
+- [x] Reception helps without becoming mandatory.
 - [ ] Two seeded runs differ while remaining inferable.
 - [ ] Playtest decides whether to proceed with deeper hidden demand.
 
@@ -393,24 +393,24 @@ audited checklist with no unsupported checked claims.
 - [ ] Implement visible `unmet` escalation.
 - [x] Implement visible `balking` escalation.
 - [x] Implement visible `distressed` escalation.
-- [ ] Implement bounded `disruptive` escalation.
+- [x] Implement bounded `disruptive` escalation.
 - [ ] Let prolonged failure cause mess, complaints, arguments, theft, vandalism,
   medical demand, or refusal to work as appropriate.
 - [x] Ensure one missed meal cannot immediately trigger a serious incident.
 - [x] Make distressed repair crews extend repair and Berth occupation.
 - [ ] Make extended occupation block or delay subsequent accepted traffic.
-- [ ] Allow emergency meal purchase.
+- [x] Allow emergency meal purchase.
 - [ ] Allow emergency temporary bunk capacity.
-- [ ] Allow repair prioritization or expediting.
-- [ ] Allow cohort compensation.
-- [ ] Allow evacuation or onward-transfer charter.
+- [x] Allow repair prioritization or expediting.
+- [x] Allow cohort compensation.
+- [x] Allow evacuation or onward-transfer charter.
 - [ ] Allow contract cancellation with an explicit penalty.
-- [ ] Allow admission closure while recovering.
-- [ ] Reserve security intervention for genuinely disruptive occupants.
+- [x] Allow admission closure while recovering.
+- [x] Reserve security intervention for genuinely disruptive occupants.
 - [x] Give stranded occupants temporary accommodation and future departure.
 - [x] Add an expensive relief transfer after a generous maximum disruption window.
 - [x] Never silently convert a failed visitor into a resident.
-- [ ] Require housing availability and explicit policy for resident acceptance.
+- [x] Require housing availability and explicit policy for resident acceptance.
 - [ ] Let an accepted resident's origin ship depart normally.
 - [ ] Apply rating/faction effects at meaningful milestones or resolution.
 - [ ] Verify every rating change traces back to visible behavior.
@@ -438,7 +438,7 @@ audited checklist with no unsupported checked claims.
 
 - [ ] Add simple auto-admission by ship class.
 - [ ] Add auto-admission conditions based on free compatible interface.
-- [ ] Add reserve-capacity conditions for beds or core services.
+- [x] Add reserve-capacity conditions for beds or core services.
 - [ ] Add minimum-margin and maximum-stay conditions.
 - [ ] Add risk/faction conditions only when those systems are legible.
 - [ ] Allow manual override of an automation decision.
@@ -1325,3 +1325,15 @@ Remaining uncertainty:
 - Art and geometry evidence: every source and final transparent PNG was inspected at its exact atlas canvas. Authoritative depicted counts remain visible across every state: Backroom 2 stock positions; Booth Bank 6 seats; Standing Rail 4 positions; Serving Line 3 pickups plus 2 staff positions; Community Table 8 seats; Guest Cabin 2 beds; Arrival Desk 2 customers plus 2 processors; Wash Bank 4 basins; Service Bar 4 guests plus 2 staff; Corner 1 guest plus 1 staff; End 2 guests. State variants communicate active, unstaffed, empty, dirty, or damaged through physical surface/status changes without adding reservation positions. One partially stocked Backroom `empty` render was rejected and regenerated as three visibly bare shelf levels.
 - Focused checks: the safe `node tools/sprites/pack-atlas.mjs --profile v1` path packs all 298 keys; `npm run sprites:validate:v1` and `git diff --check` pass. The placeholder generator and archive-pruning wrapper were not run.
 - Review judgment: the 46-key curated-art handoff is complete. Final proof still requires one bundled live browser pass across the facility scenarios at ordinary play zoom; that visual pass is intentionally grouped with the terminal playtesting tranche rather than blocking asset integration.
+
+2026-07-28 · Reception routing and bounded hidden-demand recovery
+
+- Commits or files: hidden-demand routing in `src/sim/sim.ts`; paired `reception-absent` and `reception-staffed` scenarios in `src/sim/cold-start-scenarios.ts`; strengthened production-path evidence in `tools/gate-f-facility-scale-tests.ts` (checkpoint commit pending at evidence capture).
+- Focused evidence: `npm run test:gate-f-facility` passes ten grouped checks and `npm run test:occupant-loop` passes. Eight same-seed guests begin with identical hidden demand. Without Reception, all eight reserve plausible physical lounge fixtures, four make the correct first choice, and four realize a comfort need and redirect. With a staffed two-position Arrival Desk, three are processed while the rest bypass normally, six of eight first routes are correct, and redirects fall from four to two. Every wrong choice emits exactly one causal event and one `Need: comfort` world floater, retains its realized need and origin, and cannot oscillate or emit a second redirect. An unstaffed desk exposes zero processing positions and never gates entry.
+- Preservation note: the normal-scale runner currently stops in its pre-scenario cache guard because the movement-arbitration result depends on actor iteration order. The same known failure reproduced twice and is recorded as separate stabilization work; Reception's dedicated runner and occupant-loop preservation check remain green.
+
+2026-07-28 · Gate G commitment/recovery core evidence review
+
+- Commits or files: durable failed-stay episodes and recovery planning in `src/sim/failed-stay.ts`; finite admission decisions in `src/sim/admission-policy.ts`; live seams in `src/sim/sim.ts`; save migration in `src/sim/save.ts`; adversarial coverage in `tools/commitment-recovery-tests.ts`; commits `ab54510`, `83c6a47`, and `fdd7c28`.
+- Focused evidence: `npm run test:commitment-recovery` passes ten checks and `npm run test:gate-e-save-resume` passes six. Direct fixtures prove a bounded 28/75/150-second escalation ladder; exactly-once emergency meal purchase; physical repair expediting; compensation that restores patience without feeding the cohort or resolving its shortage; canonical onward transfer with no orphan reservations; bounded admission closure that the legacy router cannot bypass; disruptive-only security intervention; resident acceptance closed by default and then blocked by absent private housing; and cumulative bed/meal reserves that hold the second otherwise-valid offer.
+- Review boundary: no claim is made yet for incident production, emergency bunk creation, positive cancellation penalty, faction effects, accepted-resident departure, or the player-facing policy/recovery controls. Those remain unchecked until focused or browser evidence exists.

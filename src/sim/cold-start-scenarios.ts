@@ -1442,12 +1442,22 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
     placeFixture(s, ModuleType.Couch, 43, 50);
     placeFixture(s, ModuleType.Couch, 43, 52);
+    placeFixture(s, ModuleType.Couch, 43, 54);
+    placeFixture(s, ModuleType.Couch, 43, 56);
     placeFixture(s, ModuleType.GameStation, 46, 50);
     placeFixture(s, ModuleType.GameStation, 46, 52);
     tick(s, 0);
-    // Mixed demand: three different wants arriving together, and nobody to ask.
-    stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['leisure', 'drink', 'comfort'], 99500);
-    stageFacilityVisitors(s, 4, 52, 52, 'market', ['comfort', 'leisure', 'drink'], 99520);
+    // Hidden mixed demand. Everyone can plausibly try the lounge first, but
+    // half actually need a comfort fixture and will realize that only after
+    // reaching the social seating. The other half guessed correctly.
+    const hidden = [
+      ...stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['comfort', 'leisure'], 99500),
+      ...stageFacilityVisitors(s, 4, 52, 52, 'lounge', ['leisure', 'comfort'], 99520)
+    ];
+    for (const visitor of hidden) {
+      visitor.activeService = null;
+      visitor.revealedServices = [];
+    }
     s.controls.paused = true;
   },
 
@@ -1460,13 +1470,21 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Lounge);
     placeFixture(s, ModuleType.Couch, 43, 50);
     placeFixture(s, ModuleType.Couch, 43, 52);
+    placeFixture(s, ModuleType.Couch, 43, 54);
+    placeFixture(s, ModuleType.Couch, 43, 56);
     placeFixture(s, ModuleType.GameStation, 46, 50);
     placeFixture(s, ModuleType.GameStation, 46, 52);
     placeFixture(s, ModuleType.ArrivalDesk, 50, 50);
     tick(s, 0);
-    // The SAME arrivals as `reception-absent`, same ids and same wants.
-    stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['leisure', 'drink', 'comfort'], 99500);
-    stageFacilityVisitors(s, 4, 52, 52, 'market', ['comfort', 'leisure', 'drink'], 99520);
+    // The SAME hidden arrivals as `reception-absent`, same ids and same wants.
+    const hidden = [
+      ...stageFacilityVisitors(s, 4, 48, 52, 'lounge', ['comfort', 'leisure'], 99500),
+      ...stageFacilityVisitors(s, 4, 52, 52, 'lounge', ['leisure', 'comfort'], 99520)
+    ];
+    for (const visitor of hidden) {
+      visitor.activeService = null;
+      visitor.revealedServices = [];
+    }
     stageFacilityStaff(s, ModuleType.ArrivalDesk, 'reception-staff');
     s.controls.paused = true;
   },
