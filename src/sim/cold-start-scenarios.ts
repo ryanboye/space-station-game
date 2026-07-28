@@ -1499,9 +1499,63 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       for (let x = 42; x < 52; x++) s.roomHousingPolicies[y * s.width + x] = 'visitor';
     }
 
+    paintFacilityBlock(s, 58, 60, 12, 8, RoomType.Lounge);
+    placeFixture(s, ModuleType.Couch, 59, 61);
+    placeFixture(s, ModuleType.GameStation, 62, 61);
+    placeFixture(s, ModuleType.Couch, 65, 61);
+
+    // These short public passages turn the five rooms into one reachable
+    // guest wing. Each endpoint replaces an exterior wall with a Door; any
+    // intervening tiles are a pressurized corridor rather than open space.
+    connectFacilityRooms(s, 54, 54, 57, 54); // Dorm -> Cafeteria
+    connectFacilityRooms(s, 54, 55, 57, 55);
+    connectFacilityRooms(s, 70, 54, 73, 54); // Cafeteria -> Cantina
+    connectFacilityRooms(s, 70, 55, 73, 55);
+    connectFacilityRooms(s, 46, 58, 46, 59); // Dorm -> Hygiene
+    connectFacilityRooms(s, 45, 58, 45, 59);
+    connectFacilityRooms(s, 62, 58, 62, 59); // Cafeteria -> Lounge
+    connectFacilityRooms(s, 63, 58, 63, 59);
+    connectFacilityRooms(s, 52, 63, 57, 63); // Hygiene -> Lounge
+    connectFacilityRooms(s, 52, 64, 57, 64);
+
     tick(s, 0);
     stockNode(s, line.originTile, 'meal', 40);
+    stockNode(s, line.originTile, 'cleanTray', 40);
     stockNode(s, bar.originTile, 'rawMaterial', 40);
+    stageFacilityStaff(s, ModuleType.ServiceBar, 'bar-staff');
+
+    // The showcase owns its cohort; starter walk-ins would add unrelated
+    // errands and obscure whether these eight long-stay guests are cycling.
+    s.visitors = [];
+    const cohort = stageFacilityVisitors(s, 8, 48, 54, 'lounge', [], 99700);
+    const recurringNeeds: RecurringNeedKind[] = ['hunger', 'energy', 'hygiene', 'leisure'];
+    for (let index = 0; index < cohort.length; index += 1) {
+      const visitor = cohort[index];
+      const needs = createVisitorNeeds(visitor.id);
+      const pressingNeed = recurringNeeds[index % recurringNeeds.length];
+      needs.hunger = 76;
+      needs.energy = 76;
+      needs.hygiene = 76;
+      needs.leisure = 76;
+      needs[pressingNeed] = 38 + (index % 2) * 4;
+      needs.active = null;
+      needs.unmetSince = null;
+      visitor.stayClass = 'extended';
+      visitor.needs = needs;
+      visitor.recurringNeedActive = null;
+      visitor.spawnedAt = s.now - 120;
+      visitor.leisureLegsRemaining = 0;
+      visitor.leisureLegsPlanned = 0;
+      // Two guests begin with an optional drink, then join the same recurring
+      // need loop as the rest of the cohort. This keeps the scenario independent
+      // from a synthetic origin ship or manifest.
+      visitor.servicePlan = [];
+      visitor.revealedServices = [];
+      visitor.completedServices = [];
+      visitor.activeService = index < 2 ? 'drink' : null;
+      visitor.optionalDrinkActive = index < 2;
+      visitor.state = VisitorState.ToLeisure;
+    }
     s.controls.paused = true;
   },
 
@@ -2513,6 +2567,33 @@ function paintFacilityBlock(
   state.rooms[door] = RoomType.None;
   state.utilityUnderlay.layers['power-conduit'].fill(1);
   state.utilityUnderlay.version += 1;
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+}
+
+/** Join two aligned facility walls with a short pressurized public passage. */
+function connectFacilityRooms(
+  state: StationState,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number
+): void {
+  if (startX !== endX && startY !== endY) {
+    throw new Error('facility showcase passages must be horizontal or vertical');
+  }
+  const stepX = Math.sign(endX - startX);
+  const stepY = Math.sign(endY - startY);
+  const distance = Math.max(Math.abs(endX - startX), Math.abs(endY - startY));
+  for (let offset = 0; offset <= distance; offset += 1) {
+    const x = startX + stepX * offset;
+    const y = startY + stepY * offset;
+    const tileIndex = y * state.width + x;
+    state.tiles[tileIndex] = offset === 0 || offset === distance ? TileType.Door : TileType.Floor;
+    state.rooms[tileIndex] = RoomType.None;
+    state.pressurized[tileIndex] = true;
+    state.zones[tileIndex] = ZoneType.Public;
+  }
   state.topologyVersion += 1;
   state.roomVersion += 1;
 }

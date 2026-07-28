@@ -669,9 +669,31 @@ function testLongStayWingSupportsRepeatSessions(): string {
   ]);
   assert(durations.size === 5, 'Each repeat need should have its own session duration.');
 
-  advance(state, 40);
-  assert(state.now > 0, 'The guest wing must keep running.');
-  return `beds ${beds.length}, wash ${wash.length}, pickups ${pickups.length}, seats ${seats.length}, bar stools ${bars[0].guestSlots.length}, 5 distinct session lengths`;
+  const cohort = (): Visitor[] => state.visitors.filter((visitor) => visitor.id >= 99700 && visitor.id < 99800);
+  assert(cohort().length === 8, `The guest wing must begin with its authored eight-person cohort, found ${cohort().length}.`);
+  advance(state, 180);
+  assert(cohort().length === 8, 'The complete long-stay cohort must remain present through the three-minute showcase.');
+  assert(
+    cohort().every((visitor) => (visitor.needs?.completions ?? 0) >= 1),
+    'Every long-stay guest must complete at least one recurring physical need.'
+  );
+  for (const service of ['meal', 'drink', 'hygiene', 'comfort', 'leisure'] as const) {
+    assert(state.serviceLog.lifetimeByService[service] > 0, `The connected guest wing must complete ${service} service.`);
+  }
+  const fixtureTruth = (service: 'meal' | 'drink' | 'hygiene' | 'comfort', module: ModuleType): boolean =>
+    state.serviceLog.recent.some((event) => event.service === service && event.moduleType === module);
+  assert(fixtureTruth('meal', ModuleType.CommunityTable), 'Recurring meals must finish at the Community Table.');
+  assert(fixtureTruth('drink', ModuleType.BoothBank), 'Drinks must finish at the Booth Bank.');
+  assert(fixtureTruth('hygiene', ModuleType.WashBank), 'At least one hygiene session must finish at the Wash Bank.');
+  assert(
+    fixtureTruth('comfort', ModuleType.GuestCabin) || fixtureTruth('comfort', ModuleType.BunkBank),
+    'At least one sleep session must finish in depicted guest lodging.'
+  );
+
+  return `cohort 8/8 present after 180s with recurring completions ${cohort().map((visitor) => visitor.needs?.completions ?? 0).join('/')}; `
+    + `services meal ${state.serviceLog.lifetimeByService.meal}, drink ${state.serviceLog.lifetimeByService.drink}, hygiene ${state.serviceLog.lifetimeByService.hygiene}, `
+    + `comfort ${state.serviceLog.lifetimeByService.comfort}, leisure ${state.serviceLog.lifetimeByService.leisure}; `
+    + `beds ${beds.length}, wash ${wash.length}, pickups ${pickups.length}, seats ${seats.length}, bar stools ${bars[0].guestSlots.length}`;
 }
 
 // ---------------------------------------------------------------------------

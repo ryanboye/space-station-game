@@ -22052,6 +22052,10 @@ function completeVisitorHospitalityService(
   if (recurringNeed !== null && visitor.needs) {
     restoreRecurringNeed(visitor.needs, recurringNeed);
     visitor.recurringNeedActive = null;
+    // The completed recurring need is a cycle, not a durable itinerary leg.
+    // Clear it so the next degraded need can win instead of repeatedly
+    // routing the actor to the service they just finished.
+    visitor.activeService = null;
   }
   return true;
 }
@@ -22707,9 +22711,10 @@ function updateVisitorLogic(
           (state.rooms[visitor.tileIndex] === RoomType.Clinic &&
             (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex)));
       const atHygieneService =
-        (state.modules[visitor.tileIndex] === ModuleType.Toilet ||
-          state.modules[visitor.tileIndex] === ModuleType.Shower ||
-          state.modules[visitor.tileIndex] === ModuleType.Sink) &&
+        (currentModule === ModuleType.Toilet ||
+          currentModule === ModuleType.Shower ||
+          currentModule === ModuleType.Sink ||
+          currentModule === ModuleType.WashBank) &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
       if (
         atLoungeModule ||
@@ -22774,7 +22779,7 @@ function updateVisitorLogic(
               : visitor.activeService === 'restroom'
           ? 2.8
           : visitor.activeService === 'hygiene'
-            ? state.modules[visitor.tileIndex] === ModuleType.Shower ? 4.2 : 6.2
+            ? currentModule === ModuleType.Shower ? 4.2 : 6.2
             : visitor.activeService === 'drink'
               ? collectingDrink ? CANTINA_PICKUP_INTERACTION_SEC : CANTINA_CONSUME_DWELL_SEC
               : visitor.activeService === 'comfort'

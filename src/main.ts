@@ -7725,7 +7725,30 @@ function centerViewportOnMapCenter(): void {
   centerViewportOnWorldPx(state.width * TILE_SIZE * 0.5, state.height * TILE_SIZE * 0.5);
 }
 
+const FACILITY_SHOWCASE_CAMERA_BOUNDS: Record<string, { minX: number; minY: number; maxX: number; maxY: number }> = {
+  'market-compact-conflict': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
+  'market-improved-flow': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
+  'cantina-undersized': { minX: 40, minY: 47, maxX: 58, maxY: 60 },
+  'cantina-expanded': { minX: 40, minY: 47, maxX: 60, maxY: 62 },
+  'reception-absent': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
+  'reception-staffed': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
+  'long-stay-guest-wing': { minX: 40, minY: 47, maxX: 88, maxY: 70 }
+};
+
+function scenarioCameraBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const scenarioName = new URLSearchParams(location.search).get('scenario');
+  return scenarioName ? FACILITY_SHOWCASE_CAMERA_BOUNDS[scenarioName] ?? null : null;
+}
+
 function getStationBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
+  // Facility scenarios intentionally coexist with the starter shell so their
+  // authored comparisons do not destroy shared baseline state. In those
+  // whitelisted showcases, Fit Station means the deliberate playtest stage;
+  // the full map remains pannable, but screenshots no longer zoom out around
+  // unrelated starter geometry.
+  const showcaseBounds = scenarioCameraBounds();
+  if (showcaseBounds) return showcaseBounds;
+
   let minX = state.width;
   let minY = state.height;
   let maxX = -1;
