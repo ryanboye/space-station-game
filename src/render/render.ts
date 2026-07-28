@@ -4710,6 +4710,9 @@ function visitorFailureThought(visitor: StationState['visitors'][number]): World
 function visitorWorldThought(state: StationState, visitor: StationState['visitors'][number]): WorldThought | null {
   if (visitor.healthState === 'critical') return { text: 'I need help!', tone: 'negative' };
   if ((visitor.angryUntil ?? 0) > state.now) return { text: "I'm leaving!", tone: 'negative' };
+  if (visitor.movementWaitReason === 'cargo crossing blocking boarding') {
+    return { text: 'CARGO BLOCKING BOARDING', tone: 'negative' };
+  }
   if (visitor.movementWaitReason === 'no public meal service') {
     return { text: 'No public food?', tone: 'negative' };
   }
@@ -4853,6 +4856,7 @@ function residentWorldThought(state: StationState, resident: StationState['resid
 
 function crewWorldThought(state: StationState, crew: StationState['crewMembers'][number]): string | null {
   if (crew.healthState === 'critical') return 'I need help!';
+  if (crew.movementWaitReason === 'passenger flow blocking freight') return 'PASSENGERS BLOCKING FREIGHT';
   if (crew.healthState === 'distressed' && airQualityAt(state, crew.tileIndex) <= 15) return 'The air feels wrong';
   if (crew.resignationNoticeAt !== null) return "I can't keep working like this";
   if (crew.missedPayrollCycles > 0) return "I haven't been paid";
@@ -7069,7 +7073,13 @@ export function renderWorld(
       }
       ctx.restore();
     }
-    const urgentThought = angry || v.healthState === 'critical' || stranded || failureStage === 'distressed' || failureStage === 'disruptive';
+    const urgentThought =
+      angry ||
+      v.healthState === 'critical' ||
+      stranded ||
+      failureStage === 'distressed' ||
+      failureStage === 'disruptive' ||
+      v.movementWaitReason === 'cargo crossing blocking boarding';
     const visitorThoughtWindowOpen = urgentThought
       ? (Math.floor(state.now / 2) + v.id * 5) % 3 === 0
       : thoughtWindowOpen(v.id, false);
@@ -7194,7 +7204,7 @@ export function renderWorld(
     else if (c.resignationNoticeAt !== null || c.missedPayrollCycles > 0) drawAgentStatusPip(ctx, cx, cy, '$', '#ff9d5c');
     else if (c.energy < 28) drawAgentStatusPip(ctx, cx, cy, 'Z', '#a9b8ff');
     const thought = crewWorldThought(state, c);
-    const urgent = c.healthState === 'critical';
+    const urgent = c.healthState === 'critical' || c.movementWaitReason === 'passenger flow blocking freight';
     if (thought && shouldDrawThought(c.id + 10000, cx, cy, urgent)) {
       drawWorldThought(ctx, thought, cx, cy, urgent);
     }

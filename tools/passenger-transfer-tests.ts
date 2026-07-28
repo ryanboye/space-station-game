@@ -9,7 +9,7 @@ import {
 } from '../src/sim/index';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
-import { ModuleType, type ArrivingShip, type StationState, type TrafficOffer, type Visitor } from '../src/sim/types';
+import { ModuleType, RoomType, ZoneType, type ArrivingShip, type StationState, type TrafficOffer, type Visitor } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -33,6 +33,12 @@ function hydrateRunning(save: Parameters<typeof hydrateStateFromSave>[0], seed: 
 function demoState(seed: number): StationState {
   const state = createInitialState({ seed, physicalStarterInventory: true, manualTrafficAdmission: true });
   assert(applyColdStartScenario(state, 'demo-station'), 'Expected the demo-station fixture.');
+  // Transfer throughput is the variable under test. Keep the demo cafeteria
+  // publicly usable so opening-business access policy cannot turn passengers
+  // around into the same Gangway before their cohort has emerged.
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] === RoomType.Cafeteria) state.zones[tile] = ZoneType.Public;
+  }
   state.controls.shipsPerCycle = 0;
   state.controls.paused = false;
   tick(state, 0);
@@ -194,7 +200,22 @@ function timeToAllEmergences(gangways: number, seed: number): number {
   const ship = admitPassengerShip(state, 10200 + gangways, 8);
   assert(setCrewShiftTarget(state, 'food', 0), 'Expected food lane reduction for throughput measurement.');
   const startedAt = state.now;
-  waitFor(state, `${gangways} Gangway arrival completion`, () => ship.passengersSpawned === ship.passengersTotal, 20);
+  for (let elapsed = 0; elapsed < 20 && ship.passengersSpawned < ship.passengersTotal; elapsed += STEP) tick(state, STEP);
+  const phaseSummary = visitorsFor(state, ship.id)
+    .map((visitor) => `${visitor.id}:${visitor.state}/${visitorPhase(visitor)}@${visitor.tileIndex}->${visitor.transferStationTile ?? '-'}:path${visitor.path.length}:target${visitor.reservedTargetTile ?? '-'}:provider${visitor.queueProviderTile ?? '-'}:${visitor.movementWaitReason ?? 'moving'}`)
+    .join(', ');
+  const stalledTarget = visitorsFor(state, ship.id).find((visitor) => visitorPhase(visitor) === 'disembark-crossing')?.transferStationTile;
+  const blockers = stalledTarget === null || stalledTarget === undefined
+    ? 'none'
+    : [
+        ...state.crewMembers.filter((actor) => actor.tileIndex === stalledTarget).map((actor) => `crew-${actor.id}/${actor.activeJobId ?? 'idle'}`),
+        ...state.residents.filter((actor) => actor.tileIndex === stalledTarget).map((actor) => `resident-${actor.id}`),
+        ...state.visitors.filter((actor) => actor.tileIndex === stalledTarget).map((actor) => `visitor-${actor.id}/${visitorPhase(actor)}`)
+      ].join(', ') || 'none';
+  assert(
+    ship.passengersSpawned === ship.passengersTotal,
+    `Timed out waiting for ${gangways} Gangway arrival completion (${ship.passengersSpawned}/${ship.passengersTotal}; ${phaseSummary}; target blockers ${blockers}).`
+  );
   return state.now - startedAt;
 }
 

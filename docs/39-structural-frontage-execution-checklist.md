@@ -90,7 +90,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Record disembark and boarding duration.
 - [ ] Record queue length, spill length, balks, and provider utilization.
 - [ ] Record door wait and corridor congestion.
-- [ ] Record public/cargo conflicts.
+- [x] Record public/cargo conflicts.
 - [ ] Record recurring need demand and fixture utilization.
 - [ ] Record reception reveal and redirection time.
 - [ ] Record committed future Berth, bed, service, and staff load.
@@ -521,7 +521,7 @@ compiles is not sufficient for player-facing work.
 - [x] Give Airlocks explicit crossing capacity.
 - [ ] Give narrow corridors low directional capacity.
 - [ ] Give open concourses greater capacity.
-- [ ] Make carts/bulky cargo consume more movement capacity.
+- [x] Make carts/bulky cargo consume more movement capacity.
 - [ ] Preserve exclusive service/work/seat reservations.
 
 ### Real Queue Spill
@@ -554,8 +554,8 @@ compiles is not sufficient for player-facing work.
 - [x] Show carrying through the station.
 - [x] Show drop-off at staging or destination.
 - [x] Make cargo carriers consume route capacity.
-- [ ] Make public/cargo conflict slow both flows.
-- [ ] Show the conflict where it happens.
+- [x] Make public/cargo conflict slow both flows.
+- [x] Show the conflict where it happens.
 - [x] Preserve resource accounting through interrupted jobs.
 
 ### Physical Boarding
@@ -1006,3 +1006,17 @@ Remaining uncertainty:
 - Focused checks: `npm run test:opening-businesses`, `npm run test:opening-procurement`, `npm run test:pod-demand-accounting`, `npm run build`, and `git diff --check` passed. A fresh station has no operating public business; opening cash funds any one of Food, Supplies, or Refuel Pods but not two; the real starter apron supports a powered public cafeteria or rotated narrow market; and stock at the operation's physical fixtures is required before it opens.
 - Visual/playtest evidence: inspected `http://127.0.0.1:5183/?scenario=starter`. The Businesses palette presents three distinct first investments with current machine capacity and one next world action. The legacy tier summary and later progression button remain hidden until an operation is live; the Global Goal remains the opening north star. Public and Crew-only zoning are visible controls. Sprites load by default and the existing interface-hide control remains available.
 - Remaining uncertainty: the shared crew mess is a cheap food conversion with a deliberate crew/guest traffic tradeoff rather than a completely empty food shell. The first-business service outcome, profitability, and clarity still require the user's fresh playtest; those Phase 8 gate items remain open.
+
+2026-07-27 · Missing public food and phantom-queue correction
+
+- Commit or files: `222497d`, meal-target selection in `src/sim/sim.ts`, immediate world feedback in `src/render/render.ts`, and `tools/opening-business-tests.ts`.
+- Focused evidence: `npm run test:opening-businesses` proves a visitor cannot enter `Queueing` without a physical public provider. A crew-only mess may remain visible but is not treated as public capacity; the visitor receives `no public meal service`, records missed demand, and chooses another service or departure.
+- Visual/playtest evidence: a fresh live `?scenario=starter` run showed the first unsupported diner clear the Pod Dock collar, announce `No public food?`, and produce the alert `A diner could not find public food service`; no line formed at the arrival tile.
+- Remaining uncertainty: the crew-only status of the starter mess needs stronger world labeling so this deliberate opening constraint does not look like a pathing defect.
+
+2026-07-27 · Passenger boarding and freight contention
+
+- Commit or files: movement attribution and telemetry in `src/sim/sim.ts`, `src/sim/types.ts`, `src/sim/initial-state.ts`, and `src/sim/save.ts`; world feedback in `src/render/render.ts`; deterministic fixture `?scenario=cargo-boarding-conflict`; and `tools/physical-cargo-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:physical-cargo` proves a bulky cart and a boarding passenger cannot exchange through one another, both lose movement time, both receive the correct physical blocker reason, `publicCargoConflictSeconds` records actor-time, and separated lanes allow both actors to move.
+- Visual/playtest evidence: inspected `http://127.0.0.1:5183/?scenario=cargo-boarding-conflict&diag=1`. The paused production state renders the cart and passenger at the collision and displays `PASSENGERS BLOCKING FREIGHT` directly above them; the conflict remains readable with the interface hidden at Fit Station zoom.
+- Remaining uncertainty: the compound boarding gate still needs one visit where a meal queue crosses an exit and causes late boarding; the broader door/queue/cargo box remains open.

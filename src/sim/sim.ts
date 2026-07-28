@@ -12164,6 +12164,20 @@ function abandonUnavailableMealService(state: StationState, visitor: Visitor): v
   assignPathToDock(state, visitor);
 }
 
+function assignVisitorOrientationPath(state: StationState, visitor: Visitor): void {
+  if (visitor.path.length > 0) return;
+  const targets: number[] = [];
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    if (!isWalkable(state.tiles[tile])) continue;
+    if (state.zones[tile] !== ZoneType.Public) continue;
+    if (state.rooms[tile] === RoomType.Berth || state.tiles[tile] === TileType.Dock) continue;
+    if (state.moduleOccupancyByTile[tile] !== null) continue;
+    targets.push(tile);
+  }
+  const path = chooseNearestPath(state, visitor.tileIndex, targets, false, 'visitor', visitor.id);
+  setVisitorPath(state, visitor, path ?? []);
+}
+
 /** Route a hungry visitor into a physical serving line. A capacity failure is
  * a bounded wait; the existing visitor-failure path owns the eventual exit. */
 function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
@@ -12172,7 +12186,7 @@ function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
     visitor.state = VisitorState.ToCafeteria;
     visitor.serviceBlockedSince ??= state.now;
     visitor.movementWaitReason = 'no public meal service';
-    setVisitorPath(state, visitor, []);
+    assignVisitorOrientationPath(state, visitor);
     if (state.now - visitor.serviceBlockedSince >= VISITOR_SERVICE_ORIENTATION_SEC) {
       abandonUnavailableMealService(state, visitor);
     }
@@ -14790,9 +14804,21 @@ function canYieldMovementTile(state: StationState, kind: MovementActorKind, acto
     return !activeSession || !usingCurrentTile;
   }
   if (kind === 'resident') return (actor as Resident).state === ResidentState.Idle;
-  // A stationary visitor is usually in a queue or service session. Moving it
-  // without changing that state would break the provider reservation.
-  return false;
+  const visitor = actor as Visitor;
+  // Most stationary visitors own a queue or service slot and must remain
+  // immovable. An unreserved traveler who has stopped in a circulation throat
+  // may step aside so a Gangway, collar, or ordinary corridor can keep flowing.
+  return (
+    passengerTransferPhase(visitor) === 'station' &&
+    visitor.reservedTargetTile === null &&
+    visitor.reservedServingTile === null &&
+    (visitor.queueProviderTile ?? null) === null &&
+    !visitor.carryingMeal &&
+    !visitor.carryingDrink &&
+    (visitor.state === VisitorState.ToCafeteria ||
+      visitor.state === VisitorState.ToLeisure ||
+      visitor.state === VisitorState.ToDock)
+  );
 }
 
 function assignMovementYieldPaths(
@@ -14913,7 +14939,11 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     // while it is still visibly travelling toward it.
     if (Math.hypot(center.x - actor.x, center.y - actor.y) > actor.speed * movementSpeedFactor(state, actor) * dt + 0.001) continue;
     if ((coordinator.bulkyCooldownUntil.get(target) ?? 0) > state.now) {
-      coordinator.blockedReasonByKey.set(movementActorKey(kind, actor), 'bulky freight clearing corridor');
+      const transferVisitor = kind === 'visitor' && passengerTransferPhase(actor as Visitor) !== 'station';
+      coordinator.blockedReasonByKey.set(
+        movementActorKey(kind, actor),
+        transferVisitor ? 'cargo crossing blocking boarding' : 'bulky freight clearing corridor'
+      );
       continue;
     }
     const narrowTiles = [actor.tileIndex, target].filter(
@@ -15014,7 +15044,26 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     visiting.delete(intent.key);
     if (!allowed) {
       rejected.add(intent.key);
-      if (!coordinator.blockedReasonByKey.has(intent.key)) coordinator.blockedReasonByKey.set(intent.key, 'destination occupied');
+      if (!coordinator.blockedReasonByKey.has(intent.key)) {
+        const transferVisitor = intent.kind === 'visitor' && passengerTransferPhase(intent.actor as Visitor) !== 'station';
+        const bulkyCarrier = intent.kind === 'crew' && crewCarriesBulkyCargo(intent.actor as CrewMember);
+        const blockedByBulkyCarrier = transferVisitor && occupants.some((occupant) => {
+          const occupantKind = coordinator.kindByActor.get(occupant);
+          return occupantKind === 'crew' && crewCarriesBulkyCargo(occupant as CrewMember);
+        });
+        const blockedByTransferPassenger = bulkyCarrier && occupants.some((occupant) => {
+          const occupantKind = coordinator.kindByActor.get(occupant);
+          return occupantKind === 'visitor' && passengerTransferPhase(occupant as Visitor) !== 'station';
+        });
+        coordinator.blockedReasonByKey.set(
+          intent.key,
+          blockedByBulkyCarrier
+            ? 'cargo crossing blocking boarding'
+            : blockedByTransferPassenger
+              ? 'passenger flow blocking freight'
+              : 'destination occupied'
+        );
+      }
       return false;
     }
     approved.add(intent.key);
@@ -15053,6 +15102,13 @@ function moveAlongPath(
     if (!coordinator?.approved.has(key)) {
       actor.movementWaitReason = coordinator?.blockedReasonByKey.get(key) ?? 'awaiting movement arbitration';
       actor.movementBlockedTile = nextTile;
+      if (
+        actor.movementWaitReason === 'cargo crossing blocking boarding' ||
+        actor.movementWaitReason === 'passenger flow blocking freight'
+      ) {
+        state.portOps.telemetry.publicCargoConflictSeconds =
+          (state.portOps.telemetry.publicCargoConflictSeconds ?? 0) + dt;
+      }
       return 'blocked';
     }
     const occupied = occupancyByTile.get(nextTile) ?? 0;

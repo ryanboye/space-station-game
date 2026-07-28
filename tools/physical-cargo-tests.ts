@@ -6,7 +6,8 @@ import {
   tick
 } from '../src/sim/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
-import { ModuleType, TileType, type CrewMember, type StationState, type TransportJob } from '../src/sim/types';
+import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { ModuleType, TileType, VisitorState, type CrewMember, type StationState, type TransportJob, type Visitor } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -202,9 +203,92 @@ function testBulkyCargoPhysicallyConsumesSharedCorridor(): void {
   assert(ordinary.tileIndex === end, 'Ordinary narrow traffic did not recover after the cart corridor cleared.');
 }
 
+function transferVisitor(seed: number): Visitor {
+  const source = createInitialState({ seed, physicalStarterInventory: true });
+  source.controls.paused = false;
+  source.controls.manualTrafficAdmission = false;
+  source.controls.shipsPerCycle = 4;
+  for (let elapsed = 0; elapsed < 45 && source.visitors.length === 0; elapsed += 0.1) tick(source, 0.1);
+  const visitor = source.visitors[0];
+  assert(visitor, `seed ${seed} produced no passenger template`);
+  return structuredClone(visitor) as Visitor;
+}
+
+function placeVisitor(visitor: Visitor, state: StationState, tileIndex: number, path: number[]): void {
+  visitor.tileIndex = tileIndex;
+  visitor.x = (tileIndex % state.width) + 0.5;
+  visitor.y = Math.floor(tileIndex / state.width) + 0.5;
+  visitor.path = [...path];
+  visitor.speed = 10;
+  visitor.state = VisitorState.ToDock;
+  visitor.transferPhase = 'boarding-queued';
+  visitor.blockedTicks = 0;
+  visitor.movementWaitReason = undefined;
+  visitor.movementBlockedTile = undefined;
+  visitor.movementReplanCooldownUntil = 0;
+}
+
+function testPassengerTransferAndCargoBlockEachOtherVisibly(): void {
+  const state = movementState();
+  const visitor = transferVisitor(813);
+  state.tiles.fill(TileType.Floor);
+  state.modules.fill(ModuleType.None);
+  state.moduleOccupancyByTile.fill(null);
+  state.residents = [];
+
+  const passengerTile = at(state, 30, 30);
+  const cargoTile = at(state, 31, 30);
+  placeVisitor(visitor, state, passengerTile, [cargoTile]);
+  const cargo = placeCrew(state, 9813, cargoTile, [passengerTile]);
+  cargo.carryingItemType = 'rawMaterial';
+  cargo.carryingAmount = 8;
+  cargo.activeJobId = 9813;
+  state.visitors = [visitor];
+  state.crewMembers = [cargo];
+
+  runMovementCoordinatorTestTick(state, 0.1);
+  state.now += 0.1;
+  const blocked = runMovementCoordinatorTestTick(state, 0.1);
+  assert(blocked.get(`visitor:${visitor.id}`) === 'blocked', `Boarding passenger crossed through a bulky cart (${blocked.get(`visitor:${visitor.id}`)} / ${visitor.movementWaitReason ?? 'none'}).`);
+  assert(blocked.get(`crew:${cargo.id}`) === 'blocked', `Bulky cart crossed through a boarding passenger (${blocked.get(`crew:${cargo.id}`)} / ${cargo.movementWaitReason ?? 'none'}).`);
+  assert(visitor.movementWaitReason === 'cargo crossing blocking boarding', `Passenger reason was ${visitor.movementWaitReason ?? 'none'}.`);
+  assert(cargo.movementWaitReason === 'passenger flow blocking freight', `Cargo reason was ${cargo.movementWaitReason ?? 'none'}.`);
+  assert((state.portOps.telemetry.publicCargoConflictSeconds ?? 0) >= 0.19, 'Physical conflict actor-time was not recorded.');
+
+  const passengerStart = at(state, 40, 32);
+  const passengerEnd = at(state, 41, 32);
+  const cargoStart = at(state, 40, 34);
+  const cargoEnd = at(state, 41, 34);
+  placeVisitor(visitor, state, passengerStart, [passengerEnd]);
+  moveCrewTo(state, cargo, cargoStart);
+  cargo.path = [cargoEnd];
+  cargo.movementWaitReason = undefined;
+  const separated = runMovementCoordinatorTestTick(state, 0.1);
+  assert(separated.get(`visitor:${visitor.id}`) === 'moved', 'Separated boarding lane did not move.');
+  assert(separated.get(`crew:${cargo.id}`) === 'moved', 'Separated cargo lane did not move.');
+}
+
+function testConflictShowcaseUsesProductionWaitState(): void {
+  const state = createInitialState({ seed: 814, physicalStarterInventory: true });
+  assert(applyColdStartScenario(state, 'cargo-boarding-conflict'), 'Conflict showcase scenario was not registered.');
+  const visitor = state.visitors.find((candidate) => candidate.id === 99620);
+  const cargo = state.crewMembers.find((candidate) => candidate.carryingAmount > 0);
+  assert(
+    visitor?.movementWaitReason === 'cargo crossing blocking boarding',
+    `Showcase passenger did not expose the production wait reason (${visitor?.movementWaitReason ?? 'none'}; visitor ${visitor?.tileIndex ?? 'missing'}; cargo ${cargo?.tileIndex ?? 'missing'}).`
+  );
+  assert(
+    cargo?.movementWaitReason === 'passenger flow blocking freight',
+    `Showcase freight worker did not expose the production wait reason (${cargo?.movementWaitReason ?? 'none'}).`
+  );
+  assert(state.controls.paused, 'Conflict showcase did not preserve a stable inspection frame.');
+}
+
 const tests: Array<[string, () => void]> = [
   ['pickup-save-dropoff-and-interrupted-return', testPickupSaveDropoffAndInterruptedReturn],
-  ['bulky-cargo-physically-consumes-shared-corridor', testBulkyCargoPhysicallyConsumesSharedCorridor]
+  ['bulky-cargo-physically-consumes-shared-corridor', testBulkyCargoPhysicallyConsumesSharedCorridor],
+  ['passenger-transfer-and-cargo-block-each-other-visibly', testPassengerTransferAndCargoBlockEachOtherVisibly],
+  ['conflict-showcase-uses-production-wait-state', testConflictShowcaseUsesProductionWaitState]
 ];
 
 for (const [name, run] of tests) {

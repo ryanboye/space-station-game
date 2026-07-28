@@ -1818,6 +1818,8 @@ export interface PortOpsTelemetry {
   cargoUnitTileDistance: number;
   /** Physical passenger-transfer waiting, optional for legacy state construction. */
   passengerTransferWaitSeconds?: number;
+  /** Actor-seconds lost where passenger transfer and bulky cargo physically contend. */
+  publicCargoConflictSeconds?: number;
   mealTarget: number;
   mealsCompleted: number;
   freightTarget: number;

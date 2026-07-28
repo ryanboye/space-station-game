@@ -145,7 +145,22 @@ check('a missing public cafeteria creates visible missed demand, never a fake do
   state.controls.paused = false;
   state.controls.manualTrafficAdmission = false;
   state.controls.shipsPerCycle = 4;
-  for (let elapsed = 0; elapsed < 45; elapsed += 0.1) tick(state, 0.1);
+  let firstStationVisitorId: number | null = null;
+  let firstStationTile: number | null = null;
+  let clearedArrivalTile = false;
+  for (let elapsed = 0; elapsed < 45; elapsed += 0.1) {
+    tick(state, 0.1);
+    if (firstStationVisitorId === null) {
+      const emerged = state.visitors.find((visitor) => (visitor.transferPhase ?? 'station') === 'station');
+      if (emerged) {
+        firstStationVisitorId = emerged.id;
+        firstStationTile = emerged.tileIndex;
+      }
+    } else {
+      const visitor = state.visitors.find((candidate) => candidate.id === firstStationVisitorId);
+      if (!visitor || visitor.tileIndex !== firstStationTile) clearedArrivalTile = true;
+    }
+  }
   assert(
     !state.visitors.some((visitor) => visitor.state === 'queueing' && visitor.queueProviderTile === null),
     'visitor entered a queue without a physical public provider'
@@ -154,6 +169,7 @@ check('a missing public cafeteria creates visible missed demand, never a fake do
     state.derived.queueTheater.eventFeed.some((event) => event.text.includes('could not find public food service')),
     'missing public food produced no visible missed-demand event'
   );
+  assert(firstStationVisitorId !== null && clearedArrivalTile, 'unsupported diner waited on the passenger arrival tile');
 });
 
 if (failures > 0) process.exit(1);

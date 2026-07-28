@@ -1485,6 +1485,7 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
       berthOccupancySeconds: Math.max(0, asFiniteNumber(telemetryRaw.berthOccupancySeconds, 0)),
       cargoUnitTileDistance: Math.max(0, asFiniteNumber(telemetryRaw.cargoUnitTileDistance, 0)),
       passengerTransferWaitSeconds: Math.max(0, asFiniteNumber(telemetryRaw.passengerTransferWaitSeconds, 0)),
+      publicCargoConflictSeconds: Math.max(0, asFiniteNumber(telemetryRaw.publicCargoConflictSeconds, 0)),
       mealTarget: Math.max(0, asFiniteNumber(telemetryRaw.mealTarget, 0)),
       mealsCompleted: Math.max(0, asFiniteNumber(telemetryRaw.mealsCompleted, 0)),
       freightTarget: Math.max(0, asFiniteNumber(telemetryRaw.freightTarget, 0)),

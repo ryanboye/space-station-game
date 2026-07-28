@@ -439,6 +439,7 @@ export function createInitialState(options?: {
         passengerQueuePersonSeconds: 0,
         berthOccupancySeconds: 0,
         cargoUnitTileDistance: 0,
+        publicCargoConflictSeconds: 0,
         mealTarget: 0,
         mealsCompleted: 0,
         freightTarget: 0,

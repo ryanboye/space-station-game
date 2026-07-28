@@ -20,7 +20,7 @@ import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -318,6 +318,71 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       s.jobSpawnCounter = Math.max(s.jobSpawnCounter, 99602);
     }
     s.controls.shipsPerCycle = 0;
+    s.controls.paused = true;
+  },
+
+  // Phase 6 visual fixture: a returning passenger and a bulky freight cart
+  // attempt a head-on exchange. The production movement coordinator generates
+  // both world-space wait reasons before the paused frame is presented.
+  'cargo-boarding-conflict': (s) => {
+    const wasPaused = s.controls.paused;
+    s.controls.paused = false;
+    tick(s, 0);
+    s.controls.paused = wasPaused;
+    const walkable = (idx: number): boolean =>
+      (s.tiles[idx] === TileType.Floor || s.tiles[idx] === TileType.Door) &&
+      s.modules[idx] === ModuleType.None;
+    let passengerTile = -1;
+    let cargoTile = -1;
+    const centerX = Math.floor(s.width / 2);
+    const centerY = Math.floor(s.height / 2);
+    for (let radius = 0; radius < Math.max(s.width, s.height) && passengerTile < 0; radius += 1) {
+      for (let y = Math.max(1, centerY - radius); y <= Math.min(s.height - 2, centerY + radius); y += 1) {
+        for (let x = Math.max(1, centerX - radius); x < Math.min(s.width - 2, centerX + radius); x += 1) {
+          const left = y * s.width + x;
+          const right = left + 1;
+          if (!walkable(left) || !walkable(right)) continue;
+          passengerTile = left;
+          cargoTile = right;
+          break;
+        }
+        if (passengerTile >= 0) break;
+      }
+    }
+    const cargo = s.crewMembers[0];
+    if (passengerTile >= 0 && cargoTile >= 0 && cargo) {
+      s.visitors.length = 0;
+      s.residents.length = 0;
+      s.crewMembers = [cargo];
+      addFailureShowcaseVisitor(s, 99620, passengerTile % s.width, Math.floor(passengerTile / s.width), 'balking', 'hunger');
+      const visitor = s.visitors.find((candidate) => candidate.id === 99620);
+      if (visitor) {
+        visitor.state = VisitorState.ToDock;
+        visitor.transferPhase = 'boarding-queued';
+        visitor.path = [cargoTile];
+        visitor.speed = 10;
+        visitor.movementWaitReason = undefined;
+        visitor.movementBlockedTile = null;
+        visitor.blockedTicks = 0;
+        cargo.tileIndex = cargoTile;
+        cargo.x = (cargoTile % s.width) + 0.5;
+        cargo.y = Math.floor(cargoTile / s.width) + 0.5;
+        cargo.path = [passengerTile];
+        cargo.speed = 10;
+        cargo.carryingItemType = 'rawMaterial';
+        cargo.carryingAmount = 8;
+        cargo.activeJobId = 99620;
+        cargo.movementWaitReason = undefined;
+        cargo.blockedTicks = 0;
+        runMovementCoordinatorTestTick(s, 0.1);
+        s.now += 0.1;
+        runMovementCoordinatorTestTick(s, 0.1);
+        s.now += 0.1;
+      }
+    }
+    s.controls.shipsPerCycle = 0;
+    s.controls.spriteMode = 'sprites';
+    s.controls.showSpriteFallback = false;
     s.controls.paused = true;
   },
 
