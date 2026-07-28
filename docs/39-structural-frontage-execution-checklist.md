@@ -286,14 +286,14 @@ audited checklist with no unsupported checked claims.
 
 ### Universal Slot Contract
 
-- [ ] Generalize provider, fixture, seat, and queue reservations without breaking
+- [x] Generalize provider, fixture, seat, and queue reservations without breaking
   cafeteria behavior.
-- [ ] Give every active need/want a physical slot and duration.
+- [x] Give every active need/want a physical slot and duration.
 - [x] Prevent two actors from owning one exclusive use slot.
 - [x] Make depicted table seats individually reservable.
 - [x] Make bed positions individually claimable for a sleep session.
 - [x] Support temporary bed claims separately from permanent home assignment.
-- [ ] Make hygiene fixtures hold exclusive sessions for visible durations.
+- [x] Make hygiene fixtures hold exclusive sessions for visible durations.
 - [x] Make lounge and cantina positions hold meaningful leisure sessions.
 - [ ] Release stale slots after cancellation, departure, death, save hydration, or
   provider removal.
@@ -307,7 +307,7 @@ audited checklist with no unsupported checked claims.
 - [x] Add stock collection from visible shelf/display inventory.
 - [x] Add a staff-side restock route.
 - [x] Add a real customer queue at checkout.
-- [ ] Make a second checkout produce a visible throughput improvement.
+- [x] Make a second checkout produce a visible throughput improvement.
 - [ ] Make shelf mix or goods category affect demand without creating a checklist.
 - [x] Prevent `Great selection` feedback when no stock exists.
 
@@ -315,7 +315,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] Stop exposing a complete pre-rolled itinerary at spawn.
 - [ ] Keep ship-level demand cues strong and learnable.
-- [ ] Reveal individual wants progressively through behavior.
+- [x] Reveal individual wants progressively through behavior.
 - [x] Add optional Reception/Customs processing slots.
 - [x] Make Reception reveal some demand earlier, never all of it.
 - [x] Allow unprocessed occupants to enter and make a plausible choice.
@@ -348,7 +348,7 @@ audited checklist with no unsupported checked claims.
 - [x] Validate every footprint at actual play zoom before locking dimensions.
 - [ ] Ensure each fixture has a public use face.
 - [x] Ensure staffed fixtures have a staff work face.
-- [ ] Ensure stocked fixtures have a delivery/service route.
+- [x] Ensure stocked fixtures have a delivery/service route.
 - [x] Give larger fixtures greater absolute capacity and useful staffing
   efficiency.
 - [ ] Charge larger fixtures through footprint, staffing, stock, utilities,
@@ -1378,3 +1378,9 @@ Remaining uncertainty:
 - Commits or files: curated Truss Junction and Reinforced Bulkhead families in `tools/sprites/curated/`; normalized generation prompts in `tools/sprites/sprite-spec.yaml`; stable keys in `src/render/sprite-keys.ts`; atlas footprint and required-key registrations; packed `public/assets/sprites/atlas.png` and `atlas.json` (checkpoint commit pending at evidence capture).
 - Visual evidence: lead review inspected both ImageGen source sheets, every extracted transparent state, the packed atlas extractions, and the complete sprites at native scale. Junction states retain a four-way X-braced hub inside a 64x64 footprint; Bulkhead states retain west/east pressure-transfer attachments inside a 128x64 footprint. Planned, delivered, welding, complete, overloaded, and damaged variants preserve their attachment geometry and remain distinct at 32 pixels per tile.
 - Validation boundary: `sprites:validate:v1` passes all 311 keys. This closes generation of both low-resolution art families only. Their live construction-state selection and the all-assets live-render verification remain open until renderer integration and the final browser pass.
+
+2026-07-28 · Gate F slot, throughput, and progressive-demand reconciliation
+
+- Commits or files: shared depicted-position contract in `src/sim/facility-slots.ts`; provider, seat, market, bar, reception, and recurring-need machines in `src/sim/facility-machines.ts` and `src/sim/sim.ts`; focused runners `tools/facility-slots-tests.ts` and `tools/gate-f-facility-scale-tests.ts`.
+- Focused evidence: `test:facility-slots` passes and the expanded Gate F runner passes 10/10. Every eight-seat Community Table position, four Guest Cabin bed positions, four Wash Bank hygiene positions, three Serving Line pickups, six Booth Bank seats, and both Arrival Desk processors are individually claimable and exclusive. Long-stay meal, drink, hygiene, comfort, and leisure each use a distinct production session duration and all five complete at named physical fixtures while all eight guests remain present for 180 seconds. A one-register/two-register production comparison records real sales and requires the second staffed register to complete more in the same 12-second window.
+- Route and discovery evidence: the physical market chain conserves 102 units across backroom, carried stock, shelves, and exactly-once sales; its compact layout crosses the customer frontage while the improved layout separates the delivery path. Same-seed Reception variants begin with identical fully hidden plans, reveal fewer wants than the full plan, and prove progressive behavior-led discovery: correct first choices improve from 4/8 to 6/8, redirects fall from four to two, and every wrong choice names its realized need once without oscillation. Claims about every removal/death path and live visual overwhelm remain open for narrower evidence or the browser bundle.
