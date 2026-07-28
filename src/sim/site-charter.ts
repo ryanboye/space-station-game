@@ -13,7 +13,8 @@
 
 import { charterDebrisFlow } from './map-conditions';
 import { deriveOpeningEconomyProfile, type OpeningEconomyProfile } from './opening-economy';
-import type { LaneRoute, SiteCharter, SpaceLane, SystemMap } from './types';
+import { laneWeightsFromSystem } from './system-map';
+import type { LaneRoute, ShipType, SiteCharter, SpaceLane, SystemMap } from './types';
 
 const LANES: SpaceLane[] = ['north', 'east', 'south', 'west'];
 
@@ -266,7 +267,11 @@ export interface CharterServiceForecast {
   advantage: number;
   /** Where `advantage` comes from, e.g. "retail demand 128%". */
   metric: string;
+  /** Present only when system faction composition participates in the forecast. */
+  compositionMultiplier?: number;
 }
+
+export type CharterExpectedShipMix = Record<ShipType, number>;
 
 export interface CharterMitigation {
   /** An existing station system, named as the player sees it. */
@@ -299,6 +304,9 @@ export interface CharterOperatingForecast {
   evenApproaches: boolean;
   /** Ranked best-first. `services[0]` is the opening lead. */
   services: CharterServiceForecast[];
+  /** Optional because legacy callers only supplied a SiteCharter. */
+  expectedShipMix?: CharterExpectedShipMix;
+  compositionLine?: string;
   resourceLine: string;
   powerLine: string;
   exposureLine: string;
@@ -381,7 +389,63 @@ function pickFace(
   return best;
 }
 
-function rankedServices(economy: OpeningEconomyProfile): CharterServiceForecast[] {
+const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+const UNIFORM_SHIP_SHARE = 1 / SHIP_TYPES.length;
+const COMPOSITION_INFLUENCE = 0.35;
+const COMPOSITION_ADJUSTMENT_MIN = 0.82;
+const COMPOSITION_ADJUSTMENT_MAX = 1.18;
+
+function expectedShipMix(site: SiteCharter, system: SystemMap): CharterExpectedShipMix {
+  const weighted: CharterExpectedShipMix = {
+    tourist: 0,
+    trader: 0,
+    industrial: 0,
+    military: 0,
+    colonist: 0
+  };
+  for (const lane of LANES) {
+    const laneVolume = Math.max(0, site.laneTrafficFactor[lane]);
+    const weights = laneWeightsFromSystem(system, lane);
+    for (const shipType of SHIP_TYPES) weighted[shipType] += laneVolume * weights[shipType];
+  }
+  const total = SHIP_TYPES.reduce((sum, shipType) => sum + weighted[shipType], 0);
+  if (total <= 0) {
+    for (const shipType of SHIP_TYPES) weighted[shipType] = UNIFORM_SHIP_SHARE;
+    return weighted;
+  }
+  for (const shipType of SHIP_TYPES) weighted[shipType] /= total;
+  return weighted;
+}
+
+function compositionAdjustment(mix: CharterExpectedShipMix, affinity: ShipType[]): number {
+  const observed = affinity.reduce((sum, shipType) => sum + mix[shipType], 0);
+  const uniform = affinity.length * UNIFORM_SHIP_SHARE;
+  const normalized = uniform > 0 ? observed / uniform : 1;
+  return Math.max(
+    COMPOSITION_ADJUSTMENT_MIN,
+    Math.min(COMPOSITION_ADJUSTMENT_MAX, 1 + (normalized - 1) * COMPOSITION_INFLUENCE)
+  );
+}
+
+function compositionLine(mix: CharterExpectedShipMix): string {
+  const labels: Record<ShipType, string> = {
+    tourist: 'tourist',
+    trader: 'trader',
+    industrial: 'industrial',
+    military: 'military',
+    colonist: 'colonist'
+  };
+  const leading = SHIP_TYPES
+    .map((shipType) => ({ shipType, share: mix[shipType] }))
+    .sort((a, b) => b.share - a.share || SHIP_TYPES.indexOf(a.shipType) - SHIP_TYPES.indexOf(b.shipType))
+    .slice(0, 2);
+  return `Expected traffic mix: ${leading.map((entry) => `${labels[entry.shipType]} ${percent(entry.share)}%`).join(' · ')}; all ship types retain ambient traffic.`;
+}
+
+function rankedServices(
+  economy: OpeningEconomyProfile,
+  mix?: CharterExpectedShipMix
+): CharterServiceForecast[] {
   const services: CharterServiceForecast[] = [
     {
       id: 'berths',
@@ -414,6 +478,20 @@ function rankedServices(economy: OpeningEconomyProfile): CharterServiceForecast[
       metric: `courier traffic ${percent(economy.courierTrafficMultiplier)}%`
     }
   ];
+  const affinities: Record<CharterServiceId, ShipType[]> = {
+    berths: ['tourist', 'colonist'],
+    retail: ['tourist', 'trader', 'colonist'],
+    fuel: ['industrial', 'trader', 'military'],
+    repair: ['industrial', 'military'],
+    freight: ['trader', 'industrial']
+  };
+  if (mix) {
+    for (const service of services) {
+      const adjustment = compositionAdjustment(mix, affinities[service.id]);
+      service.advantage *= adjustment;
+      service.compositionMultiplier = adjustment;
+    }
+  }
   // Stable: equal advantages keep the declaration order above.
   return services
     .map((service, index) => ({ service, index }))
@@ -539,7 +617,7 @@ function mitigationList(
  * deterministic: the same SiteCharter always yields the same forecast, and an
  * absent charter resolves to the neutral orbit the rest of the sim assumes.
  */
-export function computeCharterOperatingForecast(site?: SiteCharter): CharterOperatingForecast {
+export function computeCharterOperatingForecast(site?: SiteCharter, system?: SystemMap): CharterOperatingForecast {
   const chartered = site !== undefined;
   const charter = site ?? NEUTRAL_SITE;
   const economy = deriveOpeningEconomyProfile(site);
@@ -556,7 +634,8 @@ export function computeCharterOperatingForecast(site?: SiteCharter): CharterOper
     (face) => face.buildPressure,
     'min'
   );
-  const services = rankedServices(economy);
+  const mix = site && system ? expectedShipMix(site, system) : undefined;
+  const services = rankedServices(economy, mix);
   const lead = services[0];
   const support = services[1];
   const defer = services[services.length - 1];
@@ -626,6 +705,7 @@ export function computeCharterOperatingForecast(site?: SiteCharter): CharterOper
     shelteredFace,
     evenApproaches,
     services,
+    ...(mix ? { expectedShipMix: mix, compositionLine: compositionLine(mix) } : {}),
     resourceLine,
     powerLine,
     exposureLine,

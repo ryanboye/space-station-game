@@ -2,7 +2,7 @@
 // Mirrors tools/site-charter-tests.ts: pure assertions, no harness, filterable
 // via CHARTER_FORECAST_TEST_FILTER. Run with `npm run test:charter-forecast`.
 
-import { generateSystemMap } from '../src/sim/system-map';
+import { generateSystemMap, laneWeightsFromSystem } from '../src/sim/system-map';
 import { deriveOpeningEconomyProfile } from '../src/sim/opening-economy';
 import {
   CHARTER_FORECAST_VERSION,
@@ -12,7 +12,7 @@ import {
   computeSiteProfile,
   type CharterOperatingForecast
 } from '../src/sim/site-charter';
-import type { SiteCharter, SpaceLane, SystemMap } from '../src/sim/types';
+import type { ShipType, SiteCharter, SpaceLane, SystemMap } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -79,6 +79,17 @@ test('an absent charter resolves to the neutral orbit', () => {
   assert(
     JSON.stringify(forecast.economy) === JSON.stringify(deriveOpeningEconomyProfile()),
     'neutral forecast economy drifted from deriveOpeningEconomyProfile()'
+  );
+});
+
+test('omitting SystemMap preserves the legacy forecast shape and ranking path', () => {
+  const site = computeSiteProfile(system, 0.5, 0.34);
+  const forecast = computeCharterOperatingForecast(site);
+  assert(forecast.expectedShipMix === undefined, 'site-only forecast invented a system composition');
+  assert(forecast.compositionLine === undefined, 'site-only forecast added composition copy');
+  assert(
+    forecast.services.every((service) => service.compositionMultiplier === undefined),
+    'site-only service ranking received a composition adjustment'
   );
 });
 
@@ -217,6 +228,111 @@ test('service ranking follows the economy multipliers it cites', () => {
     assert(
       forecast.summary.includes(forecast.services[0].label.toLowerCase()),
       'summary does not lead with the top-ranked service'
+    );
+  }
+});
+
+// --- 3b. System trade composition grounds useful service advice ------------
+
+const SHIP_TYPES: ShipType[] = ['tourist', 'trader', 'industrial', 'military', 'colonist'];
+
+function expectedMixFromProductionWeights(site: SiteCharter, source: SystemMap): Record<ShipType, number> {
+  const result: Record<ShipType, number> = { tourist: 0, trader: 0, industrial: 0, military: 0, colonist: 0 };
+  for (const lane of LANES) {
+    const weights = laneWeightsFromSystem(source, lane);
+    for (const shipType of SHIP_TYPES) result[shipType] += site.laneTrafficFactor[lane] * weights[shipType];
+  }
+  const total = SHIP_TYPES.reduce((sum, shipType) => sum + result[shipType], 0);
+  for (const shipType of SHIP_TYPES) result[shipType] /= total;
+  return result;
+}
+
+function polarizedSystem(seed: number, invert: boolean): SystemMap {
+  const source = generateSystemMap(seed);
+  const touristFaction = {
+    ...source.factions[0],
+    id: `tourist-${seed}`,
+    shipBias: { tourist: 0.88, trader: 0.06, colonist: 0.04, industrial: 0.01, military: 0.01 }
+  };
+  const industrialFaction = {
+    ...source.factions[1],
+    id: `industrial-${seed}`,
+    shipBias: { industrial: 0.84, trader: 0.08, military: 0.06, tourist: 0.01, colonist: 0.01 }
+  };
+  const touristLanes = new Set<SpaceLane>(invert ? ['south', 'west'] : ['north', 'east']);
+  const laneSectors = Object.fromEntries(LANES.map((lane) => {
+    const faction = touristLanes.has(lane) ? touristFaction : industrialFaction;
+    return [lane, { factionIds: [faction.id], dominantFactionId: faction.id }];
+  })) as SystemMap['laneSectors'];
+  return { ...source, factions: [touristFaction, industrialFaction], laneSectors };
+}
+
+test('forecast composition exactly matches charter volume times production lane weights', () => {
+  const site = computeSiteProfile(system, 0.62, 0.41);
+  const forecast = computeCharterOperatingForecast(site, system);
+  const expected = expectedMixFromProductionWeights(site, system);
+  assert(forecast.expectedShipMix !== undefined, 'system-backed forecast omitted expected ship mix');
+  for (const shipType of SHIP_TYPES) {
+    assert(
+      Math.abs(forecast.expectedShipMix[shipType] - expected[shipType]) < 1e-12,
+      `${shipType} mix diverged from production lane weights`
+    );
+    assert(forecast.expectedShipMix[shipType] > 0, `${shipType} lost ambient diversity`);
+  }
+  const total = SHIP_TYPES.reduce((sum, shipType) => sum + forecast.expectedShipMix![shipType], 0);
+  assert(Math.abs(total - 1) < 1e-12, `expected ship mix was not normalized (${total})`);
+  assert(forecast.compositionLine?.includes('Expected traffic mix:'), 'forecast omitted concise composition copy');
+});
+
+test('different system/site composition changes useful service ordering without erasing diversity', () => {
+  const northSite: SiteCharter = {
+    version: 1,
+    x: 0.5,
+    y: 0.5,
+    sunFactor: 0.5,
+    debrisFactor: 0,
+    resourceType: null,
+    laneTrafficFactor: { north: 2.5, east: 0.6, south: 0.6, west: 0.6 }
+  };
+  const southSite: SiteCharter = {
+    ...northSite,
+    laneTrafficFactor: { north: 0.6, east: 0.6, south: 2.5, west: 0.6 }
+  };
+  const touristFacing = computeCharterOperatingForecast(northSite, polarizedSystem(4411, false));
+  const industrialFacing = computeCharterOperatingForecast(southSite, polarizedSystem(5522, false));
+  assert(touristFacing.expectedShipMix && industrialFacing.expectedShipMix, 'comparison lacks composition');
+  assert(
+    touristFacing.expectedShipMix.tourist > industrialFacing.expectedShipMix.tourist,
+    'tourist-facing site did not forecast more tourist traffic'
+  );
+  assert(
+    industrialFacing.expectedShipMix.industrial > touristFacing.expectedShipMix.industrial,
+    'industrial-facing site did not forecast more industrial traffic'
+  );
+  assert(
+    touristFacing.services[0].id !== industrialFacing.services[0].id,
+    `composition did not change the leading service (${touristFacing.services[0].id})`
+  );
+  assert(
+    ['berths', 'retail'].includes(touristFacing.services[0].id),
+    `tourist-facing mix recommended ${touristFacing.services[0].id}`
+  );
+  assert(
+    ['fuel', 'repair', 'freight'].includes(industrialFacing.services[0].id),
+    `industrial-facing mix recommended ${industrialFacing.services[0].id}`
+  );
+  for (const forecast of [touristFacing, industrialFacing]) {
+    assert(
+      SHIP_TYPES.every((shipType) => forecast.expectedShipMix![shipType] > 0),
+      'composition adjustment eliminated a ship type'
+    );
+    assert(
+      forecast.services.every((service) =>
+        service.compositionMultiplier !== undefined &&
+        service.compositionMultiplier >= 0.82 &&
+        service.compositionMultiplier <= 1.18
+      ),
+      'composition adjustment escaped its moderate bounds'
     );
   }
 });
