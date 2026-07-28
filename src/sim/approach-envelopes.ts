@@ -75,6 +75,27 @@ const SIZE_CLEARANCE: Record<ShipSize, { depth: number; lateral: number }> = {
   large: { depth: 7, lateral: 3 }
 };
 
+const LANE_ORDER: SpaceLane[] = ['north', 'east', 'south', 'west'];
+
+export interface ApproachLaneAlignment {
+  quarterTurns: 0 | 1 | 2;
+  progressMultiplier: number;
+  label: 'direct' | 'cross-lane' | 'opposed';
+}
+
+/**
+ * Ships may route around the station, but an interface pointed toward their
+ * arrival lane has a shorter, cleaner approach. This keeps every legal berth
+ * useful while making directional frontage a real operating choice.
+ */
+export function approachLaneAlignment(lane: SpaceLane, facing: SpaceLane): ApproachLaneAlignment {
+  const raw = Math.abs(LANE_ORDER.indexOf(lane) - LANE_ORDER.indexOf(facing));
+  const quarterTurns = Math.min(raw, 4 - raw) as 0 | 1 | 2;
+  if (quarterTurns === 0) return { quarterTurns, progressMultiplier: 1, label: 'direct' };
+  if (quarterTurns === 1) return { quarterTurns, progressMultiplier: 0.72, label: 'cross-lane' };
+  return { quarterTurns, progressMultiplier: 0.48, label: 'opposed' };
+}
+
 export function rectanglesOverlap(a: WorldRect, b: WorldRect): boolean {
   return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
 }

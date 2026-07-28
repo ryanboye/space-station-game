@@ -24,6 +24,7 @@ import {
 } from './occupant-demand';
 import { previewTrafficOffer } from './approach-control';
 import {
+  approachLaneAlignment,
   buildDockingSlotDescriptor,
   deriveApproachConflictGroups,
   envelopeForHull,
@@ -12985,6 +12986,10 @@ function compatiblePodDocksForOffer(
       return descriptor !== undefined && validateDockingSlot(state, descriptor, offer.size, offer.hullVariant).valid;
     })() &&
     (!requireFree || (dock.occupiedByShipId === null && !reservedSourceKeys.has(dock.sourceKey)))
+  ).sort((a, b) =>
+    approachLaneAlignment(offer.lane, b.facing).progressMultiplier -
+      approachLaneAlignment(offer.lane, a.facing).progressMultiplier ||
+    a.sourceKey.localeCompare(b.sourceKey)
   );
 }
 
@@ -13058,7 +13063,14 @@ export function admitTrafficOffer(
   const berth = berthAnchor === undefined
     ? (offer.assignedBerthAnchor != null
       ? eligibleBerths.find((entry) => entry.anchorTile === offer.assignedBerthAnchor)
-      : eligibleBerths.sort((a, b) => a.tiles.length - b.tiles.length || a.anchorTile - b.anchorTile)[0])
+      : eligibleBerths.sort((a, b) => {
+        const aFacing = deriveBerthFacing(state, a.tiles) ?? offer.lane;
+        const bFacing = deriveBerthFacing(state, b.tiles) ?? offer.lane;
+        return approachLaneAlignment(offer.lane, bFacing).progressMultiplier -
+          approachLaneAlignment(offer.lane, aFacing).progressMultiplier ||
+          a.tiles.length - b.tiles.length ||
+          a.anchorTile - b.anchorTile;
+      })[0])
     : eligibleBerths.find((entry) => entry.anchorTile === berthAnchor);
   if (offer.size === 'small' && state.now < offer.arrivesAt) {
     const dock = compatiblePodDocksForOffer(state, offer, offer.id, true)[0];
@@ -14328,7 +14340,13 @@ function updateArrivingShips(state: StationState, dt: number): void {
     const waitingForPhysicalLane =
       (ship.stage === 'approach' || ship.stage === 'depart') &&
       !canAdvancePhysicalApproach(ship);
-    if (!waitingForPhysicalLane) ship.stageTime += dt;
+    if (!waitingForPhysicalLane) {
+      const descriptor = descriptorForShip(state, ship);
+      const approachRate = descriptor && (ship.stage === 'approach' || ship.stage === 'depart')
+        ? approachLaneAlignment(ship.lane, descriptor.facing).progressMultiplier
+        : 1;
+      ship.stageTime += dt * approachRate;
+    }
 
     if (ship.stage === 'approach' && canAdvancePhysicalApproach(ship) && ship.stageTime >= SHIP_APPROACH_TIME) {
       ship.stage = 'docked';

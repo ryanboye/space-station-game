@@ -66,6 +66,7 @@ import {
   validateDockingSlot
 } from '../sim/sim';
 import {
+  approachLaneAlignment,
   buildDockingSlotDescriptor,
   deriveApproachConflictGroups,
   envelopeForHull,
@@ -4487,7 +4488,7 @@ function drawApproachLabel(
   const fontPx = Math.max(8, Math.round(TILE_SIZE * 0.29));
   const pad = Math.max(4, Math.round(TILE_SIZE * 0.18));
   ctx.font = `bold ${fontPx}px monospace`;
-  const width = Math.min(TILE_SIZE * 12, ctx.measureText(text).width + pad * 2);
+  const width = Math.min(TILE_SIZE * 18, ctx.measureText(text).width + pad * 2);
   const height = Math.max(17, Math.round(TILE_SIZE * 0.7));
   const gap = Math.max(3, TILE_SIZE * 0.13);
   const anchorX = (anchor.x + 0.5) * TILE_SIZE;
@@ -4576,11 +4577,27 @@ function drawApproachEnvelopePreview(
   ctx.restore();
 
   const reason = validation.hardReasons[0];
+  const facingTraffic = state.laneProfiles[descriptor.facing]?.trafficVolume ?? 1;
+  const anchorTile = descriptor.anchorTile ?? descriptor.hullTiles[0] ?? 0;
+  const conditions = mapConditionSamplesAt(state, anchorTile);
+  const debris = conditions.find((sample) => sample.kind === 'debris-risk');
+  const sunlight = conditions.find((sample) => sample.kind === 'sunlight');
+  const thermal = conditions.find((sample) => sample.kind === 'thermal-sink');
+  const trafficLabel = facingTraffic >= 1.25 ? 'BUSY' : facingTraffic <= 0.78 ? 'QUIET' : 'STEADY';
+  const environmentLabel = debris && debris.value >= 0.68
+    ? 'DEBRIS EXPOSED'
+    : thermal && thermal.value >= 0.68
+      ? 'COOL POCKET'
+      : sunlight && sunlight.value >= 0.68 ? 'BRIGHT' : 'SHELTERED';
+  const liveAlignment = liveShip ? approachLaneAlignment(liveShip.lane, descriptor.facing) : null;
+  const geometry = `${descriptor.facing.toUpperCase()} ${trafficLabel} · ${environmentLabel}`;
   const label = reason
     ? `APPROACH BLOCKED: ${reason}`
     : conflictGroups.length > 0
       ? `APPROACH SERIALIZES: ${conflictGroups.length} GROUP${conflictGroups.length === 1 ? '' : 'S'}`
-      : `APPROACH CLEAR: ${size.toUpperCase()} FOOTPRINT`;
+      : liveAlignment && liveAlignment.label !== 'direct'
+        ? `${geometry} · ${liveAlignment.label.toUpperCase()} ROUTE`
+        : `APPROACH CLEAR · ${geometry}`;
   drawApproachLabel(ctx, state, descriptor, label, color);
 }
 

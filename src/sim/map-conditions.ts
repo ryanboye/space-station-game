@@ -5,6 +5,7 @@ import {
   GRID_WIDTH,
   type MapConditionKind,
   type MapConditionSample,
+  type SiteCharter,
   type StationState
 } from './types';
 
@@ -56,6 +57,26 @@ function lowFrequencyNoise(seed: number, x: number, y: number, salt: number): nu
   return a * (1 - ux) * (1 - uy) + b * ux * (1 - uy) + c * (1 - ux) * uy + d * ux * uy;
 }
 
+export interface CharterDebrisFlow {
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Debris follows the site's orbital tangent. The charter stores only its
+ * system-map position, so this direction is deterministic and save-safe.
+ */
+export function charterDebrisFlow(site: SiteCharter, seed = 0): CharterDebrisFlow {
+  const rx = site.x - 0.5;
+  const ry = site.y - 0.5;
+  const magnitude = Math.hypot(rx, ry);
+  if (magnitude < 0.04) {
+    const fallbackAngle = hash01(seed, 23, 29, 113) * Math.PI * 2;
+    return { dx: Math.cos(fallbackAngle), dy: Math.sin(fallbackAngle) };
+  }
+  return { dx: -ry / magnitude, dy: rx / magnitude };
+}
+
 export function mapConditionAt(state: StationState, kind: MapConditionKind, tileIndex: number): number {
   const pos = fromIndex(tileIndex, state.width);
   const seed = state.seedAtCreation;
@@ -85,8 +106,17 @@ export function mapConditionAt(state: StationState, kind: MapConditionKind, tile
     const edgeY = Math.min(worldY, GRID_HEIGHT - 1 - worldY) / Math.max(1, GRID_HEIGHT / 2);
     const edge = clamp(1 - Math.min(edgeX, edgeY), 0, 1);
     const debrisAngle = angle + Math.PI * (0.45 + hash01(seed, 11, 13, 51) * 0.5);
-    const ddx = Math.cos(debrisAngle);
-    const ddy = Math.sin(debrisAngle);
+    let ddx = Math.cos(debrisAngle);
+    let ddy = Math.sin(debrisAngle);
+    if (site) {
+      const charterFlow = charterDebrisFlow(site, seed);
+      const directionalWeight = 0.35 + clamp(site.debrisFactor, 0, 1) * 0.55;
+      const mixedX = ddx * (1 - directionalWeight) + charterFlow.dx * directionalWeight;
+      const mixedY = ddy * (1 - directionalWeight) + charterFlow.dy * directionalWeight;
+      const mixedLength = Math.max(0.0001, Math.hypot(mixedX, mixedY));
+      ddx = mixedX / mixedLength;
+      ddy = mixedY / mixedLength;
+    }
     const lane = cx * ddx + cy * ddy;
     const lobe = smoothstep(-0.15, 0.55, lane + lowFrequencyNoise(seed, worldX, worldY, 61) * 0.28);
     const value = clamp(edge * 0.45 + lobe * 0.55 + lowFrequencyNoise(seed, worldX, worldY, 71) * 0.1, 0, 1);

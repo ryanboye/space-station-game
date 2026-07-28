@@ -6,6 +6,7 @@ import { generateSystemMap } from '../src/sim/system-map';
 import { computeSiteProfile } from '../src/sim/site-charter';
 import { createInitialState } from '../src/sim/initial-state';
 import { mapConditionAt } from '../src/sim/map-conditions';
+import { approachLaneAlignment } from '../src/sim/approach-envelopes';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import { setRoom, tick, tryPlaceModule } from '../src/sim/index';
 import { GRID_HEIGHT, GRID_WIDTH, ModuleType, RoomType, TileType, isWalkable } from '../src/sim/types';
@@ -334,6 +335,47 @@ function testHighLaneTrafficRaisesVolume(): void {
   );
 }
 
+function testDirectionalFrontageAlignment(): void {
+  const direct = approachLaneAlignment('north', 'north');
+  const cross = approachLaneAlignment('north', 'east');
+  const opposed = approachLaneAlignment('north', 'south');
+  assert(direct.progressMultiplier > cross.progressMultiplier, 'A direct approach should beat a cross-lane route.');
+  assert(cross.progressMultiplier > opposed.progressMultiplier, 'A cross-lane route should beat an opposed approach.');
+  assert(direct.label === 'direct' && opposed.label === 'opposed', 'Approach alignment labels should explain geometry.');
+}
+
+function edgeDebrisAverage(state: StationState, lane: SpaceLane): number {
+  const margin = 2;
+  const samples: number[] = [];
+  for (let offset = -8; offset <= 8; offset += 2) {
+    const cx = Math.floor(state.width / 2);
+    const cy = Math.floor(state.height / 2);
+    const x = lane === 'west' ? margin : lane === 'east' ? state.width - 1 - margin : cx + offset;
+    const y = lane === 'north' ? margin : lane === 'south' ? state.height - 1 - margin : cy + offset;
+    samples.push(mapConditionAt(state, 'debris-risk', y * state.width + x));
+  }
+  return samples.reduce((sum, value) => sum + value, 0) / samples.length;
+}
+
+function testCharterPositionRotatesDebrisExposure(): void {
+  const northSite: SiteCharter = {
+    ...charterWith(0.5, 0.95),
+    x: 0.5,
+    y: 0.12
+  };
+  const eastSite: SiteCharter = {
+    ...charterWith(0.5, 0.95),
+    x: 0.88,
+    y: 0.5
+  };
+  const north = createInitialState({ seed: 717, charter: northSite });
+  const east = createInitialState({ seed: 717, charter: eastSite });
+  const northBias = edgeDebrisAverage(north, 'east') - edgeDebrisAverage(north, 'west');
+  const eastBias = edgeDebrisAverage(east, 'south') - edgeDebrisAverage(east, 'north');
+  assert(Math.abs(northBias) > 0.04, `North-site debris should create a visible east/west exposure split (${northBias}).`);
+  assert(Math.abs(eastBias) > 0.04, `East-site debris should create a visible north/south exposure split (${eastBias}).`);
+}
+
 // Advance `seconds`, refusing every non-onboarding offer so generation keeps
 // flowing (manual admission caps live offers), and tally the CUMULATIVE count
 // of distinct offers ever tagged to `lane`. This is the deterministic,
@@ -538,6 +580,8 @@ const tests: Array<[string, () => void]> = [
   ['high debris raises debris-risk', testHighDebrisRaisesDebrisRisk],
   ['conditions deterministic with site', testConditionsDeterministicWithSite],
   ['high lane traffic raises volume', testHighLaneTrafficRaisesVolume],
+  ['directional frontage alignment', testDirectionalFrontageAlignment],
+  ['charter position rotates debris exposure', testCharterPositionRotatesDebrisExposure],
   ['cold raises life-support demand', testColdRaisesLifeSupportDemand],
   ['solar panels scale with sunlight', testSolarPanelsScaleWithSunlight],
   ['no-site traffic and power neutral', testNoSiteTrafficAndPowerNeutral]

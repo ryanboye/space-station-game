@@ -616,9 +616,9 @@ compiles is not sufficient for player-facing work.
 
 ### Charter Effects
 
-- [ ] Make directional lane traffic affect frontage value and approach pressure.
-- [ ] Make dense debris increase directional wear/impact risk.
-- [ ] Make sunlight increase generation and thermal load.
+- [x] Make directional lane traffic affect frontage value and approach pressure.
+- [x] Make dense debris increase directional wear/impact risk.
+- [x] Make sunlight increase generation and thermal load.
 - [ ] Make thermal-sink quality affect high-load expansion.
 - [ ] Make trade composition affect useful interface/service mix.
 - [ ] Keep each effect visible in Charter and station-world feedback.
@@ -630,7 +630,7 @@ compiles is not sufficient for player-facing work.
 - [x] Debris-facing wing wears faster than protected comparison.
 - [x] EVA repair visibly restores damage.
 - [x] A true breach changes pressure and restores correctly.
-- [ ] Different charters make different expansion geometry attractive.
+- [x] Different charters make different expansion geometry attractive.
 - [ ] Risk remains forecastable and recoverable.
 
 ## Phase 8: Starter, Economy, Progression, UI, And Art
@@ -1020,3 +1020,10 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:physical-cargo` proves a bulky cart and a boarding passenger cannot exchange through one another, both lose movement time, both receive the correct physical blocker reason, `publicCargoConflictSeconds` records actor-time, and separated lanes allow both actors to move.
 - Visual/playtest evidence: inspected `http://127.0.0.1:5183/?scenario=cargo-boarding-conflict&diag=1`. The paused production state renders the cart and passenger at the collision and displays `PASSENGERS BLOCKING FREIGHT` directly above them; the conflict remains readable with the interface hidden at Fit Station zoom.
 - Remaining uncertainty: the compound boarding gate still needs one visit where a meal queue crosses an exit and causes late boarding; the broader door/queue/cargo box remains open.
+
+2026-07-28 · Directional charter frontage
+
+- Commit or files: `src/sim/approach-envelopes.ts`, `src/sim/map-conditions.ts`, `src/sim/sim.ts`, `src/render/render.ts`, and `tools/site-charter-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: filtered `npm run test:site-charter` checks prove direct, cross-lane, and opposed approaches have ordered physical approach rates; two identical high-debris charters at different system-map positions rotate the exposed station face; the no-charter golden condition path remains untouched. `npm run build` and `git diff --check` pass.
+- Player-facing behavior: automatic interface selection now prefers a ship's arrival-facing Pod Dock or Berth, while legal cross-station routing remains available at a visible time cost. Inspecting or placing a physical interface labels its facing as busy, steady, or quiet and calls out debris exposure, bright space, cool pockets, or shelter directly beside the approach envelope. Existing lane generation makes high-volume directions produce more traffic; existing exterior-integrity sampling consumes the now-directional debris field; existing solar and room-heat simulation consume the shown sunlight field.
+- Remaining uncertainty: the station-world label still needs a fresh chartered live visual capture; high-load room placement against a cool pocket and charter-driven trade-composition/service mix remain open; mitigation is already covered by Truss and EVA repair but still needs to be explained alongside the placement forecast.
