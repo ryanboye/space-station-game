@@ -17223,11 +17223,13 @@ export {
   isEvaTraversalTile,
   moduleConstructionCostForDefinition,
   planModuleConstruction,
+  planStructuralPieceConstruction,
   planTileConstruction,
   removeConstructionAtTile,
   shouldSuitUpFromAirlock,
   updateEvaSuitForRoute,
   validateModulePlacementForConstruction
+  ,validateStructuralPiecePlacement
 } from './construction';
 
 function enqueueTransportJob(
@@ -27591,6 +27593,11 @@ export function tryMoveModule(
       const target = fromIndex(debt.targetTile, state.width);
       debt.targetTile = toIndex(target.x + dx, target.y + dy, state.width);
     }
+    // Module maintenance is durable by physical fixture identity. The key is
+    // tile-derived for lookup/reconciliation, so move it with the fixture as
+    // well as its coordinates; otherwise the next maintenance pass creates a
+    // fresh zero-debt record at the destination and drops this history.
+    debt.key = maintenanceTargetKey(debt.domain ?? 'module', debt.anchorTile, debt.system);
   }
 
   syncModuleOccupancy(state);

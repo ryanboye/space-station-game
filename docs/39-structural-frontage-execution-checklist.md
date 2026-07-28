@@ -824,7 +824,7 @@ audited checklist with no unsupported checked claims.
 - [x] Rebuild congestion and movement intents after load.
 - [x] Rebuild interface diagnoses after load.
 - [x] Never persist stale actor paths or transient movement intents.
-- [ ] Preserve maintenance identity through map expansion and module movement.
+- [x] Preserve maintenance identity through map expansion and module movement.
 
 ### Performance
 
@@ -1432,3 +1432,9 @@ Remaining uncertainty:
 - Commits or files: pure production-truth selector in `src/render/facility-sprite-state.ts`; narrow live overlay and shared sprite geometry in `src/render/render.ts`; focused matrix `tools/facility-sprite-state-tests.ts`; `test:facility-sprite-state` package script (checkpoint commit pending at evidence capture).
 - Focused evidence: the 3/3 runner selects all 46 curated base/state frames; enforces damaged → dirty → empty → unstaffed → active → idle priority while skipping unsupported variants; falls back to the base frame if the loaded atlas lacks a requested state; and drives a connected Service Bar through real physical staffing, guest claim, pooled stock, sanitation, and maintenance-debt transitions. Clearing each production condition clears the selected state without mutating rotation or footprint.
 - Performance boundary: idle fixtures remain in the cached decorative layer. Only visible non-idle fixtures are redrawn in the live overlay; a claim changes the overlay signature but provably leaves the full decorative-layer cache key unchanged, avoiding station-wide redraw churn. Gate F, facility-slot, and build checks pass. The six artwork-state checklist rows remain open until the bundled browser pass visually inspects the frames at gameplay zoom.
+
+2026-07-28 · Durable maintenance identity through relocation
+
+- Commits or files: module relocation in `src/sim/sim.ts`; focused regression in `tools/module-edit-tests.ts`; existing north-map expansion coverage in `tools/phase9-save-migration-tests.ts`.
+- Focused evidence: the module-edit runner moves a worn fixture while preserving its stable module id, 37 points of accrued debt, last-service time, maintenance work position, and exactly one destination-derived lookup key; no old-coordinate record remains. The Phase 9 save runner separately reloads eight accrued debts, expands the map north, and proves each physical panel follows the index shift without resetting its value.
+- Defect closed: relocation already shifted a module debt's anchor and target tiles, but left its tile-derived key unchanged. The next maintenance pass could therefore create a fresh record at the destination and discard the history at the stale key. Relocation now remaps the key atomically with the fixture before occupancy and item-node synchronization.

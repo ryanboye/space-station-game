@@ -83,6 +83,41 @@ function testMovePreservesInventory(): void {
   assertCondition(!blockedSale.ok, 'Selling a stocked module should be blocked.');
 }
 
+function testMovePreservesMaintenanceIdentity(): void {
+  const state = createModuleTestState();
+  const source = toIndex(8, 11, state.width);
+  const destination = toIndex(16, 11, state.width);
+  for (const tile of [source, source + 1, destination, destination + 1]) {
+    setRoom(state, tile, RoomType.Kitchen);
+  }
+  const placed = tryPlaceModule(state, ModuleType.Stove, source, 0);
+  assertCondition(placed.ok, `Maintenance fixture placement failed: ${placed.reason ?? 'unknown reason'}`);
+  const module = state.moduleInstances.find((candidate) => candidate.originTile === source);
+  assertCondition(module, 'Maintenance fixture instance was not found.');
+  state.maintenanceDebts.push({
+    key: `module:${source}`,
+    domain: 'module',
+    source: 'high-load',
+    anchorTile: source,
+    targetTile: source,
+    moduleId: module.id,
+    exterior: false,
+    label: 'kitchen stove',
+    effect: 'meal prep slowed at high wear',
+    debt: 37,
+    lastServicedAt: 12
+  });
+
+  const moved = tryMoveModule(state, module.id, destination);
+  assertCondition(moved.ok, `Worn module move failed: ${moved.reason ?? 'unknown reason'}`);
+  const debt = state.maintenanceDebts.find((candidate) => candidate.moduleId === module.id);
+  assertCondition(debt, 'Moving a module discarded its maintenance record.');
+  assertCondition(debt.key === `module:${destination}`, 'Maintenance lookup key did not follow the moved fixture.');
+  assertCondition(debt.anchorTile === destination && debt.targetTile === destination, 'Maintenance work position did not follow the moved fixture.');
+  assertCondition(debt.debt === 37 && debt.lastServicedAt === 12, 'Moving a module reset its maintenance history.');
+  assertCondition(!state.maintenanceDebts.some((candidate) => candidate.key === `module:${source}`), 'Old maintenance identity remained after relocation.');
+}
+
 function testSaleRefundsHalfThePurchasePrice(): void {
   const state = createModuleTestState();
   const source = toIndex(8, 8, state.width);
@@ -108,5 +143,6 @@ function testSaleRefundsHalfThePurchasePrice(): void {
 
 testMoveIsAtomicAndCreditNeutral();
 testMovePreservesInventory();
+testMovePreservesMaintenanceIdentity();
 testSaleRefundsHalfThePurchasePrice();
 console.log('module-edit-tests: PASS');
