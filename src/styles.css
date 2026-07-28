@@ -3081,11 +3081,6 @@ h2 {
   display: flex;
 }
 
-[data-palette-section="structure"] [data-tool-tile="airlock"],
-[data-palette-section="structure"] [data-tool-cancel-construction] {
-  display: none;
-}
-
 .turnaround-promises,
 .settlement-summary {
   display: grid;
@@ -4586,11 +4581,6 @@ button.alert-item {
   #bottom-dock {
     grid-template-columns: 0.9fr 1.15fr 1fr 0.8fr;
   }
-}
-
-[data-palette-section="structure"] [data-tool-tile="airlock"],
-[data-palette-section="structure"] [data-tool-cancel-construction] {
-  display: none !important;
 }
 
 #toolbar .tool-group-label {

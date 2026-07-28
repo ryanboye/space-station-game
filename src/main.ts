@@ -195,7 +195,7 @@ import {
 // without early expansion bottlenecking on haul/build jobs.
 const INSTANT_BUILD_PLAYTEST = true;
 const startupParams = new URLSearchParams(window.location.search);
-const TRUSS_EXPANSION_EXPERIMENT = startupParams.has('truss');
+const STRUCTURAL_EXPANSION_ENABLED = true;
 const STARTER_LAYOUT_DB_NAME = 'starlight-starter-layouts';
 const STARTER_LAYOUT_STORE_NAME = 'templates';
 const STARTER_LAYOUT_RECORD_KEY = 'default';
@@ -516,8 +516,8 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-deselect="1" title="Inspect / no build tool (Esc)"><span class="tool-key">Esc</span>Inspect</button>
         <button class="tool-btn" data-tool-room-copy="1" title="Copy station stamp — drag over floors, walls, rooms, and furniture"><span class="tool-key">⧉</span>Copy</button>
         <button class="tool-btn" data-tool-room-paste="1" title="Paste copied station stamp — tiles, room settings, zones, docks, and fresh furniture"><span class="tool-key">▣</span>Paste</button>
-        <button class="tool-btn" data-tool-tile="floor" title="${TRUSS_EXPANSION_EXPERIMENT ? 'Floor (1) - paint over truss to seal a pressurized expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
-        ${TRUSS_EXPANSION_EXPERIMENT ? '<button class="tool-btn" data-tool-tile="truss" title="Truss - fast EVA scaffold. Paint Floor over it to seal the station expansion."><span class="tool-key">.</span>Truss</button>' : ''}
+        <button class="tool-btn" data-tool-tile="floor" title="${STRUCTURAL_EXPANSION_ENABLED ? 'Floor (1) - paint over truss to plan a sealed station expansion' : 'Floor (1)'}"><span class="tool-key">1</span>Floor</button>
+        ${STRUCTURAL_EXPANSION_ENABLED ? '<button class="tool-btn" data-tool-tile="truss" title="Truss - plan an EVA-built structural scaffold in open space"><span class="tool-key">.</span>Truss</button>' : ''}
         <button class="tool-btn" data-tool-tile="wall" title="Wall (2)"><span class="tool-key">2</span>Wall</button>
         <button class="tool-btn" data-tool-tile="dock" title="Dock (3)"><span class="tool-key">3</span>Dock</button>
         <button class="tool-btn" data-tool-tile="door" title="Door (4)"><span class="tool-key">4</span>Door</button>
@@ -9116,7 +9116,7 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
 
   if (currentTool.kind === 'tile') {
     if (
-      TRUSS_EXPANSION_EXPERIMENT &&
+      STRUCTURAL_EXPANSION_ENABLED &&
       currentTool.tile === TileType.Floor &&
       paintTiles.some((idx) => state.tiles[idx] === TileType.Truss)
     ) {
@@ -9137,7 +9137,7 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
 
   for (const idx of paintTiles) {
       if (currentTool.kind === 'tile') {
-        const forceConstruction = TRUSS_EXPANSION_EXPERIMENT && currentTool.tile === TileType.Truss;
+        const forceConstruction = STRUCTURAL_EXPANSION_ENABLED && currentTool.tile === TileType.Truss;
         if (INSTANT_BUILD_PLAYTEST && !forceConstruction) {
           const changed = trySetTileWithCredits(state, idx, currentTool.tile!);
           if (!changed.ok) {

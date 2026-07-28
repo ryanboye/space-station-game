@@ -38,6 +38,10 @@ gate while the current gate still has a player-blocking defect.
 
 ### Gate A: Coherent Opening
 
+Status: **in progress**. Comparison UI, one-path opening economy, and stored
+starter attachment compatibility are complete. One integrated operating-cycle
+showcase remains before this gate closes.
+
 The player starts from a safe but commercially unfinished shell, chooses Food,
 Supplies, or Ship Service, and creates the first working operation through
 layout, fixtures, staffing, stock, and policy. Global Goal is the sole
@@ -49,6 +53,11 @@ visibly different station and revenue stream, exposes unmet demand before the
 player commits, and offers at least two viable layout or operating choices.
 
 ### Gate B: Spatial Operations
+
+Status: **in progress**. Physical market browsing, staffed checkout positions,
+exclusive queues, stock truth, and measured capacity scaling are complete. The
+remaining critical work is a live poor/improved layout comparison across the
+opening businesses; the broader fixture catalogue is deferred.
 
 Finish only the shared facility behaviors needed by the three opening paths:
 depicted capacity, exclusive use, staff positions, physical stock movement,
@@ -228,7 +237,7 @@ audited checklist with no unsupported checked claims.
 ### Visit Lifecycle
 
 - [x] Add `announced` phase.
-- [ ] Add `holding` phase.
+- [x] Add `holding` phase.
 - [x] Add `approach` phase.
 - [x] Add `secure` phase.
 - [x] Add `disembark` phase.
@@ -282,7 +291,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Give every active need/want a physical slot and duration.
 - [x] Prevent two actors from owning one exclusive use slot.
 - [ ] Make depicted table seats individually reservable.
-- [ ] Make bed positions individually claimable for a sleep session.
+- [x] Make bed positions individually claimable for a sleep session.
 - [x] Support temporary bed claims separately from permanent home assignment.
 - [ ] Make hygiene fixtures hold exclusive sessions for visible durations.
 - [ ] Make lounge and cantina positions hold meaningful leisure sessions.
@@ -486,7 +495,7 @@ audited checklist with no unsupported checked claims.
 ### Planning And Delivery
 
 - [x] Promote construction blueprints into the normal expansion workflow.
-- [ ] Plan Truss in space.
+- [x] Plan Truss in space.
 - [x] Route construction kits to reachable staging.
 - [x] Route EVA workers through an Airlock.
 - [ ] Build Truss through visible EVA welding.
@@ -1183,3 +1192,17 @@ Remaining uncertainty:
 - Focused checks: `npm run build` and `git diff --check` passed. The live starter at `?scenario=starter` presents Food, Supplies, and Refuel together above one selected detail/action area; selecting Supplies changes the detail without losing the three-way comparison.
 - Visual/playtest evidence: inspected at the normal in-app browser viewport. All three investments, current remaining capital, and observed demand fit in the first sidebar view while the station remains visible. The starter visibly contains a finite hull, one south Airlock, a three-tile Truss finger, and open east/west expansion faces.
 - Remaining uncertainty: this closes stale starter evidence and improves comparison, but Gate A remains open until Supplies and Refuel each complete a normal UI operating cycle and stored starter attachments are validated.
+
+2026-07-28 · Practical Gate A/B checkpoint
+
+- Commits or files: `68df873` (opening comparison), `f571275` (explicit stored-starter Pod Dock attachment rebuild), `4f643cd` (staffed checkout scaling), `src/sim/facility-descriptors.ts`, `src/sim/sim.ts`, `src/render/render.ts`, and this ledger.
+- Focused evidence: `npm run test:opening-businesses`, `npm run test:opening-procurement`, `npm run test:facility-slots`, `npm run baseline:frontage`, and `npm run build` passed. A fresh opening funds one of three businesses; markets require shelf stock plus staffed physical checkout; supplier and fuel orders use physical dock hardware; one versus two Checkout Banks exposes two versus four service positions; and the facility runner proves an unstaffed/overloaded line and measured throughput improvement.
+- Visual/playtest evidence: after a normal New Game and charter flow, Food, Supplies, and Refuel remain simultaneously visible. Supplies selects a 24-tile public Market as its first world action; Refuel selects a Pod Dock Fuel Coupler. Market fixtures render their live stock, staffed-register count, and queue length over the world objects.
+- Remaining uncertainty: Gate A still needs one preserved start-to-revenue operating-cycle capture. Gate B still needs the live bad/improved comparison; its deterministic comparison exists, but the ledger does not treat that as a substitute for player-facing inspection.
+
+2026-07-28 · Normal structural planning controls
+
+- Commit or files: normal structural tools in `src/main.ts` and `src/styles.css`; Truss planning/EVA work in `src/sim/construction.ts`; focused coverage in `tools/sim-tests.ts` and `tools/structural-expansion-tests.ts` (pending checkpoint commit at evidence capture).
+- Focused evidence: `npm run test:structural-expansion` and `npm run build` passed. Existing construction truth plans Truss only in open space adjacent to hull or planned construction, charges one scaffold kit, and creates an EVA-required construction site.
+- Visual/playtest evidence: the normal `?scenario=starter` Build palette now visibly exposes Truss, Airlock, and Cancel Build together. These were previously functional but hidden behind `?truss` and two CSS suppression rules.
+- Remaining uncertainty: this proves planning is discoverable, not a full Gate C build. A normal-start player still needs to weld the scaffold, plan the hull, save/resume, and commission one sealed wing in a preserved live run.
