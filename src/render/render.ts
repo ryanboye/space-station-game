@@ -127,6 +127,11 @@ const PX = TILE_SIZE / 18;  // pixel scale factor relative to original 18px tile
 export interface ApproachEnvelopePreview {
   inspectedSlotId?: string | null;
   berthPlacementTiles?: number[];
+  /** Candidate selected by an Approach Control offer card hover/focus. */
+  candidateOfferId?: number | null;
+  candidateSlotId?: string | null;
+  candidateHullVariant?: ShipHullVariant;
+  candidateShipSize?: ShipSize;
 }
 
 const tileColor: Record<TileType, string> = {
@@ -4573,14 +4578,16 @@ function drawApproachEnvelopePreview(
     const tiles = preview.berthPlacementTiles;
     descriptor = previewSlotDescriptor(state, `preview:berth:${tiles[0]}`, 'berth', tiles, exteriorFacingForPreview(state, tiles), ['small', 'medium', 'large']);
     planning = true;
+  } else if (preview.candidateSlotId) {
+    descriptor = getDockingSlotDescriptors(state).find((slot) => slot.id === preview.candidateSlotId) ?? null;
   } else if (preview.inspectedSlotId) {
     descriptor = getDockingSlotDescriptors(state).find((slot) => slot.id === preview.inspectedSlotId) ?? null;
   }
   if (!descriptor) return;
 
-  const size = descriptor.acceptedSizes.includes('large')
+  const size = preview.candidateShipSize ?? (descriptor.acceptedSizes.includes('large')
     ? 'large'
-    : descriptor.acceptedSizes.includes('medium') ? 'medium' : 'small';
+    : descriptor.acceptedSizes.includes('medium') ? 'medium' : 'small');
   const liveShip = state.arrivingShips.find((ship) =>
     (ship.assignedDockSourceKey && descriptor!.id === `dock:${ship.assignedDockSourceKey}`) ||
     (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined && descriptor!.id === `berth:${ship.assignedBerthAnchor}`)
@@ -4591,25 +4598,60 @@ function drawApproachEnvelopePreview(
       (offer.assignedBerthAnchor !== null && offer.assignedBerthAnchor !== undefined && descriptor!.id === `berth:${offer.assignedBerthAnchor}`)
     )
   );
-  const hullVariant = liveShip?.hullVariant ?? clearedOffer?.hullVariant;
+  const hullVariant = preview.candidateHullVariant ?? liveShip?.hullVariant ?? clearedOffer?.hullVariant;
   const validation = validateDockingSlot(state, descriptor, size, hullVariant);
   const descriptors = planning ? [...getDockingSlotDescriptors(state), descriptor] : getDockingSlotDescriptors(state);
   const conflictGroups = planning
     ? deriveApproachConflictGroups(descriptors).filter((group) => group.slotIds.includes(descriptor!.id))
     : getApproachConflictGroups(state).filter((group) => group.slotIds.includes(descriptor!.id));
-  const color = !validation.valid ? '#ff7676' : conflictGroups.length > 0 ? '#ffd36a' : '#72dff2';
+  const acceptedSlotIds = new Set<string>();
+  for (const ship of state.arrivingShips) {
+    if (ship.stage === 'depart') continue;
+    if (ship.assignedDockSourceKey) acceptedSlotIds.add(`dock:${ship.assignedDockSourceKey}`);
+    if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+      acceptedSlotIds.add(`berth:${ship.assignedBerthAnchor}`);
+    }
+  }
+  for (const offer of state.trafficOffers) {
+    if (offer.status !== 'cleared') continue;
+    if (offer.assignedDockSourceKey) acceptedSlotIds.add(`dock:${offer.assignedDockSourceKey}`);
+    if (offer.assignedBerthAnchor !== null && offer.assignedBerthAnchor !== undefined) {
+      acceptedSlotIds.add(`berth:${offer.assignedBerthAnchor}`);
+    }
+  }
+  const acceptedConflictSlotIds = [...new Set(
+    conflictGroups.flatMap((group) => group.slotIds)
+      .filter((slotId) => slotId !== descriptor!.id && acceptedSlotIds.has(slotId))
+  )];
+  const acceptedConflictLabels = acceptedConflictSlotIds.map((slotId) => {
+    if (slotId.startsWith('dock:')) {
+      const sourceKey = slotId.slice('dock:'.length);
+      const dock = state.docks.find((candidate) => candidate.sourceKey === sourceKey);
+      return dock ? `Pod Dock ${dock.id}` : 'Pod Dock';
+    }
+    if (slotId.startsWith('berth:')) return `Berth ${slotId.slice('berth:'.length)}`;
+    return slotId;
+  });
+  const conflictsWithAcceptedWork = acceptedConflictSlotIds.length > 0;
+  const color = conflictsWithAcceptedWork
+    ? '#ff9d66'
+    : !validation.valid ? '#ff7676' : conflictGroups.length > 0 ? '#ffd36a' : '#72dff2';
   const envelope = hullVariant ? envelopeForHull(descriptor, hullVariant) : descriptor.envelopesBySize[size];
   const ingress = approachRectPx(state, envelope.ingress.bounds);
   const mooring = approachRectPx(state, envelope.mooring.bounds);
   ctx.save();
-  ctx.fillStyle = !validation.valid ? 'rgba(255, 82, 82, 0.15)' : conflictGroups.length > 0 ? 'rgba(255, 194, 76, 0.14)' : 'rgba(88, 222, 201, 0.12)';
+  ctx.fillStyle = conflictsWithAcceptedWork
+    ? 'rgba(255, 126, 72, 0.18)'
+    : !validation.valid ? 'rgba(255, 82, 82, 0.15)' : conflictGroups.length > 0 ? 'rgba(255, 194, 76, 0.14)' : 'rgba(88, 222, 201, 0.12)';
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
   ctx.setLineDash([Math.max(3, TILE_SIZE * 0.15), Math.max(2, TILE_SIZE * 0.11)]);
   ctx.fillRect(ingress.x, ingress.y, ingress.w, ingress.h);
   ctx.strokeRect(ingress.x + 0.5, ingress.y + 0.5, ingress.w - 1, ingress.h - 1);
   ctx.setLineDash([]);
-  ctx.fillStyle = !validation.valid ? 'rgba(255, 90, 90, 0.25)' : conflictGroups.length > 0 ? 'rgba(255, 202, 86, 0.24)' : 'rgba(88, 226, 204, 0.2)';
+  ctx.fillStyle = conflictsWithAcceptedWork
+    ? 'rgba(255, 136, 79, 0.3)'
+    : !validation.valid ? 'rgba(255, 90, 90, 0.25)' : conflictGroups.length > 0 ? 'rgba(255, 202, 86, 0.24)' : 'rgba(88, 226, 204, 0.2)';
   ctx.fillRect(mooring.x, mooring.y, mooring.w, mooring.h);
   ctx.strokeRect(mooring.x + 0.5, mooring.y + 0.5, mooring.w - 1, mooring.h - 1);
   drawApproachArrow(ctx, ingress, descriptor.facing, color);
@@ -4628,9 +4670,16 @@ function drawApproachEnvelopePreview(
     : thermal && thermal.value >= 0.68
       ? 'COOL POCKET'
       : sunlight && sunlight.value >= 0.68 ? 'BRIGHT' : 'SHELTERED';
-  const liveAlignment = liveShip ? approachLaneAlignment(liveShip.lane, descriptor.facing) : null;
+  const projectedOffer = preview.candidateOfferId === null || preview.candidateOfferId === undefined
+    ? null
+    : state.trafficOffers.find((offer) => offer.id === preview.candidateOfferId) ?? null;
+  const liveAlignment = projectedOffer
+    ? approachLaneAlignment(projectedOffer.lane, descriptor.facing)
+    : liveShip ? approachLaneAlignment(liveShip.lane, descriptor.facing) : null;
   const geometry = `${descriptor.facing.toUpperCase()} ${trafficLabel} · ${environmentLabel}`;
-  const label = reason
+  const label = conflictsWithAcceptedWork
+    ? `ACCEPTED WORK CONFLICT: ${acceptedConflictLabels.join(', ')}`
+    : reason
     ? `APPROACH BLOCKED: ${reason}`
     : conflictGroups.length > 0
       ? `APPROACH SERIALIZES: ${conflictGroups.length} GROUP${conflictGroups.length === 1 ? '' : 'S'}`

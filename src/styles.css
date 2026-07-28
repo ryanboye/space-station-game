@@ -3681,6 +3681,112 @@ button.alert-item {
   font-size: 9px;
 }
 
+.commitment-control-surface,
+.admission-policy-editor {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(123, 167, 217, 0.26);
+  border-radius: 5px;
+  background: rgba(8, 18, 28, 0.72);
+}
+
+.commitment-surface-head,
+.failure-episode-head,
+.admission-pressure-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.commitment-surface-head > span:first-child,
+.failure-episode-head > span:first-child {
+  display: grid;
+  gap: 1px;
+}
+
+.commitment-surface-head strong { color: #eaf4f8; font-size: 10px; text-transform: uppercase; }
+.commitment-surface-head small { color: #819aaa; font-size: 8px; }
+.commitment-count {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #8ba4b3;
+  background: rgba(57, 77, 91, 0.5);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.commitment-count.is-active { color: #ffd497; background: rgba(126, 73, 29, 0.58); }
+
+.failure-episode-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.failure-episode-empty { color: #7994a5; font-size: 9px; }
+.failure-episode-card {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(221, 166, 91, 0.34);
+  border-left: 3px solid #d9a559;
+  border-radius: 4px;
+  background: rgba(55, 35, 22, 0.45);
+}
+.failure-episode-card.stage-distressed { border-left-color: #ef9360; }
+.failure-episode-card.stage-disruptive { border-left-color: #ff6969; background: rgba(76, 26, 27, 0.52); }
+.failure-episode-head strong { color: #f3eee8; font-size: 10px; }
+.failure-episode-head small { color: #a99583; font-size: 8px; }
+.failure-episode-head b { color: #f3bd72; font-size: 8px; white-space: nowrap; }
+.failure-episode-card p { margin: 5px 0; color: #c7b9aa; font-size: 9px; line-height: 1.25; }
+.failure-episode-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.failure-episode-actions button {
+  width: auto;
+  min-height: 23px;
+  padding: 2px 6px;
+  border-color: rgba(219, 172, 107, 0.36);
+  font-size: 8px;
+}
+
+.compact-switch { display: flex; align-items: center; gap: 5px; color: #b9d5df; font-size: 9px; }
+.compact-switch input { margin: 0; }
+.admission-policy-editor.is-off .admission-rule-grid { opacity: 0.62; }
+.admission-rule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.admission-rule,
+.admission-reserves {
+  min-width: 0;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid rgba(104, 170, 190, 0.28);
+  border-radius: 4px;
+}
+.admission-rule legend,
+.admission-reserves legend { padding: 0 4px; color: #9dc8d6; font-size: 9px; font-weight: 800; }
+.admission-rule legend label { display: flex; align-items: center; gap: 4px; }
+.admission-rule > label,
+.admission-reserves > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px auto;
+  gap: 4px;
+  align-items: center;
+  margin-top: 4px;
+  color: #849dab;
+  font-size: 8px;
+}
+.admission-rule input[type='number'],
+.admission-reserves input[type='number'] {
+  width: 58px;
+  min-width: 0;
+  height: 23px;
+  padding: 2px 4px;
+  font-size: 9px;
+}
+.admission-pressure-row {
+  min-width: 0;
+  padding-top: 5px;
+  border-top: 1px solid rgba(123, 167, 217, 0.16);
+}
+.admission-pressure-row span { min-width: 0; color: #aac0cc; font-size: 9px; line-height: 1.25; }
+.admission-pressure-row button { flex: 0 0 auto; width: auto; min-height: 25px; padding: 3px 8px; font-size: 9px; }
+.admission-override-note { color: #708a9b; font-size: 8px; line-height: 1.25; }
+
 .shift-brief {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -3854,6 +3960,14 @@ button.alert-item {
   background: rgba(14, 27, 39, 0.96);
 }
 
+.traffic-offer.decision-card:hover,
+.traffic-offer.decision-card:focus-visible,
+.traffic-offer.decision-card:focus-within {
+  outline: 1px solid #72dff2;
+  outline-offset: 1px;
+  border-color: rgba(114, 223, 242, 0.72);
+}
+
 .traffic-offer.decision-card.pod { border-left-color: #60c8d8; }
 .traffic-offer.decision-card.berth { border-left-color: #c99a5a; }
 .traffic-offer.decision-card.is-cleared {
@@ -3951,6 +4065,27 @@ button.alert-item {
 .traffic-interface.blocked b { color: var(--warn); }
 .traffic-interface span { color: #d9bc74; }
 
+.traffic-interface-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 4px 6px;
+  border: 1px solid rgba(91, 190, 207, 0.32);
+  background: rgba(31, 79, 91, 0.24);
+  color: #89b9c8;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.traffic-interface-choice b { min-width: 0; overflow: hidden; color: #d7f1f5; text-overflow: ellipsis; white-space: nowrap; }
+.traffic-interface-choice span { white-space: nowrap; }
+.traffic-interface-choice.is-blocked { border-color: rgba(221, 154, 75, 0.36); color: #c59b6a; }
+.traffic-admission-note {
+  color: #9fb9c6;
+  font-size: 8px;
+  line-height: 1.25;
+}
+
 .traffic-load-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -4017,6 +4152,17 @@ button.alert-item {
   grid-column: 1 / -1;
   min-height: 12px;
   white-space: normal;
+}
+
+@media (max-width: 700px) {
+  .failure-episode-list,
+  .admission-rule-grid { grid-template-columns: 1fr; }
+  .traffic-load-strip,
+  .traffic-cues,
+  .admission-override-note,
+  .failure-episode-card p { display: none; }
+  .admission-pressure-row { align-items: flex-start; }
+  .traffic-interface-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 }
 
 .traffic-action-note.tone-ok { color: var(--ok); }

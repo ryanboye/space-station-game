@@ -1,6 +1,13 @@
 import './styles.css';
 import { renderWorld, type ApproachEnvelopePreview, type RenderViewport } from './render/render';
-import { getStrandedReliefQuote, transferStrandedVisitor } from './sim/sim';
+import {
+  applyRecoveryAction,
+  getAdmissionPressure,
+  getFailureEpisodes,
+  getStrandedReliefQuote,
+  setAdmissionPolicy,
+  transferStrandedVisitor
+} from './sim/sim';
 import { DockEconomyFeedbackLayer, type DockDepartureResult } from './render/dock-economy-feedback';
 import { createEmptySpriteAtlas, loadSpriteAtlas, type SpriteAtlas } from './render/sprite-atlas';
 import { MODULE_SPRITE_KEYS } from './render/sprite-keys';
@@ -57,6 +64,7 @@ import {
   getBerthInspectorAt,
   getBerthFacilityAt,
   getCommercialUnitAt,
+  getDockingSlotDescriptors,
   getTrafficOfferPreview,
   getCrewInspectorById,
   getCrewFacilityReachability,
@@ -163,6 +171,7 @@ import {
   type IncidentEntity,
   type SpaceLane,
   type ShipSize,
+  type ShipHullVariant,
   type ShipType,
   type HousingPolicy,
   type ItemType,
@@ -170,6 +179,8 @@ import {
   type JobStatusCounts,
   type ModuleRotation,
   type StationState,
+  type TrafficOffer,
+  type TrafficOfferPreview,
   type StaffDepartment,
   type StaffRole,
   type SpecialtyId,
@@ -708,6 +719,43 @@ app.innerHTML = `
           </div>
         </div>
         <small id="approach-reputation-pull" class="approach-reputation-pull">Traffic pull: reputation has no effect yet</small>
+        <section class="commitment-control-surface" aria-labelledby="commitment-recovery-title">
+          <div class="commitment-surface-head">
+            <span><strong id="commitment-recovery-title">Stay recovery</strong><small>Explicit actions for active failures</small></span>
+            <span id="failure-episode-count" class="commitment-count">0 active</span>
+          </div>
+          <div id="failure-episode-list" class="failure-episode-list" aria-live="polite"></div>
+        </section>
+        <section id="admission-policy-editor" class="admission-policy-editor" aria-labelledby="admission-policy-title">
+          <div class="commitment-surface-head">
+            <span><strong id="admission-policy-title">Finite admission</strong><small>Routine calls only; exceptions stay manual</small></span>
+            <label class="compact-switch"><input id="admission-policy-enabled" type="checkbox" /> <span>Enabled</span></label>
+          </div>
+          <div class="admission-rule-grid">
+            <fieldset class="admission-rule" data-admission-class="pod">
+              <legend><label><input id="admission-pod-enabled" type="checkbox" /> Pods</label></legend>
+              <label>Keep free<input data-admission-number="pod.reserveFreeInterfaces" type="number" min="0" max="12" step="1" /></label>
+              <label>Max stay<input data-admission-number="pod.maxStaySeconds" type="number" min="0" max="3600" step="30" /><span>s</span></label>
+              <label>Min margin<input data-admission-number="pod.minMarginCredits" type="number" min="0" max="100000" step="10" /><span>c</span></label>
+            </fieldset>
+            <fieldset class="admission-rule" data-admission-class="berth">
+              <legend><label><input id="admission-berth-enabled" type="checkbox" /> Berths</label></legend>
+              <label>Keep free<input data-admission-number="berth.reserveFreeInterfaces" type="number" min="0" max="12" step="1" /></label>
+              <label>Max stay<input data-admission-number="berth.maxStaySeconds" type="number" min="0" max="3600" step="30" /><span>s</span></label>
+              <label>Min margin<input data-admission-number="berth.minMarginCredits" type="number" min="0" max="100000" step="10" /><span>c</span></label>
+            </fieldset>
+            <fieldset class="admission-reserves">
+              <legend>Station reserves</legend>
+              <label>Guest beds<input data-admission-number="reserveBeds" type="number" min="0" max="999" step="1" /></label>
+              <label>Prepared meals<input data-admission-number="reserveMeals" type="number" min="0" max="9999" step="1" /></label>
+            </fieldset>
+          </div>
+          <div class="admission-pressure-row">
+            <span id="admission-pressure" aria-live="polite">No calls waiting.</span>
+            <button id="admission-manual-override" type="button">Manual all</button>
+          </div>
+          <small class="admission-override-note">Manual override remains available on every offer through Accept, Hold, and Pass. Finite admission supersedes legacy auto-routing only while enabled.</small>
+        </section>
         <div id="traffic-offer-list" class="traffic-offer-list" aria-live="polite"></div>
         <small id="traffic-action-note" class="traffic-action-note">Accept commits the shown interface and station load.</small>
       </div>
@@ -1745,6 +1793,14 @@ const portAutoToggleEl = document.querySelector<HTMLButtonElement>('#toggle-port
 const portAutoStatusEl = document.querySelector<HTMLElement>('#port-auto-status')!;
 const approachPolicyEl = document.querySelector<HTMLElement>('#approach-policy')!;
 const approachReputationPullEl = document.querySelector<HTMLElement>('#approach-reputation-pull')!;
+const failureEpisodeListEl = document.querySelector<HTMLElement>('#failure-episode-list')!;
+const failureEpisodeCountEl = document.querySelector<HTMLElement>('#failure-episode-count')!;
+const admissionPolicyEditorEl = document.querySelector<HTMLElement>('#admission-policy-editor')!;
+const admissionPolicyEnabledEl = document.querySelector<HTMLInputElement>('#admission-policy-enabled')!;
+const admissionPodEnabledEl = document.querySelector<HTMLInputElement>('#admission-pod-enabled')!;
+const admissionBerthEnabledEl = document.querySelector<HTMLInputElement>('#admission-berth-enabled')!;
+const admissionPressureEl = document.querySelector<HTMLElement>('#admission-pressure')!;
+const admissionManualOverrideEl = document.querySelector<HTMLButtonElement>('#admission-manual-override')!;
 const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
 const berthOpsTitleEl = document.querySelector<HTMLElement>('#berth-ops-title')!;
 const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
@@ -2890,6 +2946,7 @@ function openPortDispatch(): void {
 function closePortDispatch(): void {
   portDispatchModal.classList.add('hidden');
   openPortDispatchBtn.setAttribute('aria-expanded', 'false');
+  projectedTrafficOffer = null;
 }
 
 function refreshDispatchTrigger(): void {
@@ -3289,6 +3346,7 @@ function renderSettlementHistory(settlements: StationState['portOps']['settlemen
 }
 
 let lastTrafficOfferRenderKey = '';
+let lastFailureEpisodeRenderKey = '';
 
 function trafficOfferTimer(offer: StationState['trafficOffers'][number]): string {
   if (offer.status === 'cleared') {
@@ -3311,7 +3369,123 @@ function compactLoadItem(label: string, value: string): string {
   return `<span><b>${escapeHtml(value)}</b>${label}</span>`;
 }
 
+const RECOVERY_ACTION_LABELS = [
+  ['emergency-meals', 'Emergency meal'],
+  ['temporary-lodging', 'Temporary bunk'],
+  ['prioritize-repair', 'Prioritize repair'],
+  ['compensate', 'Compensate'],
+  ['onward-transfer', 'Onward transfer'],
+  ['cancel-contract', 'Cancel contract'],
+  ['close-admissions', 'Close admissions'],
+  ['security-intervention', 'Security response']
+] as const;
+
+function refreshRecoveryEpisodes(): void {
+  const episodes = getFailureEpisodes(state);
+  failureEpisodeCountEl.textContent = `${episodes.length} active`;
+  failureEpisodeCountEl.classList.toggle('is-active', episodes.length > 0);
+  for (const episode of episodes) {
+    const elapsedEl = failureEpisodeListEl.querySelector<HTMLElement>(`[data-failure-elapsed="${episode.id}"]`);
+    if (elapsedEl) elapsedEl.textContent = `${Math.max(0, Math.round(state.now - episode.openedAt))}s`;
+  }
+  const renderKey = JSON.stringify(episodes.map((episode) => [
+    episode.id,
+    episode.subjectId,
+    episode.shipId,
+    episode.need,
+    episode.cause,
+    episode.stage,
+    episode.actionsApplied
+  ]));
+  if (renderKey === lastFailureEpisodeRenderKey) return;
+  lastFailureEpisodeRenderKey = renderKey;
+  if (episodes.length === 0) {
+    failureEpisodeListEl.innerHTML = '<div class="failure-episode-empty">No failed stays. Current commitments remain recoverable.</div>';
+    return;
+  }
+  failureEpisodeListEl.innerHTML = episodes.map((episode) => {
+    const visitor = state.visitors.find((entry) => entry.id === episode.subjectId);
+    const ship = episode.shipId === null ? null : state.arrivingShips.find((entry) => entry.id === episode.shipId) ?? null;
+    const elapsed = Math.max(0, Math.round(state.now - episode.openedAt));
+    const actions = RECOVERY_ACTION_LABELS
+      .filter(([kind]) => {
+        if ((kind === 'prioritize-repair' || kind === 'cancel-contract') && episode.shipId === null) return false;
+        if (kind === 'security-intervention' && episode.stage !== 'disruptive') return false;
+        return true;
+      })
+      .map(([kind, label]) => {
+        const used = episode.actionsApplied.includes(kind);
+        return `<button type="button" data-recovery-action="${kind}" data-episode-id="${episode.id}" data-visitor-id="${episode.subjectId}"${episode.shipId === null ? '' : ` data-ship-id="${episode.shipId}"`}${used ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(label)}${used ? ' ✓' : ''}</button>`;
+      }).join('');
+    return `<article class="failure-episode-card stage-${episode.stage}" data-failure-episode="${episode.id}">
+      <div class="failure-episode-head">
+        <span><strong>${escapeHtml(visitor?.name ?? `Guest ${episode.subjectId}`)}</strong><small>${escapeHtml(ship?.portManifest?.callsign ?? (episode.shipId === null ? 'Walk-in stay' : `Ship ${episode.shipId}`))}</small></span>
+        <b>${escapeHtml(episode.stage.toUpperCase())} · <span data-failure-elapsed="${episode.id}">${elapsed}s</span></b>
+      </div>
+      <p>${escapeHtml(episode.cause)}${episode.need ? ` · needs ${escapeHtml(episode.need)}` : ''}</p>
+      <div class="failure-episode-actions" aria-label="Recovery actions for ${escapeHtml(visitor?.name ?? `guest ${episode.subjectId}`)}">${actions}</div>
+    </article>`;
+  }).join('');
+}
+
+function syncNumberInput(input: HTMLInputElement, value: number): void {
+  if (document.activeElement !== input) input.value = String(value);
+}
+
+function refreshAdmissionPolicyEditor(): void {
+  const policy = state.admissionPolicy;
+  const pressure = getAdmissionPressure(state);
+  admissionPolicyEnabledEl.checked = policy.enabled;
+  admissionPodEnabledEl.checked = policy.pod.enabled;
+  admissionBerthEnabledEl.checked = policy.berth.enabled;
+  admissionPolicyEditorEl.classList.toggle('is-off', !policy.enabled);
+  const values: Record<string, number> = {
+    'pod.reserveFreeInterfaces': policy.pod.reserveFreeInterfaces,
+    'pod.maxStaySeconds': policy.pod.maxStaySeconds,
+    'pod.minMarginCredits': policy.pod.minMarginCredits,
+    'berth.reserveFreeInterfaces': policy.berth.reserveFreeInterfaces,
+    'berth.maxStaySeconds': policy.berth.maxStaySeconds,
+    'berth.minMarginCredits': policy.berth.minMarginCredits,
+    reserveBeds: policy.reserveBeds,
+    reserveMeals: policy.reserveMeals
+  };
+  for (const input of admissionPolicyEditorEl.querySelectorAll<HTMLInputElement>('input[data-admission-number]')) {
+    const key = input.dataset.admissionNumber;
+    if (key && values[key] !== undefined) syncNumberInput(input, values[key]);
+  }
+  const closure = policy.closedUntil !== null && policy.closedUntil > state.now
+    ? ` · recovery closure ${Math.ceil(policy.closedUntil - state.now)}s`
+    : '';
+  admissionPressureEl.textContent = `${pressure.pendingPods} pod / ${pressure.pendingBerths} berth waiting · ${pressure.autoAccepts} routine clear · ${pressure.autoHolds} held · ${pressure.manual} manual${closure}${pressure.topReason ? ` · ${pressure.topReason}` : ''}`;
+}
+
+type OfferInterfaceChoice = {
+  id: string;
+  label: string;
+  slotId: string;
+  side: SpaceLane | null;
+};
+
+function chosenOfferInterface(offer: TrafficOffer, preview: TrafficOfferPreview): OfferInterfaceChoice | null {
+  const assignedId = offer.size === 'small'
+    ? offer.assignedDockSourceKey ?? null
+    : offer.assignedBerthAnchor === null || offer.assignedBerthAnchor === undefined
+      ? null
+      : String(offer.assignedBerthAnchor);
+  const choice = (assignedId === null
+    ? preview.compatibleInterface.interfaces.find((entry) => entry.available)
+    : preview.compatibleInterface.interfaces.find((entry) => entry.id === assignedId))
+    ?? preview.compatibleInterface.interfaces[0]
+    ?? null;
+  if (!choice) return null;
+  const slotId = choice.kind === 'pod-dock' ? `dock:${choice.id}` : `berth:${choice.id}`;
+  const side = getDockingSlotDescriptors(state).find((descriptor) => descriptor.id === slotId)?.facing ?? null;
+  return { id: choice.id, label: choice.label, slotId, side };
+}
+
 function refreshTrafficOffers(): void {
+  refreshRecoveryEpisodes();
+  refreshAdmissionPolicyEditor();
   const cargoOps = state.portOps;
   const cargoArmCount = state.moduleInstances.filter((module) => module.type === ModuleType.CargoArm).length;
   cargoArmStatusEl.textContent = cargoOps.cargoArmStatus === 'fault'
@@ -3386,15 +3560,33 @@ function refreshTrafficOffers(): void {
   }
   const hasBerthCapacity = state.rooms.includes(RoomType.Berth);
   const visibleOffers = state.trafficOffers.filter((offer) => hasBerthCapacity || offer.size === 'small');
-  const offerViews = visibleOffers.map((offer) => ({ offer, preview: getTrafficOfferPreview(state, offer.id) }));
+  const offerViews = visibleOffers.map((offer) => {
+    const preview = getTrafficOfferPreview(state, offer.id);
+    return { offer, preview, choice: preview ? chosenOfferInterface(offer, preview) : null };
+  });
+  if (projectedTrafficOffer) {
+    const projectedView = offerViews.find(({ offer }) => offer.id === projectedTrafficOffer?.offerId);
+    projectedTrafficOffer = projectedView?.choice
+      ? {
+          offerId: projectedView.offer.id,
+          slotId: projectedView.choice.slotId,
+          hullVariant: projectedView.offer.hullVariant,
+          size: projectedView.offer.size
+        }
+      : null;
+  }
   const offerRenderKey = JSON.stringify({
     dockVersion: state.dockVersion,
     manual: state.controls.manualTrafficAdmission,
     hasBerthCapacity,
-    offers: offerViews.map(({ offer, preview }) => [
+    policy: state.admissionPolicy,
+    offers: offerViews.map(({ offer, preview, choice }) => [
       offer.id,
       offer.status,
       offer.holdUsed,
+      offer.admissionNote,
+      choice?.slotId ?? null,
+      choice?.side ?? null,
       preview?.compatibleInterface.compatibleCount ?? 0,
       preview?.compatibleInterface.freeCount ?? 0,
       preview?.canAccept ?? false,
@@ -3412,7 +3604,7 @@ function refreshTrafficOffers(): void {
       : '<div class="traffic-empty">Orbital manifest queue clear</div>';
     return;
   }
-  const offersHtml = offerViews.map(({ offer, preview }) => {
+  const offersHtml = offerViews.map(({ offer, preview, choice }) => {
     if (!preview) return '';
     const cleared = offer.status === 'cleared';
     const className = preview.shipClass === 'pod' ? 'pod' : 'berth';
@@ -3427,12 +3619,22 @@ function refreshTrafficOffers(): void {
     const blocker = !cleared && !preview.canAccept && preview.acceptReason
       ? `<small class="traffic-offer-blocker">${escapeHtml(preview.acceptReason)}</small>`
       : '';
+    const policyNote = offer.admissionNote
+      ? `<small class="traffic-admission-note">${escapeHtml(offer.admissionNote)}</small>`
+      : '';
+    const interfaceChoice = choice
+      ? `<div class="traffic-interface-choice"><b>${escapeHtml(choice.label)}</b><span>${choice.side ? `${choice.side.toUpperCase()} approach` : 'Approach side unavailable'}</span></div>`
+      : '<div class="traffic-interface-choice is-blocked"><b>No compatible interface</b><span>Manual planning required</span></div>';
+    const berthAnchor = choice && preview.shipClass === 'berth' ? Number(choice.id) : null;
     const actions = cleared
       ? '<span class="traffic-commitment">Interface committed</span>'
-      : `<button data-traffic-action="accept" data-offer-id="${offer.id}" ${preview.canAccept ? '' : 'disabled'}>Accept</button>
+      : `<button data-traffic-action="accept" data-offer-id="${offer.id}"${berthAnchor !== null && Number.isFinite(berthAnchor) ? ` data-berth-anchor="${berthAnchor}"` : ''} ${preview.canAccept ? '' : 'disabled'}>Accept</button>
         <button data-traffic-action="hold" data-offer-id="${offer.id}" ${preview.canHold ? '' : 'disabled'}>Hold</button>
         <button data-traffic-action="pass" data-offer-id="${offer.id}" ${preview.canPass ? '' : 'disabled'}>Pass</button>`;
-    return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}">
+    const projectionData = choice
+      ? ` data-offer-slot-id="${escapeHtml(choice.slotId)}" data-offer-hull-variant="${offer.hullVariant}" data-offer-size="${offer.size}"`
+      : '';
+    return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}" data-traffic-offer-id="${offer.id}"${projectionData} tabindex="0" aria-label="${escapeHtml(offer.callsign)}. ${choice ? `${choice.label}, ${choice.side ?? 'unknown'} approach.` : 'No compatible interface.'} Focus to project its physical approach envelope.">
       <div class="traffic-offer-title-row">
         <span class="traffic-offer-class traffic-offer-class--${className}" aria-hidden="true"><i></i></span>
         <img class="traffic-offer-hull" src="${shipHullAssetPath(offer.hullVariant)}" alt="${escapeHtml(hull.variant.replace(/-/g, ' '))}">
@@ -3442,6 +3644,7 @@ function refreshTrafficOffers(): void {
       <div class="traffic-offer-facts"><span>${preview.shipClass === 'pod' ? 'POD' : offer.size.toUpperCase()} · ${range(preview.partySize, ' guests')}</span><span>${range(preview.staySeconds, 's')} stay</span></div>
       <div class="traffic-cues">${cues}</div>
       <div class="traffic-interface ${preview.compatibleInterface.freeCount > 0 ? 'ready' : 'blocked'}"><b>${preview.compatibleInterface.freeCount}/${preview.compatibleInterface.compatibleCount}</b> ${interfaceLabel} free <span>· ${range(preview.expectedRevenue, 'c')}</span></div>
+      ${interfaceChoice}
       <div class="traffic-load-strip" aria-label="Committed load">
         ${compactLoadItem('berth', `${Math.ceil(load.berthSeconds / 60)}m`)}
         ${compactLoadItem('beds', String(load.bedNights))}
@@ -3450,6 +3653,7 @@ function refreshTrafficOffers(): void {
         ${compactLoadItem('staff', `${load.staffMinutes}m`)}
       </div>
       ${blocker}
+      ${policyNote}
       <div class="traffic-offer-actions">${actions}</div>
     </article>`;
   }).join('') || '<div class="traffic-empty">No compatible approach traffic is waiting.</div>';
@@ -6320,6 +6524,12 @@ let selectedRoomTile: number | null = null;
 let selectedBerthAnchor: number | null = null;
 let selectedAgent: SelectedAgent | null = null;
 let selectedIncidentId: number | null = null;
+let projectedTrafficOffer: {
+  offerId: number;
+  slotId: string;
+  hullVariant: ShipHullVariant;
+  size: ShipSize;
+} | null = null;
 let isPainting = false;
 let paintStart: { x: number; y: number } | null = null;
 let paintCurrent: { x: number; y: number } | null = null;
@@ -6338,6 +6548,14 @@ function approachPreviewForRender(): ApproachEnvelopePreview {
     return { berthPlacementTiles };
   }
   if (currentTool.kind !== 'none') return {};
+  if (projectedTrafficOffer) {
+    return {
+      candidateOfferId: projectedTrafficOffer.offerId,
+      candidateSlotId: projectedTrafficOffer.slotId,
+      candidateHullVariant: projectedTrafficOffer.hullVariant,
+      candidateShipSize: projectedTrafficOffer.size
+    };
+  }
   if (selectedDockId !== null) {
     const dock = state.docks.find((candidate) => candidate.id === selectedDockId);
     if (dock) return { inspectedSlotId: `dock:${dock.sourceKey}` };
@@ -9766,6 +9984,86 @@ portAutoToggleEl.addEventListener('click', () => {
   refreshSettlementSummary();
 });
 
+failureEpisodeListEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-recovery-action]');
+  if (!button || button.disabled) return;
+  const episodeId = Number(button.dataset.episodeId);
+  const visitorId = Number(button.dataset.visitorId);
+  const shipId = button.dataset.shipId === undefined ? undefined : Number(button.dataset.shipId);
+  const kind = button.dataset.recoveryAction;
+  if (!Number.isFinite(episodeId) || !Number.isFinite(visitorId) || !kind) return;
+  const allowed = RECOVERY_ACTION_LABELS.some(([candidate]) => candidate === kind);
+  if (!allowed) return;
+  const result = applyRecoveryAction(state, {
+    kind: kind as (typeof RECOVERY_ACTION_LABELS)[number][0],
+    episodeId,
+    visitorId,
+    shipId: shipId !== undefined && Number.isFinite(shipId) ? shipId : undefined,
+    amount: kind === 'emergency-meals' || kind === 'temporary-lodging' ? 1 : undefined
+  });
+  trafficActionNoteEl.textContent = result.ok ? result.summary : (result.reason ?? result.summary);
+  trafficActionNoteEl.className = `traffic-action-note ${result.ok ? 'tone-ok' : 'tone-warn'}`;
+  refreshTrafficOffers();
+  refreshSettlementSummary();
+});
+
+admissionPolicyEnabledEl.addEventListener('change', () => {
+  setAdmissionPolicy(state, { enabled: admissionPolicyEnabledEl.checked });
+  trafficActionNoteEl.textContent = admissionPolicyEnabledEl.checked
+    ? 'Finite admission enabled. Exceptional calls remain manual.'
+    : 'Finite admission disabled. Every new call remains manual unless legacy auto-routing is enabled.';
+  trafficActionNoteEl.className = 'traffic-action-note tone-ok';
+  lastTrafficOfferRenderKey = '';
+  refreshTrafficOffers();
+});
+
+admissionPodEnabledEl.addEventListener('change', () => {
+  setAdmissionPolicy(state, { pod: { ...state.admissionPolicy.pod, enabled: admissionPodEnabledEl.checked } });
+  lastTrafficOfferRenderKey = '';
+  refreshTrafficOffers();
+});
+
+admissionBerthEnabledEl.addEventListener('change', () => {
+  setAdmissionPolicy(state, { berth: { ...state.admissionPolicy.berth, enabled: admissionBerthEnabledEl.checked } });
+  lastTrafficOfferRenderKey = '';
+  refreshTrafficOffers();
+});
+
+admissionPolicyEditorEl.addEventListener('change', (event) => {
+  const input = (event.target as HTMLElement).closest<HTMLInputElement>('input[data-admission-number]');
+  if (!input) return;
+  const value = Number(input.value);
+  const key = input.dataset.admissionNumber;
+  if (!Number.isFinite(value) || !key) return;
+  if (key === 'reserveBeds') setAdmissionPolicy(state, { reserveBeds: value });
+  else if (key === 'reserveMeals') setAdmissionPolicy(state, { reserveMeals: value });
+  else if (key.startsWith('pod.')) {
+    const field = key.slice(4);
+    const pod = { ...state.admissionPolicy.pod };
+    if (field === 'reserveFreeInterfaces') pod.reserveFreeInterfaces = value;
+    else if (field === 'maxStaySeconds') pod.maxStaySeconds = value;
+    else if (field === 'minMarginCredits') pod.minMarginCredits = value;
+    setAdmissionPolicy(state, { pod });
+  } else if (key.startsWith('berth.')) {
+    const field = key.slice(6);
+    const berth = { ...state.admissionPolicy.berth };
+    if (field === 'reserveFreeInterfaces') berth.reserveFreeInterfaces = value;
+    else if (field === 'maxStaySeconds') berth.maxStaySeconds = value;
+    else if (field === 'minMarginCredits') berth.minMarginCredits = value;
+    setAdmissionPolicy(state, { berth });
+  }
+  lastTrafficOfferRenderKey = '';
+  refreshTrafficOffers();
+});
+
+admissionManualOverrideEl.addEventListener('click', () => {
+  setAdmissionPolicy(state, { enabled: false });
+  trafficActionNoteEl.textContent = 'Manual override restored for all new calls. Accept, Hold, and Pass remain available.';
+  trafficActionNoteEl.className = 'traffic-action-note tone-ok';
+  lastTrafficOfferRenderKey = '';
+  refreshTrafficOffers();
+});
+
 approachPolicyEl.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-port-policy]');
   if (!button || button.disabled) return;
@@ -9783,6 +10081,42 @@ approachPolicyEl.addEventListener('click', (event) => {
   refreshTrafficOffers();
 });
 
+function projectTrafficOfferCard(card: HTMLElement | null): void {
+  if (!card) {
+    projectedTrafficOffer = null;
+    return;
+  }
+  const offerId = Number(card.dataset.trafficOfferId);
+  const slotId = card.dataset.offerSlotId;
+  const hullVariant = card.dataset.offerHullVariant as ShipHullVariant | undefined;
+  const size = card.dataset.offerSize as ShipSize | undefined;
+  if (!Number.isFinite(offerId) || !slotId || !hullVariant || !size) {
+    projectedTrafficOffer = null;
+    return;
+  }
+  projectedTrafficOffer = { offerId, slotId, hullVariant, size };
+}
+
+trafficOfferListEl.addEventListener('mouseover', (event) => {
+  projectTrafficOfferCard((event.target as HTMLElement).closest<HTMLElement>('[data-traffic-offer-id]'));
+});
+
+trafficOfferListEl.addEventListener('mouseout', (event) => {
+  const card = (event.target as HTMLElement).closest<HTMLElement>('[data-traffic-offer-id]');
+  if (card && event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return;
+  projectTrafficOfferCard(null);
+});
+
+trafficOfferListEl.addEventListener('focusin', (event) => {
+  projectTrafficOfferCard((event.target as HTMLElement).closest<HTMLElement>('[data-traffic-offer-id]'));
+});
+
+trafficOfferListEl.addEventListener('focusout', (event) => {
+  const card = (event.target as HTMLElement).closest<HTMLElement>('[data-traffic-offer-id]');
+  if (card && event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return;
+  projectTrafficOfferCard(null);
+});
+
 trafficOfferListEl.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-traffic-action]');
   if (!button) return;
@@ -9790,7 +10124,8 @@ trafficOfferListEl.addEventListener('click', (event) => {
   if (!Number.isFinite(offerId)) return;
   const action = button.dataset.trafficAction;
   if (action === 'accept' || action === 'assign') {
-    const result = admitTrafficOffer(state, offerId);
+    const berthAnchor = button.dataset.berthAnchor === undefined ? undefined : Number(button.dataset.berthAnchor);
+    const result = admitTrafficOffer(state, offerId, berthAnchor !== undefined && Number.isFinite(berthAnchor) ? berthAnchor : undefined);
     trafficActionNoteEl.textContent = result.ok
       ? (result.reason ?? `Approach clearance transmitted.`)
       : (result.reason ?? 'Unable to accept this approach.');
@@ -9804,6 +10139,7 @@ trafficOfferListEl.addEventListener('click', (event) => {
     trafficActionNoteEl.textContent = passed ? 'Traffic passed. Lane control notified.' : 'Approach is already committed.';
     trafficActionNoteEl.className = 'traffic-action-note tone-muted';
   }
+  projectedTrafficOffer = null;
   refreshTrafficStatus();
   refreshTrafficOffers();
 });
