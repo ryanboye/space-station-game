@@ -36,6 +36,10 @@ Read these before implementing a package:
 7. `../33-prison-architect-depth-catalogue.md` - deeper facility and operations research.
 8. `../35-port-infrastructure-evolution.md` - Pod Dock and berth contracts.
 9. `../36-opening-economy-legibility-and-growth.md` - current economy implementation.
+10. `12-gate-e-save-resume-durability-handoff.md` - durable save, derived-state
+    reconstruction, and normal-scale resume evidence.
+11. `13-gate-f-facility-scale-and-reception-handoff.md` - the follow-on large
+    facility, market, cantina, physical-slot, and optional Reception tranche.
 
 Code is the source of truth when implementation and prose disagree. Report the
 conflict instead of silently choosing a new product direction.
