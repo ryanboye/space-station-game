@@ -4,6 +4,9 @@ import type { PodFreightOperation } from './pod-freight';
 import type { PodDemandLog } from './pod-demand';
 import type { ServiceLog } from './service-truth';
 
+import type { FailureEpisodeState } from './failed-stay';
+import type { AdmissionPolicy } from './admission-policy';
+
 export const GRID_WIDTH = 100;
 export const GRID_HEIGHT = 80;
 export const TILE_SIZE = 32;
@@ -1944,6 +1947,12 @@ export interface TrafficOffer {
   assignedDockSourceKey?: string | null;
   /** One disclosed schedule extension; repeated holds are not free parking. */
   holdUsed?: boolean;
+  /**
+   * The admission policy's one-sentence explanation for this call's current
+   * decision. Transient display state, refreshed every evaluation pass, and
+   * optional so every existing offer literal still compiles.
+   */
+  admissionNote?: string;
 }
 
 /** A physical station interface summarized for quick approach decisions. */
@@ -2399,6 +2408,41 @@ export interface PlumbingState {
   nextLeakId: number;
 }
 
+/**
+ * The six commitment metrics Gate G scopes.
+ *
+ * Recorded as running totals plus completion counts so a readout can show an
+ * average without keeping a per-visit history.
+ */
+export interface CommitmentMetrics {
+  /** Real-time visit duration, split by the class that was committed to. */
+  visitSecondsByClass: Record<VisitStayClass, number>;
+  visitsCompletedByClass: Record<VisitStayClass, number>;
+  /** Seconds ships spent holding for approach, and how many did so. */
+  holdingSeconds: number;
+  holdingShips: number;
+  approachGroupWaitSeconds: number;
+  /** Passenger transfer durations, measured from queue entry to arrival. */
+  disembarkSeconds: number;
+  disembarkCompleted: number;
+  boardingSeconds: number;
+  boardingCompleted: number;
+  /** Recurring-need demand raised and satisfied, by need. */
+  needRaised: Record<RecurringNeedKind, number>;
+  needSatisfied: Record<RecurringNeedKind, number>;
+  /** Occupied fixture-seconds, for utilization against depicted capacity. */
+  fixtureOccupiedSeconds: number;
+  fixtureCapacitySeconds: number;
+  /** Committed future load across accepted contracts, refreshed each pass. */
+  committedBerthSeconds: number;
+  committedBeds: number;
+  committedMeals: number;
+  committedStaffMinutes: number;
+  /** Departures missed and occupants left behind. */
+  missedDepartures: number;
+  strandedOccupants: number;
+}
+
 export interface DerivedCache {
   serviceTargetsByRoom: Map<RoomType, number[]>;
   queueTargets: number[];
@@ -2774,6 +2818,12 @@ export interface Controls {
   crewWatchTargets: [CrewShiftTargets, CrewShiftTargets, CrewShiftTargets];
   /** Emergency recall temporarily makes every watch dispatchable at a needs cost. */
   emergencyRecallUntil: number;
+  /**
+   * Explicit immigration policy. Resident acceptance requires BOTH this and
+   * physical housing, so a successful visit never silently converts into
+   * permanent load. Absent on legacy saves, which read as closed.
+   */
+  residentAcceptanceOpen?: boolean;
 }
 
 /**
@@ -2853,6 +2903,18 @@ export interface StationState {
   dirtSourceByTile: Uint8Array;
   plumbing: PlumbingState;
   mapConditionVersion: number;
+  commitment: CommitmentMetrics;
+  /**
+   * Failed-stay episodes: who is failing, why, since when, and which
+   * consequences have already been paid. Durable so a milestone cannot fire
+   * twice across a save/load. See failed-stay.ts.
+   */
+  failureEpisodes: FailureEpisodeState;
+  /**
+   * Player-authored admission rules for routine traffic. Disabled by default
+   * and on legacy saves, so loading never starts admitting on its own.
+   */
+  admissionPolicy: AdmissionPolicy;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
   reservations: Reservation[];

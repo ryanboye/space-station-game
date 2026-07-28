@@ -46,6 +46,8 @@ import {
   generateLaneProfiles
 } from './sim';
 import { generateSystemMap } from './system-map';
+import { createFailureEpisodeState } from './failed-stay';
+import { createAdmissionPolicy } from './admission-policy';
 import {
   GRID_HEIGHT,
   GRID_WIDTH,
@@ -60,8 +62,43 @@ import {
   TileType,
   ZoneType,
   makeRng,
-  toIndex
+  toIndex,
+  type CommitmentMetrics,
+  type RecurringNeedKind,
+  type VisitStayClass
 } from './types';
+
+
+/** Zeroed commitment metrics. Every field is a running total. */
+export function createCommitmentMetrics(): CommitmentMetrics {
+  const byClass = (): Record<VisitStayClass, number> => ({
+    errand: 0, shore: 0, contract: 0, extended: 0, permanent: 0
+  });
+  const byNeed = (): Record<RecurringNeedKind, number> => ({
+    hunger: 0, energy: 0, hygiene: 0, leisure: 0
+  });
+  return {
+    visitSecondsByClass: byClass(),
+    visitsCompletedByClass: byClass(),
+    holdingSeconds: 0,
+    holdingShips: 0,
+    approachGroupWaitSeconds: 0,
+    disembarkSeconds: 0,
+    disembarkCompleted: 0,
+    boardingSeconds: 0,
+    boardingCompleted: 0,
+    needRaised: byNeed(),
+    needSatisfied: byNeed(),
+    fixtureOccupiedSeconds: 0,
+    fixtureCapacitySeconds: 0,
+    committedBerthSeconds: 0,
+    committedBeds: 0,
+    committedMeals: 0,
+    committedStaffMinutes: 0,
+    missedDepartures: 0,
+    strandedOccupants: 0
+  };
+}
 
 export function createInitialState(options?: {
   seed?: number;
@@ -492,6 +529,9 @@ export function createInitialState(options?: {
       nextLeakId: 1
     },
     mapConditionVersion: MAP_CONDITION_VERSION,
+    commitment: createCommitmentMetrics(),
+    failureEpisodes: createFailureEpisodeState(),
+    admissionPolicy: createAdmissionPolicy(),
     pathOccupancyByTile: new Map(),
     jobs: [],
     reservations: [],

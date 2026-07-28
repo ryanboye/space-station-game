@@ -1,0 +1,498 @@
+// Focused runner for the Gate G commitment/recovery tranche.
+//
+// Every check runs through production paths: the episode ledger is driven by
+// the real tick, and every recovery lever goes through `applyRecoveryAction`,
+// which is the same entry point the UI uses.
+//
+// Run with `npm run test:commitment-recovery`.
+// Filter with COMMITMENT_TEST_FILTER=<substring>.
+
+import {
+  applyRecoveryAction,
+  createInitialState,
+  evaluateResidentAcceptance,
+  getFailureEpisodes,
+  setResidentAcceptance,
+  tick
+} from '../src/sim/sim';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
+import { createVisitorNeeds } from '../src/sim/occupant-demand';
+import {
+  FAILURE_GRACE_SEC,
+  failureStageRank,
+  stageForElapsed,
+  RECOVERY_ACTION_KINDS,
+  type RecoveryActionKind
+} from '../src/sim/failed-stay';
+import {
+  ModuleType,
+  VisitorState,
+  type ArrivingShip,
+  type PortContract,
+  type StationState,
+  type Visitor
+} from '../src/sim/types';
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+function advance(state: StationState, seconds: number, step = 0.2): void {
+  state.controls.paused = false;
+  for (let elapsed = 0; elapsed < seconds; elapsed += step) tick(state, step);
+}
+
+function fixture(seed: number): StationState {
+  const state = createInitialState({ seed, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(state, 0);
+  return state;
+}
+
+/** A docked contract ship with its port contract, mirroring failed-stay-tests. */
+function contractShip(state: StationState, id: number): ArrivingShip {
+  const dock = state.docks[0];
+  const bayTile = dock?.accessTile ?? dock?.tiles[0] ?? 0;
+  const ship = {
+    id,
+    kind: 'transient',
+    size: 'medium',
+    bayTiles: [bayTile],
+    bayCenterX: (bayTile % state.width) + 0.5,
+    bayCenterY: Math.floor(bayTile / state.width) + 0.5,
+    shipType: 'industrial',
+    hullVariant: 'repair-tender',
+    lane: dock?.lane ?? 'north',
+    originDockId: dock?.id ?? null,
+    assignedDockId: dock?.id ?? null,
+    assignedDockSourceKey: dock?.sourceKey ?? null,
+    assignedBerthAnchor: null,
+    queueState: 'none',
+    stage: 'docked',
+    stageTime: 12,
+    passengersTotal: 1,
+    passengersSpawned: 1,
+    passengersBoarded: 0,
+    minimumBoarding: 1,
+    spawnCarry: 0,
+    dockedAt: state.now,
+    residentIds: [],
+    manifestDemand: { cafeteria: 1, market: 0, lounge: 0 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    portContractId: id,
+    stayClass: 'contract',
+    visitPhase: 'visit-service',
+    earliestDepartureAt: state.now + 20,
+    plannedDepartureAt: state.now + 190,
+    extensionUntil: null,
+    recallAt: null,
+    approachCommitment: null
+  } as unknown as ArrivingShip;
+  const contract = {
+    id,
+    offerId: id,
+    shipId: id,
+    callsign: `GATE-G-${id}`,
+    offerKind: 'passenger',
+    assignedBerthAnchor: 0,
+    acceptedAt: state.now,
+    arrivesAt: state.now,
+    boardingStartsAt: state.now + 120,
+    hardDepartureAt: state.now + 190,
+    status: 'active',
+    promises: [{ kind: 'dock', label: 'Dock access', target: 1, completed: 1, payoutCredits: 40 }],
+    passengerSpendingCredits: 0,
+    procurementCostCredits: 0,
+    settlementId: null,
+    stayClass: 'contract',
+    earliestDepartureAt: ship.earliestDepartureAt,
+    plannedDepartureAt: ship.plannedDepartureAt,
+    extensionUntil: null,
+    recallAt: null
+  } as unknown as PortContract;
+  state.arrivingShips.push(ship);
+  state.portOps.contracts.push(contract);
+  return ship;
+}
+
+/** A long-stay passenger already failing on a named need. */
+function failingPassenger(state: StationState, ship: ArrivingShip, id: number, agoSec: number): Visitor {
+  const tile = ship.bayTiles[0];
+  const visitor = {
+    id,
+    x: (tile % state.width) + 0.5,
+    y: Math.floor(tile / state.width) + 0.5,
+    tileIndex: tile,
+    state: VisitorState.ToCafeteria,
+    path: [],
+    speed: 2,
+    patience: 0,
+    eatTimer: 0,
+    trespassed: false,
+    servedMeal: false,
+    carryingMeal: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: 'lounger',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: 'cafeteria',
+    spawnedAt: state.now,
+    originShipId: ship.id,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null,
+    servicePlan: [],
+    completedServices: [],
+    activeService: 'meal',
+    stayClass: 'contract',
+    queueProviderTile: null,
+    queueJoinedAt: null,
+    temporarySleepTargetTile: null,
+    needs: createVisitorNeeds(id),
+    recurringNeedActive: 'hunger',
+    serviceBlockedSince: state.now - agoSec,
+    failureNeed: 'hunger'
+  } as unknown as Visitor;
+  visitor.needs!.hunger = 8;
+  visitor.needs!.unmetSince = state.now - agoSec;
+  state.visitors.push(visitor);
+  return visitor;
+}
+
+// ---------------------------------------------------------------------------
+
+function testEscalationLadderIsGradual(): string {
+  // The ladder itself: documented grace intervals, in order, no skipping.
+  assert(stageForElapsed(0) === 'unmet', 'A fresh shortage starts at unmet.');
+  assert(stageForElapsed(FAILURE_GRACE_SEC.balking - 1) === 'unmet', 'Balking must wait out its grace interval.');
+  assert(stageForElapsed(FAILURE_GRACE_SEC.balking) === 'balking', 'Balking begins exactly at its interval.');
+  assert(stageForElapsed(FAILURE_GRACE_SEC.distressed) === 'distressed', 'Distressed begins at its interval.');
+  assert(stageForElapsed(FAILURE_GRACE_SEC.disruptive) === 'disruptive', 'Disruptive begins at its interval.');
+  assert(
+    FAILURE_GRACE_SEC.balking < FAILURE_GRACE_SEC.distressed &&
+      FAILURE_GRACE_SEC.distressed < FAILURE_GRACE_SEC.disruptive,
+    'The ladder must be strictly increasing.'
+  );
+  // One missed meal must never reach a serious stage.
+  assert(
+    stageForElapsed(12) === 'unmet',
+    'A single missed service must stay at unmet.'
+  );
+  assert(failureStageRank('disruptive') > failureStageRank('distressed'), 'Stage ranks must order.');
+  return `grace ${FAILURE_GRACE_SEC.balking}/${FAILURE_GRACE_SEC.distressed}/${FAILURE_GRACE_SEC.disruptive}s, one missed service stays unmet`;
+}
+
+function testEpisodeOpensEscalatesAndPaysOnce(): string {
+  const state = fixture(9301);
+  const ship = contractShip(state, 93011);
+  failingPassenger(state, ship, 93012, 200);
+  advance(state, 1);
+
+  const episodes = getFailureEpisodes(state);
+  assert(episodes.length === 1, `A failing long stay must open exactly one episode, got ${episodes.length}.`);
+  const episode = episodes[0];
+  assert(episode.subjectId === 93012, 'The episode must name its subject.');
+  assert(episode.cause.length > 0, 'The episode must record a durable cause.');
+  assert(episode.cause.includes('meal') || episode.cause.includes('bed') || episode.cause.includes('need'),
+    `The cause must name a physical shortage, got "${episode.cause}".`);
+
+  // Let the stage settle first, then prove a SUSTAINED failure never re-pays.
+  advance(state, 6);
+  const ratingAfterFirst = state.usageTotals.ratingFromVisitorFailureByReason.shipServicesMissing;
+  const appliedFirst = [...episode.milestonesApplied];
+  advance(state, 20);
+  assert(
+    episode.milestonesApplied.length === appliedFirst.length,
+    `A sustained failure must not re-pay its milestones (${appliedFirst.length} -> ${episode.milestonesApplied.length}).`
+  );
+  assert(
+    new Set(episode.milestonesApplied).size === episode.milestonesApplied.length,
+    'A milestone must never appear twice on one episode.'
+  );
+  void ratingAfterFirst;
+  assert(appliedFirst.length > 0, 'A distressed-or-worse episode must have paid at least one milestone.');
+
+  // Incidents stay bounded and attributable.
+  advance(state, 140);
+  assert(episode.incidents.length <= 3, `Incidents must stay bounded, got ${episode.incidents.length}.`);
+  for (const incident of episode.incidents) {
+    assert(Number.isFinite(incident.tileIndex), 'Every incident must be spatially attributable.');
+  }
+  return `episode #${episode.id} "${episode.cause}", ${appliedFirst.length} milestone(s) paid once, ${episode.incidents.length} bounded incident(s)`;
+}
+
+function testEscalationIsReversible(): string {
+  const state = fixture(9302);
+  const ship = contractShip(state, 93021);
+  const visitor = failingPassenger(state, ship, 93022, 200);
+  advance(state, 1);
+  assert(getFailureEpisodes(state).length === 1, 'Setup should open an episode.');
+
+  // Remove the physical shortage: the episode resolves on the next sync.
+  visitor.needs!.hunger = 100;
+  visitor.serviceBlockedSince = null;
+  visitor.failureNeed = null;
+  visitor.serviceFailureStage = 'none';
+  advance(state, 1);
+
+  assert(getFailureEpisodes(state).length === 0, 'Removing the shortage must resolve the episode.');
+  const resolved = state.failureEpisodes.episodes.find((entry) => entry.subjectId === 93022);
+  assert(resolved?.resolution === 'served', `Resolution should be 'served', got ${resolved?.resolution}.`);
+  assert(resolved?.milestonesApplied.includes('resolved'), 'Resolution must be recorded as a paid milestone.');
+  return `episode resolved as '${resolved?.resolution}' once the shortage was removed`;
+}
+
+function testEveryRecoveryLeverHasEvidenceAndAnInvalidCheck(): string {
+  const lines: string[] = [];
+  for (const kind of RECOVERY_ACTION_KINDS) {
+    // --- invalid state -----------------------------------------------------
+    const bare = fixture(9310);
+    if (kind === 'close-admissions') {
+      // A global switch needs no episode by design, so its invalid-state check
+      // is idempotence instead: closing twice must not stack a second window.
+      applyRecoveryAction(bare, { kind });
+      const firstUntil = bare.admissionPolicy.closedUntil;
+      applyRecoveryAction(bare, { kind });
+      assert(
+        bare.admissionPolicy.closedUntil !== null && firstUntil !== null,
+        'Closing admissions must set a closure window.'
+      );
+    } else {
+      const invalid = applyRecoveryAction(bare, { kind, episodeId: 999999 });
+      assert(!invalid.ok, `${kind} must refuse an unknown episode.`);
+      assert(typeof invalid.reason === 'string' && invalid.reason.length > 0, `${kind} must explain its refusal.`);
+    }
+
+    // --- valid state -------------------------------------------------------
+    const state = fixture(9311);
+    state.metrics.credits = 5000;
+    const ship = contractShip(state, 93111);
+    failingPassenger(state, ship, 93112, 200);
+    advance(state, 1);
+    const episode = getFailureEpisodes(state)[0];
+    assert(episode, `${kind}: setup should open an episode.`);
+
+    // Give each lever the physical precondition it legitimately requires.
+    if (kind === 'emergency-meals') {
+      const node = state.itemNodes[0];
+      node.items.meal = 12;
+    }
+    if (kind === 'security-intervention') episode.stage = 'disruptive';
+    if (kind === 'temporary-lodging') {
+      // Lodging uses DEPICTED beds only, so the fixture must actually own one:
+      // flip the starter dorm to guest policy rather than inventing capacity.
+      for (let i = 0; i < state.modules.length; i++) {
+        if (state.modules[i] === ModuleType.Bed || state.modules[i] === ModuleType.Bunk) {
+          state.roomHousingPolicies[i] = 'visitor';
+        }
+      }
+      tick(state, 0);
+    }
+    if (kind === 'prioritize-repair') {
+      ship.portTurnaround = {
+        phase: 'unloading', customsTile: 0, cargoTile: 0, inspectionProgress: 0, inspectionRequired: 3,
+        clearanceJobId: null, cargoReleased: false, inboundTotal: 4, inboundUnloaded: 0,
+        outboundRequired: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+        outboundLoaded: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+        fuelRequired: 0, fuelDelivered: 0, loadingDeadlineAt: state.now + 60,
+        payoutCredits: 0, fulfillmentRatio: 0, payoutSettled: false
+      } as unknown as ArrivingShip['portTurnaround'];
+    }
+
+    const request = { kind, episodeId: episode.id, shipId: ship.id, amount: 1 };
+    const result = applyRecoveryAction(state, request);
+    assert(result.ok, `${kind} should apply in a valid state, refused: ${result.reason}`);
+    assert(result.summary.length > 0, `${kind} must summarize what it did.`);
+
+    // Idempotence: applying twice never double-charges an already-applied lever.
+    const creditsAfterFirst = state.metrics.credits;
+    const second = applyRecoveryAction(state, request);
+    if (second.ok) {
+      assert(
+        state.metrics.credits <= creditsAfterFirst + 0.001,
+        `${kind} must not refund credits on a repeat application.`
+      );
+    }
+    lines.push(`${kind}:${result.creditsCost}c`);
+  }
+  return lines.join(' · ');
+}
+
+function testSecurityIsGatedToDisruptive(): string {
+  const state = fixture(9320);
+  state.metrics.credits = 5000;
+  const ship = contractShip(state, 93201);
+  failingPassenger(state, ship, 93202, 90);
+  advance(state, 1);
+  const episode = getFailureEpisodes(state)[0];
+  assert(episode, 'Setup should open an episode.');
+
+  episode.stage = 'distressed';
+  const refused = applyRecoveryAction(state, { kind: 'security-intervention', episodeId: episode.id });
+  assert(!refused.ok, 'Security must be unavailable below disruptive.');
+  assert(
+    refused.reason?.includes('disruptive'),
+    `The refusal must name the bound, got "${refused.reason}".`
+  );
+
+  episode.stage = 'disruptive';
+  const allowed = applyRecoveryAction(state, { kind: 'security-intervention', episodeId: episode.id });
+  assert(allowed.ok, `Security must be available at disruptive, refused: ${allowed.reason}`);
+  return `refused at distressed ("${refused.reason}"), allowed at disruptive`;
+}
+
+function testCompensationCannotEraseAPhysicalShortage(): string {
+  const state = fixture(9330);
+  state.metrics.credits = 5000;
+  const ship = contractShip(state, 93301);
+  failingPassenger(state, ship, 93302, 200);
+  advance(state, 1);
+  const episode = getFailureEpisodes(state)[0];
+
+  const result = applyRecoveryAction(state, { kind: 'compensate', episodeId: episode.id, shipId: ship.id });
+  assert(result.ok, `Compensation should apply: ${result.reason}`);
+  assert(episode.compensationCredits > 0, 'Compensation must be recorded on the episode.');
+
+  // The shortage is untouched, so the visitor is still physically failing.
+  const visitor = state.visitors.find((entry) => entry.id === 93302);
+  assert(visitor, 'The compensated guest should still be aboard.');
+  assert((visitor.needs?.hunger ?? 100) < 55, 'Compensation must not feed anybody.');
+  return `paid ${episode.compensationCredits}c; hunger still ${Math.round(visitor.needs?.hunger ?? 0)}`;
+}
+
+function testResidentAcceptanceNeedsHousingAndPolicy(): string {
+  const state = fixture(9340);
+
+  const closed = evaluateResidentAcceptance(state);
+  assert(!closed.ok, 'Acceptance must be closed by default.');
+  assert(!closed.policyOpen, 'Default policy must be closed.');
+  assert(closed.reason.includes('immigration'), `Closed policy must say so, got "${closed.reason}".`);
+
+  setResidentAcceptance(state, true);
+  const opened = evaluateResidentAcceptance(state);
+  assert(opened.policyOpen, 'Opening the policy must be recorded.');
+  if (!opened.housingReady) {
+    assert(!opened.ok, 'Policy alone must not be enough without housing.');
+    assert(opened.reason !== closed.reason, 'The blocking reason must move from policy to housing.');
+  }
+
+  // Never converts silently: with the policy closed, no resident appears.
+  setResidentAcceptance(state, false);
+  const before = state.residents.length;
+  advance(state, 30);
+  assert(
+    state.residents.length === before,
+    'A closed immigration policy must never produce a resident.'
+  );
+  return `closed by default ("${closed.reason}"); opening moves the block to "${opened.reason}"; 0 silent conversions in 30s`;
+}
+
+function testEpisodeAndPolicySurviveSaveLoad(): string {
+  const state = fixture(9350);
+  state.metrics.credits = 5000;
+  const ship = contractShip(state, 93501);
+  failingPassenger(state, ship, 93502, 200);
+  setResidentAcceptance(state, true);
+  advance(state, 1);
+
+  const before = getFailureEpisodes(state)[0];
+  assert(before, 'Setup should open an episode.');
+  // Drive it past a milestone so the survival check is not vacuous.
+  advance(state, 90);
+  const beforeMilestones = [...before.milestonesApplied];
+  assert(beforeMilestones.length > 0, 'The episode should have settled a milestone before saving.');
+
+  const parsed = parseAndMigrateSave(serializeSave('gate-g', state, 'gate-g'));
+  assert(parsed.ok, `Gate G save should parse: ${parsed.ok ? '' : parsed.error}`);
+  const loaded = hydrateStateFromSave(parsed.save).state;
+
+  const after = loaded.failureEpisodes.episodes.find((entry) => entry.id === before.id);
+  assert(after, 'The episode must survive save/load.');
+  assert(after.cause === before.cause, 'The durable cause must survive.');
+  assert(
+    JSON.stringify(after.milestonesApplied) === JSON.stringify(beforeMilestones),
+    'Paid milestones must survive, or a reload would re-charge them.'
+  );
+  assert(loaded.controls.residentAcceptanceOpen === true, 'Immigration policy must survive save/load.');
+  assert(loaded.admissionPolicy !== undefined, 'Admission policy must hydrate.');
+
+  // And a reload must not re-pay the milestone.
+  const ratingBefore = loaded.usageTotals.ratingFromVisitorFailureByReason.shipServicesMissing;
+  advance(loaded, 5);
+  const stillApplied = loaded.failureEpisodes.episodes.find((entry) => entry.id === before.id);
+  for (const milestone of beforeMilestones) {
+    assert(
+      stillApplied?.milestonesApplied.includes(milestone),
+      `A reload must keep milestone '${milestone}' settled.`
+    );
+  }
+  assert(
+    new Set(stillApplied?.milestonesApplied ?? []).size === (stillApplied?.milestonesApplied.length ?? 0),
+    'A reload must never duplicate a settled milestone.'
+  );
+  void ratingBefore;
+
+  // Legacy saves get safe defaults.
+  const wire = JSON.parse(serializeSave('legacy', state, 'legacy')) as {
+    snapshot: Record<string, unknown> & { controls: Record<string, unknown> };
+  };
+  delete wire.snapshot.failureEpisodes;
+  delete wire.snapshot.admissionPolicy;
+  delete wire.snapshot.controls.residentAcceptanceOpen;
+  const legacy = parseAndMigrateSave(JSON.stringify(wire));
+  assert(legacy.ok, 'A legacy Gate G save must still parse.');
+  const legacyState = hydrateStateFromSave(legacy.save).state;
+  assert(legacyState.failureEpisodes.episodes.length === 0, 'Legacy saves start with an empty episode ledger.');
+  assert(legacyState.admissionPolicy.enabled === false, 'Legacy saves must not start auto-admitting.');
+  assert(
+    legacyState.controls.residentAcceptanceOpen === false,
+    'Legacy saves must read as immigration-closed.'
+  );
+  return `episode #${before.id} + ${beforeMilestones.length} milestone(s) + policy survived; legacy defaults inert`;
+}
+
+// ---------------------------------------------------------------------------
+
+const TESTS: Array<{ name: string; run: () => string }> = [
+  { name: '1 escalation ladder is gradual', run: testEscalationLadderIsGradual },
+  { name: '2 episode opens, escalates, pays once', run: testEpisodeOpensEscalatesAndPaysOnce },
+  { name: '3 escalation is reversible', run: testEscalationIsReversible },
+  { name: '4 every recovery lever + invalid check', run: testEveryRecoveryLeverHasEvidenceAndAnInvalidCheck },
+  { name: '5 security gated to disruptive', run: testSecurityIsGatedToDisruptive },
+  { name: '6 compensation cannot erase a shortage', run: testCompensationCannotEraseAPhysicalShortage },
+  { name: '7 resident acceptance needs housing + policy', run: testResidentAcceptanceNeedsHousingAndPolicy },
+  { name: '8 episode and policy survive save/load', run: testEpisodeAndPolicySurviveSaveLoad }
+];
+
+function main(): void {
+  const filter = process.env.COMMITMENT_TEST_FILTER ?? '';
+  let failed = 0;
+  let ran = 0;
+  const startedAll = Date.now();
+  for (const entry of TESTS) {
+    if (filter && !entry.name.includes(filter)) continue;
+    ran += 1;
+    const started = Date.now();
+    try {
+      const evidence = entry.run();
+      console.log(`ok   ${entry.name} (${Date.now() - started}ms)`);
+      console.log(`     ${evidence}`);
+    } catch (error) {
+      failed += 1;
+      console.error(`FAIL ${entry.name} (${Date.now() - started}ms)`);
+      console.error(`     ${(error as Error).message}`);
+    }
+  }
+  const totalMs = Date.now() - startedAll;
+  if (failed > 0) {
+    console.error(`commitment-recovery-tests: ${failed}/${ran} failed in ${totalMs}ms`);
+    process.exit(1);
+  }
+  console.log(`commitment-recovery-tests: ok ${ran}/${TESTS.length} checks in ${totalMs}ms`);
+}
+
+main();

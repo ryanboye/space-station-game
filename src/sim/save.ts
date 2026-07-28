@@ -102,6 +102,8 @@ import {
   type MarketPricingPolicy
 } from './opening-economy';
 import { normalizeServiceLog, type ServiceLog } from './service-truth';
+import { normalizeFailureEpisodeState, type FailureEpisodeState } from './failed-stay';
+import { normalizeAdmissionPolicy, type AdmissionPolicy } from './admission-policy';
 import { createPodDemandLog, normalizePodDemandLog } from './pod-demand';
 import { createCapitalProjectsState, hydrateCapitalProjectsState } from './capital-projects';
 import {
@@ -383,6 +385,7 @@ export interface StationSnapshotV1 {
     crewShiftTargets?: Partial<CrewShiftTargets>;
     crewWatchTargets?: [Partial<CrewShiftTargets>, Partial<CrewShiftTargets>, Partial<CrewShiftTargets>];
     emergencyRecallUntil?: number;
+    residentAcceptanceOpen?: boolean;
   };
   unlocks: {
     tier: UnlockTier;
@@ -492,6 +495,13 @@ export interface StationSnapshotV1 {
   openingEconomy?: StationState['openingEconomy'];
   /** Canonical completed-service log. Optional for saves written before it. */
   serviceLog?: ServiceLog;
+  /**
+   * Gate G durable state. Both optional: a legacy save has neither and
+   * hydrates to an empty episode ledger and a DISABLED admission policy, so
+   * loading an old station never starts admitting traffic on its own.
+   */
+  failureEpisodes?: FailureEpisodeState;
+  admissionPolicy?: AdmissionPolicy;
   portOps: PortOpsState;
   /** Pending approach decisions, including physical reservations made before arrival. */
   trafficOffers?: TrafficOffer[];
@@ -1282,7 +1292,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         CrewShiftTargets,
         CrewShiftTargets
       ],
-      emergencyRecallUntil: state.controls.emergencyRecallUntil
+      emergencyRecallUntil: state.controls.emergencyRecallUntil,
+      residentAcceptanceOpen: state.controls.residentAcceptanceOpen === true
     },
     unlocks: {
       tier: state.unlocks.tier,
@@ -1370,6 +1381,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     },
     openingEconomy: normalizeOpeningEconomyState(state.openingEconomy, []),
     serviceLog: normalizeServiceLog(state.serviceLog),
+    failureEpisodes: normalizeFailureEpisodeState(state.failureEpisodes),
+    admissionPolicy: normalizeAdmissionPolicy(state.admissionPolicy),
     portOps: {
       ...state.portOps,
       contracts: state.portOps.contracts.map((contract) => ({
@@ -2287,6 +2300,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     CrewShiftTargets
   ];
   let emergencyRecallUntil = defaultState.controls.emergencyRecallUntil;
+  let residentAcceptanceOpen = false;
   let materialImportBatchSize = defaultState.controls.materialImportBatchSize;
   let securityPosture = defaultState.controls.securityPosture;
   if (isRecord(snapshotRaw.controls)) {
@@ -2326,6 +2340,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       ];
     }
     emergencyRecallUntil = Math.max(0, asFiniteNumber(snapshotRaw.controls.emergencyRecallUntil, emergencyRecallUntil));
+    residentAcceptanceOpen = snapshotRaw.controls.residentAcceptanceOpen === true;
     materialImportBatchSize = clamp(asFiniteNumber(snapshotRaw.controls.materialImportBatchSize, materialImportBatchSize), 1, 160);
     if (isOneOf(snapshotRaw.controls.securityPosture, SECURITY_POSTURES)) {
       securityPosture = snapshotRaw.controls.securityPosture;
@@ -2760,6 +2775,14 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
   const openingEconomy = normalizeOpeningEconomyState(snapshotRaw.openingEconomy, warnings);
   const serviceLog = normalizeServiceLog(snapshotRaw.serviceLog as Partial<ServiceLog> | undefined);
+  // Absent on every pre-Gate-G save; both normalizers return a safe, inert
+  // default rather than undefined so hydration never has to branch.
+  const failureEpisodes = normalizeFailureEpisodeState(
+    snapshotRaw.failureEpisodes as Partial<FailureEpisodeState> | undefined
+  );
+  const admissionPolicy = normalizeAdmissionPolicy(
+    snapshotRaw.admissionPolicy as Partial<AdmissionPolicy> | undefined
+  );
 
   // Procedural identity. A legacy save carries none of this: `seedAtCreation`
   // stays undefined and hydration falls back to the documented default seed,
@@ -2824,7 +2847,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       securityPosture,
       crewShiftTargets,
       crewWatchTargets,
-      emergencyRecallUntil
+      emergencyRecallUntil,
+      residentAcceptanceOpen
     },
     unlocks: {
       tier: unlockTier,
@@ -2856,6 +2880,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     },
     openingEconomy,
     serviceLog,
+    failureEpisodes,
+    admissionPolicy,
     portOps,
     trafficOffers,
     activePortShips,
@@ -3370,6 +3396,14 @@ export function hydrateStateFromSave(
   next.legacyMaterialStock = Math.max(0, snapshot.resources.legacyMaterialStock);
   next.openingEconomy = normalizeOpeningEconomyState(snapshot.openingEconomy, warnings);
   next.serviceLog = normalizeServiceLog(snapshot.serviceLog);
+  next.failureEpisodes = normalizeFailureEpisodeState(snapshot.failureEpisodes);
+  next.admissionPolicy = normalizeAdmissionPolicy(snapshot.admissionPolicy);
+  if (snapshot.admissionPolicy === undefined) {
+    // Legacy saves keep their old two-scalar auto-admit setting as the seed for
+    // the new policy, so a station that had auto-admit on does not silently
+    // lose it — but the finite rules stay off until the player authors them.
+    next.admissionPolicy.enabled = false;
+  }
   next.crew.roleCounts = snapshot.crew.roleCounts
     ? ({ ...createEmptyStaffRoleCounts(), ...snapshot.crew.roleCounts } as StaffRoleCounts)
     : next.crew.roleCounts;
@@ -3447,6 +3481,8 @@ export function hydrateStateFromSave(
     ];
   }
   next.controls.emergencyRecallUntil = Math.max(0, snapshot.controls.emergencyRecallUntil ?? 0);
+  // Legacy saves predate immigration policy and read as closed.
+  next.controls.residentAcceptanceOpen = snapshot.controls.residentAcceptanceOpen === true;
   next.controls.materialImportBatchSize = clamp(snapshot.controls.materialImportBatchSize ?? next.controls.materialImportBatchSize, 1, 160);
   next.controls.securityPosture = snapshot.controls.securityPosture ?? next.controls.securityPosture;
   next.portOps = {

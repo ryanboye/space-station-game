@@ -86,6 +86,28 @@ import {
 } from './content/unlocks';
 import { MAP_CONDITION_VERSION, mapConditionAt, mapConditionSamplesAt } from './map-conditions';
 import { generateSystemMap, laneWeightsFromSystem } from './system-map';
+import {
+  failureStageRank,
+  markMilestoneApplied,
+  nextIncidentFor,
+  openEpisodes,
+  planRecoveryAction,
+  recordIncident,
+  resolutionForAction,
+  resolveEpisode,
+  syncFailureEpisodes,
+  RECOVERY_COSTS,
+  type FailureEpisode,
+  type RecoveryActionRequest,
+  type RecoveryActionResult
+} from './failed-stay';
+import {
+  evaluateAdmission,
+  normalizeAdmissionPolicy,
+  summarizeLanePressure,
+  type AdmissionPolicy,
+  type LanePressure
+} from './admission-policy';
 import { generateCommercialOffers } from './commercial';
 import {
   deriveOpeningEconomyProfile,
@@ -934,6 +956,13 @@ const RESIDENT_TAX_PERIOD = 24;
 const RESIDENT_TAX_PER_HEAD = 0.42;
 const RESIDENT_LEAVE_INTENT_THRESHOLD = 18;
 const RESIDENT_LEAVE_INTENT_TRIGGER = 12;
+/**
+ * Sustained dissatisfaction at which a resident explicitly leaves.
+ *
+ * Well above the confrontation trigger so withdrawal and protest both happen
+ * first: leaving is the last stage, not the first response.
+ */
+const RESIDENT_LEAVE_INTENT_DEPARTURE = 96;
 const RESIDENT_RETENTION_RATING_BONUS_PER_SEC = 0.0009;
 const RESIDENT_DEPARTURE_RATING_PENALTY = 0.4;
 const RESIDENT_AGITATION_CONFRONTATION_THRESHOLD = 60;
@@ -9150,7 +9179,52 @@ function recordResidentConversionSuccess(state: StationState): void {
   state.usageTotals.residentConversionFailureStreak = 0;
 }
 
+
+export interface ResidentAcceptanceVerdict {
+  ok: boolean;
+  /** Why acceptance is unavailable, or how it is satisfied. */
+  reason: string;
+  housingReady: boolean;
+  policyOpen: boolean;
+}
+
+/**
+ * Can the station accept a new permanent resident right now?
+ *
+ * Requires BOTH halves, and says which one is missing. Housing alone is not
+ * consent, and consent alone is not a bed.
+ */
+export function evaluateResidentAcceptance(state: StationState): ResidentAcceptanceVerdict {
+  const housing = getResidentHousingReadiness(state);
+  const policyOpen = state.controls.residentAcceptanceOpen === true;
+  if (!policyOpen) {
+    return {
+      ok: false,
+      reason: 'immigration is closed; open resident acceptance to allow applicants',
+      housingReady: housing.ready,
+      policyOpen: false
+    };
+  }
+  if (!housing.ready) {
+    return { ok: false, reason: housing.reason, housingReady: false, policyOpen: true };
+  }
+  return { ok: true, reason: 'housing ready and immigration open', housingReady: true, policyOpen: true };
+}
+
+/** Player-facing immigration switch. Never toggled by the simulation. */
+export function setResidentAcceptance(state: StationState, open: boolean): boolean {
+  state.controls.residentAcceptanceOpen = open;
+  return state.controls.residentAcceptanceOpen;
+}
+
 function maybeMoveInResident(state: StationState): void {
+  // Explicit policy is a hard precondition. Without it the station keeps
+  // serving visitors and simply never gains a permanent resident.
+  const acceptance = evaluateResidentAcceptance(state);
+  if (!acceptance.ok) {
+    noteResidentConversionResult(state, `blocked: ${acceptance.reason}`);
+    return;
+  }
   const dock = pickResidentMoveInDock(state);
   if (!dock) {
     noteResidentConversionResult(state, 'blocked: no free residential berth');
@@ -13391,10 +13465,287 @@ export function holdTrafficOffer(state: StationState, offerId: number): boolean 
   return true;
 }
 
+
+// --- Gate G: failed-stay episodes ------------------------------------------
+
+/**
+ * Advance the durable episode ledger and pay each milestone exactly once.
+ *
+ * The per-visitor stage is still recomputed every tick by
+ * `updateVisitorServiceFailure`; this pass turns those stage changes into
+ * episodes with memory, so a consequence fires on the CROSSING rather than
+ * every tick the visitor happens to be distressed.
+ */
+function updateFailureEpisodes(state: StationState): void {
+  const ledger = state.failureEpisodes;
+  const sync = syncFailureEpisodes(state, ledger);
+
+  for (const { episode, milestone } of sync.pendingMilestones) {
+    if (milestone === 'resolved') {
+      // A resolved episode returns some of what its escalation cost, so
+      // recovering is visibly worth doing.
+      const recovered = failureStageRank(episode.stage) * 0.02;
+      if (recovered > 0) visitorSuccessRatingBonus(state, recovered, 'successfulExit');
+      pushCrowdEvent(state, 'info', `Recovered: ${episode.cause}`);
+    } else {
+      // Milestone penalties are the ONLY rating effect an episode produces, so
+      // a long failure cannot bleed rating tick by tick.
+      const penalty = milestone === 'disruptive' ? 0.5 : 0.22;
+      addVisitorFailurePenalty(state, penalty, 'shipServicesMissing');
+      pushCrowdEvent(state, milestone === 'disruptive' ? 'danger' : 'warn', `${milestone}: ${episode.cause}`);
+    }
+    markMilestoneApplied(episode, milestone);
+  }
+
+  // Bounded, attributable incidents. Deterministic ladder, cooled down, capped.
+  for (const episode of openEpisodes(ledger)) {
+    const kind = nextIncidentFor(state, episode);
+    if (!kind) continue;
+    const incident = recordIncident(state, ledger, episode, kind, episode.anchorTile);
+    if (kind === 'mess') addDirt(state, episode.anchorTile, 26, 'traffic');
+    pushCrowdFloater(
+      state,
+      episode.anchorTile % state.width,
+      Math.floor(episode.anchorTile / state.width),
+      kind === 'mess' ? 'MESS' : kind === 'complaint' ? 'COMPLAINT' : 'REFUSED WORK',
+      kind === 'refusal-to-work' ? '#ff827a' : '#ffad65'
+    );
+    void incident;
+  }
+}
+
+/** Prepared meals physically on the station, for recovery validity checks. */
+function availablePreparedMeals(state: StationState): number {
+  let total = 0;
+  for (const node of state.itemNodes) total += Math.max(0, node.items.meal ?? 0);
+  return total;
+}
+
+/** Free depicted guest beds. Never a hidden capacity number. */
+function freeGuestBedCount(state: StationState): number {
+  const slots = temporarySleepSlots(state);
+  const taken = new Set(
+    state.visitors
+      .map((visitor) => visitor.temporarySleepTargetTile)
+      .filter((tile): tile is number => tile !== null && tile !== undefined)
+  );
+  return slots.filter((slot) => !taken.has(slot.tileIndex)).length;
+}
+
+/**
+ * Apply an explicit recovery lever.
+ *
+ * Validity, cost and the economy intent all come from the pure planner; this
+ * wrapper is the only place that spends credits and mutates the episode, which
+ * is what keeps every lever idempotent and testable.
+ */
+export function applyRecoveryAction(
+  state: StationState,
+  request: RecoveryActionRequest
+): RecoveryActionResult {
+  const ledger = state.failureEpisodes;
+  const ship = request.shipId === undefined
+    ? null
+    : state.arrivingShips.find((entry) => entry.id === request.shipId) ?? null;
+  const contract = ship?.portContractId === undefined
+    ? null
+    : state.portOps.contracts.find((entry) => entry.id === ship?.portContractId) ?? null;
+  const remainingValue = contract
+    ? contract.promises.reduce(
+        (sum, promise) => sum + Math.max(0, promise.payoutCredits) * (promise.completed >= promise.target ? 0 : 1),
+        0
+      )
+    : 0;
+
+  const plan = planRecoveryAction(state, ledger, request, {
+    availableMeals: availablePreparedMeals(state),
+    freeGuestBeds: freeGuestBedCount(state),
+    contractRemainingValue: remainingValue,
+    repairIncomplete: ship?.portTurnaround !== undefined && ship.portTurnaround.phase !== 'open'
+  });
+  if (!plan.ok) return plan;
+  if (state.metrics.credits + 0.001 < plan.creditsCost) {
+    return {
+      ok: false,
+      reason: `needs ${Math.round(plan.creditsCost)}c`,
+      creditsCost: 0,
+      economyEvents: [],
+      affectedEpisodeIds: [],
+      summary: `${request.kind} refused: not enough credits`
+    };
+  }
+
+  for (const event of plan.economyEvents) {
+    applyEconomyTransaction(state, event, { countAsEarned: false });
+  }
+
+  const touched = ledger.episodes.filter((episode) => plan.affectedEpisodeIds.includes(episode.id));
+  for (const episode of touched) {
+    if (!episode.actionsApplied.includes(request.kind)) episode.actionsApplied.push(request.kind);
+  }
+
+  // Physical effects. Each one removes a real shortage or a real occupant;
+  // none of them silently clears an episode that is still physically failing.
+  switch (request.kind) {
+    case 'emergency-meals': {
+      const served = Math.max(1, Math.floor(request.amount ?? touched.length));
+      let remaining = served;
+      for (const node of state.itemNodes) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, Math.max(0, node.items.meal ?? 0));
+        if (take <= 0) continue;
+        node.items.meal = (node.items.meal ?? 0) - take;
+        remaining -= take;
+      }
+      for (const episode of touched) {
+        const visitor = state.visitors.find((entry) => entry.id === episode.subjectId);
+        if (visitor?.needs) restoreRecurringNeed(visitor.needs, 'hunger');
+      }
+      break;
+    }
+    case 'temporary-lodging': {
+      for (const episode of touched) {
+        const visitor = state.visitors.find((entry) => entry.id === episode.subjectId);
+        if (visitor) assignPathToTemporarySleep(state, visitor);
+      }
+      break;
+    }
+    case 'prioritize-repair': {
+      if (ship?.portTurnaround) {
+        // Expediting buys real progress on the blocking work, which is what
+        // actually releases the interface.
+        ship.portTurnaround.inspectionProgress = ship.portTurnaround.inspectionRequired;
+        for (const job of state.jobs) {
+          if (job.portShipId === ship.id && job.workRequired !== undefined) {
+            job.workProgress = job.workRequired;
+          }
+        }
+      }
+      break;
+    }
+    case 'compensate': {
+      for (const episode of touched) {
+        episode.compensationCredits += RECOVERY_COSTS.compensateUnit;
+        const visitor = state.visitors.find((entry) => entry.id === episode.subjectId);
+        // Compensation buys patience back; it cannot erase the shortage, so
+        // the episode stays open until the physical need is actually met.
+        if (visitor) visitor.patience = Math.max(0, visitor.patience - 25);
+      }
+      break;
+    }
+    case 'onward-transfer': {
+      for (const episode of touched) {
+        state.visitors = state.visitors.filter((entry) => entry.id !== episode.subjectId);
+      }
+      break;
+    }
+    case 'cancel-contract': {
+      if (ship) beginShipRecall(state, ship);
+      break;
+    }
+    case 'close-admissions': {
+      state.admissionPolicy.closedUntil = state.now + 120;
+      break;
+    }
+    case 'security-intervention': {
+      for (const episode of touched) {
+        state.visitors = state.visitors.filter((entry) => entry.id !== episode.subjectId);
+      }
+      break;
+    }
+  }
+
+  const resolution = resolutionForAction(request.kind);
+  if (resolution) {
+    for (const episode of touched) resolveEpisode(state, ledger, episode, resolution);
+  }
+  pushCrowdEvent(state, 'info', plan.summary);
+  return plan;
+}
+
+/** Read-only episode view for the UI and focused runners. */
+export function getFailureEpisodes(state: StationState): FailureEpisode[] {
+  return openEpisodes(state.failureEpisodes);
+}
+
+
+/** Interfaces of a class that are free right now, for reserve checks. */
+function freeInterfaceCount(state: StationState, offer: TrafficOffer): number {
+  const preview = getTrafficOfferPreview(state, offer.id);
+  return preview?.compatibleInterface.freeCount ?? 0;
+}
+
+/**
+ * Evaluate every pending offer against the player's admission policy.
+ *
+ * Accepts only what the policy can justify, records the explanation on the
+ * offer so the card can show it, and leaves everything else exactly where it
+ * was. A `manual` or `hold` verdict never removes an offer.
+ */
+function applyAdmissionPolicy(state: StationState): void {
+  const policy = state.admissionPolicy;
+  if (!policy.enabled) {
+    for (const offer of state.trafficOffers) offer.admissionNote = undefined;
+    return;
+  }
+  const meals = availablePreparedMeals(state);
+  const beds = freeGuestBedCount(state);
+  for (const offer of [...state.trafficOffers]) {
+    if (offer.status !== 'forecast' && offer.status !== 'holding') continue;
+    const preview = getTrafficOfferPreview(state, offer.id);
+    const verdict = evaluateAdmission(offer, preview, policy, {
+      now: state.now,
+      freeInterfaces: freeInterfaceCount(state, offer),
+      freeGuestBeds: beds,
+      availableMeals: meals,
+      requestedServicesReady: offer.requestedServices.every((tag) => shipServiceTagSatisfied(state, tag))
+    });
+    // The explanation is written for EVERY decision, including the ones that
+    // do nothing, so the player can always see why a call is sitting there.
+    offer.admissionNote = verdict.reason;
+    if (verdict.decision !== 'accept') continue;
+    const result = admitTrafficOffer(state, offer.id);
+    if (result.ok) {
+      pushCrowdEvent(state, 'info', `${offer.callsign} auto-admitted · ${verdict.reason}`);
+    } else {
+      offer.admissionNote = result.reason ?? verdict.reason;
+    }
+  }
+}
+
+/** Aggregate lane pressure for a compact readout. */
+export function getAdmissionPressure(state: StationState): LanePressure {
+  const meals = availablePreparedMeals(state);
+  const beds = freeGuestBedCount(state);
+  const verdicts = state.trafficOffers
+    .filter((offer) => offer.status === 'forecast' || offer.status === 'holding')
+    .map((offer) => ({
+      offer,
+      verdict: evaluateAdmission(offer, getTrafficOfferPreview(state, offer.id), state.admissionPolicy, {
+        now: state.now,
+        freeInterfaces: freeInterfaceCount(state, offer),
+        freeGuestBeds: beds,
+        availableMeals: meals,
+        requestedServicesReady: offer.requestedServices.every((tag) => shipServiceTagSatisfied(state, tag))
+      })
+    }));
+  return summarizeLanePressure(verdicts);
+}
+
+/** Player-facing policy edit. Manual override is always available. */
+export function setAdmissionPolicy(state: StationState, next: Partial<AdmissionPolicy>): AdmissionPolicy {
+  state.admissionPolicy = normalizeAdmissionPolicy({ ...state.admissionPolicy, ...next });
+  return state.admissionPolicy;
+}
+
 function updateTrafficOffers(state: StationState): void {
   if (state.controls.portAutoAdmitEnabled && state.dockedShipsCompleted < PORT_AUTO_ADMIT_TURNAROUNDS) {
     state.controls.portAutoAdmitEnabled = false;
   }
+  // Finite admission policy runs FIRST. It only ever accepts routine calls it
+  // can justify; anything exceptional, closed, or over a reserve is left on the
+  // list for the player, which is what preserves manual override.
+  applyAdmissionPolicy(state);
   if (state.controls.portAutoAdmitEnabled) {
     for (const offer of state.trafficOffers) {
       if (offer.status !== 'forecast' && offer.status !== 'holding') continue;
@@ -22164,8 +22515,43 @@ function updateLongStayVisitorNeeds(state: StationState, visitor: Visitor, dt: n
   else visitor.needs.unmetSince = null;
   if (visitor.activeService === null && visitor.state !== VisitorState.Eating && visitor.state !== VisitorState.Leisure) {
     if (!routeStrandedVisitor(state, visitor)) routeLongStayVisitor(state, visitor);
+  } else if (shouldPreemptForCriticalNeed(state, visitor)) {
+    // A critical need interrupts an OPTIONAL want. The guard below is what
+    // keeps this from oscillating: it only fires when the severe need is a
+    // different one from the service already in progress, and it re-uses the
+    // ordinary retry cooldown so a failed preempt cannot retrigger every tick.
+    scheduleVisitorPathRetry(state, visitor);
+    visitor.activeService = null;
+    visitor.recurringNeedActive = null;
+    if (!routeStrandedVisitor(state, visitor)) routeLongStayVisitor(state, visitor);
   }
   updateVisitorServiceFailure(state, visitor);
+}
+
+/**
+ * Does a severe need justify abandoning what this occupant is currently doing?
+ *
+ * Three bounds keep it from thrashing:
+ *   - the occupant must have a genuinely severe need (not merely a seeking one);
+ *   - that need must be DIFFERENT from the service already under way, so a
+ *     hungry visitor mid-meal is never pulled off the meal;
+ *   - the ordinary path-retry cooldown must have elapsed.
+ */
+function shouldPreemptForCriticalNeed(state: StationState, visitor: Visitor): boolean {
+  if (!visitor.needs) return false;
+  if (!visitorPathRetryReady(state, visitor)) return false;
+  const severe = severeNeedForVisitor(visitor);
+  if (!severe) return false;
+  const wanted = serviceForRecurringNeed(severe);
+  // Already serving the severe need: let it finish.
+  if (visitor.activeService === wanted) return false;
+  // Only an OPTIONAL want may be preempted; a planned contract service is a
+  // commitment the station made and is not interrupted by need pressure.
+  const onPlan = visitor.activeService !== null
+    && visitor.servicePlan.includes(visitor.activeService)
+    && !visitor.completedServices.includes(visitor.activeService);
+  if (onPlan) return false;
+  return true;
 }
 
 function routeContractVisitorToNextService(state: StationState, visitor: Visitor): boolean {
@@ -24128,6 +24514,24 @@ function nearbyIncidentPressure(state: StationState, tileIndex: number): number 
   return pressure;
 }
 
+
+/**
+ * A resident explicitly leaves the station.
+ *
+ * The counterpart to `maybeMoveInResident`. It frees the bed, records the
+ * departure against the rating breakdown that already had a slot for it, and
+ * names the cause in the world feed so the player can see what they lost.
+ */
+function departResident(state: StationState, resident: Resident, cause: string): void {
+  releaseReservationsForOwner(state, 'resident', resident.id, 'cleared');
+  unlinkResidentFromShip(state, resident);
+  state.residents = state.residents.filter((entry) => entry.id !== resident.id);
+  state.usageTotals.residentDepartures += 1;
+  state.usageTotals.ratingFromResidentDeparture -= RESIDENT_DEPARTURE_RATING_PENALTY;
+  state.usageTotals.ratingDelta -= RESIDENT_DEPARTURE_RATING_PENALTY;
+  pushCrowdEvent(state, 'warn', `A resident ${cause}`);
+}
+
 function updateResidentLogic(
   state: StationState,
   dt: number,
@@ -24450,7 +24854,14 @@ function updateResidentLogic(
       }
     }
 
-    if (resident.stress > 100) {
+    if (resident.leaveIntent >= RESIDENT_LEAVE_INTENT_DEPARTURE) {
+    // A resident who has been unhappy long enough explicitly leaves, rather
+    // than accumulating leaveIntent forever. This is the departure the rating
+    // breakdown has always had a slot for.
+    departResident(state, resident, 'left after sustained dissatisfaction');
+    continue;
+  }
+  if (resident.stress > 100) {
       registerIncident(state, 1);
       resident.stress = 55;
       resident.agitation = clamp((resident.agitation ?? 0) + 12, 0, 100);
@@ -27824,6 +28235,7 @@ export function tick(state: StationState, frameDt: number): void {
   tryStartResidentConfrontation(state, dt, securityAuraByTile);
   maybeCreateTheftIncident(state, dt);
   decayIncidentMemory(state);
+  updateFailureEpisodes(state);
   finishPhase('residentsSecurity');
   maintainCafeteriaQueues(state);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);
