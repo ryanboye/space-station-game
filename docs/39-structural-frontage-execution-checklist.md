@@ -269,7 +269,7 @@ compiles is not sufficient for player-facing work.
 ### Phase 1B Gate
 
 - [ ] One checkout visibly becomes overwhelmed.
-- [ ] A second checkout or redesigned queue improves measured throughput.
+- [x] A second checkout or redesigned queue improves measured throughput.
 - [ ] A larger cantina visibly supports more simultaneous occupants.
 - [x] Large fixtures create meaningful queue, route, stock, staffing, and floor
   tradeoffs.
@@ -1031,9 +1031,9 @@ Remaining uncertainty:
 2026-07-27 · Facility-scale market operation
 
 - Commit or files: `src/sim/facility-descriptors.ts`, market flow and crew dispatch in `src/sim/sim.ts`, market status presentation in `src/render/render.ts`, authored `?scenario=facility-scale`, and `tools/facility-slots-tests.ts` (pending integration commit at evidence capture).
-- Focused evidence: `npm run test:facility-slots` proves physical shelf browsing, exclusive stock claims, FIFO checkout, stocked and empty outcomes, abandonment of an unstaffed register, two distinct register/customer pairs, temporary-bunk exclusivity, and protection of physically posted Stewards from unrelated general dispatch.
+- Focused evidence: `npm run test:facility-slots` proves physical shelf browsing, exclusive stock claims, FIFO checkout, stocked and empty outcomes, abandonment of an unstaffed register, two distinct register/customer pairs, measured one-versus-two-register throughput, temporary-bunk exclusivity, and protection of physically posted Stewards from unrelated general dispatch.
 - Visual/playtest evidence: the first wall-adjacent Checkout Bank had no legal customer frontage and therefore zero queue capacity. Moving it inward produced eight physical line positions, two live registers, visible stocked aisles, and completed sales. This is the intended spatial tradeoff: the larger fixture earns throughput only when the player budgets public frontage, staff space, stock access, and floor area.
-- Remaining uncertainty: the second register has not yet been benchmarked against one-register throughput; restocking is sourced physically but its staff-side route needs a dedicated visual fixture; compact Market Stall compatibility still exists; and the larger cantina, Reception, wash, cabin, and connected-bar fixtures remain open.
+- Remaining uncertainty: the throughput comparison is deterministic runner evidence rather than a live before/after player capture; restocking is sourced physically but its staff-side route needs a dedicated visual fixture; compact Market Stall compatibility still exists; and the larger cantina, Reception, wash, cabin, and connected-bar fixtures remain open.
 
 2026-07-27 · Visit scheduling, save migration, and deterministic scale cadence
 

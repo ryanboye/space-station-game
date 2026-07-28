@@ -40,9 +40,11 @@ problems instead of resolving demand through hidden counters:
    now report `No public food?`, record missed demand, and choose another action
    or departure without claiming a phantom line.
 
-2. A large market could visually contain two registers but send every shopper
-   to one register. Register lines now split deterministically while retaining
-   FIFO order and a maximum of four physical places per register.
+2. A large market could visually contain two registers while the first line
+   claimed the second register's physical head tile. Each register now protects
+   its own queue head, lines split deterministically, and a focused comparison
+   proves that two staffed registers complete more sales than one in the same
+   window.
 
 3. Stewards posted at Checkout Banks were immediately stolen by generic tray or
    cleaning dispatch. Live market posts are now protected up to actual register
@@ -152,7 +154,8 @@ design benchmark and the replacement for stale port-operation tests.
 - A complete bare-station to first-medium-Berth playthrough is not yet closed.
 - Larger cantina, Reception, wash, guest-cabin, and connected-bar machines are
   still planned rather than implemented.
-- One versus two Checkout Banks needs a measured throughput comparison.
+- One versus two Checkout Banks still needs a live player-facing comparison;
+  one versus two staffed registers is now measured in the focused runner.
 - Early recall and bounded extension need a dedicated live scenario capture.
 - The final scale gate needs active ships, jobs, reservations, service queues,
   and browser render-frame measurements.

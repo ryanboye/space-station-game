@@ -423,6 +423,39 @@ function testStaffedBankCapacityScales(): void {
   );
 }
 
+function testSecondRegisterImprovesMeasuredThroughput(): void {
+  const salesAfter = (stewards: number): { sales: number; detail: string } => {
+    const state = buildFacilityState();
+    staffMarketRegisters(state, stewards);
+    addCheckoutReadyShoppers(state, 8);
+    runFor(state, 12);
+    return {
+      sales: state.usageTotals.tradeGoodsSold,
+      detail: JSON.stringify({
+        fixture: getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id),
+        visitors: state.visitors.map((visitor) => ({
+          id: visitor.id,
+          state: visitor.state,
+          tile: visitor.tileIndex,
+          queue: visitor.queueProviderTile,
+          target: visitor.reservedTargetTile,
+          source: visitor.marketTradeGoodSourceTile,
+          timer: visitor.eatTimer,
+          wait: visitor.movementWaitReason
+        }))
+      })
+    };
+  };
+
+  const oneRegister = salesAfter(1);
+  const twoRegisters = salesAfter(2);
+  assert(oneRegister.sales > 0, 'One staffed register must complete real sales in the comparison window.');
+  assert(
+    twoRegisters.sales > oneRegister.sales,
+    `A second staffed register must improve measured throughput (${oneRegister.sales} ${oneRegister.detail} vs ${twoRegisters.sales} ${twoRegisters.detail}).`
+  );
+}
+
 function testLiveCheckoutPostsSurviveGeneralDispatch(): void {
   const state = buildFacilityState();
   staffMarketRegisters(state, 2);
@@ -516,6 +549,7 @@ function main(): void {
   testMarketBrowseToCheckoutFlow();
   testMarketCheckoutFifoAndUnstaffedFeedback();
   testStaffedBankCapacityScales();
+  testSecondRegisterImprovesMeasuredThroughput();
   testLiveCheckoutPostsSurviveGeneralDispatch();
   testUnrelatedQueueDoesNotCreateMarketDemand();
   testTemporarySleepAndHydration();

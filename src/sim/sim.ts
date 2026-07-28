@@ -11810,7 +11810,8 @@ function buildQueueChain(
   state: StationState,
   servingTile: number,
   room: RoomType = state.rooms[servingTile],
-  claimedByEarlierProvider: ReadonlySet<number> = new Set()
+  claimedByEarlierProvider: ReadonlySet<number> = new Set(),
+  protectedLaterHeads: ReadonlySet<number> = new Set()
 ): number[] {
   const sp = fromIndex(servingTile, state.width);
   const deltas: ReadonlyArray<readonly [number, number]> = [[0, 1], [1, 0], [-1, 0], [0, -1]];
@@ -11852,6 +11853,7 @@ function buildQueueChain(
       const ni = toIndex(nx, ny, state.width);
       if (inChain.has(ni)) continue;
       if (claimedByEarlierProvider.has(ni)) continue;
+      if (protectedLaterHeads.has(ni)) continue;
       if (!isWalkable(state.tiles[ni])) continue;
       if (state.moduleOccupancyByTile[ni] !== null) continue;
       const isDoor = state.tiles[ni] === TileType.Door;
@@ -11906,8 +11908,30 @@ function ensureQueueChains(state: StationState): void {
       ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina })),
       ...enhancedMarketSlots(state, 'checkout').map((slot) => ({ tile: slot.tileIndex, room: RoomType.Market }))
     ].sort((a, b) => a.tile - b.tile || a.room.localeCompare(b.room));
+    const marketHeadCandidates = new Map<number, Set<number>>();
     for (const provider of providers) {
-      const chain = buildQueueChain(state, provider.tile, provider.room, claimed);
+      if (provider.room !== RoomType.Market) continue;
+      const point = fromIndex(provider.tile, state.width);
+      const candidates = new Set<number>();
+      for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1]] as const) {
+        const x = point.x + dx;
+        const y = point.y + dy;
+        if (!inBounds(x, y, state.width, state.height)) continue;
+        const tileIndex = toIndex(x, y, state.width);
+        if (isWalkable(state.tiles[tileIndex]) && state.moduleOccupancyByTile[tileIndex] === null) candidates.add(tileIndex);
+      }
+      marketHeadCandidates.set(provider.tile, candidates);
+    }
+    for (let providerIndex = 0; providerIndex < providers.length; providerIndex += 1) {
+      const provider = providers[providerIndex];
+      const protectedLaterHeads = new Set<number>();
+      if (provider.room === RoomType.Market) {
+        for (const later of providers.slice(providerIndex + 1)) {
+          if (later.room !== RoomType.Market) continue;
+          for (const tileIndex of marketHeadCandidates.get(later.tile) ?? []) protectedLaterHeads.add(tileIndex);
+        }
+      }
+      const chain = buildQueueChain(state, provider.tile, provider.room, claimed, protectedLaterHeads);
       // A CheckoutBank contains adjacent registers. Letting the numerically
       // first register claim an entire 12-tile snake makes its neighbour look
       // built but unusable. Four physical places per market register still
@@ -12133,11 +12157,22 @@ function joinMarketCheckoutQueue(state: StationState, visitor: Visitor): boolean
   const registerCandidates = [...theater.chainsByAnchor]
     .filter(([anchor]) => anchors.has(anchor))
     .sort(([left], [right]) => left - right);
-  const preferredRegisterIndex = registerCandidates.length > 0
-    ? Math.abs(visitor.id) % registerCandidates.length
+  const staffedRegisters = registerCandidates.filter(([anchor]) => {
+    const register = marketCheckoutSlotAtTile(state, anchor);
+    return register !== null && marketRegisterIsStaffed(state, register);
+  });
+  const staffedCandidates = staffedRegisters.filter(([anchor, chain]) =>
+    (theater.membersByAnchor.get(anchor)?.length ?? 0) < chain.length
+  );
+  // Never send a shopper to an unstaffed register while a staffed line still
+  // has physical room. An entirely unstaffed bank still forms a bounded line
+  // so the missing Steward is visible and can eventually cause abandonment.
+  const eligibleCandidates = staffedRegisters.length > 0 ? staffedCandidates : registerCandidates;
+  const preferredRegisterIndex = eligibleCandidates.length > 0
+    ? Math.abs(visitor.id) % eligibleCandidates.length
     : 0;
-  for (let index = 0; index < registerCandidates.length; index += 1) {
-    const [anchor, chain] = registerCandidates[index];
+  for (let index = 0; index < eligibleCandidates.length; index += 1) {
+    const [anchor, chain] = eligibleCandidates[index];
     const members = theater.membersByAnchor.get(anchor) ?? [];
     if (members.length >= chain.length) continue;
     const register = marketCheckoutSlotAtTile(state, anchor);
