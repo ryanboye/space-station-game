@@ -772,7 +772,7 @@ audited checklist with no unsupported checked claims.
 - [x] Keep capabilities visible rather than hidden behind arbitrary unlocks.
 - [ ] Use rating to attract more valuable traffic.
 - [x] Use Capital Projects as optional subsidies, not exclusive gates.
-- [ ] Reconcile global goal, business path, and legacy tier messaging.
+- [x] Reconcile global goal, business path, and legacy tier messaging.
 - [ ] Preserve a visible cumulative station rating with causal breakdown.
 
 ### Contextual UI
@@ -1242,3 +1242,10 @@ Remaining uncertainty:
 - Live-browser observation: inspected the ordinary `?scenario=starter` at the normal viewport. The Global Goal reads `Open Food, Supplies, or Refuel · 0/1`, `Earn business revenue · 0/500c`, and `Travelers served · 0/20`; the three comparable business cards remain visible together, and the starter's 320 credits can fund one complete path but not two.
 - Focused checks: `npm run build` and `git diff --check` passed.
 - Remaining uncertainty: this closes the authored-decision requirement, not the whole coherent-opening gate. The user still needs to perform the normal-start Supplies and Refuel construction passes, and legacy tier messaging after the first operation remains a separate reconciliation item.
+
+2026-07-28 · One player-facing progression spine
+
+- Commit or files: `src/main.ts` and this execution ledger (pending checkpoint commit at evidence capture).
+- Design resolution: Global Goals are the player-facing progression spine, while Food, Supplies, and Refuel are authored choices beneath the first goal. The legacy tier ladder remains an internal capability mechanism for now and no longer reappears inside the goal card or normal command UI after the first business opens.
+- Live-browser observation: inspected `?scenario=opening-food-cycle` after a paid meal. The first Global Goal shows the business criterion complete and live revenue/traveler progress (`1/1`, `4/500c`, `1/20`) with no Tier summary, roadmap, specialization branch, or second progression instruction visible.
+- Remaining uncertainty: future facility prerequisites still need to become more concrete as later content is refined, but they no longer compete with the opening objective as an independent ladder.

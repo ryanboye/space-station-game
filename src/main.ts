@@ -324,7 +324,7 @@ app.innerHTML = `
         <div class="station-goal-progress" aria-hidden="true">
           <i id="station-goal-fill"></i>
         </div>
-        <button id="open-progression-summary" class="station-tier-summary" type="button" aria-haspopup="dialog" aria-controls="progression-modal">
+        <button id="open-progression-summary" class="station-tier-summary hidden" type="button" aria-haspopup="dialog" aria-controls="progression-modal">
           <span class="station-tier-copy">
             <span id="station-tier-current">Tier 0: Founding Outpost</span>
             <strong id="station-tier-next">Next: Guest Services</strong>
@@ -7477,9 +7477,12 @@ function wireToolbar(): void {
 function refreshToolbar(): void {
   refreshOpeningRecipeCatalog();
   refreshPaletteMenu();
-  const hasOpeningOperation = evaluateOpeningRecipes(state).some((recipe) => recipe.operational);
-  openProgressionSummaryBtn.classList.toggle('hidden', !hasOpeningOperation);
-  openProgressionModalBtn.classList.toggle('hidden', !hasOpeningOperation);
+  // Global Goals are the player-facing progression spine. The legacy tier
+  // ladder remains an internal unlock mechanism until its capabilities are
+  // fully folded into concrete goals and catalog prerequisites; revealing it
+  // here would give the player two competing answers to "what next?".
+  openProgressionSummaryBtn.classList.add('hidden');
+  openProgressionModalBtn.classList.add('hidden');
   openCapitalProjectsBtn.classList.toggle('hidden', !shouldShowCapitalProjects());
   const hasBerth = state.rooms.includes(RoomType.Berth);
   document.querySelectorAll<HTMLElement>('[data-berth-hardware]').forEach((element) => {
