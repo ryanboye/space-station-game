@@ -126,7 +126,7 @@ compiles is not sufficient for player-facing work.
 - [x] Add `shore` tenure for shore leave.
 - [x] Add `contract` tenure for contract crew.
 - [x] Add `extended` tenure for extended guests.
-- [x] Preserve `resident` as permanent tenure.
+- [x] Preserve the separate Resident actor as permanent tenure.
 - [x] Give long-stay occupants regenerating hunger.
 - [x] Give long-stay occupants regenerating energy/sleep demand.
 - [x] Give long-stay occupants regenerating hygiene demand.
@@ -399,7 +399,7 @@ compiles is not sufficient for player-facing work.
 - [x] Plan Pressure Hull over completed or planned support.
 - [x] Derive floor-plate blueprints.
 - [x] Derive perimeter wall/bulkhead blueprints.
-- [x] Derive tie-in and doorway/airlock work.
+- [ ] Derive tie-in and doorway/airlock work.
 - [ ] Preserve editable plans before work completes.
 - [x] Preserve cancellation and define material salvage/refund.
 - [ ] Preserve module movement and resale.
@@ -408,11 +408,11 @@ compiles is not sufficient for player-facing work.
 
 - [x] Remove instant shell conversion from normal expansion.
 - [x] Require structural completion before hull completion.
-- [x] Require complete perimeter before seal check.
+- [ ] Require complete perimeter before seal check.
 - [x] Keep incomplete shell unpressurized.
 - [ ] Perform visible seal check.
-- [x] Commission and pressurize only a supported sealed shell.
-- [x] Require EVA construction for exterior/unpressurized modules.
+- [ ] Commission and pressurize only a supported sealed shell.
+- [ ] Require EVA construction for exterior/unpressurized modules.
 - [ ] Report missing material.
 - [ ] Report missing staging route.
 - [ ] Report missing Airlock/EVA route.
@@ -750,7 +750,7 @@ compiles is not sufficient for player-facing work.
 - [x] Add approach geometry/reservation runner.
 - [ ] Add ship visit/settlement runner.
 - [x] Add occupant tenure/needs runner.
-- [x] Add fixture-slot/reception runner.
+- [ ] Add fixture-slot/reception runner.
 - [x] Add failed-stay/stranding runner.
 - [x] Add movement/queue/deadlock runner.
 - [ ] Add cargo/boarding/support runner.
@@ -921,3 +921,24 @@ Remaining uncertainty:
 - Focused checks: `npm run test:queue-spill`, `npm run test:movement-coordinator`, `npm run test:occupant-loop`, `npm run build`, and `git diff --check` passed. Coverage proves stable FIFO order independent of visitor array order, one exclusive floor reservation per admitted queuer, reachable spill onto a Door, real Door throttling, alternate-crossing recovery, greater capacity from a second provider route, stale-head release and follower advance, bounded service failure, and save/resume reconstruction from durable queue intent.
 - Visual/playtest evidence: queue members use their ordinary world actors as the physical line; sampled thought bubbles report `WAITING FOR SERVICE` or `QUEUE BLOCKED` while the existing animated waiting dots remain the at-a-glance marker. A fresh live browser comparison of a blocked-door line remains required before the visual Phase 5 gate closes.
 - Remaining uncertainty: queue length/spill caps remain deliberately bounded; open-concourse and narrow-corridor directional capacity, bulky carts, target-scale performance, and live door-spill visual validation remain open.
+
+2026-07-27 · Target-scale performance architecture audit
+
+- Commit or files: read-only audit of `tools/sim-perf.ts`, `src/sim/sim.ts`, `src/sim/path.ts`, `src/main.ts`, renderer caches, harness hooks, and `docs/26-fifty-crew-scale-playtest.md`. No performance box was checked.
+- Focused findings: the current runner measures average whole-tick time on mostly empty actor populations and cannot prove smooth rendering. The required fixture is one deterministic saved 100x80 station shared by Node and browser runs, with 50/50, 100/100, and 150/150 crew/visitor tiers, 5-10 mixed interfaces, active ships, approach conflicts, jobs, reservations, and real food/drink queues. It must record p50/p95/p99/max simulation phases, path/cache activity, movement/queue contention, rAF intervals, render/UI time, long frames, and deterministic final-state counters.
+- Proposed starting budgets: at 50/50, simulation p95 <= 15 ms and p99 <= 25 ms, render p95 <= 12 ms; at 2-3x footprint, simulation p95 <= 25 ms and p99 <= 40 ms, render p95 <= 14 ms. Calibrate only after the first raw baseline is preserved.
+- Remaining uncertainty: no target-scale fixture, raw sample history, live rAF profile, approach-group cache, or save/load repeatability evidence exists yet. `window.__harnessAdvanceSim()` is suitable for deterministic simulation distributions but cannot substitute for a real running browser profile.
+
+2026-07-27 · Phase 3 evidence reconciliation
+
+- Commit or files: read-only comparison of the Phase 3 wording against structural-support, expansion, construction, save/remap, focused runners, and live fixtures. No behavior changed.
+- Confirmed evidence: normal expansion creates durable staged projects; Pressure Hull planning validates support; Truss targets derive floor and perimeter work; materials move to construction; EVA workers route through an Airlock; perimeter work precedes interior work; commission is atomic through authoritative topology mutation; cancellation/refund and partial save/load are deterministic.
+- Corrected overclaims: tie-in work does not yet install an Airlock; there is no explicit seal-check phase; final pressure restoration has not been directly asserted/observed; and ordinary exterior module construction still sets `requiresEva: false`. Those compound boxes were reopened.
+- Remaining uncertainty: normal Truss placement is still hidden, Truss/Junction/Bulkhead are not player-placeable staged pieces, blocked projects do not name the missing Airlock/material/staging/oxygen/obstruction in world, and no live starter expansion has been watched through a complete sealed pressurized wing.
+
+2026-07-27 · Long-stay and facility evidence reconciliation
+
+- Commit or files: read-only comparison of Phase 1A/1B against occupant-demand, facility-slot, failed-stay, save, scenario, and artwork evidence. No behavior changed.
+- Confirmed evidence: long-stay hunger/energy/hygiene decay and recovery; tenure derivation; one-shot versus recurring demand; contract-crew save/load; exactly-once cleanup; exclusive facility claims; temporary bunks separate from resident homes; stocked shelf browsing and exactly-once checkout; native Checkout Bank, Shelf Aisle, and Bunk Bank footprints/art.
+- Corrected overclaim: `test:facility-slots` does not test Reception, so the compound fixture-slot/Reception runner box was reopened. Resident permanence was clarified as the separate Resident actor contract.
+- Remaining uncertainty: normal long-stay energy does not yet choose temporary bunks, repeated repair crews have not completed multiple meal/sleep/wash/leisure cycles, recall/boarding save-load remains open, Reception does not exist, Checkout Bank is not staffed or physically queued, restocking is not physical, and large fixtures lack occupied/unstaffed/low-stock/dirty/damaged render states.
