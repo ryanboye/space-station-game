@@ -502,6 +502,19 @@ export enum VisitorState {
   ToDock = 'to-dock'
 }
 
+/**
+ * A passenger can be visible at a dock interface before it is admitted to the
+ * station, and remains visible until its return crossing has actually ended.
+ * The queue fields below are durable; paths and physical reservations rebuild
+ * from them after hydration or topology edits.
+ */
+export type PassengerTransferPhase =
+  | 'station'
+  | 'disembark-queued'
+  | 'disembark-crossing'
+  | 'boarding-queued'
+  | 'boarding-crossing';
+
 export interface Visitor {
   id: number;
   name?: string;
@@ -526,6 +539,8 @@ export interface Visitor {
   movementWaitReason?: string;
   /** Simulation-time hysteresis for congestion-triggered path invalidation. */
   movementReplanCooldownUntil?: number;
+  /** The tile currently preventing a physical move. Runtime-only. */
+  movementBlockedTile?: number | null;
   archetype: VisitorArchetype;
   taxSensitivity: number;
   spendMultiplier: number;
@@ -561,6 +576,22 @@ export interface Visitor {
   /** Durable queue intent. The physical slot/path is reconstructed after load. */
   queueProviderTile?: number | null;
   queueJoinedAt?: number | null;
+  /** Durable passenger-interface queue/crossing state. */
+  transferPhase?: PassengerTransferPhase;
+  /** Stable interface identity: berth anchor + Gangway module, or dock collar. */
+  transferSlotKey?: string | null;
+  /** FIFO sequence time, with visitor id as the deterministic tie-breaker. */
+  transferQueuedAt?: number | null;
+  /** Rebuilt physical queue slot on the station side of the interface. */
+  transferQueueTile?: number | null;
+  /** Real crossing tile occupied while this passenger transfers. */
+  transferAccessTile?: number | null;
+  /** Station-side tile reached after a disembark crossing. */
+  transferStationTile?: number | null;
+  /** Simulation time at which an active interface crossing began. */
+  transferCrossingStartedAt?: number | null;
+  /** Last physical tile that blocked this transfer, for world-space feedback. */
+  transferBlockedTile?: number | null;
   serviceBlockedSince?: number | null;
   activeIncidentId?: number | null;
   // Crowd-loop v1 theater: set on storm-off/balk; renderer shows red tint + "!"
@@ -1142,7 +1173,9 @@ export type ReservationKind =
   | 'seat-use-slot'
   | 'source-item'
   | 'target-capacity'
-  | 'actor-job';
+  | 'actor-job'
+  /** Physical queue slot at a berth Gangway or Pod Dock collar. */
+  | 'transfer-slot';
 export type ReservationReleaseReason = 'completed' | 'failed' | 'expired' | 'replaced' | 'cleared';
 
 export interface Reservation {
@@ -1361,6 +1394,16 @@ export interface ShipProfile {
 }
 
 export type ShipSize = 'small' | 'medium' | 'large';
+/** Hull silhouette is a durable physical identity, separate from economic purpose. */
+export type ShipHullVariant =
+  | 'courier-pod'
+  | 'crew-launch'
+  | 'passenger-shuttle'
+  | 'repair-tender'
+  | 'long-freighter'
+  | 'colonist-transport'
+  | 'luxury-liner'
+  | 'corvette';
 
 export type ShipStage = 'approach' | 'docked' | 'depart';
 
@@ -1434,6 +1477,7 @@ export interface ArrivingShip {
   bayCenterX: number;
   bayCenterY: number;
   shipType: ShipType;
+  hullVariant: ShipHullVariant;
   lane: SpaceLane;
   originDockId: number | null;
   assignedDockId: number | null;
@@ -1657,6 +1701,7 @@ export interface DockQueueEntry {
   shipId: number;
   lane: SpaceLane;
   shipType: ShipType;
+  hullVariant: ShipHullVariant;
   size: ShipSize;
   queuedAt: number;
   timeoutAt: number;
@@ -1753,6 +1798,8 @@ export interface PortOpsTelemetry {
   passengerQueuePersonSeconds: number;
   berthOccupancySeconds: number;
   cargoUnitTileDistance: number;
+  /** Physical passenger-transfer waiting, optional for legacy state construction. */
+  passengerTransferWaitSeconds?: number;
   mealTarget: number;
   mealsCompleted: number;
   freightTarget: number;
@@ -1794,6 +1841,7 @@ export interface TrafficOffer {
   shipName: string;
   lane: SpaceLane;
   shipType: ShipType;
+  hullVariant: ShipHullVariant;
   offerKind?: PortOfferKind;
   size: ShipSize;
   status: TrafficOfferStatus;

@@ -15,6 +15,7 @@
 // paths or JSON blobs land through this door.
 
 import { UNLOCK_DEFINITIONS } from './content/unlocks';
+import { selectShipHullVariant } from './ship-hulls';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
@@ -178,6 +179,7 @@ function approachConflictShip(id: number, dock: StationState['docks'][number], s
     bayCenterX: x + 0.5,
     bayCenterY: y + 0.5,
     shipType: id === 9403 ? 'trader' : 'tourist',
+    hullVariant: selectShipHullVariant(id, id === 9403 ? 'trader' : 'tourist', 'small'),
     lane: dock.facing,
     originDockId: dock.id,
     assignedDockId: dock.id,
@@ -580,6 +582,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
         shipName: 'Helios Bunker',
         lane: 'east',
         shipType: 'industrial',
+        hullVariant: selectShipHullVariant(9001, 'industrial', 'medium'),
         offerKind: 'freight',
         arrivesAt: 5,
         fuelSupply: 48,
@@ -595,6 +598,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
         shipName: 'Wayfarer Meridian',
         lane: 'south',
         shipType: 'trader',
+        hullVariant: selectShipHullVariant(9002, 'trader', 'medium'),
         offerKind: 'freight',
         arrivesAt: 9,
         fuelSupply: 0,

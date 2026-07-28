@@ -1,4 +1,5 @@
-import type { ShipSize, SpaceLane } from './types';
+import { SHIP_HULL_VARIANTS, shipHullProfile } from './ship-hulls';
+import type { ShipHullVariant, ShipSize, SpaceLane } from './types';
 
 export type DockingSlotKind = 'legacy-dock' | 'pod-dock' | 'berth';
 
@@ -26,6 +27,12 @@ export interface DockingSlotDescriptor {
   hullTiles: number[];
   accessTiles: number[];
   envelopesBySize: Record<ShipSize, {
+    ingress: DockingEnvelope;
+    mooring: DockingEnvelope;
+    egress: DockingEnvelope;
+  }>;
+  /** Actual hull envelopes. These drive admission and live traffic. */
+  envelopesByHull: Record<ShipHullVariant, {
     ingress: DockingEnvelope;
     mooring: DockingEnvelope;
     egress: DockingEnvelope;
@@ -114,6 +121,18 @@ export function buildDockingSlotDescriptor(input: EnvelopeSlotInput): DockingSlo
       egress: { kind: 'egress', bounds: egress, facing: input.facing, clearance: scale.lateral }
     };
   }
+  const envelopesByHull = {} as DockingSlotDescriptor['envelopesByHull'];
+  for (const hullVariant of SHIP_HULL_VARIANTS) {
+    const profile = shipHullProfile(hullVariant);
+    const mooring = expandLateral(input.hullBounds, input.facing, profile.lateralClearance);
+    const ingress = directionalCorridor(mooring, input.facing, profile.approachDepth, profile.lateralClearance);
+    const egress = directionalCorridor(mooring, input.facing, profile.approachDepth, profile.lateralClearance);
+    envelopesByHull[hullVariant] = {
+      ingress: { kind: 'ingress', bounds: ingress, facing: input.facing, clearance: profile.lateralClearance },
+      mooring: { kind: 'mooring', bounds: mooring, facing: input.facing, clearance: profile.lateralClearance },
+      egress: { kind: 'egress', bounds: egress, facing: input.facing, clearance: profile.lateralClearance }
+    };
+  }
   return {
     id: input.id,
     kind: input.kind,
@@ -123,8 +142,16 @@ export function buildDockingSlotDescriptor(input: EnvelopeSlotInput): DockingSlo
     acceptedSizes: [...input.acceptedSizes],
     hullTiles: [...input.hullTiles],
     accessTiles: [...input.accessTiles],
-    envelopesBySize
+    envelopesBySize,
+    envelopesByHull
   };
+}
+
+export function envelopeForHull(
+  descriptor: DockingSlotDescriptor,
+  variant: ShipHullVariant
+): DockingSlotDescriptor['envelopesByHull'][ShipHullVariant] {
+  return descriptor.envelopesByHull[variant];
 }
 
 export function deriveApproachConflictGroups(descriptors: DockingSlotDescriptor[]): ApproachConflictGroup[] {

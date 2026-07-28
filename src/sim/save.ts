@@ -8,6 +8,7 @@ import {
   setDockFacing,
   setDockPurpose,
   reconcilePhysicalApproachCommitments,
+  rebuildPassengerTransfersAfterHydration,
   tick,
   tryPlaceModule
 } from './sim';
@@ -30,6 +31,7 @@ import {
   type ShipServiceTag,
   type PortOpsState,
   type PortPromiseKind,
+  type PassengerTransferPhase,
   type Resident,
   ResidentState,
   type SiteCharter,
@@ -61,6 +63,7 @@ import {
   isWalkable
 } from './types';
 import { ensureBerthConfig, setBerthCustomsPolicy } from './dock-controls';
+import { isCompatibleShipHullVariant, selectShipHullVariant } from './ship-hulls';
 import {
   UTILITY_UNDERLAY_KINDS,
   createUtilityUnderlayFromLayers,
@@ -116,6 +119,13 @@ const SMALL_CRAFT_SERVICE_KINDS = ['passenger', 'refuel', 'freight', 'repair'] a
 const SMALL_CRAFT_SERVICE_STATUSES = ['pending', 'active', 'complete', 'blocked', 'skipped'] as const;
 const VISIT_STAY_CLASSES: VisitStayClass[] = ['errand', 'shore', 'contract', 'extended', 'permanent'];
 const VISITOR_FAILURE_STAGES: VisitorServiceFailureStage[] = ['none', 'unmet', 'balking', 'distressed', 'disruptive'];
+const PASSENGER_TRANSFER_PHASES: PassengerTransferPhase[] = [
+  'station',
+  'disembark-queued',
+  'disembark-crossing',
+  'boarding-queued',
+  'boarding-crossing'
+];
 const SHIP_VISIT_PHASES = ['announced', 'approach', 'secure', 'visit-service', 'recall', 'boarding', 'depart'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
 const CUSTOMS_POLICIES: CustomsPolicy[] = ['routine', 'selective', 'expedited', 'seizure'];
@@ -693,6 +703,9 @@ function normalizeTrafficOffer(value: unknown): TrafficOffer | null {
     shipName: typeof value.shipName === 'string' ? value.shipName.slice(0, 80) : 'Unknown ship',
     lane: value.lane,
     shipType: value.shipType,
+    hullVariant: isCompatibleShipHullVariant(value.hullVariant, value.shipType, value.size)
+      ? value.hullVariant
+      : selectShipHullVariant(value.id, value.shipType, value.size),
     offerKind: isOneOf(value.offerKind, PORT_OFFER_KINDS) ? value.offerKind : undefined,
     size: value.size,
     status: value.status,
@@ -781,6 +794,21 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
   const strandedFromShipId = typeof value.strandedFromShipId === 'number' && Number.isFinite(value.strandedFromShipId)
     ? Math.max(1, Math.floor(value.strandedFromShipId))
     : null;
+  const transferPhase = isOneOf(value.transferPhase, PASSENGER_TRANSFER_PHASES)
+    ? value.transferPhase
+    : 'station';
+  const transferSlotKey = transferPhase !== 'station' && typeof value.transferSlotKey === 'string' && value.transferSlotKey.length > 0
+    ? value.transferSlotKey.slice(0, 200)
+    : null;
+  const transferQueuedAt = transferPhase !== 'station' && typeof value.transferQueuedAt === 'number' && Number.isFinite(value.transferQueuedAt)
+    ? Math.max(0, value.transferQueuedAt)
+    : null;
+  const transferCrossingStartedAt =
+    (transferPhase === 'disembark-crossing' || transferPhase === 'boarding-crossing') &&
+    typeof value.transferCrossingStartedAt === 'number' &&
+    Number.isFinite(value.transferCrossingStartedAt)
+      ? Math.max(0, value.transferCrossingStartedAt)
+      : null;
   const hadTransientFacilityClaim =
     (typeof value.marketTradeGoodSourceTile === 'number' && Number.isFinite(value.marketTradeGoodSourceTile)) ||
     (typeof value.temporarySleepTargetTile === 'number' && Number.isFinite(value.temporarySleepTargetTile));
@@ -790,6 +818,8 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     tileIndex: clamp(Math.floor(visitor.tileIndex), 0, Math.max(0, tileCount - 1)),
     state: hadTransientFacilityClaim ? VisitorState.ToLeisure : visitor.state,
     path: [],
+    movementWaitReason: undefined,
+    movementBlockedTile: undefined,
     reservedServingTile: null,
     reservedTargetTile: null,
     serveTimer: undefined,
@@ -802,6 +832,14 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     queueJoinedAt: typeof value.queueJoinedAt === 'number' && Number.isFinite(value.queueJoinedAt)
       ? Math.max(0, value.queueJoinedAt)
       : null,
+    transferPhase,
+    transferSlotKey,
+    transferQueuedAt,
+    transferQueueTile: null,
+    transferAccessTile: null,
+    transferStationTile: null,
+    transferCrossingStartedAt,
+    transferBlockedTile: null,
     stayClass,
     needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
     recurringNeedActive: needs?.active ?? null,
@@ -1054,7 +1092,15 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       roleAffinity: { ...resident.roleAffinity },
       lastRouteExposure: resident.lastRouteExposure ? { ...resident.lastRouteExposure } : undefined
     })),
-    visitors: state.visitors.map(({ movementWaitReason: _movementWaitReason, ...visitor }) => ({
+    visitors: state.visitors.map(({
+      movementWaitReason: _movementWaitReason,
+      movementBlockedTile: _movementBlockedTile,
+      transferQueueTile: _transferQueueTile,
+      transferAccessTile: _transferAccessTile,
+      transferStationTile: _transferStationTile,
+      transferBlockedTile: _transferBlockedTile,
+      ...visitor
+    }) => ({
       ...visitor,
       path: [...visitor.path],
       needs: visitor.needs ? { ...visitor.needs } : undefined,
@@ -1375,6 +1421,7 @@ function normalizePortOps(raw: unknown, fallback: PortOpsState, warnings: string
       passengerQueuePersonSeconds: Math.max(0, asFiniteNumber(telemetryRaw.passengerQueuePersonSeconds, 0)),
       berthOccupancySeconds: Math.max(0, asFiniteNumber(telemetryRaw.berthOccupancySeconds, 0)),
       cargoUnitTileDistance: Math.max(0, asFiniteNumber(telemetryRaw.cargoUnitTileDistance, 0)),
+      passengerTransferWaitSeconds: Math.max(0, asFiniteNumber(telemetryRaw.passengerTransferWaitSeconds, 0)),
       mealTarget: Math.max(0, asFiniteNumber(telemetryRaw.mealTarget, 0)),
       mealsCompleted: Math.max(0, asFiniteNumber(telemetryRaw.mealsCompleted, 0)),
       freightTarget: Math.max(0, asFiniteNumber(telemetryRaw.freightTarget, 0)),
@@ -2260,8 +2307,16 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
           !Array.isArray(entry.bayTiles) ||
           !isOneOf(entry.stage, ['approach', 'docked', 'depart'] as const)
         ) return [];
+        const shipType = entry.shipType as ShipType;
+        const size = entry.size as ShipSize;
+        const portManifest = normalizeTrafficOffer(entry.portManifest);
+        const hullVariant = isCompatibleShipHullVariant(entry.hullVariant, shipType, size)
+          ? entry.hullVariant
+          : selectShipHullVariant(entry.id, shipType, size);
         return [{
           ...(entry as unknown as ArrivingShip),
+          hullVariant,
+          portManifest: portManifest ? { ...portManifest, hullVariant } : undefined,
           smallCraftVisit: normalizeSmallCraftVisit(entry.smallCraftVisit),
           stayClass: isOneOf(entry.stayClass, VISIT_STAY_CLASSES) ? entry.stayClass : 'errand',
           visitPhase: isOneOf(entry.visitPhase, SHIP_VISIT_PHASES)
@@ -2936,10 +2991,14 @@ export function hydrateStateFromSave(
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);
-  const savedVisitorCountByShip = new Map<number, number>();
+  const savedVisitorCountByShip = new Map<number, { stationSide: number; disembarking: number }>();
   for (const visitor of snapshot.visitors ?? []) {
     if (visitor.originShipId === null) continue;
-    savedVisitorCountByShip.set(visitor.originShipId, (savedVisitorCountByShip.get(visitor.originShipId) ?? 0) + 1);
+    const counts = savedVisitorCountByShip.get(visitor.originShipId) ?? { stationSide: 0, disembarking: 0 };
+    const phase = visitor.transferPhase ?? 'station';
+    if (phase === 'disembark-queued' || phase === 'disembark-crossing') counts.disembarking += 1;
+    else counts.stationSide += 1;
+    savedVisitorCountByShip.set(visitor.originShipId, counts);
   }
   next.arrivingShips = snapshot.activePortShips.map((savedShip) => {
     const ship: ArrivingShip = {
@@ -3004,14 +3063,19 @@ export function hydrateStateFromSave(
       ship.stageTime = 0;
     }
     const contract = next.portOps.contracts.find((entry) => entry.id === ship.portContractId);
-    if (contract && ship.stage === 'docked') {
-      const savedVisitors = savedVisitorCountByShip.get(ship.id) ?? 0;
-      if (savedVisitors > 0) {
-        // Phase 1A snapshots preserve active occupants. Retain the saved spawn
-        // counters so the ship does not produce a duplicate passenger cohort.
-        ship.passengersSpawned = Math.max(ship.passengersSpawned, savedVisitors);
+    if (ship.stage === 'docked') {
+      const savedVisitors = savedVisitorCountByShip.get(ship.id) ?? { stationSide: 0, disembarking: 0 };
+      const hasSavedCohort = savedVisitors.stationSide > 0 || savedVisitors.disembarking > 0 || ship.passengersBoarded > 0;
+      if (hasSavedCohort) {
+        // Every completed arrival is either still station-side or has already
+        // boarded. Ship-side queues and active inbound crossings are not yet
+        // spawned and remain represented by their durable transfer phases.
+        ship.passengersSpawned = Math.min(
+          ship.passengersTotal,
+          Math.max(0, ship.passengersBoarded + savedVisitors.stationSide)
+        );
         ship.spawnCarry = 0;
-      } else {
+      } else if (contract) {
         // Legacy saves omitted visitors entirely and retain the established
         // reconstruction behavior.
         const returned = contract.promises.find((promise) => promise.kind === 'passengers-returned');
@@ -3020,6 +3084,8 @@ export function hydrateStateFromSave(
         ship.passengersBoarded = 0;
         ship.spawnCarry = 0;
       }
+    }
+    if (contract && ship.stage === 'docked') {
       if (ship.portTurnaround && !ship.portTurnaround.cargoReleased) {
         ship.portTurnaround.cargoReleased = true;
         ship.portTurnaround.phase = ship.portTurnaround.inboundUnloaded + 0.05 < ship.portTurnaround.inboundTotal
@@ -3137,6 +3203,7 @@ export function hydrateStateFromSave(
     next.crewSpawnCounter,
     next.crewMembers.reduce((max, crew) => Math.max(max, crew.id + 1), 1)
   );
+  rebuildPassengerTransfersAfterHydration(next);
   tick(next, 0);
 
   // The final reconciliation tick refreshes derived facility state, but it

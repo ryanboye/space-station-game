@@ -22,6 +22,7 @@ function offer(state: StationState, id: number, size: 'small' | 'medium'): Traff
     shipName: size === 'small' ? 'Wayfarer Pod' : 'Wayfarer Liner',
     lane: state.docks[0]?.lane ?? 'north',
     shipType: size === 'small' ? 'trader' : 'tourist',
+    hullVariant: size === 'small' ? 'courier-pod' : 'passenger-shuttle',
     offerKind: 'passenger',
     size,
     status: 'forecast',

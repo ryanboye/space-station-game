@@ -26,6 +26,8 @@
     "test:failed-stay": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/failed-stay-tests.js",
     "test:movement-coordinator": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/movement-coordinator-tests.js",
     "test:queue-spill": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/queue-spill-tests.js",
+    "test:passenger-transfer": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/passenger-transfer-tests.js",
+    "test:ship-fleet": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/ship-fleet-tests.js",
     "test:harness": "playwright test",
     "test:harness:update-snapshots": "playwright test --update-snapshots",
     "perf:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-perf.js",

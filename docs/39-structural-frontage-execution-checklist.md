@@ -142,7 +142,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Add `holding` phase.
 - [x] Add `approach` phase.
 - [x] Add `secure` phase.
-- [ ] Add `disembark` phase.
+- [x] Add `disembark` phase.
 - [x] Add `visit-service` phase.
 - [x] Add `recall` phase.
 - [x] Add `boarding` phase.
@@ -163,7 +163,7 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Show ship purpose and visit phase beside the physical interface.
 - [ ] Show likely cohort-size and stay ranges without full itinerary disclosure.
-- [ ] Show recall and boarding physically.
+- [x] Show recall and boarding physically.
 - [ ] Show early departure and extension reasons.
 - [ ] Keep ship details hideable on small screens.
 
@@ -173,7 +173,7 @@ compiles is not sufficient for player-facing work.
 - [x] Persist durable visit phase and timing.
 - [ ] Hydrate legacy visitors and residents with safe defaults.
 - [x] Save/load a contract crew mid-stay.
-- [ ] Save/load during recall and boarding.
+- [x] Save/load during recall and boarding.
 - [x] Verify settlement remains exactly once.
 - [ ] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
 - [ ] Focused check: fixed and flexible schedules behave differently.
@@ -446,14 +446,14 @@ compiles is not sufficient for player-facing work.
 
 - [x] Generate a native-resolution fleet with clearly distinct compact, broad,
   and long silhouettes.
-- [ ] Keep economic purpose (`tourist`, `trader`, `industrial`, `military`,
+- [x] Keep economic purpose (`tourist`, `trader`, `industrial`, `military`,
   `colonist`) separate from physical hull variant.
-- [ ] Assign hull variants deterministically so save/load preserves vessel identity.
-- [ ] Support at least two Pod Dock silhouettes and six Berth silhouettes.
-- [ ] Let ship size and hull shape affect rendered mooring and approach footprints.
-- [ ] Make long freighters and liners visibly require deeper open approach space.
-- [ ] Keep compact craft useful where frontage or approach clearance is constrained.
-- [ ] Show the same silhouette in Approach Control, holding orbit, approach, docking,
+- [x] Assign hull variants deterministically so save/load preserves vessel identity.
+- [x] Support at least two Pod Dock silhouettes and six Berth silhouettes.
+- [x] Let ship size and hull shape affect rendered mooring and approach footprints.
+- [x] Make long freighters and liners visibly require deeper open approach space.
+- [x] Keep compact craft useful where frontage or approach clearance is constrained.
+- [x] Show the same silhouette in Approach Control, holding orbit, approach, docking,
   and departure.
 - [ ] Verify every fleet sprite at actual gameplay zoom and on every lane rotation.
 
@@ -560,10 +560,10 @@ compiles is not sufficient for player-facing work.
 
 ### Physical Boarding
 
-- [ ] Give Gangways/collars disembark capacity.
-- [ ] Give Gangways/collars boarding capacity.
-- [ ] Make additional Gangways improve real throughput.
-- [ ] Make recall route people physically back to origin ship.
+- [x] Give Gangways/collars disembark capacity.
+- [x] Give Gangways/collars boarding capacity.
+- [x] Make additional Gangways improve real throughput.
+- [x] Make recall route people physically back to origin ship.
 - [ ] Make boarding contend with doors, queues, and cargo.
 - [ ] Make late boarding extend occupation or trigger explicit missed departure.
 
@@ -970,3 +970,10 @@ Remaining uncertainty:
 - Focused evidence: two 50-crew/50-visitor passes complete in about seven seconds with ten interfaces and a 2.1x starter footprint. Both retain the requested populations and emit p50/p95/p99/max simulation timing plus memory and explicit fixture omissions.
 - Observed result: typical tick p95 was about 22 ms; one pass reached a 51.5 ms p99 and 88.9 ms max. Gameplay fingerprints diverged first at crew oxygen exposure (`17.64` versus `17.37`) despite matching final counters, so the diagnostic correctly exits nonzero.
 - Remaining uncertainty: this fast fixture has no active jobs, reservations, service queues, or ships and is not the target-scale gate. The repeatability divergence must be diagnosed, and a shared active-workload Node/browser fixture plus real rAF/render measurements remain open.
+
+2026-07-27 · Fleet identity, physical passenger transfer, and directional Pod Dock assembly
+
+- Commit or files: `src/sim/ship-hulls.ts`, `src/sim/approach-envelopes.ts`, `src/sim/sim.ts`, `src/sim/types.ts`, `src/sim/save.ts`, `src/render/render.ts`, the eight fleet assets under `public/assets/ships/`, the Pod Dock atlas sources, `tools/ship-fleet-tests.ts`, and `tools/passenger-transfer-tests.ts` (pending integration commit at evidence capture).
+- Focused checks: `npm run test:ship-fleet`, `npm run test:approach-envelopes`, `npm run test:passenger-transfer`, `npm run test:movement-coordinator`, `npm run test:occupant-loop`, `npm run sprites:validate:v1`, `npm run build`, and `git diff --check` passed. Passenger coverage includes nonzero crossing time, single-slot exclusivity, two-Gangway arrival throughput, recall cancellation, mid-disembark and mid-boarding hydration, exactly-once settlement, and FIFO reconstruction.
+- Visual/playtest evidence: the durable hull variant is the same authored silhouette in Approach Control, holding orbit, approach, docked, and departure presentation. A live starter inspection showed each north-facing Pod Dock composed from two independent authored halves: its caution-framed pressure door remains on the traversable hull tile while the clamp occupies the exterior tile and rotates from the real wall service direction. Idle and active infrastructure states use the same directional assembly.
+- Remaining uncertainty: every ship silhouette and Pod Dock orientation still needs a single all-rotations gameplay-zoom fixture; additional-Gangway evidence currently measures disembark throughput rather than the Phase 6 gate's boarding-specific comparison; passenger transfer does not yet contend with visible cargo; and the broader port-operations runner contains stale assumptions about the current six-crew, no-market, no-fuel starter shell.

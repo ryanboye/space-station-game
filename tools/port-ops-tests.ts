@@ -54,6 +54,7 @@ function smallCraftOffer(state: StationState, dock: DockEntity, id: number): Tra
     shipName: 'Courier Pod',
     lane: dock.lane,
     shipType: 'trader',
+    hullVariant: 'courier-pod',
     offerKind: 'passenger',
     size: 'small',
     status: 'holding',

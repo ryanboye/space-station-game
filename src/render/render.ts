@@ -9,6 +9,7 @@ import {
   type RoutePressureDiagnostics,
   type ReputationZoneScore,
   type ShipSize,
+  type ShipHullVariant,
   type ShipType,
   type SpaceLane,
   type UtilityUnderlayKind,
@@ -67,6 +68,7 @@ import {
 import {
   buildDockingSlotDescriptor,
   deriveApproachConflictGroups,
+  envelopeForHull,
   type DockingSlotDescriptor,
   type WorldRect
 } from '../sim/approach-envelopes';
@@ -74,10 +76,10 @@ import {
   DOOR_SPRITE_VARIANT_KEYS,
   MODULE_SPRITE_KEYS,
   ROOM_SPRITE_KEYS,
-  SHIP_SPRITE_KEYS,
   TILE_SPRITE_KEYS,
   WALL_SPRITE_VARIANT_KEYS
 } from './sprite-keys';
+import { shipHullAssetPath, shipHullProfile } from '../sim/ship-hulls';
 import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
 import { drawEnvironmentAtlasCell, getEnvironmentPiece } from './environment-pieces';
 import {
@@ -2261,6 +2263,9 @@ function drawModuleVisual(
   const h = module.height * TILE_SIZE;
   if (useSprites) {
     const moduleKey = storageVisualKey(state, module) ?? PORT_INFRASTRUCTURE_SPRITE_KEYS[module.type] ?? MODULE_SPRITE_KEYS[module.type];
+    if (module.type === ModuleType.PodDock && drawPodDockAssembly(ctx, state, module, spriteAtlas, moduleKey)) {
+      return;
+    }
     const exteriorGeometry = portExteriorSpriteGeometry(state, module);
     if (exteriorGeometry && drawSpriteByKey(
       ctx,
@@ -2330,8 +2335,12 @@ function portExteriorSpriteGeometry(
   const outwardY = Math.sign(origin.y - service.y);
   const rotation = outwardY < 0 ? 0 : outwardX > 0 ? 90 : outwardY > 0 ? 180 : 270;
   const definition = MODULE_DEFINITIONS[module.type];
-  const scale = module.type === ModuleType.PodDock ? 1.22 : 1.12;
-  const projection = TILE_SIZE * (module.type === ModuleType.PodDock ? 0.38 : 0.24);
+  // Pod Docks are pressure doors mounted in the hull, not appliances hanging
+  // outside it. Keep the authored 2x1 airlock flush with the wall; the clamp
+  // jaws in the sprite provide the exterior silhouette without shifting the
+  // whole module away from its traversable entrance.
+  const scale = module.type === ModuleType.PodDock ? 1.02 : 1.12;
+  const projection = TILE_SIZE * (module.type === ModuleType.PodDock ? 0.08 : 0.24);
   const sourceWidth = definition.width * TILE_SIZE * scale;
   const sourceHeight = definition.height * TILE_SIZE * scale;
   const centerX = (origin.x + module.width * 0.5) * TILE_SIZE + outwardX * projection;
@@ -2343,6 +2352,56 @@ function portExteriorSpriteGeometry(
     height: sourceHeight,
     rotation
   };
+}
+
+function drawPodDockAssembly(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  spriteAtlas: SpriteAtlas,
+  spriteKey: string,
+  alpha = 1
+): boolean {
+  const frame = spriteAtlas.getFrame(spriteKey);
+  const serviceTile = wallMountedModuleServiceTile(state, module.originTile);
+  if (!frame || !spriteAtlas.image || serviceTile === null) return false;
+
+  const origin = fromIndex(module.originTile, state.width);
+  const service = fromIndex(serviceTile, state.width);
+  const outwardX = Math.sign(origin.x - service.x);
+  const outwardY = Math.sign(origin.y - service.y);
+  if (outwardX === 0 && outwardY === 0) return false;
+
+  // The authored 2x1 source contains two independent 1x1 pieces: pressure
+  // door on the left, clamp on the right. Keep the door on its traversable
+  // hull tile and rotate the clamp into the adjacent exterior tile.
+  const halfWidth = frame.w * 0.5;
+  const doorFrame: SpriteFrame = { x: frame.x, y: frame.y, w: halfWidth, h: frame.h };
+  const clampFrame: SpriteFrame = { x: frame.x + halfWidth, y: frame.y, w: halfWidth, h: frame.h };
+  const rotation = outwardX > 0 ? 0 : outwardY > 0 ? 90 : outwardX < 0 ? 180 : 270;
+  const doorDrawn = drawSpriteFrame(
+    ctx,
+    spriteAtlas,
+    doorFrame,
+    origin.x * TILE_SIZE,
+    origin.y * TILE_SIZE,
+    TILE_SIZE,
+    TILE_SIZE,
+    rotation,
+    alpha
+  );
+  const clampDrawn = drawSpriteFrame(
+    ctx,
+    spriteAtlas,
+    clampFrame,
+    (origin.x + outwardX) * TILE_SIZE,
+    (origin.y + outwardY) * TILE_SIZE,
+    TILE_SIZE,
+    TILE_SIZE,
+    rotation,
+    alpha
+  );
+  return doorDrawn && clampDrawn;
 }
 
 function storageVisualKey(
@@ -2412,7 +2471,6 @@ type ShipPalette = {
   cockpit: string;
   engine: string;
 };
-type ShipSpriteKind = 'pod' | 'berth';
 
 const SHIP_SILHOUETTES: Record<ShipSize, ShipSilhouette[]> = {
   small: [
@@ -2757,15 +2815,27 @@ function shipPalette(shipType: ShipType, docked: boolean): ShipPalette {
     : { hull: '#ffea8a', cockpit: '#fff7cd', engine: '#fff1ad' };
 }
 
-function projectShipSpriteImage(kind: ShipSpriteKind, shipType: ShipType): HTMLImageElement | null {
-  const key = `${kind}:${shipType}`;
+function projectShipHullImage(hullVariant: ShipHullVariant, shipType: ShipType): HTMLImageElement | null {
+  const key = `hull:${hullVariant}`;
   let image = shipImageCache.get(key);
   if (!image) {
     image = new Image();
-    image.src = `assets/ships/ship-${kind}-${shipType}.png?v=${SHIP_ASSET_VERSION}`;
+    image.src = `${shipHullAssetPath(hullVariant)}?v=${SHIP_ASSET_VERSION}`;
     shipImageCache.set(key, image);
   }
-  return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
+  if (!image.complete) return null;
+  if (image.naturalWidth > 0 && image.naturalHeight > 0) return image;
+  // Older purpose art is intentionally only the failure fallback. A durable
+  // hull identity is the normal visual contract for a live traffic call.
+  const legacyKind = shipHullProfile(hullVariant).interfaceKind;
+  const legacyKey = `legacy:${legacyKind}:${shipType}`;
+  let legacy = shipImageCache.get(legacyKey);
+  if (!legacy) {
+    legacy = new Image();
+    legacy.src = `assets/ships/ship-${legacyKind}-${shipType}.png?v=${SHIP_ASSET_VERSION}`;
+    shipImageCache.set(legacyKey, legacy);
+  }
+  return legacy.complete && legacy.naturalWidth > 0 && legacy.naturalHeight > 0 ? legacy : null;
 }
 
 function drawRotatedImage(
@@ -3053,7 +3123,7 @@ function drawDockedPodShip(ctx: CanvasRenderingContext2D, state: StationState, s
   const contact = dockHatchContact(state, ship);
   const outward = laneUnitVector(contact.lane);
   const palette = shipPalette(ship.shipType, ship.stage === 'docked');
-  const sprite = projectShipSpriteImage('pod', ship.shipType);
+  const sprite = projectShipHullImage(ship.hullVariant, ship.shipType);
   const length = TILE_SIZE * 2.35;
   const width = sprite ? length / Math.max(1, sprite.naturalWidth / sprite.naturalHeight) : TILE_SIZE * 1.08;
   const transit = shipTransitOffset(ship);
@@ -3086,7 +3156,7 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
     h: (bounds.maxY - bounds.minY + 1) * TILE_SIZE
   };
   const palette = shipPalette(ship.shipType, ship.stage === 'docked');
-  const sprite = projectShipSpriteImage('berth', ship.shipType);
+  const sprite = projectShipHullImage(ship.hullVariant, ship.shipType);
   const transit = shipTransitOffset(ship);
   const inset = Math.max(2, TILE_SIZE * 0.08);
   const targetW = Math.max(TILE_SIZE, bayRect.w - inset * 2);
@@ -3094,10 +3164,17 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   const visualLane = pickBerthVisualLane(state, ship);
   // U-shaped bays are a vessel envelope bounded by their service rails, not
   // a rectangular room to clip. Their open face establishes the ship axis.
-  const bayIsWide = useUShapedEnvelope
-    ? visualLane === 'east' || visualLane === 'west'
-    : targetW > targetH * 1.18;
-  const angle = bayIsWide ? Math.PI * 0.5 : 0;
+  // Generated berth hulls are authored nose-to-tail vertically. Align that
+  // native axis with the actual open berth face instead of stretching each
+  // silhouette into a generic bay rectangle.
+  const bayIsWide = visualLane === 'east' || visualLane === 'west';
+  const angle = visualLane === 'north'
+    ? 0
+    : visualLane === 'east'
+      ? Math.PI * 0.5
+      : visualLane === 'south'
+        ? Math.PI
+        : -Math.PI * 0.5;
   const imageAspect = sprite
     ? sprite.naturalWidth / Math.max(1, sprite.naturalHeight)
     : ship.size === 'large' ? 0.62 : ship.size === 'medium' ? 0.68 : 0.78;
@@ -3403,6 +3480,16 @@ function drawAuthoredInfrastructureState(
   deployment: number
 ): void {
   if (!useSprites || !spriteKey || deployment <= 0.01) return;
+  if (module.type === ModuleType.PodDock && drawPodDockAssembly(
+    ctx,
+    state,
+    module,
+    spriteAtlas,
+    spriteKey,
+    deployment
+  )) {
+    return;
+  }
   const exteriorGeometry = portExteriorSpriteGeometry(state, module);
   if (exteriorGeometry) {
     drawSpriteByKey(
@@ -4347,14 +4434,26 @@ function drawApproachEnvelopePreview(
   const size = descriptor.acceptedSizes.includes('large')
     ? 'large'
     : descriptor.acceptedSizes.includes('medium') ? 'medium' : 'small';
-  const validation = validateDockingSlot(state, descriptor, size);
+  const liveShip = state.arrivingShips.find((ship) =>
+    (ship.assignedDockSourceKey && descriptor!.id === `dock:${ship.assignedDockSourceKey}`) ||
+    (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined && descriptor!.id === `berth:${ship.assignedBerthAnchor}`)
+  );
+  const clearedOffer = liveShip ? null : state.trafficOffers.find((offer) =>
+    offer.status === 'cleared' && (
+      (offer.assignedDockSourceKey && descriptor!.id === `dock:${offer.assignedDockSourceKey}`) ||
+      (offer.assignedBerthAnchor !== null && offer.assignedBerthAnchor !== undefined && descriptor!.id === `berth:${offer.assignedBerthAnchor}`)
+    )
+  );
+  const hullVariant = liveShip?.hullVariant ?? clearedOffer?.hullVariant;
+  const validation = validateDockingSlot(state, descriptor, size, hullVariant);
   const descriptors = planning ? [...getDockingSlotDescriptors(state), descriptor] : getDockingSlotDescriptors(state);
   const conflictGroups = planning
     ? deriveApproachConflictGroups(descriptors).filter((group) => group.slotIds.includes(descriptor!.id))
     : getApproachConflictGroups(state).filter((group) => group.slotIds.includes(descriptor!.id));
   const color = !validation.valid ? '#ff7676' : conflictGroups.length > 0 ? '#ffd36a' : '#72dff2';
-  const ingress = approachRectPx(state, descriptor.envelopesBySize[size].ingress.bounds);
-  const mooring = approachRectPx(state, descriptor.envelopesBySize[size].mooring.bounds);
+  const envelope = hullVariant ? envelopeForHull(descriptor, hullVariant) : descriptor.envelopesBySize[size];
+  const ingress = approachRectPx(state, envelope.ingress.bounds);
+  const mooring = approachRectPx(state, envelope.mooring.bounds);
   ctx.save();
   ctx.fillStyle = !validation.valid ? 'rgba(255, 82, 82, 0.15)' : conflictGroups.length > 0 ? 'rgba(255, 194, 76, 0.14)' : 'rgba(88, 222, 201, 0.12)';
   ctx.strokeStyle = color;
@@ -5738,7 +5837,7 @@ function drawLaneEdgeOverlay(ctx: CanvasRenderingContext2D, state: StationState,
   }
 }
 
-function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, spriteAtlas: SpriteAtlas, useSprites: boolean): void {
+function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, _spriteAtlas: SpriteAtlas, _useSprites: boolean): void {
   const countsByLane: Record<'north' | 'east' | 'south' | 'west', number> = {
     north: 0,
     east: 0,
@@ -5770,10 +5869,19 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, spr
     const palette = shipPalette(queued.shipType, false);
     ctx.fillStyle = 'rgba(6, 16, 28, 0.75)';
     ctx.fillRect(cx - chipW * 0.5 - 2, cy - chipH * 0.5 - 2, chipW + 4, chipH + 4);
-    if (useSprites) {
-      const shipKey = SHIP_SPRITE_KEYS[queued.shipType];
-      const drewSprite = drawSpriteByKey(ctx, spriteAtlas, shipKey, cx - chipW * 0.5, cy - chipH * 0.5, chipW, chipH);
-      if (drewSprite) continue;
+    const image = projectShipHullImage(queued.hullVariant, queued.shipType);
+    if (image) {
+      const aspect = shipHullProfile(queued.hullVariant).nativeAspect;
+      const maxW = Math.max(chipW, 13 * PX);
+      const maxH = Math.max(chipH, 13 * PX);
+      let drawW = maxW;
+      let drawH = drawW / Math.max(0.1, aspect);
+      if (drawH > maxH) {
+        drawH = maxH;
+        drawW = drawH * aspect;
+      }
+      drawRotatedImage(ctx, image, { x: cx, y: cy }, drawW, drawH, laneAngleRad(queued.lane));
+      continue;
     }
     drawShipSilhouetteCells(ctx, silhouette, cx - chipW * 0.5, cy - chipH * 0.5, cellSize, palette, 0.4);
   }
@@ -7023,8 +7131,22 @@ export function renderWorld(
     const spriteH = silhouette.bounds.height * cellSize;
     const posX = ship.bayCenterX * TILE_SIZE - spriteW * 0.5;
     const posY = ship.bayCenterY * TILE_SIZE - spriteH * 0.5;
-    const palette = shipPalette(ship.shipType, ship.stage === 'docked');
-    drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
+    const image = projectShipHullImage(ship.hullVariant, ship.shipType);
+    if (image) {
+      const aspect = shipHullProfile(ship.hullVariant).nativeAspect;
+      const maxW = Math.max(TILE_SIZE * 2.5, spriteW);
+      const maxH = Math.max(TILE_SIZE * 2.5, spriteH);
+      let drawW = maxW;
+      let drawH = drawW / Math.max(0.1, aspect);
+      if (drawH > maxH) {
+        drawH = maxH;
+        drawW = drawH * aspect;
+      }
+      drawRotatedImage(ctx, image, { x: ship.bayCenterX * TILE_SIZE, y: ship.bayCenterY * TILE_SIZE }, drawW, drawH, laneAngleRad(ship.lane));
+    } else {
+      const palette = shipPalette(ship.shipType, ship.stage === 'docked');
+      drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
+    }
   }
 
   const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);

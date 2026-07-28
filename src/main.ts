@@ -28,6 +28,7 @@ import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/op
 import { deriveOpeningEconomyProfile, marketPolicyEffect } from './sim/opening-economy';
 import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
+import { shipHullAssetPath, shipHullProfile } from './sim/ship-hulls';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -3391,6 +3392,7 @@ function refreshTrafficOffers(): void {
       .map((cue) => `<span class="traffic-cue">${escapeHtml(cue)}</span>`)
       .join('');
     const load = preview.committedLoad;
+    const hull = shipHullProfile(offer.hullVariant);
     const blocker = !cleared && !preview.canAccept && preview.acceptReason
       ? `<small class="traffic-offer-blocker">${escapeHtml(preview.acceptReason)}</small>`
       : '';
@@ -3402,6 +3404,7 @@ function refreshTrafficOffers(): void {
     return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}">
       <div class="traffic-offer-title-row">
         <span class="traffic-offer-class traffic-offer-class--${className}" aria-hidden="true"><i></i></span>
+        <img class="traffic-offer-hull" src="${shipHullAssetPath(offer.hullVariant)}" alt="${escapeHtml(hull.variant.replace(/-/g, ' '))}">
         <div><strong>${escapeHtml(offer.callsign)}</strong><small>${escapeHtml(offer.shipName)}</small></div>
         <span class="traffic-offer-timer" data-offer-timer="${offer.id}">${trafficOfferTimer(offer)}</span>
       </div>

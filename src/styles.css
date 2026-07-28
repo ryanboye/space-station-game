@@ -3869,9 +3869,18 @@ button.alert-item {
 
 .traffic-offer-title-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 26px 38px minmax(0, 1fr) auto;
   gap: 7px;
   align-items: center;
+}
+
+.traffic-offer-hull {
+  width: 38px;
+  height: 24px;
+  display: block;
+  object-fit: contain;
+  image-rendering: auto;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8));
 }
 
 .traffic-offer-title-row strong,

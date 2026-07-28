@@ -26,6 +26,7 @@ import { previewTrafficOffer } from './approach-control';
 import {
   buildDockingSlotDescriptor,
   deriveApproachConflictGroups,
+  envelopeForHull,
   rectanglesOverlap,
   tilesInWorldRect,
   type ApproachConflictGroup,
@@ -33,6 +34,7 @@ import {
   type DockingSlotDescriptor,
   type WorldRect
 } from './approach-envelopes';
+import { selectShipHullVariant, shipHullProfile } from './ship-hulls';
 import {
   facilityUsageTilesForModule,
   resolveFacilitySlots,
@@ -228,8 +230,10 @@ import {
   type RoomInspector,
   RoomType,
   type ShipSize,
+  type ShipHullVariant,
   TileType,
   type VisitorArchetype,
+  type PassengerTransferPhase,
   type RecurringNeedKind,
   type VisitStayClass,
   type VisitorPreference,
@@ -1184,7 +1188,8 @@ const RESERVATION_KINDS: ReservationKind[] = [
   'seat-use-slot',
   'source-item',
   'target-capacity',
-  'actor-job'
+  'actor-job',
+  'transfer-slot'
 ];
 
 export function laneFromFacing(facing: SpaceLane): SpaceLane {
@@ -7046,7 +7051,7 @@ function visitorIdentity(id: number): { name: string; trait: NonNullable<Visitor
   };
 }
 
-function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShip): void {
+function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShip, passengerIndex?: number): void {
   const mix = ship?.manifestMix ?? {
     diner: 0.4,
     shopper: 0.3,
@@ -7060,7 +7065,7 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
   const visitorId = state.spawnCounter++;
   const identity = visitorIdentity(visitorId);
   const hasContractPlan = !!ship?.portManifest;
-  const servicePlan = ship ? hospitalityPlanForPassenger(ship, ship.passengersSpawned) : [];
+  const servicePlan = ship ? hospitalityPlanForPassenger(ship, passengerIndex ?? ship.passengersSpawned) : [];
   const activeService = servicePlan[0] ?? null;
   const stayClass = ship?.stayClass ?? 'errand';
   const visitor: Visitor = {
@@ -7119,6 +7124,533 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
   visitor.leisureLegsPlanned = plan;
   visitor.leisureLegsRemaining = plan;
   state.visitors.push(visitor);
+}
+
+type PassengerTransferSlot = {
+  key: string;
+  accessTile: number;
+  stationTile: number;
+  queueTiles: number[];
+  outwardDx: number;
+  outwardDy: number;
+};
+
+const PASSENGER_TRANSFER_RESERVATION_TTL_SEC = 18;
+// The passenger stays visibly on the real collar/Gangway tile for this
+// interval before emerging or disappearing.  This is deliberately separate
+// from walk speed so an empty corridor cannot collapse a cohort into one tick.
+const PASSENGER_TRANSFER_CROSSING_SEC = 0.8;
+
+function passengerTransferPhase(visitor: Visitor): PassengerTransferPhase {
+  return visitor.transferPhase ?? 'station';
+}
+
+function isPassengerTransferQueued(visitor: Visitor): boolean {
+  const phase = passengerTransferPhase(visitor);
+  return phase === 'disembark-queued' || phase === 'boarding-queued';
+}
+
+function isPassengerTransferCrossing(visitor: Visitor): boolean {
+  const phase = passengerTransferPhase(visitor);
+  return phase === 'disembark-crossing' || phase === 'boarding-crossing';
+}
+
+function isShipSidePassengerQueue(visitor: Visitor): boolean {
+  return passengerTransferPhase(visitor) === 'disembark-queued';
+}
+
+function passengerTransferOutwardVector(
+  state: StationState,
+  accessTile: number,
+  outwardHintTile?: number | null
+): { dx: number; dy: number } {
+  const access = fromIndex(accessTile, state.width);
+  if (outwardHintTile !== null && outwardHintTile !== undefined) {
+    const hint = fromIndex(outwardHintTile, state.width);
+    const dx = Math.sign(hint.x - access.x);
+    const dy = Math.sign(hint.y - access.y);
+    if (dx !== 0 || dy !== 0) return { dx, dy };
+  }
+  for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+    const x = access.x + dx;
+    const y = access.y + dy;
+    if (!inBounds(x, y, state.width, state.height)) return { dx, dy };
+    if (state.tiles[toIndex(x, y, state.width)] === TileType.Space) return { dx, dy };
+  }
+  return { dx: 0, dy: -1 };
+}
+
+function passengerTransferStationTile(
+  state: StationState,
+  accessTile: number,
+  berthTiles: ReadonlySet<number> | null
+): number | null {
+  const candidates = adjacentWalkableTiles(state, accessTile)
+    .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+    .sort((a, b) => {
+      const score = (tile: number): number =>
+        (berthTiles !== null && !berthTiles.has(tile) ? 32 : 0) +
+        (!tileTouchesSpace(state, tile) ? 12 : 0) +
+        (state.rooms[tile] !== RoomType.Berth ? 4 : 0);
+      return score(b) - score(a) || a - b;
+    });
+  return candidates[0] ?? null;
+}
+
+function passengerTransferSlotsForShip(state: StationState, ship: ArrivingShip): PassengerTransferSlot[] {
+  const slots: Array<Omit<PassengerTransferSlot, 'queueTiles'>> = [];
+  const facility = berthFacilityForShip(state, ship);
+  if (facility) {
+    const berthTiles = new Set(facility.clusterTiles);
+    const moduleIds = [...(facility.serviceModuleIds[ModuleType.Gangway] ?? [])].sort((a, b) => a - b);
+    for (const moduleId of moduleIds) {
+      const module = state.moduleInstances.find((candidate) => candidate.id === moduleId && candidate.type === ModuleType.Gangway);
+      // A Gangway's origin is a walkable floor tile even though the module
+      // occupies it.  It is intentionally the physical interface target.
+      if (!module || !isWalkable(state.tiles[module.originTile])) continue;
+      const stationTile = passengerTransferStationTile(state, module.originTile, berthTiles);
+      if (stationTile === null) continue;
+      const outward = passengerTransferOutwardVector(state, module.originTile);
+      slots.push({
+        key: `berth:${facility.anchorTile}:gangway:${module.id}`,
+        accessTile: module.originTile,
+        stationTile,
+        outwardDx: outward.dx,
+        outwardDy: outward.dy
+      });
+    }
+  } else if (ship.assignedDockId !== null) {
+    const dock = state.docks.find((candidate) => candidate.id === ship.assignedDockId);
+    const accessTile = dock ? dockAccessTiles(dock)[0] ?? null : null;
+    if (dock && accessTile !== null && accessTile !== undefined && isWalkable(state.tiles[accessTile])) {
+      const stationTile = passengerTransferStationTile(state, accessTile, null);
+      if (stationTile !== null) {
+        const outward = passengerTransferOutwardVector(state, accessTile, dock.mountTile);
+        slots.push({
+          key: `${dock.sourceKey}:collar`,
+          accessTile,
+          stationTile,
+          outwardDx: outward.dx,
+          outwardDy: outward.dy
+        });
+      }
+    }
+  }
+
+  // Legacy dock paint has no module identity. Retain one deterministic collar
+  // rather than reintroducing instant transfer for old snapshots.
+  if (slots.length === 0) {
+    const accessTile = ship.bayTiles.find((tile) => isWalkable(state.tiles[tile])) ?? null;
+    if (accessTile !== null) {
+      const stationTile = passengerTransferStationTile(state, accessTile, null);
+      if (stationTile !== null) {
+        const outward = passengerTransferOutwardVector(state, accessTile);
+        slots.push({
+          key: `legacy:${ship.assignedDockSourceKey ?? ship.id}:collar`,
+          accessTile,
+          stationTile,
+          outwardDx: outward.dx,
+          outwardDy: outward.dy
+        });
+      }
+    }
+  }
+
+  const claimedQueueTiles = new Set<number>();
+  return slots
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map((slot) => {
+      const room = state.rooms[slot.stationTile];
+      const chain = buildQueueChain(state, slot.stationTile, room, claimedQueueTiles);
+      for (const tile of chain) claimedQueueTiles.add(tile);
+      const fallback = adjacentWalkableTiles(state, slot.stationTile)
+        .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+        .sort((a, b) => a - b);
+      return {
+        ...slot,
+        queueTiles: chain.length > 0 ? chain : fallback.slice(0, 1)
+      };
+    });
+}
+
+function clearPassengerTransferReservation(state: StationState, visitor: Visitor, reason: Reservation['releaseReason'] = 'replaced'): void {
+  releaseReservationsForOwner(state, 'visitor', visitor.id, reason ?? 'replaced', ['transfer-slot']);
+}
+
+function clearPassengerTransferState(state: StationState, visitor: Visitor): void {
+  clearPassengerTransferReservation(state, visitor, 'completed');
+  visitor.transferPhase = 'station';
+  visitor.transferSlotKey = null;
+  visitor.transferQueuedAt = null;
+  visitor.transferQueueTile = null;
+  visitor.transferAccessTile = null;
+  visitor.transferStationTile = null;
+  visitor.transferCrossingStartedAt = null;
+  visitor.transferBlockedTile = null;
+}
+
+function queuePassengerTransfer(state: StationState, visitor: Visitor, direction: 'disembark' | 'boarding'): void {
+  const desired: PassengerTransferPhase = direction === 'disembark' ? 'disembark-queued' : 'boarding-queued';
+  if (passengerTransferPhase(visitor) === desired || isPassengerTransferCrossing(visitor)) return;
+  clearPassengerTransferReservation(state, visitor);
+  visitor.transferPhase = desired;
+  visitor.transferSlotKey = null;
+  visitor.transferQueuedAt = state.now;
+  visitor.transferQueueTile = null;
+  visitor.transferAccessTile = null;
+  visitor.transferStationTile = null;
+  visitor.transferCrossingStartedAt = null;
+  visitor.transferBlockedTile = null;
+  setVisitorPath(state, visitor, []);
+}
+
+function transferQueueSort(a: Visitor, b: Visitor): number {
+  return (a.transferQueuedAt ?? Number.POSITIVE_INFINITY) - (b.transferQueuedAt ?? Number.POSITIVE_INFINITY) || a.id - b.id;
+}
+
+function passengerTransferSpawnTile(state: StationState, ship: ArrivingShip): number {
+  const slots = passengerTransferSlotsForShip(state, ship);
+  const loadFor = (slot: PassengerTransferSlot): number => state.visitors.filter(
+    (visitor) => visitor.originShipId === ship.id && visitor.transferSlotKey === slot.key && passengerTransferPhase(visitor) !== 'station'
+  ).length;
+  const slot = [...slots].sort((a, b) => loadFor(a) - loadFor(b) || a.key.localeCompare(b.key))[0];
+  // Arrivals originate at the interface, not at a station-side queue tail.
+  // `rebuildPassengerTransferQueues` immediately stages queued arrivals just
+  // outside this tile until their real crossing begins.
+  return slot?.accessTile ?? ship.bayTiles[0] ?? 0;
+}
+
+function refreshPassengerTransferReservation(state: StationState, visitor: Visitor, slotKey: string, targetTile: number): void {
+  const targetId = `transfer-slot:${slotKey}`;
+  const existing = state.reservations.find(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.ownerKind === 'visitor' &&
+      reservation.ownerId === visitor.id &&
+      reservation.kind === 'transfer-slot'
+  );
+  if (existing && existing.targetId === targetId && existing.targetTile === targetTile) {
+    existing.expiresAt = Math.max(existing.expiresAt, state.now + PASSENGER_TRANSFER_RESERVATION_TTL_SEC);
+    return;
+  }
+  clearPassengerTransferReservation(state, visitor);
+  tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'transfer-slot',
+    targetTile,
+    targetId,
+    amount: 1,
+    capacity: 1,
+    ttlSec: PASSENGER_TRANSFER_RESERVATION_TTL_SEC
+  });
+}
+
+function passengerTransferPath(state: StationState, visitor: Visitor, targetTile: number): void {
+  if (visitor.tileIndex === targetTile) {
+    setVisitorPath(state, visitor, []);
+    return;
+  }
+  const existingTarget = visitor.path[visitor.path.length - 1];
+  if (existingTarget === targetTile) return;
+  setVisitorPath(state, visitor, findQueueSlotPath(state, visitor.tileIndex, targetTile, visitor.id) ?? []);
+}
+
+function stagePassengerOnShipSide(state: StationState, visitor: Visitor, slot: PassengerTransferSlot, rank: number): void {
+  const center = tileCenter(slot.accessTile, state.width);
+  const offset = 0.56 + Math.min(4, rank) * 0.16;
+  visitor.tileIndex = slot.accessTile;
+  visitor.x = center.x + slot.outwardDx * offset;
+  visitor.y = center.y + slot.outwardDy * offset;
+  setVisitorPath(state, visitor, []);
+}
+
+function passengerTransferAccessIsFree(state: StationState, slot: PassengerTransferSlot, ignore?: Visitor): boolean {
+  const occupiedByVisitor = state.visitors.some(
+    (visitor) => visitor !== ignore && !isShipSidePassengerQueue(visitor) && visitor.tileIndex === slot.accessTile
+  );
+  if (occupiedByVisitor) return false;
+  return !state.residents.some((resident) => resident.tileIndex === slot.accessTile) &&
+    !state.crewMembers.some((crew) => crew.tileIndex === slot.accessTile);
+}
+
+function activateDisembarkCrossing(state: StationState, visitor: Visitor, slot: PassengerTransferSlot): void {
+  visitor.transferPhase = 'disembark-crossing';
+  visitor.transferAccessTile = slot.accessTile;
+  visitor.transferStationTile = slot.stationTile;
+  visitor.transferQueueTile = null;
+  visitor.transferCrossingStartedAt = state.now;
+  visitor.transferBlockedTile = null;
+  clearPassengerTransferReservation(state, visitor);
+  const center = tileCenter(slot.accessTile, state.width);
+  visitor.tileIndex = slot.accessTile;
+  visitor.x = center.x;
+  visitor.y = center.y;
+  setVisitorPath(state, visitor, []);
+}
+
+function activateBoardingCrossing(state: StationState, visitor: Visitor, slot: PassengerTransferSlot): void {
+  visitor.transferPhase = 'boarding-crossing';
+  visitor.transferAccessTile = slot.accessTile;
+  visitor.transferStationTile = slot.stationTile;
+  visitor.transferQueueTile = null;
+  visitor.transferCrossingStartedAt = null;
+  visitor.transferBlockedTile = null;
+  clearPassengerTransferReservation(state, visitor);
+  passengerTransferPath(state, visitor, slot.accessTile);
+}
+
+function restoreQueuedPassengerTransfer(state: StationState, visitor: Visitor): void {
+  visitor.transferPhase = passengerTransferPhase(visitor) === 'disembark-crossing'
+    ? 'disembark-queued'
+    : 'boarding-queued';
+  visitor.transferSlotKey = null;
+  visitor.transferQueueTile = null;
+  visitor.transferAccessTile = null;
+  visitor.transferStationTile = null;
+  visitor.transferCrossingStartedAt = null;
+  clearPassengerTransferReservation(state, visitor);
+  setVisitorPath(state, visitor, []);
+}
+
+/** Rebuilds durable passenger transfer queues and their physical slot claims. */
+function rebuildPassengerTransferQueues(state: StationState): void {
+  const ships = state.arrivingShips.filter((ship) => ship.stage === 'docked' && ship.kind === 'transient');
+  for (const ship of ships) {
+    const slots = passengerTransferSlotsForShip(state, ship);
+    const slotByKey = new Map(slots.map((slot) => [slot.key, slot]));
+    const activeBySlot = new Set<string>();
+    const active = state.visitors
+      .filter((visitor) => visitor.originShipId === ship.id && isPassengerTransferCrossing(visitor))
+      .sort(transferQueueSort);
+
+    for (const visitor of active) {
+      const slot = visitor.transferSlotKey ? slotByKey.get(visitor.transferSlotKey) : undefined;
+      if (!slot || activeBySlot.has(slot.key)) {
+        restoreQueuedPassengerTransfer(state, visitor);
+        continue;
+      }
+      activeBySlot.add(slot.key);
+      visitor.transferAccessTile = slot.accessTile;
+      visitor.transferStationTile = slot.stationTile;
+      clearPassengerTransferReservation(state, visitor);
+      if (passengerTransferPhase(visitor) === 'disembark-crossing') {
+        if (visitor.tileIndex !== slot.accessTile && visitor.tileIndex !== slot.stationTile) {
+          const center = tileCenter(slot.accessTile, state.width);
+          visitor.tileIndex = slot.accessTile;
+          visitor.x = center.x;
+          visitor.y = center.y;
+        }
+        if (visitor.tileIndex === slot.accessTile && visitor.transferCrossingStartedAt == null) {
+          visitor.transferCrossingStartedAt = state.now;
+        }
+        if (
+          visitor.tileIndex === slot.accessTile &&
+          visitor.transferCrossingStartedAt != null &&
+          state.now - visitor.transferCrossingStartedAt >= PASSENGER_TRANSFER_CROSSING_SEC
+        ) {
+          passengerTransferPath(state, visitor, slot.stationTile);
+        }
+      } else if (visitor.tileIndex === slot.accessTile) {
+        setVisitorPath(state, visitor, []);
+        if (visitor.transferCrossingStartedAt === null) visitor.transferCrossingStartedAt = state.now;
+      } else {
+        passengerTransferPath(state, visitor, slot.accessTile);
+      }
+    }
+
+    const queueBySlot = new Map<string, Visitor[]>();
+    for (const slot of slots) queueBySlot.set(slot.key, []);
+    const queued = state.visitors
+      .filter((visitor) => visitor.originShipId === ship.id && isPassengerTransferQueued(visitor))
+      .sort(transferQueueSort);
+    for (const visitor of queued) {
+      if (visitor.transferQueuedAt === null || visitor.transferQueuedAt === undefined) visitor.transferQueuedAt = state.now;
+      const preferred = visitor.transferSlotKey ? slotByKey.get(visitor.transferSlotKey) : undefined;
+      const slot = preferred ?? [...slots].sort((a, b) => {
+        const aLoad = (queueBySlot.get(a.key)?.length ?? 0) + (activeBySlot.has(a.key) ? 1 : 0);
+        const bLoad = (queueBySlot.get(b.key)?.length ?? 0) + (activeBySlot.has(b.key) ? 1 : 0);
+        return aLoad - bLoad || a.key.localeCompare(b.key);
+      })[0];
+      if (!slot) {
+        visitor.transferSlotKey = null;
+        visitor.transferQueueTile = null;
+        visitor.transferAccessTile = null;
+        visitor.transferStationTile = null;
+        clearPassengerTransferReservation(state, visitor);
+        continue;
+      }
+      visitor.transferSlotKey = slot.key;
+      visitor.transferAccessTile = slot.accessTile;
+      visitor.transferStationTile = slot.stationTile;
+      queueBySlot.get(slot.key)!.push(visitor);
+    }
+
+    for (const slot of slots) {
+      const queue = queueBySlot.get(slot.key) ?? [];
+      let boardingRank = 0;
+      let disembarkRank = 0;
+      for (const visitor of queue) {
+        if (passengerTransferPhase(visitor) === 'disembark-queued') {
+          visitor.transferQueueTile = null;
+          clearPassengerTransferReservation(state, visitor);
+          stagePassengerOnShipSide(state, visitor, slot, disembarkRank++);
+          continue;
+        }
+        const rank = boardingRank++;
+        // The station-side Gangway tile is itself a valid head position. A
+        // cramped berth may have no additional spill tile, but that must not
+        // prevent the passenger already at the interface from boarding.
+        const queueTile = slot.queueTiles[rank] ?? (rank === 0 ? slot.stationTile : null);
+        visitor.transferQueueTile = queueTile;
+        if (queueTile === null) {
+          clearPassengerTransferReservation(state, visitor);
+          setVisitorPath(state, visitor, []);
+          continue;
+        }
+        refreshPassengerTransferReservation(state, visitor, slot.key, queueTile);
+        passengerTransferPath(state, visitor, queueTile);
+      }
+
+      if (activeBySlot.has(slot.key)) continue;
+      const head = queue[0];
+      if (!head) continue;
+      if (passengerTransferPhase(head) === 'disembark-queued') {
+        if (passengerTransferAccessIsFree(state, slot, head)) activateDisembarkCrossing(state, head, slot);
+      } else if (
+        head.transferQueueTile !== null &&
+        head.tileIndex === head.transferQueueTile &&
+        passengerTransferAccessIsFree(state, slot, head)
+      ) {
+        activateBoardingCrossing(state, head, slot);
+      }
+    }
+  }
+}
+
+/** Restores runtime paths and physical slot claims from durable transfer state. */
+export function rebuildPassengerTransfersAfterHydration(state: StationState): void {
+  for (const visitor of state.visitors) {
+    if (passengerTransferPhase(visitor) === 'station') continue;
+    clearPassengerTransferReservation(state, visitor, 'cleared');
+    visitor.path = [];
+    visitor.movementWaitReason = undefined;
+    visitor.movementBlockedTile = undefined;
+    visitor.transferQueueTile = null;
+    visitor.transferAccessTile = null;
+    visitor.transferStationTile = null;
+    visitor.transferBlockedTile = null;
+  }
+  rebuildPassengerTransferQueues(state);
+}
+
+function passengerTransferWait(state: StationState, visitor: Visitor, dt: number): void {
+  state.portOps.telemetry.passengerTransferWaitSeconds = (state.portOps.telemetry.passengerTransferWaitSeconds ?? 0) + dt;
+  visitor.transferBlockedTile = visitor.movementBlockedTile ?? visitor.path[0] ?? visitor.transferAccessTile ?? null;
+}
+
+function updateQueuedPassengerTransferVisitor(
+  state: StationState,
+  visitor: Visitor,
+  dt: number,
+  occupancyByTile: Map<number, number>
+): void {
+  if (passengerTransferPhase(visitor) === 'disembark-queued') return;
+  const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+  if (moveResult === 'blocked') {
+    visitor.blockedTicks = Math.min(9999, visitor.blockedTicks + 1);
+    passengerTransferWait(state, visitor, dt);
+  } else if (moveResult === 'moved') {
+    visitor.blockedTicks = 0;
+  }
+}
+
+function updatePassengerTransferVisitor(
+  state: StationState,
+  visitor: Visitor,
+  dt: number,
+  occupancyByTile: Map<number, number>
+): 'keep' | 'remove' {
+  if (!isPassengerTransferCrossing(visitor)) return 'keep';
+  const ship = originShipForVisitor(state, visitor);
+  const phase = passengerTransferPhase(visitor);
+  const accessTile = visitor.transferAccessTile;
+  const stationTile = visitor.transferStationTile;
+  if (!ship || ship.stage !== 'docked' || accessTile === null || accessTile === undefined) {
+    if (phase === 'disembark-crossing') {
+      restoreQueuedPassengerTransfer(state, visitor);
+      return 'keep';
+    }
+    return 'keep';
+  }
+  if (phase === 'disembark-crossing') {
+    if (stationTile === null || stationTile === undefined) {
+      restoreQueuedPassengerTransfer(state, visitor);
+      return 'keep';
+    }
+    if (visitor.tileIndex === accessTile) {
+      if (visitor.transferCrossingStartedAt === null || visitor.transferCrossingStartedAt === undefined) {
+        visitor.transferCrossingStartedAt = state.now;
+        return 'keep';
+      }
+      if (state.now - visitor.transferCrossingStartedAt < PASSENGER_TRANSFER_CROSSING_SEC) return 'keep';
+      if (visitor.path.length === 0) {
+        // The crossing has been visibly occupying the actual Gangway/collar;
+        // now use the regular movement coordinator to emerge station-side.
+        passengerTransferPath(state, visitor, stationTile);
+        return 'keep';
+      }
+    }
+    const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+    if (moveResult === 'blocked') {
+      visitor.blockedTicks = Math.min(9999, visitor.blockedTicks + 1);
+      passengerTransferWait(state, visitor, dt);
+      return 'keep';
+    }
+    if (moveResult === 'moved') visitor.blockedTicks = 0;
+    if (visitor.tileIndex !== stationTile) return 'keep';
+    if (ship.passengersSpawned < ship.passengersTotal) ship.passengersSpawned += 1;
+    clearPassengerTransferState(state, visitor);
+    visitor.spawnedAt = state.now;
+    setVisitorPath(state, visitor, []);
+    if (ship.visitPhase === 'recall' || ship.visitPhase === 'boarding') {
+      visitor.state = VisitorState.ToDock;
+      queuePassengerTransfer(state, visitor, 'boarding');
+    }
+    return 'keep';
+  }
+
+  if (visitor.tileIndex !== accessTile) {
+    const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
+    if (moveResult === 'blocked') {
+      visitor.blockedTicks = Math.min(9999, visitor.blockedTicks + 1);
+      passengerTransferWait(state, visitor, dt);
+      return 'keep';
+    }
+    if (moveResult === 'moved') visitor.blockedTicks = 0;
+    if (visitor.tileIndex !== accessTile) return 'keep';
+  }
+  if (visitor.transferCrossingStartedAt === null || visitor.transferCrossingStartedAt === undefined) {
+    visitor.transferCrossingStartedAt = state.now;
+    setVisitorPath(state, visitor, []);
+    return 'keep';
+  }
+  if (state.now - visitor.transferCrossingStartedAt < PASSENGER_TRANSFER_CROSSING_SEC) return 'keep';
+
+  if (ship.kind === 'transient') {
+    ship.passengersBoarded = Math.min(ship.passengersTotal, ship.passengersBoarded + 1);
+    advancePortPromise(state, ship.id, 'passengers-returned', 1);
+  }
+  clearPassengerTransferReservation(state, visitor, 'completed');
+  occupancyByTile.set(visitor.tileIndex, Math.max(0, (occupancyByTile.get(visitor.tileIndex) ?? 1) - 1));
+  return 'remove';
+}
+
+function queueVisitorForBoardingTransfer(state: StationState, visitor: Visitor): boolean {
+  const ship = originShipForVisitor(state, visitor);
+  if (!ship || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
+  if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding');
+  return true;
 }
 
 function hospitalityPlanForPassenger(ship: ArrivingShip, passengerIndex: number): HospitalityServiceKind[] {
@@ -7525,8 +8057,17 @@ function tileTouchesWallOrSpace(state: StationState, tile: number): boolean {
 }
 
 export function validateBerthModulePlacement(state: StationState, module: ModuleType, tiles: number[]): string | null {
-  if (module === ModuleType.Gangway && !tiles.some((tile) => tileTouchesSpace(state, tile))) {
-    return 'gangway must touch the berth edge open to space';
+  if (module === ModuleType.Gangway) {
+    if (!tiles.some((tile) => tileTouchesSpace(state, tile))) {
+      return 'gangway must touch the berth edge open to space';
+    }
+    const footprint = new Set(tiles);
+    const hasStationExit = tiles.some((tile) =>
+      adjacentWalkableTiles(state, tile).some((neighbor) =>
+        !footprint.has(neighbor) && state.moduleOccupancyByTile[neighbor] === null
+      )
+    );
+    if (!hasStationExit) return 'gangway needs a clear station-side exit tile';
   }
   if (module === ModuleType.CargoArm && !tiles.some((tile) => tileTouchesWallOrSpace(state, tile))) {
     return 'cargo arm must sit on a berth edge';
@@ -7986,6 +8527,13 @@ export function getDockingSlotDescriptors(state: StationState): DockingSlotDescr
     const acceptedSizes = berthAcceptedSizes(state, berth);
     if (!facing || acceptedSizes.length === 0) continue;
     const anchor = fromIndex(berth.anchorTile, state.width);
+    // The station-side door belongs to the berth cluster for access/pathing,
+    // but it is not part of the parked vessel's physical bay. Including that
+    // lone doorway in a rectangular hull bound also sweeps the adjacent rear
+    // bulkhead panels into the mooring envelope and falsely blocks the berth.
+    const mooringTiles = berth.tiles.filter((tile) =>
+      state.tiles[tile] !== TileType.Door && state.tiles[tile] !== TileType.Airlock
+    );
     descriptors.push(buildDockingSlotDescriptor({
       id: `berth:${berth.anchorTile}`,
       kind: 'berth',
@@ -7997,7 +8545,7 @@ export function getDockingSlotDescriptors(state: StationState): DockingSlotDescr
       accessTiles: [...berth.tiles],
       anchorWorldX: anchor.x + state.mapWorldOriginX + 0.5,
       anchorWorldY: anchor.y + state.mapWorldOriginY + 0.5,
-      hullBounds: worldBoundsForTiles(state, berth.tiles)
+      hullBounds: worldBoundsForTiles(state, mooringTiles.length > 0 ? mooringTiles : berth.tiles)
     }));
   }
   return descriptors.sort((a, b) => a.id.localeCompare(b.id));
@@ -8023,10 +8571,21 @@ function localTileAtWorld(state: StationState, worldX: number, worldY: number): 
 }
 
 /** Validate only fixed physical obstruction; other ships are handled below. */
-export function validateDockingSlot(state: StationState, descriptor: DockingSlotDescriptor, size: ShipSize): ApproachValidation {
-  const envelope = descriptor.envelopesBySize[size];
+export function validateDockingSlot(
+  state: StationState,
+  descriptor: DockingSlotDescriptor,
+  size: ShipSize,
+  hullVariant?: ShipHullVariant
+): ApproachValidation {
+  const envelope = hullVariant ? envelopeForHull(descriptor, hullVariant) : descriptor.envelopesBySize[size];
   const reasons: string[] = [];
   if (!descriptor.acceptedSizes.includes(size)) reasons.push('slot does not accept this ship size');
+  if (hullVariant) {
+    const profile = shipHullProfile(hullVariant);
+    if (!profile.compatibleSizes.includes(size)) reasons.push('hull does not match ship size');
+    const expectedKind = descriptor.kind === 'berth' ? 'berth' : 'pod';
+    if (profile.interfaceKind !== expectedKind) reasons.push('hull does not match docking interface');
+  }
   const ownHull = new Set(descriptor.hullTiles);
   for (const part of [envelope.mooring, envelope.ingress, envelope.egress]) {
     for (const worldTile of tilesInWorldRect(part.bounds)) {
@@ -8046,13 +8605,13 @@ export function validateDockingSlot(state: StationState, descriptor: DockingSlot
 }
 
 function activeShipMooringOverlaps(state: StationState, ship: ArrivingShip, descriptor: DockingSlotDescriptor): boolean {
-  const current = descriptor.envelopesBySize[ship.size].mooring.bounds;
+  const current = envelopeForHull(descriptor, ship.hullVariant).mooring.bounds;
   for (const other of state.arrivingShips) {
     if (other.id === ship.id || other.stage === 'depart') continue;
     const otherDescriptor = descriptorForShip(state, other);
     if (!otherDescriptor) continue;
     if (otherDescriptor.id === descriptor.id) return true;
-    if (rectanglesOverlap(current, otherDescriptor.envelopesBySize[other.size].mooring.bounds)) return true;
+    if (rectanglesOverlap(current, envelopeForHull(otherDescriptor, other.hullVariant).mooring.bounds)) return true;
   }
   return false;
 }
@@ -8060,7 +8619,7 @@ function activeShipMooringOverlaps(state: StationState, ship: ArrivingShip, desc
 function commitmentForShip(state: StationState, ship: ArrivingShip, phase: ApproachCommitment['phase']): ApproachCommitment | null {
   const descriptor = descriptorForShip(state, ship);
   if (!descriptor || !descriptor.acceptedSizes.includes(ship.size)) return null;
-  const validation = validateDockingSlot(state, descriptor, ship.size);
+  const validation = validateDockingSlot(state, descriptor, ship.size, ship.hullVariant);
   if (!validation.valid || activeShipMooringOverlaps(state, ship, descriptor)) return null;
   const groups = getApproachConflictGroups(state)
     .filter((group) => group.slotIds.includes(descriptor.id))
@@ -8073,6 +8632,35 @@ function releaseApproachCommitment(ship: ArrivingShip): void {
 }
 
 export function resolvePhysicalApproachCommitments(state: StationState): void {
+  // Approach ownership follows the hulls actually in traffic, not generic
+  // size classes. Infrastructure planning remains conservatively size-based,
+  // while a courier and a liner only conflict when their real corridors do.
+  const committed = state.arrivingShips.filter((ship) => ship.approachCommitment !== null && ship.approachCommitment !== undefined);
+  const descriptorByShip = new Map<number, DockingSlotDescriptor>();
+  for (const ship of committed) {
+    const descriptor = descriptorForShip(state, ship);
+    if (!descriptor) continue;
+    descriptorByShip.set(ship.id, descriptor);
+    if (ship.approachCommitment) ship.approachCommitment.groupIds = [];
+  }
+  for (let index = 0; index < committed.length; index++) {
+    const first = committed[index];
+    const firstDescriptor = descriptorByShip.get(first.id);
+    if (!firstDescriptor || !first.approachCommitment) continue;
+    const firstPhase = first.approachCommitment.phase === 'depart' ? 'egress' : 'ingress';
+    const firstBounds = envelopeForHull(firstDescriptor, first.hullVariant)[firstPhase].bounds;
+    for (let otherIndex = index + 1; otherIndex < committed.length; otherIndex++) {
+      const second = committed[otherIndex];
+      const secondDescriptor = descriptorByShip.get(second.id);
+      if (!secondDescriptor || !second.approachCommitment || firstDescriptor.id === secondDescriptor.id) continue;
+      const secondPhase = second.approachCommitment.phase === 'depart' ? 'egress' : 'ingress';
+      const secondBounds = envelopeForHull(secondDescriptor, second.hullVariant)[secondPhase].bounds;
+      if (!rectanglesOverlap(firstBounds, secondBounds)) continue;
+      const groupId = `approach|${[firstDescriptor.id, secondDescriptor.id].sort().join('|')}`;
+      first.approachCommitment.groupIds.push(groupId);
+      second.approachCommitment.groupIds.push(groupId);
+    }
+  }
   const groups = new Map<string, ArrivingShip[]>();
   for (const ship of state.arrivingShips) {
     const commitment = ship.approachCommitment;
@@ -8343,6 +8931,7 @@ function spawnResidentHomeShipAtDock(
     bayCenterX: center.x,
     bayCenterY: center.y,
     shipType,
+    hullVariant: selectShipHullVariant(shipId, shipType, 'small'),
     lane: dock.lane,
     originDockId: dock.id,
     assignedDockId: dock.id,
@@ -11654,6 +12243,7 @@ function createTrafficOffer(
 ): TrafficOffer {
   const id = state.shipSpawnCounter++;
   const size = template?.size ?? trafficOfferSize(state);
+  const hullVariant = selectShipHullVariant(id, shipType, size);
   const offerKind = template?.offerKind ?? (shipType === 'industrial' ? 'freight' : shipType === 'trader' ? 'mixed' : 'passenger');
   const passengersTotal = template?.passengersTotal ?? (
     offerKind === 'freight' ? 0 : size === 'small' ? dockPodPassengerCount(state.rng) : berthPassengerCount(size, state.rng)
@@ -11697,6 +12287,7 @@ function createTrafficOffer(
     shipName: `${prefix} ${suffix}`,
     lane,
     shipType,
+    hullVariant,
     offerKind,
     size,
     status: 'forecast',
@@ -12201,6 +12792,10 @@ function compatibleBerthsForOffer(
     .filter((berth) => {
       const config = findBerthConfigByAnchor(state, berth.anchorTile);
       return !config || (config.allowedShipTypes.includes(offer.shipType) && config.allowedShipSizes.includes(offer.size));
+    })
+    .filter((berth) => {
+      const descriptor = getDockingSlotDescriptors(state).find((entry) => entry.id === `berth:${berth.anchorTile}`);
+      return descriptor !== undefined && validateDockingSlot(state, descriptor, offer.size, offer.hullVariant).valid;
     });
 }
 
@@ -12217,6 +12812,10 @@ function compatiblePodDocksForOffer(
     dock.purpose === 'visitor' &&
     dock.allowedShipTypes.includes(offer.shipType) &&
     dock.allowedShipSizes.includes('small') &&
+    (() => {
+      const descriptor = getDockingSlotDescriptors(state).find((entry) => entry.id === `dock:${dock.sourceKey}`);
+      return descriptor !== undefined && validateDockingSlot(state, descriptor, offer.size, offer.hullVariant).valid;
+    })() &&
     (!requireFree || (dock.occupiedByShipId === null && !reservedSourceKeys.has(dock.sourceKey)))
   );
 }
@@ -12612,6 +13211,7 @@ function scheduleSporadicArrival(state: StationState): void {
       shipId: state.shipSpawnCounter++,
       lane,
       shipType,
+      hullVariant: selectShipHullVariant(state.shipSpawnCounter - 1, shipType, 'small'),
       size: 'small',
       queuedAt: state.now,
       timeoutAt: state.now + DOCK_QUEUE_MAX_TIME_SEC
@@ -12689,7 +13289,12 @@ function activeVisitorsForShip(state: StationState, shipId: number): number {
 
 function transientShipVisitorsResolved(state: StationState, ship: ArrivingShip): boolean {
   const portWorkComplete = !ship.portTurnaround || ship.portTurnaround.phase === 'open';
-  return portWorkComplete && ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) <= 0;
+  const arrivalComplete = ship.visitPhase === 'recall' || ship.visitPhase === 'boarding'
+    ? !state.visitors.some(
+        (visitor) => visitor.originShipId === ship.id && passengerTransferPhase(visitor) === 'disembark-crossing'
+      )
+    : ship.passengersSpawned >= ship.passengersTotal;
+  return portWorkComplete && arrivalComplete && activeVisitorsForShip(state, ship.id) <= 0;
 }
 
 function smallCraftService(
@@ -13360,8 +13965,23 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   ship.visitPhase = 'recall';
   ship.recallAt = state.now;
   if (contract) contract.recallAt = state.now;
+  const cancelledShipSide = new Set<number>();
   for (const visitor of state.visitors) {
-    if (visitor.originShipId !== ship.id || visitor.state === VisitorState.ToDock) continue;
+    if (visitor.originShipId !== ship.id) continue;
+    const phase = passengerTransferPhase(visitor);
+    if (phase === 'disembark-queued') {
+      releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+      removeVisitorFromQueues(state, visitor.id);
+      cancelledShipSide.add(visitor.id);
+      continue;
+    }
+    // A passenger already crossing into the station owns the interface until
+    // emergence, then joins the ordinary boarding queue from station-side.
+    if (phase === 'disembark-crossing' || phase === 'boarding-queued' || phase === 'boarding-crossing') continue;
+    if (visitor.state === VisitorState.ToDock) {
+      queueVisitorForBoardingTransfer(state, visitor);
+      continue;
+    }
     visitor.state = VisitorState.ToDock;
     visitor.activeService = null;
     visitor.recurringNeedActive = null;
@@ -13374,12 +13994,33 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     removeVisitorFromQueues(state, visitor.id);
     assignPathToDock(state, visitor);
   }
+  if (cancelledShipSide.size > 0) {
+    state.visitors = state.visitors.filter((visitor) => !cancelledShipSide.has(visitor.id));
+  }
   pushCrowdEvent(state, 'info', `${ship.portManifest?.callsign ?? `Ship ${ship.id}`} recall started`);
 }
 
 function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void {
+  const cancelledArrivals = new Set<number>();
   for (const visitor of state.visitors) {
     if (visitor.originShipId !== ship.id) continue;
+    const phase = passengerTransferPhase(visitor);
+    if (phase === 'disembark-queued' || phase === 'disembark-crossing') {
+      // These people never reached station-side access.  They return with the
+      // departing ship and must not become stranded residents or count as
+      // spawned passengers.
+      releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+      removeVisitorFromQueues(state, visitor.id);
+      cancelledArrivals.add(visitor.id);
+      continue;
+    }
+    if (phase === 'boarding-crossing' && visitor.transferStationTile !== null && visitor.transferStationTile !== undefined) {
+      const center = tileCenter(visitor.transferStationTile, state.width);
+      visitor.tileIndex = visitor.transferStationTile;
+      visitor.x = center.x;
+      visitor.y = center.y;
+    }
+    clearPassengerTransferState(state, visitor);
     releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
     removeVisitorFromQueues(state, visitor.id);
     visitor.strandedFromShipId = ship.id;
@@ -13396,6 +14037,9 @@ function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void 
     visitor.state = VisitorState.ToLeisure;
     setVisitorPath(state, visitor, []);
     routeStrandedVisitor(state, visitor);
+  }
+  if (cancelledArrivals.size > 0) {
+    state.visitors = state.visitors.filter((visitor) => !cancelledArrivals.has(visitor.id));
   }
 }
 
@@ -13491,7 +14135,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
     }
     const freeDock = eligible.find((d) => d.occupiedByShipId === null);
     if (freeDock) {
-      spawnShipAtDock(state, entry.lane, entry.shipType, freeDock.id, entry.shipId, entry.size);
+      spawnShipAtDock(state, entry.lane, entry.shipType, freeDock.id, entry.shipId, entry.size, undefined, entry.hullVariant);
       state.dockQueue.splice(i, 1);
       i--;
       continue;
@@ -13541,11 +14185,24 @@ function updateArrivingShips(state: StationState, dt: number): void {
         continue;
       }
       const spawnRate = ship.passengersTotal / SHIP_DOCKED_TIME;
-      ship.spawnCarry += spawnRate * dt;
-      while (ship.spawnCarry >= 1 && ship.passengersSpawned < ship.passengersTotal) {
-        const dockTile = ship.bayTiles[0] ?? 0;
-        spawnVisitor(state, dockTile, ship);
-        ship.passengersSpawned++;
+      const acceptingArrivals = ship.visitPhase !== 'recall' && ship.visitPhase !== 'boarding';
+      if (acceptingArrivals) ship.spawnCarry += spawnRate * dt;
+      const transferSlots = passengerTransferSlotsForShip(state, ship);
+      const inFlightArrivals = () => state.visitors.filter(
+        (visitor) =>
+          visitor.originShipId === ship.id &&
+          (passengerTransferPhase(visitor) === 'disembark-queued' || passengerTransferPhase(visitor) === 'disembark-crossing')
+      ).length;
+      while (
+        acceptingArrivals &&
+        transferSlots.length > 0 &&
+        ship.spawnCarry >= 1 &&
+        ship.passengersSpawned + inFlightArrivals() < ship.passengersTotal
+      ) {
+        const passengerIndex = ship.passengersSpawned + inFlightArrivals();
+        spawnVisitor(state, passengerTransferSpawnTile(state, ship), ship, passengerIndex);
+        const visitor = state.visitors[state.visitors.length - 1];
+        if (visitor) queuePassengerTransfer(state, visitor, 'disembark');
         ship.spawnCarry -= 1;
       }
       if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
@@ -13657,6 +14314,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
     keep.push(ship);
   }
   state.arrivingShips = keep;
+  rebuildPassengerTransferQueues(state);
 }
 
 function tryBoardVisitorOriginShipAtTile(
@@ -13667,6 +14325,7 @@ function tryBoardVisitorOriginShipAtTile(
   if (visitor.originShipId !== null) {
     const byId = originShipForVisitor(state, visitor);
     if (byId && byId.stage === 'docked' && byId.bayTiles.includes(dockTile)) {
+      if (passengerTransferSlotsForShip(state, byId).length > 0) return { boarded: false, ship: byId };
       if (byId.kind === 'transient') {
         byId.passengersBoarded++;
         advancePortPromise(state, byId.id, 'passengers-returned', 1);
@@ -13678,6 +14337,7 @@ function tryBoardVisitorOriginShipAtTile(
   for (const ship of state.arrivingShips) {
     if (ship.stage !== 'docked') continue;
     if (!ship.bayTiles.includes(dockTile)) continue;
+    if (passengerTransferSlotsForShip(state, ship).length > 0) return { boarded: false, ship };
     if (ship.kind === 'transient') {
       ship.passengersBoarded++;
       advancePortPromise(state, ship.id, 'passengers-returned', 1);
@@ -13706,7 +14366,8 @@ function spawnShipAtDock(
   dockId: number,
   forcedShipId?: number,
   forcedSize?: ShipSize,
-  trafficOffer?: TrafficOffer
+  trafficOffer?: TrafficOffer,
+  hullVariantOverride?: ShipHullVariant
 ): void {
   const dock = state.docks.find((d) => d.id === dockId);
   if (!dock) return;
@@ -13715,6 +14376,7 @@ function spawnShipAtDock(
   const passengersTotal = trafficOffer?.passengersTotal ?? dockPodPassengerCount(state.rng);
   const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
+  const hullVariant = hullVariantOverride ?? trafficOffer?.hullVariant ?? selectShipHullVariant(shipId, shipType, size);
   const stayClass = deriveVisitStayClass({
     shipType,
     size,
@@ -13738,6 +14400,7 @@ function spawnShipAtDock(
     bayCenterX: centerX,
     bayCenterY: centerY,
     shipType,
+    hullVariant,
     lane,
     originDockId: dockId,
     assignedDockId: dockId,
@@ -13794,6 +14457,7 @@ function spawnShipAtBerth(
   const passengersTotal = trafficOffer?.passengersTotal ?? berthPassengerCount(size, state.rng);
   const manifest = trafficOffer ?? generateShipManifest(state, shipType);
   const shipId = forcedShipId ?? state.shipSpawnCounter++;
+  const hullVariant = trafficOffer?.hullVariant ?? selectShipHullVariant(shipId, shipType, size);
   const stayClass = deriveVisitStayClass({
     shipType,
     size,
@@ -13816,6 +14480,7 @@ function spawnShipAtBerth(
     bayCenterX: centerX,
     bayCenterY: centerY,
     shipType,
+    hullVariant,
     lane,
     originDockId: null,
     assignedDockId: null,
@@ -13849,6 +14514,10 @@ function spawnShipAtBerth(
 function buildOccupancyMap(state: StationState): Map<number, number> {
   const map = new Map<number, number>();
   for (const v of state.visitors) {
+    // Disembark queues are visibly staged on the ship side of the interface.
+    // Their nominal tile is retained for durable reconstruction, but they do
+    // not occupy station floor until a crossing claims the collar/Gangway.
+    if (isShipSidePassengerQueue(v)) continue;
     map.set(v.tileIndex, (map.get(v.tileIndex) ?? 0) + 1);
   }
   for (const r of state.residents) {
@@ -13866,6 +14535,7 @@ type MovementActorKind = 'crew' | 'resident' | 'visitor';
 type MovementActor = (CrewMember | Resident | Visitor) & {
   movementWaitReason?: string;
   movementReplanCooldownUntil?: number;
+  movementBlockedTile?: number | null;
 };
 
 type MovementIntent = {
@@ -13922,13 +14592,16 @@ function isServiceTarget(actor: MovementActor, tileIndex: number): boolean {
 
 function clearMovementWait(actor: MovementActor): void {
   actor.movementWaitReason = undefined;
+  actor.movementBlockedTile = undefined;
 }
 
 function movementActors(state: StationState): Array<{ kind: MovementActorKind; actor: MovementActor }> {
   return [
     ...state.crewMembers.map((actor) => ({ kind: 'crew' as const, actor: actor as MovementActor })),
     ...state.residents.map((actor) => ({ kind: 'resident' as const, actor: actor as MovementActor })),
-    ...state.visitors.map((actor) => ({ kind: 'visitor' as const, actor: actor as MovementActor }))
+    ...state.visitors
+      .filter((actor) => !isShipSidePassengerQueue(actor))
+      .map((actor) => ({ kind: 'visitor' as const, actor: actor as MovementActor }))
   ];
 }
 
@@ -14198,6 +14871,7 @@ function moveAlongPath(
     const key = kind ? movementActorKey(kind, actor) : '';
     if (!coordinator?.approved.has(key)) {
       actor.movementWaitReason = coordinator?.blockedReasonByKey.get(key) ?? 'awaiting movement arbitration';
+      actor.movementBlockedTile = nextTile;
       return 'blocked';
     }
     const occupied = occupancyByTile.get(nextTile) ?? 0;
@@ -15659,7 +16333,8 @@ export function createReservationCounts(): Record<ReservationKind, number> {
     'seat-use-slot': 0,
     'source-item': 0,
     'target-capacity': 0,
-    'actor-job': 0
+    'actor-job': 0,
+    'transfer-slot': 0
   };
 }
 
@@ -19337,6 +20012,7 @@ function assignPathToDock(state: StationState, visitor: Visitor): void {
   visitor.temporarySleepTargetTile = null;
   visitor.commercialDrinkUnitId = null;
   visitor.optionalDrinkActive = false;
+  if (queueVisitorForBoardingTransfer(state, visitor)) return;
   setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, docks, false, 'visitor', visitor.id) ?? []);
 }
 
@@ -20374,6 +21050,16 @@ function updateVisitorLogic(
   let marketTradeGoodsUsed = 0;
 
   for (const visitor of state.visitors) {
+    if (isPassengerTransferQueued(visitor)) {
+      updateQueuedPassengerTransferVisitor(state, visitor, dt, occupancyByTile);
+      keep.push(visitor);
+      continue;
+    }
+    if (isPassengerTransferCrossing(visitor)) {
+      const result = updatePassengerTransferVisitor(state, visitor, dt, occupancyByTile);
+      if (result === 'keep') keep.push(visitor);
+      continue;
+    }
     updateLongStayVisitorNeeds(state, visitor, dt);
     const exposure = applyAirExposure(state, visitor, operationalAirAt(state, visitor.tileIndex), dt);
     if (exposure.died) {
@@ -21027,6 +21713,10 @@ function updateVisitorLogic(
         }
       }
     } else {
+      if (queueVisitorForBoardingTransfer(state, visitor)) {
+        keep.push(visitor);
+        continue;
+      }
       if (visitor.path.length === 0 && visitorPathRetryReady(state, visitor)) {
         assignPathToDock(state, visitor);
       }

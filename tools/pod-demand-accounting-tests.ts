@@ -30,6 +30,7 @@ function passengerOffer(state: StationState, dock: DockEntity, id: number): Traf
     shipName: 'Accounting Probe',
     lane: dock.lane,
     shipType: 'trader',
+    hullVariant: 'courier-pod',
     offerKind: 'passenger',
     size: 'small',
     status: 'holding',
