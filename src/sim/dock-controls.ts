@@ -53,6 +53,7 @@ export function setDockFacing(state: StationState, dockId: number, facing: Space
   if (dock.sourceKind === 'pod-dock-module') {
     return { ok: false, reason: 'pod dock facing is fixed by its exterior hull mount' };
   }
+  if (dock.facing === facing) return { ok: true };
   const check = validateDockPlacementAt(state, dock.anchorTile, facing);
   if (!check.valid) return { ok: false, reason: check.reason };
   dock.facing = facing;
@@ -70,7 +71,12 @@ export function setDockAllowedShipType(state: StationState, dockId: number, ship
   if (allowed) next.add(shipType);
   else next.delete(shipType);
   if (next.size === 0) next.add('tourist');
-  dock.allowedShipTypes = [...next];
+  const updated = [...next];
+  if (
+    updated.length === dock.allowedShipTypes.length &&
+    updated.every((entry, index) => entry === dock.allowedShipTypes[index])
+  ) return;
+  dock.allowedShipTypes = updated;
   bumpDockVersion(state);
 }
 
@@ -82,7 +88,12 @@ export function setDockAllowedShipSize(state: StationState, dockId: number, size
   if (allowed) next.add(size);
   else next.delete(size);
   if (next.size === 0) next.add('small');
-  dock.allowedShipSizes = shipSizesUpTo(dock.maxSizeByArea).filter((s) => next.has(s));
+  const updated = shipSizesUpTo(dock.maxSizeByArea).filter((s) => next.has(s));
+  if (
+    updated.length === dock.allowedShipSizes.length &&
+    updated.every((entry, index) => entry === dock.allowedShipSizes[index])
+  ) return;
+  dock.allowedShipSizes = updated;
   bumpDockVersion(state);
 }
 
@@ -186,7 +197,13 @@ export function setBerthAllowedShipSize(
   else next.delete(size);
   // Mirror dock invariant: never leave the size-allowlist empty.
   if (next.size === 0) next.add('medium');
-  cfg.allowedShipSizes = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
+  const updated = ALL_SHIP_SIZES_FOR_BERTH.filter((s) => next.has(s));
+  if (
+    updated.length === cfg.allowedShipSizes.length &&
+    updated.every((entry, index) => entry === cfg.allowedShipSizes[index])
+  ) return;
+  cfg.allowedShipSizes = updated;
+  bumpDockVersion(state);
 }
 
 export function setBerthScreeningLevel(

@@ -8691,12 +8691,52 @@ function berthAcceptedSizes(state: StationState, candidate: BerthCandidate): Shi
   return configured.filter((size) => shipSizeFitsBerth(size, candidate.size));
 }
 
-/**
- * Physical frontage descriptors are intentionally rebuilt from the station
- * each time. They contain world coordinates, not map indices, so north/west
- * map growth only changes the index binding and never moves a station in space.
- */
-export function getDockingSlotDescriptors(state: StationState): DockingSlotDescriptor[] {
+type ApproachGeometryCacheEntry = {
+  key: string;
+  descriptors: DockingSlotDescriptor[];
+  groups: ApproachConflictGroup[];
+  hits: number;
+  misses: number;
+};
+
+const approachGeometryCacheByState = new WeakMap<StationState, ApproachGeometryCacheEntry>();
+
+function approachGeometryKey(state: StationState): string {
+  // Versions cover authoritative tile/room/module edits. The compact physical
+  // signatures additionally protect legacy adapters and test/scenario seams
+  // that restore Dock/Config objects directly before their first tick.
+  const docks = [...state.docks]
+    .sort((a, b) => (a.sourceKey ?? '').localeCompare(b.sourceKey ?? ''))
+    .map((dock) => [
+      dock.sourceKind,
+      dock.sourceKey,
+      dock.anchorTile,
+      dock.mountTile ?? '',
+      dock.facing,
+      dock.allowedShipSizes.join(','),
+      dock.tiles.join(','),
+      dock.accessTile ?? ''
+    ].join(':'))
+    .join('|');
+  const berthSizes = [...state.berthConfigs]
+    .sort((a, b) => a.anchorTile - b.anchorTile)
+    // Missing config and a materialized default are the same geometry.
+    .filter((config) => config.allowedShipSizes.join(',') !== ALL_SHIP_SIZES_FOR_BERTH.join(','))
+    .map((config) => `${config.anchorTile}:${config.allowedShipSizes.join(',')}`)
+    .join('|');
+  return [
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.dockVersion,
+    `${state.width}x${state.height}`,
+    `${state.mapWorldOriginX},${state.mapWorldOriginY}`,
+    docks,
+    berthSizes
+  ].join('~');
+}
+
+function deriveDockingSlotDescriptors(state: StationState): DockingSlotDescriptor[] {
   const descriptors: DockingSlotDescriptor[] = [];
   for (const dock of state.docks) {
     const kind = dock.sourceKind === 'pod-dock-module' ? 'pod-dock' : 'legacy-dock';
@@ -8750,8 +8790,54 @@ export function getDockingSlotDescriptors(state: StationState): DockingSlotDescr
   return descriptors.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function approachGeometry(state: StationState): ApproachGeometryCacheEntry {
+  const key = approachGeometryKey(state);
+  const cached = approachGeometryCacheByState.get(state);
+  if (cached?.key === key) {
+    cached.hits += 1;
+    return cached;
+  }
+  const descriptors = deriveDockingSlotDescriptors(state);
+  const entry: ApproachGeometryCacheEntry = {
+    key,
+    descriptors,
+    groups: deriveApproachConflictGroups(descriptors),
+    hits: cached?.hits ?? 0,
+    misses: (cached?.misses ?? 0) + 1
+  };
+  approachGeometryCacheByState.set(state, entry);
+  return entry;
+}
+
+/**
+ * Physical frontage descriptors are world-space derived data. Repeated ticks
+ * and projections reuse the same immutable-by-contract objects until a real
+ * topology, interface, module, origin, or accepted-size input changes.
+ */
+export function getDockingSlotDescriptors(state: StationState): DockingSlotDescriptor[] {
+  return approachGeometry(state).descriptors;
+}
+
 export function getApproachConflictGroups(state: StationState): ApproachConflictGroup[] {
-  return deriveApproachConflictGroups(getDockingSlotDescriptors(state));
+  return approachGeometry(state).groups;
+}
+
+/** Read-only focused/performance evidence; the geometry remains module-local. */
+export function getApproachGeometryCacheStats(state: StationState): {
+  hits: number;
+  misses: number;
+  descriptorCount: number;
+  groupCount: number;
+} {
+  const cached = approachGeometryCacheByState.get(state);
+  return cached
+    ? {
+        hits: cached.hits,
+        misses: cached.misses,
+        descriptorCount: cached.descriptors.length,
+        groupCount: cached.groups.length
+      }
+    : { hits: 0, misses: 0, descriptorCount: 0, groupCount: 0 };
 }
 
 function descriptorForShip(state: StationState, ship: ArrivingShip): DockingSlotDescriptor | null {
@@ -8797,8 +8883,7 @@ export function validateDockingSlot(
       }
     }
   }
-  const descriptors = getDockingSlotDescriptors(state);
-  const groups = deriveApproachConflictGroups(descriptors);
+  const groups = getApproachConflictGroups(state);
   const conflictGroupIds = groups.filter((group) => group.slotIds.includes(descriptor.id)).map((group) => group.id);
   return { valid: reasons.length === 0, hardReasons: [...new Set(reasons)], conflictGroupIds, descriptor };
 }

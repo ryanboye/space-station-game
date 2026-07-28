@@ -611,7 +611,7 @@ audited checklist with no unsupported checked claims.
 - [x] Accumulate wait age for fairness.
 - [x] Use deterministic tie-breaking.
 - [x] Allow controlled safe head-on swaps.
-- [ ] Make one actor yield when a swap is unsafe.
+- [x] Make one actor yield when a swap is unsafe.
 - [x] Replan after bounded waiting using congestion.
 - [x] Add route hysteresis to prevent oscillation.
 - [x] Add bounded deadlock recovery.
@@ -667,7 +667,7 @@ audited checklist with no unsupported checked claims.
 - [x] Give Gangways/collars boarding capacity.
 - [x] Make additional Gangways improve real throughput.
 - [x] Make recall route people physically back to origin ship.
-- [ ] Make boarding contend with doors, queues, and cargo.
+- [x] Make boarding contend with doors, queues, and cargo.
 - [x] Make boarding and bulky cargo contend physically in a shared route.
   Evidence: `npm run test:physical-cargo` case
   `passenger-transfer-and-cargo-block-each-other-visibly`.
@@ -677,11 +677,11 @@ audited checklist with no unsupported checked claims.
 
 ### Per-Interface Diagnosis
 
-- [ ] Measure disembark throughput.
+- [x] Measure disembark throughput.
 - [x] Identify door and Airlock choke points.
 - [x] Identify queue spill across arrival/boarding routes.
 - [ ] Measure boarding distance and duration.
-- [ ] Measure reachable service and seating capacity.
+- [x] Measure reachable service and seating capacity.
 - [x] Identify public/cargo route intersections.
 - [x] Measure freight staging/storage distance.
 - [x] Measure staff access to ship hardware.
@@ -829,7 +829,7 @@ audited checklist with no unsupported checked claims.
 ### Performance
 
 - [x] Cache structure by topology/structure version.
-- [ ] Cache approach groups by interface geometry version.
+- [x] Cache approach groups by interface geometry version.
 - [ ] Recompute interface diagnoses only after relevant change or sustained
   traffic interval.
 - [x] Resolve movement intents in a batch.
@@ -1390,3 +1390,15 @@ Remaining uncertainty:
 - Commits or files: tie-in derivation and staging-route validation in `src/sim/construction.ts`; focused production runner `tools/commissioning-diagnostics-tests.ts`; `test:commissioning-diagnostics` package script (checkpoint commit pending at evidence capture).
 - Focused evidence: an isolated but stocked interior site reports exactly `no construction staging route` and creates no fictional job; opening one real floor gateway clears the diagnosis and enqueues the physical delivery. Reusing the live starter Airlock derives a zero-material EVA perimeter tie-in while an explicitly authored Door remains authoritative. A low/depleted-oxygen EVA worker reports the exact blocker, returns through the Airlock to refill, and advances the same build job. Sustained occupancy of the only real work face reports `work position obstructed`; moving the occupying worker clears it and resumes progress. `test:commissioning-diagnostics` and `test:structural-support` pass.
 - Preservation boundary: the legacy structural-expansion runner's final 8,000-step save/resume commissioning assertion still stalls. The worker reproduced the identical failure with the entire production diff disabled and the new runner removed from compilation, so it is recorded as pre-existing and is not used as evidence for this tranche.
+
+2026-07-28 · Movement, transfer, and per-interface measurement reconciliation
+
+- Commits or files: batched arbitration and wait reasons in `src/sim/sim.ts`; transfer and capacity metrics in `src/sim/types.ts`, `src/sim/sim.ts`, and `src/sim/facility-machines.ts`; focused runners `tools/movement-coordinator-tests.ts`, `tools/physical-cargo-tests.ts`, `tools/gate-g-metrics-admission-tests.ts`, and `tools/gate-f-facility-scale-tests.ts`.
+- Focused evidence: `test:movement-coordinator` passes all six groups. Safe head-on swaps proceed, while an unsafe swap through a one-capacity Door makes both actors yield; longer wait age and bounded blocker displacement then recover progress without nondeterminism. `test:physical-cargo` passes all four groups and proves a boarding passenger and bulky freight worker contend on the same physical crossing, each exposes the opposing flow as its wait cause, and shared freight measurably slows the public corridor.
+- Measurement evidence: the Gate G metrics runner records one production disembark crossing and its 1.2-second duration. Gate F capacity reads are derived from actual depicted slots and claims: the long-stay wing reports eight beds, four Wash positions, three meal pickups, fourteen seats, and four bar stools, while its recurring services complete against named fixture types. The broader passenger-transfer runner currently times out in its pre-existing first-boarding-crossing fixture; no claim here depends on that failing group, and boarding-distance measurement remains open.
+
+2026-07-28 · Versioned approach-geometry cache
+
+- Commits or files: per-state derived descriptor/group cache in `src/sim/sim.ts`; no-op and Berth-size version discipline in `src/sim/dock-controls.ts`; focused runner `tools/approach-geometry-cache-tests.ts`; `test:approach-geometry-cache` package script (checkpoint commit pending at evidence capture).
+- Focused evidence: the 5/5 runner records 261 hits and one derivation miss across 128 repeated descriptor/group projections plus ordinary tick, time, actor, and credit churn, returning the exact same descriptor and group objects. A real Dock edit, Berth accepted-size edit, topology edit, and west map expansion each invalidate immediately; repeated no-op edits reuse. Every cached group equals a fresh pure derivation, and west expansion preserves exact world-space envelopes and conflict semantics despite local index remapping.
+- Migration evidence: a legacy snapshot without modern Berth configs/source keys hydrates into a fresh StationState with no inherited cache objects or counters, derives semantically identical descriptors/groups, then reuses them. `test:approach-control`, `test:approach-envelopes`, and `test:phase9-save` all pass with the cache active.
