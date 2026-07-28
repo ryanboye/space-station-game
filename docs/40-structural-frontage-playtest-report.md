@@ -101,11 +101,14 @@ should show staged exterior work, EVA activity, and material use.
 Open:
 
 - `http://127.0.0.1:5183/?scenario=failed-stay-showcase&diag=1`
+- `http://127.0.0.1:5183/?scenario=visit-schedule-showcase&diag=1`
 - `http://127.0.0.1:5183/?scenario=exterior-integrity-showcase&diag=1`
 
-These show the occupant failure ladder and the worn/damaged/breached/patched
-exterior states. Early-recall and extension reasons are tested and rendered in
-ship chips, but a dedicated natural live visit fixture is still needed.
+These show the occupant failure ladder, the red `EARLY RECALL | SERVICES
+FAILED` and blue `EXTENDED | WORK REMAINS` Berth chips, and the
+worn/damaged/breached/patched exterior states. The fixture stages the two
+player-facing reasons; their production transitions are independently covered
+by the failed-stay runner.
 
 ## Focused Verification
 
@@ -156,7 +159,8 @@ design benchmark and the replacement for stale port-operation tests.
   still planned rather than implemented.
 - One versus two Checkout Banks still needs a live player-facing comparison;
   one versus two staffed registers is now measured in the focused runner.
-- Early recall and bounded extension need a dedicated live scenario capture.
+- Early recall and bounded extension are visually staged and mechanically
+  covered, but still need to emerge naturally during a full mixed visit.
 - The final scale gate needs active ships, jobs, reservations, service queues,
   and browser render-frame measurements.
 - Missing material, staging, oxygen, seal, and obstruction reasons need the

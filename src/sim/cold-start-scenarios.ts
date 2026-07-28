@@ -146,6 +146,25 @@ function roomClusterAnchorsForScenario(state: StationState, room: RoomType): num
   return anchors.sort((a, b) => a - b);
 }
 
+function roomClusterTilesForScenario(state: StationState, room: RoomType, anchor: number): number[] {
+  if (state.rooms[anchor] !== room) return [];
+  const seen = new Set<number>([anchor]);
+  const stack = [anchor];
+  while (stack.length > 0) {
+    const tile = stack.pop()!;
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+      const next = ny * state.width + nx;
+      if (seen.has(next) || state.rooms[next] !== room) continue;
+      seen.add(next);
+      stack.push(next);
+    }
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
 function drawAirDuctLine(state: StationState, x1: number, y1: number, x2: number, y2: number): void {
   const dx = Math.sign(x2 - x1);
   const dy = Math.sign(y2 - y1);
@@ -205,6 +224,51 @@ function approachConflictShip(id: number, dock: StationState['docks'][number], s
       status,
       queuedAt: id === 9401 ? 1 : id === 9402 ? 2 : 3
     }
+  };
+}
+
+function visitScheduleShowcaseShip(
+  state: StationState,
+  id: number,
+  berthAnchor: number,
+  reason: 'service-failure' | 'remaining-work'
+): ArrivingShip {
+  const bayTiles = roomClusterTilesForScenario(state, RoomType.Berth, berthAnchor);
+  if (bayTiles.length === 0) throw new Error('Visit schedule showcase requires a Berth cluster.');
+  const centerX = bayTiles.reduce((sum, tile) => sum + (tile % state.width) + 0.5, 0) / bayTiles.length;
+  const centerY = bayTiles.reduce((sum, tile) => sum + Math.floor(tile / state.width) + 0.5, 0) / bayTiles.length;
+  return {
+    id,
+    kind: 'transient',
+    size: 'medium',
+    bayTiles,
+    bayCenterX: centerX,
+    bayCenterY: centerY,
+    shipType: reason === 'service-failure' ? 'tourist' : 'industrial',
+    hullVariant: reason === 'service-failure' ? 'passenger-shuttle' : 'repair-tender',
+    lane: 'north',
+    originDockId: null,
+    assignedDockId: null,
+    assignedDockSourceKey: null,
+    assignedBerthAnchor: berthAnchor,
+    queueState: 'none',
+    stage: 'docked',
+    stageTime: 0,
+    passengersTotal: reason === 'service-failure' ? 18 : 9,
+    passengersSpawned: reason === 'service-failure' ? 18 : 9,
+    passengersBoarded: 0,
+    minimumBoarding: 1,
+    spawnCarry: 0,
+    dockedAt: state.now - 180,
+    residentIds: [],
+    manifestDemand: { cafeteria: 1, market: 1, lounge: 1 },
+    manifestMix: { diner: 0.25, shopper: 0.25, lounger: 0.25, rusher: 0.25 },
+    stayClass: 'contract',
+    visitPhase: reason === 'service-failure' ? 'recall' : 'visit-service',
+    plannedDepartureAt: state.now + (reason === 'service-failure' ? 45 : 150),
+    extensionUntil: reason === 'remaining-work' ? state.now + 150 : null,
+    recallAt: reason === 'service-failure' ? state.now : null,
+    visitScheduleReason: reason
   };
 }
 
@@ -647,6 +711,22 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     addFailureShowcaseVisitor(s, 99102, 23, 17, 'distressed', 'leisure');
     addFailureShowcaseVisitor(s, 99103, 29, 17, 'disruptive', 'hygiene');
     addFailureShowcaseVisitor(s, 99104, 35, 17, 'distressed', 'energy', true);
+    s.controls.paused = true;
+  },
+
+  // Paired berth chips for the two authored reasons that can change a long
+  // visit clock. The production transitions are covered by failed-stay tests;
+  // this paused fixture makes their world-space explanation easy to inspect.
+  'visit-schedule-showcase': (s) => {
+    unlockThrough(s, 3);
+    applyDemoStationOverlay(s);
+    const berthAnchors = roomClusterAnchorsForScenario(s, RoomType.Berth);
+    if (berthAnchors.length < 2) throw new Error('Visit schedule showcase requires two Berths.');
+    s.arrivingShips.length = 0;
+    s.arrivingShips.push(
+      visitScheduleShowcaseShip(s, 99301, berthAnchors[0], 'service-failure'),
+      visitScheduleShowcaseShip(s, 99302, berthAnchors[1], 'remaining-work')
+    );
     s.controls.paused = true;
   },
 

@@ -164,7 +164,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Show ship purpose and visit phase beside the physical interface.
 - [ ] Show likely cohort-size and stay ranges without full itinerary disclosure.
 - [x] Show recall and boarding physically.
-- [ ] Show early departure and extension reasons.
+- [x] Show early departure and extension reasons.
 - [ ] Keep ship details hideable on small screens.
 
 ### Phase 1A Save And Checks
@@ -1040,7 +1040,8 @@ Remaining uncertainty:
 - Commit or files: visit timing and reasons in `src/sim/types.ts`, `src/sim/sim.ts`, and `src/sim/save.ts`; `tools/failed-stay-tests.ts`; new `tools/phase9-save-migration-tests.ts`; and `tools/target-scale-perf.ts` (pending integration commit at evidence capture).
 - Focused evidence: `npm run test:failed-stay` proves cohort-level early recall after sustained failure and bounded extension for unfinished work. `npm run test:phase9-save` preserves five visit-phase records, exact contract timings, exactly-once settlement, partial construction, and breached exterior integrity while clearing stale paths, queue slots, reservations, occupancy, and invalid dock bindings. `npm run perf:target-scale` repeats a sealed 16,800-tile fixture with 50 crew, 50 visitors, and ten interfaces deterministically, at roughly 28 ms p95 simulation tick and 258 MiB RSS on this machine.
 - Correctness fix: room operations and local atmosphere cadence now use simulation time rather than wall-clock/render throughput. Fast-forward, a slow machine, and a smooth renderer therefore produce the same oxygen and operational results.
-- Remaining uncertainty: the scale fixture intentionally has little active work at its sample boundary and is not the full 50/50 mixed-operation gate; early recall and extension reasons render in interface chips but still need a live fixture capture; the broader `test:port-ops` runner retains obsolete assumptions about the pre-choice starter and needs an authored Berth fixture rather than patched expectations.
+- Visual/playtest evidence: `?scenario=visit-schedule-showcase` stages two docked Berths at ordinary play zoom. The red passenger chip reads `EARLY RECALL | SERVICES FAILED`; the blue industrial chip reads `EXTENDED | WORK REMAINS` with its remaining time. The production transitions and save persistence remain covered by `test:failed-stay` and `test:phase9-save` rather than being faked by the presentation fixture.
+- Remaining uncertainty: the scale fixture intentionally has little active work at its sample boundary and is not the full 50/50 mixed-operation gate; the broader `test:port-ops` runner retains obsolete assumptions about the pre-choice starter and needs an authored Berth fixture rather than patched expectations.
 
 2026-07-27 · Construction block diagnosis
 
