@@ -19,7 +19,7 @@ import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
 import type { ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buyMaterials, buyRawFood, mapConditionAt, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, mapConditionAt, planStationExpansionOnTruss, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -422,6 +422,17 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // Paired construction fixtures: one makes the missing-Airlock block easy
+  // to inspect; the other runs the same project through real logistics/EVA.
+  'structural-expansion-blocked': (s) => {
+    planScenarioStructuralExpansion(s, false);
+    s.controls.paused = false;
+  },
+  'structural-expansion-active': (s) => {
+    planScenarioStructuralExpansion(s, true);
+    s.controls.paused = false;
+  },
+
   // Commercial-unit prototype: a mature station with one large vacant shell
   // ready for the player to solicit and compare tenant proposals.
   'commercial-units': (s) => {
@@ -672,6 +683,47 @@ function addFailureShowcaseVisitor(
     reliefEligibleAt: stranded ? state.now : null
   };
   state.visitors.push(visitor);
+}
+
+function planScenarioStructuralExpansion(state: StationState, withAirlock: boolean): void {
+  let patch: number[] | null = null;
+  for (let y = 1; y < state.height - 2 && patch === null; y++) {
+    for (let x = 1; x < state.width - 2; x++) {
+      const candidate = [
+        y * state.width + x,
+        y * state.width + x + 1,
+        (y + 1) * state.width + x,
+        (y + 1) * state.width + x + 1
+      ];
+      if (candidate.some((tile) => state.tiles[tile] !== TileType.Space)) continue;
+      for (const tile of candidate) setTile(state, tile, TileType.Truss);
+      if (planStationExpansionOnTruss(state, candidate).ok) {
+        patch = candidate;
+        break;
+      }
+      for (const tile of candidate) setTile(state, tile, TileType.Space);
+    }
+  }
+  if (!patch) throw new Error('Structural expansion fixture could not find a valid scaffold patch.');
+  if (withAirlock) {
+    for (let tile = 0; tile < state.tiles.length; tile++) {
+      if (state.tiles[tile] !== TileType.Wall) continue;
+      const x = tile % state.width;
+      const y = Math.floor(tile / state.width);
+      const neighbors = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([dx, dy]) => ({ x: x + dx, y: y + dy }))
+        .filter((point) => point.x >= 0 && point.y >= 0 && point.x < state.width && point.y < state.height)
+        .map((point) => point.y * state.width + point.x);
+      if (!neighbors.some((neighbor) => state.tiles[neighbor] === TileType.Space)) continue;
+      if (!neighbors.some((neighbor) => state.tiles[neighbor] === TileType.Floor)) continue;
+      setTile(state, tile, TileType.Airlock);
+      break;
+    }
+  }
+  state.legacyMaterialStock = 200;
+  state.metrics.materials = 200;
+  const planned = buildStationExpansionOnTruss(state, patch);
+  if (!planned.ok) throw new Error(`Structural expansion fixture failed: ${planned.reason ?? 'unknown'}`);
 }
 
 function applyDemoStationOverlay(state: StationState): void {

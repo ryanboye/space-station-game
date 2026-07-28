@@ -34,6 +34,8 @@ import {
   type ModuleRotation,
   RoomType,
   type StationState,
+  type StructuralExpansionProject,
+  type StructuralExpansionTarget,
   TileType,
   ZoneType,
   fromIndex,
@@ -42,6 +44,7 @@ import {
   toIndex
 } from './types';
 import { MODULE_DEFINITIONS } from './balance';
+import { validateStructuralSupportPlan } from './structural-support';
 // setTile, setRoom, setZone live in sim.ts and are NOT exported there yet.
 // applyConstructionSite uses them at the end of the file. Import from sim.
 import { findPath, moduleCreditBuildCost, setRoom, setTile, setZone } from './sim';
@@ -117,6 +120,10 @@ function constructionSiteCoversTile(state: StationState, site: ConstructionSite,
 
 export function removeConstructionAtTile(state: StationState, tileIndex: number, refundMaterials = false): boolean {
   const removedSites = state.constructionSites.filter((site) => constructionSiteCoversTile(state, site, tileIndex));
+  const structuralProjectId = removedSites.find((site) => site.structuralProjectId !== undefined)?.structuralProjectId;
+  if (structuralProjectId !== undefined) {
+    return cancelStructuralExpansionProject(state, structuralProjectId);
+  }
   const removedIds = new Set(removedSites.map((site) => site.id));
   if (removedIds.size <= 0) return false;
   if (refundMaterials) {
@@ -195,6 +202,185 @@ function createConstructionSite(
   };
   state.constructionSites.push(next);
   return next;
+}
+
+export interface StructuralExpansionGeometry {
+  bounds: StructuralExpansionProject['bounds'];
+  doorTile: number | null;
+  targets: StructuralExpansionTarget[];
+  requiredMaterials: number;
+}
+
+function projectSites(state: StationState, projectId: number): ConstructionSite[] {
+  return state.constructionSites.filter((site) => site.structuralProjectId === projectId);
+}
+
+function projectStageTargets(project: StructuralExpansionProject, stage: 'perimeter' | 'interior'): StructuralExpansionTarget[] {
+  return project.targets.filter((target) =>
+    stage === 'perimeter'
+      ? target.targetTile === TileType.Wall || target.targetTile === TileType.Door
+      : target.targetTile === TileType.Floor
+  );
+}
+
+function structuralWorkRequired(target: StructuralExpansionTarget): number {
+  return target.targetTile === TileType.Floor ? 5 : 7;
+}
+
+function enqueueStructuralStage(
+  state: StationState,
+  project: StructuralExpansionProject,
+  stage: 'perimeter' | 'interior'
+): void {
+  const targets = projectStageTargets(project, stage);
+  for (const target of targets) {
+    const site = createConstructionSite(state, {
+      kind: 'tile',
+      tileIndex: target.tileIndex,
+      targetTile: target.targetTile,
+      requiredMaterials: target.requiredMaterials,
+      deliveredMaterials: 0,
+      buildProgress: 0,
+      buildWorkRequired: structuralWorkRequired(target),
+      requiresEva: true,
+      structuralProjectId: project.id,
+      structuralStage: stage
+    });
+    project.childSiteIds.push(site.id);
+  }
+}
+
+/** Creates a deferred expansion project. The caller already validated geometry. */
+export function createStructuralExpansionProject(
+  state: StationState,
+  geometry: StructuralExpansionGeometry
+): StructuralExpansionProject {
+  const project: StructuralExpansionProject = {
+    id: state.structuralExpansionProjectSpawnCounter++,
+    bounds: { ...geometry.bounds },
+    doorTile: geometry.doorTile,
+    targets: geometry.targets.map((target) => ({ ...target })),
+    phase: 'perimeter',
+    childSiteIds: [],
+    completedSiteIds: [],
+    requiredMaterials: geometry.requiredMaterials,
+    deliveredMaterials: 0,
+    refundedMaterials: 0,
+    blockedReason: null,
+    cancelled: false,
+    commissioned: false,
+    createdAt: state.now,
+    finishedAt: null
+  };
+  state.structuralExpansionProjects.push(project);
+  enqueueStructuralStage(state, project, 'perimeter');
+  return project;
+}
+
+function markProjectBlocked(project: StructuralExpansionProject, sites: readonly ConstructionSite[]): void {
+  const blocked = sites.find((site) => site.state === 'blocked' && site.blockedReason);
+  if (!blocked) return;
+  project.phase = 'blocked';
+  project.blockedReason = blocked.blockedReason;
+}
+
+function updateProjectMaterialProgress(project: StructuralExpansionProject, sites: readonly ConstructionSite[]): void {
+  const delivered = sites.reduce((sum, site) => sum + Math.max(0, site.deliveredMaterials), 0);
+  project.deliveredMaterials = Math.min(project.requiredMaterials, Math.max(project.deliveredMaterials, delivered));
+}
+
+/**
+ * Advances the durable parent after child site work has run. Commissioning is
+ * intentionally atomic: construction sites render/progress in space but the
+ * station topology stays untouched until the whole shell is finished.
+ */
+export function advanceStructuralExpansionProjects(state: StationState): void {
+  for (const project of state.structuralExpansionProjects) {
+    if (project.cancelled || project.commissioned) continue;
+    const sites = projectSites(state, project.id);
+    updateProjectMaterialProgress(project, sites);
+    if (project.phase === 'blocked' && !sites.some((site) => site.state === 'blocked')) {
+      project.phase = sites.some((site) => site.structuralStage === 'interior') ? 'interior' : 'perimeter';
+      project.blockedReason = null;
+    }
+    markProjectBlocked(project, sites);
+    if (project.phase === 'blocked') continue;
+
+    const currentStage = project.phase;
+    const stageSites = sites.filter((site) => site.structuralStage === currentStage);
+    if (stageSites.some((site) => site.state !== 'done')) continue;
+    for (const site of stageSites) {
+      if (!project.completedSiteIds.includes(site.id)) project.completedSiteIds.push(site.id);
+    }
+
+    if (currentStage === 'perimeter') {
+      project.phase = 'interior';
+      enqueueStructuralStage(state, project, 'interior');
+      continue;
+    }
+
+    const support = validateStructuralSupportPlan(
+      state,
+      [],
+      project.targets
+        .filter((target) => target.targetTile === TileType.Floor)
+        .map((target) => ({ tile: target.tileIndex, kind: 'small' as const }))
+    );
+    const supportProblem = support.problems.find((problem) => problem.reason !== 'branch-requires-junction');
+    if (supportProblem) {
+      project.phase = 'blocked';
+      project.blockedReason = `structural support: ${supportProblem.reason}`;
+      continue;
+    }
+
+    // No topology was changed by the children, so this one write cannot ever
+    // leave a pressurizable half-shell behind.
+    for (const target of project.targets) {
+      setTile(state, target.tileIndex, target.targetTile);
+      setZone(state, target.tileIndex, ZoneType.Public);
+      setRoom(state, target.tileIndex, RoomType.None);
+    }
+    project.deliveredMaterials = project.requiredMaterials;
+    project.phase = 'commissioned';
+    project.commissioned = true;
+    project.finishedAt = state.now;
+  }
+}
+
+/** Cancels only this project's child sites/jobs and refunds delivered value once. */
+export function cancelStructuralExpansionProject(state: StationState, projectId: number): boolean {
+  const project = state.structuralExpansionProjects.find((candidate) => candidate.id === projectId);
+  if (!project || project.cancelled || project.commissioned) return false;
+  const sites = projectSites(state, projectId);
+  const siteIds = new Set(sites.map((site) => site.id));
+  let refund = Math.max(0, project.deliveredMaterials - project.refundedMaterials);
+
+  for (const job of state.jobs) {
+    if (job.constructionSiteId === undefined || !siteIds.has(job.constructionSiteId)) continue;
+    if (job.state !== 'done' && job.state !== 'expired') {
+      job.expiredFromState = job.state;
+      job.state = 'expired';
+      job.completedAt = state.now;
+      job.assignedCrewId = null;
+      job.stallReason = 'none';
+    }
+    const crew = state.crewMembers.find((candidate) => candidate.activeJobId === job.id);
+    if (crew) {
+      if (crew.carryingItemType === 'rawMaterial' && crew.carryingAmount > 0) refund += crew.carryingAmount;
+      crew.activeJobId = null;
+      crew.carryingItemType = null;
+      crew.carryingAmount = 0;
+      setCrewPath(state, crew, []);
+    }
+  }
+  state.constructionSites = state.constructionSites.filter((site) => !siteIds.has(site.id));
+  project.refundedMaterials += refund;
+  project.cancelled = true;
+  project.phase = 'cancelled';
+  project.finishedAt = state.now;
+  project.blockedReason = null;
+  refundConstructionMaterials(state, refund);
+  return true;
 }
 
 export function planTileConstruction(state: StationState, index: number, tile: TileType): { ok: boolean; reason?: string } {
@@ -453,6 +639,15 @@ export function createConstructionJobs(state: StationState): void {
     if (site.state === 'done') continue;
     if (hasOpenConstructionJob(state, site.id)) continue;
     site.assignedCrewId = null;
+    if (site.requiresEva) {
+      const workTile = constructionWorkTile(state, site);
+      const hasEvaRoute = activeAirlockTiles(state).some((airlock) => findSpacePath(state, airlock, workTile) !== null);
+      if (!hasEvaRoute) {
+        site.state = 'blocked';
+        site.blockedReason = 'no airlock EVA route';
+        continue;
+      }
+    }
     if (site.deliveredMaterials + 0.05 < site.requiredMaterials) {
       const remaining = site.requiredMaterials - site.deliveredMaterials;
       const sources = constructionMaterialSources(state);
@@ -558,6 +753,11 @@ export function crewAtConstructionSite(state: StationState, crew: CrewMember, si
 }
 
 export function applyConstructionSite(state: StationState, site: ConstructionSite): boolean {
+  if (site.structuralProjectId !== undefined) {
+    // The parent performs one atomic topology write after every child site is
+    // complete. This site is still rendered and receives normal EVA work.
+    return true;
+  }
   if (site.kind === 'tile' && site.targetTile !== undefined) {
     setTile(state, site.tileIndex, site.targetTile);
     if (site.targetTile === TileType.Space) {

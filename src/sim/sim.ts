@@ -250,6 +250,8 @@ import {
   activeAirlockTiles,
   applyConstructionSite,
   cleanupConstructionSites,
+  createStructuralExpansionProject,
+  advanceStructuralExpansionProjects,
   createConstructionJobs,
   crewAtConstructionSite,
   findConstructionPath,
@@ -260,6 +262,7 @@ import {
   updateEvaSuitForRoute,
   validateModulePlacementForConstruction
 } from './construction';
+import { validateStructuralSupportPlan } from './structural-support';
 import {
   ALL_SHIP_SIZES_FOR_BERTH,
   ALL_SHIP_TYPES_FOR_BERTH,
@@ -17897,7 +17900,12 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               setCrewPath(state, crew, []);
             }
           } else if (crew.carryingAmount > 0 && crewAtConstructionSite(state, crew, site)) {
-            site.deliveredMaterials = Math.min(site.requiredMaterials, site.deliveredMaterials + crew.carryingAmount);
+            const delivered = Math.min(crew.carryingAmount, Math.max(0, site.requiredMaterials - site.deliveredMaterials));
+            site.deliveredMaterials += delivered;
+            if (site.structuralProjectId !== undefined && delivered > 0) {
+              const project = state.structuralExpansionProjects.find((candidate) => candidate.id === site.structuralProjectId);
+              if (project) project.deliveredMaterials = Math.min(project.requiredMaterials, project.deliveredMaterials + delivered);
+            }
             crew.carryingAmount = 0;
             crew.carryingItemType = null;
             job.state = 'done';
@@ -23056,10 +23064,19 @@ function proposedWalkableExpansionConnectsToCore(state: StationState, proposedTi
   return reachedExpansionFloors >= expansionFloors.size;
 }
 
-export function buildStationExpansionOnTruss(
+export interface StationExpansionGeometryPlan {
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  doorTile: number | null;
+  targets: Array<{ tileIndex: number; targetTile: TileType; requiredMaterials: number }>;
+  changedTiles: number;
+  requiredMaterials: number;
+}
+
+/** Pure, deterministic geometry extraction for the truss expansion gesture. */
+export function planStationExpansionOnTruss(
   state: StationState,
   indices: number[]
-): { ok: boolean; reason?: string; changedTiles?: number; requiredMaterials?: number } {
+): { ok: true; plan: StationExpansionGeometryPlan } | { ok: false; reason: string; requiredMaterials?: number } {
   const expansionFloors = new Set<number>();
   for (const index of indices) {
     if (index < 0 || index >= state.tiles.length) continue;
@@ -23101,37 +23118,67 @@ export function buildStationExpansionOnTruss(
     return { ok: false, reason: 'needs walkable hull connection' };
   }
 
+  // Validate the actual scaffold before it is hidden by the commissioned
+  // floor. Validating proposedTiles here would turn every new floor into a
+  // grandfathered structural root and make this check vacuous.
+  const structural = validateStructuralSupportPlan(
+    state,
+    [],
+    [...expansionFloors].map((tile) => ({ tile, kind: 'small' as const }))
+  );
+  // Legacy expansion paints a contiguous deck of Truss tiles and has no
+  // placeable Junction yet. Enforce reachability and span now; the explicit
+  // branch rule becomes authoritative when Junction enters the build palette.
+  const blockingStructuralProblem = structural.problems.find((problem) => problem.reason !== 'branch-requires-junction');
+  if (blockingStructuralProblem) {
+    return { ok: false, reason: `structural support: ${blockingStructuralProblem.reason}` };
+  }
+
+  const targets: StationExpansionGeometryPlan['targets'] = [];
   let requiredMaterials = 0;
-  for (const [index, tile] of changes) {
+  for (const [index, tile] of [...changes.entries()].sort(([left], [right]) => left - right)) {
     const oldTile = state.tiles[index];
     if (oldTile === tile) continue;
+    let targetMaterials = 0;
     if (tile === TileType.Floor && oldTile === TileType.Truss) {
-      requiredMaterials += TRUSS_EXPANSION_FLOOR_COST;
+      targetMaterials = TRUSS_EXPANSION_FLOOR_COST;
     } else if (tile === TileType.Wall || tile === TileType.Door) {
-      requiredMaterials += TRUSS_EXPANSION_PERIMETER_COST;
+      targetMaterials = TRUSS_EXPANSION_PERIMETER_COST;
     } else {
-      requiredMaterials += Math.max(0, tileBuildCost(tile) - tileBuildCost(oldTile));
+      targetMaterials = Math.max(0, tileBuildCost(tile) - tileBuildCost(oldTile));
     }
+    requiredMaterials += targetMaterials;
+    targets.push({ tileIndex: index, targetTile: tile, requiredMaterials: targetMaterials });
   }
 
-  if (!consumeConstructionMaterials(state, requiredMaterials)) {
-    return { ok: false, reason: 'no construction materials', requiredMaterials };
+  const coordinates = [...expansionFloors].map((tile) => fromIndex(tile, state.width));
+  const bounds = {
+    minX: Math.min(...coordinates.map((point) => point.x)),
+    minY: Math.min(...coordinates.map((point) => point.y)),
+    maxX: Math.max(...coordinates.map((point) => point.x)),
+    maxY: Math.max(...coordinates.map((point) => point.y))
+  };
+  const doorTile = targets.find((target) => target.targetTile === TileType.Door)?.tileIndex ?? null;
+  return { ok: true, plan: { bounds, doorTile, targets, changedTiles: targets.length, requiredMaterials } };
+}
+
+export function buildStationExpansionOnTruss(
+  state: StationState,
+  indices: number[]
+): { ok: boolean; reason?: string; changedTiles?: number; requiredMaterials?: number } {
+  const planned = planStationExpansionOnTruss(state, indices);
+  if (!planned.ok) return planned;
+  const plan = planned.plan;
+  if (plan.targets.some((target) => state.constructionSites.some((site) => site.tileIndex === target.tileIndex))) {
+    return { ok: false, reason: 'construction overlap', requiredMaterials: plan.requiredMaterials };
   }
 
-  for (const [index, tile] of changes) {
-    removeConstructionAtTile(state, index, true);
-    setTile(state, index, tile);
-    state.zones[index] = ZoneType.Public;
-    state.rooms[index] = RoomType.None;
-    state.roomHousingPolicies[index] = defaultHousingPolicyForRoom(RoomType.None);
-  }
-  bumpRoomVersion(state);
-  bumpTopologyVersion(state);
+  createStructuralExpansionProject(state, plan);
 
   return {
     ok: true,
-    changedTiles: changes.size,
-    requiredMaterials
+    changedTiles: plan.changedTiles,
+    requiredMaterials: plan.requiredMaterials
   };
 }
 
@@ -24980,6 +25027,7 @@ export function tick(state: StationState, frameDt: number): void {
   updateSanitation(state, dt);
   maybeCreateTier3DispatchIncident(state, dt);
   updateIncidentPipeline(state, dt, occupancyByTile);
+  advanceStructuralExpansionProjects(state);
   cleanupConstructionSites(state);
   finishPhase('worldPost');
 

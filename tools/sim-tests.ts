@@ -583,7 +583,7 @@ function testTrussBuildRequiresEvaAndCanChain(): void {
   assertCondition(state.metrics.materials === startingMaterials - 2, 'Planning two truss tiles should charge two scaffold kits up front.');
 }
 
-function testTrussExpansionConvertsScaffoldIntoPressurizedShell(): void {
+function testTrussExpansionCreatesDeferredConstructionProject(): void {
   const state = createInitialState({ seed: 1340 });
   const core = fromIndex(state.core.centerTile, state.width);
   const patch = [
@@ -597,29 +597,18 @@ function testTrussExpansionConvertsScaffoldIntoPressurizedShell(): void {
   state.metrics.materials = 11;
 
   const built = buildStationExpansionOnTruss(state, patch);
-  assertCondition(built.ok, `Truss expansion should convert scaffold into a sealed room shell (${built.reason ?? 'no reason'}).`);
+  assertCondition(built.ok, `Truss expansion should create a deferred shell project (${built.reason ?? 'no reason'}).`);
   assertCondition(built.requiredMaterials === 11, `Truss shell conversion should use discounted scaffold costs (${built.requiredMaterials}).`);
-
-  for (const index of patch) {
-    assertCondition(state.tiles[index] === TileType.Floor, 'Truss expansion should convert selected scaffold into floor.');
-    assertCondition(state.rooms[index] === RoomType.None, 'Fresh expansion floor should not inherit a room paint.');
-  }
-
-  const doorTiles = [toIndex(core.x, core.y + 9, state.width), toIndex(core.x + 1, core.y + 9, state.width)];
+  assertCondition(state.structuralExpansionProjects.length === 1, 'Truss expansion should create one durable structural project.');
   assertCondition(
-    doorTiles.filter((index) => state.tiles[index] === TileType.Door).length === 1,
-    'Truss expansion should punch one door through the shared hull wall.'
+    state.constructionSites.length > 0 && state.constructionSites.every((site) => site.requiresEva && site.structuralProjectId !== undefined),
+    'Truss shell conversion should begin with linked EVA construction sites.'
   );
-  assertCondition(state.tiles[toIndex(core.x - 1, core.y + 10, state.width)] === TileType.Wall, 'Expansion should add an outer west wall.');
-  assertCondition(state.tiles[toIndex(core.x + 2, core.y + 10, state.width)] === TileType.Wall, 'Expansion should add an outer east wall.');
-  assertCondition(state.tiles[toIndex(core.x + 1, core.y + 12, state.width)] === TileType.Wall, 'Expansion should add an outer south wall.');
 
-  tick(state, 0.1);
   for (const index of patch) {
-    assertCondition(state.pressurized[index], 'Converted truss expansion should become pressurized.');
+    assertCondition(state.tiles[index] === TileType.Truss, 'Truss expansion should leave selected scaffold untouched until commissioning.');
   }
-  assertCondition(state.metrics.leakingTiles === 0, 'Converted truss expansion should not create a pressure leak.');
-  assertCondition(state.metrics.materials === 0, 'Conversion should consume exactly the discounted shell materials.');
+  assertCondition(state.metrics.materials === 11, 'Deferred conversion should not consume all shell materials up front.');
 }
 
 function setupFoodChain(state: StationState): void {
@@ -6751,7 +6740,7 @@ function run(): void {
   testCreditBuildDoesNotConsumeSuppliesOrNeedIntake();
   testCreditBuildBlocksOnCredits();
   testTrussBuildRequiresEvaAndCanChain();
-  testTrussExpansionConvertsScaffoldIntoPressurizedShell();
+  testTrussExpansionCreatesDeferredConstructionProject();
   testHydroponicsSuppliesBoostOutputButAreNotRequired();
   testUnlockTier0StartsConstrained();
   testTier0StarterDepotMaterialCapacity();

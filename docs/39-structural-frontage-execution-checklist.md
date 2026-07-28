@@ -365,7 +365,7 @@ compiles is not sufficient for player-facing work.
 - [x] Define small, medium, and heavy interface loads.
 - [x] Require reinforced load transfer for large Berths where appropriate.
 - [x] Validate support while planning.
-- [ ] Validate support again before commissioning.
+- [x] Validate support again before commissioning.
 - [ ] Cache support by structure/topology version.
 - [x] Avoid per-tick structure scans.
 
@@ -381,7 +381,7 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 2 Gate
 
-- [ ] Unsupported hull planning is rejected.
+- [x] Unsupported hull planning is rejected.
 - [x] A Junction enables a branch.
 - [x] Reinforcement enables a heavy interface.
 - [ ] Legacy saves load as structurally valid.
@@ -391,28 +391,28 @@ compiles is not sufficient for player-facing work.
 
 ### Planning And Delivery
 
-- [ ] Promote construction blueprints into the normal expansion workflow.
+- [x] Promote construction blueprints into the normal expansion workflow.
 - [ ] Plan Truss in space.
-- [ ] Route construction kits to reachable staging.
-- [ ] Route EVA workers through an Airlock.
+- [x] Route construction kits to reachable staging.
+- [x] Route EVA workers through an Airlock.
 - [ ] Build Truss through visible EVA welding.
-- [ ] Plan Pressure Hull over completed or planned support.
-- [ ] Derive floor-plate blueprints.
-- [ ] Derive perimeter wall/bulkhead blueprints.
-- [ ] Derive tie-in and doorway/airlock work.
+- [x] Plan Pressure Hull over completed or planned support.
+- [x] Derive floor-plate blueprints.
+- [x] Derive perimeter wall/bulkhead blueprints.
+- [x] Derive tie-in and doorway/airlock work.
 - [ ] Preserve editable plans before work completes.
-- [ ] Preserve cancellation and define material salvage/refund.
+- [x] Preserve cancellation and define material salvage/refund.
 - [ ] Preserve module movement and resale.
 
 ### Commissioning
 
-- [ ] Remove instant shell conversion from normal expansion.
-- [ ] Require structural completion before hull completion.
-- [ ] Require complete perimeter before seal check.
-- [ ] Keep incomplete shell unpressurized.
+- [x] Remove instant shell conversion from normal expansion.
+- [x] Require structural completion before hull completion.
+- [x] Require complete perimeter before seal check.
+- [x] Keep incomplete shell unpressurized.
 - [ ] Perform visible seal check.
-- [ ] Commission and pressurize only a supported sealed shell.
-- [ ] Require EVA construction for exterior/unpressurized modules.
+- [x] Commission and pressurize only a supported sealed shell.
+- [x] Require EVA construction for exterior/unpressurized modules.
 - [ ] Report missing material.
 - [ ] Report missing staging route.
 - [ ] Report missing Airlock/EVA route.
@@ -423,11 +423,11 @@ compiles is not sufficient for player-facing work.
 ### Phase 3 Gate
 
 - [ ] Build a complete pressurized wing from a live starter.
-- [ ] No Airlock visibly blocks exterior work.
+- [x] No Airlock visibly blocks exterior work.
 - [ ] Missing material visibly blocks work.
 - [ ] Exterior module installation uses EVA.
-- [ ] Save/load preserves partially delivered and partially built sites.
-- [ ] Topology mutations continue through authoritative invalidation paths.
+- [x] Save/load preserves partially delivered and partially built sites.
+- [x] Topology mutations continue through authoritative invalidation paths.
 
 ## Phase 4: Docking Slots, Approach Envelopes, And Frontage
 
@@ -746,7 +746,7 @@ compiles is not sufficient for player-facing work.
 ## Focused Runner Catalogue
 
 - [x] Add structural support runner.
-- [ ] Add phased construction/EVA runner.
+- [x] Add phased construction/EVA runner.
 - [x] Add approach geometry/reservation runner.
 - [ ] Add ship visit/settlement runner.
 - [x] Add occupant tenure/needs runner.
@@ -872,3 +872,10 @@ Remaining uncertainty:
 - Focused checks: traced `spawnShipAtDock`, `spawnShipAtBerth`, `updateArrivingShips`, current `approachTiles`, stable interface bindings, active-ship persistence, and grid remapping. The narrow adapter is between physical slot binding and approach/departure stage advancement.
 - Visual/playtest evidence: current Berth approach lanes are cosmetic and current Pod Dock validation truncates at map bounds. The planned model keeps full world-coordinate ingress, mooring, and egress rectangles outside map bounds, hard-rejects structure/mooring overlap, and derives conflict groups when otherwise legal approach paths intersect.
 - Remaining uncertainty: implementation must preserve accepted-offer commitments while adding deterministic `(queuedAt, ship.id)` group ownership, rederive geometry after map expansion, return orphaned bindings to holding, and prove map-edge legality, obstruction, parked coexistence, conflict serialization, independent concurrency, save/resume, and deterministic holding.
+
+2026-07-27 · Phase 3 phased structural expansion and EVA commissioning
+
+- Commit or files: `src/sim/types.ts`, `src/sim/initial-state.ts`, `src/sim/save.ts`, `src/sim/expansion.ts`, `src/sim/construction.ts`, `src/sim/sim.ts`, `src/sim/cold-start-scenarios.ts`, `tools/structural-expansion-tests.ts`, `tools/sim-tests.ts`, and `package.json`.
+- Focused checks: `npm run test:structural-expansion`, `npm run test:structural-support`, `npm run build`, and `git diff --check` passed. Coverage includes deterministic disconnected/over-span rejection, no instant mutation/upfront charge, missing-Airlock blocking, real material delivery and Airlock/EVA work, perimeter-before-interior staging, commissioning-time support revalidation, atomic topology commit, project-local cancellation/refund, partial delivery/build save-resume, and grid remapping.
+- Visual/playtest evidence: compared `?scenario=structural-expansion-blocked` and `?scenario=structural-expansion-active` at `1600x1000` with panels hidden and play zoom. The same exterior blueprint renders red and remains idle without an Airlock; with an Airlock it renders active blue/white EVA markers, shows an EVA worker at the site, reduces station stock, and exposes active construction work in Operations.
+- Remaining uncertainty: the red blocked blueprint does not yet state `missing Airlock` in selection/Alerts; seal-check presentation is not visible; the live fixture has not yet been watched through final pressurization; explicit Junction placement remains deferred, so contiguous legacy Truss decks temporarily ignore only `branch-requires-junction` while still enforcing reachability, span, and load support.

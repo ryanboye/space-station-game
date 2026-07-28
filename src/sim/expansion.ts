@@ -168,6 +168,23 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     ...site,
     tileIndex: remapIndex(site.tileIndex)
   }));
+  state.structuralExpansionProjects = state.structuralExpansionProjects.map((project) => {
+    const topLeft = fromIndex(toIndex(project.bounds.minX, project.bounds.minY, oldWidth), oldWidth);
+    const bottomRight = fromIndex(toIndex(project.bounds.maxX, project.bounds.maxY, oldWidth), oldWidth);
+    const remappedTopLeft = fromIndex(remapIndex(toIndex(topLeft.x, topLeft.y, oldWidth)), newWidth);
+    const remappedBottomRight = fromIndex(remapIndex(toIndex(bottomRight.x, bottomRight.y, oldWidth)), newWidth);
+    return {
+      ...project,
+      bounds: {
+        minX: remappedTopLeft.x,
+        minY: remappedTopLeft.y,
+        maxX: remappedBottomRight.x,
+        maxY: remappedBottomRight.y
+      },
+      doorTile: remapOptionalIndex(project.doorTile),
+      targets: project.targets.map((target) => ({ ...target, tileIndex: remapIndex(target.tileIndex) }))
+    };
+  });
   state.incidents = state.incidents.map((incident) => ({
     ...incident,
     tileIndex: remapIndex(incident.tileIndex)

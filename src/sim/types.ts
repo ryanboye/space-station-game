@@ -1275,6 +1275,40 @@ export interface ConstructionSite {
   state: ConstructionState;
   blockedReason: string | null;
   createdAt: number;
+  /** Structural expansion parent, when this site is one staged piece of a deferred hull commission. */
+  structuralProjectId?: number;
+  structuralStage?: 'perimeter' | 'interior';
+}
+
+export type StructuralExpansionPhase = 'perimeter' | 'interior' | 'blocked' | 'commissioned' | 'cancelled';
+
+export interface StructuralExpansionTarget {
+  tileIndex: number;
+  targetTile: TileType;
+  requiredMaterials: number;
+}
+
+/**
+ * Durable parent for a truss expansion. Child construction sites do the
+ * visible delivery/EVA work; the target hull is only written when every
+ * child has completed, so a partial shell can never pressurize.
+ */
+export interface StructuralExpansionProject {
+  id: number;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  doorTile: number | null;
+  targets: StructuralExpansionTarget[];
+  phase: StructuralExpansionPhase;
+  childSiteIds: number[];
+  completedSiteIds: number[];
+  requiredMaterials: number;
+  deliveredMaterials: number;
+  refundedMaterials: number;
+  blockedReason: string | null;
+  cancelled: boolean;
+  commissioned: boolean;
+  createdAt: number;
+  finishedAt: number | null;
 }
 
 export interface ItemNode {
@@ -2675,6 +2709,7 @@ export interface StationState {
   jobs: TransportJob[];
   reservations: Reservation[];
   constructionSites: ConstructionSite[];
+  structuralExpansionProjects: StructuralExpansionProject[];
   itemNodes: ItemNode[];
   legacyMaterialStock: number;
   incidents: IncidentEntity[];
@@ -2709,6 +2744,7 @@ export interface StationState {
   jobSpawnCounter: number;
   reservationSpawnCounter: number;
   constructionSiteSpawnCounter: number;
+  structuralExpansionProjectSpawnCounter: number;
   incidentSpawnCounter: number;
   incidentHeat: number;
   lastPayrollAt: number;

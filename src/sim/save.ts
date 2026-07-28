@@ -195,6 +195,7 @@ export interface StationSnapshotV1 {
   }>;
   commercialUnits?: CommercialUnit[];
   constructionSites: Array<{
+    id?: number;
     kind: 'tile' | 'module';
     tileIndex: number;
     targetTile?: TileType;
@@ -205,7 +206,31 @@ export interface StationSnapshotV1 {
     buildProgress: number;
     buildWorkRequired: number;
     requiresEva: boolean;
+    state?: 'planned' | 'delivering' | 'building' | 'blocked' | 'done';
+    structuralProjectId?: number;
+    structuralStage?: 'perimeter' | 'interior';
   }>;
+  structuralExpansionProjects?: Array<{
+    id: number;
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+    doorTile: number | null;
+    targets: Array<{ tileIndex: number; targetTile: TileType; requiredMaterials: number }>;
+    phase: 'perimeter' | 'interior' | 'blocked' | 'commissioned' | 'cancelled';
+    childSiteIds: number[];
+    completedSiteIds: number[];
+    requiredMaterials: number;
+    deliveredMaterials: number;
+    refundedMaterials: number;
+    blockedReason: string | null;
+    cancelled: boolean;
+    commissioned: boolean;
+    createdAt: number;
+    finishedAt: number | null;
+  }>;
+  mapExpansion?: {
+    purchased: { north: boolean; east: boolean; south: boolean; west: boolean };
+    purchasesMade: number;
+  };
   dockConfigs: Array<{
     anchorTile: number;
     sourceKey?: string;
@@ -915,8 +940,9 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       tenantStaffTiles: [...unit.tenantStaffTiles]
     })),
     constructionSites: state.constructionSites
-      .filter((site) => site.state !== 'done')
+      .filter((site) => site.state !== 'done' || site.structuralProjectId !== undefined)
       .map((site) => ({
+        id: site.id,
         kind: site.kind,
         tileIndex: site.tileIndex,
         targetTile: site.targetTile,
@@ -926,9 +952,23 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         deliveredMaterials: site.deliveredMaterials,
         buildProgress: site.buildProgress,
         buildWorkRequired: site.buildWorkRequired,
-        requiresEva: site.requiresEva
+        requiresEva: site.requiresEva,
+        state: site.state,
+        structuralProjectId: site.structuralProjectId,
+        structuralStage: site.structuralStage
       }))
       .sort((a, b) => a.tileIndex - b.tileIndex),
+    structuralExpansionProjects: state.structuralExpansionProjects.map((project) => ({
+      ...project,
+      bounds: { ...project.bounds },
+      targets: project.targets.map((target) => ({ ...target })),
+      childSiteIds: [...project.childSiteIds],
+      completedSiteIds: [...project.completedSiteIds]
+    })),
+    mapExpansion: {
+      purchased: { ...state.mapExpansion.purchased },
+      purchasesMade: state.mapExpansion.purchasesMade
+    },
     dockConfigs: state.docks
       .map((dock) => ({
         anchorTile: dock.anchorTile,
@@ -1556,6 +1596,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
       }
       const rawRotation = Math.round(asFiniteNumber(entry.rotation, 0));
       constructionSites.push({
+        id: Math.max(1, Math.floor(asFiniteNumber(entry.id, 0))) || undefined,
         kind,
         tileIndex,
         targetTile,
@@ -1565,10 +1606,95 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         deliveredMaterials: Math.max(0, asFiniteNumber(entry.deliveredMaterials, 0)),
         buildProgress: Math.max(0, asFiniteNumber(entry.buildProgress, 0)),
         buildWorkRequired: Math.max(1, asFiniteNumber(entry.buildWorkRequired, 1)),
-        requiresEva: entry.requiresEva === true
+        requiresEva: entry.requiresEva === true,
+        state: ['planned', 'delivering', 'building', 'blocked', 'done'].includes(String(entry.state))
+          ? entry.state as NonNullable<StationSnapshotV1['constructionSites']>[number]['state']
+          : undefined,
+        structuralProjectId: Number.isFinite(entry.structuralProjectId)
+          ? Math.max(1, Math.floor(asFiniteNumber(entry.structuralProjectId, 0)))
+          : undefined,
+        structuralStage: entry.structuralStage === 'perimeter' || entry.structuralStage === 'interior'
+          ? entry.structuralStage
+          : undefined
       });
     }
   }
+
+  const structuralExpansionProjects: NonNullable<StationSnapshotV1['structuralExpansionProjects']> = [];
+  if (Array.isArray(snapshotRaw.structuralExpansionProjects)) {
+    for (let i = 0; i < snapshotRaw.structuralExpansionProjects.length; i++) {
+      const entry = snapshotRaw.structuralExpansionProjects[i];
+      if (!isRecord(entry)) {
+        warnings.push(`structuralExpansionProjects[${i}] invalid; skipped.`);
+        continue;
+      }
+      const id = Math.floor(asFiniteNumber(entry.id, 0));
+      const bounds = isRecord(entry.bounds) ? entry.bounds : null;
+      const phase = entry.phase;
+      if (
+        id <= 0 || !bounds ||
+        !['perimeter', 'interior', 'blocked', 'commissioned', 'cancelled'].includes(String(phase)) ||
+        !Array.isArray(entry.targets)
+      ) {
+        warnings.push(`structuralExpansionProjects[${i}] missing required shape; skipped.`);
+        continue;
+      }
+      const targets = entry.targets.flatMap((target) => {
+        if (!isRecord(target)) return [];
+        const tileIndex = Math.floor(asFiniteNumber(target.tileIndex, -1));
+        const targetTile = isOneOf(target.targetTile, Object.values(TileType)) ? target.targetTile : undefined;
+        if (tileIndex < 0 || tileIndex >= expectedLength || targetTile === undefined) return [];
+        return [{
+          tileIndex,
+          targetTile,
+          requiredMaterials: Math.max(0, asFiniteNumber(target.requiredMaterials, 0))
+        }];
+      });
+      if (targets.length <= 0) {
+        warnings.push(`structuralExpansionProjects[${i}] has no valid targets; skipped.`);
+        continue;
+      }
+      const ids = (value: unknown): number[] => Array.isArray(value)
+        ? [...new Set(value.map((item) => Math.floor(asFiniteNumber(item, -1))).filter((item) => item > 0))]
+        : [];
+      structuralExpansionProjects.push({
+        id,
+        bounds: {
+          minX: Math.floor(asFiniteNumber(bounds.minX, 0)),
+          minY: Math.floor(asFiniteNumber(bounds.minY, 0)),
+          maxX: Math.floor(asFiniteNumber(bounds.maxX, 0)),
+          maxY: Math.floor(asFiniteNumber(bounds.maxY, 0))
+        },
+        doorTile: Number.isFinite(entry.doorTile) ? Math.floor(asFiniteNumber(entry.doorTile, -1)) : null,
+        targets,
+        phase: phase as NonNullable<StationSnapshotV1['structuralExpansionProjects']>[number]['phase'],
+        childSiteIds: ids(entry.childSiteIds),
+        completedSiteIds: ids(entry.completedSiteIds),
+        requiredMaterials: Math.max(0, asFiniteNumber(entry.requiredMaterials, 0)),
+        deliveredMaterials: Math.max(0, asFiniteNumber(entry.deliveredMaterials, 0)),
+        refundedMaterials: Math.max(0, asFiniteNumber(entry.refundedMaterials, 0)),
+        blockedReason: typeof entry.blockedReason === 'string' ? entry.blockedReason : null,
+        cancelled: entry.cancelled === true,
+        commissioned: entry.commissioned === true,
+        createdAt: Math.max(0, asFiniteNumber(entry.createdAt, simTime)),
+        finishedAt: Number.isFinite(entry.finishedAt) ? Math.max(0, asFiniteNumber(entry.finishedAt, 0)) : null
+      });
+    }
+  }
+
+  const rawMapExpansion = isRecord(snapshotRaw.mapExpansion) ? snapshotRaw.mapExpansion : null;
+  const rawPurchased = rawMapExpansion && isRecord(rawMapExpansion.purchased) ? rawMapExpansion.purchased : null;
+  const mapExpansion = rawPurchased
+    ? {
+        purchased: {
+          north: rawPurchased.north === true,
+          east: rawPurchased.east === true,
+          south: rawPurchased.south === true,
+          west: rawPurchased.west === true
+        },
+        purchasesMade: Math.max(0, Math.floor(asFiniteNumber(rawMapExpansion?.purchasesMade, 0)))
+      }
+    : undefined;
 
   // Optional in legacy saves — empty/missing array is fine; the runtime
   // defaults the per-berth allowlist to "all allowed" when no row
@@ -2159,6 +2285,8 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     modules,
     commercialUnits,
     constructionSites,
+    structuralExpansionProjects,
+    mapExpansion,
     dockConfigs,
     berthConfigs,
     resources: {
@@ -2499,7 +2627,7 @@ export function hydrateStateFromSave(
     }, 1)
   );
   next.constructionSites = snapshot.constructionSites.map((site) => ({
-    id: next.constructionSiteSpawnCounter++,
+    id: site.id ?? next.constructionSiteSpawnCounter++,
     kind: site.kind,
     tileIndex: site.tileIndex,
     targetTile: site.targetTile,
@@ -2511,10 +2639,37 @@ export function hydrateStateFromSave(
     buildWorkRequired: site.buildWorkRequired,
     requiresEva: site.requiresEva,
     assignedCrewId: null,
-    state: site.deliveredMaterials >= site.requiredMaterials ? 'building' : 'planned',
+    state: site.state === 'done'
+      ? 'done'
+      : site.deliveredMaterials >= site.requiredMaterials
+        ? 'building'
+        : 'planned',
     blockedReason: null,
-    createdAt: next.now
+    createdAt: next.now,
+    structuralProjectId: site.structuralProjectId,
+    structuralStage: site.structuralStage
   }));
+  next.constructionSiteSpawnCounter = Math.max(
+    next.constructionSiteSpawnCounter,
+    ...next.constructionSites.map((site) => site.id + 1)
+  );
+  next.structuralExpansionProjects = (snapshot.structuralExpansionProjects ?? []).map((project) => ({
+    ...project,
+    bounds: { ...project.bounds },
+    targets: project.targets.map((target) => ({ ...target })),
+    childSiteIds: [...project.childSiteIds],
+    completedSiteIds: [...project.completedSiteIds]
+  }));
+  next.structuralExpansionProjectSpawnCounter = Math.max(
+    1,
+    ...next.structuralExpansionProjects.map((project) => project.id + 1)
+  );
+  if (snapshot.mapExpansion) {
+    next.mapExpansion = {
+      purchased: { ...snapshot.mapExpansion.purchased },
+      purchasesMade: snapshot.mapExpansion.purchasesMade
+    };
+  }
 
   next.controls.paused = true;
   tick(next, 0);
