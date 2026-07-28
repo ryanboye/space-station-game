@@ -28,6 +28,91 @@ compiles is not sufficient for player-facing work.
   reservations, and render/simulation separation remain intact.
 - [ ] `system-flow-map.html` remains untouched unless separately requested.
 
+## Practical Completion Order
+
+The checklist is a product backlog, not a valid execution schedule. Remaining
+items are completed through the following integrated gates. A gate gets one
+active implementation owner, one deterministic showcase, one deliberately bad
+comparison, one live browser inspection, and one commit. Do not begin the next
+gate while the current gate still has a player-blocking defect.
+
+### Gate A: Coherent Opening
+
+The player starts from a safe but commercially unfinished shell, chooses Food,
+Supplies, or Ship Service, and creates the first working operation through
+layout, fixtures, staffing, stock, and policy. Global Goal is the sole
+north-star progression surface; business paths are choices beneath it. Legacy
+tier and specialization UI must not compete with that model.
+
+Required proof: each path can be selected from the same starter, produces a
+visibly different station and revenue stream, exposes unmet demand before the
+player commits, and offers at least two viable layout or operating choices.
+
+### Gate B: Spatial Operations
+
+Finish only the shared facility behaviors needed by the three opening paths:
+depicted capacity, exclusive use, staff positions, physical stock movement,
+queues, dirty/damaged/empty states, and local diagnosis. Add further facility
+families only after these three paths survive live play.
+
+Required proof: a poor layout fails visibly, an improved layout measurably
+raises throughput, and the improvement comes from world changes rather than a
+staff-count stepper or hidden modifier.
+
+### Gate C: Player-Built Frontage And Expansion
+
+Expose Truss, structural support, staged EVA construction, sealing, utilities,
+and commissioning as one discoverable player workflow. Connect Pod Dock and
+Berth frontage to approach clearance and interior throats.
+
+Required proof: begin at the normal starter, build and commission one complete
+wing, install a working interface, then observe a bad and improved passenger or
+cargo route. Save and resume once during construction.
+
+### Gate D: Charter Operating Consequences
+
+Turn the charter into one causal forecast reused at site selection, interface
+placement, and map-condition inspection: likely traffic, valuable services,
+busy and sheltered faces, thermal pressure, resource economics, and available
+mitigations. The forecast must predict actual simulation outcomes.
+
+Required proof: two sites from the same seeded system produce different useful
+service mixes, exterior risks, expansion choices, and measured operating
+results without making either site a trap.
+
+### Gate E: Normal-Scale Operation
+
+Build one active benchmark with at least 50 crew, 50 simultaneous visitors,
+5-10 mixed interfaces, ships in multiple phases, service queues, cargo jobs,
+reservations, and approach conflicts. Profile before optimizing and change only
+measured hot paths. Simulation and render budgets remain separate.
+
+Required proof: deterministic repeat, representative workload counters, saved
+raw before/after timings, smooth live movement, and no hidden reduction of work
+to pass the budget.
+
+### Gate F: Integrated Playthrough And Catalogue
+
+Play from charter selection through a large mixed station, fixing progression,
+save migration, balance, and discoverability defects encountered along the
+way. After the integrated loop is sound, complete the remaining fixture,
+art-state, and content catalogue in bounded families rather than parallel
+one-offs.
+
+Required proof: a preserved save, chronological playtest record, completed
+global goals, all three opening businesses represented, one commissioned
+expansion, one medium/large Berth operation, one damage/EVA recovery, and an
+audited checklist with no unsupported checked claims.
+
+### Execution Limits
+
+- At most one implementation subagent may be open for this program at a time.
+- A worker receives one bounded gate slice and is closed immediately after lead review.
+- No full test suite during iteration; run only focused checks named by the gate.
+- Stop and report after each committed gate instead of running indefinitely.
+- A test fixture may prove mechanics, but only a normal-start playtest can close a gameplay gate.
+- Catalogue breadth cannot delay Gates A-E unless the missing asset or fixture blocks that gate.
+
 ## Program Setup
 
 - [x] Consolidate the structural frontage, approach, visit, crowd, exposure, and
@@ -651,14 +736,14 @@ compiles is not sufficient for player-facing work.
 
 ### Starter Contract
 
-- [ ] Begin with a finite unfinished pressure hull.
+- [x] Begin with a finite unfinished pressure hull.
 - [x] Include basic life safety and crew support.
 - [x] Include Receiving and a construction staging route.
-- [ ] Include one usable Airlock.
+- [x] Include one usable Airlock.
 - [x] Include two Pod Docks on limited frontage.
 - [x] Include room to author one opening business.
-- [ ] Include one short prebuilt truss/hardpoint lesson.
-- [ ] Preserve one legible side for the first Berth expansion.
+- [x] Include one short prebuilt truss/hardpoint lesson.
+- [x] Preserve one legible side for the first Berth expansion.
 - [x] Do not start with a completed food and market checklist.
 
 ### Opening Choices
@@ -1091,3 +1176,10 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:structural-expansion` proves perimeter-before-interior staging, whole-shell validation before inspection, a real zero-material EVA seal job, no topology mutation during partial inspection, save/resume during the seal pass, support revalidation, and atomic commission only after the supported shell passes. Missing perimeter and doorway cases report exact tile coordinates.
 - Player-facing behavior: the final exterior worker pass renders as `SEAL`; low oxygen sends the worker back toward an Airlock and exposes `EVA OXYGEN LOW` or `EVA OXYGEN DEPLETED`; incidental crowd contention must persist for the movement replan threshold before it becomes `WORK POSITION OBSTRUCTED`.
 - Remaining uncertainty: low-oxygen and obstructed-position blockers still need dedicated deterministic runners and live captures, so those two checklist claims remain open. A complete player-built starter wing still needs a live end-to-end commissioning pass.
+
+2026-07-28 · Practical completion reset and opening comparison
+
+- Commit or files: practical gate order in this checklist; compact opening-business comparison in `src/main.ts` and `src/styles.css` (pending integration commit at evidence capture).
+- Focused checks: `npm run build` and `git diff --check` passed. The live starter at `?scenario=starter` presents Food, Supplies, and Refuel together above one selected detail/action area; selecting Supplies changes the detail without losing the three-way comparison.
+- Visual/playtest evidence: inspected at the normal in-app browser viewport. All three investments, current remaining capital, and observed demand fit in the first sidebar view while the station remains visible. The starter visibly contains a finite hull, one south Airlock, a three-tile Truss finger, and open east/west expansion faces.
+- Remaining uncertainty: this closes stale starter evidence and improves comparison, but Gate A remains open until Supplies and Refuel each complete a normal UI operating cycle and stored starter attachments are validated.

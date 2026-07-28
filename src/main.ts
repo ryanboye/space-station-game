@@ -7120,13 +7120,18 @@ function recipeNextControl(recipe: ReturnType<typeof evaluateOpeningRecipes>[num
  * to do nothing. Re-render only when something actually changed.
  */
 let renderedRecipeSignature = '';
+let selectedOpeningRecipeId = 'feed-travelers';
 
-function refreshOpeningRecipeCatalog(): void {
+function refreshOpeningRecipeCatalog(force = false): void {
   const host = document.querySelector<HTMLElement>('#opening-recipe-list');
   if (!host) return;
   const demand = getPodDemandSummary(state, null);
   const recipes = evaluateOpeningRecipes(state);
+  if (!recipes.some((recipe) => recipe.id === selectedOpeningRecipeId)) {
+    selectedOpeningRecipeId = recipes[0]?.id ?? 'feed-travelers';
+  }
   const signature = JSON.stringify([
+    selectedOpeningRecipeId,
     recipes.map((recipe) => [
       recipe.remainingCostCredits,
       recipe.affordable,
@@ -7141,10 +7146,9 @@ function refreshOpeningRecipeCatalog(): void {
   // Demand can change while the player is deciding which step to click. Keep
   // the current nodes stable under the pointer and catch up on the next 125ms
   // refresh after it leaves the catalog.
-  if (host.matches(':hover')) return;
+  if (!force && host.matches(':hover')) return;
   renderedRecipeSignature = signature;
-  host.innerHTML = recipes
-    .map((recipe) => {
+  const presented = recipes.map((recipe) => {
       const demandRow = demand.rows.find((row) =>
         (recipe.id === 'feed-travelers' && row.family === 'food') ||
         (recipe.id === 'sell-supplies' && row.family === 'supplies') ||
@@ -7158,25 +7162,36 @@ function refreshOpeningRecipeCatalog(): void {
       const status = recipe.operational
         ? 'Live now.'
         : recipe.operationalReasons[0] ?? 'Finish the remaining build steps.';
-      return `
-        <div class="recipe-card${recipe.built ? ' recipe-card-done' : ''}${recipe.operational ? ' recipe-card-operational' : ''}">
+      return { recipe, demandNote, status };
+    });
+  const selected = presented.find(({ recipe }) => recipe.id === selectedOpeningRecipeId) ?? presented[0];
+  host.innerHTML = `
+    <div class="recipe-choice-grid" aria-label="Opening business choices">
+      ${presented.map(({ recipe, demandNote }) => `
+        <button class="recipe-choice${recipe.id === selected?.recipe.id ? ' selected' : ''}${recipe.operational ? ' operational' : ''}"
+          type="button" data-recipe-select="${escapeHtml(recipe.id)}"
+          aria-pressed="${recipe.id === selected?.recipe.id ? 'true' : 'false'}">
+          <span class="recipe-choice-name">${escapeHtml(recipe.title)}</span>
+          <strong class="${recipe.affordable ? '' : 'recipe-card-unaffordable'}">${escapeHtml(recipeOperationalLabel(recipe))}</strong>
+          <small>${escapeHtml(demandNote)}</small>
+        </button>`).join('')}
+    </div>
+    ${selected ? `
+      <div class="recipe-card recipe-detail${selected.recipe.built ? ' recipe-card-done' : ''}${selected.recipe.operational ? ' recipe-card-operational' : ''}">
           <div class="recipe-card-head">
-            <span class="recipe-card-title">${escapeHtml(recipe.title)}</span>
-            <span class="recipe-card-cost${recipe.affordable ? '' : ' recipe-card-unaffordable'}">${
-              recipeOperationalLabel(recipe)
+            <span class="recipe-card-title">${escapeHtml(selected.recipe.title)}</span>
+            <span class="recipe-card-cost${selected.recipe.affordable ? '' : ' recipe-card-unaffordable'}">${
+              recipeOperationalLabel(selected.recipe)
             }</span>
           </div>
-          <small class="recipe-card-summary">${escapeHtml(recipe.summary)}</small>
-          <small class="recipe-card-demand">${escapeHtml(demandNote)}</small>
-          <small class="recipe-card-machine">${escapeHtml(recipeMachineReadout(recipe))}</small>
-          <small class="recipe-card-status">${escapeHtml(status)}</small>
-          ${recipe.operational ? '' : `<div class="recipe-action-row">${recipeNextControl(recipe)}</div>`}
-          <small class="recipe-card-note">Staff: ${escapeHtml(recipe.staffing)}</small>
-          <small class="recipe-card-note">Utilities: ${escapeHtml(recipe.utilities)}</small>
-          <small class="recipe-card-note">${escapeHtml(recipe.economics)}</small>
-        </div>`;
-    })
-    .join('');
+          <small class="recipe-card-summary">${escapeHtml(selected.recipe.summary)}</small>
+          <small class="recipe-card-machine">${escapeHtml(recipeMachineReadout(selected.recipe))}</small>
+          <small class="recipe-card-status">${escapeHtml(selected.status)}</small>
+          ${selected.recipe.operational ? '' : `<div class="recipe-action-row">${recipeNextControl(selected.recipe)}</div>`}
+          <small class="recipe-card-note">Staff: ${escapeHtml(selected.recipe.staffing)}</small>
+          <small class="recipe-card-note">Utilities: ${escapeHtml(selected.recipe.utilities)}</small>
+          <small class="recipe-card-note">${escapeHtml(selected.recipe.economics)}</small>
+      </div>` : ''}`;
 
   const futureHost = document.querySelector<HTMLElement>('#future-facility-list');
   if (futureHost && futureHost.childElementCount === 0) {
@@ -7326,6 +7341,13 @@ function wireToolbar(): void {
   // same helpers the catalog buttons use — a step is a shortcut to a tool, not
   // a second way to build.
   document.querySelector('#opening-recipe-list')?.addEventListener('click', (event) => {
+    const choice = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-recipe-select]');
+    if (choice?.dataset.recipeSelect) {
+      selectedOpeningRecipeId = choice.dataset.recipeSelect;
+      renderedRecipeSignature = '';
+      refreshOpeningRecipeCatalog(true);
+      return;
+    }
     const step = (event.target as HTMLElement).closest<HTMLButtonElement>('.recipe-step');
     if (!step) return;
     const roomKey = step.dataset.toolRoom;
