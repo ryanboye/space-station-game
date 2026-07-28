@@ -30,6 +30,7 @@
     "test:ship-fleet": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/ship-fleet-tests.js",
     "test:exterior-integrity": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/exterior-integrity-tests.js",
     "test:interface-diagnosis": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/interface-diagnosis-tests.js",
+    "test:physical-cargo": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/physical-cargo-tests.js",
     "test:harness": "playwright test",
     "test:harness:update-snapshots": "playwright test --update-snapshots",
     "perf:sim": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/sim-perf.js",

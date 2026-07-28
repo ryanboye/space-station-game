@@ -20,7 +20,7 @@ import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { createVisitorNeeds } from './occupant-demand';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tryPlaceModule } from './sim';
+import { buildStationExpansionOnTruss, buyMaterials, buyRawFood, getApproachConflictGroups, mapConditionAt, planStationExpansionOnTruss, reconcileExteriorIntegrityTargets, removeModuleAtTile, setBerthCustomsPolicy, setBerthScreeningLevel, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryPlaceModule } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -274,6 +274,50 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     if (distinctHullTargets[1]) setExteriorIntegrityTargetWear(s, distinctHullTargets[1].id, 58);
     if (distinctHullTargets[2]) setExteriorIntegrityTargetWear(s, distinctHullTargets[2].id, 88);
     if (distinctHullTargets[3]) setExteriorIntegrityTargetState(s, distinctHullTargets[3].id, 'patched', 0);
+    s.controls.paused = true;
+  },
+
+  // Phase 6 visual fixture: a real assigned haul waits at a stocked source.
+  // Unpausing demonstrates pickup, the bulky cart footprint, and the brief
+  // destination handoff marker without inventing showcase-only cargo state.
+  'physical-cargo-showcase': (s) => {
+    const wasPaused = s.controls.paused;
+    s.controls.paused = false;
+    tick(s, 0);
+    s.controls.paused = wasPaused;
+    const nodes = [...s.itemNodes].sort((a, b) => a.tileIndex - b.tileIndex);
+    const source = nodes[0];
+    const destination = nodes.find((node) => node.tileIndex !== source?.tileIndex);
+    const crew = s.crewMembers[0];
+    if (source && destination && crew) {
+      source.items = { tradeGood: Math.min(8, source.capacity) };
+      destination.items = {};
+      crew.tileIndex = source.tileIndex;
+      crew.x = source.tileIndex % s.width + 0.5;
+      crew.y = Math.floor(source.tileIndex / s.width) + 0.5;
+      crew.path = [];
+      crew.activeJobId = 99601;
+      crew.carryingItemType = null;
+      crew.carryingAmount = 0;
+      s.jobs = [{
+        id: 99601,
+        type: 'deliver',
+        itemType: 'tradeGood',
+        amount: Math.min(8, source.capacity),
+        fromTile: source.tileIndex,
+        toTile: destination.tileIndex,
+        assignedCrewId: crew.id,
+        createdAt: s.now,
+        expiresAt: s.now + 180,
+        state: 'assigned',
+        pickedUpAmount: 0,
+        completedAt: null,
+        lastProgressAt: s.now,
+        stallReason: 'none'
+      }];
+      s.jobSpawnCounter = Math.max(s.jobSpawnCounter, 99602);
+    }
+    s.controls.shipsPerCycle = 0;
     s.controls.paused = true;
   },
 

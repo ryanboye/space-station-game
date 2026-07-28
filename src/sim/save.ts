@@ -9,6 +9,7 @@ import {
   setDockPurpose,
   reconcilePhysicalApproachCommitments,
   rebuildPassengerTransfersAfterHydration,
+  restorePersistedTransportJobs,
   tick,
   tryPlaceModule
 } from './sim';
@@ -24,6 +25,7 @@ import {
   type CommercialOffer,
   type HousingPolicy,
   type ItemType,
+  type TransportJob,
   type ArrivingShip,
   type SmallCraftService,
   type SmallCraftVisit,
@@ -296,6 +298,10 @@ export interface StationSnapshotV1 {
       healthState: 'healthy' | 'distressed' | 'critical';
       blockedTicks?: number;
       movementReplanCooldownUntil?: number;
+      /** An active haul remains physically held by this crew member across save/load. */
+      activeJobId?: number | null;
+      carryingItemType?: ItemType | null;
+      carryingAmount?: number;
     }>;
   };
   residents?: Resident[];
@@ -309,6 +315,17 @@ export interface StationSnapshotV1 {
     tileIndex: number;
     items: Partial<Record<ItemType, number>>;
   }>;
+  /**
+   * Only ordinary pickup/deliver work persists. Repair, production, and
+   * sanitation jobs are regenerated from their authoritative world state.
+   */
+  transportJobs?: Array<Pick<TransportJob,
+    'id' | 'type' | 'itemType' | 'amount' | 'fromTile' | 'toTile' |
+    'assignedCrewId' | 'createdAt' | 'expiresAt' | 'state' |
+    'pickedUpAmount' | 'completedAt' | 'lastProgressAt' | 'stallReason' |
+    'stalledSince' | 'blockedReason' | 'portShipId' | 'portCargoLotId' |
+    'portCargoDirection' | 'portFuelNodeTile'
+  >>;
   controls: {
     shipsPerCycle: number;
     taxRate: number;
@@ -1097,7 +1114,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         airExposureSec: crew.airExposureSec,
         healthState: crew.healthState,
         blockedTicks: crew.blockedTicks,
-        movementReplanCooldownUntil: crew.movementReplanCooldownUntil
+        movementReplanCooldownUntil: crew.movementReplanCooldownUntil,
+        activeJobId: crew.activeJobId,
+        carryingItemType: crew.carryingItemType,
+        carryingAmount: crew.carryingAmount
       }))
     },
     residents: state.residents.map(({ movementWaitReason: _movementWaitReason, ...resident }) => ({
@@ -1127,6 +1147,34 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       officers: { ...state.command.officers }
     },
     inventoryByTile,
+    transportJobs: state.jobs
+      .filter((job) =>
+        (job.type === 'pickup' || job.type === 'deliver') &&
+        (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress')
+      )
+      .map((job) => ({
+        id: job.id,
+        type: job.type,
+        itemType: job.itemType,
+        amount: job.amount,
+        fromTile: job.fromTile,
+        toTile: job.toTile,
+        assignedCrewId: job.assignedCrewId,
+        createdAt: job.createdAt,
+        expiresAt: job.expiresAt,
+        state: job.state,
+        pickedUpAmount: job.pickedUpAmount,
+        completedAt: job.completedAt,
+        lastProgressAt: job.lastProgressAt,
+        stallReason: job.stallReason,
+        stalledSince: job.stalledSince,
+        blockedReason: job.blockedReason,
+        portShipId: job.portShipId,
+        portCargoLotId: job.portCargoLotId,
+        portCargoDirection: job.portCargoDirection,
+        portFuelNodeTile: job.portFuelNodeTile
+      }))
+      .sort((a, b) => a.id - b.id),
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
       taxRate: state.controls.taxRate,
@@ -1902,7 +1950,18 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
           ? entry.healthState
           : 'healthy',
         blockedTicks: Math.max(0, Math.floor(asFiniteNumber(entry.blockedTicks, 0))),
-        movementReplanCooldownUntil: Math.max(0, asFiniteNumber(entry.movementReplanCooldownUntil, 0))
+        movementReplanCooldownUntil: Math.max(0, asFiniteNumber(entry.movementReplanCooldownUntil, 0)),
+        activeJobId: entry.activeJobId === null
+          ? null
+          : Number.isFinite(entry.activeJobId)
+            ? Math.max(0, Math.floor(asFiniteNumber(entry.activeJobId, 0)))
+            : undefined,
+        carryingItemType: entry.carryingItemType === null
+          ? null
+          : isOneOf(entry.carryingItemType, ITEM_TYPES)
+            ? entry.carryingItemType
+            : undefined,
+        carryingAmount: Math.max(0, asFiniteNumber(entry.carryingAmount, 0))
       });
     }
   }
@@ -2404,6 +2463,55 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         return visitor ? [visitor] : [];
       })
     : [];
+  const transportJobs: NonNullable<StationSnapshotV1['transportJobs']> = [];
+  if (Array.isArray(snapshotRaw.transportJobs)) {
+    const seenJobIds = new Set<number>();
+    for (const entry of snapshotRaw.transportJobs) {
+      if (!isRecord(entry)) continue;
+      const id = Math.floor(asFiniteNumber(entry.id, -1));
+      const type = isOneOf(entry.type, ['pickup', 'deliver'] as const) ? entry.type : null;
+      const itemType = isOneOf(entry.itemType, ITEM_TYPES) ? entry.itemType : null;
+      const state = isOneOf(entry.state, ['pending', 'assigned', 'in_progress'] as const) ? entry.state : null;
+      if (id < 0 || seenJobIds.has(id) || !type || !itemType || !state) {
+        warnings.push('transport job invalid; dropped.');
+        continue;
+      }
+      seenJobIds.add(id);
+      const amount = Math.max(0, asFiniteNumber(entry.amount, 0));
+      if (amount <= 0) {
+        warnings.push(`transport job ${id} has no cargo; dropped.`);
+        continue;
+      }
+      const fromTile = clamp(Math.floor(asFiniteNumber(entry.fromTile, -1)), 0, expectedLength - 1);
+      const toTile = clamp(Math.floor(asFiniteNumber(entry.toTile, -1)), 0, expectedLength - 1);
+      transportJobs.push({
+        id,
+        type,
+        itemType,
+        amount,
+        fromTile,
+        toTile,
+        assignedCrewId: Number.isFinite(entry.assignedCrewId) ? Math.floor(asFiniteNumber(entry.assignedCrewId, 0)) : null,
+        createdAt: Math.max(0, asFiniteNumber(entry.createdAt, simTime)),
+        expiresAt: Math.max(0, asFiniteNumber(entry.expiresAt, simTime)),
+        state,
+        pickedUpAmount: clamp(asFiniteNumber(entry.pickedUpAmount, 0), 0, amount),
+        completedAt: null,
+        lastProgressAt: Math.max(0, asFiniteNumber(entry.lastProgressAt, simTime)),
+        stallReason: isOneOf(entry.stallReason, ['none', 'stalled_path_blocked', 'stalled_unreachable_source', 'stalled_unreachable_dropoff', 'stalled_no_supply'] as const)
+          ? entry.stallReason
+          : 'none',
+        stalledSince: Number.isFinite(entry.stalledSince) ? Math.max(0, asFiniteNumber(entry.stalledSince, 0)) : undefined,
+        blockedReason: typeof entry.blockedReason === 'string' ? entry.blockedReason.slice(0, 160) : null,
+        portShipId: Number.isFinite(entry.portShipId) ? Math.max(0, Math.floor(asFiniteNumber(entry.portShipId, 0))) : undefined,
+        portCargoLotId: Number.isFinite(entry.portCargoLotId) ? Math.max(0, Math.floor(asFiniteNumber(entry.portCargoLotId, 0))) : undefined,
+        portCargoDirection: isOneOf(entry.portCargoDirection, ['inbound', 'outbound'] as const) ? entry.portCargoDirection : undefined,
+        portFuelNodeTile: Number.isFinite(entry.portFuelNodeTile)
+          ? clamp(Math.floor(asFiniteNumber(entry.portFuelNodeTile, 0)), 0, expectedLength - 1)
+          : undefined
+      });
+    }
+  }
   const commercialUnits = normalizeCommercialUnits(snapshotRaw.commercialUnits, expectedLength, warnings);
   const openingEconomy = normalizeOpeningEconomyState(snapshotRaw.openingEconomy, warnings);
   const serviceLog = normalizeServiceLog(snapshotRaw.serviceLog as Partial<ServiceLog> | undefined);
@@ -2439,6 +2547,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     residents,
     command,
     inventoryByTile,
+    transportJobs,
     controls: {
       shipsPerCycle,
       taxRate,
@@ -3249,7 +3358,11 @@ export function hydrateStateFromSave(
     crew.healthState = saved.healthState;
     crew.blockedTicks = Math.max(0, Math.floor(saved.blockedTicks ?? 0));
     crew.movementReplanCooldownUntil = Math.max(0, saved.movementReplanCooldownUntil ?? 0);
+    crew.activeJobId = saved.activeJobId ?? null;
+    crew.carryingItemType = saved.carryingItemType ?? null;
+    crew.carryingAmount = Math.max(0, saved.carryingAmount ?? 0);
   }
+  restorePersistedTransportJobs(next, snapshot.transportJobs ?? [], warnings);
   next.crewSpawnCounter = Math.max(
     next.crewSpawnCounter,
     next.crewMembers.reduce((max, crew) => Math.max(max, crew.id + 1), 1)

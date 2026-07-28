@@ -550,13 +550,13 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Represent meals, stock, supplies, luggage, and freight as visible carried
   objects or carts backed by real jobs.
-- [ ] Show pickup at source.
-- [ ] Show carrying through the station.
-- [ ] Show drop-off at staging or destination.
-- [ ] Make cargo carriers consume route capacity.
+- [x] Show pickup at source.
+- [x] Show carrying through the station.
+- [x] Show drop-off at staging or destination.
+- [x] Make cargo carriers consume route capacity.
 - [ ] Make public/cargo conflict slow both flows.
 - [ ] Show the conflict where it happens.
-- [ ] Preserve resource accounting through interrupted jobs.
+- [x] Preserve resource accounting through interrupted jobs.
 
 ### Physical Boarding
 
@@ -584,7 +584,7 @@ compiles is not sufficient for player-facing work.
 
 ### Phase 6 Gate
 
-- [ ] Shared public/cargo corridor performs worse than separated routes.
+- [x] Shared public/cargo corridor performs worse than separated routes.
 - [ ] Additional Gangway improves boarding.
 - [ ] Meal queue across an exit creates late boarding.
 - [x] Diagnosis matches measured actor behavior.
@@ -686,9 +686,9 @@ compiles is not sufficient for player-facing work.
 - [ ] Add planned/delivered/welding/complete/overloaded structural states.
 - [ ] Add scaffold/floor/wall/seal/pressurizing states.
 - [ ] Add approach reservation animation.
-- [ ] Add carried resource sprites.
+- [x] Add carried resource sprites.
 - [ ] Add Gangway and clamp deployment states.
-- [ ] Add hull wear/damage/breach/repair states.
+- [x] Add hull wear/damage/breach/repair states.
 - [ ] Add door contention and late-boarding indicators.
 - [ ] Verify every asset at actual gameplay size in the live renderer.
 
@@ -769,7 +769,7 @@ compiles is not sufficient for player-facing work.
 - [x] Add failed-stay/stranding runner.
 - [x] Add movement/queue/deadlock runner.
 - [ ] Add cargo/boarding/support runner.
-- [ ] Add integrity/pressure/EVA repair runner.
+- [x] Add integrity/pressure/EVA repair runner.
 - [ ] Add target-scale performance runner.
 - [x] Document commands beside each completed phase.
 
@@ -984,3 +984,18 @@ Remaining uncertainty:
 - Focused evidence: `npm run test:exterior-integrity`, `npm run test:interface-diagnosis`, `npm run test:ship-fleet`, `npm run test:passenger-transfer`, and `npm run test:structural-expansion` passed. Coverage proves world-stable face identity, thresholded worn/damaged/breached states, pressure loss without deleting the wall, patched pressure restoration, Airlock/oxygen/supply repair gates, exactly-once material consumption, save/load and map-expansion remapping, debris exposure with Truss mitigation, and diagnosis derived from real transfer queues and active cargo routes rather than a hidden score.
 - Visual/playtest evidence: `?scenario=exterior-integrity-showcase` seeds worn, damaged, breached, and patched targets on one paused starter hull. Damage overlays render in the world and repair workers use the existing external EVA/weld presentation. The interface card is contextual to the selected Pod Dock or Berth and returns one prioritized problem with a concrete physical coordinate and remedy.
 - Remaining uncertainty: integrity overlay readability needs tuning at Fit Station zoom; automatic wear rates need a sustained live balance pass; the current charter evidence proves debris-density weighting but not a lane-direction comparison; diagnosis does not yet highlight the implicated route or calculate explicit reachable seat counts; and physical cargo persistence remains Phase 6 work.
+
+2026-07-27 · Phase 8 starter and opening-business audit
+
+- Existing foundation: the starter already supplies two Pod Docks, a finite powered shell, receiving, crew quarters, hygiene, and a crew mess. The three intended opening businesses already exist in `src/sim/opening-recipes.ts`, with real demand, located inventory, procurement, physical service truth, and optional Capital Projects underneath them.
+- Player-facing conflict: food begins as an almost-complete Cafeteria, supplies inherit most receiving infrastructure, and `Service Ships` currently means refueling rather than repair/dry-dock work. Global Goal, legacy tiers, specialties, business recipes, and Capital Projects all compete to explain progression.
+- Recommended next boundary after physical cargo: retain shared safety infrastructure but begin commercially unfinished; present food, supplies, and pod refueling as build-by-doing choices; make each path expose one meaningful spatial tradeoff; require a real visible service outcome within two traffic waves; then offer throughput expansion, another Pod Dock, or saving toward the first Berth.
+- Acceptance emphasis: recipe progress must read actual service outcomes rather than become a placement checklist; missing stock, access, power, or pipe must produce zero service and a specific physical explanation; and one opening business must become modestly profitable before the first Berth without passive arrival revenue or rating growth funding the station.
+- Remaining uncertainty: the starter still lacks a visible Airlock/truss lesson; saved starter templates may preserve incompatible interface attachments; and the market's large native fixtures are not yet the opening recipe's required spatial machine.
+
+2026-07-27 · Physical cargo ownership, persistence, and corridor capacity
+
+- Commit or files: transport ownership and movement in `src/sim/sim.ts`, save/hydration in `src/sim/save.ts`, world presentation in `src/render/render.ts`, deterministic visual fixture `?scenario=physical-cargo-showcase`, and `tools/physical-cargo-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:physical-cargo` proves source decrement at pickup exactly once, the same carried stack and job survive save/load, destination increment occurs once, cancellation and crew death return and requeue the stack without duplication, and a shared bulky-cargo corridor completes measurably slower than separated routes. The worker also passed movement-coordinator, passenger-transfer, queue-spill, exterior-integrity, build, and whitespace checks.
+- Physical implementation: a bulky load moves on a visible cart plate, reserves the tile it leaves and enters until its tail clears, and cannot use ordinary actor swaps. Pickup and recent drop-off are marked at their real inventory nodes; no abstract cargo throughput score substitutes for those claims.
+- Remaining uncertainty: the focused contention case demonstrates lower combined shared-corridor throughput but does not yet prove that both individual streams are delayed in the same run; luggage is not an inventory item; conflict lacks a dedicated world warning; and cargo does not yet contend with boarding in the same fixture. Those compound boxes remain open.

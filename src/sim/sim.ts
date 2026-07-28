@@ -176,6 +176,7 @@ import {
   type SpecialtyId,
   type JobStallReason,
   type JobType,
+  type TransportJob,
   type JobStatusCounts,
   type JobExpiryContext,
   type ItemType,
@@ -14350,17 +14351,19 @@ function updateArrivingShips(state: StationState, dt: number): void {
         strandUnboardedVisitors(state, ship);
         for (const job of state.jobs) {
           if (job.portShipId !== ship.id || job.state === 'done' || job.state === 'expired') continue;
-          if (job.itemType === 'fuel' && job.assignedCrewId !== null) {
-            const crew = state.crewMembers.find((candidate) => candidate.id === job.assignedCrewId);
-            if (crew?.carryingItemType === 'fuel' && crew.carryingAmount > 0) {
-              addItemStockAtNode(state, job.fromTile, 'fuel', crew.carryingAmount);
-              crew.carryingItemType = null;
-              crew.carryingAmount = 0;
-              crew.activeJobId = null;
-              setCrewPath(state, crew, []);
-            }
+          const crew = job.assignedCrewId === null
+            ? null
+            : state.crewMembers.find((candidate) => candidate.id === job.assignedCrewId) ?? null;
+          if (isLiveTransportJob(job)) {
+            requeueInterruptedTransportJob(state, job, crew);
+          } else if (crew) {
+            crew.activeJobId = null;
+            crew.carryingItemType = null;
+            crew.carryingAmount = 0;
+            setCrewPath(state, crew, []);
           }
           job.state = 'expired';
+          job.assignedCrewId = null;
           job.blockedReason = 'Ship departed at contract deadline.';
         }
         settlePortContract(state, ship);
@@ -14675,13 +14678,30 @@ type MovementCoordinator = {
   approved: Set<string>;
   blockedReasonByKey: Map<string, string>;
   narrowCooldownUntil: Map<number, number>;
+  /** Tiles a hand cart is physically clearing; this is a real short-lived corridor claim. */
+  bulkyCooldownUntil: Map<number, number>;
   kindByActor: Map<MovementActor, MovementActorKind>;
 };
 
 const MOVEMENT_REPLAN_BLOCKED_TICKS = 8;
 const MOVEMENT_REPLAN_COOLDOWN_SEC = 1.25;
 const NARROW_CROSSING_COOLDOWN_SEC = 0.35;
+const BULKY_CARGO_AMOUNT = 4;
+const BULKY_CORRIDOR_CLEARANCE_SEC = 0.42;
+const BULKY_CARGO_MOVE_MULTIPLIER = 0.66;
 const movementCoordinatorByState: WeakMap<StationState, MovementCoordinator> = new WeakMap();
+
+function crewCarriesBulkyCargo(crew: CrewMember): boolean {
+  return crew.carryingItemType !== null && crew.carryingAmount >= BULKY_CARGO_AMOUNT;
+}
+
+function movementSpeedFactor(state: StationState, actor: MovementActor): number {
+  const brownout = state.now < state.effects.brownoutUntil ? 0.65 : 1;
+  const cart = 'carryingItemType' in actor && crewCarriesBulkyCargo(actor as CrewMember)
+    ? BULKY_CARGO_MOVE_MULTIPLIER
+    : 1;
+  return brownout * cart;
+}
 
 function movementActorKey(kind: MovementActorKind, actor: MovementActor): string {
   return `${kind}:${actor.id}`;
@@ -14821,10 +14841,14 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     approved: new Set<string>(),
     blockedReasonByKey: new Map<string, string>(),
     narrowCooldownUntil: new Map(),
+    bulkyCooldownUntil: new Map(),
     kindByActor: new Map()
   };
   for (const [tile, until] of previous?.narrowCooldownUntil ?? []) {
     if (until > state.now) coordinator.narrowCooldownUntil.set(tile, until);
+  }
+  for (const [tile, until] of previous?.bulkyCooldownUntil ?? []) {
+    if (until > state.now) coordinator.bulkyCooldownUntil.set(tile, until);
   }
 
   const actors = movementActors(state);
@@ -14854,9 +14878,14 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     if (actor.path.length === 0) continue;
     const target = actor.path[0];
     const center = tileCenter(target, state.width);
-    // The prepass only claims crossings that can happen with the actor's
-    // unmodified speed. Crew modifiers only slow movement, never speed it up.
-    if (Math.hypot(center.x - actor.x, center.y - actor.y) > actor.speed * dt + 0.001) continue;
+    // The prepass only claims crossings that can happen this tick. A bulky
+    // cart rolls more slowly and therefore cannot pre-claim a public tile
+    // while it is still visibly travelling toward it.
+    if (Math.hypot(center.x - actor.x, center.y - actor.y) > actor.speed * movementSpeedFactor(state, actor) * dt + 0.001) continue;
+    if ((coordinator.bulkyCooldownUntil.get(target) ?? 0) > state.now) {
+      coordinator.blockedReasonByKey.set(movementActorKey(kind, actor), 'bulky freight clearing corridor');
+      continue;
+    }
     const narrowTiles = [actor.tileIndex, target].filter(
       (tile, index, values) => values.indexOf(tile) === index && (state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock)
     );
@@ -14923,8 +14952,8 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     if (isMovementHazard(state, a.origin) || isMovementHazard(state, a.target)) return false;
     const aCrew = a.kind === 'crew' ? a.actor as CrewMember : null;
     const bCrew = b.kind === 'crew' ? b.actor as CrewMember : null;
-    const aBulkyCargo = aCrew !== null && aCrew.carryingItemType !== null && aCrew.carryingAmount > 1;
-    const bBulkyCargo = bCrew !== null && bCrew.carryingItemType !== null && bCrew.carryingAmount > 1;
+    const aBulkyCargo = aCrew !== null && crewCarriesBulkyCargo(aCrew);
+    const bBulkyCargo = bCrew !== null && crewCarriesBulkyCargo(bCrew);
     return !aBulkyCargo && !bBulkyCargo;
   };
   const approved = new Set<string>();
@@ -14985,8 +15014,7 @@ function moveAlongPath(
   const dx = target.x - actor.x;
   const dy = target.y - actor.y;
   const dist = Math.hypot(dx, dy);
-  const speedFactor = state.now < state.effects.brownoutUntil ? 0.65 : 1;
-  const step = actor.speed * speedFactor * dt;
+  const step = actor.speed * movementSpeedFactor(state, actor) * dt;
 
   if (dist <= step || dist < 0.001) {
     const coordinator = movementCoordinatorByState.get(state);
@@ -15015,6 +15043,14 @@ function moveAlongPath(
       if (state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock) {
         coordinator?.narrowCooldownUntil.set(tile, state.now + NARROW_CROSSING_COOLDOWN_SEC);
       }
+    }
+    const actorKind = coordinator?.kindByActor.get(actor);
+    if (actorKind === 'crew' && crewCarriesBulkyCargo(actor as CrewMember)) {
+      // A cart occupies both the tile it leaves and the tile it has just
+      // reached until its tail clears. This is intentionally a reservation of
+      // actual floor tiles, not a hidden throughput percentage.
+      coordinator?.bulkyCooldownUntil.set(originTile, state.now + BULKY_CORRIDOR_CLEARANCE_SEC);
+      coordinator?.bulkyCooldownUntil.set(nextTile, state.now + BULKY_CORRIDOR_CLEARANCE_SEC);
     }
     return 'moved';
   }
@@ -15491,6 +15527,149 @@ function takeItemStockAtNode(
   if (taken <= 0) return 0;
   node.items[itemType] = current - taken;
   return taken;
+}
+
+function isLiveTransportJob(job: TransportJob): boolean {
+  return (job.type === 'pickup' || job.type === 'deliver') &&
+    (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress');
+}
+
+/**
+ * Put cargo back into the same authoritative inventory it came from before a
+ * worker loses the job. Inbound port lots are deliberately different: their
+ * handled quantity is only committed on drop-off, so returning them would
+ * duplicate cargo that never left the manifest.
+ */
+function returnCarriedTransportToSource(
+  state: StationState,
+  job: TransportJob,
+  itemType: ItemType,
+  amount: number,
+  warnings?: string[]
+): number {
+  if (amount <= 0) return 0;
+  if (job.portCargoDirection === 'inbound' && job.portCargoLotId !== undefined) return amount;
+  let returned = addItemStockAtNode(state, job.fromTile, itemType, amount);
+  if (returned + 0.001 < amount) {
+    // Geometry can change while a worker is out. Preserve goods in an
+    // authoritative destination node rather than silently losing them.
+    returned += addItemStockAtNode(state, job.toTile, itemType, amount - returned);
+  }
+  if (returned + 0.001 < amount) {
+    warnings?.push(`Transport job ${job.id} could only restore ${returned.toFixed(2)}/${amount.toFixed(2)} ${itemType}.`);
+  }
+  return returned;
+}
+
+/**
+ * Cancellation, death, and invalidated save work all use one return path so a
+ * picked-up stack cannot be both requeued and still held by a worker.
+ */
+export function requeueInterruptedTransportJob(
+  state: StationState,
+  job: TransportJob,
+  crew: CrewMember | null,
+  warnings?: string[]
+): void {
+  if (!isLiveTransportJob(job)) return;
+  const carriedAmount = crew?.carryingItemType === job.itemType
+    ? Math.max(0, crew.carryingAmount)
+    : Math.max(0, job.pickedUpAmount);
+  if (carriedAmount > 0) returnCarriedTransportToSource(state, job, job.itemType, carriedAmount, warnings);
+  if (crew) {
+    crew.carryingItemType = null;
+    crew.carryingAmount = 0;
+    crew.activeJobId = null;
+    setCrewPath(state, crew, []);
+    releaseReservationsForOwner(state, 'crew', crew.id, 'failed', ['actor-job']);
+  }
+  job.assignedCrewId = null;
+  job.pickedUpAmount = 0;
+  job.state = 'pending';
+  job.expiresAt = Math.max(job.expiresAt, state.now + JOB_TTL_SEC);
+  job.lastProgressAt = state.now;
+  markJobStall(state, job, 'none');
+}
+
+type PersistedTransportJob = Pick<TransportJob,
+  'id' | 'type' | 'itemType' | 'amount' | 'fromTile' | 'toTile' |
+  'assignedCrewId' | 'createdAt' | 'expiresAt' | 'state' |
+  'pickedUpAmount' | 'completedAt' | 'lastProgressAt' | 'stallReason' |
+  'stalledSince' | 'blockedReason' | 'portShipId' | 'portCargoLotId' |
+  'portCargoDirection' | 'portFuelNodeTile'
+>;
+
+/**
+ * Restore only durable hauling work. A valid carrier keeps its exact stack;
+ * everything else is returned once and requeued as ordinary source-to-target
+ * work. Paths and reservations are intentionally rebuilt by normal ticks.
+ */
+export function restorePersistedTransportJobs(
+  state: StationState,
+  persisted: readonly PersistedTransportJob[],
+  warnings: string[] = []
+): void {
+  const crewsById = new Map(state.crewMembers.map((crew) => [crew.id, crew]));
+  const claimedCrewIds = new Set<number>();
+  const seenJobIds = new Set<number>();
+  const restored: TransportJob[] = [];
+
+  for (const saved of [...persisted].sort((a, b) => a.id - b.id)) {
+    if (seenJobIds.has(saved.id) || saved.amount <= 0 || saved.fromTile < 0 || saved.toTile < 0 ||
+      saved.fromTile >= state.tiles.length || saved.toTile >= state.tiles.length) {
+      warnings.push(`Transport job ${saved.id} could not be restored.`);
+      continue;
+    }
+    seenJobIds.add(saved.id);
+    const job: TransportJob = { ...saved, completedAt: null };
+    const crew = job.assignedCrewId === null ? null : crewsById.get(job.assignedCrewId) ?? null;
+    const carriesThisJob = crew !== null &&
+      crew.activeJobId === job.id &&
+      crew.carryingItemType === job.itemType &&
+      crew.carryingAmount > 0.001;
+    const canContinueCarry = job.state === 'in_progress' && job.pickedUpAmount > 0.001 && carriesThisJob;
+    const canContinuePickup = job.state === 'assigned' && crew !== null && crew.activeJobId === job.id && !carriesThisJob;
+
+    if (canContinueCarry && crew) {
+      const carried = Math.min(job.amount, crew.carryingAmount);
+      crew.carryingAmount = carried;
+      job.pickedUpAmount = carried;
+      crew.path = [];
+      claimedCrewIds.add(crew.id);
+    } else if (canContinuePickup && crew) {
+      crew.carryingItemType = null;
+      crew.carryingAmount = 0;
+      crew.path = [];
+      claimedCrewIds.add(crew.id);
+    } else {
+      const abandonedCarrier = carriesThisJob ? crew : null;
+      requeueInterruptedTransportJob(state, job, abandonedCarrier, warnings);
+    }
+    restored.push(job);
+  }
+
+  for (const crew of state.crewMembers) {
+    if (claimedCrewIds.has(crew.id)) continue;
+    if (crew.carryingItemType !== null && crew.carryingAmount > 0.001) {
+      const matching = restored.find((job) => job.id === crew.activeJobId);
+      if (matching) {
+        requeueInterruptedTransportJob(state, matching, crew, warnings);
+      } else {
+        const restoredAmount = addItemStockAtNode(state, crew.tileIndex, crew.carryingItemType, crew.carryingAmount);
+        if (restoredAmount + 0.001 < crew.carryingAmount) {
+          warnings.push(`Unassigned carried ${crew.carryingItemType} from crew ${crew.id} could not be placed after load.`);
+        }
+        crew.carryingItemType = null;
+        crew.carryingAmount = 0;
+        crew.activeJobId = null;
+      }
+    } else if (crew.activeJobId !== null) {
+      crew.activeJobId = null;
+    }
+  }
+
+  state.jobs.push(...restored);
+  state.jobSpawnCounter = Math.max(state.jobSpawnCounter, ...restored.map((job) => job.id + 1), 1);
 }
 
 function sumItemStockForRoom(
@@ -18207,9 +18386,12 @@ function expireJobs(state: StationState): void {
       extendActiveReservationsForOwner(state, 'job', job.id, JOB_TTL_SEC + 5);
       continue;
     }
-    job.expiredFromState = job.state;
-    job.state = 'expired';
-    state.metrics.expiredJobs += 1;
+    const interruptedTransport = isLiveTransportJob(job) && (job.state === 'assigned' || job.state === 'in_progress');
+    if (interruptedTransport) {
+      const crew = job.assignedCrewId === null ? null : state.crewMembers.find((c) => c.id === job.assignedCrewId) ?? null;
+      requeueInterruptedTransportJob(state, job, crew);
+      continue;
+    }
     if (job.assignedCrewId !== null) {
       const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
       if (crew) {
@@ -18221,6 +18403,9 @@ function expireJobs(state: StationState): void {
       }
       job.assignedCrewId = null;
     }
+    job.expiredFromState = job.state;
+    state.metrics.expiredJobs += 1;
+    job.state = 'expired';
   }
 }
 
@@ -18505,10 +18690,15 @@ function refreshJobMetrics(state: StationState): void {
   };
 }
 
-function releaseCrewJobsOnDeath(state: StationState, crewId: number): void {
+export function releaseCrewJobsOnDeath(state: StationState, crewId: number): void {
+  const crew = state.crewMembers.find((candidate) => candidate.id === crewId) ?? null;
   for (const job of state.jobs) {
     if (job.assignedCrewId !== crewId) continue;
     if (job.state !== 'assigned' && job.state !== 'in_progress') continue;
+    if (isLiveTransportJob(job)) {
+      requeueInterruptedTransportJob(state, job, crew);
+      continue;
+    }
     job.assignedCrewId = null;
     job.state = 'pending';
     job.pickedUpAmount = 0;

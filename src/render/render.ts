@@ -4044,7 +4044,54 @@ function drawCarriedInventorySprite(
   centerY: number
 ): void {
   if (!itemType || itemType === 'body' || amount <= 0.01) return;
+  if (amount >= 4) {
+    // A big stack rides on a small cart plate so a player can immediately see
+    // why this person is holding up a narrow corridor.
+    ctx.save();
+    ctx.fillStyle = 'rgba(20, 35, 45, 0.92)';
+    ctx.strokeStyle = '#e1b450';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.035);
+    ctx.fillRect(centerX + TILE_SIZE * 0.08, centerY + TILE_SIZE * 0.12, TILE_SIZE * 0.38, TILE_SIZE * 0.27);
+    ctx.strokeRect(centerX + TILE_SIZE * 0.08, centerY + TILE_SIZE * 0.12, TILE_SIZE * 0.38, TILE_SIZE * 0.27);
+    ctx.restore();
+  }
   drawItemWorldSprite(ctx, itemType, centerX + TILE_SIZE * 0.22, centerY + TILE_SIZE * 0.2, TILE_SIZE * 0.44);
+}
+
+function drawTransportJobMarkers(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  for (const job of state.jobs) {
+    if (job.type !== 'pickup' && job.type !== 'deliver') continue;
+    let tile: number | null = null;
+    let color = '';
+    let pulse = 0;
+    if ((job.state === 'pending' || job.state === 'assigned') && job.pickedUpAmount <= 0.01) {
+      tile = job.fromTile;
+      color = '#f0bd55';
+      pulse = 0.35 + 0.22 * Math.sin(state.now * 5 + job.id);
+    } else if (job.state === 'done' && job.completedAt !== null && state.now - job.completedAt < 1.1) {
+      tile = job.toTile;
+      color = '#72e3ae';
+      pulse = Math.max(0, 1 - (state.now - job.completedAt) / 1.1);
+    }
+    if (tile === null || !tileInRange(tile, state, visibleTiles)) continue;
+    const x = (tile % state.width + 0.5) * TILE_SIZE;
+    const y = (Math.floor(tile / state.width) + 0.5) * TILE_SIZE;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.2, pulse);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
+    ctx.setLineDash([TILE_SIZE * 0.12, TILE_SIZE * 0.1]);
+    ctx.beginPath();
+    ctx.arc(x, y, TILE_SIZE * (0.28 + pulse * 0.12), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+    drawItemWorldSprite(ctx, job.itemType, x + TILE_SIZE * 0.2, y - TILE_SIZE * 0.17, TILE_SIZE * 0.25);
+  }
 }
 
 function collectCafeteriaQueueNodeTiles(state: StationState): number[] {
@@ -6728,6 +6775,7 @@ export function renderWorld(
   // goods visible in the normal world view so players can watch that flow
   // without switching to a diagnostic overlay.
   drawLocatedInventorySprites(ctx, state, visibleTiles);
+  drawTransportJobMarkers(ctx, state, visibleTiles);
 
   drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
 
