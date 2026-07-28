@@ -21956,7 +21956,10 @@ export function recordServiceCompletion(
   const { tileIndex, service } = options;
   if (tileIndex < 0 || tileIndex >= state.rooms.length) return null;
   const roomType = state.rooms[tileIndex];
-  const moduleType = state.modules[tileIndex];
+  // Multi-tile fixtures store their type only at the origin in `modules`.
+  // Service positions elsewhere in the footprint still belong to the placed
+  // fixture and must report that fixture as their physical source of truth.
+  const moduleType = moduleAtTile(state, tileIndex)?.type ?? state.modules[tileIndex];
   if (!fixtureProvidesService(roomType, moduleType, service)) return null;
   const event = appendServiceCompletion(
     state.serviceLog,
@@ -22025,10 +22028,15 @@ function noteVisitorServiceObserved(visitor: Visitor, service: HospitalityServic
 function completeVisitorHospitalityService(
   state: StationState,
   visitor: Visitor,
-  service: HospitalityServiceKind
+  service: HospitalityServiceKind,
+  options: { countTowardPlan?: boolean } = {}
 ): boolean {
   const recurringNeed = visitor.recurringNeedActive ?? null;
-  const onPlan = recurringNeed === null && visitor.activeService === service && !visitor.completedServices.includes(service);
+  const onPlan =
+    (options.countTowardPlan ?? true) &&
+    recurringNeed === null &&
+    visitor.activeService === service &&
+    !visitor.completedServices.includes(service);
   const recorded = recordServiceCompletion(state, {
     population: 'visitor',
     actorId: visitor.id,
@@ -22488,7 +22496,8 @@ function updateVisitorLogic(
           visitor.reservedTargetTile !== null &&
           visitor.tileIndex === visitor.reservedTargetTile &&
           state.rooms[visitor.tileIndex] === RoomType.Cafeteria &&
-          state.modules[visitor.tileIndex] === ModuleType.Table &&
+          (moduleAtTile(state, visitor.tileIndex)?.type === ModuleType.CommunityTable ||
+            state.modules[visitor.tileIndex] === ModuleType.Table) &&
           state.now >= state.effects.cafeteriaStallUntil &&
           dinersOnTile(state, visitor.tileIndex) < MAX_USERS_PER_USAGE_TILE
         ) {
@@ -22517,12 +22526,19 @@ function updateVisitorLogic(
       }
 
       if (visitor.eatTimer <= 0) {
+        // Canonical physical truth is the commit point. If the fixture was
+        // removed or the actor is no longer at a valid seat, retain the meal
+        // and session state so no payment, promise, tray, or route can advance.
+        if (!completeVisitorHospitalityService(state, visitor, 'meal')) {
+          visitor.serviceBlockedSince ??= state.now;
+          keep.push(visitor);
+          continue;
+        }
         releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['seat-use-slot']);
         visitor.reservedTargetTile = null;
         visitor.carryingMeal = false;
         returnDirtyTray(state, visitor.tileIndex);
         visitor.servedMeal = true;
-        completeVisitorHospitalityService(state, visitor, 'meal');
         state.metrics.mealsServedTotal += 1;
         visitorSuccessRatingBonus(state, 0.08, 'mealService');
         const mealGross = mealExitPayout(state, visitor);
@@ -22880,9 +22896,9 @@ function updateVisitorLogic(
           !visitor.carryingDrink &&
           isCantinaBarServiceTile(state, visitor.tileIndex) &&
           hasActiveDrinkPickupReservation(state, 'visitor', visitor.id, visitor.tileIndex);
-        releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot', 'service-tile', 'seat-use-slot']);
-        visitor.reservedTargetTile = null;
         if (completedDrinkPickup) {
+          releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot', 'service-tile', 'seat-use-slot']);
+          visitor.reservedTargetTile = null;
           const cluster = clusterForRoomTile(state, RoomType.Cantina, visitor.tileIndex);
           const stewardCount = activeStewardsInCantinaCluster(state, cluster);
           const supplied = consumeCantinaSupplies(state, CANTINA_VISITOR_DRINK_SUPPLY_COST, visitor.tileIndex);
@@ -22906,24 +22922,38 @@ function updateVisitorLogic(
         } else {
           if (visitor.activeService !== null && visitor.activeService !== 'meal') {
             const completedOptionalDrink = visitor.activeService === 'drink' && visitor.optionalDrinkActive;
-            const completedDrink = visitor.activeService === 'drink' || completedOptionalDrink;
+            const completedService = visitor.activeService;
+            const completed = completeVisitorHospitalityService(
+              state,
+              visitor,
+              completedService,
+              { countTowardPlan: !completedOptionalDrink }
+            );
+            if (!completed) {
+              visitor.serviceBlockedSince ??= state.now;
+              keep.push(visitor);
+              continue;
+            }
+            releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot', 'service-tile', 'seat-use-slot']);
+            visitor.reservedTargetTile = null;
             if (completedOptionalDrink) {
               visitor.repeatDrinksServed = (visitor.repeatDrinksServed ?? 0) + 1;
               visitor.optionalDrinkActive = false;
               visitor.activeService = null;
               visitorSuccessRatingBonus(state, 0.025, 'leisureService');
-            } else {
-              completeVisitorHospitalityService(state, visitor, visitor.activeService);
             }
-            if (completedDrink) {
+            if (completedService === 'drink') {
               const drinkGross = 2.4 * clamp(visitor.spendMultiplier, 0.6, 1.7);
               const commercialUnit = visitor.commercialDrinkUnitId == null
                 ? getCommercialUnitAt(state, visitor.tileIndex)
                 : state.commercialUnits.find((unit) => unit.id === visitor.commercialDrinkUnitId) ?? null;
               recordVisitorTransaction(state, visitor, drinkGross, commercialUnit, 'market');
               visitor.commercialDrinkUnitId = null;
+              visitor.carryingDrink = false;
             }
-            if (completedDrink) visitor.carryingDrink = false;
+          } else {
+            releaseReservationsForOwner(state, 'visitor', visitor.id, 'completed', ['provider-slot', 'service-tile', 'seat-use-slot']);
+            visitor.reservedTargetTile = null;
           }
           if (state.modules[visitor.tileIndex] === ModuleType.MarketStall) {
             const consumedGoods = takeItemStockAtNode(state, visitor.tileIndex, 'tradeGood', 1);

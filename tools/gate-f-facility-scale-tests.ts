@@ -38,6 +38,7 @@ import { resolveFacilitySlots } from '../src/sim/facility-descriptors';
 import {
   ModuleType,
   RoomType,
+  VisitorState,
   type StationState,
   type Visitor
 } from '../src/sim/types';
@@ -67,6 +68,13 @@ function claim(state: StationState, ownerId: number, slot: FacilitySlotTarget, o
 function stockOf(state: StationState, tileIndex: number, item: 'tradeGood' | 'rawMaterial' | 'meal'): number {
   const node = state.itemNodes.find((entry) => entry.tileIndex === tileIndex);
   return Math.max(0, node?.items[item] ?? 0);
+}
+
+function putVisitorAt(state: StationState, visitor: Visitor, tileIndex: number): void {
+  visitor.tileIndex = tileIndex;
+  visitor.x = (tileIndex % state.width) + 0.5;
+  visitor.y = Math.floor(tileIndex / state.width) + 0.5;
+  visitor.path = [];
 }
 
 // ---------------------------------------------------------------------------
@@ -356,9 +364,151 @@ function testThroughputAndDwellAreIndependent(): string {
     stockedResult.poured > 0,
     `A stocked, staffed bar must actually pour drinks (poured ${stockedResult.poured}).`
   );
+  const carryingAtForty = new Set(
+    stocked.visitors.filter((visitor) => visitor.carryingDrink).map((visitor) => visitor.id)
+  );
+  advance(stocked, 40);
+  const connectedDrinkEvents = stocked.serviceLog.recent.filter((event) => event.service === 'drink');
+  assert(connectedDrinkEvents.length > 0, 'A connected bar must finish at least one canonical drink service.');
+  assert(
+    connectedDrinkEvents.some((event) => carryingAtForty.has(event.actorId)),
+    'At least one drink carried at 40 seconds must drain into a canonical completion event.'
+  );
+  assert(
+    connectedDrinkEvents.every(
+      (event) => event.moduleType === ModuleType.BoothBank || event.moduleType === ModuleType.StandingRail
+    ),
+    'Connected-bar drinks must name the depicted Booth Bank or Standing Rail seat where they finished.'
+  );
 
   return `service ${undersizedBar.guestSlots.length}->${expandedBar.guestSlots.length}, dwell ${undersizedDwell}->${expandedDwell}; `
-    + `drinks poured over 40s: dry ${dryResult.poured} to ${dryResult.carrying} guests vs stocked ${stockedResult.poured.toFixed(1)} to ${stockedResult.carrying}`;
+    + `drinks poured over 40s: dry ${dryResult.poured} to ${dryResult.carrying} guests vs stocked ${stockedResult.poured.toFixed(1)} to ${stockedResult.carrying}; `
+    + `${connectedDrinkEvents.length} connected-seat completions by 80s`;
+}
+
+// ---------------------------------------------------------------------------
+// 7. Canonical completion for Gate F drink seats and Community Tables
+// ---------------------------------------------------------------------------
+
+function testCanonicalFacilityServiceCompletion(): string {
+  // Optional repeat drinks use the same canonical event as planned drinks,
+  // but never advance a manifest plan or charge twice.
+  const optional = scenario('demo-station');
+  optional.controls.paused = false;
+  const optionalVisitor = scenario('cantina-expanded').visitors[0];
+  optional.visitors = [optionalVisitor];
+  const legacySeat = optional.moduleInstances.find(
+    (module) => module.type === ModuleType.Bench && optional.rooms[module.originTile] === RoomType.Cantina
+  );
+  assert(legacySeat, 'The demo station needs a legacy Cantina bench.');
+  putVisitorAt(optional, optionalVisitor, legacySeat.originTile);
+  optionalVisitor.state = VisitorState.Leisure;
+  optionalVisitor.eatTimer = 0;
+  optionalVisitor.activeService = 'drink';
+  optionalVisitor.optionalDrinkActive = true;
+  optionalVisitor.repeatDrinksServed = 0;
+  optionalVisitor.carryingDrink = true;
+  optionalVisitor.servicePlan = [];
+  optionalVisitor.completedServices = [];
+  optionalVisitor.reservedTargetTile = legacySeat.originTile;
+
+  const optionalEventsBefore = optional.serviceLog.lifetimeByService.drink;
+  const optionalSalesBefore = optional.openingEconomy.ledger.recent.filter((event) => event.kind === 'retail-sale').length;
+  tick(optional, 0.2);
+  assert(
+    optional.serviceLog.lifetimeByService.drink === optionalEventsBefore + 1,
+    'An optional drink consumed at a legacy Cantina bench must write one canonical drink event.'
+  );
+  assert(optionalVisitor.repeatDrinksServed === 1, 'The optional repeat counter must advance once.');
+  assert(optionalVisitor.completedServices.length === 0, 'An optional drink must not enter the promised-service plan.');
+  assert(optionalVisitor.activeService === null && !optionalVisitor.carryingDrink, 'A completed optional drink must clear its transient state.');
+  assert(
+    optional.openingEconomy.ledger.recent.filter((event) => event.kind === 'retail-sale').length === optionalSalesBefore + 1,
+    'A completed optional drink must create exactly one sale.'
+  );
+  tick(optional, 0.2);
+  assert(
+    optional.serviceLog.lifetimeByService.drink === optionalEventsBefore + 1,
+    'A second tick must not duplicate an optional drink event.'
+  );
+  assert(
+    optional.openingEconomy.ledger.recent.filter((event) => event.kind === 'retail-sale').length === optionalSalesBefore + 1,
+    'A second tick must not charge for the optional drink again.'
+  );
+
+  // Rejection is also a production-path contract: invalid fixture truth must
+  // leave the drink, plan, payment, and route untouched for a later retry.
+  const rejected = scenario('cantina-expanded');
+  rejected.controls.paused = false;
+  const rejectedVisitor = rejected.visitors[0];
+  rejected.visitors = [rejectedVisitor];
+  const emptyCantinaTile = 59 * rejected.width + 57;
+  assert(rejected.rooms[emptyCantinaTile] === RoomType.Cantina, 'The rejection fixture must be inside the Cantina.');
+  assert(rejected.modules[emptyCantinaTile] === ModuleType.None, 'The rejection tile must not contain a service fixture.');
+  putVisitorAt(rejected, rejectedVisitor, emptyCantinaTile);
+  rejectedVisitor.state = VisitorState.Leisure;
+  rejectedVisitor.eatTimer = 0;
+  rejectedVisitor.activeService = 'drink';
+  rejectedVisitor.optionalDrinkActive = false;
+  rejectedVisitor.carryingDrink = true;
+  rejectedVisitor.servicePlan = ['drink'];
+  rejectedVisitor.completedServices = [];
+  rejectedVisitor.reservedTargetTile = null;
+  const rejectedEventsBefore = rejected.serviceLog.lifetimeByService.drink;
+  const rejectedSalesBefore = rejected.openingEconomy.ledger.recent.length;
+  tick(rejected, 0.2);
+  assert(rejected.serviceLog.lifetimeByService.drink === rejectedEventsBefore, 'An empty Cantina tile must not complete a drink.');
+  assert(rejected.openingEconomy.ledger.recent.length === rejectedSalesBefore, 'A rejected drink must not create an economy event.');
+  assert(
+    rejectedVisitor.activeService === 'drink' && rejectedVisitor.carryingDrink && rejectedVisitor.completedServices.length === 0,
+    'A rejected drink must retain its physical carry and outstanding plan state.'
+  );
+  assert(rejectedVisitor.tileIndex === emptyCantinaTile && rejectedVisitor.path.length === 0, 'A rejected drink must not route away as if served.');
+
+  // Community Table seats must enter and finish the ordinary meal state; the
+  // larger fixture is not a decorative capacity bonus.
+  const cafeteria = scenario('long-stay-guest-wing');
+  cafeteria.controls.paused = false;
+  const donor = scenario('cantina-expanded').visitors[0];
+  const diner: Visitor = {
+    ...donor,
+    id: 99880,
+    path: [],
+    servicePlan: ['meal'],
+    completedServices: [],
+    state: VisitorState.ToCafeteria,
+    activeService: 'meal',
+    optionalDrinkActive: false,
+    carryingDrink: false,
+    carryingMeal: true,
+    servedMeal: false,
+    eatTimer: 0,
+    recurringNeedActive: null,
+    needs: undefined
+  };
+  cafeteria.visitors = [diner];
+  const communitySeat = slotsOfRole(cafeteria, [ModuleType.CommunityTable], 'seat')[0];
+  assert(communitySeat, 'The guest wing needs a Community Table seat.');
+  putVisitorAt(cafeteria, diner, communitySeat.tileIndex);
+  diner.reservedTargetTile = communitySeat.tileIndex;
+  assert(claim(cafeteria, diner.id, communitySeat), 'The diner must hold its depicted Community Table seat.');
+  tick(cafeteria, 0.2);
+  assert(diner.state === VisitorState.Eating, 'A meal carried to a Community Table seat must enter the eating state.');
+  diner.eatTimer = 0;
+  const mealEventsBefore = cafeteria.serviceLog.lifetimeByService.meal;
+  const mealsServedBefore = cafeteria.metrics.mealsServedTotal;
+  tick(cafeteria, 0.2);
+  const mealEvent = cafeteria.serviceLog.recent.find(
+    (event) => event.actorId === diner.id && event.service === 'meal'
+  );
+  assert(mealEvent?.moduleType === ModuleType.CommunityTable, 'The canonical meal event must name the Community Table fixture.');
+  assert(cafeteria.serviceLog.lifetimeByService.meal === mealEventsBefore + 1, 'The Community Table meal must complete exactly once.');
+  assert(cafeteria.metrics.mealsServedTotal === mealsServedBefore + 1, 'The physical Community Table meal must advance served-meal truth.');
+  assert(diner.servedMeal && !diner.carryingMeal && diner.completedServices.includes('meal'), 'The diner must finish and clear its carried meal.');
+  tick(cafeteria, 0.2);
+  assert(cafeteria.serviceLog.lifetimeByService.meal === mealEventsBefore + 1, 'A later tick must not duplicate the Community Table meal.');
+
+  return 'legacy optional drink: 1 event / 1 sale / 0 promise entries; invalid seat: 0 events / 0 sales; Community Table: 1 meal event';
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +747,7 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '3+4 market layout comparison', run: testMarketLayoutComparison },
   { name: '5 connected bar geometry', run: testConnectedBarGeometry },
   { name: '6+7 throughput vs dwell, dry vs staffed', run: testThroughputAndDwellAreIndependent },
+  { name: '7 canonical facility service completion', run: testCanonicalFacilityServiceCompletion },
   { name: '8 every depicted position reservable', run: testEveryDepictedPositionIsReservable },
   { name: '9 reception reveals without gating', run: testReceptionRevealsAndNeverGates },
   { name: '10 long-stay repeat sessions', run: testLongStayWingSupportsRepeatSessions },

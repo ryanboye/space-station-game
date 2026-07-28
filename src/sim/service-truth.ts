@@ -91,11 +91,20 @@ export interface ServiceFixtureRule {
 export const SERVICE_FIXTURE_RULES: Record<ServiceKind, ServiceFixtureRule> = {
   meal: {
     rooms: [RoomType.Cafeteria, RoomType.Cantina, RoomType.CommercialUnit],
-    modules: [ModuleType.Table, ModuleType.Bench, ModuleType.Couch, ModuleType.BarCounter]
+    modules: [ModuleType.Table, ModuleType.CommunityTable, ModuleType.Bench, ModuleType.Couch, ModuleType.BarCounter]
   },
   drink: {
     rooms: [RoomType.Cantina, RoomType.CommercialUnit],
-    modules: [ModuleType.BarCounter, ModuleType.Tap, ModuleType.Bench, ModuleType.Couch, ModuleType.Table]
+    modules: [
+      ModuleType.BarCounter,
+      ModuleType.Tap,
+      ModuleType.Bench,
+      ModuleType.Couch,
+      ModuleType.Table,
+      ModuleType.BoothBank,
+      ModuleType.StandingRail,
+      ModuleType.CommunityTable
+    ]
   },
   leisure: {
     rooms: [RoomType.Lounge, RoomType.RecHall, RoomType.Observatory],
