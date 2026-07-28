@@ -2626,9 +2626,7 @@ export function getCrewFacilityReachability(state: StationState): CrewFacilityRe
     };
   };
 
-  const sleepTiles = state.moduleInstances
-    .filter((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)
-    .flatMap((module) => module.tiles);
+  const sleepTiles = preferredDormTargets(state);
   const hygieneTiles = state.moduleInstances
     .filter((module) =>
       module.type === ModuleType.Toilet || module.type === ModuleType.Shower || module.type === ModuleType.Sink
@@ -15362,7 +15360,12 @@ export function runMovementCoordinatorTestTick(
 }
 
 function preferredDormTargets(state: StationState): number[] {
-  const dorms = activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm]);
+  const dorms = [
+    ...activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm]),
+    ...activeFacilitySlotTargets(state, [ModuleType.BunkBank], RoomType.Dorm, 'temporary-sleep').map(
+      (slot) => slot.tileIndex
+    )
+  ];
   const dedicatedCrew = dorms.filter((idx) => state.roomHousingPolicies[idx] === 'crew');
   const restrictedShared = dorms.filter(
     (idx) => state.roomHousingPolicies[idx] === 'visitor' && state.zones[idx] === ZoneType.Restricted
@@ -15413,7 +15416,14 @@ function buildCrewQuartersSnapshot(state: StationState, targets = preferredDormT
     const moduleType = state.modules[tileIndex];
     const environment = roomEnvironmentScoreAt(state, tileIndex);
     const noisePenalty = Math.max(0, environment.serviceNoise) * 8;
-    const furnitureBase = moduleType === ModuleType.Bed ? 82 : moduleType === ModuleType.Bunk ? 62 : 35;
+    const furnitureBase =
+      moduleType === ModuleType.Bed
+        ? 82
+        : moduleType === ModuleType.Bunk
+          ? 62
+          : moduleType === ModuleType.BunkBank
+            ? 58
+            : 35;
     const quality = clamp(furnitureBase + lockerBonus - noisePenalty, 20, 100);
     qualityByTile.set(tileIndex, quality);
     qualityTotal += quality;
@@ -15458,10 +15468,12 @@ export function getCrewSustainabilitySummary(state: StationState): {
   payrollPerCycle: number;
   secondsToPayroll: number;
 } {
-  const bedSlots = activeModuleUsageTargets(state, [ModuleType.Bed], [RoomType.Dorm]).length;
-  const bunkSlots = activeModuleUsageTargets(state, [ModuleType.Bunk], [RoomType.Dorm]).length;
   const quarters = buildCrewQuartersSnapshot(state);
   const targets = quarters.targets;
+  const bedSlots = targets.filter((tileIndex) => state.modules[tileIndex] === ModuleType.Bed).length;
+  const bunkSlots = targets.filter(
+    (tileIndex) => state.modules[tileIndex] === ModuleType.Bunk || state.modules[tileIndex] === ModuleType.BunkBank
+  ).length;
   assignCrewSleepSlots(state, targets);
   const occupiedSleepSlots = state.crewMembers.filter(
     (crew) => crew.resting && targets.includes(crew.tileIndex)
@@ -21420,7 +21432,12 @@ function updateMarketCheckoutQueue(
 }
 
 function temporarySleepSlots(state: StationState): FacilitySlotTarget[] {
-  const bunkBankSlots = activeFacilitySlotTargets(state, [ModuleType.BunkBank], RoomType.Dorm, 'temporary-sleep');
+  const bunkBankSlots = activeFacilitySlotTargets(
+    state,
+    [ModuleType.BunkBank],
+    RoomType.Dorm,
+    'temporary-sleep'
+  ).filter((slot) => state.roomHousingPolicies[slot.tileIndex] === 'visitor');
   if (bunkBankSlots.length > 0) return bunkBankSlots;
   return activeModuleUsageTargets(state, [ModuleType.Bed, ModuleType.Bunk], [RoomType.Dorm])
     .filter((tileIndex) => state.roomHousingPolicies[tileIndex] === 'visitor')
@@ -25795,11 +25812,15 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   const bedModules =
     room === RoomType.Dorm
       ? state.moduleInstances.filter(
-          (m) => (m.type === ModuleType.Bed || m.type === ModuleType.Bunk) && tiles.includes(m.originTile)
+          (m) =>
+            (m.type === ModuleType.Bed || m.type === ModuleType.Bunk || m.type === ModuleType.BunkBank) &&
+            tiles.includes(m.originTile)
         )
       : [];
   const slotsFor = (module: (typeof bedModules)[number]): number =>
-    Math.max(1, MODULE_DEFINITIONS[module.type].residentCapacity ?? 1);
+    module.type === ModuleType.BunkBank
+      ? resolveFacilitySlots(module, state.width).filter((slot) => slot.role === 'temporary-sleep').length
+      : Math.max(1, MODULE_DEFINITIONS[module.type].residentCapacity ?? 1);
   const bedsTotal = bedModules.reduce((sum, module) => sum + slotsFor(module), 0);
   const assignedBeds = assignedHousingBedIds(state);
   const bedsAssigned = bedModules

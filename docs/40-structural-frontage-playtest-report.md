@@ -212,6 +212,14 @@ Focused neighboring checks also pass:
 - `npm run test:physical-cargo`
 - `npm run test:failed-stay`
 
-The scenario still exposes one fixture-quality warning: the demo station has
-only 5 sleep slots for 18 crew. That is intentionally not counted as a closed
-crew-sustainability gate.
+The scenario's quarters now contain four compact Bunk Banks and two private
+Beds: 18 depicted, policy-owned positions for 18 crew. A Bunk Bank contributes
+four crew positions only in crew quarters; the same fixture becomes four
+exclusive temporary guest positions in visitor lodging. The focused facility
+check proves visitors cannot claim crew-only banks.
+
+Boarding capacity now has a boarding-specific comparison as well as the prior
+arrival comparison. The passenger-transfer runner resumes one identical,
+fully-disembarked cohort into one- and two-Gangway variants, invokes normal
+contract recall, waits for a production Gangway crossing, and proves that two
+Gangways return more passengers in the same seven-second window.

@@ -599,7 +599,7 @@ compiles is not sufficient for player-facing work.
 ### Phase 6 Gate
 
 - [x] Shared public/cargo corridor performs worse than separated routes.
-- [ ] Additional Gangway improves boarding.
+- [x] Additional Gangway improves boarding.
 - [ ] Meal queue across an exit creates late boarding.
 - [x] Diagnosis matches measured actor behavior.
 - [x] No hidden percentage substitutes for physical interference.
@@ -817,7 +817,14 @@ Remaining uncertainty:
 - Commit or files: `src/sim/approach-envelopes.ts`, `src/sim/cold-start-scenarios.ts`, `src/sim/sim.ts`, `tools/mixed-berth-visit-tests.ts`, and `package.json` (pending integration commit at evidence capture).
 - Focused evidence: `npm run test:mixed-berth-visit` proves a legal medium repair tender, six physical passenger transfers, a planned table meal credited through the canonical service log, contract-owned freight jobs with custody progress and nonzero tile distance, one bounded extension, recall and collar boarding, explicit stranded provenance, cleanup, and exactly-once settlement. `npm run test:approach-envelopes`, `npm run test:passenger-transfer`, `npm run test:physical-cargo`, and `npm run test:failed-stay` remain green.
 - Correctness fixes: Berth clearance previously expanded from the whole room footprint and collided with the bay's own U-shaped walls; it now grows from a centered mooring core. A ten-second route timeout also wrote an unmet hospitality stop into `completedServices` without a fixture session; unreachable passengers now remain visibly unmet and retry until service or recall.
-- Live evidence: `?scenario=mixed-berth-visit&diag=1` presents one medium `Longwatch Repair Tender` in Approach Control beside the authored east-facing repair bay. The fixture remains deliberately short on crew beds (5/18) and does not close the crew-sustainability gate.
+- Live evidence: `?scenario=mixed-berth-visit&diag=1` presents one medium `Longwatch Repair Tender` in Approach Control beside the authored east-facing repair bay. Four crew-policy Bunk Banks and two private Beds now give its 18 crew 18 depicted sleep positions.
+
+2026-07-28 · Gangway boarding throughput and bunk ownership
+
+- Commit or files: `tools/passenger-transfer-tests.ts`, `src/sim/sim.ts`, `src/sim/cold-start-scenarios.ts`, and `tools/facility-slots-tests.ts` (pending integration commit at evidence capture).
+- Focused evidence: `npm run test:passenger-transfer` resumes one identical fully disembarked cohort into one- and two-Gangway variants, triggers the production recall path, waits for a real boarding crossing, and proves the second Gangway returns more passengers in the same seven-second window. `npm run test:facility-slots` proves a visitor-policy Bunk Bank accepts temporary guests but adds no crew capacity, while changing that same fixture to crew policy rejects guests and adds exactly four assignable crew positions. `npm run test:mixed-berth-visit` remains green.
+- Player-facing behavior: room policy now owns the depicted Bunk Bank positions. Crew quarters count and assign four positions per bank; guest lodging uses the same four exclusive positions only when explicitly visitor-zoned.
+- Remaining uncertainty: repeated multi-day repair crews still need to complete several organic sleep/meal/wash/leisure cycles, and the compound meal-queue-causes-late-boarding gate remains open.
 
 2026-07-27 · Program setup and implementation authority
 

@@ -835,6 +835,16 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       if (publicRooms.has(s.rooms[tile])) s.zones[tile] = ZoneType.Public;
     }
 
+    // The mixed fixture fields eighteen crew, so replace the old five-bed demo
+    // dorm with sixteen compact bunks plus two private beds. Guest lodging below
+    // remains a separate public resource and cannot satisfy crew quarters.
+    for (let y = 7; y < 14; y++) {
+      for (let x = 6; x < 14; x++) removeModuleAtTile(s, y * s.width + x);
+    }
+    for (const x of [6, 8, 10, 12]) placeMod(s, x, 7, ModuleType.BunkBank);
+    placeMod(s, 7, 12, ModuleType.Bed);
+    placeMod(s, 11, 12, ModuleType.Bed);
+
     // Guest bunks are separate from crew quarters. A six-person repair call
     // can fill this small public lodging room rather than commandeering the
     // crew's sleep capacity.

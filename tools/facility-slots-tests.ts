@@ -2,6 +2,7 @@ import {
   assignPathToTemporarySleep,
   completeMarketCheckout,
   createInitialState,
+  getCrewSustainabilitySummary,
   getMarketFixtureStatus,
   getRoomInspectorAt,
   hireStaffRole,
@@ -57,6 +58,9 @@ function buildFacilityState(): StationState {
   // Starter hull ends at y=48. These rooms share its accessible south edge.
   setFixtureRoom(state, RoomType.Market, 42, 49, 18, 8);
   setFixtureRoom(state, RoomType.Dorm, 62, 49, 7, 8);
+  for (let y = 49; y < 57; y++) {
+    for (let x = 62; x < 69; x++) state.roomHousingPolicies[tile(state, x, y)] = 'visitor';
+  }
   const place = (type: ModuleType, x: number, y: number): void => {
     const result = tryPlaceModule(state, type, tile(state, x, y));
     assert(result.ok, `place ${type} at ${x},${y}: ${result.reason ?? 'unknown error'}`);
@@ -504,15 +508,17 @@ function testTemporarySleepAndHydration(): void {
   // reservation/dwell lifecycle rather than the starter hull's external route.
   const visitor = makeVisitor(state, 200, tile(state, 64, 55));
   visitor.needs!.energy = 10;
-  visitor.needs!.active = 'energy';
-  visitor.recurringNeedActive = 'energy';
-  visitor.activeService = 'comfort';
+  visitor.needs!.active = null;
+  visitor.recurringNeedActive = null;
+  visitor.activeService = null;
+  visitor.state = VisitorState.ToDock;
   state.visitors.push(visitor);
-  tick(state, 0);
+  state.controls.paused = false;
+  tick(state, 0.1);
   const dormInspector = getRoomInspectorAt(state, fixture(state, ModuleType.BunkBank).originTile);
   assert(
-    assignPathToTemporarySleep(state, visitor),
-    `Long-stay visitor should reserve a BunkBank slot (${dormInspector?.reasons.join(', ') ?? 'no dorm inspector'}).`
+    visitor.temporarySleepTargetTile !== null,
+    `Long-stay visitor should autonomously reserve a BunkBank slot (${dormInspector?.reasons.join(', ') ?? 'no dorm inspector'}).`
   );
   assert(visitor.temporarySleepTargetTile !== null, 'Bunk claim must be temporary visitor state, not resident identity.');
   const sleepTile = visitor.temporarySleepTargetTile!;
@@ -523,7 +529,7 @@ function testTemporarySleepAndHydration(): void {
   state.controls.paused = false;
   tick(state, 0.1);
   assert(
-    visitor.state === VisitorState.Leisure && visitor.eatTimer > 10,
+    (visitor.state as VisitorState) === VisitorState.Leisure && visitor.eatTimer > 10,
     `Temporary bunk must hold the visitor for a sleep dwell (state ${visitor.state}, module ${state.modules[visitor.tileIndex]}, target ${visitor.temporarySleepTargetTile}, reserved ${visitor.reservedTargetTile}, dwell ${visitor.eatTimer}, reservations ${JSON.stringify(state.reservations.filter((reservation) => reservation.ownerId === visitor.id))}).`
   );
   for (let elapsed = 0; elapsed < 20; elapsed += 0.2) tick(state, 0.2);
@@ -542,6 +548,27 @@ function testTemporarySleepAndHydration(): void {
   assert(!restored.reservations.some((reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null), 'Hydration must not retain stale reservations.');
 }
 
+function testBunkBankHousingPolicyOwnership(): void {
+  const state = buildFacilityState();
+  const bank = fixture(state, ModuleType.BunkBank);
+  const bankSlots = resolveFacilitySlots(bank, state.width);
+  assert(bankSlots.length === 4, 'BunkBank fixture must expose four physical sleep positions.');
+
+  const visitor = makeVisitor(state, 201, tile(state, 64, 55));
+  assert(assignPathToTemporarySleep(state, visitor), 'Visitor-policy BunkBank must accept a temporary guest.');
+  const visitorPolicyCrewSlots = getCrewSustainabilitySummary(state).sleepSlots;
+
+  for (const slot of bankSlots) state.roomHousingPolicies[slot.tileIndex] = 'crew';
+  state.reservations.length = 0;
+  visitor.temporarySleepTargetTile = null;
+  visitor.reservedTargetTile = null;
+  assert(!assignPathToTemporarySleep(state, visitor), 'Crew-policy BunkBank must reject temporary guests.');
+  assert(
+    getCrewSustainabilitySummary(state).sleepSlots === visitorPolicyCrewSlots + 4,
+    'Changing a BunkBank from visitor to crew policy must add exactly four assignable crew sleep slots.'
+  );
+}
+
 function main(): void {
   testDescriptorRotationAndCounts();
   testSlotExclusivityAndCapacity();
@@ -553,6 +580,7 @@ function main(): void {
   testLiveCheckoutPostsSurviveGeneralDispatch();
   testUnrelatedQueueDoesNotCreateMarketDemand();
   testTemporarySleepAndHydration();
+  testBunkBankHousingPolicyOwnership();
   console.log('facility-slots-tests: ok');
 }
 

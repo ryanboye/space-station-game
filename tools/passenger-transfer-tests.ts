@@ -8,7 +8,7 @@ import {
   tryPlaceModule
 } from '../src/sim/index';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
-import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave, type StationSaveEnvelopeV1 } from '../src/sim/save';
 import { ModuleType, RoomType, ZoneType, type ArrivingShip, type StationState, type TrafficOffer, type Visitor } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -225,6 +225,65 @@ function testTwoGangwaysIncreaseArrivalThroughput(): void {
   assert(twoGangways + 0.5 < oneGangway, `Two Gangways did not materially beat one (${twoGangways.toFixed(1)}s vs ${oneGangway.toFixed(1)}s).`);
 }
 
+function boardingThroughputSnapshot(): StationSaveEnvelopeV1 {
+  const state = demoState(108);
+  const facility = berth(state);
+  setGangwayCount(state, facility.anchorTile, 1);
+  const ship = admitPassengerShip(state, 10801, 10);
+  assert(setCrewShiftTarget(state, 'food', 0), 'Expected food lane reduction for boarding throughput measurement.');
+  waitFor(
+    state,
+    'shared station-side passenger cohort',
+    () => shipById(state, ship.id).passengersSpawned === ship.passengersTotal,
+    24
+  );
+  const snapshot = parseAndMigrateSave(serializeSave('boarding-throughput', state, 'test'));
+  assert(snapshot.ok, snapshot.ok ? '' : snapshot.error);
+  return snapshot.save;
+}
+
+function boardWithinRecallWindow(state: StationState, shipId: number, windowSec: number): number {
+  const ship = shipById(state, shipId);
+  const contract = state.portOps.contracts.find((entry) => entry.shipId === ship.id);
+  assert(contract, 'Expected an active contract for boarding throughput measurement.');
+  // This is the real contract-driven recall path. Keep the hard deadline well
+  // outside the measured window so it cannot strand people and fake capacity.
+  contract.boardingStartsAt = state.now + 0.1;
+  contract.plannedDepartureAt = state.now + 30;
+  contract.hardDepartureAt = state.now + 30;
+  ship.plannedDepartureAt = state.now + 30;
+  waitFor(state, 'boarding phase', () => shipById(state, ship.id).visitPhase === 'boarding', 5);
+  // Passenger positions are deliberately inherited from the same station-side
+  // snapshot. Let each otherwise-identical variant reach a real Gangway
+  // crossing before starting the capacity clock, so the measured window is
+  // boarding throughput rather than the walk back from hospitality rooms.
+  waitFor(
+    state,
+    'first production boarding crossing',
+    () => visitorsFor(state, ship.id).some((visitor) => visitorPhase(visitor) === 'boarding-crossing'),
+    18
+  );
+  const boardedAtStart = shipById(state, ship.id).passengersBoarded;
+  advance(state, windowSec);
+  return shipById(state, ship.id).passengersBoarded - boardedAtStart;
+}
+
+function testTwoGangwaysIncreaseBoardingThroughput(): void {
+  const snapshot = boardingThroughputSnapshot();
+  const oneGangway = hydrateRunning(snapshot, 108);
+  const twoGangways = hydrateRunning(snapshot, 108);
+  const twoGangwayFacility = berth(twoGangways);
+  setGangwayCount(twoGangways, twoGangwayFacility.anchorTile, 2);
+
+  const windowSec = 7;
+  const oneBoarded = boardWithinRecallWindow(oneGangway, 10801, windowSec);
+  const twoBoarded = boardWithinRecallWindow(twoGangways, 10801, windowSec);
+  assert(
+    twoBoarded > oneBoarded,
+    `Two Gangways did not board more passengers in the same ${windowSec}s recall window (${twoBoarded} vs ${oneBoarded}).`
+  );
+}
+
 function prepareRecallState(seed: number, id: number, passengers: number): { state: StationState; ship: ArrivingShip } {
   const state = demoState(seed);
   const facility = berth(state);
@@ -297,6 +356,7 @@ function testFifoSurvivesVisitorArrayReversal(): void {
 function main(): void {
   testSingleGangwayCrossingAndEmergence();
   testTwoGangwaysIncreaseArrivalThroughput();
+  testTwoGangwaysIncreaseBoardingThroughput();
   testRecallCancelsShipSideQueue();
   testSaveResumeForDisembarkAndBoarding();
   testFifoSurvivesVisitorArrayReversal();
