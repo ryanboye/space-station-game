@@ -789,8 +789,8 @@ audited checklist with no unsupported checked claims.
 
 ### Structural And Operational Art
 
-- [ ] Generate low-resolution Truss Junction art.
-- [ ] Generate low-resolution Reinforced Bulkhead art.
+- [x] Generate low-resolution Truss Junction art.
+- [x] Generate low-resolution Reinforced Bulkhead art.
 - [ ] Add planned/delivered/welding/complete/overloaded structural states.
 - [ ] Add scaffold/floor/wall/seal/pressurizing states.
 - [ ] Add approach reservation animation.
@@ -1372,3 +1372,9 @@ Remaining uncertainty:
 - Commits or files: physical emergency-bunk placement, cancellation/recall, and explicit resident acceptance in `src/sim/sim.ts`; refusal and proportional-penalty contracts in `src/sim/failed-stay.ts`; focused runner `tools/gate-g-recovery-depth-tests.ts`; `test:gate-g-recovery-depth` package script (checkpoint commit pending at evidence capture).
 - Focused evidence: the runner passes 4/4. Two distressed visitors receive two real 1x1 Bunk fixtures on distinct free Dorm floor tiles, distinct fixture claims, and distinct routed destinations for an exact 28c cost; zero eligible floor tiles produce an exact refusal with no hidden capacity. Cancelling a contract with 135c of unfinished promised value charges the documented 45% share (61c), records its durable cause, and recalls both ship and contract, while a zero-value cancellation is refused. A single physical tile then produces the bounded mess → complaint → refusal-to-work incident ladder with a 45-second cooldown and cap of three.
 - Resident departure evidence: explicit policy-gated acceptance converts one depicted visitor only after a private Bed and residential dock are available. The accepted resident retains the same physical Bed after their home ship departs normally and releases its dock; no silent ambient conversion path calls the explicit acceptance operation.
+
+2026-07-28 · Curated structural-frontage source art
+
+- Commits or files: curated Truss Junction and Reinforced Bulkhead families in `tools/sprites/curated/`; normalized generation prompts in `tools/sprites/sprite-spec.yaml`; stable keys in `src/render/sprite-keys.ts`; atlas footprint and required-key registrations; packed `public/assets/sprites/atlas.png` and `atlas.json` (checkpoint commit pending at evidence capture).
+- Visual evidence: lead review inspected both ImageGen source sheets, every extracted transparent state, the packed atlas extractions, and the complete sprites at native scale. Junction states retain a four-way X-braced hub inside a 64x64 footprint; Bulkhead states retain west/east pressure-transfer attachments inside a 128x64 footprint. Planned, delivered, welding, complete, overloaded, and damaged variants preserve their attachment geometry and remain distinct at 32 pixels per tile.
+- Validation boundary: `sprites:validate:v1` passes all 311 keys. This closes generation of both low-resolution art families only. Their live construction-state selection and the all-assets live-render verification remain open until renderer integration and the final browser pass.

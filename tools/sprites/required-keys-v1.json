@@ -296,5 +296,18 @@
   "module.wash_bank",
   "module.wash_bank.active",
   "module.wash_bank.dirty",
-  "module.wash_bank.damaged"
+  "module.wash_bank.damaged",
+  "module.truss_junction",
+  "module.truss_junction.planned",
+  "module.truss_junction.delivered",
+  "module.truss_junction.welding",
+  "module.truss_junction.complete",
+  "module.truss_junction.overloaded",
+  "module.reinforced_bulkhead",
+  "module.reinforced_bulkhead.planned",
+  "module.reinforced_bulkhead.delivered",
+  "module.reinforced_bulkhead.welding",
+  "module.reinforced_bulkhead.complete",
+  "module.reinforced_bulkhead.overloaded",
+  "module.reinforced_bulkhead.damaged"
 ]

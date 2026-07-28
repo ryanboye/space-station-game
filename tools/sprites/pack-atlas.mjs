@@ -97,6 +97,21 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.plant': { w: 1, h: 1 },
   'module.reactor_core': { w: 2, h: 2 },
   'module.solar_panel': { w: 1, h: 1 },
+  // Structural-frontage pieces are atlas assets before their world renderer
+  // lands. Every state keeps the same physical footprint and attachment axes.
+  'module.truss_junction': { w: 1, h: 1 },
+  'module.truss_junction.planned': { w: 1, h: 1 },
+  'module.truss_junction.delivered': { w: 1, h: 1 },
+  'module.truss_junction.welding': { w: 1, h: 1 },
+  'module.truss_junction.complete': { w: 1, h: 1 },
+  'module.truss_junction.overloaded': { w: 1, h: 1 },
+  'module.reinforced_bulkhead': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.planned': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.delivered': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.welding': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.complete': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.overloaded': { w: 2, h: 1 },
+  'module.reinforced_bulkhead.damaged': { w: 2, h: 1 },
   // Occupant-loop content fixtures. Every state variant needs its own entry or
   // it packs at the 1x1 default cell size and gets stretched.
   'module.backroom_stock_bank': { w: 2, h: 3 },

@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-07-28T21:48:13.457Z",
+  "version": "sprite-v1-2026-07-28T22:17:11.647Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -1790,6 +1790,84 @@
       "y": 3110,
       "w": 128,
       "h": 320
+    },
+    "module.truss_junction": {
+      "x": 2038,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.planned": {
+      "x": 2106,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.delivered": {
+      "x": 2174,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.welding": {
+      "x": 2242,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.complete": {
+      "x": 2310,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.overloaded": {
+      "x": 2378,
+      "y": 3110,
+      "w": 64,
+      "h": 64
+    },
+    "module.reinforced_bulkhead": {
+      "x": 2446,
+      "y": 3110,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.planned": {
+      "x": 2578,
+      "y": 3110,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.delivered": {
+      "x": 2710,
+      "y": 3110,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.welding": {
+      "x": 2842,
+      "y": 3110,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.complete": {
+      "x": 2,
+      "y": 3434,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.overloaded": {
+      "x": 134,
+      "y": 3434,
+      "w": 128,
+      "h": 64
+    },
+    "module.reinforced_bulkhead.damaged": {
+      "x": 266,
+      "y": 3434,
+      "w": 128,
+      "h": 64
     }
   },
   "rotations": {

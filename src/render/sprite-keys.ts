@@ -159,3 +159,26 @@ export const SHIP_SPRITE_KEYS: Record<ShipType, string> = {
   military: 'ship.military',
   colonist: 'ship.colonist'
 };
+
+/**
+ * Stable keys for the structural-frontage art family. The simulation's
+ * structural graph currently keeps these as planning-time piece kinds rather
+ * than ModuleType values, so they deliberately live outside MODULE_SPRITE_KEYS.
+ */
+export const STRUCTURAL_SPRITE_KEYS = {
+  trussJunction: {
+    planned: 'module.truss_junction.planned',
+    delivered: 'module.truss_junction.delivered',
+    welding: 'module.truss_junction.welding',
+    complete: 'module.truss_junction.complete',
+    overloaded: 'module.truss_junction.overloaded'
+  },
+  reinforcedBulkhead: {
+    planned: 'module.reinforced_bulkhead.planned',
+    delivered: 'module.reinforced_bulkhead.delivered',
+    welding: 'module.reinforced_bulkhead.welding',
+    complete: 'module.reinforced_bulkhead.complete',
+    overloaded: 'module.reinforced_bulkhead.overloaded',
+    damaged: 'module.reinforced_bulkhead.damaged'
+  }
+} as const;

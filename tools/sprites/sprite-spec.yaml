@@ -1350,3 +1350,42 @@ sprites:
   module.wash_bank.damaged:
     prompt: "Top-down low-resolution pixel art station module: communal wash bank, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR basins WEST with the plumbing spine EAST, split by a bold red pipe fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.truss_junction:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, COMPLETE state. 1x1 footprint (64x64), visibly braced four-way steel hub with identical north/east/south/west attachment endpoints, central load collar, X-bracing, cyan status lamp and restrained yellow hazard tabs. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.truss_junction.planned:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, PLANNED state. Same 1x1 footprint and four endpoint coordinates as complete; cyan holographic structural outline and sparse plan stakes. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.truss_junction.delivered:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, DELIVERED state. Same 1x1 footprint and four endpoint coordinates as complete; physical X-braced frame, exposed gussets, fastener bundles and two restrained yellow delivery straps. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.truss_junction.welding:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, WELDING state. Same 1x1 footprint and four endpoint coordinates as complete; nearly assembled steel hub with one bright localized weld arc and sparks. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.truss_junction.complete:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, COMPLETE state. Same 1x1 footprint and four endpoint coordinates; heavy central load collar, X-bracing, four gusset plates, cyan status lamp and restrained yellow hazard tabs. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.truss_junction.overloaded:
+    prompt: "Top-down low-resolution pixel art exterior Truss Junction, OVERLOADED state. Identical complete silhouette, footprint and four endpoint coordinates; orange-red heat bloom, strained bolts and hot warning lamps communicate overload without adding another piece. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, COMPLETE state. 2x1 footprint (128x64), wide heavy plated pressure-hull transfer member with west/east flanges, central spine, paired diagonal load ribs, large bolts, cyan load indicators and restrained hazard corners. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.planned:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, PLANNED state. Same 2x1 footprint and west/east flange coordinates as complete; cyan holographic outline retains the full heavy transfer geometry. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.delivered:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, DELIVERED state. Same 2x1 footprint and west/east flange coordinates as complete; full physical frame with loosely fitted strapped armor plates awaiting assembly. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.welding:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, WELDING state. Same 2x1 footprint and west/east flange coordinates as complete; nearly assembled heavy member with one bright localized weld arc and sparks. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.complete:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, COMPLETE state. Same 2x1 footprint and west/east flange coordinates; cool heavy plating, paired diagonal load ribs, large bolts, cyan status indicators and dark pressure seal. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.overloaded:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, OVERLOADED state. Identical complete silhouette, 2x1 footprint and west/east flange coordinates; orange-red heat and strained warning bolts show excess load without adding another member. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  module.reinforced_bulkhead.damaged:
+    prompt: "Top-down low-resolution pixel art Reinforced Bulkhead, DAMAGED state. Identical outer 2x1 silhouette and west/east flange coordinates; one buckled central plate, dark impact scar and inactive warning lamp while the transfer member remains recognizable. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
