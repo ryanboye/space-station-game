@@ -558,6 +558,9 @@ export interface Visitor {
   optionalDrinkActive?: boolean;
   /** Count of optional repeat drinks completed during this visit. */
   repeatDrinksServed?: number;
+  /** Durable queue intent. The physical slot/path is reconstructed after load. */
+  queueProviderTile?: number | null;
+  queueJoinedAt?: number | null;
   serviceBlockedSince?: number | null;
   activeIncidentId?: number | null;
   // Crowd-loop v1 theater: set on storm-off/balk; renderer shows red tint + "!"
@@ -2251,6 +2254,8 @@ export interface QueueTheater {
   chainsByAnchor: Map<number, number[]>;
   chainsVersion: string;
   membersByAnchor: Map<number, number[]>;
+  /** Transient physical slot assignments rebuilt from durable visitor queue facts. */
+  slotByVisitorId: Map<number, number>;
   floaters: Array<{ x: number; y: number; text: string; color: string; bornAt: number }>;
   eventFeed: Array<{ at: number; tone: 'danger' | 'warn' | 'info'; text: string }>;
 }

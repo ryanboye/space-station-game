@@ -796,6 +796,12 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     nextPathRetryAt: undefined,
     marketTradeGoodSourceTile: null,
     temporarySleepTargetTile: null,
+    queueProviderTile: typeof value.queueProviderTile === 'number' && Number.isFinite(value.queueProviderTile)
+      ? clamp(Math.floor(value.queueProviderTile), 0, Math.max(0, tileCount - 1))
+      : null,
+    queueJoinedAt: typeof value.queueJoinedAt === 'number' && Number.isFinite(value.queueJoinedAt)
+      ? Math.max(0, value.queueJoinedAt)
+      : null,
     stayClass,
     needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
     recurringNeedActive: needs?.active ?? null,

@@ -1873,6 +1873,7 @@ export function createEmptyDerivedCache(): StationState['derived'] {
       chainsByAnchor: new Map(),
       chainsVersion: '',
       membersByAnchor: new Map(),
+      slotByVisitorId: new Map(),
       floaters: [],
       eventFeed: []
     },
@@ -7104,6 +7105,8 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
     activeService,
     optionalDrinkActive: false,
     repeatDrinksServed: 0,
+    queueProviderTile: null,
+    queueJoinedAt: null,
     serviceBlockedSince: null,
     stayClass,
     needs: isLongStayClass(stayClass) ? createVisitorNeeds(visitorId + (ship?.id ?? 0) * 31) : undefined,
@@ -11022,12 +11025,13 @@ function pickQueueSpotPath(
 // visitors hold a slot on the chain (arrival order) and physically stand
 // there — a too-small room spills its line into the corridor by construction,
 // and spilled queuers block traffic through the normal occupancy rules.
-// Membership is runtime-only (derived.queueTheater); it rebuilds after load.
+// Queue intent/order is durable on the visitor. Chains, physical slot claims,
+// and paths remain transient and rebuild after load or topology changes.
 // ---------------------------------------------------------------------------
 
 const QUEUE_CHAIN_MAX_LEN = 24;
 const QUEUE_CHAIN_MAX_SPILL = 6;
-const QUEUE_BALK_LENGTH = 12;
+const QUEUE_BALK_WAIT_SEC = 16;
 const VISITOR_SERVICE_ORIENTATION_SEC = 4;
 const CROWD_FEED_MAX = 30;
 const CROWD_FLOATER_MAX = 40;
@@ -11067,7 +11071,12 @@ function wallAdjacencyCount(state: StationState, tileIndex: number): number {
   return count;
 }
 
-function buildQueueChain(state: StationState, servingTile: number, room: RoomType = state.rooms[servingTile]): number[] {
+function buildQueueChain(
+  state: StationState,
+  servingTile: number,
+  room: RoomType = state.rooms[servingTile],
+  claimedByEarlierProvider: ReadonlySet<number> = new Set()
+): number[] {
   const sp = fromIndex(servingTile, state.width);
   const deltas: ReadonlyArray<readonly [number, number]> = [[0, 1], [1, 0], [-1, 0], [0, -1]];
   // Head of the line: a walkable, module-free neighbor of the counter,
@@ -11079,6 +11088,7 @@ function buildQueueChain(state: StationState, servingTile: number, room: RoomTyp
     const ny = sp.y + dy;
     if (!inBounds(nx, ny, state.width, state.height)) continue;
     const ni = toIndex(nx, ny, state.width);
+    if (claimedByEarlierProvider.has(ni)) continue;
     if (!isWalkable(state.tiles[ni])) continue;
     if (state.moduleOccupancyByTile[ni] !== null) continue;
     const score = (state.rooms[ni] === room ? 8 : 0) + wallAdjacencyCount(state, ni);
@@ -11106,6 +11116,7 @@ function buildQueueChain(state: StationState, servingTile: number, room: RoomTyp
       if (!inBounds(nx, ny, state.width, state.height)) continue;
       const ni = toIndex(nx, ny, state.width);
       if (inChain.has(ni)) continue;
+      if (claimedByEarlierProvider.has(ni)) continue;
       if (!isWalkable(state.tiles[ni])) continue;
       if (state.moduleOccupancyByTile[ni] !== null) continue;
       const isDoor = state.tiles[ni] === TileType.Door;
@@ -11149,33 +11160,60 @@ function findQueueSlotPath(state: StationState, from: number, slotTile: number, 
 
 function ensureQueueChains(state: StationState): void {
   const theater = state.derived.queueTheater;
-  // Queue membership is a presentation/ordering record, not an authority on
-  // visitor state. Prune anyone who has already been promoted, bailed, or
-  // moved on so a save made before a handoff fix cannot retain a ghost head.
-  for (const [anchor, members] of theater.membersByAnchor) {
-    const activeMembers = members.filter((visitorId) => {
-      const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
-      return visitor?.state === VisitorState.Queueing && !visitor.carryingMeal;
-    });
-    if (activeMembers.length === 0) theater.membersByAnchor.delete(anchor);
-    else if (activeMembers.length !== members.length) theater.membersByAnchor.set(anchor, activeMembers);
-  }
   const version = queueTargetVersionKey(state);
-  if (theater.chainsVersion === version) return;
-  theater.chainsByAnchor.clear();
-  for (const target of collectServingPickupTargets(state)) {
-    const chain = buildQueueChain(state, target, RoomType.Cafeteria);
-    if (chain.length > 0) theater.chainsByAnchor.set(target, chain);
+  if (theater.chainsVersion !== version) {
+    theater.chainsByAnchor.clear();
+    // Provider order is stable. Earlier providers own their physical line
+    // tiles, so two counters can never silently reserve the same corridor.
+    const claimed = new Set<number>();
+    const providers = [
+      ...collectServingPickupTargets(state).map((tile) => ({ tile, room: RoomType.Cafeteria })),
+      ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina }))
+    ].sort((a, b) => a.tile - b.tile || a.room.localeCompare(b.room));
+    for (const provider of providers) {
+      const chain = buildQueueChain(state, provider.tile, provider.room, claimed);
+      if (chain.length === 0) continue;
+      theater.chainsByAnchor.set(provider.tile, chain);
+      for (const tile of chain) claimed.add(tile);
+    }
+    theater.chainsVersion = version;
   }
-  for (const target of collectCantinaBarTargets(state)) {
-    const chain = buildQueueChain(state, target, RoomType.Cantina);
-    if (chain.length > 0) theater.chainsByAnchor.set(target, chain);
+
+  // The queue order is durable visitor data, not renderer theater. Rebuild
+  // this small transient index every maintenance pass so hydration, topology
+  // edits and departures cannot leave a ghost standing in a slot.
+  theater.membersByAnchor.clear();
+  theater.slotByVisitorId.clear();
+  const providers = new Set(theater.chainsByAnchor.keys());
+  const ordered = state.visitors
+    .filter((visitor) => {
+      const provider = visitor.queueProviderTile;
+      if (provider === null || provider === undefined || !providers.has(provider)) return false;
+      if (collectServingPickupTargets(state).includes(provider)) {
+        return visitor.state === VisitorState.Queueing && !visitor.carryingMeal;
+      }
+      return visitorWaitingForCantinaPickup(visitor);
+    })
+    .sort((a, b) =>
+      (a.queueProviderTile ?? -1) - (b.queueProviderTile ?? -1) ||
+      (a.queueJoinedAt ?? Number.POSITIVE_INFINITY) - (b.queueJoinedAt ?? Number.POSITIVE_INFINITY) ||
+      a.id - b.id
+    );
+  const queuedIds = new Set(ordered.map((visitor) => visitor.id));
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null || !reservation.targetId?.startsWith('queue-slot:')) continue;
+    if (reservation.ownerKind !== 'visitor' || !queuedIds.has(Number(reservation.ownerId))) {
+      releaseReservation(state, reservation, 'cleared');
+    }
   }
-  // Drop membership lists for anchors that no longer exist.
-  for (const anchor of [...theater.membersByAnchor.keys()]) {
-    if (!theater.chainsByAnchor.has(anchor)) theater.membersByAnchor.delete(anchor);
+  for (const visitor of ordered) {
+    const provider = visitor.queueProviderTile!;
+    const chain = theater.chainsByAnchor.get(provider)!;
+    const members = theater.membersByAnchor.get(provider) ?? [];
+    if (members.length >= chain.length) continue;
+    members.push(visitor.id);
+    theater.membersByAnchor.set(provider, members);
   }
-  theater.chainsVersion = version;
 }
 
 export function queuePositionOf(
@@ -11192,6 +11230,18 @@ export function queuePositionOf(
 }
 
 function removeVisitorFromQueues(state: StationState, visitorId: number, anchors?: Set<number>): void {
+  const visitor = state.visitors.find((candidate) => candidate.id === visitorId);
+  if (visitor && (!anchors || (visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined && anchors.has(visitor.queueProviderTile)))) {
+    visitor.queueProviderTile = null;
+    visitor.queueJoinedAt = null;
+  }
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null) continue;
+    if (reservation.ownerKind !== 'visitor' || reservation.ownerId !== visitorId) continue;
+    if (!reservation.targetId?.startsWith('queue-slot:')) continue;
+    releaseReservation(state, reservation, 'replaced');
+  }
+  state.derived.queueTheater.slotByVisitorId.delete(visitorId);
   for (const [anchor, members] of [...state.derived.queueTheater.membersByAnchor]) {
     if (anchors && !anchors.has(anchor)) continue;
     const kept = members.filter((id) => id !== visitorId);
@@ -11200,9 +11250,64 @@ function removeVisitorFromQueues(state: StationState, visitorId: number, anchors
   }
 }
 
-/** Join the shortest serving line (or balk if every line is hopeless).
- *  Returns 'joined' | 'balked' | 'no-queue'. */
-function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | 'balked' | 'no-queue' {
+function queueSlotTargetId(anchor: number): string {
+  return `queue-slot:${anchor}`;
+}
+
+function refreshVisitorQueueSlotReservation(state: StationState, visitor: Visitor, anchor: number, slotTile: number): boolean {
+  const targetId = queueSlotTargetId(anchor);
+  const existing = state.reservations.find(
+    (reservation) =>
+      reservation.releaseReason === null &&
+      reservation.ownerKind === 'visitor' &&
+      reservation.ownerId === visitor.id &&
+      reservation.kind === 'provider-slot' &&
+      reservation.targetId === targetId &&
+      reservation.targetTile === slotTile
+  );
+  if (existing) {
+    existing.expiresAt = Math.max(existing.expiresAt, state.now + 12);
+    return true;
+  }
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null) continue;
+    if (reservation.ownerKind !== 'visitor' || reservation.ownerId !== visitor.id) continue;
+    if (!reservation.targetId?.startsWith('queue-slot:')) continue;
+    releaseReservation(state, reservation, 'replaced');
+  }
+  return tryCreateReservation(state, {
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'provider-slot',
+    targetTile: slotTile,
+    targetId,
+    capacity: 1,
+    ttlSec: 12
+  }).ok;
+}
+
+function assignVisitorToQueue(state: StationState, visitor: Visitor, anchor: number): void {
+  visitor.queueProviderTile = anchor;
+  visitor.queueJoinedAt ??= state.now;
+  visitor.reservedServingTile = null;
+  visitor.reservedTargetTile = null;
+  visitor.serviceBlockedSince = null;
+  ensureQueueChains(state);
+  const position = queuePositionOf(state, visitor.id, new Set([anchor]));
+  const slot = position === null ? null : state.derived.queueTheater.chainsByAnchor.get(anchor)?.[position.index] ?? null;
+  if (slot === null || !refreshVisitorQueueSlotReservation(state, visitor, anchor, slot)) {
+    visitor.serviceBlockedSince ??= state.now;
+    visitor.movementWaitReason = 'queue slot unavailable';
+    return;
+  }
+  state.derived.queueTheater.slotByVisitorId.set(visitor.id, slot);
+  const path = findQueueSlotPath(state, visitor.tileIndex, slot, visitor.id);
+  setVisitorPath(state, visitor, path ?? []);
+}
+
+/** Join the shortest physically valid serving line. A full line is a bounded
+ * wait, not an instant rejection; failed-stay logic owns the eventual bail. */
+function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | 'no-queue' {
   ensureQueueChains(state);
   const theater = state.derived.queueTheater;
   const servingAnchors = new Set(collectServingPickupTargets(state));
@@ -11220,22 +11325,13 @@ function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | '
       bestAnchor = anchor;
     }
   }
-  if (bestAnchor === null || bestLen >= QUEUE_BALK_LENGTH) {
-    // B3: balk — the visitor looks at the line and refuses on the spot.
-    visitor.angryUntil = state.now + 5;
-    pushCrowdFloater(state, visitor.x, visitor.y, 'line too long!', '#ff9f5f');
-    pushCrowdEvent(state, 'warn', `A ${visitor.archetype} balked — the food line is too long`);
-    addVisitorFailurePenalty(state, 0.05, 'patienceBail');
-    return 'balked';
+  if (bestAnchor === null) {
+    visitor.serviceBlockedSince ??= state.now;
+    visitor.movementWaitReason = 'queue full';
+    return 'no-queue';
   }
-  const members = theater.membersByAnchor.get(bestAnchor) ?? [];
-  members.push(visitor.id);
-  theater.membersByAnchor.set(bestAnchor, members);
   visitor.state = VisitorState.Queueing;
-  const chain = theater.chainsByAnchor.get(bestAnchor)!;
-  const slotTile = chain[Math.min(members.length - 1, chain.length - 1)];
-  const path = findQueueSlotPath(state, visitor.tileIndex, slotTile, visitor.id);
-  setVisitorPath(state, visitor, path ?? []);
+  assignVisitorToQueue(state, visitor, bestAnchor);
   return 'joined';
 }
 
@@ -11264,15 +11360,8 @@ function joinCantinaBarQueue(state: StationState, visitor: Visitor): 'joined' | 
     visitor.carryingDrink = false;
     return 'balked';
   }
-  const members = theater.membersByAnchor.get(bestAnchor) ?? [];
-  members.push(visitor.id);
-  theater.membersByAnchor.set(bestAnchor, members);
   visitor.state = VisitorState.ToLeisure;
-  visitor.reservedTargetTile = null;
-  const chain = theater.chainsByAnchor.get(bestAnchor)!;
-  const slotTile = chain[Math.min(members.length - 1, chain.length - 1)];
-  const path = findQueueSlotPath(state, visitor.tileIndex, slotTile, visitor.id);
-  setVisitorPath(state, visitor, path ?? []);
+  assignVisitorToQueue(state, visitor, bestAnchor);
   return 'joined';
 }
 
@@ -11283,10 +11372,19 @@ function maintainCafeteriaQueues(state: StationState): void {
   if (theater.floaters.length > 0) {
     theater.floaters = theater.floaters.filter((f) => state.now - f.bornAt < CROWD_FLOATER_TTL_SEC);
   }
-  if (theater.membersByAnchor.size === 0) return;
   ensureQueueChains(state);
-  const servingAnchors = new Set(collectServingPickupTargets(state));
-  const barAnchors = new Set(collectCantinaBarTargets(state));
+  // A topology change can remove every physical slot while a visitor is
+  // already waiting. Treat that as the same bounded service failure as a
+  // full line, rather than leaving an invisible permanent queue state.
+  for (const visitor of state.visitors) {
+    if (visitor.state !== VisitorState.Queueing) continue;
+    if (visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined) continue;
+    if (visitor.serviceBlockedSince === null || visitor.serviceBlockedSince === undefined) continue;
+    if (state.now - visitor.serviceBlockedSince >= QUEUE_BALK_WAIT_SEC) {
+      balkFromServiceQueue(state, visitor);
+    }
+  }
+  if (theater.membersByAnchor.size === 0) return;
   const byId = new Map<number, Visitor>();
   for (const v of state.visitors) byId.set(v.id, v);
   for (const [anchor, members] of [...theater.membersByAnchor]) {
@@ -11295,36 +11393,47 @@ function maintainCafeteriaQueues(state: StationState): void {
       theater.membersByAnchor.delete(anchor);
       continue;
     }
-    const kept: number[] = [];
-    for (const id of members) {
-      const v = byId.get(id);
+    for (let i = 0; i < members.length; i++) {
+      const v = byId.get(members[i]);
       if (!v) continue;
-      if (servingAnchors.has(anchor)) {
-        if (v.state !== VisitorState.Queueing || v.carryingMeal) continue;
-      } else if (barAnchors.has(anchor)) {
-        if (!visitorWaitingForCantinaPickup(v)) continue;
-      } else {
+      const slotTile = chain[i];
+      if (!refreshVisitorQueueSlotReservation(state, v, anchor, slotTile)) {
+        v.serviceBlockedSince ??= state.now;
+        v.movementWaitReason = 'queue slot blocked';
         continue;
       }
-      kept.push(id);
-    }
-    for (let i = 0; i < kept.length; i++) {
-      const v = byId.get(kept[i])!;
-      const slotTile = chain[Math.min(i, chain.length - 1)];
+      theater.slotByVisitorId.set(v.id, slotTile);
       const currentGoal = v.path.length > 0 ? v.path[v.path.length - 1] : v.tileIndex;
       if (currentGoal !== slotTile) {
         const path = findQueueSlotPath(state, v.tileIndex, slotTile, v.id);
         if (path) setVisitorPath(state, v, path);
       }
+      if (v.tileIndex !== slotTile) v.movementWaitReason = 'waiting for queue slot';
+      else if (i > 0) v.movementWaitReason = 'waiting in service line';
+      else v.movementWaitReason = 'waiting for service';
     }
-    if (kept.length === 0) theater.membersByAnchor.delete(anchor);
-    else theater.membersByAnchor.set(anchor, kept);
   }
 }
 
-/** Route a hungry visitor into a physical serving line; on balk, send them
- *  to leisure (or the dock) instead. Falls back to the legacy queue-spot
- *  blob when no serving stations exist. */
+/** Focused harness hook. Production invokes this during the visitor phase. */
+export function runQueueMaintenanceTestTick(state: StationState): void {
+  maintainCafeteriaQueues(state);
+}
+
+function balkFromServiceQueue(state: StationState, visitor: Visitor): void {
+  visitor.angryUntil = state.now + 5;
+  pushCrowdFloater(state, visitor.x, visitor.y, 'line too long!', '#ff9f5f');
+  pushCrowdEvent(state, 'warn', `A ${visitor.archetype} left the food line after waiting`);
+  addVisitorFailurePenalty(state, 0.05, 'patienceBail');
+  removeVisitorFromQueues(state, visitor.id);
+  visitor.serviceBlockedSince = null;
+  if (!visitor.servedMeal && assignPathToLeisure(state, visitor)) return;
+  visitor.state = VisitorState.ToDock;
+  assignPathToDock(state, visitor);
+}
+
+/** Route a hungry visitor into a physical serving line. A capacity failure is
+ * a bounded wait; the existing visitor-failure path owns the eventual exit. */
 function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
   const isStillArriving =
     state.now - visitor.spawnedAt < VISITOR_SERVICE_ORIENTATION_SEC ||
@@ -11337,16 +11446,14 @@ function enterServingLineOrBail(state: StationState, visitor: Visitor): void {
   }
   const result = joinCafeteriaQueue(state, visitor);
   if (result === 'joined') return;
-  if (result === 'balked') {
-    if (!visitor.servedMeal && assignPathToLeisure(state, visitor)) {
-      return;
-    }
-    visitor.state = VisitorState.ToDock;
-    assignPathToDock(state, visitor);
+  visitor.state = VisitorState.Queueing;
+  visitor.serviceBlockedSince ??= state.now;
+  visitor.movementWaitReason = 'queue full';
+  if (state.now - visitor.serviceBlockedSince >= QUEUE_BALK_WAIT_SEC) {
+    balkFromServiceQueue(state, visitor);
     return;
   }
-  setVisitorPath(state, visitor, pickQueueSpotPath(state, visitor.tileIndex, 'visitor', visitor.id));
-  visitor.state = VisitorState.Queueing;
+  setVisitorPath(state, visitor, []);
 }
 
 function dinersOnTile(state: StationState, tileIndex: number): number {
@@ -19415,11 +19522,11 @@ function assignPathToCantinaSeat(state: StationState, visitor: Visitor): boolean
 }
 
 function assignPathToCantinaPickup(state: StationState, visitor: Visitor): boolean {
+  const existingQueue = queuePositionOf(state, visitor.id, new Set(collectCantinaBarTargets(state)));
+  if (existingQueue !== null && (existingQueue.index > 0 || !hasUnreservedCantinaBar(state))) return true;
   releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot', 'seat-use-slot']);
   visitor.reservedTargetTile = null;
   visitor.reservedServingTile = null;
-  const existingQueue = queuePositionOf(state, visitor.id, new Set(collectCantinaBarTargets(state)));
-  if (existingQueue !== null && (existingQueue.index > 0 || !hasUnreservedCantinaBar(state))) return true;
   const choice = pickCantinaBarPath(state, visitor.tileIndex, 'visitor', visitor.id);
   if (choice.target !== null) {
     const reservation = tryCreateReservation(state, {

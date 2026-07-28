@@ -4529,6 +4529,10 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
   if (sanitation?.severity === 'dirty') {
     return { text: visitorThoughtVariant(visitor.id, ['This place is a mess', 'The floors are disgusting'], 2), tone: 'negative' };
   }
+  if (visitor.state === VisitorState.Queueing && visitor.movementWaitReason) {
+    const blocked = visitor.movementWaitReason.includes('blocked') || visitor.movementWaitReason.includes('full');
+    return { text: blocked ? 'QUEUE BLOCKED' : 'WAITING FOR SERVICE', tone: blocked ? 'negative' : 'neutral' };
+  }
   if (
     visitor.state === VisitorState.Queueing &&
     visitor.path.length === 0 &&

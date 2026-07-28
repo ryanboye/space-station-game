@@ -511,22 +511,22 @@ compiles is not sufficient for player-facing work.
 
 ### Real Queue Spill
 
-- [ ] Back every queue position with a real floor reservation.
-- [ ] Grow a queue backward from its provider.
-- [ ] Route queue spill through reachable floor.
-- [ ] Permit queue spill into circulation.
-- [ ] Make a queue covering a door reduce door throughput.
-- [ ] Let actors balk after appropriate wait and alternatives.
+- [x] Back every queue position with a real floor reservation.
+- [x] Grow a queue backward from its provider.
+- [x] Route queue spill through reachable floor.
+- [x] Permit queue spill into circulation.
+- [x] Make a queue covering a door reduce door throughput.
+- [x] Let actors balk after appropriate wait and alternatives.
 - [ ] Lift queue and congestion caps only after deadlock safety exists.
-- [ ] Show why an actor is waiting.
+- [x] Show why an actor is waiting.
 
 ### Phase 5 Gate
 
 - [x] A narrow terminal congests without permanently freezing.
 - [ ] A queue visibly covers and slows a door.
-- [ ] A second entrance measurably improves throughput.
-- [ ] Head-on and cyclic traffic recovers.
-- [ ] No actor remains indefinitely stuck in a stale reservation.
+- [x] A second entrance measurably improves throughput.
+- [x] Head-on and cyclic traffic recovers.
+- [x] No actor remains indefinitely stuck in a stale reservation.
 - [ ] Target-scale movement remains performant.
 
 ## Phase 6: Physical Cargo, Boarding, And Interior Support
@@ -752,11 +752,11 @@ compiles is not sufficient for player-facing work.
 - [x] Add occupant tenure/needs runner.
 - [x] Add fixture-slot/reception runner.
 - [x] Add failed-stay/stranding runner.
-- [ ] Add movement/queue/deadlock runner.
+- [x] Add movement/queue/deadlock runner.
 - [ ] Add cargo/boarding/support runner.
 - [ ] Add integrity/pressure/EVA repair runner.
 - [ ] Add target-scale performance runner.
-- [ ] Document commands beside each completed phase.
+- [x] Document commands beside each completed phase.
 
 ## User Playtest Review
 
@@ -914,3 +914,10 @@ Remaining uncertainty:
 - Focused checks: `npm run test:movement-coordinator`, `npm run test:structural-expansion`, `npm run test:occupant-loop`, `npm run test:facility-slots`, `npm run test:failed-stay`, `npm run test:approach-envelopes`, and `npm run build` passed. Coverage proves order-independent contested-tile ownership, bounded urgency with wait-age fairness, safe floor swaps, unsafe Door serialization, narrow-crossing cooldown, bounded congestion replanning, hysteresis, an idle-blocker sidestep, a one-tile hand-courier exchange, distinct fresh crew spawn tiles, and save/resume of durable wait age without stale transient claims.
 - Visual/playtest evidence: construction regression tracing exposed two real physical cases rather than lost inventory: the legacy starter spawned all crew on one tile, and a pathless worker could occupy the only square in a one-tile corridor. Fresh crew now spawn on distinct nearby walkable tiles; idle blockers step aside or perform a safety-checked exchange. Interrupted construction loads still return to their authoritative source exactly once.
 - Remaining uncertainty: real queue floor slots, queue spill through doors, general narrow-corridor directional capacity, rendered actor wait reasons, bulky-cart capacity beyond swap safety, and target-scale performance remain Phase 5/6 work and stay unchecked.
+
+2026-07-27 · Phase 5 physical queue spill
+
+- Commit or files: `src/sim/types.ts`, `src/sim/save.ts`, `src/sim/sim.ts`, `src/render/render.ts`, `tools/queue-spill-tests.ts`, and `package.json` (pending integration commit at time of evidence capture).
+- Focused checks: `npm run test:queue-spill`, `npm run test:movement-coordinator`, `npm run test:occupant-loop`, `npm run build`, and `git diff --check` passed. Coverage proves stable FIFO order independent of visitor array order, one exclusive floor reservation per admitted queuer, reachable spill onto a Door, real Door throttling, alternate-crossing recovery, greater capacity from a second provider route, stale-head release and follower advance, bounded service failure, and save/resume reconstruction from durable queue intent.
+- Visual/playtest evidence: queue members use their ordinary world actors as the physical line; sampled thought bubbles report `WAITING FOR SERVICE` or `QUEUE BLOCKED` while the existing animated waiting dots remain the at-a-glance marker. A fresh live browser comparison of a blocked-door line remains required before the visual Phase 5 gate closes.
+- Remaining uncertainty: queue length/spill caps remain deliberately bounded; open-concourse and narrow-corridor directional capacity, bulky carts, target-scale performance, and live door-spill visual validation remain open.
