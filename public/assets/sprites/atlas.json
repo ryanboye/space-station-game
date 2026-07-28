@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-07-27T23:04:45.798Z",
+  "version": "sprite-v1-2026-07-28T01:55:52.776Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -573,608 +573,686 @@
       "w": 128,
       "h": 128
     },
-    "module.storage_rack": {
+    "module.freight_pallet.empty": {
       "x": 2002,
+      "y": 394,
+      "w": 36,
+      "h": 36
+    },
+    "module.freight_pallet.partial": {
+      "x": 2042,
+      "y": 394,
+      "w": 36,
+      "h": 36
+    },
+    "module.freight_pallet.full": {
+      "x": 2082,
+      "y": 394,
+      "w": 36,
+      "h": 36
+    },
+    "module.storage_rack": {
+      "x": 2122,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.empty": {
-      "x": 2134,
+      "x": 2254,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.light": {
-      "x": 2266,
+      "x": 2386,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.stocked": {
-      "x": 2398,
+      "x": 2518,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "module.storage_rack.full": {
-      "x": 2530,
+      "x": 2650,
       "y": 394,
       "w": 128,
       "h": 64
     },
     "room.berth": {
-      "x": 2662,
+      "x": 2782,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "room.cantina": {
-      "x": 2730,
+      "x": 2850,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "room.observatory": {
-      "x": 2798,
+      "x": 2918,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.gangway": {
-      "x": 2866,
+      "x": 2986,
       "y": 394,
       "w": 64,
       "h": 64
     },
     "module.gangway.active": {
-      "x": 2934,
-      "y": 394,
+      "x": 2,
+      "y": 718,
       "w": 64,
       "h": 64
     },
+    "module.gangway.closed": {
+      "x": 70,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "module.gangway.deploying": {
+      "x": 92,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "module.gangway.connected": {
+      "x": 114,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "module.gangway.blocked": {
+      "x": 136,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "module.gangway.late": {
+      "x": 158,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "module.cargo_cart.loaded": {
+      "x": 180,
+      "y": 718,
+      "w": 36,
+      "h": 18
+    },
+    "cargo.icon.supply_crate": {
+      "x": 220,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "cargo.icon.material_bundle": {
+      "x": 242,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "cargo.icon.luggage": {
+      "x": 264,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
+    "cargo.icon.fuel_canister": {
+      "x": 286,
+      "y": 718,
+      "w": 18,
+      "h": 18
+    },
     "module.customs_counter": {
-      "x": 3002,
-      "y": 394,
+      "x": 308,
+      "y": 718,
       "w": 64,
       "h": 64
     },
     "module.cargo_arm": {
-      "x": 2,
+      "x": 376,
       "y": 718,
       "w": 128,
       "h": 128
     },
     "module.fuel_tank": {
-      "x": 134,
+      "x": 508,
       "y": 718,
       "w": 128,
       "h": 128
     },
     "module.fuel_pump": {
-      "x": 266,
+      "x": 640,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.pod_dock": {
-      "x": 398,
+      "x": 772,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.pod_dock.active": {
-      "x": 530,
+      "x": 904,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.fuel_coupler": {
-      "x": 662,
+      "x": 1036,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.freight_locker": {
-      "x": 730,
+      "x": 1104,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.maintenance_socket": {
-      "x": 862,
+      "x": 1236,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.berth_control": {
-      "x": 994,
+      "x": 1368,
       "y": 718,
       "w": 128,
       "h": 128
     },
     "module.docking_clamp": {
-      "x": 1126,
+      "x": 1500,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.docking_clamp.active": {
-      "x": 1194,
+      "x": 1568,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.fire_extinguisher": {
-      "x": 1262,
+      "x": 1636,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.vent": {
-      "x": 1330,
+      "x": 1704,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.insulation_panel": {
-      "x": 1398,
+      "x": 1772,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.vending_machine": {
-      "x": 1466,
+      "x": 1840,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.bench": {
-      "x": 1534,
+      "x": 1908,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.bar_counter": {
-      "x": 1666,
+      "x": 2040,
       "y": 718,
       "w": 128,
       "h": 64
     },
     "module.tap": {
-      "x": 1798,
+      "x": 2172,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.telescope": {
-      "x": 1866,
+      "x": 2240,
       "y": 718,
       "w": 128,
       "h": 128
     },
     "module.water_fountain": {
-      "x": 1998,
+      "x": 2372,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.plant": {
-      "x": 2066,
+      "x": 2440,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "module.reactor_core": {
-      "x": 2134,
+      "x": 2508,
       "y": 718,
       "w": 128,
       "h": 128
     },
     "module.solar_panel": {
-      "x": 2266,
+      "x": 2640,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "overlay.utility.air_duct_tile": {
-      "x": 2334,
+      "x": 2708,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.tourist": {
-      "x": 2402,
+      "x": 2776,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.trader": {
-      "x": 2470,
+      "x": 2844,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.industrial": {
-      "x": 2538,
+      "x": 2912,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.military": {
-      "x": 2606,
+      "x": 2980,
       "y": 718,
       "w": 64,
       "h": 64
     },
     "ship.colonist": {
-      "x": 2674,
-      "y": 718,
+      "x": 2,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.solo": {
-      "x": 2742,
-      "y": 718,
+      "x": 70,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.start": {
-      "x": 2810,
-      "y": 718,
+      "x": 138,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.middle": {
-      "x": 2878,
-      "y": 718,
+      "x": 206,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.dock.facade.north.end": {
-      "x": 2946,
-      "y": 718,
+      "x": 274,
+      "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.1": {
-      "x": 2,
+      "x": 342,
       "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.2": {
-      "x": 70,
+      "x": 410,
       "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.3": {
-      "x": 138,
+      "x": 478,
       "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.4": {
-      "x": 206,
+      "x": 546,
       "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.5": {
-      "x": 274,
+      "x": 614,
       "y": 850,
       "w": 64,
       "h": 64
     },
     "overlay.floor.grime.6": {
-      "x": 342,
-      "y": 850,
-      "w": 64,
-      "h": 64
-    },
-    "overlay.floor.wear.1": {
-      "x": 410,
-      "y": 850,
-      "w": 64,
-      "h": 64
-    },
-    "overlay.floor.wear.2": {
-      "x": 478,
-      "y": 850,
-      "w": 64,
-      "h": 64
-    },
-    "overlay.floor.wear.3": {
-      "x": 546,
-      "y": 850,
-      "w": 64,
-      "h": 64
-    },
-    "overlay.floor.wear.4": {
-      "x": 614,
-      "y": 850,
-      "w": 64,
-      "h": 64
-    },
-    "agent.visitor.1": {
       "x": 682,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.visitor.2": {
+    "overlay.floor.wear.1": {
       "x": 750,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.visitor.3": {
+    "overlay.floor.wear.2": {
       "x": 818,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.visitor.4": {
+    "overlay.floor.wear.3": {
       "x": 886,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.visitor.5": {
+    "overlay.floor.wear.4": {
       "x": 954,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.visitor.6": {
+    "agent.visitor.1": {
       "x": 1022,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.1": {
+    "agent.visitor.2": {
       "x": 1090,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.2": {
+    "agent.visitor.3": {
       "x": 1158,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.3": {
+    "agent.visitor.4": {
       "x": 1226,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.4": {
+    "agent.visitor.5": {
       "x": 1294,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.5": {
+    "agent.visitor.6": {
       "x": 1362,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.resident.6": {
+    "agent.resident.1": {
       "x": 1430,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.1": {
+    "agent.resident.2": {
       "x": 1498,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.2": {
+    "agent.resident.3": {
       "x": 1566,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.3": {
+    "agent.resident.4": {
       "x": 1634,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.4": {
+    "agent.resident.5": {
       "x": 1702,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.5": {
+    "agent.resident.6": {
       "x": 1770,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.6": {
+    "agent.crew.1": {
       "x": 1838,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.eva_suit": {
+    "agent.crew.2": {
       "x": 1906,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.captain": {
+    "agent.crew.3": {
       "x": 1974,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.sanitation_officer": {
+    "agent.crew.4": {
       "x": 2042,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.security_officer": {
+    "agent.crew.5": {
       "x": 2110,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.mechanic_officer": {
+    "agent.crew.6": {
       "x": 2178,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.industrial_officer": {
+    "agent.crew.eva_suit": {
       "x": 2246,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.navigation_officer": {
+    "agent.crew.captain": {
       "x": 2314,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.comms_officer": {
+    "agent.crew.sanitation_officer": {
       "x": 2382,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.medical_officer": {
+    "agent.crew.security_officer": {
       "x": 2450,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.eva_specialist": {
+    "agent.crew.mechanic_officer": {
       "x": 2518,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.eva_engineer": {
+    "agent.crew.industrial_officer": {
       "x": 2586,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.flight_controller": {
+    "agent.crew.navigation_officer": {
       "x": 2654,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.docking_officer": {
+    "agent.crew.comms_officer": {
       "x": 2722,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.doctor": {
+    "agent.crew.medical_officer": {
       "x": 2790,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.nurse": {
+    "agent.crew.eva_specialist": {
       "x": 2858,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.cook": {
+    "agent.crew.eva_engineer": {
       "x": 2926,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.cleaner": {
+    "agent.crew.flight_controller": {
       "x": 2994,
       "y": 850,
       "w": 64,
       "h": 64
     },
-    "agent.crew.janitor": {
+    "agent.crew.docking_officer": {
       "x": 2,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.botanist": {
+    "agent.crew.doctor": {
       "x": 70,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.technician": {
+    "agent.crew.nurse": {
       "x": 138,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.assistant": {
+    "agent.crew.cook": {
       "x": 206,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.security_guard": {
+    "agent.crew.cleaner": {
       "x": 274,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.maintenance_tech": {
+    "agent.crew.janitor": {
       "x": 342,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.engineer": {
+    "agent.crew.botanist": {
       "x": 410,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.mechanic": {
+    "agent.crew.technician": {
       "x": 478,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "agent.crew.welder": {
+    "agent.crew.assistant": {
       "x": 546,
       "y": 918,
       "w": 64,
       "h": 64
     },
-    "space.planet.rocky.1": {
+    "agent.crew.security_guard": {
       "x": 614,
+      "y": 918,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.maintenance_tech": {
+      "x": 682,
+      "y": 918,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.engineer": {
+      "x": 750,
+      "y": 918,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.mechanic": {
+      "x": 818,
+      "y": 918,
+      "w": 64,
+      "h": 64
+    },
+    "agent.crew.welder": {
+      "x": 886,
+      "y": 918,
+      "w": 64,
+      "h": 64
+    },
+    "space.planet.rocky.1": {
+      "x": 954,
       "y": 918,
       "w": 256,
       "h": 256
     },
     "space.massive.moon_dark_limb.1": {
-      "x": 874,
+      "x": 1214,
       "y": 918,
       "w": 768,
       "h": 768
     },
     "space.massive.gas_blue_limb.1": {
-      "x": 1646,
+      "x": 1986,
       "y": 918,
       "w": 768,
       "h": 768
@@ -1335,38 +1413,104 @@
       "w": 64,
       "h": 64
     },
-    "icon.tier1_unlock": {
+    "overlay.wall.hull.worn": {
       "x": 1094,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "overlay.wall.hull.damaged": {
+      "x": 1116,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "overlay.wall.hull.breached": {
+      "x": 1138,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "overlay.wall.hull.patched": {
+      "x": 1160,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.eva.weld.1": {
+      "x": 1182,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.eva.weld.2": {
+      "x": 1204,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.eva.weld.3": {
+      "x": 1226,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.eva.weld.4": {
+      "x": 1248,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.eva.weld.5": {
+      "x": 1270,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.repair.patch": {
+      "x": 1292,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "fx.impact.hull_burst.1": {
+      "x": 1314,
+      "y": 2462,
+      "w": 18,
+      "h": 18
+    },
+    "icon.tier1_unlock": {
+      "x": 1336,
       "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier2_unlock": {
-      "x": 1162,
+      "x": 1404,
       "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier3_unlock": {
-      "x": 1230,
+      "x": 1472,
       "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier4_unlock": {
-      "x": 1298,
+      "x": 1540,
       "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier5_unlock": {
-      "x": 1366,
+      "x": 1608,
       "y": 2462,
       "w": 64,
       "h": 64
     },
     "icon.tier6_unlock": {
-      "x": 1434,
+      "x": 1676,
       "y": 2462,
       "w": 64,
       "h": 64

@@ -332,6 +332,71 @@ sprites:
     prompt: "Top-down pixel art station module sprite: intake pallet. 2x2 footprint,
       transparent background, readable at 36x36."
     rotation: 0
+  module.freight_pallet.empty:
+    prompt: "Top-down pixel art station module sprite: empty freight pallet. 2x2 footprint, transparent background, no text, readable at 36x36."
+    rotation: 0
+    frameWidth: 36
+    frameHeight: 36
+  module.freight_pallet.partial:
+    prompt: "Top-down pixel art station module sprite: partially loaded freight pallet. 2x2 footprint, two visible cargo cases on a low pallet, transparent background, no text, readable at 36x36."
+    rotation: 0
+    frameWidth: 36
+    frameHeight: 36
+  module.freight_pallet.full:
+    prompt: "Top-down pixel art station module sprite: fully loaded freight pallet. 2x2 footprint, transparent background, no text, readable at 36x36."
+    rotation: 0
+    frameWidth: 36
+    frameHeight: 36
+  module.cargo_cart.loaded:
+    prompt: "Top-down pixel art station module sprite: loaded cargo cart. 2x1 footprint, full-width wheeled cart carrying bright freight cases, transparent background, no text, readable at 36x18."
+    rotation: 0
+    frameWidth: 36
+    frameHeight: 18
+  cargo.icon.supply_crate:
+    prompt: "Top-down pixel art carried supply crate with a bold yellow cargo strap, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  cargo.icon.material_bundle:
+    prompt: "Top-down pixel art carried material bundle: three bound metal bars with a bold amber strap, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  cargo.icon.luggage:
+    prompt: "Top-down pixel art carried luggage case with a bold handle, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  cargo.icon.fuel_canister:
+    prompt: "Top-down pixel art carried red fuel canister with a pale cap, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  module.gangway.closed:
+    prompt: "Top-down pixel art berth gangway hatch, fully closed with a red lock indicator, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  module.gangway.deploying:
+    prompt: "Top-down pixel art berth gangway hatch, ramp partly deployed, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  module.gangway.connected:
+    prompt: "Top-down pixel art berth gangway, ramp fully connected with cyan seal lights, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  module.gangway.blocked:
+    prompt: "Top-down pixel art berth gangway, connected but blocked by a strong red barrier, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  module.gangway.late:
+    prompt: "Top-down pixel art berth gangway, closed late-departure state with amber warning lights, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
   module.storage_rack:
     prompt: "Top-down pixel art station module sprite: storage rack. 2x1 footprint,
       transparent background, readable at 36x18."
@@ -1062,6 +1127,65 @@ sprites:
     offsetY: 0
     blendMode: multiply
     alpha: 0.52
+  overlay.wall.hull.worn:
+    prompt: "Top-down pixel art exterior hull overlay: sparse pale abrasion and exposed panel edge, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+    blendMode: normal
+  overlay.wall.hull.damaged:
+    prompt: "Top-down pixel art exterior hull overlay: a jagged impact dent with dark crack and amber exposed metal, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+    blendMode: normal
+  overlay.wall.hull.breached:
+    prompt: "Top-down pixel art exterior hull overlay: unmistakable black torn opening into space with bright exposed structural ribs, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+    blendMode: normal
+  overlay.wall.hull.patched:
+    prompt: "Top-down pixel art exterior hull overlay: bolted pale repair plate with four strong corner fasteners, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+    blendMode: normal
+  fx.eva.weld.1:
+    prompt: "Top-down pixel art EVA repair worker welding hull, first animation frame with no spark burst, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.eva.weld.2:
+    prompt: "Top-down pixel art EVA repair worker welding hull, small bright spark burst animation frame, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.eva.weld.3:
+    prompt: "Top-down pixel art EVA repair worker welding hull, broad bright spark burst animation frame, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.eva.weld.4:
+    prompt: "Top-down pixel art EVA repair worker welding hull, fading spark burst animation frame, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.eva.weld.5:
+    prompt: "Top-down pixel art EVA repair worker welding hull, cooled final animation frame, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.repair.patch:
+    prompt: "Top-down pixel art repair patch effect: compact bolted plate with a small cyan completion glint, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
+  fx.impact.hull_burst.1:
+    prompt: "Top-down pixel art hull impact burst: compact amber-white spark and dark metal chips, transparent background, no text, readable at 18x18."
+    rotation: 0
+    frameWidth: 18
+    frameHeight: 18
   icon.tier1_unlock:
     prompt: Top-down pixel art icon. Style of rimworld. Tier 1 unlock icon for "Sustenance" — a single bowl or plate with steam rising. Simple iconographic composition, centered, warm food tones (amber/orange). Square icon with subtle gold-on-dark background matching unlock-toast style. No text, no frame, readable at 32x32, instantly identifiable as "food / meal".
     rotation: 0

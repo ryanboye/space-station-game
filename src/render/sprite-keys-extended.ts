@@ -67,6 +67,40 @@ export const FX_SPRITE_KEYS = {
   repairSpark: 'fx.repair.spark'
 } as const;
 
+// Native-resolution art keys prepared for the structural-frontage systems.
+// Render integration intentionally follows in the owning gameplay pass.
+export const STRUCTURAL_FRONTAGE_SPRITE_KEYS = {
+  carriedCargo: {
+    supplyCrate: 'cargo.icon.supply_crate',
+    materialBundle: 'cargo.icon.material_bundle',
+    luggage: 'cargo.icon.luggage',
+    fuelCanister: 'cargo.icon.fuel_canister'
+  },
+  cargoCartLoaded: 'module.cargo_cart.loaded',
+  freightPallet: {
+    empty: 'module.freight_pallet.empty',
+    partial: 'module.freight_pallet.partial',
+    full: 'module.freight_pallet.full'
+  },
+  gangway: {
+    closed: 'module.gangway.closed',
+    deploying: 'module.gangway.deploying',
+    connected: 'module.gangway.connected',
+    active: 'module.gangway.active',
+    blocked: 'module.gangway.blocked',
+    late: 'module.gangway.late'
+  },
+  hull: {
+    worn: 'overlay.wall.hull.worn',
+    damaged: 'overlay.wall.hull.damaged',
+    breached: 'overlay.wall.hull.breached',
+    patched: 'overlay.wall.hull.patched'
+  },
+  evaWeldFrames: ['fx.eva.weld.1', 'fx.eva.weld.2', 'fx.eva.weld.3', 'fx.eva.weld.4', 'fx.eva.weld.5'],
+  repairPatch: 'fx.repair.patch',
+  hullImpactBurst: 'fx.impact.hull_burst.1'
+} as const;
+
 export const SPACE_BACKDROP_SPRITE_KEYS = [
   'space.debris.rock.2',
   'space.debris.rust.1',
