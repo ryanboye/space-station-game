@@ -292,6 +292,7 @@ import {
   isWalkable,
   makeRng,
   toIndex,
+  type CommitmentMetrics,
   type ShelfMix,
   type StationState,
   type Visitor
@@ -7445,6 +7446,20 @@ function clearPassengerTransferReservation(state: StationState, visitor: Visitor
 }
 
 function clearPassengerTransferState(state: StationState, visitor: Visitor): void {
+  // A transfer that had a start stamp is a completed crossing: record how long
+  // it actually took, from joining the queue to arriving.
+  const startedAt = visitor.transferQueuedAt ?? visitor.transferCrossingStartedAt;
+  const phase = visitor.transferPhase ?? 'station';
+  if (startedAt !== null && startedAt !== undefined && phase !== 'station') {
+    const elapsed = Math.max(0, state.now - startedAt);
+    if (phase.startsWith('disembark')) {
+      state.commitment.disembarkSeconds += elapsed;
+      state.commitment.disembarkCompleted += 1;
+    } else {
+      state.commitment.boardingSeconds += elapsed;
+      state.commitment.boardingCompleted += 1;
+    }
+  }
   clearPassengerTransferReservation(state, visitor, 'completed');
   visitor.transferPhase = 'station';
   visitor.transferSlotKey = null;
@@ -13476,6 +13491,76 @@ export function holdTrafficOffer(state: StationState, offerId: number): boolean 
  * episodes with memory, so a consequence fires on the CROSSING rather than
  * every tick the visitor happens to be distressed.
  */
+
+/**
+ * The per-tick half of the commitment metrics.
+ *
+ * Durations accrue here; discrete events are counted at their own completion
+ * sites. Committed load is a snapshot rather than an accumulator — it answers
+ * "what have I already promised", so it is recomputed rather than summed.
+ */
+function updateCommitmentMetrics(state: StationState, dt: number): void {
+  if (dt <= 0) return;
+  const commitment = state.commitment;
+
+  // Holding-orbit and approach-group wait: any ship whose commitment is not
+  // yet active is physically waiting for the corridor ahead of it.
+  let holding = 0;
+  for (const ship of state.arrivingShips) {
+    const waiting = ship.approachCommitment?.status === 'waiting';
+    if (!waiting) continue;
+    holding += 1;
+    commitment.holdingSeconds += dt;
+    if ((ship.approachCommitment?.groupIds.length ?? 0) > 0) {
+      commitment.approachGroupWaitSeconds += dt;
+    }
+  }
+  commitment.holdingShips = holding;
+
+  // Fixture utilization, against DEPICTED capacity so the ratio is honest.
+  let occupied = 0;
+  let capacity = 0;
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null || reservation.expiresAt <= state.now) continue;
+    if (reservation.kind !== 'provider-slot' && reservation.kind !== 'seat-use-slot') continue;
+    occupied += 1;
+  }
+  for (const module of state.moduleInstances) {
+    capacity += moduleUsageTiles(module).length;
+  }
+  commitment.fixtureOccupiedSeconds += occupied * dt;
+  commitment.fixtureCapacitySeconds += capacity * dt;
+
+  // Committed future load across everything already accepted.
+  let berthSeconds = 0;
+  let beds = 0;
+  let meals = 0;
+  let staffMinutes = 0;
+  for (const contract of state.portOps.contracts) {
+    if (contract.status === 'settled' || contract.status === 'departed') continue;
+    berthSeconds += Math.max(0, contract.hardDepartureAt - state.now);
+    const ship = state.arrivingShips.find((entry) => entry.id === contract.shipId);
+    if (!ship) continue;
+    const preview = ship.portManifest ? getTrafficOfferPreview(state, ship.portManifest.id) : null;
+    if (preview) {
+      beds += preview.committedLoad.bedNights;
+      meals += preview.committedLoad.meals;
+      staffMinutes += preview.committedLoad.staffMinutes;
+    } else {
+      meals += Math.max(0, ship.passengersTotal - ship.passengersBoarded);
+    }
+  }
+  commitment.committedBerthSeconds = berthSeconds;
+  commitment.committedBeds = beds;
+  commitment.committedMeals = meals;
+  commitment.committedStaffMinutes = staffMinutes;
+}
+
+/** Concise commitment readout for the UI and focused runners. */
+export function getCommitmentMetrics(state: StationState): CommitmentMetrics {
+  return state.commitment;
+}
+
 function updateFailureEpisodes(state: StationState): void {
   const ledger = state.failureEpisodes;
   const sync = syncFailureEpisodes(state, ledger);
@@ -13539,6 +13624,24 @@ function freeGuestBedCount(state: StationState): number {
  * wrapper is the only place that spends credits and mutates the episode, which
  * is what keeps every lever idempotent and testable.
  */
+
+/**
+ * Remove an occupant from the station the same way every other departure path
+ * does: release claims and queue membership first, then drop them.
+ *
+ * A raw `state.visitors.filter` leaves the actor's reservations and queue slot
+ * behind until TTL, which is exactly the stale-claim class of bug Gate E
+ * existed to eliminate.
+ */
+function removeOccupantFromStation(state: StationState, visitorId: number): void {
+  const visitor = state.visitors.find((entry) => entry.id === visitorId);
+  if (!visitor) return;
+  releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
+  removeVisitorFromQueues(state, visitor.id);
+  clearPassengerTransferState(state, visitor);
+  state.visitors = state.visitors.filter((entry) => entry.id !== visitorId);
+}
+
 export function applyRecoveryAction(
   state: StationState,
   request: RecoveryActionRequest
@@ -13634,9 +13737,7 @@ export function applyRecoveryAction(
       break;
     }
     case 'onward-transfer': {
-      for (const episode of touched) {
-        state.visitors = state.visitors.filter((entry) => entry.id !== episode.subjectId);
-      }
+      for (const episode of touched) removeOccupantFromStation(state, episode.subjectId);
       break;
     }
     case 'cancel-contract': {
@@ -13648,16 +13749,24 @@ export function applyRecoveryAction(
       break;
     }
     case 'security-intervention': {
-      for (const episode of touched) {
-        state.visitors = state.visitors.filter((entry) => entry.id !== episode.subjectId);
-      }
+      for (const episode of touched) removeOccupantFromStation(state, episode.subjectId);
       break;
     }
   }
 
   const resolution = resolutionForAction(request.kind);
   if (resolution) {
-    for (const episode of touched) resolveEpisode(state, ledger, episode, resolution);
+    for (const episode of touched) {
+      if (episode.resolvedAt !== null) continue;
+      resolveEpisode(state, ledger, episode, resolution);
+      // A terminal action settles the 'resolved' milestone here rather than
+      // waiting for the next sync, which would never see the episode again.
+      // markMilestoneApplied is idempotent, so a repeat click cannot re-pay it.
+      if (!episode.milestonesApplied.includes('resolved')) {
+        visitorSuccessRatingBonus(state, failureStageRank(episode.stage) * 0.02, 'successfulExit');
+        markMilestoneApplied(episode, 'resolved');
+      }
+    }
   }
   pushCrowdEvent(state, 'info', plan.summary);
   return plan;
@@ -13688,16 +13797,19 @@ function applyAdmissionPolicy(state: StationState): void {
     for (const offer of state.trafficOffers) offer.admissionNote = undefined;
     return;
   }
-  const meals = availablePreparedMeals(state);
-  const beds = freeGuestBedCount(state);
+  // Start from what is free now MINUS what already-accepted commitments will
+  // consume, then draw down further with every acceptance in this pass. A
+  // reserve that resets per offer is not a reserve.
+  let meals = availablePreparedMeals(state) - state.commitment.committedMeals;
+  let beds = freeGuestBedCount(state) - state.commitment.committedBeds;
   for (const offer of [...state.trafficOffers]) {
     if (offer.status !== 'forecast' && offer.status !== 'holding') continue;
     const preview = getTrafficOfferPreview(state, offer.id);
     const verdict = evaluateAdmission(offer, preview, policy, {
       now: state.now,
       freeInterfaces: freeInterfaceCount(state, offer),
-      freeGuestBeds: beds,
-      availableMeals: meals,
+      freeGuestBeds: Math.max(0, beds),
+      availableMeals: Math.max(0, meals),
       requestedServicesReady: offer.requestedServices.every((tag) => shipServiceTagSatisfied(state, tag))
     });
     // The explanation is written for EVERY decision, including the ones that
@@ -13706,6 +13818,10 @@ function applyAdmissionPolicy(state: StationState): void {
     if (verdict.decision !== 'accept') continue;
     const result = admitTrafficOffer(state, offer.id);
     if (result.ok) {
+      // Draw the accepted call's load down immediately so the NEXT offer in
+      // this same pass sees a smaller pool.
+      beds -= preview?.committedLoad.bedNights ?? 0;
+      meals -= preview?.committedLoad.meals ?? 0;
       pushCrowdEvent(state, 'info', `${offer.callsign} auto-admitted · ${verdict.reason}`);
     } else {
       offer.admissionNote = result.reason ?? verdict.reason;
@@ -13746,7 +13862,11 @@ function updateTrafficOffers(state: StationState): void {
   // can justify; anything exceptional, closed, or over a reserve is left on the
   // list for the player, which is what preserves manual override.
   applyAdmissionPolicy(state);
-  if (state.controls.portAutoAdmitEnabled) {
+  // The finite policy is authoritative. When it is on, the legacy auto-router
+  // is skipped entirely — otherwise a military call, a large commitment, or a
+  // closed-admissions window that the policy refused would be admitted anyway
+  // by the older, coarser loop.
+  if (state.controls.portAutoAdmitEnabled && !state.admissionPolicy.enabled) {
     for (const offer of state.trafficOffers) {
       if (offer.status !== 'forecast' && offer.status !== 'holding') continue;
       const policy = state.controls.portAutoAdmitPolicy;
@@ -14853,6 +14973,7 @@ function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void 
     releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
     removeVisitorFromQueues(state, visitor.id);
     visitor.strandedFromShipId = ship.id;
+    state.commitment.strandedOccupants += 1;
     visitor.strandedAt = state.now;
     visitor.reliefEligibleAt = state.now + FAILED_STAY_TIMINGS.reliefDelaySec;
     visitor.originShipId = null;
@@ -15062,6 +15183,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.stageTime = 0;
       } else if (contract && state.now >= contract.hardDepartureAt) {
         state.portOps.telemetry.hardDeadlineDepartures += 1;
+        state.commitment.missedDepartures += 1;
         strandUnboardedVisitors(state, ship);
         for (const job of state.jobs) {
           if (job.portShipId !== ship.id || job.state === 'done' || job.state === 'expired') continue;
@@ -15129,8 +15251,14 @@ function updateArrivingShips(state: StationState, dt: number): void {
         }
       }
       if (ship.dockedAt > 0) {
-        state.dockedTimeTotal += Math.max(0, state.now - ship.dockedAt);
+        const visitSeconds = Math.max(0, state.now - ship.dockedAt);
+        state.dockedTimeTotal += visitSeconds;
         state.dockedShipsCompleted += 1;
+        // Split by the class that was actually committed to, so a long repair
+        // stay and a quick errand cannot average each other away.
+        const visitClass = ship.stayClass ?? 'shore';
+        state.commitment.visitSecondsByClass[visitClass] += visitSeconds;
+        state.commitment.visitsCompletedByClass[visitClass] += 1;
       }
       recordPodVisitDemandOutcome(state, ship);
       recordBerthServiceOutcome(state, ship);
@@ -22402,6 +22530,7 @@ function completeVisitorHospitalityService(
   if (onPlan) visitor.completedServices.push(service);
   if (recurringNeed !== null && visitor.needs) {
     restoreRecurringNeed(visitor.needs, recurringNeed);
+    state.commitment.needSatisfied[recurringNeed] += 1;
     visitor.recurringNeedActive = null;
     // The completed recurring need is a cycle, not a durable itinerary leg.
     // Clear it so the next degraded need can win instead of repeatedly
@@ -22495,6 +22624,8 @@ function routeLongStayVisitor(state: StationState, visitor: Visitor): boolean {
     if (visitor.path.length === 0) assignPathToLeisure(state, visitor);
     return true;
   }
+  // Count each distinct raising of a need, not each tick it stays raised.
+  if (visitor.needs.active !== need) state.commitment.needRaised[need] += 1;
   visitor.needs.active = need;
   visitor.recurringNeedActive = need;
   visitor.activeService = serviceForRecurringNeed(need);
@@ -28236,6 +28367,7 @@ export function tick(state: StationState, frameDt: number): void {
   maybeCreateTheftIncident(state, dt);
   decayIncidentMemory(state);
   updateFailureEpisodes(state);
+  updateCommitmentMetrics(state, dt);
   finishPhase('residentsSecurity');
   maintainCafeteriaQueues(state);
   updateVisitorLogic(state, dt, occupancyByTile, securityAuraByTile);

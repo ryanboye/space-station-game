@@ -17,6 +17,7 @@ import {
 } from '../src/sim/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import { createVisitorNeeds } from '../src/sim/occupant-demand';
+import { evaluateAdmission } from '../src/sim/admission-policy';
 import {
   FAILURE_GRACE_SEC,
   failureStageRank,
@@ -213,7 +214,18 @@ function testEpisodeOpensEscalatesAndPaysOnce(): string {
     new Set(episode.milestonesApplied).size === episode.milestonesApplied.length,
     'A milestone must never appear twice on one episode.'
   );
-  void ratingAfterFirst;
+  // Rating SUMMARIZES the visible failure rather than replacing it: the
+  // milestone charge lands in the attributable bucket, and the success bucket
+  // is untouched by a failure.
+  const ratingAfterMore = state.usageTotals.ratingFromVisitorFailureByReason.shipServicesMissing;
+  assert(
+    ratingAfterMore >= ratingAfterFirst,
+    'A failure must never credit the failure bucket back.'
+  );
+  assert(
+    ratingAfterFirst > 0,
+    'A settled failure milestone must be attributable in the rating breakdown.'
+  );
   assert(appliedFirst.length > 0, 'A distressed-or-worse episode must have paid at least one milestone.');
 
   // Incidents stay bounded and attributable.
@@ -455,6 +467,93 @@ function testEpisodeAndPolicySurviveSaveLoad(): string {
   return `episode #${before.id} + ${beforeMilestones.length} milestone(s) + policy survived; legacy defaults inert`;
 }
 
+function testHardenedIdentityAndIdempotence(): string {
+  const state = fixture(9360);
+  state.metrics.credits = 5000;
+  const ship = contractShip(state, 93601);
+  const other = contractShip(state, 93602);
+  failingPassenger(state, ship, 93603, 200);
+  advance(state, 1);
+  const episode = getFailureEpisodes(state)[0];
+  assert(episode, 'Setup should open an episode.');
+
+  // Identity binding: the episode must carry its real contract, and a request
+  // naming a different ship must be refused rather than silently retargeted.
+  assert(episode.contractId === ship.portContractId, `Episode must record its contract id, got ${episode.contractId}.`);
+  const mismatched = applyRecoveryAction(state, { kind: 'compensate', episodeId: episode.id, shipId: other.id });
+  assert(!mismatched.ok, 'A recovery request naming the wrong ship must be refused.');
+  assert(
+    mismatched.reason?.includes('does not belong'),
+    `The refusal must name the mismatch, got "${mismatched.reason}".`
+  );
+  const wrongVisitor = applyRecoveryAction(state, { kind: 'compensate', episodeId: episode.id, visitorId: 999999 });
+  assert(!wrongVisitor.ok, 'A request naming the wrong occupant must be refused.');
+
+  // Idempotence: meals and lodging charge once, like every other lever.
+  const node = state.itemNodes[0];
+  node.items.meal = 20;
+  const first = applyRecoveryAction(state, { kind: 'emergency-meals', episodeId: episode.id, amount: 1 });
+  assert(first.ok, `Emergency meals should apply: ${first.reason}`);
+  const creditsAfter = state.metrics.credits;
+  const repeat = applyRecoveryAction(state, { kind: 'emergency-meals', episodeId: episode.id, amount: 1 });
+  assert(!repeat.ok, 'A repeat emergency-meal click must be refused, not charged again.');
+  assert(state.metrics.credits === creditsAfter, 'A refused repeat must not move credits.');
+
+  // Terminal actions settle 'resolved' exactly once, and canonical cleanup
+  // must leave no reservation behind.
+  const terminal = applyRecoveryAction(state, { kind: 'onward-transfer', episodeId: episode.id });
+  assert(terminal.ok, `Onward transfer should apply: ${terminal.reason}`);
+  assert(episode.resolvedAt !== null, 'A terminal action must resolve its episode.');
+  assert(
+    episode.milestonesApplied.filter((m) => m === 'resolved').length === 1,
+    'A terminal action must settle the resolved milestone exactly once.'
+  );
+  const orphan = state.reservations.filter(
+    (r) => r.releaseReason === null && r.ownerKind === 'visitor' && r.ownerId === 93603
+  );
+  assert(orphan.length === 0, `Canonical cleanup must release claims, ${orphan.length} left.`);
+  return `contract ${episode.contractId} bound; wrong-ship and wrong-occupant refused; repeat meal refused; 1 resolved milestone; 0 orphan claims`;
+}
+
+function testPolicyIsAuthoritativeAndReservesAreCumulative(): string {
+  const state = fixture(9370);
+  // Legacy auto-admit ON and the finite policy ON: the policy must win.
+  state.controls.portAutoAdmitEnabled = true;
+  state.dockedShipsCompleted = 10;
+  state.admissionPolicy.enabled = true;
+  state.admissionPolicy.closedUntil = state.now + 120;
+  const before = state.arrivingShips.length;
+  advance(state, 3);
+  assert(
+    state.arrivingShips.length <= before,
+    'A closed-admissions window must not be bypassed by the legacy auto-router.'
+  );
+
+  // Cumulative reserves: the same free pool must not satisfy two offers.
+  const policy = { ...state.admissionPolicy, closedUntil: null, reserveBeds: 2, reserveMeals: 10 };
+  state.admissionPolicy = policy;
+  const beds = 3;
+  const first = evaluateAdmission(
+    { size: 'medium', shipType: 'trader', berthTimeSec: 200, dockingFee: 50, projectedSpend: 50,
+      requestedServices: [], riskLabel: 'low' } as never,
+    { committedLoad: { bedNights: 2, meals: 0, berthSeconds: 0, hygieneVisits: 0, staffMinutes: 0 } } as never,
+    { ...policy, berth: { ...policy.berth, enabled: true, shipTypes: ['trader'], reserveFreeInterfaces: 0 } },
+    { now: state.now, freeInterfaces: 4, freeGuestBeds: beds, availableMeals: 100, requestedServicesReady: true }
+  );
+  const second = evaluateAdmission(
+    { size: 'medium', shipType: 'trader', berthTimeSec: 200, dockingFee: 50, projectedSpend: 50,
+      requestedServices: [], riskLabel: 'low' } as never,
+    { committedLoad: { bedNights: 2, meals: 0, berthSeconds: 0, hygieneVisits: 0, staffMinutes: 0 } } as never,
+    { ...policy, berth: { ...policy.berth, enabled: true, shipTypes: ['trader'], reserveFreeInterfaces: 0 } },
+    // The pool the caller passes has already been drawn down by the first accept.
+    { now: state.now, freeInterfaces: 3, freeGuestBeds: beds - 2, availableMeals: 100, requestedServicesReady: true }
+  );
+  assert(second.decision === 'hold', `The second call must hold on the bed reserve, got ${second.decision}.`);
+  assert(second.reason.includes('reserve'), `The hold must name the reserve, got "${second.reason}".`);
+  void first;
+  return `closed window survived the legacy router; second offer holds on the bed reserve ("${second.reason}")`;
+}
+
 // ---------------------------------------------------------------------------
 
 const TESTS: Array<{ name: string; run: () => string }> = [
@@ -465,7 +564,9 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '5 security gated to disruptive', run: testSecurityIsGatedToDisruptive },
   { name: '6 compensation cannot erase a shortage', run: testCompensationCannotEraseAPhysicalShortage },
   { name: '7 resident acceptance needs housing + policy', run: testResidentAcceptanceNeedsHousingAndPolicy },
-  { name: '8 episode and policy survive save/load', run: testEpisodeAndPolicySurviveSaveLoad }
+  { name: '8 episode and policy survive save/load', run: testEpisodeAndPolicySurviveSaveLoad },
+  { name: '9 identity binding and idempotence', run: testHardenedIdentityAndIdempotence },
+  { name: '10 policy authority and cumulative reserves', run: testPolicyIsAuthoritativeAndReservesAreCumulative }
 ];
 
 function main(): void {

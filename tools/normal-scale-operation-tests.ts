@@ -4,6 +4,13 @@ import {
   tick,
   validateDockPlacement
 } from '../src/sim/index';
+import {
+  ensureRoomClustersCache,
+  getApproachConflictGroups,
+  reconcileExteriorIntegrityTargets,
+  runMovementCoordinatorTestTick
+} from '../src/sim/sim';
+import { buildStructuralSupportGraph } from '../src/sim/structural-support';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import {
   ensureUtilityUnderlay,
@@ -54,6 +61,130 @@ function berthAnchors(state: StationState): number[] {
     if (facility) anchors.add(facility.anchorTile);
   }
   return [...anchors].sort((left, right) => left - right);
+}
+
+/** Phases that partition one whole tick. `trafficJob*` are nested inside `trafficJobs`. */
+const TOP_LEVEL_PHASES = [
+  'setup',
+  'trafficJobs',
+  'roomsResources',
+  'crew',
+  'residentsSecurity',
+  'visitors',
+  'worldPost',
+  'derived'
+] as const;
+
+function measureCacheGuarantees(state: StationState, actorCount: number, pathCallsP95: number) {
+  ensureRoomClustersCache(state);
+  const clusterMapRef = state.derived.roomClustersByRoom;
+  const structureVersion = state.derived.cacheVersions.roomClustersVersion;
+  const repeatStart = performance.now();
+  for (let attempt = 0; attempt < 2000; attempt += 1) ensureRoomClustersCache(state);
+  const cachedHitMs = performance.now() - repeatStart;
+  assert(state.derived.cacheVersions.roomClustersVersion === structureVersion, 'structure cache version drifted with an unchanged topology');
+  assert(state.derived.roomClustersByRoom === clusterMapRef, 'structure cache was rebuilt with an unchanged topology');
+  state.topologyVersion += 1;
+  const rebuildStart = performance.now();
+  ensureRoomClustersCache(state);
+  const rebuildMs = performance.now() - rebuildStart;
+  assert(state.derived.cacheVersions.roomClustersVersion !== structureVersion, 'structure cache ignored a topology version bump');
+
+  const firstApproachStart = performance.now();
+  const firstGroups = getApproachConflictGroups(state);
+  const firstApproachMs = performance.now() - firstApproachStart;
+  const secondApproachStart = performance.now();
+  const secondGroups = getApproachConflictGroups(state);
+  const secondApproachMs = performance.now() - secondApproachStart;
+  assert(JSON.stringify(firstGroups) === JSON.stringify(secondGroups), 'approach conflict groups are not deterministic across calls');
+
+  const targetFingerprint = (): string[] =>
+    state.exteriorIntegrityTargets
+      .map((target) => `${target.id}:${target.wear.toFixed(4)}:${target.state}`)
+      .sort();
+  const targetsBefore = targetFingerprint();
+  reconcileExteriorIntegrityTargets(state);
+  const targetsAfter = targetFingerprint();
+  assert(targetsBefore.length > 0, 'no exterior maintenance targets are maintained on the state');
+  assert(targetsBefore.join('|') === targetsAfter.join('|'), 'exterior maintenance target list did not survive reconciliation');
+
+  // Batched movement arbitration: at baseline scale the outcome of one whole
+  // pass must not depend on the order actors are visited in.
+  type MovementSnapshotActor = { x: number; y: number; tileIndex: number; path: number[]; blockedTicks: number };
+  const movementActorList = [...state.crewMembers, ...state.residents, ...state.visitors] as MovementSnapshotActor[];
+  const snapshot = movementActorList.map((actor) => ({ actor, ...actor, path: [...actor.path] }));
+  const conflictSeconds = state.portOps.telemetry.publicCargoConflictSeconds;
+  const restoreMovement = (): void => {
+    for (const entry of snapshot) {
+      Object.assign(entry.actor, { x: entry.x, y: entry.y, tileIndex: entry.tileIndex, blockedTicks: entry.blockedTicks });
+      entry.actor.path = [...entry.path];
+    }
+    state.portOps.telemetry.publicCargoConflictSeconds = conflictSeconds;
+  };
+  const forward = runMovementCoordinatorTestTick(state, 1 / 15, false);
+  restoreMovement();
+  const reversed = runMovementCoordinatorTestTick(state, 1 / 15, true);
+  restoreMovement();
+  const fingerprint = (results: Map<string, string>): string =>
+    [...results.entries()].map(([key, value]) => `${key}=${value}`).sort().join(',');
+  assert(forward.size === reversed.size, 'movement arbitration visited a different actor set in reverse order');
+  assert(fingerprint(forward) === fingerprint(reversed), 'movement arbitration outcome depends on actor iteration order');
+  const arbitratedActors = forward.size;
+  const nonIdleActors = [...forward.values()].filter((result) => result !== 'idle').length;
+
+  // Structural support graph: measure whether a second identical derivation is free.
+  const structuralFirstStart = performance.now();
+  const structuralFirst = buildStructuralSupportGraph(state);
+  const structuralFirstMs = performance.now() - structuralFirstStart;
+  const structuralSecondStart = performance.now();
+  const structuralSecond = buildStructuralSupportGraph(state);
+  const structuralSecondMs = performance.now() - structuralSecondStart;
+
+  assert(actorCount > 0, 'actor count must be positive');
+  assert(
+    pathCallsP95 < actorCount,
+    `p95 path calls ${pathCallsP95} reaches one full A* per actor (${actorCount})`
+  );
+
+  return {
+    structureCache: {
+      versionKey: structureVersion,
+      cachedHitsMeasured: 2000,
+      cachedHitTotalMs: Number(cachedHitMs.toFixed(3)),
+      cachedHitAvgUs: Number(((cachedHitMs / 2000) * 1000).toFixed(4)),
+      rebuildAfterTopologyBumpMs: Number(rebuildMs.toFixed(3)),
+      speedupVsRebuild: Number((rebuildMs / Math.max(1e-6, cachedHitMs / 2000)).toFixed(1))
+    },
+    approachGroupCache: {
+      cached: firstGroups === secondGroups,
+      groups: firstGroups.length,
+      dockingSlots: state.docks.length + berthAnchors(state).length,
+      firstCallMs: Number(firstApproachMs.toFixed(4)),
+      secondCallMs: Number(secondApproachMs.toFixed(4)),
+      deterministic: true
+    },
+    exteriorMaintenanceTargets: {
+      maintainedList: true,
+      count: targetsBefore.length,
+      stableThroughReconcile: true
+    },
+    pathfindingPerActor: {
+      actorCount,
+      pathCallsP95,
+      callsPerActorP95: Number((pathCallsP95 / actorCount).toFixed(4))
+    },
+    batchedMovementArbitration: {
+      arbitratedActors,
+      nonIdleActors,
+      orderIndependent: true
+    },
+    structuralSupportGraph: {
+      cached: structuralFirst === structuralSecond,
+      nodes: structuralFirst.nodes.length,
+      firstCallMs: Number(structuralFirstMs.toFixed(3)),
+      secondCallMs: Number(structuralSecondMs.toFixed(3))
+    }
+  };
 }
 
 function assertUtilityUnderlayIdentity(): void {
@@ -127,6 +258,8 @@ function main(): void {
   const phaseSamples = new Map<string, number[]>();
   const phasePathCallSamples = new Map<string, number[]>();
   const inventoryPairScans: number[] = [];
+  const phaseCoverage: number[] = [];
+  const unprofiledPhaseTicks = new Set<string>();
   const slowTicks: Array<{ now: number; tickMs: number; pathCalls: number; inventoryPairs: number; phases: Record<string, number> }> = [];
   let sawInspection = false;
   let sawUnloading = false;
@@ -158,6 +291,13 @@ function main(): void {
       samples.push(milliseconds);
       phaseSamples.set(phase, samples);
     }
+    const measuredPhases = state.metrics.simPhaseMs ?? {};
+    let topLevelPhaseMs = 0;
+    for (const phase of TOP_LEVEL_PHASES) {
+      if (measuredPhases[phase] === undefined) unprofiledPhaseTicks.add(phase);
+      topLevelPhaseMs += measuredPhases[phase] ?? 0;
+    }
+    if (state.metrics.tickMs > 0.5) phaseCoverage.push(topLevelPhaseMs / state.metrics.tickMs);
     for (const [phase, calls] of Object.entries(state.metrics.simPhasePathCalls ?? {})) {
       const samples = phasePathCallSamples.get(phase) ?? [];
       samples.push(calls);
@@ -230,6 +370,11 @@ function main(): void {
   const p50 = percentile(tickMs, 0.5);
   const p95 = percentile(tickMs, 0.95);
   const p99 = percentile(tickMs, 0.99);
+  const pathCallsP95 = percentile(pathCallsPerTick, 0.95);
+  const actorCount = state.crewMembers.length + state.visitors.length;
+  const cacheGuarantees = measureCacheGuarantees(state, actorCount, pathCallsP95);
+  const coverageP50 = percentile(phaseCoverage, 0.5);
+  const coverageP05 = percentile(phaseCoverage, 0.05);
 
   process.stdout.write(`${JSON.stringify({
     scenario: 'normal-scale-50',
@@ -289,7 +434,7 @@ function main(): void {
       p99: Number(p99.toFixed(3)),
       max: Number(Math.max(...tickMs).toFixed(3)),
       pathCallsP50: Number(percentile(pathCallsPerTick, 0.5).toFixed(1)),
-      pathCallsP95: Number(percentile(pathCallsPerTick, 0.95).toFixed(1)),
+      pathCallsP95: Number(pathCallsP95.toFixed(1)),
       inventoryPairScansP95: Number(percentile(inventoryPairScans, 0.95).toFixed(1)),
       phases: Object.fromEntries(
         [...phaseSamples.entries()]
@@ -309,8 +454,16 @@ function main(): void {
             max: Math.max(...samples)
           }])
       ),
+      phaseCoverage: {
+        topLevelPhases: [...TOP_LEVEL_PHASES],
+        unprofiledPhases: [...unprofiledPhaseTicks],
+        ticksSampled: phaseCoverage.length,
+        coveredFractionP50: Number(coverageP50.toFixed(4)),
+        coveredFractionP05: Number(coverageP05.toFixed(4))
+      },
       slowestTicks: slowTicks
     },
+    cacheGuarantees,
     utilityUnderlayIdentityRegression: 'passed'
   }, null, 2)}\n`);
 
@@ -327,6 +480,8 @@ function main(): void {
   assert(queueBoundedOrRecovering, `cafeteria queue did not stabilize: ${queueBySecond.join(',')}`);
   assert(state.metrics.requiredCriticalStaff.cafeteria === 0, 'self-service cafeteria still requires a physical staff post');
   assert(p95 < 25, `tick p95 ${p95.toFixed(2)}ms exceeds the 25ms practical budget`);
+  assert(unprofiledPhaseTicks.size === 0, `phases never profiled at baseline scale: ${[...unprofiledPhaseTicks].join(', ')}`);
+  assert(coverageP50 >= 0.75, `profiled phases only account for ${(coverageP50 * 100).toFixed(1)}% of the median tick`);
 }
 
 main();

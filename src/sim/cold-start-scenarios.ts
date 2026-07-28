@@ -25,7 +25,10 @@ import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType,
   type ModuleInstance,
   type ModuleRotation,
   type VisitorPreference,
-  type HospitalityServiceKind
+  type HospitalityServiceKind,
+  type ShipType,
+  type ShipSize,
+  isWalkable
 } from './types';
 import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
 import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryCreateReservation, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
@@ -1559,6 +1562,52 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // --- Gate G: a committed long stay with nothing to support it -----------
+  // A repair cohort is berthed with no reachable meal, bed, or hygiene. It
+  // escalates through the documented ladder, slows its own ship work, and
+  // holds the interface. Compare with `?scenario=commitment-recovered`, which
+  // uses the SAME seed and the same cohort.
+  'commitment-failure': (s) => {
+    stageCommitmentCohort(s, { supported: false });
+  },
+
+  // --- Gate G: the identical cohort, supported ---------------------------
+  // Same seed, same ship, same guests — plus the physical facilities the
+  // cohort actually needs. The episodes resolve and the berth releases.
+  'commitment-recovered': (s) => {
+    stageCommitmentCohort(s, { supported: true });
+  },
+
+  // --- Gate G: admission policy under pressure ---------------------------
+  // Several routine calls arrive against a nearly-full port with an authored
+  // policy: some auto-accept, some hold on a reserve, and the exceptional ones
+  // stay manual with their reason shown.
+  'admission-policy-pressure': (s) => {
+    unlockThrough(s, 3);
+    s.metrics.credits = 4000;
+    s.controls.manualTrafficAdmission = true;
+    s.admissionPolicy = {
+      ...s.admissionPolicy,
+      enabled: true,
+      pod: { ...s.admissionPolicy.pod, enabled: true, shipTypes: ['tourist', 'trader'], reserveFreeInterfaces: 1 },
+      berth: { ...s.admissionPolicy.berth, enabled: true, shipTypes: ['trader'], reserveFreeInterfaces: 1 },
+      reserveMeals: 6
+    };
+    const dock = s.docks.find((entry) => entry.sourceKind === 'pod-dock-module');
+    if (dock) {
+      // Routine calls the policy should take.
+      s.trafficOffers.push(commitmentOffer(s, 96001, 'tourist', 'small', dock));
+      s.trafficOffers.push(commitmentOffer(s, 96002, 'trader', 'small', dock));
+      // Exceptional calls that must stay manual whatever the policy says.
+      s.trafficOffers.push(commitmentOffer(s, 96003, 'military', 'medium', dock));
+      s.trafficOffers.push(commitmentOffer(s, 96004, 'colonist', 'medium', dock));
+      const large = commitmentOffer(s, 96005, 'trader', 'large', dock);
+      s.trafficOffers.push(large);
+    }
+    tick(s, 0);
+    s.controls.paused = true;
+  },
+
   'reputation-slice': (s) => {
     unlockThrough(s, 3);
     completeSpecialtyForScenario(s, 'sanitation-program');
@@ -2743,6 +2792,228 @@ function readyFacilityScenario(state: StationState): void {
   // obscuring the authored shoppers and guests the scenario is measuring.
   state.controls.manualTrafficAdmission = true;
   state.controls.portAutoAdmitEnabled = false;
+}
+
+
+/** A minimal, complete TrafficOffer for the Gate G admission showcase. */
+function commitmentOffer(
+  state: StationState,
+  id: number,
+  shipType: ShipType,
+  size: ShipSize,
+  dock: StationState['docks'][number]
+): TrafficOffer {
+  return {
+    id,
+    callsign: `GATE-G-${id}`,
+    shipName: `${shipType} call`,
+    lane: dock.lane,
+    shipType,
+    hullVariant: selectShipHullVariant(id, shipType, size),
+    size,
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 600,
+    passengersTotal: size === 'small' ? 2 : 6,
+    manifestDemand: { cafeteria: 0.5, market: 0.3, lounge: 0.2 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+    outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    requestedServices: [],
+    berthTimeSec: size === 'small' ? 120 : 300,
+    dockingFee: 40,
+    projectedSpend: 60,
+    riskLabel: shipType === 'military' ? 'high' : 'low',
+    assignedBerthAnchor: null,
+    assignedDockSourceKey: null
+  };
+}
+
+/**
+ * The Gate G before/after pair.
+ *
+ * Both arms build the SAME cohort at the same seed. The only difference is
+ * whether the station physically owns the facilities the cohort needs, which
+ * is what makes the comparison about layout rather than about luck.
+ */
+function stageCommitmentCohort(state: StationState, options: { supported: boolean }): void {
+  unlockThrough(state, 3);
+  state.metrics.credits = 4000;
+  state.pressurized.fill(true);
+
+  // A shared public concourse exists in BOTH arms. Only what opens onto it
+  // differs, so the comparison is about provision, not about geometry.
+  paintFacilityBlock(state, 55, 49, 8, 9, RoomType.Lounge);
+
+  if (options.supported) {
+    // A guest wing the cohort can actually reach: beds, a wash bank, and meals.
+    paintFacilityBlock(state, 42, 49, 12, 9, RoomType.Dorm);
+    for (let y = 49; y < 58; y++) {
+      for (let x = 42; x < 54; x++) state.roomHousingPolicies[y * state.width + x] = 'visitor';
+    }
+    placeFixture(state, ModuleType.BunkBank, 43, 50);
+    placeFixture(state, ModuleType.GuestCabin, 47, 50);
+
+    paintFacilityBlock(state, 58, 49, 12, 9, RoomType.Cafeteria);
+    const line = placeFixture(state, ModuleType.ServingLine, 59, 50);
+    placeFixture(state, ModuleType.CommunityTable, 63, 50);
+    placeFixture(state, ModuleType.TrayReturn, 67, 50);
+
+    paintFacilityBlock(state, 74, 49, 10, 8, RoomType.Hygiene);
+    placeFixture(state, ModuleType.WashBank, 75, 50);
+    placeFixture(state, ModuleType.Toilet, 79, 50);
+    placeFixture(state, ModuleType.Sink, 80, 50);
+    for (let y = 49; y < 57; y++) {
+      for (let x = 74; x < 84; x++) state.roomHousingPolicies[y * state.width + x] = 'visitor';
+    }
+    tick(state, 0);
+    stockNode(state, line.originTile, 'meal', 40);
+  } else {
+    tick(state, 0);
+  }
+
+  // The committed cohort itself: identical in both arms.
+  const dock = state.docks[0];
+  const bayTile = dock?.accessTile ?? dock?.tiles[0] ?? 0;
+  const shipId = 95001;
+  state.arrivingShips.push({
+    id: shipId,
+    kind: 'transient',
+    size: 'medium',
+    bayTiles: [bayTile],
+    bayCenterX: (bayTile % state.width) + 0.5,
+    bayCenterY: Math.floor(bayTile / state.width) + 0.5,
+    shipType: 'industrial',
+    hullVariant: 'repair-tender',
+    lane: dock?.lane ?? 'north',
+    originDockId: dock?.id ?? null,
+    assignedDockId: dock?.id ?? null,
+    assignedDockSourceKey: dock?.sourceKey ?? null,
+    assignedBerthAnchor: null,
+    queueState: 'none',
+    stage: 'docked',
+    stageTime: 12,
+    passengersTotal: 4,
+    passengersSpawned: 4,
+    passengersBoarded: 0,
+    minimumBoarding: 4,
+    spawnCarry: 0,
+    dockedAt: state.now,
+    residentIds: [],
+    manifestDemand: { cafeteria: 1, market: 0, lounge: 0 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    portContractId: shipId,
+    stayClass: 'contract',
+    visitPhase: 'visit-service',
+    // Far enough out that `tryRecallFailedLongStay` cannot end the showcase
+    // before the player has looked at it. The recall path is exercised by
+    // tools/failed-stay-tests.ts, not here.
+    earliestDepartureAt: state.now + 600,
+    plannedDepartureAt: state.now + 900,
+    extensionUntil: null,
+    recallAt: null,
+    approachCommitment: null
+  } as unknown as StationState['arrivingShips'][number]);
+  state.portOps.contracts.push({
+    id: shipId,
+    offerId: shipId,
+    shipId,
+    callsign: 'GATE-G-COHORT',
+    offerKind: 'passenger',
+    assignedBerthAnchor: 0,
+    acceptedAt: state.now,
+    arrivesAt: state.now,
+    boardingStartsAt: state.now + 840,
+    hardDepartureAt: state.now + 900,
+    status: 'active',
+    promises: [{ kind: 'dock', label: 'Dock access', target: 1, completed: 1, payoutCredits: 80 }],
+    passengerSpendingCredits: 0,
+    procurementCostCredits: 0,
+    settlementId: null,
+    stayClass: 'contract',
+    earliestDepartureAt: state.now + 600,
+    plannedDepartureAt: state.now + 900,
+    extensionUntil: null,
+    recallAt: null
+  } as unknown as StationState['portOps']['contracts'][number]);
+
+  // Both arms place the cohort in the SAME spot: the concourse the guest wing
+  // opens onto. In the supported arm they can walk to food, a bed and a wash
+  // bank from here; in the failure arm there is nothing to walk to. That is
+  // the whole comparison, so the spawn point must not differ between them.
+  const tiles = commitmentCohortTiles(state);
+  for (let index = 0; index < 4; index += 1) {
+    const tile = tiles[index % tiles.length];
+    const visitor = {
+      id: 95100 + index,
+      x: (tile % state.width) + 0.5,
+      y: Math.floor(tile / state.width) + 0.5,
+      tileIndex: tile,
+      state: VisitorState.ToCafeteria,
+      path: [],
+      speed: 2,
+      patience: 0,
+      eatTimer: 0,
+      trespassed: false,
+      servedMeal: false,
+      carryingMeal: false,
+      reservedServingTile: null,
+      reservedTargetTile: null,
+      blockedTicks: 0,
+      archetype: 'lounger',
+      taxSensitivity: 1,
+      spendMultiplier: 1,
+      patienceMultiplier: 1,
+      primaryPreference: 'cafeteria',
+      spawnedAt: state.now,
+      originShipId: shipId,
+      airExposureSec: 0,
+      healthState: 'healthy',
+      leisureLegsRemaining: 0,
+      leisureLegsPlanned: 0,
+      lastLeisureKind: null,
+      servicePlan: [],
+      completedServices: [],
+      activeService: 'meal',
+      stayClass: 'contract',
+      queueProviderTile: null,
+      queueJoinedAt: null,
+      temporarySleepTargetTile: null,
+      needs: createVisitorNeeds(95100 + index),
+      recurringNeedActive: 'hunger',
+      revealedServices: [],
+      receptionProcessedAt: null,
+      redirectedFrom: null
+    } as unknown as Visitor;
+    // Start them already hungry so the pressure is visible immediately.
+    visitor.needs!.hunger = 14;
+    visitor.needs!.energy = 20;
+    if (!options.supported) {
+      visitor.serviceBlockedSince = state.now - 90;
+      visitor.needs!.unmetSince = state.now - 90;
+    }
+    state.visitors.push(visitor);
+  }
+  tick(state, 0);
+  state.controls.paused = true;
+}
+
+/** The four concourse tiles the cohort stands on, identical in both arms. */
+function commitmentCohortTiles(state: StationState): number[] {
+  const tiles: number[] = [];
+  for (let y = 50; y < 54 && tiles.length < 4; y++) {
+    for (let x = 55; x < 58 && tiles.length < 4; x++) {
+      const index = y * state.width + x;
+      if (isWalkable(state.tiles[index])) tiles.push(index);
+    }
+  }
+  if (tiles.length > 0) return tiles;
+  // Fallback for a hull shape that lacks the concourse strip.
+  for (let i = 0; i < state.tiles.length && tiles.length < 4; i++) {
+    if (isWalkable(state.tiles[i]) && state.rooms[i] !== RoomType.Berth) tiles.push(i);
+  }
+  return tiles;
 }
 
 export function applyColdStartScenario(

@@ -55,6 +55,7 @@ import {
   ModuleType,
   type ModuleRotation,
   RoomType,
+  type CommitmentMetrics,
   type ShelfMix,
   type ShipSize,
   type ShipType,
@@ -502,6 +503,8 @@ export interface StationSnapshotV1 {
    */
   failureEpisodes?: FailureEpisodeState;
   admissionPolicy?: AdmissionPolicy;
+  /** Running commitment measurements. Absent on legacy saves, which reset to zero. */
+  commitment?: CommitmentMetrics;
   portOps: PortOpsState;
   /** Pending approach decisions, including physical reservations made before arrival. */
   trafficOffers?: TrafficOffer[];
@@ -1383,6 +1386,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     serviceLog: normalizeServiceLog(state.serviceLog),
     failureEpisodes: normalizeFailureEpisodeState(state.failureEpisodes),
     admissionPolicy: normalizeAdmissionPolicy(state.admissionPolicy),
+    commitment: state.commitment,
     portOps: {
       ...state.portOps,
       contracts: state.portOps.contracts.map((contract) => ({
@@ -2783,6 +2787,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const admissionPolicy = normalizeAdmissionPolicy(
     snapshotRaw.admissionPolicy as Partial<AdmissionPolicy> | undefined
   );
+  const commitment = isRecord(snapshotRaw.commitment)
+    ? (snapshotRaw.commitment as unknown as CommitmentMetrics)
+    : undefined;
 
   // Procedural identity. A legacy save carries none of this: `seedAtCreation`
   // stays undefined and hydration falls back to the documented default seed,
@@ -2882,6 +2889,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     serviceLog,
     failureEpisodes,
     admissionPolicy,
+    commitment,
     portOps,
     trafficOffers,
     activePortShips,
@@ -3398,6 +3406,9 @@ export function hydrateStateFromSave(
   next.serviceLog = normalizeServiceLog(snapshot.serviceLog);
   next.failureEpisodes = normalizeFailureEpisodeState(snapshot.failureEpisodes);
   next.admissionPolicy = normalizeAdmissionPolicy(snapshot.admissionPolicy);
+  // Merge over a zeroed baseline so a legacy save, or one written before a
+  // field existed, still hydrates every counter.
+  if (snapshot.commitment) next.commitment = { ...next.commitment, ...snapshot.commitment };
   if (snapshot.admissionPolicy === undefined) {
     // Legacy saves keep their old two-scalar auto-admit setting as the seed for
     // the new policy, so a station that had auto-admit on does not silently

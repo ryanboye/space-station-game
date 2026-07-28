@@ -1,11 +1,18 @@
 import {
   admitTrafficOffer,
   createInitialState,
+  expandMap,
+  getApproachConflictGroups,
+  getDockingSlotDescriptors,
   planTileConstruction,
   reconcileExteriorIntegrityTargets,
+  setBerthAllowedShipSize,
   setExteriorIntegrityTargetState,
   tick
 } from '../src/sim/sim';
+import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { auditSaveRecovery } from '../src/sim/save-recovery';
+import { buildStructuralSupportGraph } from '../src/sim/structural-support';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   TileType,
@@ -24,7 +31,9 @@ function assert(condition: unknown, message: string): asserts condition {
 const evidence = {
   durablePhaseRecords: 0,
   rebuiltTransientChecks: 0,
-  reconciliationWarnings: 0
+  reconciliationWarnings: 0,
+  legacyDerivations: 0,
+  maintenanceIdentityChecks: 0
 };
 
 function roundTrip(state: StationState, seed: number): { state: StationState; warnings: string[] } {
@@ -245,8 +254,50 @@ function testDurableConstructionIntegrityAndTransientReset(): void {
   assert(damaged && setExteriorIntegrityTargetState(state, damaged.id, 'breached', 86), 'Could not create a damaged exterior target.');
 
   const ship = dockedVisit(state, 90201, 'visit-service');
-  const visitor: Visitor = {
-    id: 90202,
+  const visitor = makeVisitor(state, ship, 90202, buildTile);
+  state.visitors.push(visitor);
+  state.crewMembers[0].path = [buildTile];
+  state.pathOccupancyByTile.set(999999, 99);
+  state.derived.pathCache.set('phase9-stale-path', { path: [buildTile], createdAt: state.now, topologyVersion: state.topologyVersion, roomVersion: state.roomVersion });
+  state.derived.queueTheater.membersByAnchor.set(buildTile, [visitor.id, 999999]);
+  state.derived.queueTheater.slotByVisitorId.set(999999, buildTile);
+  state.reservations.push({
+    id: 90203,
+    ownerKind: 'visitor',
+    ownerId: visitor.id,
+    kind: 'transfer-slot',
+    targetTile: buildTile,
+    targetId: 'phase9-stale-reservation',
+    itemType: null,
+    amount: 1,
+    capacity: 1,
+    createdAt: state.now,
+    expiresAt: state.now + 999,
+    releaseReason: null
+  });
+  state.dockQueue.push({ shipId: 999999, lane: 'north', shipType: 'tourist', hullVariant: 'courier-pod', size: 'small', queuedAt: state.now, timeoutAt: state.now + 999 });
+
+  const restored = roundTrip(state, 9020).state;
+  const loadedSite = restored.constructionSites.find((entry) => entry.id === site.id);
+  assert(loadedSite?.state === 'building' && loadedSite.buildProgress === site.buildProgress, 'In-progress construction was not restored durably.');
+  assert(restored.exteriorIntegrityTargets.some((entry) => entry.id === damaged.id && entry.state === 'breached' && entry.wear === 86), 'Damaged exterior integrity state was not restored.');
+  const loadedVisitor = restored.visitors.find((entry) => entry.id === visitor.id);
+  assert(loadedVisitor?.originShipId === ship.id && loadedVisitor.stayClass === 'contract', 'Durable visit identity did not survive hydration.');
+  assert(loadedVisitor.path.length === 0 && loadedVisitor.reservedServingTile === null && loadedVisitor.reservedTargetTile === null && loadedVisitor.temporarySleepTargetTile === null, 'Hydration retained stale visitor paths or fixture claims.');
+  assert(restored.crewMembers.every((crew) => crew.path.length === 0), 'Hydration retained stale crew movement paths.');
+  assert(!restored.pathOccupancyByTile.has(999999) && !restored.derived.pathCache.has('phase9-stale-path'), 'Hydration retained stale occupancy or path cache state.');
+  assert(!restored.derived.queueTheater.membersByAnchor.get(buildTile)?.includes(999999) && !restored.derived.queueTheater.slotByVisitorId.has(999999), 'Hydration retained stale queue occupancy.');
+  assert(!restored.reservations.some((entry) => entry.targetId === 'phase9-stale-reservation') && !restored.dockQueue.some((entry) => entry.shipId === 999999), 'Hydration retained stale reservations or dock queue entries.');
+  evidence.rebuiltTransientChecks += 1;
+}
+
+/**
+ * A guest carrying every kind of transient claim the save must drop and every
+ * kind of durable identity it must keep.
+ */
+function makeVisitor(state: StationState, ship: ArrivingShip, id: number, buildTile: number): Visitor {
+  return {
+    id,
     x: ship.bayCenterX,
     y: ship.bayCenterY,
     tileIndex: ship.bayTiles[0],
@@ -286,40 +337,6 @@ function testDurableConstructionIntegrityAndTransientReset(): void {
     transferSlotKey: 'stale-slot',
     transferQueuedAt: state.now
   };
-  state.visitors.push(visitor);
-  state.crewMembers[0].path = [buildTile];
-  state.pathOccupancyByTile.set(999999, 99);
-  state.derived.pathCache.set('phase9-stale-path', { path: [buildTile], createdAt: state.now, topologyVersion: state.topologyVersion, roomVersion: state.roomVersion });
-  state.derived.queueTheater.membersByAnchor.set(buildTile, [visitor.id, 999999]);
-  state.derived.queueTheater.slotByVisitorId.set(999999, buildTile);
-  state.reservations.push({
-    id: 90203,
-    ownerKind: 'visitor',
-    ownerId: visitor.id,
-    kind: 'transfer-slot',
-    targetTile: buildTile,
-    targetId: 'phase9-stale-reservation',
-    itemType: null,
-    amount: 1,
-    capacity: 1,
-    createdAt: state.now,
-    expiresAt: state.now + 999,
-    releaseReason: null
-  });
-  state.dockQueue.push({ shipId: 999999, lane: 'north', shipType: 'tourist', hullVariant: 'courier-pod', size: 'small', queuedAt: state.now, timeoutAt: state.now + 999 });
-
-  const restored = roundTrip(state, 9020).state;
-  const loadedSite = restored.constructionSites.find((entry) => entry.id === site.id);
-  assert(loadedSite?.state === 'building' && loadedSite.buildProgress === site.buildProgress, 'In-progress construction was not restored durably.');
-  assert(restored.exteriorIntegrityTargets.some((entry) => entry.id === damaged.id && entry.state === 'breached' && entry.wear === 86), 'Damaged exterior integrity state was not restored.');
-  const loadedVisitor = restored.visitors.find((entry) => entry.id === visitor.id);
-  assert(loadedVisitor?.originShipId === ship.id && loadedVisitor.stayClass === 'contract', 'Durable visit identity did not survive hydration.');
-  assert(loadedVisitor.path.length === 0 && loadedVisitor.reservedServingTile === null && loadedVisitor.reservedTargetTile === null && loadedVisitor.temporarySleepTargetTile === null, 'Hydration retained stale visitor paths or fixture claims.');
-  assert(restored.crewMembers.every((crew) => crew.path.length === 0), 'Hydration retained stale crew movement paths.');
-  assert(!restored.pathOccupancyByTile.has(999999) && !restored.derived.pathCache.has('phase9-stale-path'), 'Hydration retained stale occupancy or path cache state.');
-  assert(!restored.derived.queueTheater.membersByAnchor.get(buildTile)?.includes(999999) && !restored.derived.queueTheater.slotByVisitorId.has(999999), 'Hydration retained stale queue occupancy.');
-  assert(!restored.reservations.some((entry) => entry.targetId === 'phase9-stale-reservation') && !restored.dockQueue.some((entry) => entry.shipId === 999999), 'Hydration retained stale reservations or dock queue entries.');
-  evidence.rebuiltTransientChecks += 1;
 }
 
 function testInvalidDockBindingReturnsToHolding(): void {
@@ -343,12 +360,243 @@ function testInvalidDockBindingReturnsToHolding(): void {
   evidence.reconciliationWarnings += restored.warnings.filter((warning) => warning.includes('dock')).length;
 }
 
+/**
+ * Legacy-save simulation: take a real save and delete the blocks or fields an
+ * older build never wrote, so the loader has to supply the defaults itself.
+ */
+function legacyLoad(
+  state: StationState,
+  seed: number,
+  strip: (snapshot: Record<string, unknown>) => void
+): { state: StationState; warnings: string[] } {
+  const wire = JSON.parse(serializeSave('phase9-legacy', state, 'legacy')) as { snapshot: Record<string, unknown> };
+  strip(wire.snapshot);
+  const parsed = parseAndMigrateSave(JSON.stringify(wire));
+  assert(parsed.ok, `Legacy save failed to parse: ${parsed.ok ? '' : parsed.error}`);
+  return hydrateStateFromSave(parsed.save, { seed });
+}
+
+/** A station that actually owns a Berth, which the starter layout does not. */
+function berthFixture(seed: number): StationState {
+  const state = createInitialState({ seed, physicalStarterInventory: true, manualTrafficAdmission: true });
+  assert(applyColdStartScenario(state, 'mixed-berth-visit'), 'Fixture requires the mixed-berth demo station.');
+  state.controls.shipsPerCycle = 0;
+  tick(state, 0);
+  return state;
+}
+
+/**
+ * A legacy save carries no structural layer, no dock source keys and no berth
+ * configs. Everything physical has to be re-derived from the loaded map: the
+ * grandfathered hull, each Dock's approach envelopes, and the Berth geometry.
+ */
+function testLegacyStructureDocksAndBerths(): void {
+  const state = berthFixture(9040);
+  const beforeGraph = buildStructuralSupportGraph(state);
+  const beforeSlots = JSON.stringify(getDockingSlotDescriptors(state));
+  const beforeGroups = JSON.stringify(getApproachConflictGroups(state));
+  assert(beforeGraph.rootTiles.length > 0, 'Fixture hull produced no grandfathered structural roots.');
+  assert(getDockingSlotDescriptors(state).some((slot) => slot.kind === 'berth'), 'Fixture produced no Berth slot.');
+
+  const legacy = legacyLoad(state, 9040, (snapshot) => {
+    delete snapshot.structuralExpansionProjects;
+    delete snapshot.berthConfigs;
+    for (const dock of snapshot.dockConfigs as Array<Record<string, unknown>>) delete dock.sourceKey;
+  });
+
+  const graph = buildStructuralSupportGraph(legacy.state);
+  assert(
+    graph.rootTiles.length === beforeGraph.rootTiles.length &&
+      JSON.stringify(graph.rootTiles) === JSON.stringify(beforeGraph.rootTiles),
+    'Legacy hull was not grandfathered as supported structure after load.'
+  );
+  assert(
+    graph.nodes.length === beforeGraph.nodes.length && graph.adjacency.size === beforeGraph.adjacency.size,
+    'Structural support graph did not rebuild identically after load.'
+  );
+  assert(
+    !legacy.warnings.some((warning) => warning.includes('no matching dock')),
+    'A legacy Dock config without a source key lost its dock on load.'
+  );
+
+  const slots = getDockingSlotDescriptors(legacy.state);
+  assert(JSON.stringify(slots) === beforeSlots, 'Approach envelopes were not re-derived identically after load.');
+  assert(
+    slots.filter((slot) => slot.kind !== 'berth').every((slot) => {
+      const envelopes = slot.envelopesByHull['courier-pod'];
+      return envelopes.ingress.bounds.maxX > envelopes.ingress.bounds.minX &&
+        envelopes.mooring.bounds.maxY > envelopes.mooring.bounds.minY &&
+        envelopes.egress.clearance >= 0;
+    }),
+    'A legacy Dock did not derive a usable approach envelope after load.'
+  );
+  assert(
+    JSON.stringify(getApproachConflictGroups(legacy.state)) === beforeGroups,
+    'Approach conflict groups were not rebuilt from loaded geometry.'
+  );
+
+  // Berth geometry is adapted from the map until the player edits it.
+  const berth = slots.find((slot) => slot.kind === 'berth');
+  assert(berth && berth.anchorTile !== null && berth.acceptedSizes.length > 1, 'Legacy load produced no adapted Berth slot.');
+  const droppedSize = berth.acceptedSizes[0];
+  setBerthAllowedShipSize(legacy.state, berth.anchorTile, droppedSize, false);
+  const edited = getDockingSlotDescriptors(legacy.state).find((slot) => slot.id === berth.id);
+  assert(
+    edited !== undefined && !edited.acceptedSizes.includes(droppedSize) &&
+      edited.acceptedSizes.length === berth.acceptedSizes.length - 1,
+    'Adapted Berth geometry did not yield to an explicit edit after load.'
+  );
+  evidence.legacyDerivations += 1;
+}
+
+/**
+ * New occupant state and the integrity/damage ledger are both absent from an
+ * older save. Neither may be invented, and neither may crash the load.
+ */
+function testLegacyOccupantAndIntegrityDefaults(): void {
+  const state = fixture(9050);
+  reconcileExteriorIntegrityTargets(state);
+  assert(state.exteriorIntegrityTargets.length > 0, 'Fixture produced no integrity targets to strip.');
+  const ship = dockedVisit(state, 90501, 'visit-service');
+  const buildTile = state.tiles.findIndex((tile) => tile === TileType.Floor);
+  state.visitors.push(makeVisitor(state, ship, 90502, buildTile));
+
+  const legacy = legacyLoad(state, 9050, (snapshot) => {
+    delete snapshot.maintenance;
+    for (const visitor of snapshot.visitors as Array<Record<string, unknown>>) {
+      for (const field of [
+        'stayClass', 'needs', 'serviceFailureStage', 'failureNeed', 'failureSince',
+        'strandedFromShipId', 'strandedAt', 'transferPhase', 'transferSlotKey',
+        'transferQueuedAt', 'transferCrossingStartedAt', 'queueProviderTile',
+        'queueJoinedAt', 'temporarySleepTargetTile'
+      ]) delete visitor[field];
+    }
+  });
+
+  const loaded = legacy.state.visitors.find((entry) => entry.id === 90502);
+  assert(loaded, 'A legacy occupant was dropped instead of defaulted.');
+  assert(
+    loaded.transferPhase === 'station' && loaded.transferSlotKey === null && loaded.transferQueuedAt === null,
+    'Legacy occupant did not default to safe station-side transfer state.'
+  );
+  assert(
+    loaded.stayClass === 'errand' && loaded.serviceFailureStage === 'none' && loaded.failureNeed === null &&
+      loaded.needs === undefined && loaded.strandedFromShipId === null &&
+      loaded.queueProviderTile === null && loaded.queueJoinedAt === null && loaded.temporarySleepTargetTile === null,
+    'Legacy occupant did not default the rest of the new occupant state safely.'
+  );
+
+  const audit = auditSaveRecovery(legacy.state);
+  assert(
+    legacy.state.exteriorIntegrityTargets.length === 0 && legacy.state.maintenanceDebts.length === 0 &&
+      audit.breachedIntegrityTargets === 0 && audit.openRepairJobs === 0,
+    'A legacy save without a maintenance block invented integrity or damage state.'
+  );
+  legacy.state.controls.paused = false;
+  for (let step = 0; step < 4; step += 1) tick(legacy.state, 0.5);
+  assert(
+    legacy.state.exteriorIntegrityTargets.length === state.exteriorIntegrityTargets.length &&
+      auditSaveRecovery(legacy.state).breachedIntegrityTargets === 0,
+    'Resuming a legacy save did not rebuild an undamaged integrity ledger from geometry.'
+  );
+  evidence.legacyDerivations += 1;
+}
+
+/**
+ * Movement intents and the congestion map are never carried on the wire. A
+ * loaded station has to plan its own, which only a running station can prove.
+ */
+function testCongestionAndMovementIntentsRebuild(): void {
+  const state = berthFixture(9060);
+  state.controls.paused = false;
+  for (let step = 0; step < 60; step += 1) tick(state, 0.5);
+  const before = auditSaveRecovery(state);
+  assert(before.actorsWithPaths > 0 && state.pathOccupancyByTile.size > 0, 'Fixture never produced live movement to reload.');
+
+  const wire = JSON.parse(serializeSave('phase9-movement', state, 'phase9')) as {
+    snapshot: { crew: { members: Array<Record<string, unknown>> }; visitors?: Array<Record<string, unknown>> };
+  };
+  assert(
+    wire.snapshot.crew.members.every((member) => member.path === undefined) &&
+      (wire.snapshot.visitors ?? []).every((visitor) => visitor.path === undefined),
+    'The save carried actor paths on the wire instead of rebuilding them.'
+  );
+
+  const restored = roundTrip(state, 9060).state;
+  assert(
+    auditSaveRecovery(restored).actorsWithPaths === 0 && restored.pathOccupancyByTile.size === 0,
+    'Hydration resumed with movement intents it did not plan.'
+  );
+  restored.controls.paused = false;
+  for (let step = 0; step < 6; step += 1) tick(restored, 0.5);
+  const after = auditSaveRecovery(restored);
+  assert(after.actorsWithPaths > 0, 'Movement intents were not replanned after load.');
+  assert(restored.pathOccupancyByTile.size > 0, 'The congestion map was not rebuilt after load.');
+  assert(after.pathlessActors === 0, 'A reloaded actor was left standing on nothing walkable.');
+  evidence.rebuiltTransientChecks += 1;
+}
+
+/**
+ * Maintenance identity is a key, not a slot. It has to name the same physical
+ * panel after a reload and after the map grows underneath it.
+ */
+function testMaintenanceIdentityThroughExpansion(): void {
+  const state = fixture(9070);
+  state.controls.paused = false;
+  for (let step = 0; step < 40; step += 1) tick(state, 30);
+  const tracked = state.maintenanceDebts.filter((debt) => debt.debt > 1).slice(0, 8);
+  assert(tracked.length > 0, 'Fixture accrued no maintenance debt to track.');
+
+  const restored = roundTrip(state, 9070).state;
+  restored.controls.paused = false;
+  for (let step = 0; step < 4; step += 1) tick(restored, 0.5);
+  for (const debt of tracked) {
+    const found = restored.maintenanceDebts.find((entry) => entry.key === debt.key);
+    assert(found, `Maintenance debt ${debt.key} lost its identity across a reload.`);
+    assert(Math.abs(found.debt - debt.debt) < 2, `Maintenance debt ${debt.key} did not keep its accrued value across a reload.`);
+  }
+
+  // Growing north keeps the width, so every surviving tile index shifts by the
+  // number of tiles the map gained. Identity has to follow the physical panel
+  // across that shift rather than the index it happened to hold when saved.
+  restored.metrics.credits = Math.max(restored.metrics.credits, 9000);
+  const carriedDebt = new Map(tracked.map((debt) =>
+    [debt.key, restored.maintenanceDebts.find((entry) => entry.key === debt.key)?.debt ?? debt.debt]
+  ));
+  const tilesBefore = restored.tiles.length;
+  const expansion = expandMap(restored, 'north');
+  assert(expansion.ok, `Map expansion failed: ${expansion.ok ? '' : expansion.reason}`);
+  const tileShift = restored.tiles.length - tilesBefore;
+  for (let step = 0; step < 2; step += 1) tick(restored, 0.5);
+  for (const debt of tracked) {
+    const expectedAnchor = debt.anchorTile + tileShift;
+    const carried = carriedDebt.get(debt.key) ?? debt.debt;
+    // Exterior integrity is keyed in world space, so its key must survive the
+    // shift untouched; tile-anchored keys must be re-keyed onto the new index.
+    const expectedKey = debt.key.startsWith('integrity:')
+      ? debt.key
+      : debt.key.replace(/:\d+$/, `:${expectedAnchor}`);
+    const found = restored.maintenanceDebts.find((entry) => entry.key === expectedKey);
+    assert(found, `Maintenance debt ${debt.key} lost its identity when the map expanded (expected key ${expectedKey}).`);
+    assert(found.anchorTile === expectedAnchor, `Maintenance debt ${debt.key} did not follow its panel to the shifted tile index.`);
+    assert(Math.abs(found.debt - carried) < 3, `Maintenance debt ${debt.key} was reset by map expansion.`);
+  }
+  evidence.maintenanceIdentityChecks += tracked.length;
+}
+
 function main(): void {
   testApproachCommitmentRoundTrip();
   testDockedVisitPhasesAndSettlement();
   testDurableConstructionIntegrityAndTransientReset();
   testInvalidDockBindingReturnsToHolding();
-  console.log(`phase9-save-migration-tests: ok phases=${evidence.durablePhaseRecords} transient=${evidence.rebuiltTransientChecks} warnings=${evidence.reconciliationWarnings}`);
+  testLegacyStructureDocksAndBerths();
+  testLegacyOccupantAndIntegrityDefaults();
+  testCongestionAndMovementIntentsRebuild();
+  testMaintenanceIdentityThroughExpansion();
+  console.log(
+    `phase9-save-migration-tests: ok phases=${evidence.durablePhaseRecords} transient=${evidence.rebuiltTransientChecks}` +
+    ` warnings=${evidence.reconciliationWarnings} legacy=${evidence.legacyDerivations} maintenance=${evidence.maintenanceIdentityChecks}`
+  );
 }
 
 main();

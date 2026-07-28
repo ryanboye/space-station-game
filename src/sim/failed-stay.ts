@@ -244,6 +244,14 @@ export interface EpisodeSyncResult {
  * or leaves. Escalation is therefore reversible by construction: removing the
  * shortage resolves the episode on the very next sync.
  */
+/** The contract that owns this ship, so an episode can name its commitment. */
+function contractIdForShip(state: StationState, shipId: number | null): number | null {
+  if (shipId === null) return null;
+  const ship = state.arrivingShips.find((entry) => entry.id === shipId);
+  if (!ship || ship.portContractId === undefined) return null;
+  return ship.portContractId;
+}
+
 export function syncFailureEpisodes(state: StationState, ledger: FailureEpisodeState): EpisodeSyncResult {
   const result: EpisodeSyncResult = { opened: [], escalated: [], resolved: [], pendingMilestones: [] };
   const liveById = new Map(state.visitors.map((visitor) => [visitor.id, visitor]));
@@ -257,7 +265,7 @@ export function syncFailureEpisodes(state: StationState, ledger: FailureEpisodeS
         subjectKind: 'visitor',
         subjectId: visitor.id,
         shipId: visitor.originShipId ?? visitor.strandedFromShipId ?? null,
-        contractId: null,
+        contractId: contractIdForShip(state, visitor.originShipId ?? visitor.strandedFromShipId ?? null),
         need: visitor.failureNeed ?? null,
         cause: describeCause(visitor.failureNeed ?? null, visitor.serviceFailureStage ?? 'unmet'),
         anchorTile: visitor.tileIndex,
@@ -303,9 +311,13 @@ export function syncFailureEpisodes(state: StationState, ledger: FailureEpisodeS
   }
 
   if (ledger.episodes.length > MAX_RETAINED_EPISODES) {
+    // Open episodes are live operating state and are NEVER dropped, however
+    // many there are. Only the closed history is trimmed, and only down to
+    // whatever room the open set leaves — which may be none.
     const open = openEpisodes(ledger);
     const closed = ledger.episodes.filter((episode) => episode.resolvedAt !== null);
-    ledger.episodes = [...closed.slice(-(MAX_RETAINED_EPISODES - open.length)), ...open];
+    const room = Math.max(0, MAX_RETAINED_EPISODES - open.length);
+    ledger.episodes = [...closed.slice(closed.length - Math.min(room, closed.length)), ...open];
   }
   return result;
 }
@@ -490,6 +502,14 @@ export function planRecoveryAction(
   if (needsOpenEpisode && targets.length === 0) {
     return refuse(request.kind, 'no open failure episode for that target');
   }
+  // One consistent identity. Naming both an episode and a ship that do not
+  // belong together is a caller bug, not a request to guess which was meant.
+  if (episode && request.shipId !== undefined && episode.shipId !== request.shipId) {
+    return refuse(request.kind, 'episode does not belong to that ship');
+  }
+  if (episode && request.visitorId !== undefined && episode.subjectId !== request.visitorId) {
+    return refuse(request.kind, 'episode does not belong to that occupant');
+  }
   if (targets.some((entry) => entry.resolvedAt !== null)) {
     return refuse(request.kind, 'episode already resolved');
   }
@@ -500,12 +520,15 @@ export function planRecoveryAction(
 
   switch (request.kind) {
     case 'emergency-meals': {
-      const wanted = Math.max(1, Math.floor(request.amount ?? targets.length));
+      // Bounded by the cohort: you cannot buy meals for more guests than are
+      // actually failing, which is what keeps cost and effect identical.
+      const wanted = Math.min(targets.length, Math.max(1, Math.floor(request.amount ?? targets.length)));
       if (context.availableMeals < wanted) {
         // Emergency meals consume or purchase PHYSICAL inventory. If there is
         // none to buy or carry, the action fails rather than inventing food.
         return refuse(request.kind, `only ${context.availableMeals} prepared meals available`);
       }
+      if (already('emergency-meals')) return refuse(request.kind, 'emergency meals already served to this cohort');
       const cost = wanted * RECOVERY_COSTS.emergencyMealUnit;
       return {
         ok: true,
@@ -524,11 +547,12 @@ export function planRecoveryAction(
       };
     }
     case 'temporary-lodging': {
-      const wanted = Math.max(1, Math.floor(request.amount ?? targets.length));
+      const wanted = Math.min(targets.length, Math.max(1, Math.floor(request.amount ?? targets.length)));
       if (context.freeGuestBeds < wanted) {
         // Lodging uses depicted bed positions only. No hidden bed capacity.
         return refuse(request.kind, `only ${context.freeGuestBeds} free guest beds`);
       }
+      if (already('temporary-lodging')) return refuse(request.kind, 'temporary lodging already arranged for this cohort');
       const cost = wanted * RECOVERY_COSTS.temporaryLodgingUnit;
       return {
         ok: true,
