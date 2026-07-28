@@ -160,10 +160,15 @@ export function normalizeFailureEpisodeState(
     (highest, episode) => episode.incidents.reduce((inner, incident) => Math.max(inner, incident.id), highest),
     0
   );
+  const open = episodes.filter((episode) => episode.resolvedAt === null);
+  const closed = episodes.filter((episode) => episode.resolvedAt !== null);
+  const closedRoom = Math.max(0, MAX_RETAINED_EPISODES - open.length);
   return {
     nextEpisodeId: Math.max(1, Math.floor(raw?.nextEpisodeId ?? maxId + 1), maxId + 1),
     nextIncidentId: Math.max(1, Math.floor(raw?.nextIncidentId ?? maxIncidentId + 1), maxIncidentId + 1),
-    episodes: episodes.slice(-MAX_RETAINED_EPISODES)
+    // Open episodes are live operating state. Never discard their milestone
+    // history merely because the bounded closed-history ledger is full.
+    episodes: [...(closedRoom === 0 ? [] : closed.slice(-closedRoom)), ...open]
   };
 }
 
@@ -529,6 +534,7 @@ export function planRecoveryAction(
         return refuse(request.kind, `only ${context.availableMeals} prepared meals available`);
       }
       if (already('emergency-meals')) return refuse(request.kind, 'emergency meals already served to this cohort');
+      const selected = targets.slice(0, wanted);
       const cost = wanted * RECOVERY_COSTS.emergencyMealUnit;
       return {
         ok: true,
@@ -540,9 +546,9 @@ export function planRecoveryAction(
           credits: -cost,
           costBasis: cost,
           label: `Emergency meals · ${wanted}`,
-          tileIndex: targets[0]?.anchorTile
+          tileIndex: selected[0]?.anchorTile
         }],
-        affectedEpisodeIds: ids,
+        affectedEpisodeIds: selected.map((entry) => entry.id),
         summary: `Served ${wanted} emergency meals`
       };
     }
@@ -553,6 +559,7 @@ export function planRecoveryAction(
         return refuse(request.kind, `only ${context.freeGuestBeds} free guest beds`);
       }
       if (already('temporary-lodging')) return refuse(request.kind, 'temporary lodging already arranged for this cohort');
+      const selected = targets.slice(0, wanted);
       const cost = wanted * RECOVERY_COSTS.temporaryLodgingUnit;
       return {
         ok: true,
@@ -564,9 +571,9 @@ export function planRecoveryAction(
           credits: -cost,
           costBasis: 0,
           label: `Temporary lodging · ${wanted} bunks`,
-          tileIndex: targets[0]?.anchorTile
+          tileIndex: selected[0]?.anchorTile
         }],
-        affectedEpisodeIds: ids,
+        affectedEpisodeIds: selected.map((entry) => entry.id),
         summary: `Opened ${wanted} temporary bunks`
       };
     }
@@ -686,7 +693,6 @@ export function planRecoveryAction(
 /** Which resolution a successful action produces, if it closes the episode. */
 export function resolutionForAction(kind: RecoveryActionKind): FailureResolution | null {
   switch (kind) {
-    case 'compensate': return 'compensated';
     case 'onward-transfer': return 'transferred';
     case 'cancel-contract': return 'cancelled';
     case 'security-intervention': return 'removed';

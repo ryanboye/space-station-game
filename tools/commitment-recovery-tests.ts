@@ -373,6 +373,7 @@ function testCompensationCannotEraseAPhysicalShortage(): string {
   const visitor = state.visitors.find((entry) => entry.id === 93302);
   assert(visitor, 'The compensated guest should still be aboard.');
   assert((visitor.needs?.hunger ?? 100) < 55, 'Compensation must not feed anybody.');
+  assert(episode.resolvedAt === null, 'Compensation must leave the physical-shortage episode open.');
   return `paid ${episode.compensationCredits}c; hunger still ${Math.round(visitor.needs?.hunger ?? 0)}`;
 }
 
@@ -512,7 +513,21 @@ function testHardenedIdentityAndIdempotence(): string {
     (r) => r.releaseReason === null && r.ownerKind === 'visitor' && r.ownerId === 93603
   );
   assert(orphan.length === 0, `Canonical cleanup must release claims, ${orphan.length} left.`);
-  return `contract ${episode.contractId} bound; wrong-ship and wrong-occupant refused; repeat meal refused; 1 resolved milestone; 0 orphan claims`;
+
+  // Amount-limited cohort actions must consume and affect the same count.
+  const cohortState = fixture(9361);
+  cohortState.metrics.credits = 5000;
+  const cohortShip = contractShip(cohortState, 93611);
+  failingPassenger(cohortState, cohortShip, 93612, 200);
+  failingPassenger(cohortState, cohortShip, 93613, 200);
+  advance(cohortState, 1);
+  cohortState.itemNodes[0].items.meal = 20;
+  const bounded = applyRecoveryAction(cohortState, { kind: 'emergency-meals', shipId: cohortShip.id, amount: 1 });
+  assert(bounded.ok, `Bounded cohort meal should apply: ${bounded.reason}`);
+  assert(bounded.affectedEpisodeIds.length === 1, `One meal must affect one episode, got ${bounded.affectedEpisodeIds.length}.`);
+  const restored = cohortState.visitors.filter((visitor) => (visitor.needs?.completions ?? 0) === 1).length;
+  assert(restored === 1, `One meal must restore one guest, got ${restored}.`);
+  return `contract ${episode.contractId} bound; repeat refused; 1 resolved milestone; 0 orphan claims; amount=1 affected/restored 1`;
 }
 
 function testPolicyIsAuthoritativeAndReservesAreCumulative(): string {
