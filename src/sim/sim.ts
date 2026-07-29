@@ -21478,8 +21478,13 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     }
     if (!crew.resting && !incidentDutyLocked && !commandDutyLocked && !protectedDutyLocked) {
       const dutyDrain = watchStatus === 'off-duty' ? 0.08 : watchStatus === 'reserve' ? 0.16 : 0.24;
-      crew.energy = clamp(crew.energy - dt * (dutyDrain + publicInterference * CREW_PUBLIC_CROWD_DRAIN), 0, 100);
-      const needsCriticalRest = crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD;
+      const projectedDutyEnergy = clamp(
+        crew.energy - dt * (dutyDrain + publicInterference * CREW_PUBLIC_CROWD_DRAIN),
+        0,
+        100
+      );
+      const needsCriticalRest = projectedDutyEnergy <
+        CREW_REST_CRITICAL_ENERGY_THRESHOLD + CREW_REST_PREEMPTION_MARGIN;
       const belowRestCap = currentResting < state.metrics.crewRestCap;
       const canRestByShift = needsCriticalRest || (belowRestCap && watchStatus === 'off-duty');
       const cooldownReady = state.now >= crew.restCooldownUntil && state.now >= crew.taskLockUntil;
@@ -21495,6 +21500,10 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         cooldownReady &&
         canRestByShift &&
         (!airEmergency || needsCriticalRest);
+      // A crew member who can begin ordinary critical rest this frame should
+      // not pay the duty drain that the rest decision is preventing. Active
+      // jobs and physical self-care keep their existing non-preemption rules.
+      if (!shouldRest) crew.energy = projectedDutyEnergy;
       if (shouldRest) {
         crew.resting = true;
         crew.restSessionActive = false;

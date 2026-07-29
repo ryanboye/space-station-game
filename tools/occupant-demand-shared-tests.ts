@@ -264,6 +264,20 @@ function testCrewStalledSelfCareYieldsToCriticalSleep(): void {
   assert(crew.assignedSleepTile !== null, 'critical crew did not retain an assigned physical sleep slot');
 }
 
+function testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor(): void {
+  const state = crewProductionState();
+  const serving = fixtureTile(state, ModuleType.ServingStation);
+  const crew = stageCrew(state, serving, 18.2);
+  crew.idleReason = 'idle_waiting_reassign';
+  crew.path = [serving + 1];
+
+  tick(state, 0.2);
+
+  assert(crew.resting, 'ordinary idle crew did not begin rest before its projected duty drain crossed the floor');
+  assert(crew.energy >= 18, `ordinary idle crew crossed the hard energy floor before rest: ${crew.energy}`);
+  assert(crew.path.length === 0, 'ordinary critical-rest handoff retained a stale route');
+}
+
 function testCrewActiveMealIsNeverPreempted(): void {
   const state = crewProductionState();
   const table = fixtureTile(state, ModuleType.Table);
@@ -290,6 +304,7 @@ testVisitorProductionPreemption();
 testResidentProductionPreemption();
 testPlannedVisitorServiceIsNotPreempted();
 testCrewStalledSelfCareYieldsToCriticalSleep();
+testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor();
 testCrewActiveMealIsNeverPreempted();
 
 console.log('PASS shared occupant demand: profile decay, stable claims, visitor/resident/crew production preemption, active-service guards');
