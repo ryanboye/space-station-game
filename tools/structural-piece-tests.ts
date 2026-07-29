@@ -19,6 +19,7 @@ import {
   buildStructuralSupportGraph,
   deriveStructuralInterfaceLoads,
   getStructuralSupportCacheStats,
+  overloadedStructuralPieceIds,
   validateLiveStructuralInterfaces,
   validateStructuralSupportPlan
 } from '../src/sim/structural-support';
@@ -472,6 +473,23 @@ function buildExpansionBerth(
     'An unrelated Bulkhead reached only through legacy root must not enable the expanded large Berth.'
   );
   assert(pickBerthForShip(state, 'tourist', 'large') === null, 'Unsupported commissioned large Berth must be ineligible for arrival.');
+  // The completed legacy-hull Bulkhead is the nearest reinforced transfer the
+  // live heavy-load violation can be attributed to, so the piece itself must
+  // report overloaded rather than complete while that violation stands.
+  const unrelatedPiece = state.structuralPieces.find((candidate) => candidate.id === unrelated.pieceId)!;
+  assert(unrelatedPiece.completed, 'Overload contrast needs the legacy-hull Bulkhead already completed.');
+  assert(
+    overloadedStructuralPieceIds(state).has(unrelatedPiece.id),
+    'A live heavy-load-requires-reinforced-transfer violation must attribute an overload to a completed Bulkhead.'
+  );
+  assert(
+    structuralPieceVisualState(state, unrelatedPiece) === 'overloaded',
+    'A completed piece under a heavy-load-requires-reinforced-transfer violation must select overloaded art.'
+  );
+  assert(
+    structuralPieceSpriteKey(unrelatedPiece, 'overloaded') === 'module.reinforced_bulkhead.overloaded',
+    'Overloaded Bulkhead must use its curated atlas key.'
+  );
   const wall = fromIndex(berth.bulkheadWall, state.width);
   const outside = toIndex(wall.x + berth.bulkheadOutward[0], wall.y + berth.bulkheadOutward[1], state.width);
   const origin = berth.bulkheadOutward[0] < 0 || berth.bulkheadOutward[1] < 0 ? outside : berth.bulkheadWall;
@@ -486,6 +504,10 @@ function buildExpansionBerth(
   completePiece(state, planned.pieceId);
   assert(validateLiveStructuralInterfaces(state).ok, 'Completed hull-adjacent Bulkhead must enable the commissioned large Berth load.');
   assert(pickBerthForShip(state, 'tourist', 'large') !== null, 'Completed Bulkhead must make the commissioned large Berth eligible.');
+  assert(
+    structuralPieceVisualState(state, unrelatedPiece) === 'complete',
+    'Clearing the heavy-load violation must return the attributed Bulkhead to complete art.'
+  );
 }
 
 // A real exterior construction produces delivery work and requires EVA; the

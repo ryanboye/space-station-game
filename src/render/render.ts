@@ -106,7 +106,13 @@ import {
 import {
   structuralPieceDimensions,
   overloadedStructuralPieceIds,
-  validateLiveStructuralInterfaces
+  validateLiveStructuralInterfaces,
+  buildStructuralSupportGraph,
+  MAX_TRUSS_SPAN,
+  type ProposedStructuralPiece,
+  type StructuralNodeKind,
+  type StructuralSupportGraph,
+  type StructuralSupportReason
 } from '../sim/structural-support';
 import { shipHullAssetPath, shipHullProfile } from '../sim/ship-hulls';
 import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
@@ -5523,7 +5529,8 @@ function mixRgba(
 function diagnosticOverlayCacheKey(
   state: StationState,
   overlay: DiagnosticOverlay,
-  focusedUtilityKind?: UtilityUnderlayKind
+  focusedUtilityKind?: UtilityUnderlayKind,
+  proposedStructuralPieces: readonly ProposedStructuralPiece[] = []
 ): string {
   const debtKey =
     overlay === 'maintenance'
@@ -5583,6 +5590,10 @@ function diagnosticOverlayCacheKey(
           state.incidents.map((incident) => `${incident.id}:${incident.stage}:${incident.tileIndex}:${Math.round(incident.severity * 10)}`).join(',')
         ].join(':')
       : '';
+  // Topology/room/module versions below already cover every built input to the
+  // support graph, so the only extra signal is the live placement proposal.
+  const structuralKey =
+    overlay === 'structural' ? structuralOverlayProposalKey(proposedStructuralPieces) : '';
   return [
     overlay,
     state.width,
@@ -5603,7 +5614,8 @@ function diagnosticOverlayCacheKey(
     mapKey,
     thermalKey,
     utilityKey,
-    reputationKey
+    reputationKey,
+    structuralKey
   ].join('|');
 }
 
@@ -5814,6 +5826,236 @@ function reputationDiagnosticColor(zone: ReputationZoneScore): string {
   }
   const controlTint = clamp01(zone.control / 100);
   return mixRgba([97, 200, 255], [255, 214, 92], clamp01(zone.value / 100), 0.11 + controlTint * 0.12);
+}
+
+/**
+ * Every support failure the planner can report, bucketed into the two tile
+ * states the overlay paints. Written as an exhaustive Record so a new reason in
+ * structural-support.ts forces a decision here instead of silently vanishing.
+ * The two load-transfer reasons match what `overloadedStructuralPieceIds` already
+ * attributes to a piece sprite; the rest describe structure that does not hold.
+ */
+const STRUCTURAL_PROBLEM_SEVERITY: Record<StructuralSupportReason, 'overloaded' | 'unsupported'> = {
+  'piece-out-of-bounds': 'unsupported',
+  'piece-overlaps-hull': 'unsupported',
+  'duplicate-piece': 'unsupported',
+  'disconnected-support': 'unsupported',
+  'span-exceeded': 'unsupported',
+  'branch-requires-junction': 'unsupported',
+  'load-has-no-supported-path': 'unsupported',
+  'medium-load-requires-junction': 'overloaded',
+  'heavy-load-requires-reinforced-transfer': 'overloaded'
+};
+
+const STRUCTURAL_PROBLEM_COPY: Record<StructuralSupportReason, string> = {
+  'piece-out-of-bounds': 'piece runs off the map',
+  'piece-overlaps-hull': 'piece overlaps hull',
+  'duplicate-piece': 'two pieces claim this tile',
+  'disconnected-support': 'no load path back to hull',
+  'span-exceeded': `truss run longer than ${MAX_TRUSS_SPAN} tiles from a root or junction`,
+  'branch-requires-junction': 'truss branches without a Truss Junction',
+  'load-has-no-supported-path': 'interface has no supported anchor',
+  'medium-load-requires-junction': 'medium berth load needs a Junction transfer',
+  'heavy-load-requires-reinforced-transfer': 'heavy berth load needs a Reinforced Bulkhead transfer'
+};
+
+interface StructuralOverlayModel {
+  key: string;
+  /** Grandfathered hull. Trivially supported, so it only gets an anchor wash. */
+  rootTiles: Set<number>;
+  /** Built structure that already carries load back to a root. */
+  supportedTiles: Set<number>;
+  /** Tiles that only reach a root once pending/previewed pieces complete. */
+  plannedTiles: Set<number>;
+  /** Load interfaces whose transfer piece is missing or under-rated. */
+  overloadedTiles: Set<number>;
+  /** Tiles the live plan reports as structurally invalid. */
+  unsupportedTiles: Set<number>;
+  reasonByTile: Map<number, StructuralSupportReason>;
+  nodeKindByTile: Map<number, StructuralNodeKind>;
+  proposedTiles: Set<number>;
+}
+
+let structuralOverlayCache: StructuralOverlayModel | null = null;
+/**
+ * Proposals the current frame's overlay layer was built from. Renderer-owned
+ * scratch, never written back to `StationState`; the legend and hover readouts
+ * use it so they describe the same model the tiles were painted from.
+ */
+let structuralOverlayLegendProposals: readonly ProposedStructuralPiece[] = [];
+
+function structuralOverlayProposalKey(proposals: readonly ProposedStructuralPiece[]): string {
+  return proposals.map((piece) => `${piece.tile}:${piece.kind}`).join(',');
+}
+
+/**
+ * Reachability from the grandfathered roots. `existingOnly` walks the same graph
+ * twice: once refusing to pass through a node the plan has not built yet, once
+ * allowing it. The difference between the two runs is exactly the support a
+ * pending or previewed piece would add.
+ */
+function structuralReachableTiles(graph: StructuralSupportGraph, existingOnly: boolean): Set<number> {
+  const nodeByTile = new Map(graph.nodes.map((node) => [node.tile, node]));
+  const reachable = new Set<number>(graph.rootTiles);
+  const queue = [...graph.rootTiles];
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    for (const neighbor of graph.adjacency.get(queue[cursor]!) ?? []) {
+      if (reachable.has(neighbor)) continue;
+      if (existingOnly && nodeByTile.get(neighbor)?.existing === false) continue;
+      reachable.add(neighbor);
+      queue.push(neighbor);
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Reads the structural planner, never writes it. Memoized on the same topology /
+ * room / module versions that invalidate the planner's own graph cache plus the
+ * live proposal signature, so a steady frame costs one string compare instead of
+ * a graph walk.
+ */
+function readStructuralOverlay(
+  state: StationState,
+  proposals: readonly ProposedStructuralPiece[]
+): StructuralOverlayModel {
+  const key = [
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.width,
+    state.height,
+    structuralOverlayProposalKey(proposals)
+  ].join('|');
+  if (structuralOverlayCache?.key === key) return structuralOverlayCache;
+
+  // Two questions, two graphs. Live validation answers "what is broken right
+  // now" and only counts completed pieces; the planning graph answers "what
+  // would hold once the pending and previewed pieces finish". Both builds are
+  // topology-cached inside structural-support.ts.
+  const validation = validateLiveStructuralInterfaces(state);
+  const planningGraph = buildStructuralSupportGraph(state, proposals);
+  const existingReachable = structuralReachableTiles(planningGraph, true);
+  const fullReachable = structuralReachableTiles(planningGraph, false);
+
+  const rootTiles = new Set(planningGraph.rootTiles);
+  const supportedTiles = new Set<number>();
+  const plannedTiles = new Set<number>();
+  const nodeKindByTile = new Map<number, StructuralNodeKind>();
+  const proposedTiles = new Set<number>();
+  for (const node of planningGraph.nodes) {
+    nodeKindByTile.set(node.tile, node.kind);
+    if (!node.existing) proposedTiles.add(node.tile);
+    if (node.kind === 'root') continue;
+    if (existingReachable.has(node.tile)) supportedTiles.add(node.tile);
+    else if (fullReachable.has(node.tile)) plannedTiles.add(node.tile);
+  }
+
+  const overloadedTiles = new Set<number>();
+  const unsupportedTiles = new Set<number>();
+  const reasonByTile = new Map<number, StructuralSupportReason>();
+  for (const problem of validation.problems) {
+    if (STRUCTURAL_PROBLEM_SEVERITY[problem.reason] === 'overloaded') overloadedTiles.add(problem.tile);
+    else unsupportedTiles.add(problem.tile);
+    // Problems arrive sorted by tile then reason; keep the first so the hover
+    // line is deterministic across frames.
+    if (!reasonByTile.has(problem.tile)) reasonByTile.set(problem.tile, problem.reason);
+  }
+
+  structuralOverlayCache = {
+    key,
+    rootTiles,
+    supportedTiles,
+    plannedTiles,
+    overloadedTiles,
+    unsupportedTiles,
+    reasonByTile,
+    nodeKindByTile,
+    proposedTiles
+  };
+  return structuralOverlayCache;
+}
+
+/**
+ * Live proposal fed to `buildStructuralSupportGraph`. Holding a structural piece
+ * over a tile answers "what would this hold up?" before a credit is spent.
+ */
+function structuralOverlayProposals(
+  state: StationState,
+  currentTool: BuildTool,
+  hoveredTile: number | null
+): ProposedStructuralPiece[] {
+  if (state.controls.diagnosticOverlay !== 'structural') return [];
+  if (currentTool.kind !== 'structural-piece' || !currentTool.structuralPiece) return [];
+  if (hoveredTile === null || hoveredTile < 0 || hoveredTile >= state.tiles.length) return [];
+  const kind = currentTool.structuralPiece;
+  const preview = validateStructuralPiecePlacement(state, hoveredTile, kind, state.controls.moduleRotation);
+  if (!preview.ok) return [];
+  return preview.tiles.map((tile) => ({ tile, kind }));
+}
+
+function structuralDiagnosticColor(tileIndex: number, model: StructuralOverlayModel): string | null {
+  if (model.unsupportedTiles.has(tileIndex)) return rgba(238, 79, 79, 0.46);
+  if (model.overloadedTiles.has(tileIndex)) return rgba(255, 214, 92, 0.42);
+  if (model.plannedTiles.has(tileIndex)) return rgba(97, 200, 255, 0.26);
+  if (model.supportedTiles.has(tileIndex)) return rgba(110, 219, 143, 0.32);
+  // Grandfathered hull is the thing everything else has to reach. A faint wash
+  // reads as "anchor" without competing with the structure being planned, the
+  // same way the maintenance overlay washes healthy tiles.
+  if (model.rootTiles.has(tileIndex)) return rgba(110, 219, 143, 0.1);
+  return null;
+}
+
+/**
+ * Per-tile marks that survive gameplay zoom: a diagonal hatch for plan-only
+ * support, and a bright outline for the single tiles a problem lands on.
+ */
+function drawStructuralOverlayTileDetail(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  tileIndex: number,
+  model: StructuralOverlayModel
+): void {
+  const unsupported = model.unsupportedTiles.has(tileIndex);
+  const overloaded = !unsupported && model.overloadedTiles.has(tileIndex);
+  const planned = !unsupported && !overloaded && model.plannedTiles.has(tileIndex);
+  if (!unsupported && !overloaded && !planned) return;
+  ctx.save();
+  if (planned) {
+    ctx.beginPath();
+    ctx.rect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(167, 231, 255, 0.9)';
+    ctx.lineWidth = Math.max(1, Math.round(1.5 * PX));
+    const step = Math.max(4, Math.round(6 * PX));
+    ctx.beginPath();
+    for (let offset = -TILE_SIZE; offset < TILE_SIZE; offset += step) {
+      ctx.moveTo(px + offset, py + TILE_SIZE);
+      ctx.lineTo(px + offset + TILE_SIZE, py);
+    }
+    ctx.stroke();
+  }
+  if (unsupported || overloaded) {
+    ctx.strokeStyle = unsupported ? 'rgba(255, 168, 160, 0.95)' : 'rgba(255, 232, 160, 0.95)';
+    ctx.lineWidth = Math.max(1, Math.round(2 * PX));
+    ctx.strokeRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    // A single overloaded clamp or severed truss tile is easy to miss at play
+    // zoom, so the failing tile also carries a mark: a cross for unsupported,
+    // a bar for a transfer that exists but is under-rated.
+    ctx.beginPath();
+    if (unsupported) {
+      ctx.moveTo(px + TILE_SIZE * 0.3, py + TILE_SIZE * 0.3);
+      ctx.lineTo(px + TILE_SIZE * 0.7, py + TILE_SIZE * 0.7);
+      ctx.moveTo(px + TILE_SIZE * 0.7, py + TILE_SIZE * 0.3);
+      ctx.lineTo(px + TILE_SIZE * 0.3, py + TILE_SIZE * 0.7);
+    } else {
+      ctx.moveTo(px + TILE_SIZE * 0.28, py + TILE_SIZE * 0.5);
+      ctx.lineTo(px + TILE_SIZE * 0.72, py + TILE_SIZE * 0.5);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawUtilityUnderlayDuct(
@@ -6120,7 +6362,8 @@ function drawDiagnosticOverlayLayer(
   overlay: DiagnosticOverlay,
   spriteAtlas: SpriteAtlas,
   useSprites: boolean,
-  focusedUtilityKind?: UtilityUnderlayKind
+  focusedUtilityKind?: UtilityUnderlayKind,
+  proposedStructuralPieces: readonly ProposedStructuralPiece[] = []
 ): void {
   if (overlay === 'none') return;
   if (overlay === 'utility-underlay') {
@@ -6129,6 +6372,7 @@ function drawDiagnosticOverlayLayer(
   }
   const lifeSupportCoverage = overlay === 'life-support' ? getLifeSupportCoverageDiagnostics(state) : null;
   const routePressureDiagnostics = overlay === 'route-pressure' ? getRoutePressureDiagnostics(state) : null;
+  const structuralModel = overlay === 'structural' ? readStructuralOverlay(state, proposedStructuralPieces) : null;
   const reputationByTile = new Map<number, ReputationZoneScore>();
   if (overlay === 'reputation') {
     for (const zone of getReputationZoneScores(state)) {
@@ -6154,6 +6398,9 @@ function drawDiagnosticOverlayLayer(
     } else if (overlay === 'reputation') {
       const zone = reputationByTile.get(i);
       color = zone ? reputationDiagnosticColor(zone) : null;
+    } else if (overlay === 'structural') {
+      if (!structuralModel) continue;
+      color = structuralDiagnosticColor(i, structuralModel);
     } else {
       color = environmentDiagnosticColor(state, i, overlay);
     }
@@ -6170,6 +6417,9 @@ function drawDiagnosticOverlayLayer(
         ctx.strokeRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
       }
     }
+    if (overlay === 'structural' && structuralModel) {
+      drawStructuralOverlayTileDetail(ctx, px, py, i, structuralModel);
+    }
   }
 }
 
@@ -6179,7 +6429,8 @@ function ensureDiagnosticOverlayLayer(
   heightPx: number,
   spriteAtlas: SpriteAtlas,
   useSprites: boolean,
-  focusedUtilityKind?: UtilityUnderlayKind
+  focusedUtilityKind?: UtilityUnderlayKind,
+  proposedStructuralPieces: readonly ProposedStructuralPiece[] = []
 ): CachedLayer | null {
   const overlay = state.controls.diagnosticOverlay;
   if (overlay === 'none') {
@@ -6188,11 +6439,19 @@ function ensureDiagnosticOverlayLayer(
   }
   diagnosticOverlayCache = ensureCachedLayer(diagnosticOverlayCache, widthPx, heightPx);
   const layer = diagnosticOverlayCache;
-  const key = `${diagnosticOverlayCacheKey(state, overlay, focusedUtilityKind)}|sprites:${useSprites ? 1 : 0}:${spriteAtlas.version}`;
+  const key = `${diagnosticOverlayCacheKey(state, overlay, focusedUtilityKind, proposedStructuralPieces)}|sprites:${useSprites ? 1 : 0}:${spriteAtlas.version}`;
   if (layer.key === key) return layer;
   layer.key = key;
   layer.ctx.clearRect(0, 0, widthPx, heightPx);
-  drawDiagnosticOverlayLayer(layer.ctx, state, overlay, spriteAtlas, useSprites, focusedUtilityKind);
+  drawDiagnosticOverlayLayer(
+    layer.ctx,
+    state,
+    overlay,
+    spriteAtlas,
+    useSprites,
+    focusedUtilityKind,
+    proposedStructuralPieces
+  );
   return layer;
 }
 
@@ -6277,6 +6536,17 @@ function diagnosticOverlayLegendLine(state: StationState): { title: string; line
         scale: 'green prestige | gold/purple notoriety | red crime pressure',
         color: '#52d1a7'
       };
+    case 'structural': {
+      const model = readStructuralOverlay(state, structuralOverlayLegendProposals);
+      return {
+        title: 'Structural Support',
+        line:
+          `supported ${model.supportedTiles.size} | planned ${model.plannedTiles.size} | ` +
+          `overloaded ${model.overloadedTiles.size} | unsupported ${model.unsupportedTiles.size}`,
+        scale: 'green supported | cyan hatch planned | gold overloaded | red unsupported',
+        color: '#6edb8f'
+      };
+    }
     case 'none':
       return null;
   }
@@ -6338,6 +6608,24 @@ function diagnosticOverlayHoverLine(state: StationState, hoveredTile: number | n
     const diagnostic = getRoutePressureTileDiagnostic(state, pos.x, pos.y);
     if (!diagnostic) return `hover ${pos.x},${pos.y}: no active planned routes`;
     return `hover ${pos.x},${pos.y}: total ${diagnostic.totalCount} | V${diagnostic.visitorCount} R${diagnostic.residentCount} C${diagnostic.crewCount} L${diagnostic.logisticsCount} | conflicts ${diagnostic.conflictScore}`;
+  }
+  if (overlay === 'structural') {
+    const model = readStructuralOverlay(state, structuralOverlayLegendProposals);
+    const reason = model.reasonByTile.get(hoveredTile);
+    const kind = model.nodeKindByTile.get(hoveredTile);
+    if (reason) {
+      const severity = STRUCTURAL_PROBLEM_SEVERITY[reason];
+      return `hover ${pos.x},${pos.y}: ${severity} | ${STRUCTURAL_PROBLEM_COPY[reason]}`;
+    }
+    if (model.plannedTiles.has(hoveredTile)) {
+      const source = model.proposedTiles.has(hoveredTile) ? 'previewed piece' : 'pending build';
+      return `hover ${pos.x},${pos.y}: planned support | ${kind ?? 'structure'} | holds once the ${source} completes`;
+    }
+    if (model.supportedTiles.has(hoveredTile)) {
+      return `hover ${pos.x},${pos.y}: supported | ${kind ?? 'structure'} | load reaches a structural root`;
+    }
+    if (model.rootTiles.has(hoveredTile)) return `hover ${pos.x},${pos.y}: structural root | grandfathered hull anchor`;
+    return `hover ${pos.x},${pos.y}: open space | nothing to support here yet`;
   }
   if (overlay === 'reputation') {
     const diagnostic = getReputationTileDiagnostic(state, pos.x, pos.y);
@@ -7621,13 +7909,15 @@ export function renderWorld(
     currentTool.kind === 'utility-underlay' && !currentTool.utilityErase
       ? currentTool.utilityKind
       : undefined;
+  structuralOverlayLegendProposals = structuralOverlayProposals(state, currentTool, hoveredTile);
   const diagnosticLayer = ensureDiagnosticOverlayLayer(
     state,
     widthPx,
     heightPx,
     spriteAtlas,
     useSprites,
-    focusedUtilityKind
+    focusedUtilityKind,
+    structuralOverlayLegendProposals
   );
   if (diagnosticLayer) drawCachedLayer(ctx, diagnosticLayer.canvas, viewport);
   ctx.save();

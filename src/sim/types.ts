@@ -78,7 +78,11 @@ export type DiagnosticOverlay =
   | 'sanitation'
   | 'maintenance'
   | 'route-pressure'
-  | 'reputation';
+  | 'reputation'
+  // Structural planning lens: which frontage is supported today, which only
+  // becomes supported once a pending piece completes, and which load transfers
+  // are overloaded or unsupported. Backed by structural-support.ts.
+  | 'structural';
 
 export type DriftSeverity = 'none' | 'low' | 'warning' | 'active' | 'severe';
 export type MapConditionKind = 'sunlight' | 'debris-risk' | 'thermal-sink';

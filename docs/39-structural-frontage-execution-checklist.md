@@ -476,10 +476,10 @@ audited checklist with no unsupported checked claims.
 
 ### Planning Feedback
 
-- [ ] Add supported overlay state.
-- [ ] Add planned-support overlay state.
-- [ ] Add overloaded overlay state.
-- [ ] Add unsupported overlay state.
+- [x] Add supported overlay state.
+- [x] Add planned-support overlay state.
+- [x] Add overloaded overlay state.
+- [x] Add unsupported overlay state.
 - [x] Explain unsupported span in world.
 - [x] Explain missing Junction in world.
 - [x] Explain excessive interface load in world.
@@ -793,7 +793,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] Generate low-resolution Truss Junction art.
 - [x] Generate low-resolution Reinforced Bulkhead art.
-- [ ] Add planned/delivered/welding/complete/overloaded structural states.
+- [x] Add planned/delivered/welding/complete/overloaded structural states.
 - [ ] Add scaffold/floor/wall/seal/pressurizing states.
 - [x] Add approach reservation animation.
 - [x] Add carried resource sprites.
@@ -2664,3 +2664,48 @@ bugfixing phase.
   ("off shift — stress"). Today the skip is visible in world because the resident
   is not in the work room, and the inspector exposes stress and routine phase,
   but there is no worded cause.
+
+2026-07-28 · The structural planning overlay
+
+- Commit or files: `'structural'` member in `src/sim/types.ts`; the overlay model,
+  severity map and tile detail in `src/render/render.ts`; the overloaded piece
+  assertion in `tools/structural-piece-tests.ts`; label, list, legend case and
+  palette button in `src/main.ts`.
+- `validateStructuralSupportPlan` and `buildStructuralSupportGraph` had computed
+  exactly this data for a long time and the renderer never read either. The
+  overlay lives inside the existing `drawDiagnosticOverlayLayer` pipeline with
+  the same cached-layer, cache-key and legend structure as `maintenance` and
+  `route-pressure` — not a parallel system.
+- **Planned support is a real distinction, not a colour.** The same BFS runs
+  twice over `buildStructuralSupportGraph(state, proposals)`: once refusing to
+  traverse nodes with `existing === false`, once allowing them. The difference is
+  what gets hatched, so a tile is "planned" precisely when it reaches a root
+  *only* through something not yet built. Holding the Junction or Bulkhead tool
+  feeds the hovered footprint in as a proposal, so the preview shows the support
+  the piece *would* provide before it is paid for.
+- `STRUCTURAL_PROBLEM_SEVERITY` is an exhaustive `Record<StructuralSupportReason,
+  ...>`, so a new reason forces a decision at compile time instead of silently
+  vanishing from the overlay.
+- Live evidence, all four states in one frame at gameplay zoom with panels
+  hidden: a 2x2 red cross block for `disconnected-support`, two red tiles at the
+  end of an 8-tile run for `span-exceeded`, six green truss tiles with the
+  station and Berth wing washed as supported, one cyan hatched tile for the
+  pending Junction, and a gold tile at the Berth wing edge for the overloaded
+  heavy transfer. **The overloaded tile was verified by geometry rather than by
+  eye**: map (68,40) is exactly the `heavy-load-requires-reinforced-transfer`
+  tile index 4068 that `validation.problems` reports.
+- Cost, measured rather than asserted: the model is memoized on topology, room,
+  module and proposal signature, so a steady frame costs a template-string build
+  and one comparison. A full rebuild is 0.53ms mean over a 357-node graph, and
+  the upstream topology cache reports 2 builds against 403 hits. It only rebuilds
+  on a topology change or per mouse-move while a structural tool is held, and
+  `drawStructuralPieces` already called the same validation every frame, so this
+  adds no new category of work.
+- Render/simulation separation re-checked by hand with the overlay active:
+  snapshot and metrics hashes byte-identical across six render passes.
+- Honest limit: `load-has-no-supported-path` shares the unsupported bucket and
+  colour with the two reasons shown, but no fixture was found that triggers it,
+  so that one reason is code-path-only.
+- Noted for a separate decision: `drawDiagnosticOverlayLegend` in `render.ts` has
+  no callers — pre-existing dead code, since the player-facing legend is the
+  `#diagnostic-key` panel in `main.ts`.
