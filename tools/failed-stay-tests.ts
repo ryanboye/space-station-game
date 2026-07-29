@@ -6,12 +6,19 @@ import {
   transferStrandedVisitor
 } from '../src/sim/sim';
 import { createVisitorNeeds } from '../src/sim/occupant-demand';
+import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
+  ResidentState,
+  RoomType,
+  TileType,
   VisitorState,
   type ArrivingShip,
   type PortContract,
+  type Resident,
+  type ResidentRole,
   type StationState,
+  type VisitStayClass,
   type Visitor
 } from '../src/sim/types';
 
@@ -24,7 +31,7 @@ function advance(state: StationState, seconds: number): void {
   for (let elapsed = 0; elapsed < seconds; elapsed += 0.2) tick(state, 0.2);
 }
 
-function contractShip(state: StationState, id: number): ArrivingShip {
+function contractShip(state: StationState, id: number, stayClass: VisitStayClass = 'contract'): ArrivingShip {
   const dock = state.docks[0];
   const dockTile = dock?.accessTile ?? dock?.tiles[0] ?? 0;
   const ship: ArrivingShip = {
@@ -79,7 +86,7 @@ function contractShip(state: StationState, id: number): ArrivingShip {
       riskLabel: 'low'
     },
     portContractId: id,
-    stayClass: 'contract',
+    stayClass,
     visitPhase: 'visit-service',
     earliestDepartureAt: state.now + 20,
     plannedDepartureAt: state.now + 190,
@@ -106,7 +113,7 @@ function contractShip(state: StationState, id: number): ArrivingShip {
     passengerSpendingCredits: 0,
     procurementCostCredits: 0,
     settlementId: null,
-    stayClass: 'contract',
+    stayClass,
     earliestDepartureAt: state.now + 20,
     plannedDepartureAt: state.now + 190,
     extensionUntil: null,
@@ -115,7 +122,12 @@ function contractShip(state: StationState, id: number): ArrivingShip {
   return ship;
 }
 
-function passenger(state: StationState, ship: ArrivingShip, id: number): Visitor {
+function passenger(
+  state: StationState,
+  ship: ArrivingShip,
+  id: number,
+  stayClass: VisitStayClass = 'contract'
+): Visitor {
   const tileIndex = ship.bayTiles[0];
   const visitor: Visitor = {
     id,
@@ -148,12 +160,85 @@ function passenger(state: StationState, ship: ArrivingShip, id: number): Visitor
     servicePlan: [],
     completedServices: [],
     activeService: null,
-    stayClass: 'contract',
+    stayClass,
     needs: createVisitorNeeds(id),
     recurringNeedActive: null
   };
   state.visitors.push(visitor);
   return visitor;
+}
+
+/** A resident built the way `makeResident` builds one, so the tick sees an
+ * ordinary occupant and only the named pressure differs between subjects. */
+function resident(
+  state: StationState,
+  id: number,
+  tileIndex: number,
+  role: ResidentRole,
+  overrides: Partial<Resident> = {}
+): Resident {
+  const entry: Resident = {
+    id,
+    x: (tileIndex % state.width) + 0.5,
+    y: Math.floor(tileIndex / state.width) + 0.5,
+    tileIndex,
+    path: [],
+    speed: 1.8,
+    hunger: 80,
+    energy: 85,
+    hygiene: 75,
+    social: 72,
+    safety: 70,
+    stress: 10,
+    routinePhase: 'rest',
+    role,
+    roleAffinity: {},
+    state: ResidentState.Idle,
+    carryingMeal: false,
+    reservedServingTile: null,
+    serveTimer: undefined,
+    actionTimer: 0,
+    retargetAt: 0,
+    reservedTargetTile: null,
+    homeShipId: null,
+    homeDockId: null,
+    housingUnitId: null,
+    bedModuleId: null,
+    satisfaction: 72,
+    leaveIntent: 0,
+    blockedTicks: 0,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    agitation: 8,
+    activeIncidentId: null,
+    confrontationUntil: 0,
+    ...overrides
+  };
+  state.residents.push(entry);
+  return entry;
+}
+
+/** Where an actor is actually walking, which is the only honest evidence that
+ * they took (or skipped) a leg of their routine. */
+function destinationTile(path: number[]): number | null {
+  return path.length > 0 ? path[path.length - 1] : null;
+}
+
+/**
+ * Move the routine clock onto the work leg without simulating a whole day.
+ *
+ * The routine period belongs to the sim, so this asks the production phase
+ * clock rather than copying its constant: it steps the clock and lets an
+ * ordinary zero-length tick report which leg the resident is now on.
+ */
+function advanceClockToWorkPhase(state: StationState, probe: Resident): void {
+  state.controls.paused = false;
+  for (let step = 0; step < 600; step += 1) {
+    tick(state, 0);
+    if (probe.routinePhase === 'work') return;
+    state.now += 1;
+  }
+  throw new Error('The resident routine clock never reached its work leg.');
 }
 
 function testBoardingAndStranding(): void {
@@ -212,6 +297,58 @@ function testFailureStagesAndWorkPressure(): void {
   assert(String(visitor.serviceFailureStage) === 'none' && getContractVisitorWorkMultiplier(state, ship.id) === 1, 'Need recovery must restore normal work productivity.');
 }
 
+/**
+ * Shore leave has to hold in both directions.
+ *
+ * A passenger whose leisure stop cannot be routed must spend the visit on
+ * something else rather than stalling at an empty room, and the same passenger
+ * must drop whatever they found the moment their ship calls them back — with
+ * the physical claim released, not left pinning a counter.
+ */
+function testShoreLeaveAlternativeAndRecall(): void {
+  const state = createInitialState({ seed: 9107, physicalStarterInventory: true, manualTrafficAdmission: true });
+  // A station with a real, working public galley and no Lounge, Rec Hall,
+  // Cantina, Observatory or Market at all: the leisure leg is genuinely
+  // unroutable here rather than merely busy, which is the shortage the
+  // fallback chain exists for, and the alternative it finds is a real service.
+  assert(applyColdStartScenario(state, 'opening-food-cycle'), 'Expected the opening-food-cycle fixture.');
+  state.controls.shipsPerCycle = 0;
+  tick(state, 0);
+  const ship = contractShip(state, 97011, 'shore');
+  const contract = state.portOps.contracts.find((entry) => entry.id === ship.id)!;
+  const visitor = passenger(state, ship, 97012, 'shore');
+  visitor.state = VisitorState.ToLeisure;
+  visitor.spawnedAt = state.now;
+  advance(state, 1);
+
+  const alternative = state.visitors.find((entry) => entry.id === visitor.id);
+  assert(alternative, 'A shore passenger must remain aboard the station while it looks for an alternative.');
+  assert(
+    alternative.state === VisitorState.ToCafeteria,
+    `An unroutable leisure stop must send a shore passenger to another service, got ${alternative.state}.`
+  );
+  assert(alternative.path.length > 0, 'The alternative must be a real walked route, not an intention.');
+  assert(alternative.reservedServingTile !== null, 'The alternative must claim a real physical counter.');
+  const claimed = state.reservations.filter(
+    (reservation) => reservation.releaseReason === null && reservation.ownerKind === 'visitor' && reservation.ownerId === visitor.id
+  );
+  assert(claimed.length > 0, 'Choosing the alternative must take a real physical claim.');
+
+  // Recall now outranks the alternative: the ship calls, and the passenger
+  // turns around with nothing still reserved behind them.
+  contract.boardingStartsAt = state.now;
+  advance(state, 0.2);
+  assert(ship.visitPhase === 'recall' && contract.status === 'boarding', 'A shore ship at its boarding time must begin recall.');
+  const recalled = state.visitors.find((entry) => entry.id === visitor.id);
+  assert(recalled, 'Recall must not delete a shore passenger.');
+  assert(recalled.state === VisitorState.ToDock, `Recall must turn a shore passenger toward the dock, got ${recalled.state}.`);
+  assert(recalled.activeService === null, 'Recall must end the service the passenger was pursuing.');
+  const heldAfterRecall = state.reservations.filter(
+    (reservation) => reservation.releaseReason === null && reservation.ownerKind === 'visitor' && reservation.ownerId === visitor.id
+  );
+  assert(heldAfterRecall.length === 0, `Recall must release every claim, ${heldAfterRecall.length} left.`);
+}
+
 function testEarlyRecallAndBoundedExtensionReasons(): void {
   const failed = createInitialState({ seed: 9104, physicalStarterInventory: true, manualTrafficAdmission: true });
   tick(failed, 0);
@@ -231,9 +368,17 @@ function testEarlyRecallAndBoundedExtensionReasons(): void {
   assert(failedShip.visitScheduleReason === 'service-failure' && failedContract.visitScheduleReason === 'service-failure', 'Early recall must retain its player-facing cause.');
 
   const working = createInitialState({ seed: 9105, physicalStarterInventory: true, manualTrafficAdmission: true });
+  // A station whose galley actually serves guests, so "did not head for the
+  // berth" means the crew are still ashore with somewhere to be — not that
+  // they had nothing to do and drifted back to the ship on their own.
+  assert(applyColdStartScenario(working, 'opening-food-cycle'), 'Expected the opening-food-cycle fixture.');
+  working.controls.shipsPerCycle = 0;
   tick(working, 0);
   const workingShip = contractShip(working, 95011);
   const workingContract = working.portOps.contracts.find((entry) => entry.id === workingShip.id)!;
+  // The deferral is only worth anything if the crew are still ashore for it,
+  // so the fixture carries the passenger the extension is being bought for.
+  const workingCrew = passenger(working, workingShip, 95012);
   workingContract.boardingStartsAt = working.now;
   workingShip.portTurnaround = {
     phase: 'loading',
@@ -258,6 +403,19 @@ function testEarlyRecallAndBoundedExtensionReasons(): void {
   assert(workingShip.visitPhase === 'visit-service' && workingContract.status === 'active', 'Useful unfinished work should defer recall once.');
   assert(workingShip.extensionUntil !== null && workingShip.visitScheduleReason === 'remaining-work', 'Extension must be bounded and retain its work reason.');
   assert(workingContract.visitScheduleReason === 'remaining-work', 'Contract and ship must agree on the extension cause.');
+  // The crew half of the same deferral: nobody is called back to the ship
+  // while its work is unfinished, and they keep their station-side provenance.
+  const stillAshore = working.visitors.find((entry) => entry.id === workingCrew.id);
+  assert(stillAshore, 'A deferred recall must leave the contract crew on the station.');
+  assert(stillAshore.originShipId === workingShip.id, 'Deferred crew must keep their ship provenance.');
+  assert(
+    stillAshore.state !== VisitorState.ToDock,
+    `Deferred crew must not be walking back to the berth, got ${stillAshore.state}.`
+  );
+  assert(
+    working.visitors.filter((entry) => entry.originShipId === workingShip.id).every((entry) => entry.state !== VisitorState.ToDock),
+    'No crew member may be recalled while their ship still has useful work.'
+  );
   const firstExtension = workingShip.extensionUntil;
   workingContract.boardingStartsAt = working.now;
   advance(working, 0.2);
@@ -268,6 +426,93 @@ function testEarlyRecallAndBoundedExtensionReasons(): void {
   const restored = hydrateStateFromSave(parsed.save).state;
   assert(restored.arrivingShips.find((entry) => entry.id === workingShip.id)?.visitScheduleReason === 'remaining-work', 'Ship extension reason must survive save/load.');
   assert(restored.portOps.contracts.find((entry) => entry.id === workingContract.id)?.visitScheduleReason === 'remaining-work', 'Contract extension reason must survive save/load.');
+}
+
+/**
+ * Residents carry their own pressure.
+ *
+ * It accumulates from the shortages they physically live with, it survives a
+ * reload, it costs the station their shift before it costs the station the
+ * resident, and a resident who never recovers leaves exactly once.
+ */
+function testResidentStressWithdrawalAndDeparture(): void {
+  const state = createInitialState({ seed: 9108, physicalStarterInventory: true, manualTrafficAdmission: true });
+  assert(applyColdStartScenario(state, 'demo-station'), 'Expected the demo-station fixture.');
+  tick(state, 0);
+  const homeTile = state.rooms.findIndex((room, tile) => room === RoomType.Dorm && state.tiles[tile] === TileType.Floor);
+  assert(homeTile >= 0, 'The demo station must have a walkable Dorm tile to live on.');
+
+  // Two residents of the same role, on the same tile, with the same needs.
+  // Stress is the only difference between them, so where they walk next is
+  // attributable to stress and nothing else. Hydroponics and the Kitchen are
+  // this role's work rooms and are never leisure or idle-wander destinations,
+  // which is what makes the skip unambiguous.
+  const steady = resident(state, 98011, homeTile, 'hydro_assist');
+  const strained = resident(state, 98012, homeTile, 'hydro_assist', { stress: 90 });
+  advanceClockToWorkPhase(state, steady);
+  assert(strained.routinePhase === 'work', 'Both residents must be on the same routine leg.');
+
+  const workRooms = new Set([RoomType.Hydroponics, RoomType.Kitchen]);
+  const steadyTarget = destinationTile(steady.path);
+  const strainedTarget = destinationTile(strained.path);
+  assert(
+    steadyTarget !== null && workRooms.has(state.rooms[steadyTarget]),
+    `A settled resident must take the work leg of their routine, went to ${steadyTarget === null ? 'nowhere' : state.rooms[steadyTarget]}.`
+  );
+  assert(
+    strainedTarget === null || !workRooms.has(state.rooms[strainedTarget]),
+    `A resident under sustained stress must withdraw from work, went to ${strainedTarget === null ? 'nowhere' : state.rooms[strainedTarget]}.`
+  );
+  assert(
+    strained.state === ResidentState.Idle,
+    `A withdrawn resident stays visibly off-shift, got ${strained.state}.`
+  );
+
+  // Withdrawal is a stage, not a state change: relieve the pressure and the
+  // same off-shift resident takes the same shift on their very next decision.
+  strained.stress = 20;
+  tick(state, 0);
+  const recoveredTarget = destinationTile(strained.path);
+  assert(
+    recoveredTarget !== null && workRooms.has(state.rooms[recoveredTarget]),
+    'Relieving the stress must return the resident to work on the next decision.'
+  );
+
+  // --- accumulation, persistence and departure ------------------------------
+  const pressured = resident(state, 98013, homeTile, 'none', {
+    hunger: 12,
+    energy: 22,
+    hygiene: 14,
+    social: 20,
+    safety: 24,
+    stress: 30
+  });
+  const leaving = resident(state, 98014, homeTile, 'none', { satisfaction: 4, leaveIntent: 95.5 });
+  const stressBefore = pressured.stress;
+  const departuresBefore = state.usageTotals.residentDepartures;
+  advance(state, 2);
+  assert(pressured.stress > stressBefore, 'Living with real shortages must accumulate resident stress.');
+  assert(!state.residents.some((entry) => entry.id === leaving.id), 'A resident past the departure threshold must actually leave.');
+  assert(
+    state.usageTotals.residentDepartures === departuresBefore + 1,
+    `A departure must be counted exactly once, got ${state.usageTotals.residentDepartures - departuresBefore}.`
+  );
+  const departurePenalty = state.usageTotals.ratingFromResidentDeparture;
+  advance(state, 2);
+  assert(state.usageTotals.residentDepartures === departuresBefore + 1, 'Later ticks must not re-count a departure.');
+  assert(state.usageTotals.ratingFromResidentDeparture === departurePenalty, 'A departure must charge its rating penalty exactly once.');
+
+  const parsed = parseAndMigrateSave(serializeSave('resident-stress', state, 'test'));
+  assert(parsed.ok, 'Resident-stress snapshot should parse.');
+  const restored = hydrateStateFromSave(parsed.save).state;
+  const loaded = restored.residents.find((entry) => entry.id === pressured.id);
+  assert(loaded, 'A stressed resident must survive save/load.');
+  assert(loaded.stress === pressured.stress, 'Accumulated stress must be durable, or a reload would forgive it.');
+  assert(loaded.leaveIntent === pressured.leaveIntent, 'Leave intent must be durable across a reload.');
+  assert(
+    !restored.residents.some((entry) => entry.id === leaving.id),
+    'A departed resident must not reappear on load.'
+  );
 }
 
 function testReliefAndSaveRoundTrip(): void {
@@ -301,7 +546,9 @@ function testReliefAndSaveRoundTrip(): void {
 function main(): void {
   testBoardingAndStranding();
   testFailureStagesAndWorkPressure();
+  testShoreLeaveAlternativeAndRecall();
   testEarlyRecallAndBoundedExtensionReasons();
+  testResidentStressWithdrawalAndDeparture();
   testReliefAndSaveRoundTrip();
   console.log('failed-stay-tests: ok');
 }

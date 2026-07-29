@@ -8,15 +8,21 @@
 // Filter with COMMITMENT_TEST_FILTER=<substring>.
 
 import {
+  admitTrafficOffer,
   applyRecoveryAction,
   createInitialState,
   evaluateResidentAcceptance,
+  getBerthFacilityAt,
   getFailureEpisodes,
+  getTrafficOfferPreview,
+  holdTrafficOffer,
   setResidentAcceptance,
   tick
 } from '../src/sim/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import { createVisitorNeeds } from '../src/sim/occupant-demand';
+import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { VISIT_TIMINGS } from '../src/sim/balance';
 import { evaluateAdmission } from '../src/sim/admission-policy';
 import {
   FAILURE_GRACE_SEC,
@@ -27,10 +33,12 @@ import {
 } from '../src/sim/failed-stay';
 import {
   ModuleType,
+  RoomType,
   VisitorState,
   type ArrivingShip,
   type PortContract,
   type StationState,
+  type TrafficOffer,
   type Visitor
 } from '../src/sim/types';
 
@@ -41,6 +49,23 @@ function assert(condition: unknown, message: string): asserts condition {
 function advance(state: StationState, seconds: number, step = 0.2): void {
   state.controls.paused = false;
   for (let elapsed = 0; elapsed < seconds; elapsed += step) tick(state, step);
+}
+
+/** Run the real tick until a physical condition holds, or fail saying so. */
+function runUntil(state: StationState, label: string, predicate: () => boolean, maxSeconds: number, step = 0.5): void {
+  state.controls.paused = false;
+  const deadline = state.now + maxSeconds;
+  while (state.now < deadline) {
+    if (predicate()) return;
+    tick(state, step);
+  }
+  assert(predicate(), `Timed out waiting for ${label} after ${maxSeconds}s.`);
+}
+
+/** Run the real tick up to a wall time on the simulation clock. */
+function runUntilTime(state: StationState, target: number, step = 0.5): void {
+  state.controls.paused = false;
+  while (state.now < target) tick(state, step);
 }
 
 function fixture(seed: number): StationState {
@@ -569,6 +594,118 @@ function testPolicyIsAuthoritativeAndReservesAreCumulative(): string {
   return `closed window survived the legacy router; second offer holds on the bed reserve ("${second.reason}")`;
 }
 
+/**
+ * Extended occupation is a real physical block on later traffic.
+ *
+ * The berth is owned by the ship sitting in it, so a call that would have been
+ * admissible the moment the first ship left is refused for exactly as long as
+ * the extension keeps it there — and becomes admissible again the moment the
+ * interface is physically free. No hidden capacity penalty is involved.
+ */
+function testExtendedOccupationBlocksLaterTraffic(): string {
+  const state = createInitialState({ seed: 88001, physicalStarterInventory: true, manualTrafficAdmission: true });
+  assert(applyColdStartScenario(state, 'mixed-berth-visit'), 'Expected the mixed-berth-visit fixture.');
+  // Ambient traffic would add offers this check does not control.
+  state.controls.shipsPerCycle = 0;
+  tick(state, 0);
+
+  const offer = state.trafficOffers.find((entry) => entry.status === 'holding');
+  assert(offer, 'The mixed-berth fixture must publish one holding offer.');
+  const anchors: number[] = [];
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] !== RoomType.Berth) continue;
+    const facility = getBerthFacilityAt(state, tile);
+    if (facility && !anchors.includes(facility.anchorTile)) anchors.push(facility.anchorTile);
+  }
+  let anchor: number | null = null;
+  for (const candidate of anchors.sort((a, b) => a - b)) {
+    if (admitTrafficOffer(state, offer.id, candidate).ok) {
+      anchor = candidate;
+      break;
+    }
+  }
+  assert(anchor !== null, 'The first call must be admitted to a real berth.');
+
+  const ship = () => state.arrivingShips.find((entry) => entry.id === offer.id) ?? null;
+  runUntil(state, 'the first call to dock and clear customs', () => {
+    const active = ship();
+    return active?.stage === 'docked' && active.portTurnaround?.cargoReleased === true;
+  }, 300);
+  const docked = ship();
+  assert(docked, 'The admitted call must be physically docked.');
+  const contract = state.portOps.contracts.find((entry) => entry.shipId === offer.id);
+  assert(contract, 'The admitted call must own a contract.');
+
+  // Publish a short remaining schedule so the extension has to visibly move
+  // it. Everything after this point is the production visit lifecycle.
+  const originalDeparture = state.now + 30;
+  contract.hardDepartureAt = originalDeparture;
+  contract.plannedDepartureAt = originalDeparture;
+  contract.boardingStartsAt = originalDeparture - VISIT_TIMINGS.boardingLeadSec;
+  docked.plannedDepartureAt = originalDeparture;
+
+  // A second call for the same class of berth, arriving just after the first
+  // one was due to leave. Without the extension this is an easy accept.
+  const second: TrafficOffer = {
+    ...JSON.parse(JSON.stringify(offer)) as TrafficOffer,
+    id: 90210,
+    callsign: 'SECOND-CALL',
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: originalDeparture + 2,
+    expiresAt: originalDeparture + 600,
+    assignedBerthAnchor: null,
+    assignedDockSourceKey: null,
+    holdUsed: false
+  };
+  state.trafficOffers.push(second);
+
+  runUntil(state, 'the unfinished work to buy its extension', () => ship()?.extensionUntil != null, 60);
+  const extended = ship();
+  assert(extended?.extensionUntil != null, 'Unfinished work must extend the visit.');
+  assert(
+    extended.extensionUntil > originalDeparture,
+    `The extension must push the departure past the published one (${extended.extensionUntil} vs ${originalDeparture}).`
+  );
+  assert(extended.visitScheduleReason === 'remaining-work', 'The extension must keep its player-facing cause.');
+
+  // Past the moment the first ship was due to leave, and it is still in the
+  // berth — the second call is refused by that ownership, not by a rule.
+  runUntilTime(state, originalDeparture + 4);
+  const occupant = ship();
+  assert(occupant?.stage === 'docked', 'The extended visit must still physically own the berth.');
+  assert(occupant.assignedBerthAnchor === anchor, 'The extended visit must still hold the same berth.');
+  assert(state.now > second.arrivesAt, 'The second call must have reached its arrival window.');
+
+  const blocked = getTrafficOfferPreview(state, second.id);
+  assert(blocked, 'The second call must still be previewable.');
+  assert(!blocked.canAccept, 'A berth held past its schedule must make the next call un-acceptable.');
+  assert(
+    blocked.compatibleInterface.compatibleCount > 0 && blocked.compatibleInterface.freeCount === 0,
+    `The block must be a committed interface, not an incompatible one (${blocked.compatibleInterface.compatibleCount} compatible, ${blocked.compatibleInterface.freeCount} free).`
+  );
+  assert(
+    blocked.acceptReason?.includes('committed') === true,
+    `The refusal must name the commitment, got "${blocked.acceptReason}".`
+  );
+  const refused = admitTrafficOffer(state, second.id);
+  assert(!refused.ok, 'Admitting over an occupied berth must be refused.');
+  assert(
+    state.trafficOffers.find((entry) => entry.id === second.id)?.status !== 'cleared',
+    'A refused call must stay uncleared past its arrival time.'
+  );
+  // Hold is the move the player is left with, and it is still offered.
+  assert(blocked.canHold && holdTrafficOffer(state, second.id), 'A blocked call must still be holdable.');
+
+  // The block is the occupation and nothing else: once the interface is
+  // physically free, the same call becomes acceptable again.
+  runUntil(state, 'the extended visit to finally release its berth', () => ship() === null, 400);
+  const released = getTrafficOfferPreview(state, second.id);
+  assert(released?.canAccept === true, `Releasing the berth must restore the same call, reason "${released?.acceptReason}".`);
+  assert(released.compatibleInterface.freeCount > 0, 'The released berth must read as free.');
+  return `berth ${anchor} held to ${Math.round(extended.extensionUntil)}s past a ${Math.round(originalDeparture)}s schedule; second call refused ("${blocked.acceptReason}") and uncleared, acceptable again once free`;
+}
+
 // ---------------------------------------------------------------------------
 
 const TESTS: Array<{ name: string; run: () => string }> = [
@@ -581,7 +718,8 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '7 resident acceptance needs housing + policy', run: testResidentAcceptanceNeedsHousingAndPolicy },
   { name: '8 episode and policy survive save/load', run: testEpisodeAndPolicySurviveSaveLoad },
   { name: '9 identity binding and idempotence', run: testHardenedIdentityAndIdempotence },
-  { name: '10 policy authority and cumulative reserves', run: testPolicyIsAuthoritativeAndReservesAreCumulative }
+  { name: '10 policy authority and cumulative reserves', run: testPolicyIsAuthoritativeAndReservesAreCumulative },
+  { name: '11 extended occupation blocks later traffic', run: testExtendedOccupationBlocksLaterTraffic }
 ];
 
 function main(): void {

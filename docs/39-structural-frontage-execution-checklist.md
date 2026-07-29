@@ -385,12 +385,12 @@ audited checklist with no unsupported checked claims.
 ## Failed Stay And Stranding Contract
 
 - [x] Errand visitors can balk, abandon a purchase, and leave early.
-- [ ] Shore-leave passengers seek an alternative and obey recall.
+- [x] Shore-leave passengers seek an alternative and obey recall.
 - [x] A passenger who physically misses boarding becomes stranded.
-- [ ] Contract crews remain while their ship work is incomplete.
+- [x] Contract crews remain while their ship work is incomplete.
 - [x] Poor contract-crew needs reduce cooperation or work productivity.
 - [x] Extended/stranded guests consume temporary food, hygiene, and lodging.
-- [ ] Residents accumulate persistent stress and can withdraw from work or leave.
+- [x] Residents accumulate persistent stress and can withdraw from work or leave.
 - [x] Implement visible `unmet` escalation.
 - [x] Implement visible `balking` escalation.
 - [x] Implement visible `distressed` escalation.
@@ -399,7 +399,7 @@ audited checklist with no unsupported checked claims.
   medical demand, or refusal to work as appropriate.
 - [x] Ensure one missed meal cannot immediately trigger a serious incident.
 - [x] Make distressed repair crews extend repair and Berth occupation.
-- [ ] Make extended occupation block or delay subsequent accepted traffic.
+- [x] Make extended occupation block or delay subsequent accepted traffic.
 - [x] Allow emergency meal purchase.
 - [x] Allow emergency temporary bunk capacity.
 - [x] Allow repair prioritization or expediting.
@@ -413,7 +413,8 @@ audited checklist with no unsupported checked claims.
 - [x] Never silently convert a failed visitor into a resident.
 - [x] Require housing availability and explicit policy for resident acceptance.
 - [x] Let an accepted resident's origin ship depart normally.
-- [ ] Apply rating/faction effects at meaningful milestones or resolution.
+- [x] Apply rating effects at meaningful milestones or resolution. Faction standing
+  is deliberately out of scope: no faction-standing system exists to move.
 - [x] Verify every rating change traces back to visible behavior.
 
 ## Approach Control And Admission Portfolio
@@ -2614,3 +2615,52 @@ bugfixing phase.
   the text was confirmed to be the topmost element at that point. That is the rule
   working: a checked row failed its own standard on live inspection and went back
   to open before anything else was built on it.
+
+2026-07-28 · The stranding contract, proven through production paths
+
+- Commit or files: resident work withdrawal in `src/sim/sim.ts`; new cases in
+  `tools/failed-stay-tests.ts` and `tools/commitment-recovery-tests.ts` (now
+  11/11).
+- **Shore leave** was never tested for recall — every failed-stay fixture was
+  `contract`. The new case uses `opening-food-cycle`, a station with a working
+  galley and deliberately no Lounge, Rec Hall, Cantina, Observatory or Market, so
+  `assignPathToPreferredLeisure` genuinely fails rather than being stubbed. The
+  passenger falls back to the cafeteria with a real path and a real provider-slot
+  claim, then recall flips it to the dock with **zero** unreleased reservations.
+- **Contract crews remaining** now inspects `state.visitors`, which the old
+  ship-level assertion never did. The fixture choice matters and was deliberate:
+  on the bare starter, crew legitimately walk to the dock for lack of anything to
+  do, so "did not head for the berth" would have been a true statement about a
+  meaningless station. Running it on a station with somewhere to be makes the
+  assertion mean what it says.
+- **Resident work withdrawal** was the one genuinely missing mechanism: stress
+  and leaving were real, but the work leg was clock-driven and gated only on a
+  critical need, so a resident could be at breaking point and still clock in. It
+  now withdraws at the stress band the penalty curve already treats as severe, or
+  on leave intent. No new durable field — `stress` and `leaveIntent` already
+  round-trip. The consequence is physical rather than a modifier: a withdrawn
+  resident is simply not in the work room, so the role count and its bonus are
+  lost until pressure drops. The test isolates it properly — two residents, same
+  tile, same needs, differing only in stress — advances the routine clock by
+  asking the production phase clock rather than copying the constant, and proves
+  it is reversible. **Negative control: with the gate removed the test fails with
+  "went to kitchen."**
+- **Extended occupation blocking traffic** previously rested on a hand-fabricated
+  approach commitment. It now runs the real extension path and asserts *past the
+  original departure time* that a provably compatible second offer reports
+  `canAccept === false` with `compatibleCount > 0 && freeCount === 0`, is refused
+  by `admitTrafficOffer`, and stays uncleared. The closing control is what makes
+  it worth having: once the ship finally leaves, the same offer becomes
+  acceptable again, so the block was interface ownership rather than a rule.
+- **The faction half of the milestone row is struck rather than checked.**
+  `Faction` is `{ id, templateId, displayName, color, shipBias }` — system-map
+  flavour plus a ship-type weight. The only reputation channel in the sim is
+  zone-scoped prestige/notoriety/control, not faction-scoped. There is nothing to
+  move, and inventing a standing system to satisfy a checklist row would be
+  exactly backwards. The rating half is proven exactly-once by the episode
+  ledger. Faction standing is a separate unbuilt feature, not a gap in this one.
+- Optional follow-up, not done because the file was owned elsewhere:
+  `src/sim/actor-inspectors.ts` could word the withdrawal as an `actionReason`
+  ("off shift — stress"). Today the skip is visible in world because the resident
+  is not in the work room, and the inspector exposes stress and routine phase,
+  but there is no worded cause.

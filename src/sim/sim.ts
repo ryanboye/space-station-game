@@ -969,6 +969,15 @@ const RESIDENT_LEAVE_INTENT_TRIGGER = 12;
  * first: leaving is the last stage, not the first response.
  */
 const RESIDENT_LEAVE_INTENT_DEPARTURE = 96;
+/**
+ * Persistent stress at which a resident stops turning up for their role.
+ *
+ * Deliberately the same band the satisfaction penalty already treats as
+ * severe, so withdrawal is the visible middle of the ladder rather than a new
+ * private number: pressure first costs satisfaction, then the shift, and only
+ * a resident who never recovers reaches an incident or leaves.
+ */
+const RESIDENT_WORK_WITHDRAW_STRESS = 85;
 const RESIDENT_RETENTION_RATING_BONUS_PER_SEC = 0.0009;
 const RESIDENT_DEPARTURE_RATING_PENALTY = 0.4;
 const RESIDENT_AGITATION_CONFRONTATION_THRESHOLD = 60;
@@ -24607,6 +24616,23 @@ function residentLeisureTargets(state: StationState): number[] {
   return crewLeisureTargets(state);
 }
 
+/**
+ * Has this resident withdrawn from their role?
+ *
+ * A resident under sustained stress, or one who has already decided to go,
+ * simply does not take the work leg of their routine. That is the whole
+ * mechanism: no hidden output penalty, no invisible multiplier. They are
+ * physically somewhere else, so `activeResidentRoleCounts` stops counting them
+ * and the station loses the role bonus until the pressure actually comes down.
+ * Reversible by construction — the very next retarget takes the shift back.
+ */
+function residentWithdrawnFromWork(resident: Resident): boolean {
+  return (
+    resident.stress >= RESIDENT_WORK_WITHDRAW_STRESS ||
+    resident.leaveIntent >= RESIDENT_LEAVE_INTENT_TRIGGER
+  );
+}
+
 function assignResidentUsagePath(
   state: StationState,
   resident: Resident,
@@ -24786,7 +24812,7 @@ function assignResidentTarget(state: StationState, resident: Resident, securityA
     }
   }
 
-  if (!criticalNeed && resident.routinePhase === 'work') {
+  if (!criticalNeed && resident.routinePhase === 'work' && !residentWithdrawnFromWork(resident)) {
     const workTargets = residentWorkTargets(state, resident);
     if (workTargets.length > 0) {
       resident.state = ResidentState.ToLeisure;
