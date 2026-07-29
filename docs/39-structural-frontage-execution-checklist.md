@@ -1007,7 +1007,14 @@ audited checklist with no unsupported checked claims.
   Emergency meal action changed to an exactly-once checked state; after one
   simulation tick the panel reported 0 active failures and `Served 1 emergency
   meals`, while the remaining recovery levers stayed available for other causes.
-- [ ] Build temporary guest lodging.
+- [x] Build temporary guest lodging.
+  Evidence: frozen production browser play on `long-stay-guest-wing` selected
+  the normal Sell tool and removed a depicted Guest Cabin for its `110c` resale,
+  then selected `Guest Cabin · 220c` and rebuilt it in the same visitor Dorm
+  footprint, producing the exact `-220c` debit. At 4x the player-selected Dorm
+  remained `active`, `100%` pressurized, `Visitor/Shared`, with all three sleep
+  providers reachable and the live provider summary reaching `bed in_use
+  2/3/4` while the long-stay cohort circulated through the wing.
 - [x] Build a physical expansion through EVA construction.
 - [ ] Build the first medium Berth.
 - [ ] Operate overlapping Pod and Berth traffic.
