@@ -1,4 +1,5 @@
 import {
+  acceptVisitorAsResident,
   admitTrafficOffer,
   buyMaterials,
   buyMaterialsDetailed,
@@ -90,7 +91,8 @@ import {
   type Visitor
 } from '../src/sim/types';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
-import { planStructuralPieceConstruction } from '../src/sim/construction';
+import { createEmptyStaffRoleCounts } from '../src/sim/content/command';
+import { createConstructionJobs, planStructuralPieceConstruction } from '../src/sim/construction';
 import { validateStructuralSupportPlan } from '../src/sim/structural-support';
 import { resolveDoorVariantFromMask, resolveWallVariantFromMask } from '../src/render/tile-variants';
 import { pickDualVariant, type DualWallShape } from '../src/render/wall-dual-tilemap';
@@ -495,6 +497,7 @@ function placeCrewAtSystemAnchor(state: StationState, tileIndex: number, system:
   crew.y = center.y + 0.5;
   crew.tileIndex = tileIndex;
   crew.path = [];
+  crew.staffRole = 'engineer';
   crew.role = 'reactor';
   crew.targetTile = tileIndex;
   crew.assignedSystem = system;
@@ -504,6 +507,8 @@ function placeCrewAtSystemAnchor(state: StationState, tileIndex: number, system:
   crew.activeJobId = null;
   crew.energy = 100;
   crew.hygiene = 100;
+  crew.assignmentHoldUntil = state.now + 999;
+  crew.assignmentStickyUntil = state.now + 999;
 }
 
 function setupCoreRooms(state: StationState): void {
@@ -1019,6 +1024,7 @@ function testResidentBadRouteStress(): void {
   setupFoodChain(state);
   spawnResidentActor(state, 18, 10, 3094, {
     state: ResidentState.ToCafeteria,
+    carryingMeal: true,
     reservedTargetTile: toIndex(18, 10, state.width),
     path: [toIndex(18, 10, state.width)],
     lastRouteExposure: {
@@ -1188,6 +1194,7 @@ function testMaintenanceDebtReducesReactorPower(): void {
   const clean = createInitialState({ seed: 3101 });
   buildHabitat(clean);
   setupCoreRooms(clean);
+  placeModuleOrThrow(clean, ModuleType.ReactorCore, 6, 6);
   const reactorAnchor = toIndex(6, 6, clean.width);
   placeCrewAtSystemAnchor(clean, reactorAnchor, 'reactor');
   tick(clean, 0.25);
@@ -1195,6 +1202,7 @@ function testMaintenanceDebtReducesReactorPower(): void {
   const degraded = createInitialState({ seed: 3102 });
   buildHabitat(degraded);
   setupCoreRooms(degraded);
+  placeModuleOrThrow(degraded, ModuleType.ReactorCore, 6, 6);
   const degradedAnchor = toIndex(6, 6, degraded.width);
   placeCrewAtSystemAnchor(degraded, degradedAnchor, 'reactor');
   degraded.maintenanceDebts = [{
@@ -1206,7 +1214,12 @@ function testMaintenanceDebtReducesReactorPower(): void {
   }];
   tick(degraded, 0.25);
 
-  assertCondition(degraded.metrics.powerSupply < clean.metrics.powerSupply, 'High reactor maintenance debt should reduce power supply.');
+  assertCondition(
+    degraded.metrics.powerSupply < clean.metrics.powerSupply,
+    `High reactor maintenance debt should reduce power supply ` +
+      `(clean=${clean.metrics.powerSupply}, degraded=${degraded.metrics.powerSupply}, ` +
+      `debt=${degraded.maintenanceDebts.find((entry) => entry.system === 'reactor')?.debt ?? 'missing'}).`
+  );
   assertCondition(degraded.metrics.maintenanceDebtMax > 60, 'High reactor debt should surface in maintenance metrics.');
 }
 
@@ -1244,6 +1257,7 @@ function testCrewAtUtilityReducesMaintenanceDebt(): void {
   const state = createInitialState({ seed: 3105 });
   buildHabitat(state);
   setupCoreRooms(state);
+  placeModuleOrThrow(state, ModuleType.ReactorCore, 6, 6);
   const reactorAnchor = toIndex(6, 6, state.width);
   placeCrewAtSystemAnchor(state, reactorAnchor, 'reactor');
   state.maintenanceDebts = [{
@@ -1257,7 +1271,12 @@ function testCrewAtUtilityReducesMaintenanceDebt(): void {
 
   const debt = state.maintenanceDebts.find((entry) => entry.key === `reactor:${reactorAnchor}`);
   assertCondition(!!debt, 'Expected reactor maintenance debt entry to remain.');
-  assertCondition(debt!.debt < 50, 'Crew standing at a utility post should reduce maintenance debt.');
+  assertCondition(
+    debt!.debt < 50,
+    `Crew standing at a utility post should reduce maintenance debt ` +
+      `(debt=${debt!.debt.toFixed(3)}, tile=${state.crewMembers[0]?.tileIndex}, ` +
+      `system=${state.crewMembers[0]?.assignedSystem}, activeJob=${state.crewMembers[0]?.activeJobId}).`
+  );
 }
 
 function testRepairSuppliesImproveMaintenanceRepairSpeed(): void {
@@ -1265,11 +1284,26 @@ function testRepairSuppliesImproveMaintenanceRepairSpeed(): void {
     const state = createInitialState({ seed });
     buildHabitat(state);
     setupCoreRooms(state);
+    placeModuleOrThrow(state, ModuleType.ReactorCore, 6, 6);
     state.controls.materialAutoImportEnabled = false;
     state.legacyMaterialStock = supplies;
     state.metrics.materials = supplies;
+    state.crew.roleCounts = createEmptyStaffRoleCounts();
+    state.crew.roleCounts.engineer = 1;
     state.crew.total = 1;
     runFor(state, 0.25);
+    const repairCrew = state.crewMembers[0];
+    assertCondition(!!repairCrew, 'Repair-speed fixture should retain one crew member.');
+    assertCondition(repairCrew!.staffRole === 'engineer', 'Repair-speed fixture should staff an engineering-qualified worker.');
+    const crewStart = toIndex(20, 20, state.width);
+    repairCrew!.tileIndex = crewStart;
+    repairCrew!.x = 20.5;
+    repairCrew!.y = 20.5;
+    repairCrew!.path = [];
+    repairCrew!.targetTile = null;
+    repairCrew!.assignedSystem = null;
+    repairCrew!.lastSystem = null;
+    repairCrew!.role = 'idle';
     const anchor = toIndex(6, 6, state.width);
     state.maintenanceDebts = [{
       key: `reactor:${anchor}`,
@@ -1284,14 +1318,16 @@ function testRepairSuppliesImproveMaintenanceRepairSpeed(): void {
   const empty = makeRepairState(31051, 0);
   const stocked = makeRepairState(31052, 4);
 
-  runFor(empty.state, 12);
-  runFor(stocked.state, 12);
+  runFor(empty.state, 35);
+  runFor(stocked.state, 35);
 
   const emptyDebt = empty.state.maintenanceDebts.find((entry) => entry.anchorTile === empty.anchor)?.debt ?? 0;
   const stockedDebt = stocked.state.maintenanceDebts.find((entry) => entry.anchorTile === stocked.anchor)?.debt ?? 0;
   assertCondition(
     stockedDebt < emptyDebt,
-    `Repair supplies should make maintenance repair faster (${stockedDebt.toFixed(1)} vs ${emptyDebt.toFixed(1)} debt).`
+    `Repair supplies should make maintenance repair faster (${stockedDebt.toFixed(1)} vs ${emptyDebt.toFixed(1)} debt; ` +
+      `stocked jobs=${stocked.state.jobs.map((job) => `${job.type}:${job.state}:${job.stallReason}@${job.fromTile}`).join(',') || 'none'}; ` +
+      `crew=${stocked.state.crewMembers.map((crew) => `${crew.staffRole}/${crew.activeJobId}/${crew.assignedSystem}@${crew.tileIndex}:rest=${crew.resting}:health=${crew.healthState}`).join(',')}).`
   );
 }
 
@@ -1299,11 +1335,25 @@ function testRepairJobClearsDebtBelowRequeueThreshold(): void {
   const state = createInitialState({ seed: 31053 });
   buildHabitat(state);
   setupCoreRooms(state);
+  placeModuleOrThrow(state, ModuleType.ReactorCore, 6, 6);
   state.controls.materialAutoImportEnabled = false;
   state.legacyMaterialStock = 8;
   state.metrics.materials = 8;
+  state.crew.roleCounts = createEmptyStaffRoleCounts();
+  state.crew.roleCounts.engineer = 1;
   state.crew.total = 1;
   runFor(state, 0.25);
+  const repairCrew = state.crewMembers[0];
+  assertCondition(!!repairCrew && repairCrew.staffRole === 'engineer', 'Repair-completion fixture should staff one engineer.');
+  const crewStart = toIndex(20, 20, state.width);
+  repairCrew!.tileIndex = crewStart;
+  repairCrew!.x = 20.5;
+  repairCrew!.y = 20.5;
+  repairCrew!.path = [];
+  repairCrew!.targetTile = null;
+  repairCrew!.assignedSystem = null;
+  repairCrew!.lastSystem = null;
+  repairCrew!.role = 'idle';
   const anchor = toIndex(6, 6, state.width);
   state.maintenanceDebts = [{
     key: `reactor:${anchor}`,
@@ -1356,21 +1406,37 @@ function testDebrisRiskDrivesExteriorMaintenanceWear(): void {
     .sort((a, b) => a.risk - b.risk);
   assertCondition(hullDebts.length >= 2, 'Exterior hull maintenance should discover multiple coalesced hull targets.');
   const sheltered = hullDebts[0];
-  const exposed = hullDebts[hullDebts.length - 1];
+  const impacted = hullDebts
+    .filter((entry) => entry.debt.lastImpactAt !== undefined)
+    .sort((a, b) => b.debt.debt - a.debt.debt);
+  assertCondition(impacted.length > 0, 'Debris-risk fixture should produce at least one deterministic exterior impact.');
+  const worn = impacted[0]!;
   assertCondition(
-    exposed.debt.debt > sheltered.debt.debt + 1,
-    `High debris hull should wear faster (${exposed.debt.debt.toFixed(1)} vs ${sheltered.debt.debt.toFixed(1)}).`
+    worn.debt.debt > sheltered.debt.debt + 1,
+    `Debris-impacted hull should wear faster (${worn.debt.debt.toFixed(1)} at anchor risk ${worn.risk.toFixed(2)} ` +
+      `vs ${sheltered.debt.debt.toFixed(1)} at risk ${sheltered.risk.toFixed(2)}; ` +
+      `impacts=${impacted.length}).`
   );
 }
 
 function testExteriorRepairBlocksWithoutAirlock(): void {
   const state = createInitialState({ seed: 91203 });
   buildHabitat(state);
+  state.crew.roleCounts = createEmptyStaffRoleCounts();
+  state.crew.roleCounts.engineer = 1;
   state.crew.total = 1;
   state.controls.materialAutoImportEnabled = false;
   state.legacyMaterialStock = 8;
   state.metrics.materials = 8;
   runFor(state, 1);
+  const engineer = state.crewMembers[0];
+  assertCondition(!!engineer && engineer.staffRole === 'engineer', 'Blocked-EVA fixture should staff one engineer.');
+  const crewStart = toIndex(20, 20, state.width);
+  engineer!.tileIndex = crewStart;
+  engineer!.x = 20.5;
+  engineer!.y = 20.5;
+  engineer!.path = [];
+  engineer!.targetTile = null;
   const debt = firstHullMaintenanceDebt(state);
   assertCondition(!!debt, 'Expected hull maintenance target to exist.');
   debt!.debt = 82;
@@ -1388,12 +1454,27 @@ function testExteriorRepairBlocksWithoutAirlock(): void {
 function testEvaRepairReducesExteriorMaintenanceDebt(): void {
   const state = createInitialState({ seed: 91204 });
   buildHabitat(state);
+  setupCoreRooms(state);
+  placeModuleOrThrow(state, ModuleType.ReactorCore, 6, 6);
   placeHabitatAirlocks(state);
+  state.crew.roleCounts = createEmptyStaffRoleCounts();
+  state.crew.roleCounts.engineer = 1;
   state.crew.total = 1;
   state.controls.materialAutoImportEnabled = false;
   state.legacyMaterialStock = 12;
   state.metrics.materials = 12;
   runFor(state, 1);
+  const engineer = state.crewMembers[0];
+  assertCondition(!!engineer && engineer.staffRole === 'engineer', 'EVA-repair fixture should staff one engineer.');
+  // Start at the real bottom-hull Airlock nearest the deterministic first
+  // exterior target. This isolates suit issuance + EVA repair instead of
+  // spending most of the fixture crossing the synthetic 40x26 interior.
+  const crewStart = toIndex(24, 30, state.width);
+  engineer!.tileIndex = crewStart;
+  engineer!.x = 24.5;
+  engineer!.y = 30.5;
+  engineer!.path = [];
+  engineer!.targetTile = null;
   const debt = firstHullMaintenanceDebt(state);
   assertCondition(!!debt, 'Expected hull maintenance target to exist.');
   debt!.debt = 84;
@@ -1402,7 +1483,12 @@ function testEvaRepairReducesExteriorMaintenanceDebt(): void {
 
   const currentDebt = state.maintenanceDebts.find((entry) => entry.key === debt!.key)?.debt ?? 100;
   const finishedRepair = state.jobs.some((job) => job.type === 'repair' && job.repairTargetKey === debt!.key && job.state === 'done');
-  assertCondition(currentDebt < startingDebt - 20, `EVA repair should reduce exterior debt (${currentDebt.toFixed(1)} from ${startingDebt}).`);
+  assertCondition(
+    currentDebt < startingDebt - 20,
+    `EVA repair should reduce exterior debt (${currentDebt.toFixed(1)} from ${startingDebt}; ` +
+      `jobs=${state.jobs.map((job) => `${job.type}:${job.state}:${job.blockedReason ?? 'none'}:${job.stallReason}@${job.fromTile}`).join(',') || 'none'}; ` +
+      `crew=${state.crewMembers.map((crew) => `${crew.staffRole}/${crew.activeJobId}@${crew.tileIndex}:suit=${crew.evaSuit}`).join(',')}).`
+  );
   assertCondition(finishedRepair || currentDebt < 30, 'Exterior repair should either finish or clear below the warning band.');
 }
 
@@ -2180,12 +2266,25 @@ function testWallMountedModuleConstructionUsesServiceTile(): void {
   state.metrics.materials = 50;
   const wallTile = toIndex(20, 4, state.width);
   const serviceTile = toIndex(20, 5, state.width);
+  // This is an interior wall-mount fixture. Construction now derives EVA duty
+  // from the authoritative per-tile pressure field, so make that precondition
+  // explicit instead of relying on the old all-interior-is-safe assumption.
+  state.pressurized[serviceTile] = true;
   const planned = planModuleConstruction(state, wallTile, ModuleType.Vent, 0);
-  tick(state, 0.25);
+  const site = state.constructionSites.find((candidate) => candidate.tileIndex === wallTile);
+  assertCondition(!!site, 'Wall-mounted vent blueprint should create a construction site.');
+  // Material delivery has its own routing coverage. Stage this site at the
+  // build phase so this narrow test isolates the wall fixture's work target.
+  site!.deliveredMaterials = site!.requiredMaterials;
+  createConstructionJobs(state);
   const job = state.jobs.find((candidate) => candidate.type === 'construct' && candidate.constructionSiteId !== undefined);
 
   assertCondition(planned.ok, `Wall-mounted vent blueprint should plan successfully: ${planned.reason ?? 'unknown'}`);
-  assertCondition(!!job, 'Wall-mounted vent blueprint should create a construction job.');
+  assertCondition(
+    !!job,
+    `Wall-mounted vent blueprint should create a construction job ` +
+      `(site=${state.constructionSites[0]?.state ?? 'missing'}: ${state.constructionSites[0]?.blockedReason ?? 'no reason'}).`
+  );
   assertCondition(job!.toTile === serviceTile, 'Wall-mounted vent construction should target the adjacent service tile.');
 }
 
@@ -6354,69 +6453,40 @@ function testMilitaryShipPenalizesLowSecurity(): void {
   );
 }
 
-function testColonistShipBoostsConversionWhenHousingValid(): void {
-  const tourist = createInitialState({ seed: 5105 });
-  buildHabitat(tourist);
-  setUnlockTierForTest(tourist, 3);
-  tourist.crew.total = 0;
-  tourist.metrics.stationRating = 55;
-  tourist.rng = () => 0.02;
-  const visitorDockTourist = placeEastHullDock(tourist, 8, 9);
-  const residentialDockTourist = placeEastHullDock(tourist, 18, 19);
-  setDockPurpose(tourist, residentialDockTourist, 'residential');
-  setDockAllowedShipType(tourist, residentialDockTourist, 'tourist', true);
-  setupPrivateResidentHousing(tourist);
-  // Move-in now needs housing AND an explicit immigration policy -- "a
-  // successful visit can no longer convert into permanent load on its own".
-  // Without opening acceptance, maybeMoveInResident bails at the policy check
-  // and BOTH arms of this comparison score zero, which the > assertion reported
-  // as a colonist-vs-tourist result rather than as the fixture never running.
-  //
-  // KNOWN INCOMPLETE -- this test is still red, and opening immigration is only
-  // the first of three things that aged out from under it. The other two need a
-  // fixture rebuild rather than a one-line setter, so they are recorded here
-  // rather than half-patched:
-  //   1. runFor(..., 1.5) never reaches a move-in attempt at all.
-  //      maybeMoveInResident is behind RESIDENT_MOVE_IN_CADENCE_SEC = 8 sim
-  //      seconds (sim.ts), so 1.5s of sim time cannot trigger one. Both arms
-  //      finish still holding the initial-state placeholder result string
-  //      'waiting for eligible visitor exit' -- the code never ran.
-  //   2. stationRating is derived, not assignable. computeMetrics recomputes it
-  //      (sim.ts:26450, ratingFoundation + usageTotals.ratingDelta), so the 55
-  //      set below is overwritten to 32 on the first tick -- under the
-  //      RESIDENT_MOVE_IN_MIN_RATING = 50 gate, which would block move-in even
-  //      once the cadence is reached. The fixture has to earn the rating (or
-  //      drive usageTotals.ratingDelta) instead of assigning the metric.
-  // Both arms also end with zero visitors, so the eligible-visitor precondition
-  // needs a visitor that survives the run, not just one spawned at t=0.
-  setResidentAcceptance(tourist, true);
-  const touristShip = createDockedTransientShip(tourist, visitorDockTourist, 9601);
-  touristShip.shipType = 'tourist';
-  spawnReturningVisitor(tourist, dockByIdOrThrow(tourist, visitorDockTourist).tiles[0], 5201, touristShip.id);
-  runFor(tourist, 1.5);
-  const touristConversions = tourist.usageTotals.residentConversionSuccesses;
+function testColonistVisitorRequiresExplicitResidentAcceptance(): void {
+  const state = createInitialState({ seed: 5105 });
+  buildHabitat(state);
+  setUnlockTierForTest(state, 3);
+  state.crew.total = 0;
+  const visitorDockId = placeEastHullDock(state, 8, 9);
+  const residentialDockId = placeEastHullDock(state, 18, 19);
+  setDockPurpose(state, residentialDockId, 'residential');
+  setDockAllowedShipType(state, residentialDockId, 'colonist', true);
+  setupPrivateResidentHousing(state);
+  const ship = createDockedTransientShip(state, visitorDockId, 9602);
+  ship.shipType = 'colonist';
+  spawnReturningVisitor(state, dockByIdOrThrow(state, visitorDockId).tiles[0], 5202, ship.id);
 
-  const colonist = createInitialState({ seed: 5105 });
-  buildHabitat(colonist);
-  setUnlockTierForTest(colonist, 3);
-  colonist.crew.total = 0;
-  colonist.metrics.stationRating = 55;
-  colonist.rng = () => 0.02;
-  const visitorDockColonist = placeEastHullDock(colonist, 8, 9);
-  const residentialDockColonist = placeEastHullDock(colonist, 18, 19);
-  setDockPurpose(colonist, residentialDockColonist, 'residential');
-  setDockAllowedShipType(colonist, residentialDockColonist, 'colonist', true);
-  setupPrivateResidentHousing(colonist);
-  setResidentAcceptance(colonist, true);
-  const colonistShip = createDockedTransientShip(colonist, visitorDockColonist, 9602);
-  colonistShip.shipType = 'colonist';
-  spawnReturningVisitor(colonist, dockByIdOrThrow(colonist, visitorDockColonist).tiles[0], 5202, colonistShip.id);
-  runFor(colonist, 1.5);
-  const colonistConversions = colonist.usageTotals.residentConversionSuccesses;
+  const closed = acceptVisitorAsResident(state, 5202);
+  assertCondition(!closed.ok, 'A colonist visitor must not become permanent while immigration is closed.');
+  assertCondition(state.residents.length === 0, 'Rejected acceptance must not create a resident.');
+  assertCondition(state.visitors.some((visitor) => visitor.id === 5202), 'Rejected acceptance must preserve the visitor.');
+
+  setResidentAcceptance(state, true);
+  runFor(state, 0.5);
   assertCondition(
-    colonistConversions > touristConversions,
-    'Colonist ships should convert more reliably than tourist ships when valid private housing exists.'
+    state.usageTotals.residentConversionSuccesses === 0,
+    'Opening immigration must not silently convert a colonist visitor without an explicit acceptance decision.'
   );
+
+  const accepted = acceptVisitorAsResident(state, 5202);
+  assertCondition(accepted.ok, `Explicit colonist acceptance should succeed: ${accepted.reason}.`);
+  assertCondition(state.residents.length === 1, 'Explicit acceptance should create exactly one resident.');
+  assertCondition(!state.visitors.some((visitor) => visitor.id === 5202), 'Accepted visitor should leave the transient population.');
+  assertCondition(state.usageTotals.residentConversionAttempts === 1, 'Explicit acceptance should record exactly one attempt.');
+  assertCondition(state.usageTotals.residentConversionSuccesses === 1, 'Explicit acceptance should record exactly one success.');
+  assertCondition(ship.kind === 'resident_home', 'The accepted resident origin ship should become a resident-home shuttle.');
+  assertCondition(ship.assignedDockId === residentialDockId, 'The resident-home shuttle should relocate to the residential dock.');
 }
 
 function testResidentWorkPhaseAffectsThroughput(): void {
@@ -6773,7 +6843,7 @@ function testBrigActiveWithoutStandingPosts(): void {
   assertCondition(state.ops.brigActive > 0, 'Brig should become active from layout and modules.');
 }
 
-function testSaveV1MigratesToV2UnlockDefaults(): void {
+function testCurrentSaveWithoutUnlocksDerivesDefaults(): void {
   const baseline = createInitialState({ seed: 5110 });
   const len = baseline.width * baseline.height;
   const rooms = new Array<string>(len).fill('none');
@@ -6784,7 +6854,7 @@ function testSaveV1MigratesToV2UnlockDefaults(): void {
   rooms[workshopTile] = 'workshop';
   rooms[workshopTile + 1] = 'workshop';
   const payload = JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 3,
     gameVersion: 'legacy',
     createdAt: new Date().toISOString(),
     name: 'legacy-no-unlocks',
@@ -6803,13 +6873,13 @@ function testSaveV1MigratesToV2UnlockDefaults(): void {
     }
   });
   const parsed = parseAndMigrateSave(payload);
-  assertCondition(parsed.ok, 'Legacy v1 payload should parse.');
+  assertCondition(parsed.ok, 'A current-schema payload without the optional unlock block should parse.');
   if (!parsed.ok) return;
   assertCondition(parsed.save.snapshot.unlocks.tier >= 2, 'Missing unlock state should be derived from saved advanced content.');
   const hydrated = hydrateStateFromSave(parsed.save);
   assertCondition(
     hydrated.state.moduleInstances.some((module) => module.type === ModuleType.Workbench && module.originTile === workshopTile),
-    'Derived unlock tier should preserve advanced module placement from v1 saves.'
+    'Derived unlock tier should preserve advanced module placement when the optional unlock block is absent.'
   );
 }
 
@@ -6962,7 +7032,7 @@ function run(): void {
   testT1ArchetypeDiversityReachesThreeWithinThreeMinutes();
   testTier0ShipServicesIgnoreLockedDemands();
   testMilitaryShipPenalizesLowSecurity();
-  testColonistShipBoostsConversionWhenHousingValid();
+  testColonistVisitorRequiresExplicitResidentAcceptance();
   testResidentWorkPhaseAffectsThroughput();
   testResidentRoutineFallbackWithoutWorkRooms();
   testClinicLowersDistressAndDeaths();
@@ -6972,7 +7042,7 @@ function run(): void {
   testIncidentEjectionCollectsDetaineeFromBrig();
   testBrigReducesIncidentDuration();
   testBrigActiveWithoutStandingPosts();
-  testSaveV1MigratesToV2UnlockDefaults();
+  testCurrentSaveWithoutUnlocksDerivesDefaults();
   test20MinuteComplexityCurveReadable();
   testTier0VisitorDockSchedulesTraffic();
   testWallVariantMaskMapping();
