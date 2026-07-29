@@ -89,6 +89,23 @@ function testOneWideDoorKeepsDrainRoute(): string {
   return `door open; ${allocation(plan, 'meal').length} safe, ${plan.unallocatedByProvider.get('meal')} unallocated`;
 }
 
+function testUnprotectedBadLayoutCanCoverDoor(): string {
+  const tiles: QueueTile[] = [
+    { tile: 0, room: 'cafe', walkable: true, neighbors: [1, 2, 3] },
+    { tile: 1, room: 'cafe', walkable: true, neighbors: [0] },
+    { tile: 2, room: 'cafe', walkable: true, neighbors: [0] },
+    { tile: 3, room: 'cafe', walkable: true, neighbors: [0, 4] },
+    { tile: 4, room: 'hall', walkable: true, door: true, narrowSection: 'cafe-door', neighbors: [3, 5] },
+    { tile: 5, room: 'hall', walkable: true, neighbors: [4, 6] },
+    { tile: 6, room: 'hall', walkable: true, neighbors: [5] }
+  ];
+  const plan = planQueueLayout({ tiles, providers: [{ ...provider('meal', 7), headCandidates: [0] }] });
+  const allocated = allocation(plan, 'meal');
+  assert(allocated.length === 7 && allocated.includes(4), 'Without a promised circulation route, sufficient demand may occupy the door.');
+  assert(allocated[allocated.length - 1] === 4, 'The choke must remain a late/high-risk place after ordinary spill floor.');
+  return `bad-layout spill reaches door last (${allocated.join(',')})`;
+}
+
 function grid(width: number, height: number, room: string): QueueTile[] {
   return Array.from({ length: width * height }, (_, tile) => {
     const x = tile % width;
@@ -151,6 +168,7 @@ const evidence = [
   testDemandExpandsWithoutMagicCeiling(),
   testProvidersFairShare(),
   testOneWideDoorKeepsDrainRoute(),
+  testUnprotectedBadLayoutCanCoverDoor(),
   testConcourseBeatsNarrowRoom(),
   testProviderDiscoveryOrderDoesNotMatter(),
   testImpossibleDemandIsExplicitAndAcyclic()

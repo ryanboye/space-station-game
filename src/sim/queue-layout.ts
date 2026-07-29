@@ -3,9 +3,9 @@
  *
  * The simulation owns demand and topology. This module only answers which
  * floor tiles may safely become visible waiting places. Queue occupancy is
- * treated as solid while checking circulation: a line may spill into spare
- * floor, but it may not consume a door, a one-lane choke, or the last route
- * covered by an explicit circulation requirement.
+ * treated as solid while checking circulation. A bad layout may visibly spill
+ * across a door or choke and hurt throughput; only an explicit circulation
+ * requirement prevents it from consuming the last required escape route.
  */
 
 export type QueueTile = {
@@ -14,7 +14,7 @@ export type QueueTile = {
   room: string;
   walkable: boolean;
   moduleBlocked?: boolean;
-  /** Doors are crossings, never waiting places. */
+  /** Doors are late/high-risk waiting places, but remain physically usable. */
   door?: boolean;
   /** Stable choke identity derived from the movement-capacity layer. */
   narrowSection?: string | null;
@@ -54,7 +54,7 @@ export type QueueLayoutPlan = {
   unallocatedByProvider: ReadonlyMap<string, number>;
   /** Fair-allocation order; useful for diagnostics and deterministic evidence. */
   allocationOrder: readonly QueueAllocationStep[];
-  /** Fixed crossings plus dynamically rejected last-route tiles. */
+  /** Explicit route endpoints plus dynamically rejected last-route tiles. */
   protectedCirculationTiles: ReadonlySet<number>;
 };
 
@@ -63,6 +63,7 @@ type Candidate = {
   distance: number;
   inProviderRoom: boolean;
   preference: number;
+  circulationRisk: boolean;
 };
 
 function demandOf(provider: QueueProviderRequest): number {
@@ -131,10 +132,12 @@ function candidatesFor(
         tile,
         distance: tileDistance,
         inProviderRoom: metadata.room === provider.room,
-        preference: metadata.queuePreference ?? 0
+        preference: metadata.queuePreference ?? 0,
+        circulationRisk: metadata.door === true || !!metadata.narrowSection
       };
     })
     .sort((a, b) =>
+      Number(a.circulationRisk) - Number(b.circulationRisk) ||
       Number(b.inProviderRoom) - Number(a.inProviderRoom) ||
       a.distance - b.distance ||
       b.preference - a.preference ||
@@ -179,9 +182,6 @@ export function planQueueLayout(input: QueueLayoutInput): QueueLayoutPlan {
   const requirements = [...(input.circulation ?? [])].sort((a, b) => a.key.localeCompare(b.key));
   const servingTiles = new Set(providers.map((provider) => provider.servingTile));
   const fixedProtected = new Set<number>();
-  for (const tile of byTile.values()) {
-    if (tile.door || tile.narrowSection) fixedProtected.add(tile.tile);
-  }
   for (const requirement of requirements) {
     fixedProtected.add(requirement.from);
     for (const destination of requirement.toAny) fixedProtected.add(destination);
