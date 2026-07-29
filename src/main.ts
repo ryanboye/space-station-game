@@ -104,6 +104,7 @@ import {
   getPreparedMealInventory,
   type PreparedMealInventory,
   getHousingInspectorAt,
+  getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
   getFuelPipeNetworkDiagnostics,
@@ -2976,6 +2977,31 @@ function preparedMealServiceSnapshot(): PreparedMealInventory {
   return getPreparedMealInventory(state);
 }
 
+function occupiedPoorAirCoverage(): { count: number; tile: number | null; room: string | null } {
+  const coverage = getLifeSupportCoverageDiagnostics(state);
+  if (!coverage.hasLifeSupportSystem || coverage.sourceCount <= 0) {
+    return { count: 0, tile: null, room: null };
+  }
+  const actorTiles = [
+    ...state.crewMembers.map((actor) => actor.tileIndex),
+    ...state.residents.map((actor) => actor.tileIndex),
+    ...state.visitors.map((actor) => actor.tileIndex)
+  ];
+  const poorOccupiedTiles = new Set(actorTiles.filter((tile) => {
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    return getLifeSupportTileDiagnostic(state, x, y, coverage)?.poorCoverage === true;
+  }));
+  const tile = poorOccupiedTiles.values().next().value as number | undefined;
+  if (tile === undefined) return { count: 0, tile: null, room: null };
+  const room = state.rooms[tile];
+  return {
+    count: actorTiles.filter((actorTile) => poorOccupiedTiles.has(actorTile)).length,
+    tile,
+    room: room && room !== RoomType.None ? room : null
+  };
+}
+
 function refreshHudStatus(): void {
   const powerDemand = state.metrics.powerDemand;
   const powerSupply = state.metrics.powerSupply;
@@ -2994,8 +3020,11 @@ function refreshHudStatus(): void {
     oxygen < 35 ? 'var(--danger)' : oxygen < 70 ? 'var(--warn)' : 'var(--ok)';
 
   const airFalling = state.metrics.airTrendPerSec < -0.2;
-  const localCoverageRisk =
-    state.metrics.lifeSupportActiveNodes > 0 && state.metrics.poorLifeSupportTiles > 0;
+  // Empty corridors and interface aprons remain visible in Air Coverage, but
+  // they must not paint the global HUD as an emergency. Escalate the headline
+  // only when a real occupant is currently standing in the weak service area.
+  const occupiedAirRisk = occupiedPoorAirCoverage();
+  const localCoverageRisk = occupiedAirRisk.count > 0;
   const airWarning =
     oxygen < 70 ||
     (airFalling && oxygen < 85) ||
@@ -3011,7 +3040,7 @@ function refreshHudStatus(): void {
   } else if (state.metrics.pressurizationPct < 75) {
     airAction = 'Check hull walls and doors';
   } else if (localCoverageRisk) {
-    airAction = `Check ${state.metrics.poorLifeSupportTiles} poorly supplied tile${state.metrics.poorLifeSupportTiles === 1 ? '' : 's'}`;
+    airAction = `Check ${occupiedAirRisk.room ?? 'occupied area'} (${occupiedAirRisk.count} occupant${occupiedAirRisk.count === 1 ? '' : 's'})`;
   }
   const trendText = `${state.metrics.airTrendPerSec >= 0 ? '+' : ''}${state.metrics.airTrendPerSec.toFixed(2)}%/s`;
   const airStatusText = !airWarning
@@ -3021,7 +3050,10 @@ function refreshHudStatus(): void {
       : oxygen < 70 || state.metrics.airBlockedWarningActive
         ? `Oxygen low: ${oxygen}% - ${airAction}`
         : `Air reserve: ${oxygen}% station-wide; local coverage uneven - ${airAction}`;
-  hudAirControlEl.title = `${airStatusText}. Click to open Air Coverage.`;
+  const coverageDetail = state.metrics.poorLifeSupportTiles > 0
+    ? ` ${state.metrics.poorLifeSupportTiles} distant floor tile${state.metrics.poorLifeSupportTiles === 1 ? '' : 's'} remain visible in Air Coverage.`
+    : '';
+  hudAirControlEl.title = `${airStatusText}.${coverageDetail} Click to open Air Coverage.`;
   hudAirControlEl.setAttribute('aria-label', hudAirControlEl.title);
   airEmergencyIndicatorEl.classList.toggle('hidden', !airWarning);
   airEmergencyIndicatorEl.classList.toggle('danger', airDanger);
@@ -3690,7 +3722,15 @@ let renderedBerthOpsHtml = '';
 const collapsedBerthOpsCards = new Map<number, boolean>();
 
 function berthOpsCardCollapsed(shipId: number): boolean {
-  return collapsedBerthOpsCards.get(shipId) ?? window.matchMedia('(max-width: 760px)').matches;
+  const activeInterfaceCount = state.arrivingShips.filter((ship) =>
+    ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
+  ).length;
+  // One or two calls can afford to explain themselves in place. At fleet
+  // scale, default new cards to their compact world chip so a five-interface
+  // bank does not turn the map into an operations spreadsheet. A player's
+  // explicit Show/Hide choice remains sticky for that ship.
+  return collapsedBerthOpsCards.get(shipId)
+    ?? (window.matchMedia('(max-width: 760px)').matches || activeInterfaceCount >= 3);
 }
 
 function disclosedVisitRange(value: number, spread: number, step = 1): string {
@@ -3715,12 +3755,20 @@ function liveVisitPurpose(ship: StationState['arrivingShips'][number]): string {
 }
 
 function liveVisitExpectation(ship: StationState['arrivingShips'][number]): string {
+  const podTarget = ship.smallCraftVisit?.targetDurationSec ?? 0;
+  const podStay = podTarget > 0
+    ? (() => {
+        const minimum = Math.max(70, Math.round(podTarget * 0.9));
+        const maximum = Math.min(110, Math.round(podTarget * 1.1));
+        return minimum === maximum ? String(minimum) : `${minimum}-${maximum}`;
+      })()
+    : null;
   if (ship.passengersTotal <= 0) {
-    const stay = disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
+    const stay = podStay ?? disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
     return `cargo only · ${stay}s stay`;
   }
   const party = disclosedVisitRange(ship.passengersTotal, 0.2);
-  const stay = disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
+  const stay = podStay ?? disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
   return `${party} guest${party === '1' ? '' : 's'} · ${stay}s stay`;
 }
 
@@ -3823,6 +3871,10 @@ function refreshTrafficOffers(): void {
   const activeTurnarounds = state.arrivingShips.filter((ship) =>
     ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
   );
+  const activeTurnaroundIds = new Set(activeTurnarounds.map((ship) => ship.id));
+  for (const shipId of collapsedBerthOpsCards.keys()) {
+    if (!activeTurnaroundIds.has(shipId)) collapsedBerthOpsCards.delete(shipId);
+  }
   refreshShiftBrief(activeTurnarounds.filter((ship) => ship.portManifest && !ship.smallCraftVisit));
   const activeHtml = activeTurnarounds.map((ship) => {
     // Dock/berth operations are anchored to the interface they run on, so each

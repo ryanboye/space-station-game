@@ -2974,6 +2974,10 @@ h2 {
   display: none;
 }
 
+.berth-ops-anchor.is-collapsed .berth-ops-expectation {
+  display: none;
+}
+
 #toggle-ui-panels .panel-visibility-slash {
   display: none;
   stroke-width: 2.4;
