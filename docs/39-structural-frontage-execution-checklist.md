@@ -1150,9 +1150,13 @@ The full check surface, by area:
 | Save, scale, performance | `test:phase9-save`, `test:gate-e-save-resume`, `test:normal-scale-operation`, `test:phase8-opening-expansion`, `perf:sim`, `perf:target-scale`, `baseline:frontage`, `balance:port-ops` |
 | Browser harness | `test:harness` |
 
-Four newly-reachable runners fail against committed code and are tracked in the
-handoff below rather than being silently left unwired: `test:opening-economy-integration`,
-`test:opening-power`, `test:power-grid`, and `test:living-station-scenarios`.
+All four runners that became newly reachable during the checklist audit now
+pass against committed code: `test:opening-economy-integration` reports 4/4,
+`test:opening-power` and `test:power-grid` exit zero, and
+`test:living-station-scenarios` reports 5/5. The sole remaining correction was
+test authorship, not production behavior: the commercially empty starter must
+first author a legal Shelf Aisle before ordering Travel Supplies, and optional
+capital advances are recorded as `project-advance` (`0d17974`).
 
 ## User Playtest Review
 
