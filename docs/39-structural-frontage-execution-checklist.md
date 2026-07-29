@@ -457,7 +457,8 @@ audited checklist with no unsupported checked claims.
 - [x] Add dirty state.
 - [x] Add damaged state.
   Evidence: curated native-footprint variants and production truth selection
-  exercise 63/63 facility frames in `npm run test:facility-sprite-state`.
+  exercise 68/68 facility frames in `npm run test:facility-sprite-state`,
+  including the Display Cold Case base, active, empty, dirty, and damaged frames.
 - [x] Add connected straight/corner/end bar rendering.
 - [x] Verify sprites in the live game rather than only as source images.
 
