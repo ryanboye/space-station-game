@@ -51,7 +51,9 @@ import {
   admitTrafficOffer,
   acceptCommercialOffer,
   buyRawFoodDetailed,
+  berthCapitalCostForArea,
   buildStationExpansionOnTruss,
+  commitBerthFootprint,
   cancelConstructionAtTile,
   canPlaceUtilityUnderlay,
   canExpandDirection,
@@ -152,7 +154,7 @@ import {
   validateDockPlacement
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
-import { MODULE_DEFINITIONS } from './sim/balance';
+import { BERTH_SIZE_MIN, MODULE_DEFINITIONS } from './sim/balance';
 import {
   applyColdStartScenario,
   COLD_START_SCENARIO_NAMES
@@ -2742,7 +2744,12 @@ function selectRoomTool(room: RoomType): void {
     return;
   }
   currentTool = { kind: 'room', room };
-  toolLockMessage = '';
+  // A Berth is the one room that costs credits, and it is charged for the whole
+  // bay at once. Say the price up front rather than letting the player discover
+  // it by being refused at the end of a drag.
+  toolLockMessage = room === RoomType.Berth
+    ? `Berth commissioning: ${berthCapitalCostForArea(BERTH_SIZE_MIN.medium)}c medium, ${berthCapitalCostForArea(BERTH_SIZE_MIN.large)}c large. Drag the whole bay.`
+    : '';
 }
 
 function selectModuleTool(module: ModuleType): void {
@@ -9517,6 +9524,16 @@ function applyRectPaint(a: { x: number; y: number }, b: { x: number; y: number }
       const bDist = Math.abs(bTile.x - core.x) + Math.abs(bTile.y - core.y);
       return currentTool.tile === TileType.Space ? bDist - aDist : aDist - bDist;
     });
+  }
+
+  // A Berth is commissioned as one bay, not tile by tile: the whole footprint
+  // is painted and its size-class capital price is paid once. Refused outright
+  // when the station cannot cover it, so the floor is never half-painted
+  // against a debt it cannot settle.
+  if (currentTool.kind === 'room' && currentTool.room === RoomType.Berth) {
+    const committed = commitBerthFootprint(state, paintTiles);
+    if (!committed.ok) toolLockMessage = committed.reason ?? 'cannot commission this berth';
+    return;
   }
 
   for (const idx of paintTiles) {

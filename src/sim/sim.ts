@@ -1,5 +1,6 @@
 import { findPath as findPathCore } from './path';
 import {
+  BERTH_CAPITAL_COST,
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
   OPENING_BALANCE,
@@ -8428,6 +8429,175 @@ export function getBerthFacilityAt(state: StationState, tileIndex: number): Bert
   const meta = state.derived.clusterByTile.get(tileIndex);
   if (!meta || meta.room !== RoomType.Berth) return null;
   return deriveBerthFacilityForCluster(state, meta.cluster);
+}
+
+// ---------------------------------------------------------------------------
+// Berth commissioning — the single capital event a berth produces.
+//
+// Painting berth floor with `setRoom` stays free, the same way `setTile` and
+// `tryPlaceModule` stay free beside their `...WithCredits` counterparts. The
+// charged path is `commitBerthFootprint`: the player shapes a whole bay, sees
+// one price for its size class, and pays it once. Growing a bay into a larger
+// class later pays only the difference, so the total ever paid for a berth is
+// exactly its class price however it was assembled.
+//
+// Nothing here reads a stored "paid" flag, which is what keeps the charge
+// exactly-once across a save: the price already paid is implied by the berth
+// floor already painted, and that floor is what saves persist. Berths restored
+// from a save or authored by a scenario were never charged and are never
+// charged retroactively — they simply read as already commissioned at their
+// current size.
+// ---------------------------------------------------------------------------
+
+/** Capital price of a berth of this floor area, by size class. */
+export function berthCapitalCostForArea(area: number): number {
+  return BERTH_CAPITAL_COST[berthSizeClassForArea(area)];
+}
+
+export interface BerthFootprintQuote {
+  /** Lowest tile of the largest berth this commit produces, or -1 for none. */
+  anchorTile: number;
+  size: BerthSizeClass;
+  /** Floor area of that berth once the commit lands. */
+  area: number;
+  /** Tiles the commit actually paints — walls and existing berth are dropped. */
+  paintTiles: number[];
+  /** Class price of every berth the commit touches, after it lands. */
+  capitalCostAfter: number;
+  /** Class price already implied by the berth floor the commit absorbs. */
+  capitalCostBefore: number;
+  /** What the commit debits: the difference, never below zero. */
+  cost: number;
+  affordable: boolean;
+  /** Why the commit is refused right now, or null when it is ready. */
+  reason: string | null;
+}
+
+export type BerthCommitResult =
+  | { ok: true; cost: number; anchorTile: number; size: BerthSizeClass; area: number }
+  | { ok: false; cost: number; reason: string };
+
+/**
+ * Berth clusters of the tile set, using the same 4-connectivity over walkable
+ * floor that `ensureRoomClustersCache` uses, so a planned layout and the
+ * layout the sim derives after painting cannot disagree.
+ */
+function connectedBerthComponents(state: StationState, berthTiles: Set<number>): number[][] {
+  const remaining = new Set(berthTiles);
+  const components: number[][] = [];
+  while (remaining.size > 0) {
+    const seed = remaining.values().next().value as number;
+    remaining.delete(seed);
+    const queue = [seed];
+    const component = [seed];
+    for (let qi = 0; qi < queue.length; qi++) {
+      const point = fromIndex(queue[qi], state.width);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = point.x + dx;
+        const ny = point.y + dy;
+        if (!inBounds(nx, ny, state.width, state.height)) continue;
+        const neighbor = toIndex(nx, ny, state.width);
+        if (!remaining.has(neighbor)) continue;
+        remaining.delete(neighbor);
+        queue.push(neighbor);
+        component.push(neighbor);
+      }
+    }
+    components.push(component);
+  }
+  return components;
+}
+
+function berthFootprintPlan(state: StationState, tiles: readonly number[]): BerthFootprintQuote {
+  const blocked = (reason: string): BerthFootprintQuote => ({
+    anchorTile: -1,
+    size: 'small',
+    area: 0,
+    paintTiles: [],
+    capitalCostAfter: 0,
+    capitalCostBefore: 0,
+    cost: 0,
+    affordable: true,
+    reason
+  });
+  if (!isRoomUnlocked(state, RoomType.Berth)) return blocked('Berths are not unlocked yet');
+
+  // Mirror setRoom's own guards so a quote can never promise a tile the paint
+  // would silently drop.
+  const requested = new Set<number>();
+  const paintTiles: number[] = [];
+  for (const tile of tiles) {
+    if (!Number.isInteger(tile) || tile < 0 || tile >= state.rooms.length) continue;
+    if (!isWalkable(state.tiles[tile])) continue;
+    if (requested.has(tile)) continue;
+    requested.add(tile);
+    if (state.rooms[tile] !== RoomType.Berth) paintTiles.push(tile);
+  }
+  if (requested.size === 0) return blocked('No paintable floor in this berth footprint');
+
+  const existingClusters = roomClusters(state, RoomType.Berth);
+  const berthAfter = new Set<number>();
+  for (const cluster of existingClusters) for (const tile of cluster) berthAfter.add(tile);
+  for (const tile of paintTiles) berthAfter.add(tile);
+
+  // Only the berths this footprint actually forms or grows are priced; berths
+  // elsewhere on the station are untouched and unbilled.
+  const seeds = paintTiles.length > 0 ? new Set(paintTiles) : requested;
+  const touched = connectedBerthComponents(state, berthAfter)
+    .filter((component) => component.some((tile) => seeds.has(tile)));
+  if (touched.length === 0) return blocked('No paintable floor in this berth footprint');
+
+  const touchedTiles = new Set(touched.flat());
+  const capitalCostAfter = touched.reduce((sum, component) => sum + berthCapitalCostForArea(component.length), 0);
+  const capitalCostBefore = existingClusters
+    .filter((cluster) => cluster.some((tile) => touchedTiles.has(tile)))
+    .reduce((sum, cluster) => sum + berthCapitalCostForArea(cluster.length), 0);
+  const cost = Math.max(0, capitalCostAfter - capitalCostBefore);
+
+  const largest = touched.reduce((best, component) => (component.length > best.length ? component : best), touched[0]);
+  const affordable = state.metrics.credits >= cost;
+  return {
+    anchorTile: largest.reduce((best, tile) => (tile < best ? tile : best), largest[0]),
+    size: berthSizeClassForArea(largest.length),
+    area: largest.length,
+    paintTiles,
+    capitalCostAfter,
+    capitalCostBefore,
+    cost,
+    affordable,
+    reason: affordable ? null : `Need ${cost} credits`
+  };
+}
+
+/**
+ * What committing this berth footprint would cost, without touching state.
+ * The build UI can price a drag live from this and show one number.
+ */
+export function quoteBerthFootprint(state: StationState, tiles: readonly number[]): BerthFootprintQuote {
+  return berthFootprintPlan(state, tiles);
+}
+
+/**
+ * Commit a berth footprint: paint the whole bay and pay its size-class capital
+ * price once. Refused outright when the station cannot cover the price — the
+ * floor is never half-painted against a debt it cannot settle.
+ */
+export function commitBerthFootprint(state: StationState, tiles: readonly number[]): BerthCommitResult {
+  const plan = berthFootprintPlan(state, tiles);
+  if (plan.reason !== null) return { ok: false, cost: plan.cost, reason: plan.reason };
+  for (const tile of plan.paintTiles) setRoom(state, tile, RoomType.Berth);
+  if (plan.cost > 0) {
+    applyEconomyTransaction(state, {
+      at: state.now,
+      kind: 'station-expansion',
+      credits: -plan.cost,
+      costBasis: plan.cost,
+      label: `${plan.size} berth commissioned`,
+      tileIndex: plan.anchorTile,
+      siteTag: 'berth'
+    }, { countAsEarned: false });
+  }
+  return { ok: true, cost: plan.cost, anchorTile: plan.anchorTile, size: plan.size, area: plan.area };
 }
 
 function computeBerthCapabilities(state: StationState, clusterTiles: number[]): CapabilityTag[] {

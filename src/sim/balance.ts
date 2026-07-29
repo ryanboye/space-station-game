@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
+import { ModuleType, RoomType, type BerthSizeClass, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -775,6 +775,40 @@ export const BERTH_SIZE_MIN = {
   medium: 12,
   large: 42
 } as const;
+
+/**
+ * What commissioning a berth costs, by size class.
+ *
+ * Berth floor paint stays free — shaping a bay must never nickel-and-dime the
+ * player one tile at a time. The whole capital price is charged once, at the
+ * moment the bay becomes a berth that can actually take a call: when its
+ * control unit goes in (`commissionBerth` in sim.ts).
+ *
+ * Calibrated against the other opening constants rather than guessed:
+ *  - A chartered station opens with `OPENING_BALANCE.startingCredits` (320c)
+ *    and the cheapest opening business still wants ~230-280c of that. A 600c
+ *    medium berth therefore cannot be reached before a business is operating:
+ *    a fresh station is 280c short even if it buys nothing at all.
+ *  - The opening Global Goal wants 500c of earned traffic revenue. 600c sits
+ *    just past it, so the first berth is the act *after* the opening goal
+ *    rather than an alternative to it.
+ *  - A single operating opening line nets ~14c/min once its traffic settles,
+ *    and one completed Capital Project pays 240-360c. The medium fee plus the
+ *    hardware that carries it (600 + 210 control + 2x100 clamps = 1010c) is
+ *    roughly an hour of trading, or two project completions. Major, but
+ *    attainable.
+ *  - Below medium a berth accepts no ships at all (`pickBerthForShip` rejects
+ *    the small class), so a sub-medium bay is a stub rather than a berth and
+ *    carries no fee — a price there would only be a trap purchase.
+ *  - Large starts at 42 tiles, 3.5x the medium minimum; 2.5x the medium fee
+ *    keeps heavy frontage a distinctly later commitment while still
+ *    discounting bulk area.
+ */
+export const BERTH_CAPITAL_COST: Record<BerthSizeClass, number> = {
+  small: 0,
+  medium: 600,
+  large: 1500
+};
 
 export const SERVICE_CAPACITY = {
   tableMaxDiners: MODULE_DEFINITIONS[ModuleType.Table].visitorCapacity ?? 3,

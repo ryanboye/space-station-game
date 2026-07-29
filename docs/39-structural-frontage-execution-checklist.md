@@ -373,12 +373,12 @@ audited checklist with no unsupported checked claims.
 
 - [ ] One checkout visibly becomes overwhelmed.
 - [x] A second checkout or redesigned queue improves measured throughput.
-- [ ] A larger cantina visibly supports more simultaneous occupants.
+- [x] A larger cantina visibly supports more simultaneous occupants.
 - [x] Large fixtures create meaningful queue, route, stock, staffing, and floor
   tradeoffs.
 - [x] Beds cannot be double-claimed.
 - [x] Reception helps without becoming mandatory.
-- [ ] Two seeded runs differ while remaining inferable.
+- [x] Two seeded runs differ while remaining inferable.
 - [ ] Playtest decides whether to proceed with deeper hidden demand.
 
 ## Failed Stay And Stranding Contract
@@ -1936,3 +1936,45 @@ maintenance" row at the same time.
   has scheduled suite work for after playtesting. It is recorded here so the
   remaining red is understood as fixture debt with a known shape rather than
   mistaken for broken gameplay.
+
+2026-07-28 · Phase 1B gate measured, and one row refused
+
+- Commit or files: cases 13 and 14 in `tools/gate-f-facility-scale-tests.ts`.
+- Larger cantina: the previous comparison counted slot capacity only and never
+  ran an actor through either room. The new case stages the *identical* eight
+  guests on the *identical* eight floor squares in both layouts, advances both 60
+  seconds at the same step, and samples simultaneous live claims each tick. Peak
+  simultaneous occupants: `4` in the undersized room against `8` in the expanded
+  one. It also asserts the undersized room saturates all four of its positions,
+  so the ceiling is the room rather than the cohort, and that the extra occupants
+  sit in dwell positions the small room does not have.
+- Two seeded runs: `reception-absent` under seeds `4242` and `7`. They differ —
+  six demand classes differ, mix distance 9 across 12 and 13 arrivals — while
+  staying inferable: correct first choices once a cue is present are `4/8` in
+  both, inside a stated band, and wrong first guesses are corrected in world in
+  both. Thresholds are stated floors rather than the observed values so the case
+  does not pin to noise.
+  Honest caveat: across eight probed seeds the *staged* cohort's outcome is
+  seed-invariant. The divergence comes entirely from ambient arrivals, so
+  "differs" here means who shows up, not how the authored eight behave.
+
+- **`One checkout visibly becomes overwhelmed` was deliberately NOT closed.**
+  The queue-depth half is real and measurable — peak depth `3` at the compact
+  layout's single busiest anchor against `2` per anchor in the improved layout.
+  The abandonment half is false, and backwards, in every one of five tried
+  configurations: the improved layout produces *more* give-ups because more
+  shoppers actually engage, selling 9-11 against 5-6. Three production causes,
+  none fixable from a test file:
+  1. The restock chain never runs. Backroom trade-good stock sits at exactly
+     `90.0` for a full 300 seconds in *both* layouts, so the compact layout's
+     authored conflict — restock crossing the customer frontage — is never
+     exercised at runtime. The existing check only verifies that route's
+     geometry, which is why this went unnoticed.
+  2. Demand is a single burst bounded by initial shelf stock: one Shelf Aisle
+     (6 units) against two (12). The compact market physically cannot generate
+     more than about six checkout events, so its bank never fills its line.
+  3. There is no counted market-checkout abandonment anywhere in `src/sim/`.
+     The only signals are free-text strings in a capped event feed and a summed
+     rating penalty shared with three unrelated paths.
+  This is a real gameplay gap, not a measurement gap, and it belongs in
+  playtesting: the market showcase never actually stresses its own bottleneck.

@@ -967,6 +967,213 @@ function testDeathFreesItsPositionSameTick(): string {
 }
 
 // ---------------------------------------------------------------------------
+// 13. A bigger cantina holds more people AT ONCE, not just more positions
+// ---------------------------------------------------------------------------
+
+/** Floor squares of a room that no fixture stands on, in a stable order. */
+function openRoomTiles(state: StationState, room: RoomType): number[] {
+  const tiles: number[] = [];
+  for (let index = 0; index < state.rooms.length; index += 1) {
+    if (state.rooms[index] !== room) continue;
+    if (state.modules[index] !== ModuleType.None) continue;
+    tiles.push(index);
+  }
+  return tiles.sort((left, right) => left - right);
+}
+
+function testLargerCantinaHoldsMoreOccupantsAtOnce(): string {
+  // Case 6+7 already proves the expanded room offers more POSITIONS. Counting
+  // positions is a claim about the blueprint; this is the claim about the
+  // room. The identical eight-guest cohort is placed on the identical eight
+  // floor squares in both layouts — squares that are open in both, so neither
+  // room gets a head start — and both are advanced with the same step. What
+  // is sampled every tick is how many of those eight guests are physically
+  // holding a Cantina position at the same instant.
+  const undersizedOpen = openRoomTiles(scenario('cantina-undersized'), RoomType.Cantina);
+  const expandedOpen = new Set(openRoomTiles(scenario('cantina-expanded'), RoomType.Cantina));
+  const shared = undersizedOpen.filter((tile) => expandedOpen.has(tile));
+  const cohortTemplate = scenario('cantina-undersized').visitors.filter(
+    (visitor) => visitor.id >= 99600 && visitor.id < 99608
+  );
+  assert(cohortTemplate.length === 8, `The cantina cohort must be the authored eight guests, found ${cohortTemplate.length}.`);
+  assert(
+    shared.length >= cohortTemplate.length,
+    `Both cantinas must share at least ${cohortTemplate.length} open floor squares, found ${shared.length}.`
+  );
+  const cohortTiles = shared.slice(0, cohortTemplate.length);
+  const cohortIds = new Set(cohortTemplate.map((visitor) => visitor.id));
+
+  const OBSERVED_SEC = 60;
+  const measure = (name: string) => {
+    const state = scenario(name);
+    // The same people, wanting the same thing, standing on the same squares.
+    state.visitors = cohortTemplate.map((donor, index) => {
+      const clone: Visitor = { ...donor, path: [], completedServices: [], spawnedAt: state.now };
+      putVisitorAt(state, clone, cohortTiles[index]);
+      return clone;
+    });
+    const service = slotsOfRole(state, [ModuleType.ServiceBar, ModuleType.BarCorner, ModuleType.BarEnd], 'bar-service');
+    const dwell = dwellSlotsInRoom(state, RoomType.Cantina);
+    const serviceTiles = new Set(service.map((slot) => slot.tileIndex));
+    const occupantTiles = new Set([...serviceTiles, ...dwell.map((slot) => slot.tileIndex)]);
+    let peak = 0;
+    let peakService = 0;
+    let peakDwell = 0;
+    let peakAt = 0;
+    state.controls.paused = false;
+    for (let elapsed = 0; elapsed < OBSERVED_SEC; elapsed += 0.2) {
+      tick(state, 0.2);
+      // A live physical hold on a depicted Cantina position, by one of OUR
+      // eight. Ambient traffic that wanders in is deliberately excluded, so
+      // the number is a property of the room and the cohort, nothing else.
+      const held = new Map<number, number>();
+      for (const reservation of state.reservations) {
+        if (reservation.releaseReason !== null || reservation.expiresAt <= state.now) continue;
+        if (reservation.ownerKind !== 'visitor') continue;
+        if (reservation.kind !== 'provider-slot' && reservation.kind !== 'seat-use-slot') continue;
+        const tile = reservation.targetTile;
+        if (tile === null || tile === undefined || !occupantTiles.has(tile)) continue;
+        if (!cohortIds.has(Number(reservation.ownerId))) continue;
+        held.set(Number(reservation.ownerId), tile);
+      }
+      if (held.size > peak) {
+        peak = held.size;
+        peakService = [...held.values()].filter((tile) => serviceTiles.has(tile)).length;
+        peakDwell = peak - peakService;
+        peakAt = state.now;
+      }
+    }
+    return {
+      positions: service.length + dwell.length,
+      service: service.length,
+      dwell: dwell.length,
+      peak,
+      peakService,
+      peakDwell,
+      peakAt
+    };
+  };
+
+  const undersized = measure('cantina-undersized');
+  const expanded = measure('cantina-expanded');
+
+  assert(undersized.peak > 0, 'The undersized cantina must hold somebody at all before the comparison means anything.');
+  assert(
+    undersized.peak === undersized.positions,
+    `The undersized cantina must saturate every position it owns, so its ceiling is the room and not the cohort (${undersized.peak}/${undersized.positions}).`
+  );
+  assert(
+    expanded.peak > undersized.peak,
+    `A larger cantina must hold more people at the same instant (${undersized.peak} vs ${expanded.peak}).`
+  );
+  assert(
+    expanded.peakDwell > 0,
+    'The extra simultaneous occupants must be standing in dwell positions the small room does not have.'
+  );
+  assert(
+    expanded.peak <= cohortTemplate.length,
+    `Simultaneous occupancy cannot exceed the cohort (${expanded.peak} of ${cohortTemplate.length}).`
+  );
+
+  return `same ${cohortTemplate.length}-guest cohort on the same tiles ${cohortTiles[0]}-${cohortTiles[cohortTiles.length - 1]}, ${OBSERVED_SEC}s each: `
+    + `peak SIMULTANEOUS occupants ${undersized.peak} (undersized, saturating all ${undersized.positions} positions = ${undersized.service} service + ${undersized.dwell} dwell, at ${undersized.peakAt.toFixed(1)}s) `
+    + `vs ${expanded.peak} (expanded, ${expanded.peakService} service + ${expanded.peakDwell} dwell of ${expanded.positions} positions, at ${expanded.peakAt.toFixed(1)}s)`;
+}
+
+// ---------------------------------------------------------------------------
+// 14. Two seeds of one layout differ without becoming unlearnable
+// ---------------------------------------------------------------------------
+
+function testSeededRunsDifferButStayInferable(): string {
+  // Case 9 deliberately runs its Reception pair on the SAME seed, because it
+  // is comparing two layouts. This is the opposite question: one layout, two
+  // seeds. Both halves have to hold at once. Divergence alone would just be
+  // noise, and a run that comes out identical every time is not a seeded run.
+  const OBSERVED_SEC = 60;
+  const runSeed = (seed: number) => {
+    const state = scenario('reception-absent', seed);
+    const mix = new Map<string, number>();
+    const seen = new Set<number>();
+    state.controls.paused = false;
+    for (let elapsed = 0; elapsed < OBSERVED_SEC; elapsed += 0.2) {
+      tick(state, 0.2);
+      // Demand mix of everybody who ARRIVED during the run, counted once on
+      // the tick they first exist, so guests who finish and leave still count.
+      for (const visitor of state.visitors) {
+        if (seen.has(visitor.id)) continue;
+        seen.add(visitor.id);
+        const label = `${visitor.archetype}/${visitor.primaryPreference}`;
+        mix.set(label, (mix.get(label) ?? 0) + 1);
+      }
+    }
+    const arrivals = state.visitors.filter((visitor) => visitor.id >= 99500 && visitor.id < 99540);
+    const resolved = arrivals.filter((visitor) => (visitor.revealedServices?.length ?? 0) > 0).length;
+    const correct = arrivals.filter(
+      (visitor) => (visitor.revealedServices?.length ?? 0) > 0 && visitor.redirectedFrom === null
+    ).length;
+    const redirected = arrivals.filter((visitor) => visitor.redirectedFrom !== null).length;
+    return { seed, mix, arrived: seen.size, resolved, correct, redirected };
+  };
+
+  const left = runSeed(4242);
+  const right = runSeed(7);
+
+  // (a) The two runs are actually different worlds.
+  const labels = new Set([...left.mix.keys(), ...right.mix.keys()]);
+  let distance = 0;
+  let differingClasses = 0;
+  for (const label of labels) {
+    const gap = Math.abs((left.mix.get(label) ?? 0) - (right.mix.get(label) ?? 0));
+    distance += gap;
+    if (gap > 0) differingClasses += 1;
+  }
+  const describe = (mix: Map<string, number>): string =>
+    [...mix].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => `${label} x${count}`).join(', ');
+  assert(describe(left.mix) !== describe(right.mix), 'Two seeds must not produce the same arrival demand mix.');
+  // Each seed is reproducible, but the thresholds are stated as floors rather
+  // than the exact measured values: the divergence is a property of the
+  // traffic generator, not of these two magic numbers.
+  assert(
+    differingClasses >= 3,
+    `Seeded arrival mixes must differ across at least 3 archetype/preference classes, differed in ${differingClasses}.`
+  );
+  assert(
+    distance >= 5,
+    `Seeded arrival mixes must differ by at least 5 arrivals in total, differed by ${distance}.`
+  );
+
+  // (b) ...and both worlds stay readable. Once a guest has a cue in hand, its
+  // first physical choice is right about as often either way, so a new seed
+  // changes WHO shows up and never whether the player can reason about them.
+  assert(left.resolved > 0 && right.resolved > 0, 'Both runs need guests whose demand became visible.');
+  assert(
+    left.redirected > 0 && right.redirected > 0,
+    `Both runs must contain a genuinely wrong first guess (${left.redirected} vs ${right.redirected} redirects).`
+  );
+  const leftShare = left.correct / left.resolved;
+  const rightShare = right.correct / right.resolved;
+  // A stated band, not an exact value. Half the authored arrivals want a
+  // fixture the lounge cannot supply, so a readable deskless run sits near one
+  // correct first choice in two; the band allows a full guest either way.
+  for (const [seed, share] of [[left.seed, leftShare], [right.seed, rightShare]] as const) {
+    assert(
+      share >= 0.35 && share <= 0.65,
+      `Seed ${seed} left first-choice accuracy outside the stated 0.35-0.65 inferable band at ${share.toFixed(3)}.`
+    );
+  }
+  assert(
+    Math.abs(leftShare - rightShare) <= 0.125,
+    `A new seed must not change how learnable the station is (${leftShare.toFixed(3)} vs ${rightShare.toFixed(3)}).`
+  );
+
+  return `one layout, two seeds, ${OBSERVED_SEC}s each — arrivals by demand class, seed ${left.seed}: ${describe(left.mix)} (${left.arrived} total) `
+    + `vs seed ${right.seed}: ${describe(right.mix)} (${right.arrived} total); ${differingClasses} classes differ, total mix distance ${distance}. `
+    + `Still inferable: correct first choices once a cue is present ${left.correct}/${left.resolved} = ${leftShare.toFixed(2)} vs `
+    + `${right.correct}/${right.resolved} = ${rightShare.toFixed(2)} — both inside the stated 0.35-0.65 band and ${Math.abs(leftShare - rightShare).toFixed(2)} apart; `
+    + `${left.redirected} and ${right.redirected} wrong first guesses were still corrected in world`;
+}
+
+// ---------------------------------------------------------------------------
 
 const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '1 exclusive claims and cleanup', run: testExclusiveClaimsAndCleanup },
@@ -979,7 +1186,9 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '9 reception reveals without gating', run: testReceptionRevealsAndNeverGates },
   { name: '10 long-stay repeat sessions', run: testLongStayWingSupportsRepeatSessions },
   { name: '11 save/load rebuilds fixtures', run: testSaveLoadRebuildsFixtures },
-  { name: '12 death frees its position same tick', run: testDeathFreesItsPositionSameTick }
+  { name: '12 death frees its position same tick', run: testDeathFreesItsPositionSameTick },
+  { name: '13 larger cantina holds more occupants at once', run: testLargerCantinaHoldsMoreOccupantsAtOnce },
+  { name: '14 seeded runs differ but stay inferable', run: testSeededRunsDifferButStayInferable }
 ];
 
 function main(): void {
