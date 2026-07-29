@@ -271,21 +271,15 @@ export function expandMap(state: StationState, direction: CardinalDirection): Ex
     assignedBerthAnchor: ship.assignedBerthAnchor === null || ship.assignedBerthAnchor === undefined
       ? ship.assignedBerthAnchor
       : remapIndex(ship.assignedBerthAnchor),
-    approachCommitment: ship.approachCommitment
-      ? {
-          ...ship.approachCommitment,
-          slotId: remapApproachSlotId(ship.approachCommitment.slotId),
-          groupIds: ship.approachCommitment.groupIds.map((groupId) => {
-            const match = /^approach\|(.+)\|(.+)$/.exec(groupId);
-            return match
-              ? `approach|${remapApproachSlotId(match[1])}|${remapApproachSlotId(match[2])}`
-              : groupId;
-          })
-        }
-      : null,
     bayTiles: ship.bayTiles.map(remapIndex),
     bayCenterX: ship.bayCenterX + shiftX,
     bayCenterY: ship.bayCenterY + shiftY
+  }));
+  state.physicalHoldingQueue = state.physicalHoldingQueue.map((entry) => ({
+    ...entry,
+    slotId: entry.slotId === null ? null : remapApproachSlotId(entry.slotId),
+    // Conflict groups are geometry-derived and rebuilt after the resize.
+    groupIds: []
   }));
   state.pendingSpawns = state.pendingSpawns.map((spawn) => ({
     ...spawn,

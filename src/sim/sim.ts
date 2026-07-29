@@ -161,7 +161,6 @@ import {
 } from './pod-freight';
 import {
   type ArrivingShip,
-  type ApproachCommitment,
   type BerthSizeClass,
   type CapabilityTag,
   type CommercialOffer,
@@ -196,7 +195,7 @@ import {
   type PodDockCapability,
   type PodDockPlacementView,
   type DockPurpose,
-  type DockQueueEntry,
+  type PhysicalHoldingQueueEntry,
   GRID_HEIGHT,
   GRID_WIDTH,
   type IncidentEntity,
@@ -8373,12 +8372,20 @@ function rebuildDockEntitiesNow(state: StationState): void {
     ship.assignedDockId = null;
     ship.assignedDockSourceKey = null;
     ship.assignedBerthAnchor = null;
-    ship.approachCommitment = null;
+    const holding = physicalHoldingEntryForShip(state, ship.id);
+    if (holding) {
+      holding.ownerKind = 'active-ship';
+      holding.slotId = null;
+      holding.groupIds = [];
+      holding.status = 'awaiting-slot';
+      holding.timeoutAt = null;
+    }
     ship.queueState = 'queued';
     ship.stage = 'approach';
     ship.stageTime = 0;
   }
-  state.dockQueue = state.dockQueue.filter((entry) =>
+  state.physicalHoldingQueue = state.physicalHoldingQueue.filter((entry) =>
+    entry.ownerKind === 'active-ship' ||
     next.some(
       (d) =>
         d.purpose === 'visitor' &&
@@ -9284,10 +9291,10 @@ export function validateDockingSlot(
   return { valid: reasons.length === 0, hardReasons: [...new Set(reasons)], conflictGroupIds, descriptor };
 }
 
-function activeShipMooringOverlaps(state: StationState, ship: ArrivingShip, descriptor: DockingSlotDescriptor): boolean {
+function occupiedMooringOverlaps(state: StationState, ship: ArrivingShip, descriptor: DockingSlotDescriptor): boolean {
   const current = envelopeForHull(descriptor, ship.hullVariant).mooring.bounds;
   for (const other of state.arrivingShips) {
-    if (other.id === ship.id || other.stage === 'depart') continue;
+    if (other.id === ship.id || (other.stage !== 'docked' && other.stage !== 'depart')) continue;
     const otherDescriptor = descriptorForShip(state, other);
     if (!otherDescriptor) continue;
     if (otherDescriptor.id === descriptor.id) return true;
@@ -9296,71 +9303,151 @@ function activeShipMooringOverlaps(state: StationState, ship: ArrivingShip, desc
   return false;
 }
 
-function commitmentForShip(state: StationState, ship: ArrivingShip, phase: ApproachCommitment['phase']): ApproachCommitment | null {
+function physicalHoldingEntryForShip(
+  state: StationState,
+  shipId: number
+): PhysicalHoldingQueueEntry | null {
+  return state.physicalHoldingQueue.find((entry) => entry.shipId === shipId) ?? null;
+}
+
+function descriptorEligibleForShip(
+  state: StationState,
+  ship: ArrivingShip
+): DockingSlotDescriptor | null {
   const descriptor = descriptorForShip(state, ship);
   if (!descriptor || !descriptor.acceptedSizes.includes(ship.size)) return null;
   const validation = validateDockingSlot(state, descriptor, ship.size, ship.hullVariant);
-  if (!validation.valid || activeShipMooringOverlaps(state, ship, descriptor)) return null;
-  const groups = getApproachConflictGroups(state)
-    .filter((group) => group.slotIds.includes(descriptor.id))
-    .map((group) => group.id);
-  return { slotId: descriptor.id, groupIds: groups, phase, status: 'waiting', queuedAt: state.now };
+  if (!validation.valid) return null;
+  return descriptor;
 }
 
-function releaseApproachCommitment(ship: ArrivingShip): void {
-  ship.approachCommitment = null;
+function ensureActiveShipHoldingEntry(
+  state: StationState,
+  ship: ArrivingShip,
+  phase: PhysicalHoldingQueueEntry['phase']
+): PhysicalHoldingQueueEntry {
+  const existing = physicalHoldingEntryForShip(state, ship.id);
+  if (existing && existing.phase === phase) {
+    const descriptor = descriptorEligibleForShip(state, ship);
+    existing.ownerKind = 'active-ship';
+    existing.lane = ship.lane;
+    existing.shipType = ship.shipType;
+    existing.hullVariant = ship.hullVariant;
+    existing.size = ship.size;
+    existing.slotId = descriptor?.id ?? null;
+    existing.groupIds = [];
+    existing.status = descriptor ? 'waiting' : 'awaiting-slot';
+    existing.timeoutAt = null;
+    return existing;
+  }
+  if (existing) state.physicalHoldingQueue.splice(state.physicalHoldingQueue.indexOf(existing), 1);
+  const descriptor = descriptorEligibleForShip(state, ship);
+  const entry: PhysicalHoldingQueueEntry = {
+    shipId: ship.id,
+    ownerKind: 'active-ship',
+    lane: ship.lane,
+    shipType: ship.shipType,
+    hullVariant: ship.hullVariant,
+    size: ship.size,
+    slotId: descriptor?.id ?? null,
+    groupIds: [],
+    phase,
+    status: descriptor ? 'waiting' : 'awaiting-slot',
+    queuedAt: state.now,
+    timeoutAt: null
+  };
+  state.physicalHoldingQueue.push(entry);
+  return entry;
 }
 
-export function resolvePhysicalApproachCommitments(state: StationState): void {
+function releasePhysicalHoldingEntry(state: StationState, shipId: number): void {
+  state.physicalHoldingQueue = state.physicalHoldingQueue.filter((entry) => entry.shipId !== shipId);
+}
+
+export function resolvePhysicalHoldingQueue(state: StationState): void {
+  const liveShipIds = new Set(state.arrivingShips.map((ship) => ship.id));
+  state.physicalHoldingQueue = state.physicalHoldingQueue.filter(
+    (entry) => entry.ownerKind === 'walk-in-candidate' || liveShipIds.has(entry.shipId)
+  );
   // Approach ownership follows the hulls actually in traffic, not generic
   // size classes. Infrastructure planning remains conservatively size-based,
   // while a courier and a liner only conflict when their real corridors do.
-  const committed = state.arrivingShips.filter((ship) => ship.approachCommitment !== null && ship.approachCommitment !== undefined);
+  const committed = state.physicalHoldingQueue.filter(
+    (entry) => entry.ownerKind === 'active-ship' && entry.slotId !== null
+  );
   const descriptorByShip = new Map<number, DockingSlotDescriptor>();
-  for (const ship of committed) {
-    const descriptor = descriptorForShip(state, ship);
-    if (!descriptor) continue;
-    descriptorByShip.set(ship.id, descriptor);
-    if (ship.approachCommitment) ship.approachCommitment.groupIds = [];
-  }
-  for (let index = 0; index < committed.length; index++) {
-    const first = committed[index];
-    const firstDescriptor = descriptorByShip.get(first.id);
-    if (!firstDescriptor || !first.approachCommitment) continue;
-    const firstPhase = first.approachCommitment.phase === 'depart' ? 'egress' : 'ingress';
-    const firstBounds = envelopeForHull(firstDescriptor, first.hullVariant)[firstPhase].bounds;
-    for (let otherIndex = index + 1; otherIndex < committed.length; otherIndex++) {
-      const second = committed[otherIndex];
-      const secondDescriptor = descriptorByShip.get(second.id);
-      if (!secondDescriptor || !second.approachCommitment || firstDescriptor.id === secondDescriptor.id) continue;
-      const secondPhase = second.approachCommitment.phase === 'depart' ? 'egress' : 'ingress';
-      const secondBounds = envelopeForHull(secondDescriptor, second.hullVariant)[secondPhase].bounds;
-      if (!rectanglesOverlap(firstBounds, secondBounds)) continue;
-      const groupId = `approach|${[firstDescriptor.id, secondDescriptor.id].sort().join('|')}`;
-      first.approachCommitment.groupIds.push(groupId);
-      second.approachCommitment.groupIds.push(groupId);
+  const blockedByDockedMooring = new Set<number>();
+  const shipsById = new Map(state.arrivingShips.map((ship) => [ship.id, ship]));
+  const descriptors = new Map(getDockingSlotDescriptors(state).map((descriptor) => [descriptor.id, descriptor]));
+  for (const entry of state.physicalHoldingQueue) {
+    entry.groupIds = [];
+    if (entry.ownerKind === 'walk-in-candidate' || entry.slotId === null) {
+      entry.status = 'awaiting-slot';
+      continue;
+    }
+    const descriptor = descriptors.get(entry.slotId);
+    if (!descriptor) {
+      entry.slotId = null;
+      entry.status = 'awaiting-slot';
+      continue;
+    }
+    descriptorByShip.set(entry.shipId, descriptor);
+    const ship = shipsById.get(entry.shipId);
+    if (ship && occupiedMooringOverlaps(state, ship, descriptor)) {
+      blockedByDockedMooring.add(entry.shipId);
     }
   }
-  const groups = new Map<string, ArrivingShip[]>();
-  for (const ship of state.arrivingShips) {
-    const commitment = ship.approachCommitment;
-    if (!commitment) continue;
-    for (const groupId of commitment.groupIds) {
+  for (let index = 0; index < committed.length; index++) {
+    const first = committed[index]!;
+    const firstDescriptor = descriptorByShip.get(first.shipId);
+    if (!firstDescriptor) continue;
+    const firstPhase = first.phase === 'depart' ? 'egress' : 'ingress';
+    const firstBounds = envelopeForHull(firstDescriptor, first.hullVariant)[firstPhase].bounds;
+    const firstMooring = envelopeForHull(firstDescriptor, first.hullVariant).mooring.bounds;
+    for (let otherIndex = index + 1; otherIndex < committed.length; otherIndex++) {
+      const second = committed[otherIndex]!;
+      const secondDescriptor = descriptorByShip.get(second.shipId);
+      if (!secondDescriptor) continue;
+      const secondPhase = second.phase === 'depart' ? 'egress' : 'ingress';
+      const secondBounds = envelopeForHull(secondDescriptor, second.hullVariant)[secondPhase].bounds;
+      const secondMooring = envelopeForHull(secondDescriptor, second.hullVariant).mooring.bounds;
+      if (
+        firstDescriptor.id !== secondDescriptor.id &&
+        !rectanglesOverlap(firstBounds, secondBounds) &&
+        !rectanglesOverlap(firstMooring, secondMooring)
+      ) continue;
+      const groupId = firstDescriptor.id === secondDescriptor.id
+        ? `approach|slot|${firstDescriptor.id}`
+        : `approach|${[firstDescriptor.id, secondDescriptor.id].sort().join('|')}`;
+      first.groupIds.push(groupId);
+      second.groupIds.push(groupId);
+    }
+  }
+  const groups = new Map<string, PhysicalHoldingQueueEntry[]>();
+  for (const entry of committed) {
+    for (const groupId of entry.groupIds) {
       const list = groups.get(groupId) ?? [];
-      list.push(ship);
+      list.push(entry);
       groups.set(groupId, list);
     }
   }
   const activeByGroup = new Map<string, number>();
-  for (const [groupId, ships] of groups.entries()) {
-    ships.sort((a, b) => (a.approachCommitment!.queuedAt - b.approachCommitment!.queuedAt) || a.id - b.id);
-    activeByGroup.set(groupId, ships[0].id);
+  for (const [groupId, entries] of groups.entries()) {
+    entries.sort((a, b) => (a.queuedAt - b.queuedAt) || a.shipId - b.shipId);
+    activeByGroup.set(groupId, entries[0]!.shipId);
   }
-  for (const ship of state.arrivingShips) {
-    const commitment = ship.approachCommitment;
-    if (!commitment) continue;
-    commitment.status = commitment.groupIds.every((groupId) => activeByGroup.get(groupId) === ship.id) ? 'active' : 'waiting';
+  for (const entry of committed) {
+    if (!descriptorByShip.has(entry.shipId)) continue;
+    entry.status = !blockedByDockedMooring.has(entry.shipId) &&
+      entry.groupIds.every((groupId) => activeByGroup.get(groupId) === entry.shipId)
+      ? 'active'
+      : 'waiting';
   }
+}
+
+/** @deprecated Queue ownership now lives on StationState.physicalHoldingQueue. */
+export function resolvePhysicalApproachCommitments(state: StationState): void {
+  resolvePhysicalHoldingQueue(state);
 }
 
 /**
@@ -9368,17 +9455,11 @@ export function resolvePhysicalApproachCommitments(state: StationState): void {
  * Bindings are never substituted: an orphaned ship returns to holding and
  * waits for a future player decision instead of claiming a nearby interface.
  */
-export function reconcilePhysicalApproachCommitments(state: StationState): void {
-  const groupsBySlot = new Map<string, string[]>();
-  for (const group of getApproachConflictGroups(state)) {
-    for (const slotId of group.slotIds) {
-      const groups = groupsBySlot.get(slotId) ?? [];
-      groups.push(group.id);
-      groupsBySlot.set(slotId, groups);
-    }
-  }
+export function reconcilePhysicalHoldingQueue(state: StationState): void {
+  const rowsByShip = new Map(state.physicalHoldingQueue.map((entry) => [entry.shipId, entry]));
   for (const ship of state.arrivingShips) {
     const descriptor = descriptorForShip(state, ship);
+    let row = rowsByShip.get(ship.id) ?? null;
     if (!descriptor) {
       if (ship.assignedDockId !== null || ship.assignedDockSourceKey || ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
         ship.assignedDockId = null;
@@ -9388,30 +9469,47 @@ export function reconcilePhysicalApproachCommitments(state: StationState): void 
         ship.stage = 'approach';
         ship.stageTime = 0;
       }
-      ship.approachCommitment = null;
+      if (!row && (ship.stage === 'approach' || ship.stage === 'depart')) {
+        row = ensureActiveShipHoldingEntry(state, ship, ship.stage === 'depart' ? 'depart' : 'approach');
+      }
+      if (row) {
+        row.slotId = null;
+        row.groupIds = [];
+        row.status = 'awaiting-slot';
+        row.timeoutAt = null;
+      }
       continue;
     }
     const phase = ship.stage === 'depart' ? 'depart' : 'approach';
-    const existing = ship.approachCommitment;
-    if (ship.stage === 'docked' && existing?.phase !== 'depart') {
-      ship.approachCommitment = null;
+    if (ship.stage === 'docked') {
+      if (row?.phase !== 'depart') releasePhysicalHoldingEntry(state, ship.id);
       continue;
     }
     if (ship.stage === 'approach' || ship.stage === 'depart') {
-      ship.approachCommitment = {
-        slotId: descriptor.id,
-        groupIds: [...(groupsBySlot.get(descriptor.id) ?? [])].sort(),
-        phase,
-        status: 'waiting',
-        queuedAt: existing?.queuedAt ?? state.now
-      };
+      if (!row) {
+        row = ensureActiveShipHoldingEntry(state, ship, phase);
+      } else if (row.phase !== phase) {
+        releasePhysicalHoldingEntry(state, ship.id);
+        row = ensureActiveShipHoldingEntry(state, ship, phase);
+      } else if (row.slotId !== descriptor.id) {
+        // A canonical row that lost its binding stays visibly unbound. The
+        // topology pass never substitutes a different live interface.
+        row.slotId = null;
+        row.groupIds = [];
+        row.status = 'awaiting-slot';
+      }
     }
   }
-  resolvePhysicalApproachCommitments(state);
+  resolvePhysicalHoldingQueue(state);
 }
 
-function canAdvancePhysicalApproach(ship: ArrivingShip): boolean {
-  return ship.approachCommitment?.status === 'active';
+/** @deprecated Queue ownership now lives on StationState.physicalHoldingQueue. */
+export function reconcilePhysicalApproachCommitments(state: StationState): void {
+  reconcilePhysicalHoldingQueue(state);
+}
+
+function canAdvancePhysicalApproach(state: StationState, ship: ArrivingShip): boolean {
+  return physicalHoldingEntryForShip(state, ship.id)?.status === 'active';
 }
 
 function describeMissingCapabilities(
@@ -14214,17 +14312,16 @@ function updateCommitmentMetrics(state: StationState, dt: number): void {
 
   // Holding-orbit and approach-group wait: any ship whose commitment is not
   // yet active is physically waiting for the corridor ahead of it.
-  let holding = 0;
-  for (const ship of state.arrivingShips) {
-    const waiting = ship.approachCommitment?.status === 'waiting';
-    if (!waiting) continue;
-    holding += 1;
+  let holdingCount = 0;
+  for (const queueEntry of state.physicalHoldingQueue) {
+    if (queueEntry.status === 'active') continue;
+    holdingCount += 1;
     commitment.holdingSeconds += dt;
-    if ((ship.approachCommitment?.groupIds.length ?? 0) > 0) {
+    if (queueEntry.groupIds.length > 0) {
       commitment.approachGroupWaitSeconds += dt;
     }
   }
-  commitment.holdingShips = holding;
+  commitment.holdingShips = holdingCount;
 
   // Fixture utilization, against DEPICTED capacity so the ratio is honest.
   let occupied = 0;
@@ -14754,10 +14851,18 @@ function updateTrafficOffers(state: StationState): void {
       if (policy === 'cautious' && !offer.requestedServices.every((tag) => shipServiceTagSatisfied(state, tag))) continue;
       const bestBerth = getEligibleBerthsForOffer(state, offer.id)
         .sort((a, b) => berthServiceScoreForAnchor(state, b.anchorTile) - berthServiceScoreForAnchor(state, a.anchorTile))[0];
-      if (!bestBerth) continue;
-      const result = admitTrafficOffer(state, offer.id, bestBerth.anchorTile);
+      // Standing orders cover both physical interface classes. Small walk-ins
+      // use their compatible Pod Dock; scheduled larger calls retain the
+      // service-scored Berth choice.
+      if (!bestBerth && offer.size !== 'small') continue;
+      const result = bestBerth
+        ? admitTrafficOffer(state, offer.id, bestBerth.anchorTile)
+        : admitTrafficOffer(state, offer.id);
       if (result.ok) {
-        pushCrowdEvent(state, 'info', `${offer.callsign} auto-routed to Berth ${berthServiceGrade(berthServiceScoreForAnchor(state, bestBerth.anchorTile))}`);
+        const destination = bestBerth
+          ? `Berth ${berthServiceGrade(berthServiceScoreForAnchor(state, bestBerth.anchorTile))}`
+          : 'Pod Dock';
+        pushCrowdEvent(state, 'info', `${offer.callsign} auto-routed to ${destination}`);
       }
     }
   }
@@ -14977,16 +15082,22 @@ function scheduleSporadicArrival(state: StationState): void {
     return;
   }
   if (!freeDock) {
-    const queueEntry: DockQueueEntry = {
-      shipId: state.shipSpawnCounter++,
+    const shipId = state.shipSpawnCounter++;
+    const queueEntry: PhysicalHoldingQueueEntry = {
+      shipId,
+      ownerKind: 'walk-in-candidate',
       lane,
       shipType,
-      hullVariant: selectShipHullVariant(state.shipSpawnCounter - 1, shipType, 'small'),
+      hullVariant: selectShipHullVariant(shipId, shipType, 'small'),
       size: 'small',
+      slotId: null,
+      groupIds: [],
+      phase: 'approach',
+      status: 'awaiting-slot',
       queuedAt: state.now,
       timeoutAt: state.now + DOCK_QUEUE_MAX_TIME_SEC
     };
-    state.dockQueue.push(queueEntry);
+    state.physicalHoldingQueue.push(queueEntry);
     return;
   }
   spawnShipAtDock(state, lane, shipType, freeDock.id, undefined, 'small');
@@ -15020,7 +15131,8 @@ function updateTrafficArrivalSchedule(state: StationState): void {
     // Crowd-loop v1 (CH-1): traffic control — don't dispatch arrivals the
     // docks can't take. A full queue means the next ship simply doesn't come
     // (instead of arriving, waiting 18s, and silently torching rating).
-    if (state.controls.manualTrafficAdmission || state.dockQueue.length < Math.max(1, state.docks.length)) {
+    const walkInsWaiting = state.physicalHoldingQueue.filter((entry) => entry.ownerKind === 'walk-in-candidate').length;
+    if (state.controls.manualTrafficAdmission || walkInsWaiting < Math.max(1, state.docks.length)) {
       scheduleSporadicArrival(state);
     }
     state.lastCycleTime += nextTrafficArrivalDelay(state);
@@ -15940,11 +16052,12 @@ function tryExtendLongStayVisit(state: StationState, ship: ArrivingShip, contrac
 }
 
 function updateArrivingShips(state: StationState, dt: number): void {
-  for (let i = 0; i < state.dockQueue.length; i++) {
-    const entry = state.dockQueue[i];
+  const walkIns = state.physicalHoldingQueue
+    .filter((entry) => entry.ownerKind === 'walk-in-candidate')
+    .sort((a, b) => (a.queuedAt - b.queuedAt) || a.shipId - b.shipId);
+  for (const entry of walkIns) {
     if (!isShipTypeUnlocked(state, entry.shipType)) {
-      state.dockQueue.splice(i, 1);
-      i--;
+      releasePhysicalHoldingEntry(state, entry.shipId);
       continue;
     }
     const eligible = state.docks.filter(
@@ -15957,37 +16070,36 @@ function updateArrivingShips(state: StationState, dt: number): void {
     );
     if (eligible.length === 0) {
       // Config changed after queueing; drop silently rather than timing out.
-      state.dockQueue.splice(i, 1);
-      i--;
+      releasePhysicalHoldingEntry(state, entry.shipId);
       continue;
     }
-    const freeDock = eligible.find((d) => d.occupiedByShipId === null);
+    const freeDock = eligible
+      .filter((d) => d.occupiedByShipId === null)
+      .sort((a, b) => a.id - b.id)[0];
     if (freeDock) {
       spawnShipAtDock(state, entry.lane, entry.shipType, freeDock.id, entry.shipId, entry.size, undefined, entry.hullVariant);
-      state.dockQueue.splice(i, 1);
-      i--;
       continue;
     }
-    if (state.now >= entry.timeoutAt) {
+    if (entry.timeoutAt !== null && state.now >= entry.timeoutAt) {
       // Crowd-loop v1 (CH-1): timeouts are telemetry, not a rating bleed —
       // dock capacity is per-zone and not fixable by the player mid-queue.
       state.metrics.shipsTimedOutInQueue++;
-      state.dockQueue.splice(i, 1);
-      i--;
+      releasePhysicalHoldingEntry(state, entry.shipId);
     }
   }
-  resolvePhysicalApproachCommitments(state);
+  resolvePhysicalHoldingQueue(state);
   const keep: ArrivingShip[] = [];
   for (const ship of state.arrivingShips) {
-    if (ship.stage === 'approach' && !ship.approachCommitment) {
-      ship.approachCommitment = commitmentForShip(state, ship, 'approach');
+    if (ship.stage === 'approach' && !physicalHoldingEntryForShip(state, ship.id)) {
+      ensureActiveShipHoldingEntry(state, ship, 'approach');
+      resolvePhysicalHoldingQueue(state);
     }
 
     // Holding is real physical waiting, not hidden progress. A ship must spend
     // the full movement duration in the corridor after it acquires ownership.
     const waitingForPhysicalLane =
       (ship.stage === 'approach' || ship.stage === 'depart') &&
-      !canAdvancePhysicalApproach(ship);
+      !canAdvancePhysicalApproach(state, ship);
     if (!waitingForPhysicalLane) {
       const descriptor = descriptorForShip(state, ship);
       const approachRate = descriptor && (ship.stage === 'approach' || ship.stage === 'depart')
@@ -15996,12 +16108,12 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ship.stageTime += dt * approachRate;
     }
 
-    if (ship.stage === 'approach' && canAdvancePhysicalApproach(ship) && ship.stageTime >= SHIP_APPROACH_TIME) {
+    if (ship.stage === 'approach' && canAdvancePhysicalApproach(state, ship) && ship.stageTime >= SHIP_APPROACH_TIME) {
       ship.stage = 'docked';
       ship.stageTime = 0;
       ship.dockedAt = state.now;
       ship.visitPhase = 'secure';
-      releaseApproachCommitment(ship);
+      releasePhysicalHoldingEntry(state, ship.id);
       beginPortTurnaround(state, ship);
     }
 
@@ -16099,10 +16211,12 @@ function updateArrivingShips(state: StationState, dt: number): void {
     }
 
     if (ship.stage === 'depart') {
-      if (ship.approachCommitment?.phase !== 'depart') {
-        ship.approachCommitment = commitmentForShip(state, ship, 'depart');
+      const departureEntry = physicalHoldingEntryForShip(state, ship.id);
+      if (departureEntry?.phase !== 'depart') {
+        ensureActiveShipHoldingEntry(state, ship, 'depart');
+        resolvePhysicalHoldingQueue(state);
       }
-      if (!ship.approachCommitment || !canAdvancePhysicalApproach(ship)) {
+      if (!canAdvancePhysicalApproach(state, ship)) {
         keep.push(ship);
         continue;
       }
@@ -16151,7 +16265,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
           dock.occupiedByShipId = null;
         }
       }
-      releaseApproachCommitment(ship);
+      releasePhysicalHoldingEntry(state, ship.id);
       continue;
     }
 
@@ -16268,11 +16382,11 @@ function spawnShipAtDock(
     stayClass,
     visitPhase: 'announced',
     extensionUntil: null,
-    recallAt: null,
-    approachCommitment: null
+    recallAt: null
   };
   state.arrivingShips.push(ship);
-  ship.approachCommitment = commitmentForShip(state, ship, 'approach');
+  ensureActiveShipHoldingEntry(state, ship, 'approach');
+  resolvePhysicalHoldingQueue(state);
   state.usageTotals.shipsByType[shipType] += 1;
 }
 
@@ -16347,11 +16461,11 @@ function spawnShipAtBerth(
     stayClass,
     visitPhase: 'announced',
     extensionUntil: null,
-    recallAt: null,
-    approachCommitment: null
+    recallAt: null
   };
   state.arrivingShips.push(ship);
-  ship.approachCommitment = commitmentForShip(state, ship, 'approach');
+  ensureActiveShipHoldingEntry(state, ship, 'approach');
+  resolvePhysicalHoldingQueue(state);
   state.usageTotals.shipsByType[shipType] += 1;
 }
 
@@ -27124,7 +27238,9 @@ function computeMetrics(state: StationState): void {
   state.metrics.dockZonesTotal = bays.length;
   state.metrics.exitsPerMin = exitsPerMin;
   const queueByLane: Record<SpaceLane, number> = { north: 0, east: 0, south: 0, west: 0 };
-  for (const q of state.dockQueue) queueByLane[q.lane] += 1;
+  for (const q of state.physicalHoldingQueue) {
+    if (q.status !== 'active') queueByLane[q.lane] += 1;
+  }
   state.metrics.dockQueueLengthByLane = queueByLane;
   state.metrics.shipDemandCafeteriaPct = manifestDemand.cafeteria * 100;
   state.metrics.shipDemandMarketPct = manifestDemand.market * 100;

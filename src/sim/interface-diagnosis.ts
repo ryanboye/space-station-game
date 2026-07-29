@@ -177,6 +177,9 @@ function relevantChangeSignature(
         ].join(',');
       })
       .join(';');
+  const holding = shipId === undefined
+    ? null
+    : state.physicalHoldingQueue.find((entry) => entry.shipId === shipId) ?? null;
 
   return {
     value: [
@@ -190,8 +193,8 @@ function relevantChangeSignature(
       ship?.stage ?? '',
       ship?.assignedDockId ?? '',
       ship?.assignedBerthAnchor ?? '',
-      ship?.approachCommitment?.status ?? '',
-      ship?.approachCommitment?.queuedAt ?? '',
+      holding?.status ?? '',
+      holding?.queuedAt ?? '',
       contract?.status ?? '',
       contract?.hardDepartureAt ?? '',
       // Utility/maintenance access only changes answer when the underlay is
@@ -764,13 +767,17 @@ function computeInterfaceDiagnosis(state: StationState, identity: InterfaceIdent
   }
 
   // 10. Approach wait/overstay.
-  if (context.ship?.approachCommitment?.status === 'waiting') {
-    const wait = Math.max(0, state.now - context.ship.approachCommitment.queuedAt);
+  const heldShip = context.ship;
+  const holding = heldShip
+    ? state.physicalHoldingQueue.find((entry) => entry.shipId === heldShip.id) ?? null
+    : null;
+  if (holding?.status === 'waiting') {
+    const wait = Math.max(0, state.now - holding.queuedAt);
     if (wait >= 15) {
       return {
         severity: 'notice',
         title: `${context.label} is waiting for approach clearance`,
-        evidence: `${context.ship.portManifest?.callsign ?? `Ship #${context.ship.id}`} has held for ${Math.ceil(wait)}s on this interface approach.`,
+        evidence: `${heldShip?.portManifest?.callsign ?? `Ship #${heldShip?.id ?? holding.shipId}`} has held for ${Math.ceil(wait)}s on this interface approach.`,
         remedy: 'Clear the shared approach lane or wait for the occupying ship to depart.',
         implicatedTile: context.anchorTile,
         metricCode: 'approach-wait'

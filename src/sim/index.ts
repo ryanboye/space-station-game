@@ -39,6 +39,8 @@ export {
   getDockingSlotDescriptors,
   getApproachConflictGroups,
   validateDockingSlot,
+  resolvePhysicalHoldingQueue,
+  reconcilePhysicalHoldingQueue,
   resolvePhysicalApproachCommitments,
   reconcilePhysicalApproachCommitments,
   runMovementCoordinatorTestTick,

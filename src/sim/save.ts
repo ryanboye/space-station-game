@@ -7,7 +7,7 @@ import {
   setDockAllowedShipType,
   setDockFacing,
   setDockPurpose,
-  reconcilePhysicalApproachCommitments,
+  reconcilePhysicalHoldingQueue,
   rebuildPassengerTransfersAfterHydration,
   restorePersistedTransportJobs,
   tick,
@@ -27,6 +27,7 @@ import {
   type ItemType,
   type TransportJob,
   type ArrivingShip,
+  type PhysicalHoldingQueueEntry,
   type SmallCraftService,
   type SmallCraftVisit,
   type MaintenanceDomain,
@@ -528,6 +529,8 @@ export interface StationSnapshotV1 {
   portOps: PortOpsState;
   /** Pending approach decisions, including physical reservations made before arrival. */
   trafficOffers?: TrafficOffer[];
+  /** Canonical physical-space queue. Absent on saves written before L555. */
+  physicalHoldingQueue?: PhysicalHoldingQueueEntry[];
   activePortShips: ArrivingShip[];
   /** Active temporary occupants are durable from Phase 1A onward. */
   visitors?: Visitor[];
@@ -748,6 +751,50 @@ function normalizeApproachCommitment(value: unknown): ArrivingShip['approachComm
     status: value.status,
     queuedAt: Math.max(0, asFiniteNumber(value.queuedAt, 0))
   };
+}
+
+function normalizePhysicalHoldingQueue(value: unknown): PhysicalHoldingQueueEntry[] {
+  if (!Array.isArray(value)) return [];
+  const byShip = new Map<number, PhysicalHoldingQueueEntry>();
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      !Number.isFinite(raw.shipId) ||
+      (raw.ownerKind !== 'walk-in-candidate' && raw.ownerKind !== 'active-ship') ||
+      !isOneOf(raw.lane, SPACE_LANES) ||
+      !isOneOf(raw.shipType, SHIP_TYPES) ||
+      !isOneOf(raw.size, SHIP_SIZES) ||
+      (raw.phase !== 'approach' && raw.phase !== 'depart') ||
+      !isOneOf(raw.status, ['awaiting-slot', 'waiting', 'active'] as const)
+    ) continue;
+    const shipId = Math.max(1, Math.floor(raw.shipId as number));
+    if (byShip.has(shipId)) continue;
+    const hullVariant = isCompatibleShipHullVariant(raw.hullVariant, raw.shipType, raw.size)
+      ? raw.hullVariant
+      : selectShipHullVariant(shipId, raw.shipType, raw.size);
+    const slotId = typeof raw.slotId === 'string' && raw.slotId.length > 0
+      ? raw.slotId.slice(0, 160)
+      : null;
+    byShip.set(shipId, {
+      shipId,
+      ownerKind: raw.ownerKind,
+      lane: raw.lane,
+      shipType: raw.shipType,
+      hullVariant,
+      size: raw.size,
+      slotId,
+      groupIds: Array.isArray(raw.groupIds)
+        ? [...new Set(raw.groupIds.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0).map((entry) => entry.slice(0, 160)))].sort()
+        : [],
+      phase: raw.phase,
+      status: slotId === null ? 'awaiting-slot' : raw.status === 'awaiting-slot' ? 'waiting' : raw.status,
+      queuedAt: Math.max(0, asFiniteNumber(raw.queuedAt, 0)),
+      timeoutAt: raw.ownerKind === 'walk-in-candidate' && Number.isFinite(raw.timeoutAt)
+        ? Math.max(0, raw.timeoutAt as number)
+        : null
+    });
+  }
+  return [...byShip.values()].sort((a, b) => (a.queuedAt - b.queuedAt) || a.shipId - b.shipId);
 }
 
 function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
@@ -1466,6 +1513,10 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
       outboundRequest: { ...offer.outboundRequest },
       requestedServices: [...offer.requestedServices]
     })),
+    physicalHoldingQueue: state.physicalHoldingQueue.map((entry) => ({
+      ...entry,
+      groupIds: [...entry.groupIds]
+    })),
     activePortShips: state.arrivingShips
       .filter((ship) => ship.kind === 'transient' && (ship.portContractId !== undefined || ship.smallCraftVisit !== undefined))
       .map((ship) => ({
@@ -1485,9 +1536,8 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
           outboundLoaded: { ...ship.portTurnaround.outboundLoaded }
         } : undefined,
         smallCraftVisit: cloneSmallCraftVisit(ship.smallCraftVisit),
-        approachCommitment: ship.approachCommitment
-          ? { ...ship.approachCommitment, groupIds: [...ship.approachCommitment.groupIds] }
-          : null
+        // Legacy per-ship ownership is deliberately omitted on new writes.
+        approachCommitment: undefined
       })),
     // Chartered site profile, if any. undefined on un-chartered starts, and
     // JSON.stringify drops it so legacy save shape is unchanged.
@@ -2824,6 +2874,27 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         }];
       })
     : [];
+  const canonicalPhysicalHoldingQueue = normalizePhysicalHoldingQueue(snapshotRaw.physicalHoldingQueue);
+  const physicalHoldingQueue: PhysicalHoldingQueueEntry[] = Array.isArray(snapshotRaw.physicalHoldingQueue)
+    ? canonicalPhysicalHoldingQueue
+    : activePortShips.flatMap((ship) => {
+        const legacy = ship.approachCommitment;
+        if (!legacy || (ship.stage !== 'approach' && ship.stage !== 'depart')) return [];
+        return [{
+          shipId: ship.id,
+          ownerKind: 'active-ship' as const,
+          lane: ship.lane,
+          shipType: ship.shipType,
+          hullVariant: ship.hullVariant,
+          size: ship.size,
+          slotId: legacy.slotId,
+          groupIds: [...legacy.groupIds],
+          phase: legacy.phase,
+          status: legacy.status,
+          queuedAt: legacy.queuedAt,
+          timeoutAt: null
+        }];
+      });
   const trafficOffers: TrafficOffer[] = Array.isArray(snapshotRaw.trafficOffers)
     ? snapshotRaw.trafficOffers
         .map((entry) => normalizeTrafficOffer(entry))
@@ -3012,6 +3083,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     interfaceBoardingTallies,
     portOps,
     trafficOffers,
+    physicalHoldingQueue,
     activePortShips,
     visitors,
     site: normalizeSite(snapshotRaw.site)
@@ -3108,7 +3180,7 @@ function clearTransientState(state: StationState): void {
   state.pendingSpawns.length = 0;
   state.jobs.length = 0;
   state.reservations.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.pathOccupancyByTile = new Map();
   state.bodyTiles.length = 0;
   state.recentDeathTimes.length = 0;
@@ -3671,6 +3743,10 @@ export function hydrateStateFromSave(
   refreshBasicInventoryMetrics(next);
 
   clearTransientState(next);
+  next.physicalHoldingQueue = (snapshot.physicalHoldingQueue ?? []).map((entry) => ({
+    ...entry,
+    groupIds: [...entry.groupIds]
+  }));
   const savedVisitorCountByShip = new Map<number, { stationSide: number; disembarking: number }>();
   for (const visitor of snapshot.visitors ?? []) {
     if (visitor.originShipId === null) continue;
@@ -3701,9 +3777,7 @@ export function hydrateStateFromSave(
         fuelDelivered: Math.max(0, savedShip.portTurnaround.fuelDelivered ?? 0)
       } : undefined,
       smallCraftVisit: cloneSmallCraftVisit(savedShip.smallCraftVisit),
-      approachCommitment: savedShip.approachCommitment
-        ? { ...savedShip.approachCommitment, groupIds: [...savedShip.approachCommitment.groupIds] }
-        : null
+      approachCommitment: undefined
     };
     if (ship.assignedDockId !== null) {
       const dock = (ship.assignedDockSourceKey
@@ -3718,7 +3792,13 @@ export function hydrateStateFromSave(
         ship.assignedDockId = null;
         ship.assignedDockSourceKey = null;
         ship.assignedBerthAnchor = null;
-        ship.approachCommitment = null;
+        const holding = next.physicalHoldingQueue.find((entry) => entry.shipId === ship.id);
+        if (holding) {
+          holding.slotId = null;
+          holding.groupIds = [];
+          holding.status = 'awaiting-slot';
+          holding.timeoutAt = null;
+        }
         ship.queueState = 'queued';
         ship.stage = 'approach';
         ship.stageTime = 0;
@@ -3737,7 +3817,13 @@ export function hydrateStateFromSave(
       ship.assignedBerthAnchor = null;
       ship.assignedDockId = null;
       ship.assignedDockSourceKey = null;
-      ship.approachCommitment = null;
+      const holding = next.physicalHoldingQueue.find((entry) => entry.shipId === ship.id);
+      if (holding) {
+        holding.slotId = null;
+        holding.groupIds = [];
+        holding.status = 'awaiting-slot';
+        holding.timeoutAt = null;
+      }
       ship.queueState = 'queued';
       ship.stage = 'approach';
       ship.stageTime = 0;
@@ -3782,7 +3868,7 @@ export function hydrateStateFromSave(
     next.arrivingShips.reduce((max, ship) => Math.max(max, ship.id + 1), 1),
     next.trafficOffers.reduce((max, offer) => Math.max(max, offer.id + 1), 1)
   );
-  reconcilePhysicalApproachCommitments(next);
+  reconcilePhysicalHoldingQueue(next);
   const activeShipIds = new Set(next.arrivingShips.map((ship) => ship.id));
   next.visitors = (snapshot.visitors ?? [])
     .filter((visitor) => visitor.originShipId === null || activeShipIds.has(visitor.originShipId))

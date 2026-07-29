@@ -142,7 +142,7 @@ function buildHabitat(state: StationState): void {
   state.visitors.length = 0;
   state.residents.length = 0;
   state.arrivingShips.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.docks.length = 0;
   state.unlocks.tier = 3;
   state.unlocks.unlockedIds = ['tier1_sustenance', 'tier2_commerce', 'tier3_logistics'];

@@ -227,8 +227,8 @@ export function auditSaveRecovery(state: StationState): SaveRecoveryAudit {
   const activeJobs = state.jobs.filter((job) => ACTIVE_JOB_STATES.has(job.state));
   const activeJobIds = new Set(activeJobs.map((job) => job.id));
 
-  const approachSlots = state.arrivingShips
-    .map((ship) => ship.approachCommitment?.slotId)
+  const approachSlots = state.physicalHoldingQueue
+    .map((entry) => entry.slotId)
     .filter((slot): slot is string => typeof slot === 'string');
   const uniqueApproachSlots = new Set(approachSlots);
 
@@ -282,7 +282,7 @@ export function auditSaveRecovery(state: StationState): SaveRecoveryAudit {
       (reservation) => !liveOwnerIds.has(`${reservation.ownerKind}:${reservation.ownerId}`)
     ).length,
     expiredReservations: state.reservations.filter((reservation) => reservation.expiresAt <= state.now).length,
-    dockQueueLength: state.dockQueue.length,
+    dockQueueLength: state.physicalHoldingQueue.filter((entry) => entry.status === 'awaiting-slot').length,
     approachCommitments: approachSlots.length,
     duplicateApproachSlots: approachSlots.length - uniqueApproachSlots.size,
     approachConflictGroups: getApproachConflictGroups(state).length,

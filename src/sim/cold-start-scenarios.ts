@@ -200,7 +200,7 @@ function placeWallMod(state: StationState, x: number, y: number, m: ModuleType):
   tryPlaceModule(state, m, y * GRID_WIDTH + x, 0);
 }
 
-function approachConflictShip(id: number, dock: StationState['docks'][number], status: 'active' | 'waiting', groupIds: string[]): ArrivingShip {
+function approachConflictShip(id: number, dock: StationState['docks'][number]): ArrivingShip {
   const anchor = dock.anchorTile;
   const x = anchor % GRID_WIDTH;
   const y = Math.floor(anchor / GRID_WIDTH);
@@ -229,14 +229,7 @@ function approachConflictShip(id: number, dock: StationState['docks'][number], s
     dockedAt: 0,
     residentIds: [],
     manifestDemand: { cafeteria: 0, market: 0, lounge: 0 },
-    manifestMix: { diner: 0.25, shopper: 0.25, lounger: 0.25, rusher: 0.25 },
-    approachCommitment: {
-      slotId: `dock:${dock.sourceKey}`,
-      groupIds,
-      phase: 'approach',
-      status,
-      queuedAt: id === 9401 ? 1 : id === 9402 ? 2 : 3
-    }
+    manifestMix: { diner: 0.25, shopper: 0.25, lounger: 0.25, rusher: 0.25 }
   };
 }
 
@@ -417,9 +410,14 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       group.slotIds.includes(`dock:${first.sourceKey}`) && group.slotIds.includes(`dock:${second.sourceKey}`)
     );
     s.arrivingShips = [
-      approachConflictShip(9401, first, 'active', sharedGroup ? [sharedGroup.id] : []),
-      approachConflictShip(9402, second, 'waiting', sharedGroup ? [sharedGroup.id] : []),
-      approachConflictShip(9403, independent, 'active', [])
+      approachConflictShip(9401, first),
+      approachConflictShip(9402, second),
+      approachConflictShip(9403, independent)
+    ];
+    s.physicalHoldingQueue = [
+      { shipId: 9401, ownerKind: 'active-ship', lane: first.lane, shipType: 'tourist', hullVariant: selectShipHullVariant(9401, 'tourist', 'small'), size: 'small', slotId: `dock:${first.sourceKey}`, groupIds: sharedGroup ? [sharedGroup.id] : [], phase: 'approach', status: 'active', queuedAt: 1, timeoutAt: null },
+      { shipId: 9402, ownerKind: 'active-ship', lane: second.lane, shipType: 'tourist', hullVariant: selectShipHullVariant(9402, 'tourist', 'small'), size: 'small', slotId: `dock:${second.sourceKey}`, groupIds: sharedGroup ? [sharedGroup.id] : [], phase: 'approach', status: 'waiting', queuedAt: 2, timeoutAt: null },
+      { shipId: 9403, ownerKind: 'active-ship', lane: independent.lane, shipType: 'trader', hullVariant: selectShipHullVariant(9403, 'trader', 'small'), size: 'small', slotId: `dock:${independent.sourceKey}`, groupIds: [], phase: 'approach', status: 'active', queuedAt: 3, timeoutAt: null }
     ];
     s.controls.paused = true;
     s.controls.spriteMode = 'sprites';
@@ -960,7 +958,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.manualTrafficAdmission = true;
     s.trafficOffers.length = 0;
     s.arrivingShips.length = 0;
-    s.dockQueue.length = 0;
+    s.physicalHoldingQueue.length = 0;
     s.portOps.contracts.length = 0;
     s.portOps.cargoLots.length = 0;
     s.portOps.settlements.length = 0;
@@ -1090,7 +1088,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.manualTrafficAdmission = true;
     s.trafficOffers.length = 0;
     s.arrivingShips.length = 0;
-    s.dockQueue.length = 0;
+    s.physicalHoldingQueue.length = 0;
     s.portOps.contracts.length = 0;
     s.portOps.cargoLots.length = 0;
     s.portOps.settlements.length = 0;
@@ -3219,7 +3217,7 @@ function stageTwoGangwayBerth(state: StationState): void {
   state.controls.portAutoAdmitEnabled = false;
   state.trafficOffers.length = 0;
   state.arrivingShips.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.portOps.contracts.length = 0;
   state.portOps.cargoLots.length = 0;
   state.portOps.settlements.length = 0;
@@ -3361,7 +3359,7 @@ function stageMixedTenureDay(state: StationState): void {
   state.controls.portAutoAdmitEnabled = false;
   state.trafficOffers.length = 0;
   state.arrivingShips.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.portOps.contracts.length = 0;
   state.portOps.cargoLots.length = 0;
   state.portOps.settlements.length = 0;
@@ -4465,8 +4463,7 @@ function stageCommitmentCohort(state: StationState, options: { supported: boolea
     earliestDepartureAt: state.now + 600,
     plannedDepartureAt: state.now + 900,
     extensionUntil: null,
-    recallAt: null,
-    approachCommitment: null
+    recallAt: null
   } as unknown as StationState['arrivingShips'][number]);
   state.portOps.contracts.push({
     id: shipId,

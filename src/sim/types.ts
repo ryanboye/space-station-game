@@ -1621,8 +1621,9 @@ export interface ArrivingShip {
   // Null for legacy-dock ships.
   assignedBerthAnchor?: number | null;
   /**
-   * Durable physical-frontage ownership. Offers reserve a compatible
-   * interface; this record serializes the shared space around that interface.
+   * Legacy physical-frontage ownership. Read only while migrating saves made
+   * before `StationState.physicalHoldingQueue`; new runtime state and new save
+   * writes leave it absent.
    */
   approachCommitment?: ApproachCommitment | null;
 }
@@ -1801,14 +1802,23 @@ export interface SystemMap {
   laneRoutes?: LaneRoute[];
 }
 
-export interface DockQueueEntry {
+/** One visible physical-space claim, shared by Pod Docks and Berths. */
+export interface PhysicalHoldingQueueEntry {
   shipId: number;
+  ownerKind: 'walk-in-candidate' | 'active-ship';
   lane: SpaceLane;
   shipType: ShipType;
   hullVariant: ShipHullVariant;
   size: ShipSize;
+  /** Stable DockingSlotDescriptor id; null while no physical interface is bound. */
+  slotId: string | null;
+  /** Runtime-derived corridor conflicts for this specific hull and phase. */
+  groupIds: string[];
+  phase: 'approach' | 'depart';
+  status: 'awaiting-slot' | 'waiting' | 'active';
   queuedAt: number;
-  timeoutAt: number;
+  /** Finite only for unbound walk-ins. Accepted ships never expire here. */
+  timeoutAt: number | null;
 }
 
 export type TrafficOfferStatus = 'forecast' | 'holding' | 'cleared';
@@ -2970,7 +2980,8 @@ export interface StationState {
   mapWorldOriginX: number;
   mapWorldOriginY: number;
   laneProfiles: Record<SpaceLane, LaneProfile>;
-  dockQueue: DockQueueEntry[];
+  /** Sole runtime owner of physical interface and corridor queue order. */
+  physicalHoldingQueue: PhysicalHoldingQueueEntry[];
   trafficOffers: TrafficOffer[];
   portOps: PortOpsState;
   openingEconomy: OpeningEconomyState;

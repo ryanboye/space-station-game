@@ -620,7 +620,7 @@ audited checklist with no unsupported checked claims.
 - [x] Add authoritative slot occupancy.
 - [x] Make small-craft reservations bind to a specific dock.
 - [x] Prevent two ships from owning the same slot.
-- [ ] Unify holding queues without merging distinct settlement models.
+- [x] Unify holding queues without merging distinct settlement models.
 
 ### Fleet Shape And Scale
 

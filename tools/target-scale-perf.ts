@@ -243,7 +243,7 @@ function gameplayFingerprint(state: StationState): unknown {
       visitors: state.visitors.length,
       residents: state.residents.length,
       arrivingShips: state.arrivingShips.length,
-      dockQueue: state.dockQueue.length,
+      dockQueue: state.physicalHoldingQueue.filter((entry) => entry.status !== 'active').length,
       incidentsTotal: state.metrics.incidentsTotal,
       incidentsOpen: state.metrics.incidentsOpen,
       deathsTotal: state.metrics.deathsTotal,
@@ -562,7 +562,7 @@ function buildTierState(template: FixtureTemplate, target: number): StationState
   }
   hydrated.state.jobs = [];
   hydrated.state.reservations = [];
-  hydrated.state.dockQueue = [];
+  hydrated.state.physicalHoldingQueue = [];
   hydrated.state.controls.paused = false;
   hydrated.state.controls.shipsPerCycle = 0;
   return hydrated.state;

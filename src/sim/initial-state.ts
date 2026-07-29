@@ -486,7 +486,7 @@ export function createInitialState(options?: {
     mapWorldOriginX: 0,
     mapWorldOriginY: 0,
     laneProfiles,
-    dockQueue: [],
+    physicalHoldingQueue: [],
     trafficOffers: [],
     portOps: {
       version: 1,

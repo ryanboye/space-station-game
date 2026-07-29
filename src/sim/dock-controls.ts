@@ -42,7 +42,9 @@ export function setDockPurpose(state: StationState, dockId: number, purpose: Doc
   if (dock.purpose === purpose) return;
   dock.purpose = purpose;
   if (purpose === 'residential') {
-    state.dockQueue = state.dockQueue.filter((entry) => entry.lane !== dock.lane);
+    state.physicalHoldingQueue = state.physicalHoldingQueue.filter(
+      (entry) => entry.ownerKind === 'active-ship' || entry.lane !== dock.lane
+    );
   }
   bumpDockVersion(state);
 }

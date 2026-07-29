@@ -254,17 +254,22 @@ function dockQueueAt(age: number): boolean {
   passenger.originShipId = occupant.id;
   state.visitors.push(passenger);
   state.now = age;
-  state.dockQueue = [{
+  state.physicalHoldingQueue = [{
     shipId: 999_002,
+    ownerKind: 'walk-in-candidate',
     lane: dock.lane,
     shipType: 'tourist',
     hullVariant: 'courier-pod',
     size: 'small',
+    slotId: null,
+    groupIds: [],
+    phase: 'approach',
+    status: 'awaiting-slot',
     queuedAt: 0,
     timeoutAt: TASK_TIMINGS.dockQueueMaxSec
   }];
   tick(state, 0);
-  return state.dockQueue.length === 1;
+  return state.physicalHoldingQueue.some((entry) => entry.shipId === 999_002);
 }
 
 function testDockQueueTimer(): string {

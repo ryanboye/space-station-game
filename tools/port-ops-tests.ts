@@ -10,6 +10,7 @@ import {
   getPodDockAttachmentView,
   getPodDockFuelSupplyView,
   getPodDockPlacementView,
+  getTrafficOfferPreview,
   holdTrafficOffer,
   isCrewAutoStaffUnlocked,
   isModuleUnlocked,
@@ -620,17 +621,18 @@ function testAutomationIsEarnedByOperation(): void {
 
 function testAutomationClaimsHoldingOffer(): void {
   const state = freshPortState(1450);
-  advance(state, 4);
-  advance(state, 60);
-  const holding = state.trafficOffers.find(
-    (offer) => offer.status === 'holding' && getEligibleBerthsForOffer(state, offer.id).length > 0
-  );
-  assert(holding, 'Expected an eligible ship waiting in holding orbit.');
+  tick(state, 0);
+  const dock = state.docks.find((entry) => entry.sourceKind === 'pod-dock-module' && entry.purpose === 'visitor');
+  assert(dock, 'Standing-order fixture requires a visitor Pod Dock.');
+  const holding = smallCraftOffer(state, dock, 145001);
+  holding.status = 'holding';
+  state.trafficOffers.push(holding);
+  assert((getTrafficOfferPreview(state, holding.id)?.compatibleInterface.freeCount ?? 0) > 0, 'Standing-order fixture did not expose a compatible physical interface.');
   state.dockedShipsCompleted = 3;
   assert(setPortAutoAdmit(state, true), 'Expected earned dispatch automation to enable.');
   advance(state, 1);
   assert(
-    state.portOps.contracts.some((contract) => contract.offerId === holding.id),
+    state.arrivingShips.some((ship) => ship.id === holding.id && ship.smallCraftVisit !== undefined),
     'Standing orders ignored a compatible ship already in holding orbit.'
   );
 }

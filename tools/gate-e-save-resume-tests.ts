@@ -475,19 +475,20 @@ function testShipsPassengersAndInterfaces(): string {
   berthShip.size = 'medium';
   berthShip.stayClass = 'contract';
 
-  // An approach commitment on a third ship still inbound.
+  // A canonical physical holding row on a third ship still inbound.
   const dock = podDock(state, 2);
   const offer = makeOffer(state, 71003, dock);
   state.trafficOffers.push(offer);
   assert(admitTrafficOffer(state, offer.id).ok, 'Approach offer could not be admitted.');
   const inbound = state.arrivingShips.find((entry) => entry.id === offer.id);
+  const inboundHolding = state.physicalHoldingQueue.find((entry) => entry.shipId === inbound?.id);
   assert(
-    inbound?.approachCommitment,
-    `Admitted ship has no approach commitment: stage=${inbound?.stage} dock=${inbound?.assignedDockId} `
+    inbound && inboundHolding?.slotId,
+    `Admitted ship has no physical holding row: stage=${inbound?.stage} dock=${inbound?.assignedDockId} `
     + `queue=${inbound?.queueState}`
   );
-  const commitmentSlot = inbound.approachCommitment.slotId;
-  const commitmentQueuedAt = inbound.approachCommitment.queuedAt;
+  const commitmentSlot = inboundHolding.slotId;
+  const commitmentQueuedAt = inboundHolding.queuedAt;
 
   const beforeShipIds = state.arrivingShips.map((ship) => ship.id).sort((a, b) => a - b);
   const beforeVisitorIds = state.visitors.map((visitor) => visitor.id).sort((a, b) => a - b);
@@ -519,12 +520,13 @@ function testShipsPassengersAndInterfaces(): string {
   );
 
   const loadedInbound = loaded.arrivingShips.find((ship) => ship.id === inbound.id);
+  const loadedInboundHolding = loaded.physicalHoldingQueue.find((entry) => entry.shipId === inbound.id);
   assert(
-    loadedInbound?.approachCommitment?.slotId === commitmentSlot,
-    `Approach slot changed to ${loadedInbound?.approachCommitment?.slotId}.`
+    loadedInbound && loadedInboundHolding?.slotId === commitmentSlot,
+    `Approach slot changed to ${loadedInboundHolding?.slotId}.`
   );
   assert(
-    loadedInbound.approachCommitment.queuedAt === commitmentQueuedAt,
+    loadedInboundHolding.queuedAt === commitmentQueuedAt,
     'Approach queue order changed across reload.'
   );
 
@@ -788,7 +790,12 @@ function testStressSaveResume(): string {
     Math.abs(totalPhysicalStock(loaded.state, 'rawMaterial') - beforeStock) < 0.01,
     'Physical stock changed across the stress reload.'
   );
-  assert(after.dockQueueLength === 0, 'A frame-local dock queue was persisted.');
+  assert(
+    loaded.state.physicalHoldingQueue
+      .filter((entry) => entry.ownerKind === 'active-ship')
+      .every((entry) => loaded.state.arrivingShips.some((ship) => ship.id === entry.shipId) && entry.timeoutAt === null),
+    'Reload left an orphaned or finite-time accepted holding row.'
+  );
   assert(
     after.visitorsInTransfer === before.visitorsInTransfer,
     `Transfer commitments ${before.visitorsInTransfer} -> ${after.visitorsInTransfer}.`

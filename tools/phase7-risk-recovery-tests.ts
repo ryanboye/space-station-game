@@ -76,7 +76,7 @@ function emptyOperationalDeck(state: StationState): void {
   state.visitors.length = 0;
   state.residents.length = 0;
   state.arrivingShips.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.docks.length = 0;
   state.crewMembers.length = 0;
   state.crew.total = 0;

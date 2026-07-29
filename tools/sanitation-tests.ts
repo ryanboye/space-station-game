@@ -59,7 +59,7 @@ function buildHabitat(state: StationState): { x0: number; y0: number; x1: number
   state.visitors.length = 0;
   state.residents.length = 0;
   state.arrivingShips.length = 0;
-  state.dockQueue.length = 0;
+  state.physicalHoldingQueue.length = 0;
   state.docks.length = 0;
   state.dirtByTile.fill(0);
   state.dirtSourceByTile.fill(0);

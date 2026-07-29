@@ -5,11 +5,11 @@ import {
   admitTrafficOffer,
   expandMap,
   getDockingSlotDescriptors,
-  resolvePhysicalApproachCommitments,
+  resolvePhysicalHoldingQueue,
   tick,
   validateDockingSlot
 } from '../src/sim/sim';
-import { TileType, toIndex, type ArrivingShip, type StationState, type TrafficOffer } from '../src/sim/types';
+import { TileType, toIndex, type StationState, type TrafficOffer } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -29,13 +29,6 @@ function descriptor(id: string, facing: 'north' | 'east' | 'south' | 'west', x: 
     anchorWorldY: y + 0.5,
     hullBounds: { minX: x, minY: y, maxX: x + 1, maxY: y + 1 }
   });
-}
-
-function fakeShip(id: number, groupIds: string[], queuedAt: number): ArrivingShip {
-  return {
-    id,
-    approachCommitment: { slotId: `slot-${id}`, groupIds, phase: 'approach', status: 'waiting', queuedAt }
-  } as ArrivingShip;
 }
 
 function physicalOffer(id: number, dock: StationState['docks'][number]): TrafficOffer {
@@ -108,22 +101,27 @@ function testFixedObstructionDoesNotMutateState(): void {
 }
 
 function testDeterministicCommitmentOwnership(): void {
-  const state = createInitialState({ seed: 71102 });
-  const later = fakeShip(20, ['shared'], 40);
-  const earlier = fakeShip(10, ['shared'], 40);
-  state.arrivingShips = [later, earlier];
-  resolvePhysicalApproachCommitments(state);
-  assert(earlier.approachCommitment?.status === 'active', 'Equal-time queue ownership must use lower ship id.');
-  assert(later.approachCommitment?.status === 'waiting', 'Shared approach waiter should remain waiting.');
-  state.arrivingShips.reverse();
-  resolvePhysicalApproachCommitments(state);
-  assert(earlier.approachCommitment?.status === 'active', 'Array order must not change approach ownership.');
+  const state = createInitialState({ seed: 71102, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(state, 0);
+  const docks = state.docks.filter((entry) => entry.sourceKind === 'pod-dock-module' && entry.purpose === 'visitor');
+  assert(docks.length >= 2, 'Deterministic fixture needs two overlapping Pod Dock approaches.');
+  state.trafficOffers.push(physicalOffer(20, docks[0]), physicalOffer(10, docks[1]));
+  assert(admitTrafficOffer(state, 20).ok && admitTrafficOffer(state, 10).ok, 'Both deterministic fixture pods must bind.');
+  for (const entry of state.physicalHoldingQueue) entry.queuedAt = 40;
+  state.physicalHoldingQueue.reverse();
+  resolvePhysicalHoldingQueue(state);
+  const earlier = state.physicalHoldingQueue.find((entry) => entry.shipId === 10);
+  const later = state.physicalHoldingQueue.find((entry) => entry.shipId === 20);
+  assert(earlier?.status === 'active', 'Equal-time queue ownership must use lower ship id.');
+  assert(later?.status === 'waiting', 'Shared approach waiter should remain waiting.');
+  state.physicalHoldingQueue.reverse();
+  resolvePhysicalHoldingQueue(state);
+  assert(earlier.status === 'active', 'Array order must not change approach ownership.');
 
-  const independentA = fakeShip(31, ['north'], 5);
-  const independentB = fakeShip(32, ['south'], 5);
-  state.arrivingShips = [independentA, independentB];
-  resolvePhysicalApproachCommitments(state);
-  assert(independentA.approachCommitment?.status === 'active' && independentB.approachCommitment?.status === 'active', 'Independent approach groups must run concurrently.');
+  state.arrivingShips = state.arrivingShips.filter((ship) => ship.id === 10);
+  state.physicalHoldingQueue = state.physicalHoldingQueue.filter((entry) => entry.shipId === 10);
+  resolvePhysicalHoldingQueue(state);
+  assert(earlier.status === 'active' && earlier.groupIds.length === 0, 'A zero-group active ship must run without synthetic contention.');
 }
 
 function testAcceptedPodRequestsPhysicalApproach(): void {
@@ -164,23 +162,24 @@ function testAcceptedPodRequestsPhysicalApproach(): void {
   const ship = state.arrivingShips.find((entry) => entry.id === offer.id);
   assert(ship?.assignedDockSourceKey === dock.sourceKey, 'Small craft must preserve Pod Dock binding.');
   assert(ship?.assignedBerthAnchor === null, 'Small craft must never bind a Berth.');
-  assert(ship?.approachCommitment?.slotId === `dock:${dock.sourceKey}`, 'Accepted ship must request durable physical approach ownership.');
+  const holding = state.physicalHoldingQueue.find((entry) => entry.shipId === offer.id);
+  assert(holding?.slotId === `dock:${dock.sourceKey}`, 'Accepted ship must request durable physical approach ownership.');
 
   const parsed = parseAndMigrateSave(serializeSave('approach-envelope', state, 'test'));
   assert(parsed.ok, parsed.ok ? '' : parsed.error);
   const restored = hydrateStateFromSave(parsed.save, { seed: 71104 }).state;
   const restoredShip = restored.arrivingShips.find((entry) => entry.id === offer.id);
-  assert(restoredShip?.approachCommitment?.slotId === `dock:${dock.sourceKey}`, 'Save/load must preserve the physical slot commitment.');
-  assert(restoredShip?.approachCommitment?.queuedAt === ship.approachCommitment?.queuedAt, 'Save/load must preserve deterministic queue order.');
+  const restoredHolding = restored.physicalHoldingQueue.find((entry) => entry.shipId === offer.id);
+  assert(restoredShip && restoredHolding?.slotId === `dock:${dock.sourceKey}`, 'Save/load must preserve the physical slot commitment.');
+  assert(restoredHolding.queuedAt === holding.queuedAt, 'Save/load must preserve deterministic queue order.');
 
   tick(state, 20);
   assert(ship.stage === 'docked', 'Only an active physical approach commitment may complete docking.');
   ship.stage = 'depart';
   ship.stageTime = 0;
-  ship.approachCommitment = null;
   tick(state, 0.1);
   tick(state, 0.1);
-  const departureCommitment = state.arrivingShips.find((entry) => entry.id === ship.id)?.approachCommitment;
+  const departureCommitment = state.physicalHoldingQueue.find((entry) => entry.shipId === ship.id);
   assert(departureCommitment?.phase === 'depart' && departureCommitment.status === 'active', 'Departure must acquire egress ownership before releasing the parked slot.');
   assert(dock.occupiedByShipId === ship.id, 'Parked slot must remain occupied until departure completes.');
 }
@@ -196,9 +195,10 @@ function testWaitingDoesNotBankMovementTime(): void {
   state.trafficOffers.push(firstOffer, secondOffer);
   assert(admitTrafficOffer(state, firstOffer.id).ok, 'First pod should enter approach control.');
   assert(admitTrafficOffer(state, secondOffer.id).ok, 'Second pod should enter approach control.');
-  resolvePhysicalApproachCommitments(state);
-  const waiting = state.arrivingShips.find((ship) => ship.approachCommitment?.status === 'waiting');
-  assert(waiting, 'Overlapping Pod Dock corridors must leave one ship waiting.');
+  resolvePhysicalHoldingQueue(state);
+  const waitingEntry = state.physicalHoldingQueue.find((entry) => entry.status === 'waiting');
+  const waiting = state.arrivingShips.find((ship) => ship.id === waitingEntry?.shipId);
+  assert(waitingEntry && waiting, 'Overlapping Pod Dock corridors must leave one ship waiting.');
   tick(state, 20);
   assert(waiting.stageTime === 0, 'A waiting ship must not bank hidden approach progress.');
   tick(state, 0.1);

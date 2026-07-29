@@ -3748,13 +3748,15 @@ function drawApproachWaitingChips(
   ctx.save();
   ctx.font = `bold ${fontSize}px monospace`;
   const width = Math.max(TILE_SIZE * 4.6, Math.min(TILE_SIZE * 9.5, ctx.measureText(widthTemplate).width + padding * 2));
-  for (const ship of state.arrivingShips) {
-    if (ship.approachCommitment?.status !== 'waiting') continue;
-    const descriptor = descriptors.get(ship.approachCommitment.slotId);
+  for (const holding of state.physicalHoldingQueue) {
+    if (holding.ownerKind !== 'active-ship' || holding.status !== 'waiting' || holding.slotId === null) continue;
+    const ship = state.arrivingShips.find((candidate) => candidate.id === holding.shipId);
+    if (!ship) continue;
+    const descriptor = descriptors.get(holding.slotId);
     if (!descriptor) continue;
     const rect = placeBerthChip(state, descriptor.hullTiles, width, height, occupied);
     if (!rect) continue;
-    const heldSec = Math.max(0, Math.floor(state.now - ship.approachCommitment.queuedAt));
+    const heldSec = Math.max(0, Math.floor(state.now - holding.queuedAt));
     const pulse = 0.72 + Math.sin(now * 2.6 + ship.id) * 0.24;
     ctx.fillStyle = 'rgba(28, 20, 7, 0.94)';
     ctx.beginPath();
@@ -6801,7 +6803,11 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, _sp
     west: 0
   };
   const laneStep = Math.round(16 * PX);
-  for (const queued of state.dockQueue) {
+  for (const queued of state.physicalHoldingQueue) {
+    // Bound accepted ships already have an in-world hull and, while blocked,
+    // an approach chip. An accepted ship whose interface vanished has neither,
+    // so retain it visibly in holding orbit beside unbound walk-ins.
+    if (queued.ownerKind === 'active-ship' && queued.status !== 'awaiting-slot') continue;
     const idx = countsByLane[queued.lane]++;
     const silhouette = resolveShipSilhouette(queued.shipId, queued.shipType, queued.size, queued.lane);
     const cellSize = (queued.size === 'small' ? 4 : queued.size === 'medium' ? 3.5 : 2) * PX;

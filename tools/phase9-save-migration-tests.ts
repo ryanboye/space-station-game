@@ -182,7 +182,8 @@ function testApproachCommitmentRoundTrip(): void {
   state.trafficOffers.push(offer);
   assert(admitTrafficOffer(state, offer.id).ok, 'Approach offer could not be admitted.');
   const ship = state.arrivingShips.find((entry) => entry.id === offer.id);
-  assert(ship?.stage === 'approach' && ship.approachCommitment, 'Accepted ship did not receive an approach commitment.');
+  const holding = state.physicalHoldingQueue.find((entry) => entry.shipId === ship?.id);
+  assert(ship?.stage === 'approach' && holding, 'Accepted ship did not receive a physical holding row.');
   state.portOps.contracts.push({
     id: offer.id,
     offerId: offer.id,
@@ -205,13 +206,14 @@ function testApproachCommitmentRoundTrip(): void {
     extensionUntil: null,
     recallAt: null
   });
-  const queuedAt = ship.approachCommitment.queuedAt;
+  const queuedAt = holding.queuedAt;
   const expectedContract = state.portOps.contracts.find((entry) => entry.id === offer.id);
   assert(expectedContract, 'Approach fixture did not retain its contract.');
   const restored = roundTrip(state, 9001).state;
   const resumed = restored.arrivingShips.find((entry) => entry.id === offer.id);
-  assert(resumed?.approachCommitment?.slotId === `dock:${dock.sourceKey}`, 'Valid approach slot was not preserved through hydration.');
-  assert(resumed.approachCommitment.queuedAt === queuedAt, 'Approach queue order changed during hydration.');
+  const resumedHolding = restored.physicalHoldingQueue.find((entry) => entry.shipId === offer.id);
+  assert(resumed && resumedHolding?.slotId === `dock:${dock.sourceKey}`, 'Valid approach slot was not preserved through hydration.');
+  assert(resumedHolding.queuedAt === queuedAt, 'Approach queue order changed during hydration.');
   assertContractPreserved(restored, offer.id, 'announced', expectedContract, ship);
 }
 
@@ -278,7 +280,20 @@ function testDurableConstructionIntegrityAndTransientReset(): void {
     expiresAt: state.now + 999,
     releaseReason: null
   });
-  state.dockQueue.push({ shipId: 999999, lane: 'north', shipType: 'tourist', hullVariant: 'courier-pod', size: 'small', queuedAt: state.now, timeoutAt: state.now + 999 });
+  state.physicalHoldingQueue.push({
+    shipId: 999999,
+    ownerKind: 'walk-in-candidate',
+    lane: 'north',
+    shipType: 'tourist',
+    hullVariant: 'courier-pod',
+    size: 'small',
+    slotId: null,
+    groupIds: [],
+    phase: 'approach',
+    status: 'awaiting-slot',
+    queuedAt: state.now,
+    timeoutAt: state.now + 999
+  });
 
   const restored = roundTrip(state, 9020).state;
   const loadedSite = restored.constructionSites.find((entry) => entry.id === site.id);
@@ -290,7 +305,8 @@ function testDurableConstructionIntegrityAndTransientReset(): void {
   assert(restored.crewMembers.every((crew) => crew.path.length === 0), 'Hydration retained stale crew movement paths.');
   assert(!restored.pathOccupancyByTile.has(999999) && !restored.derived.pathCache.has('phase9-stale-path'), 'Hydration retained stale occupancy or path cache state.');
   assert(!restored.derived.queueTheater.membersByAnchor.get(buildTile)?.includes(999999) && !restored.derived.queueTheater.slotByVisitorId.has(999999), 'Hydration retained stale queue occupancy.');
-  assert(!restored.reservations.some((entry) => entry.targetId === 'phase9-stale-reservation') && !restored.dockQueue.some((entry) => entry.shipId === 999999), 'Hydration retained stale reservations or dock queue entries.');
+  assert(!restored.reservations.some((entry) => entry.targetId === 'phase9-stale-reservation'), 'Hydration retained a stale physical reservation.');
+  assert(restored.physicalHoldingQueue.some((entry) => entry.shipId === 999999 && entry.status === 'awaiting-slot'), 'Hydration lost the durable physical holding queue.');
   evidence.rebuiltTransientChecks += 1;
 }
 
@@ -421,7 +437,8 @@ function testInvalidDockBindingReturnsToHolding(): void {
   const restoredOffer = restored.state.trafficOffers.find((entry) => entry.id === offer.id);
   const restoredShip = restored.state.arrivingShips.find((entry) => entry.id === ship.id);
   assert(restoredOffer?.status === 'holding' && restoredOffer.assignedDockSourceKey === null, 'Invalid cleared offer did not return to holding.');
-  assert(restoredShip?.queueState === 'queued' && restoredShip.assignedDockId === null && restoredShip.approachCommitment === null, 'Invalid active ship binding did not release safely.');
+  const restoredHolding = restored.state.physicalHoldingQueue.find((entry) => entry.shipId === ship.id);
+  assert(restoredShip?.queueState === 'queued' && restoredShip.assignedDockId === null && restoredHolding?.status === 'awaiting-slot' && restoredHolding.slotId === null, 'Invalid active ship binding did not remain visibly unbound.');
   assert(restored.warnings.some((warning) => warning.includes('lost its dock binding')) && restored.warnings.some((warning) => warning.includes('could not remap its dock')), 'Dock reconciliation did not surface both warnings.');
   evidence.reconciliationWarnings += restored.warnings.filter((warning) => warning.includes('dock')).length;
 }
