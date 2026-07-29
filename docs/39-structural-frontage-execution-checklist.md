@@ -292,7 +292,15 @@ audited checklist with no unsupported checked claims.
 - [x] Let freight wait for promised work until its explicit deadline.
   Evidence: `tools/mixed-berth-visit-tests.ts`.
 - [x] Let repair traffic remain until work completes, aborts, or is cancelled.
-- [ ] Tune Pod visits toward observable minutes rather than 10-30-second churn.
+- [x] Tune Pod visits toward observable minutes rather than 10-30-second churn.
+  Evidence: `npm run test:pod-visit-timing` (8/8) shares a 70-110-second
+  commitment between Approach Control and runtime, observes the declared
+  primary service still progressing at 15s and 45s, holds a physical dock for
+  at least 60s, starts bounded patience only on docking, and proves passenger,
+  mixed, refuel, freight, repair, blocked, save/resume, and inert legacy-save
+  paths. `npm run test:physical-holding-queue` (5/5) and
+  `npm run test:gate-e-save-resume` (6/6) preserve queue ownership and durable
+  exactly-once settlement.
 - [x] Tune traffic generation for useful concurrent occupancy.
 - [x] Prevent any ship or Berth from remaining pinned after terminal resolution.
 
@@ -2924,3 +2932,24 @@ bugfixing phase.
   for the five native-scale scaffold, floor, wall, seal and pressurizing frames.
   The live `structural-expansion-active` browser scenario showed the scaffold
   state on the actual exterior footprint while work advanced (`ee0cee0`).
+
+2026-07-29 · Pod calls now occupy an observable physical window
+
+- Commit or files: `5787d90`; `podVisitTargetSeconds` in
+  `src/sim/approach-control.ts`; `SmallCraftVisit` timing fields; the production
+  docking/service loop in `src/sim/sim.ts`; save normalization in
+  `src/sim/save.ts`; `tools/pod-visit-timing-tests.ts`.
+- Approach Control and the visit runtime now derive the same 70-110-second
+  target. The clock begins at physical docking, not while a craft is still on
+  approach, and its patience deadline is at least 120 seconds from that event.
+- Exactly one declared primary service owns the visible window. Passenger,
+  refuel, freight, and repair calls were each observed still active at 15 and 45
+  seconds; secondary work retains its natural duration, so a mixed call does not
+  create artificial idle padding. Passenger completion additionally requires
+  every traveler to return physically.
+- `npm run test:pod-visit-timing` passes 8/8, including exact fuel, material,
+  freight, and reward conservation; a stock-blocked call leaving on its bounded
+  deadline; one continuing save/resume clock and settlement; and an explicit
+  pre-field save that retains its old duration and is not forced through the new
+  physical floor. Lead review reran `test:physical-holding-queue` (5/5) and
+  `test:gate-e-save-resume` (6/6).
