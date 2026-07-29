@@ -8037,7 +8037,13 @@ function queueVisitorForBoardingTransfer(state: StationState, visitor: Visitor):
   // through the Gangway while their tender was still in visit-service.
   // Departure traffic is real only after the ship has called recall (or is
   // already resolving its departure); every caller shares this gate.
-  const boardingOpen = ship?.visitPhase === 'recall' || ship?.visitPhase === 'boarding' || ship?.stage === 'depart';
+  const legacySmallCraftBoarding =
+    ship?.smallCraftVisit !== undefined && ship.smallCraftVisit.targetDurationSec <= 0;
+  const boardingOpen =
+    ship?.visitPhase === 'recall' ||
+    ship?.visitPhase === 'boarding' ||
+    ship?.stage === 'depart' ||
+    legacySmallCraftBoarding;
   if (!ship || !boardingOpen || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
   if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding');
   return true;
@@ -15591,6 +15597,15 @@ function smallCraftVisitResolved(state: StationState, ship: ArrivingShip): boole
   );
 }
 
+function smallCraftVisitReadyForRecall(state: StationState, ship: ArrivingShip): boolean {
+  const visit = ship.smallCraftVisit;
+  if (!visit || visit.targetDurationSec <= 0 || visit.dockedAt === null) return false;
+  if (state.now - visit.dockedAt + 0.001 < visit.targetDurationSec) return false;
+  return visit.services.every((service) =>
+    service.kind === 'passenger' || service.status === 'complete' || service.status === 'skipped'
+  );
+}
+
 function expireSmallCraftVisit(state: StationState, ship: ArrivingShip): void {
   const visit = ship.smallCraftVisit;
   if (!visit) return;
@@ -16234,6 +16249,15 @@ function updateArrivingShips(state: StationState, dt: number): void {
         const visitor = state.visitors[state.visitors.length - 1];
         if (visitor) queuePassengerTransfer(state, visitor, 'disembark');
         ship.spawnCarry -= 1;
+      }
+      if (
+        !contract &&
+        ship.visitPhase !== 'recall' &&
+        ship.visitPhase !== 'boarding' &&
+        ship.passengersSpawned + inFlightArrivals() >= ship.passengersTotal &&
+        smallCraftVisitReadyForRecall(state, ship)
+      ) {
+        beginShipRecall(state, ship);
       }
       if (contract && contract.status === 'active') tryRecallFailedLongStay(state, ship, contract);
       if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
