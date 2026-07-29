@@ -7,8 +7,12 @@ import {
   removeModuleAtTile,
   setDockPurpose,
   setMarketPricingPolicy,
-  tick
+  setRoom,
+  setZone,
+  tick,
+  tryPlaceModuleWithCredits
 } from '../src/sim';
+import { ModuleType, RoomType, ZoneType, toIndex } from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -52,6 +56,26 @@ function routeWalkInsToFreightDock(state: ReturnType<typeof createInitialState>)
   state.controls.materialAutoImportEnabled = false;
 }
 
+function authorTravelSupplyReceiving(state: ReturnType<typeof createInitialState>): void {
+  // Use the ordinary 3x8 east-apron Market from the opening recipe, with the
+  // smallest fixture that can legally receive a supplier lot.
+  for (let y = 40; y <= 47; y++) {
+    for (let x = 58; x <= 60; x++) {
+      const tile = toIndex(x, y, state.width);
+      setRoom(state, tile, RoomType.Market);
+      setZone(state, tile, ZoneType.Public);
+    }
+  }
+  const placement = tryPlaceModuleWithCredits(
+    state,
+    ModuleType.ShelfAisle,
+    toIndex(58, 40, state.width),
+    0
+  );
+  if (!placement.ok) throw new Error(`Shelf Aisle setup failed: ${placement.reason ?? 'unknown reason'}`);
+  tick(state, 0);
+}
+
 function advanceUntil(
   state: ReturnType<typeof createInitialState>,
   condition: () => boolean,
@@ -85,6 +109,7 @@ function testFreshOpeningDefaults(): void {
 
 function testSupplierOrderRequiresFreightDock(): void {
   const state = readyState();
+  authorTravelSupplyReceiving(state);
   const locker = state.moduleInstances.find((module) => module.type === 'freight-locker');
   assert(locker, 'Starter fixture requires a Freight Locker.');
   assert(removeModuleAtTile(state, locker.originTile), 'Fixture Freight Locker should be removable through the simulation API.');
@@ -99,6 +124,7 @@ function testSupplierOrderRequiresFreightDock(): void {
 
 function testSupplierDeliveryAndCourierConsignment(): void {
   const state = readyState();
+  authorTravelSupplyReceiving(state);
   routeWalkInsToFreightDock(state);
   const suppliesBefore = stockAt(state, 'tradeGood');
   const creditsBefore = state.metrics.credits;
@@ -156,7 +182,7 @@ function testMarketPolicyAndOptionalProjects(): void {
   assert(courierProject?.state === 'active', 'Accepted capital project should become active.');
   assert(courierProject.conditions[0].complete, 'Starter Freight Locker should count toward the optional courier project.');
   assert(state.metrics.credits === creditsBefore + courierProject.advanceCredits, 'Project acceptance should issue its advance through the economy.');
-  assert(getOpeningEconomySummary(state).byKind['grant-award'].count === 1, 'Capital advance should be visible in the economy ledger.');
+  assert(getOpeningEconomySummary(state).byKind['project-advance'].count === 1, 'Capital advance should be visible in the economy ledger.');
 }
 
 const TESTS: Array<[string, () => void]> = [
