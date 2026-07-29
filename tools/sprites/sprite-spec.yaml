@@ -349,6 +349,21 @@ sprites:
   module.shelf_aisle.damaged:
     prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, DAMAGED state. 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE browsing bays remain legible, crossed by a bold red-orange fracture with two dark failure patches, a bent shelf and fallen goods, plus restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.display_cold_case:
+    prompt: "Strict top-down low-resolution pixel art station module: horizontal refrigerated display cold case, IDLE/FULL state. 3x1 footprint (192x64 authored, readable at 96x32). EXACTLY THREE equal left-to-right display bays, all visibly full of packaged chilled goods behind cyan-blue glass; dark navy and gunmetal machinery on the upper edge and three aligned shopper access lips on the lower edge. Transparent background, no text, no baked floor, at least 6px clear margin on every edge."
+    rotation: 0
+  module.display_cold_case.active:
+    prompt: "Strict top-down low-resolution pixel art station module: horizontal refrigerated display cold case, ACTIVE state. 3x1 footprint (192x64 authored, readable at 96x32). EXACTLY THREE stocked left-to-right display bays with brightly lit readable goods; one lower shopper-side access lip open with a focused green interaction scanner, goods pulled forward, and restrained green operating corners. Same physical case as idle, materially redrawn rather than tinted. Transparent background, no text, no baked floor, at least 6px clear margin on every edge."
+    rotation: 0
+  module.display_cold_case.empty:
+    prompt: "Strict top-down low-resolution pixel art station module: horizontal refrigerated display cold case, EMPTY state. 3x1 footprint (192x64 authored, readable at 96x32). EXACTLY THREE completely bare left-to-right cooling trays behind dim cyan glass, with empty divider rails, sparse frost lines, and dashed pale-blue hollow outlines; absolutely no goods remain. Same physical case as idle, materially redrawn rather than tinted. Transparent background, no text, no baked floor, at least 6px clear margin on every edge."
+    rotation: 0
+  module.display_cold_case.dirty:
+    prompt: "Strict top-down low-resolution pixel art station module: horizontal refrigerated display cold case, DIRTY state. 3x1 footprint (192x64 authored, readable at 96x32). EXACTLY THREE stocked left-to-right bays with goods still identifiable through fogged, greasy glass; localized olive-brown spills on the lower shopper lip, dropped packaging, crusted seams, condensation and muddied yellow-green service lights. Same physical case as idle, materially redrawn rather than tinted. Transparent background, no text, no baked floor, at least 6px clear margin on every edge."
+    rotation: 0
+  module.display_cold_case.damaged:
+    prompt: "Strict top-down low-resolution pixel art station module: horizontal refrigerated display cold case, DAMAGED refrigeration-fault state. 3x1 footprint (192x64 authored, readable at 96x32). EXACTLY THREE left-to-right bay positions remain legible; bold branching red-orange glass fracture, one dark frosted bay, buckled lower access lip, two dark machinery failure patches, and restrained red fault lamps. Same physical case as idle, materially redrawn rather than tinted. Transparent background, no text, no baked floor, at least 6px clear margin on every edge."
+    rotation: 0
   module.bunk_bank:
     prompt: "Top-down low-resolution pixel art station module: temporary bunk bank. 2x4 footprint, four unmistakable separate sleeping positions, transparent background, readable at 36x72."
     rotation: 0
