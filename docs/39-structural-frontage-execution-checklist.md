@@ -20,8 +20,12 @@ compiles is not sufficient for player-facing work.
 - [x] Every visual item has an inspected screenshot or live-browser observation.
 - [ ] Every gameplay item is tested in a deliberately bad layout and an improved
   layout.
-- [ ] Full-suite tests are reserved for integration gates; use focused runners
+- [x] Full-suite tests are reserved for integration gates; use focused runners
   during iteration.
+  Evidence: the running ledger and package runner catalogue record focused
+  subsystem checks throughout implementation; the whole `test:sim` runner was
+  used only as an explicit integration-debt audit and its unrelated legacy
+  failures were not used to block or falsely validate focused tranches.
 - [x] Save/load is checked at each phase that adds durable state.
 - [x] Performance is measured at each phase rather than deferred to cleanup.
 - [x] Existing exactly-once settlement, topology invalidation, physical fixture
