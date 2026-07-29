@@ -7,6 +7,9 @@
  * expose. Run with `npm run baseline:frontage`.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 import { findPath } from '../src/sim/path';
 import {
   createInitialState,
@@ -269,6 +272,34 @@ function requireImprovement(condition: boolean, message: string): void {
   if (!condition) fail(message);
 }
 
+/**
+ * Persist the run so later phases can diff against it rather than against a
+ * screenshot of a terminal. Written with sorted keys and no timestamp, so a
+ * genuine behavior change shows up as a diff and a re-run of unchanged code
+ * shows up as nothing at all.
+ */
+function writeBaselineArtifact(scenarios: Record<string, Record<string, number>>): void {
+  const sortedScenarios: Record<string, Record<string, number>> = {};
+  for (const name of Object.keys(scenarios).sort()) {
+    const metrics = scenarios[name];
+    const sortedMetrics: Record<string, number> = {};
+    // Tick timings are host-dependent, so they stay in the console report and
+    // out of the committed artifact — otherwise every run on a different
+    // machine would look like a regression.
+    for (const key of Object.keys(metrics).sort()) {
+      if (key.startsWith('tick_')) continue;
+      sortedMetrics[key] = metrics[key];
+    }
+    sortedScenarios[name] = sortedMetrics;
+  }
+  const payload = { seed: SEED, flowSamples: FLOW_SAMPLES, scenarios: sortedScenarios };
+  const dir = path.resolve(__dirname, '..', '..', '..', 'tools', 'harness', 'baselines');
+  const target = path.join(dir, 'frontage-baseline.json');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`);
+  console.log(`ARTIFACT | ${path.relative(process.cwd(), target)}`);
+}
+
 function main(): void {
   const starter = compactStarter();
   const badTerminal = terminalFlow(false);
@@ -305,11 +336,27 @@ function main(): void {
   printScenario('one-checkout-market', oneCheckout);
   printScenario('two-checkout-market', twoCheckout);
   printDelta('market', oneCheckout, twoCheckout, ['market_service_slots', 'market_stock_capacity', 'market_cluster_tiles']);
-  console.log('UNAVAILABLE | live visit duration/concurrent ship load/approach-group wait/disembark+boarding duration');
-  console.log('UNAVAILABLE | physical door wait/corridor contention/queue spill+balks/live public-cargo conflict');
-  console.log('UNAVAILABLE | recurring-need fixture use/reception effects/future commitments/stranded occupants');
-  console.log('UNAVAILABLE | damage-state/EVA duration/render frame time and visual smoothness');
-  console.log('NOTE | route metrics are deterministic path-overlap proxies; actors still co-occupy tiles today. Tick cost is host-dependent.');
+  // These lines used to claim a far longer list was unavailable, including
+  // things that have since been implemented and asserted elsewhere, and a note
+  // that "actors still co-occupy tiles today" — which the movement coordinator
+  // has since made false. Anyone auditing the Phase 0 metrics rows from this
+  // report was being told the wrong thing. What is genuinely missing is now
+  // named precisely, and metrics that moved name the runner that owns them.
+  console.log('ELSEWHERE | visit duration, approach-group wait, disembark/boarding duration, committed load, stranded occupants -> test:gate-g-metrics-admission');
+  console.log('ELSEWHERE | recurring-need fixture use and reception effects -> test:gate-f-facility; live public/cargo conflict -> test:physical-cargo');
+  console.log('UNAVAILABLE | physical door wait seconds, corridor contention, queue spill length, and a counted queue balk');
+  console.log('UNAVAILABLE | EVA suited-seconds, and render frame time / visual smoothness (nothing reads state.metrics.frameMs yet)');
+  console.log('NOTE | route metrics are deterministic path-overlap proxies. Tick cost is host-dependent, so compare tick_* only against runs on the same machine.');
+
+  writeBaselineArtifact({
+    'compact-starter-two-pod-docks': starter,
+    'single-door-passenger-terminal': badTerminal,
+    'two-entrance-passenger-terminal': improvedTerminal,
+    'public-cargo-crossing': crossing,
+    'separated-service-corridor': separated,
+    'one-checkout-market': oneCheckout,
+    'two-checkout-market': twoCheckout
+  });
 }
 
 main();

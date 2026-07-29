@@ -132,7 +132,7 @@ audited checklist with no unsupported checked claims.
 - [x] Establish a dedicated implementation branch.
   Evidence: `codex/structural-frontage-occupant-loop`.
 - [x] Add this execution checklist to `docs/README.md`.
-- [ ] Record the focused commands and artifacts used for every phase gate.
+- [x] Record the focused commands and artifacts used for every phase gate.
 - [x] Keep a running playtest findings section at the bottom of this file.
 
 ## Non-Negotiable Design Invariants
@@ -210,7 +210,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] One command produces the deterministic baseline report.
 - [x] Bad and improved layouts show measurable differences.
-- [ ] Baseline artifacts are saved for later comparison.
+- [x] Baseline artifacts are saved for later comparison.
 - [x] No full test suite is required for ordinary Phase 0 iteration.
 
 ## Phase 1A: Longer Visits And Shared Occupant Demand
@@ -2025,3 +2025,27 @@ maintenance" row at the same time.
   application, but nothing in `tools/` would catch it if a future change made one
   silently degrade. Worth a small guard runner before they are relied on as gate
   evidence.
+
+2026-07-28 · Baseline is now an artifact, and stops lying about what it measures
+
+- Commit or files: `writeBaselineArtifact` in `tools/frontage-baseline.ts`;
+  first committed artifact `tools/harness/baselines/frontage-baseline.json`.
+- The baseline harness printed to stdout only. `tools/harness/baselines/` held
+  nothing but a `.gitkeep`, so "saved for later comparison" had nothing saved and
+  every gate that cited a baseline was citing a terminal scrollback.
+- It now writes a stable-sorted JSON artifact with no timestamp, so an unchanged
+  run produces no diff and a behavior change produces a readable one. Verified by
+  running it twice and diffing: byte-identical. Host-dependent `tick_*` timings
+  are deliberately kept in the console report and out of the committed artifact,
+  otherwise every run on a different machine would read as a regression.
+- Separately, the report's own "UNAVAILABLE" lines had gone stale and were
+  actively misleading. They still claimed visit duration, approach-group wait,
+  disembark/boarding duration, committed load, stranded occupants, recurring-need
+  fixture use, reception effects and live public/cargo conflict were unmeasured —
+  all of which are implemented and asserted in other runners — and carried a note
+  that "actors still co-occupy tiles today", which the movement coordinator has
+  since made false. Anyone auditing the Phase 0 metrics rows from this report
+  would have reached the wrong conclusion. Metrics that moved now name the runner
+  that owns them, and what is genuinely missing is stated precisely: door wait
+  seconds, corridor contention, queue spill length, a counted queue balk, EVA
+  suited-seconds, and render frame time.

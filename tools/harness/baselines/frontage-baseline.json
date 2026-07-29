@@ -1,0 +1,55 @@
+{
+  "seed": 39001,
+  "flowSamples": 12,
+  "scenarios": {
+    "compact-starter-two-pod-docks": {
+      "dock_entities": 2,
+      "freight_lockers": 1,
+      "pod_docks": 2,
+      "port_offers_accepted": 0,
+      "walkable_tiles": 145
+    },
+    "one-checkout-market": {
+      "market_cluster_tiles": 20,
+      "market_doors": 1,
+      "market_providers": 1,
+      "market_service_slots": 2,
+      "market_stock_capacity": 32
+    },
+    "public-cargo-crossing": {
+      "cargo_route_tiles": 9,
+      "public_cargo_crossing": 1,
+      "public_cargo_shared_tiles": 1,
+      "visitor_route_tiles": 19
+    },
+    "separated-service-corridor": {
+      "cargo_route_tiles": 9,
+      "public_cargo_crossing": 0,
+      "public_cargo_shared_tiles": 0,
+      "visitor_route_tiles": 19
+    },
+    "single-door-passenger-terminal": {
+      "door_peak_load": 12,
+      "door_tiles_used": 1,
+      "peak_route_load": 12,
+      "route_tiles_total": 168,
+      "routes": 12,
+      "shared_route_tiles": 40
+    },
+    "two-checkout-market": {
+      "market_cluster_tiles": 32,
+      "market_doors": 1,
+      "market_providers": 2,
+      "market_service_slots": 4,
+      "market_stock_capacity": 64
+    },
+    "two-entrance-passenger-terminal": {
+      "door_peak_load": 7,
+      "door_tiles_used": 2,
+      "peak_route_load": 7,
+      "route_tiles_total": 120,
+      "routes": 12,
+      "shared_route_tiles": 30
+    }
+  }
+}
