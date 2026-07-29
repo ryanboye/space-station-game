@@ -6,6 +6,7 @@ import {
 import { DEFAULT_ECONOMY_RECENT_LIMIT, recordEconomyEvent } from '../src/sim/opening-economy';
 import { DEFAULT_SERVICE_LOG_LIMIT, appendServiceCompletion } from '../src/sim/service-truth';
 import {
+  allocateWalkInManifestDemand,
   applyEconomyTransaction,
   recordServiceCompletion,
   recordSmallCraftServiceCompletion
@@ -187,6 +188,25 @@ function testFreightIsNotEngineeringDemand(): void {
   assert(outcome.served.shipService === 0, 'Freight-only pod reported engineering demand served.');
 }
 
+function testWalkInManifestAllocatesExactPassengerIntentions(): void {
+  const soloShopper = allocateWalkInManifestDemand(1, { cafeteria: 0.24, market: 0.61, lounge: 0.15 });
+  assert(
+    soloShopper.market === 1 && soloShopper.cafeteria === 0 && soloShopper.lounge === 0,
+    'A one-passenger pod reported market demand without assigning its sole passenger to shop.'
+  );
+
+  const mixedPod = allocateWalkInManifestDemand(5, { cafeteria: 0.42, market: 0.36, lounge: 0.22 });
+  assert(
+    mixedPod.cafeteria + mixedPod.market + mixedPod.lounge === 5,
+    'Walk-in manifest allocation created or lost passengers.'
+  );
+  assert(
+    mixedPod.cafeteria === 2 && mixedPod.market === 2 && mixedPod.lounge === 1,
+    `Largest-remainder allocation drifted: ${JSON.stringify(mixedPod)}`
+  );
+}
+
+testWalkInManifestAllocatesExactPassengerIntentions();
 testPodOutcomeSurvivesBoundedEventHistory();
 testFreightIsNotEngineeringDemand();
 console.log('pod demand accounting checks passed');

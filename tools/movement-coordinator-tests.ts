@@ -128,6 +128,69 @@ function testSwapsAndNarrowDoorRecovery(): void {
   assert(lead.tileIndex === through && follower.tileIndex !== gate, 'The line should resume one crossing at a time after cooldown.');
 }
 
+function testOccupiedDoorVacatesBeforeOlderEntrant(): void {
+  const state = station();
+  const before = at(state, 28, 25);
+  const door = at(state, 29, 25);
+  const after = at(state, 30, 25);
+  state.tiles[door] = TileType.Door;
+  const leaving = placeCrew(state, 9, door, [after]);
+  const olderEntrant = placeCrew(state, 1, before, [door], { blockedTicks: 5 });
+  state.crewMembers = [olderEntrant, leaving];
+
+  const results = runMovementCoordinatorTestTick(state, 0.2);
+  assert(
+    results.get('crew:9') === 'moved' && leaving.tileIndex === after,
+    'The actor occupying a door must vacate before a higher-wait entrant can claim it.'
+  );
+  assert(
+    results.get('crew:1') === 'blocked' && olderEntrant.tileIndex === before,
+    'The older entrant must wait while the occupied door clears.'
+  );
+}
+
+function testIdleCleanerSidestepsHeadOnDoorTraffic(): void {
+  const state = station();
+  const before = at(state, 32, 25);
+  const door = at(state, 33, 25);
+  const fixturePost = at(state, 34, 25);
+  const escape = at(state, 35, 25);
+  const leisureTarget = at(state, 31, 25);
+  state.tiles[door] = TileType.Door;
+  state.tiles[at(state, 33, 24)] = TileType.Wall;
+  state.tiles[at(state, 33, 26)] = TileType.Wall;
+  state.modules[fixturePost] = ModuleType.IntakePallet;
+  const shopper = placeCrew(state, 1, before, [door, fixturePost], { blockedTicks: 8 });
+  const cleaner = placeCrew(state, 5, door, [before, leisureTarget], {
+    staffRole: 'cleaner',
+    role: 'idle',
+    leisure: true,
+    leisureSessionActive: false,
+    targetTile: leisureTarget
+  });
+  const postWorker = placeCrew(state, 6, fixturePost, []);
+  state.crewMembers = [shopper, cleaner, postWorker];
+
+  const results = runMovementCoordinatorTestTick(state, 0.2);
+  assert(
+    results.get('crew:5') === 'moved' && cleaner.tileIndex === fixturePost,
+    'An idle Cleaner walking head-on through an occupied door must step clear instead of pinning the entrant.'
+  );
+  assert(
+    results.get('crew:6') === 'moved' && postWorker.tileIndex === escape,
+    'The idle fixture worker must make one physical tile of room for the Cleaner to clear the throat.'
+  );
+  assert(
+    results.get('crew:1') === 'blocked' && shopper.tileIndex === before,
+    'The active entrant must retain its side of the narrow crossing while the Cleaner clears it.'
+  );
+  assert(cleaner.targetTile === leisureTarget && cleaner.leisure, 'Yielding must preserve the Cleaner\'s active leisure claim.');
+  assert(
+    (cleaner.movementReplanCooldownUntil ?? 0) > state.now,
+    'The Cleaner needs replan hysteresis so it does not immediately oscillate back into the door.'
+  );
+}
+
 function testCongestionReplanAndSave(): void {
   const state = station();
   const origin = at(state, 30, 30);
@@ -190,6 +253,8 @@ const tests: Array<[string, () => void]> = [
   ['contention-stable-exclusive', testContentionIsStableAndExclusive],
   ['wait-age-cargo-fairness', testWaitAgeAndCargoFairness],
   ['swaps-door-recovery', testSwapsAndNarrowDoorRecovery],
+  ['occupied-door-vacates-first', testOccupiedDoorVacatesBeforeOlderEntrant],
+  ['idle-cleaner-door-sidestep', testIdleCleanerSidestepsHeadOnDoorTraffic],
   ['congestion-replan-save', testCongestionReplanAndSave],
   ['idle-blocker-yields', testIdleBlockerMakesRoom],
   ['initial-spawn-corridor-exchange', testInitialCrewAndCorridorExchange]

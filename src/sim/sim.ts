@@ -5753,6 +5753,53 @@ function pickVisitorPrimaryPreference(
   return 'lounge';
 }
 
+/**
+ * Turn a walk-in pod's fractional manifest into an exact set of passenger
+ * intentions. The demand ledger used to round each family at departure while
+ * every passenger independently rolled a preference at spawn. On the common
+ * one-passenger pod, that could report one wanted shopper even though the sole
+ * passenger had rolled cafeteria, making physically available service appear
+ * missed. Largest-remainder allocation keeps the displayed manifest and the
+ * people who walk off the craft describing the same demand.
+ */
+export function allocateWalkInManifestDemand(
+  passengersTotal: number,
+  manifestDemand: ManifestDemand
+): Record<VisitorPreference, number> {
+  const total = Math.max(0, Math.round(passengersTotal));
+  if (total === 0) return { cafeteria: 0, market: 0, lounge: 0 };
+  const normalized = normalizeDemand(manifestDemand);
+  const preferences: VisitorPreference[] = ['cafeteria', 'market', 'lounge'];
+  const exact = preferences.map((preference, order) => ({
+    preference,
+    order,
+    raw: normalized[preference] * total,
+    count: Math.floor(normalized[preference] * total)
+  }));
+  let remaining = total - exact.reduce((sum, entry) => sum + entry.count, 0);
+  exact.sort((a, b) => (b.raw - b.count) - (a.raw - a.count) || a.order - b.order);
+  for (let index = 0; index < exact.length && remaining > 0; index += 1, remaining -= 1) {
+    exact[index].count += 1;
+  }
+  const counts: Record<VisitorPreference, number> = { cafeteria: 0, market: 0, lounge: 0 };
+  for (const entry of exact) counts[entry.preference] = entry.count;
+  return counts;
+}
+
+function walkInPreferenceCounts(ship: ArrivingShip): Record<VisitorPreference, number> {
+  return allocateWalkInManifestDemand(ship.passengersTotal, ship.manifestDemand);
+}
+
+function walkInPreferenceForPassenger(ship: ArrivingShip, passengerIndex: number): VisitorPreference {
+  const counts = walkInPreferenceCounts(ship);
+  const sequence: VisitorPreference[] = [];
+  for (const preference of ['cafeteria', 'market', 'lounge'] as const) {
+    for (let index = 0; index < counts[preference]; index += 1) sequence.push(preference);
+  }
+  if (sequence.length === 0) return 'cafeteria';
+  return sequence[(Math.max(0, passengerIndex) + ship.id) % sequence.length];
+}
+
 function shipSizeForBay(area: number, wanted: ShipSize): ShipSize | null {
   const order: ShipSize[] =
     wanted === 'large' ? ['large', 'medium', 'small'] : wanted === 'medium' ? ['medium', 'small'] : ['small'];
@@ -7337,7 +7384,10 @@ function spawnVisitor(state: StationState, dockIndex: number, ship?: ArrivingShi
   const archetype = pickArchetypeFromMix(state, mix);
   state.usageTotals.archetypesEverSeen[archetype] = true;
   const profile = ARCHETYPE_PROFILES[archetype];
-  const primaryPreference = pickVisitorPrimaryPreference(state, archetype, ship?.manifestDemand ?? null);
+  const sampledPreference = pickVisitorPrimaryPreference(state, archetype, ship?.manifestDemand ?? null);
+  const primaryPreference = ship && !ship.portManifest
+    ? walkInPreferenceForPassenger(ship, passengerIndex ?? ship.passengersSpawned)
+    : sampledPreference;
   const visitorId = state.spawnCounter++;
   const identity = visitorIdentity(visitorId);
   const hasContractPlan = !!ship?.portManifest;
@@ -13713,9 +13763,10 @@ function recordPodVisitDemandOutcome(state: StationState, ship: ArrivingShip): v
   if (dockTile < 0) return;
 
   const travelers = Math.max(0, Math.round(ship.passengersTotal));
+  const preferenceCounts = walkInPreferenceCounts(ship);
   const wanted: PodDemandCounts = {
-    food: Math.round(travelers * clamp(ship.manifestDemand.cafeteria, 0, 1)),
-    supplies: Math.round(travelers * clamp(ship.manifestDemand.market, 0, 1)),
+    food: preferenceCounts.cafeteria,
+    supplies: preferenceCounts.market,
     // Freight is shared dock logistics, not an engineering service sold to a
     // craft. This opening family deliberately represents refuel and repair.
     shipService: ship.smallCraftVisit?.services.filter(
@@ -16441,6 +16492,38 @@ function canYieldMovementTile(state: StationState, kind: MovementActorKind, acto
   );
 }
 
+function canRerouteIdleCrewOutOfContestedNarrowTile(
+  state: StationState,
+  inbound: MovementActor,
+  kind: MovementActorKind,
+  actor: MovementActor
+): boolean {
+  if (kind !== 'crew') return false;
+  const crew = actor as CrewMember;
+  const contestedNarrow =
+    state.tiles[crew.tileIndex] === TileType.Door ||
+    state.tiles[crew.tileIndex] === TileType.Airlock ||
+    state.tiles[inbound.tileIndex] === TileType.Door ||
+    state.tiles[inbound.tileIndex] === TileType.Airlock;
+  const headOn = crew.path[0] === inbound.tileIndex;
+  const activeFixtureSession =
+    crew.restSessionActive ||
+    crew.cleanSessionActive ||
+    crew.toiletSessionActive ||
+    crew.drinkSessionActive ||
+    crew.eatSessionActive ||
+    crew.leisureSessionActive;
+  return (
+    contestedNarrow &&
+    headOn &&
+    crew.role === 'idle' &&
+    crew.activeJobId === null &&
+    !activeFixtureSession &&
+    crew.targetTile !== null &&
+    !isServiceTarget(crew, crew.tileIndex)
+  );
+}
+
 function assignMovementYieldPaths(
   state: StationState,
   actors: Array<{ kind: MovementActorKind; actor: MovementActor }>,
@@ -16461,13 +16544,20 @@ function assignMovementYieldPaths(
     const target = inbound.actor.path[0];
     const blockers = occupantByTile.get(target) ?? [];
     for (const blocker of blockers) {
-      if (!canYieldMovementTile(state, blocker.kind, blocker.actor)) continue;
+      const yieldsFromCurrentTile = canYieldMovementTile(state, blocker.kind, blocker.actor);
+      const rerouteContestedNarrow = canRerouteIdleCrewOutOfContestedNarrowTile(
+        state,
+        inbound.actor,
+        blocker.kind,
+        blocker.actor
+      );
+      if (!yieldsFromCurrentTile && !rerouteContestedNarrow) continue;
       const point = fromIndex(blocker.actor.tileIndex, state.width);
       const sidestepCandidates = ([[1, 0], [0, 1], [-1, 0], [0, -1]] as Array<[number, number]>)
         .map(([dx, dy]) => ({ x: point.x + dx, y: point.y + dy }))
         .filter(({ x, y }) => inBounds(x, y, state.width, state.height))
         .map(({ x, y }) => toIndex(x, y, state.width));
-      const emptySidestep = sidestepCandidates.find((tile) =>
+      let emptySidestep = sidestepCandidates.find((tile) =>
           tile !== inbound.actor.tileIndex &&
           !claimedYieldTiles.has(tile) &&
           (occupancyByTile.get(tile) ?? 0) === 0 &&
@@ -16475,6 +16565,56 @@ function assignMovementYieldPaths(
           state.moduleOccupancyByTile[tile] === null &&
           !isMovementHazard(state, tile)
         );
+      // Some authored throats are door -> staffed fixture -> open floor. The
+      // idle fixture worker can make room one tile farther down the chain,
+      // allowing the noncommitted door occupant to clear without an unsafe
+      // door swap or evicting either actor's target reservation.
+      const narrowThroat =
+        state.tiles[blocker.actor.tileIndex] === TileType.Door ||
+        state.tiles[blocker.actor.tileIndex] === TileType.Airlock ||
+        state.tiles[inbound.actor.tileIndex] === TileType.Door ||
+        state.tiles[inbound.actor.tileIndex] === TileType.Airlock;
+      if (emptySidestep === undefined && (rerouteContestedNarrow || (yieldsFromCurrentTile && narrowThroat))) {
+        for (const occupiedTile of sidestepCandidates) {
+          if (
+            occupiedTile === inbound.actor.tileIndex ||
+            claimedYieldTiles.has(occupiedTile) ||
+            !isWalkable(state.tiles[occupiedTile]) ||
+            isMovementHazard(state, occupiedTile)
+          ) continue;
+          const secondaryBlockers = occupantByTile.get(occupiedTile) ?? [];
+          if (secondaryBlockers.length !== 1) continue;
+          const secondary = secondaryBlockers[0];
+          if (!canYieldMovementTile(state, secondary.kind, secondary.actor)) continue;
+          const secondaryPoint = fromIndex(secondary.actor.tileIndex, state.width);
+          const secondarySidestep = ([[1, 0], [0, 1], [-1, 0], [0, -1]] as Array<[number, number]>)
+            .map(([dx, dy]) => ({ x: secondaryPoint.x + dx, y: secondaryPoint.y + dy }))
+            .filter(({ x, y }) => inBounds(x, y, state.width, state.height))
+            .map(({ x, y }) => toIndex(x, y, state.width))
+            .find((tile) =>
+              tile !== blocker.actor.tileIndex &&
+              tile !== inbound.actor.tileIndex &&
+              !claimedYieldTiles.has(tile) &&
+              (occupancyByTile.get(tile) ?? 0) === 0 &&
+              isWalkable(state.tiles[tile]) &&
+              state.moduleOccupancyByTile[tile] === null &&
+              !isMovementHazard(state, tile)
+            );
+          if (secondarySidestep === undefined) continue;
+          secondary.actor.path = [secondarySidestep];
+          secondary.actor.movementWaitReason = 'making room';
+          if (secondary.kind === 'crew') {
+            const crew = secondary.actor as CrewMember;
+            crew.retargetAt = Math.max(crew.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
+          } else if (secondary.kind === 'resident') {
+            const resident = secondary.actor as Resident;
+            resident.retargetAt = Math.max(resident.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
+          }
+          claimedYieldTiles.add(secondarySidestep);
+          emptySidestep = occupiedTile;
+          break;
+        }
+      }
       // A one-tile corridor has nowhere to step aside. Permit a deliberate
       // exchange with the inbound actor only when the normal swap safety rules
       // can validate it later (plain floor, no fixture, no hazard/narrow tile).
@@ -16499,6 +16639,12 @@ function assignMovementYieldPaths(
       if (blocker.kind === 'crew') {
         const crew = blocker.actor as CrewMember;
         crew.retargetAt = Math.max(crew.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
+        if (rerouteContestedNarrow) {
+          crew.movementReplanCooldownUntil = Math.max(
+            crew.movementReplanCooldownUntil ?? 0,
+            state.now + MOVEMENT_REPLAN_COOLDOWN_SEC
+          );
+        }
       } else if (blocker.kind === 'resident') {
         const resident = blocker.actor as Resident;
         resident.retargetAt = Math.max(resident.retargetAt, state.now + MOVEMENT_REPLAN_COOLDOWN_SEC);
@@ -16609,7 +16755,14 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   for (const [tile, bucket] of byNarrowTile) {
     bucket.sort(compare);
     const cooldownUntil = coordinator.narrowCooldownUntil.get(tile) ?? 0;
-    const winner = cooldownUntil > state.now ? undefined : bucket[0];
+    // A narrow tile cannot accept its next entrant until the actor already
+    // standing on it has stepped clear. Pure wait-age priority used to choose
+    // the long-blocked entrant instead; dependency validation would then
+    // reject that entrant because the occupant had lost this same arbitration,
+    // leaving both actors frozen. Prefer a candidate vacating the door or
+    // airlock, then resume ordinary age/urgency ordering once it is empty.
+    const exits = bucket.filter((intent) => intent.origin === tile && intent.target !== tile);
+    const winner = cooldownUntil > state.now ? undefined : (exits[0] ?? bucket[0]);
     for (const intent of bucket) {
       if (intent === winner) continue;
       candidates.delete(intent);
@@ -17081,6 +17234,29 @@ function ensureCrewUsageTarget(
       reservation.targetId === `${targetKind}:${crew.targetTile}`
   );
   if (crew.targetTile !== null && targets.includes(crew.targetTile) && activeTargetReservation) {
+    // Congestion recovery deliberately clears an actor's route so the next
+    // logic pass can find another one. A live provider reservation used to
+    // short-circuit that next pass, leaving the crew member permanently idle
+    // away from the reserved fixture. Rebuild the route once the coordinator's
+    // brief cooldown has elapsed; if topology no longer permits the trip,
+    // release the stale claim so another provider can be selected.
+    if (
+      crew.tileIndex !== crew.targetTile &&
+      crew.path.length === 0 &&
+      state.now >= (crew.movementReplanCooldownUntil ?? 0)
+    ) {
+      const pathOptions = { allowRestricted: false, intent: 'crew' as const, routeSeed: crew.id };
+      const path =
+        findPath(state, crew.tileIndex, crew.targetTile, pathOptions, state.pathOccupancyByTile) ??
+        findPath(state, crew.tileIndex, crew.targetTile, pathOptions);
+      if (path) {
+        setCrewPath(state, crew, path);
+      } else {
+        releaseCrewUsageTarget(state, crew, 'failed');
+        crew.retargetAt = state.now + 1.5 + deterministicUnit(crew.id, 819);
+        return null;
+      }
+    }
     return crew.targetTile;
   }
 
@@ -21088,6 +21264,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         !crew.carryingMeal &&
         crew.role === 'idle' &&
         !crew.cleaning &&
+        !crew.toileting &&
+        !crew.drinking &&
+        !crew.eating &&
         !crew.leisure &&
         !airEmergency &&
         state.now >= CREW_STARTUP_SETTLE_SEC &&

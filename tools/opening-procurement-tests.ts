@@ -207,6 +207,42 @@ function testFuelOrderRefusalsAndArrival(): void {
   assertEqual(-purchases[0].credits, quote.creditCost, 'fuel ledger charge matches quote');
 }
 
+function testTravelSupplyDebitLedgerAndDeliveryReconcile(): void {
+  const state = charteredOpening();
+  ensureFixture(state, RoomType.Market, ModuleType.MarketStall);
+  routeSupplierTrafficToFreightDock(state);
+  emptyFixtureStock(state, ModuleType.MarketStall, 'tradeGood');
+  const quote = quoteTravelSuppliesOrder(state);
+  const creditsBefore = state.metrics.credits;
+  const stockBefore = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
+  const order = buyImportedTradeGoodsDetailed(state);
+  assert(order.ok, order.message);
+  const delivery = state.openingEconomy.podFreightOperations.find(
+    (operation) => operation.kind === 'supplier-delivery' && operation.stockKind === 'travel-supplies'
+  );
+  assert(delivery && delivery.kind === 'supplier-delivery', 'travel-supply order did not create its supplier delivery');
+  const purchase = state.openingEconomy.ledger.recent.find((event) => event.kind === 'supplier-purchase');
+  assert(purchase, 'travel-supply order did not enter the operating ledger');
+  assertEqual(creditsBefore - state.metrics.credits, quote.creditCost, 'travel-supply debit matches quote');
+  assertEqual(-purchase.credits, quote.creditCost, 'travel-supply ledger expense matches quote');
+  assertEqual(purchase.costBasis, quote.creditCost, 'travel-supply ledger cost basis matches paid expense');
+
+  advanceUntil(
+    state,
+    () => state.openingEconomy.podFreightOperations.some(
+      (operation) => operation.id === delivery.id && operation.status === 'complete'
+    ),
+    120,
+    'travel-supply delivery did not complete'
+  );
+  const completed = state.openingEconomy.podFreightOperations.find((operation) => operation.id === delivery.id);
+  assert(completed?.kind === 'supplier-delivery', 'completed travel-supply delivery disappeared');
+  const stockAfter = state.itemNodes.reduce((sum, node) => sum + (node.items.tradeGood ?? 0), 0);
+  assertEqual(completed.orderedUnits, OPENING_BALANCE.travelSupplyBatch.units, 'travel-supply order unit contract');
+  assertEqual(completed.unloadedUnits, OPENING_BALANCE.travelSupplyBatch.units, 'travel-supply delivered unit count');
+  assertEqual(stockAfter - stockBefore, OPENING_BALANCE.travelSupplyBatch.units, 'travel-supply station inventory delta');
+}
+
 function testRecipeStockActionsAreDistinct(): void {
   const expected = {
     'feed-travelers': 'prepared-meals',
@@ -235,7 +271,53 @@ function testRecipeStockActionsAreDistinct(): void {
   }
 }
 
+function testOpeningStewardSelfCareRemainsExclusiveAndReplans(): void {
+  const state = createInitialState({ physicalStarterInventory: true });
+  tick(state, 0);
+  state.controls.paused = false;
+  state.now = 50;
+  state.metrics.morale = 0;
+  const steward = state.crewMembers.find((crew) => crew.staffRole === 'steward');
+  assert(steward, 'starter needs a Steward for the opening market');
+  // Watch 0 is active at 50s; bucket 2 is off duty and therefore eligible
+  // for leisure. A live restroom trip must still remain the one exclusive
+  // self-care state rather than acquiring a leisure seat in parallel.
+  steward.shiftBucket = 2;
+  steward.role = 'idle';
+  steward.assignedSystem = null;
+  steward.targetTile = null;
+  steward.toileting = true;
+  steward.toiletSessionActive = false;
+  steward.leisure = false;
+  steward.energy = 100;
+  steward.hygiene = 100;
+  steward.bladder = 0;
+  steward.thirst = 100;
+  steward.hunger = 100;
+  steward.retargetAt = 0;
+
+  tick(state, 0);
+  assert(steward.toileting, 'the active restroom trip was unexpectedly cancelled');
+  assert(!steward.leisure, 'the Steward acquired leisure while already toileting');
+  assert(steward.targetTile !== null, 'the Steward did not reserve a restroom target');
+  assert(steward.tileIndex !== steward.targetTile, 'the Steward unexpectedly started on the reserved restroom');
+  assert(steward.path.length > 0, 'the Steward did not receive an initial restroom route');
+
+  // The movement coordinator clears congested routes and expects their owner
+  // to replan on a later logic pass. A live fixture claim must not suppress
+  // that replan and strand the crew member away from the fixture forever.
+  steward.path = [];
+  steward.movementReplanCooldownUntil = state.now;
+  tick(state, 0);
+  assert(
+    steward.tileIndex === steward.targetTile || steward.path.length > 0,
+    'the live restroom reservation suppressed route recovery after congestion'
+  );
+}
+
 testSiteAdjustedQuotesMatchRecipesAndCharges();
 testFuelOrderRefusalsAndArrival();
+testTravelSupplyDebitLedgerAndDeliveryReconcile();
 testRecipeStockActionsAreDistinct();
+testOpeningStewardSelfCareRemainsExclusiveAndReplans();
 console.log('PASS opening procurement truth');

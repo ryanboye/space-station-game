@@ -983,7 +983,10 @@ export const OPENING_BALANCE: {
   crewMessMealReserve: 30,
   /** Opening stock batches, priced so each recipe lands in the target band. */
   preparedMealBatch: { units: 12, costCredits: 70 },
-  travelSupplyBatch: { units: 12, costCredits: 80 },
+  // Twelve units use the market ledger's 3.5c base landed cost. The old 80c
+  // lot charged nearly twice that truth and, after the 190c authored shop,
+  // left too little working capital to reorder or cover opening payroll.
+  travelSupplyBatch: { units: 12, costCredits: 42 },
   fuelLot: { units: 40, costCredits: 50 }
 };
 

@@ -113,7 +113,19 @@ function testMarketScenariosConserveThroughCongestion(): string {
       assertConserved(state, opening, `${name} at ${state.now.toFixed(1)}s`);
     }
     if (name === 'market-compact-conflict') {
-      assert(staleRequeues > 0, 'Compact congestion must exercise at least one in-progress stale requeue.');
+      // The coordinator may now keep every cargo move making progress through
+      // this crowd, in which case forcing a stale requeue would make the test
+      // depend on worse movement. If no requeue occurred, require that no
+      // active job remained beyond the real 12-second stale threshold.
+      const staleActiveJobs = state.jobs.filter(
+        (job) =>
+          (job.state === 'pending' || job.state === 'assigned' || job.state === 'in_progress') &&
+          state.now - job.lastProgressAt >= 12
+      );
+      assert(
+        staleRequeues > 0 || staleActiveJobs.length === 0,
+        'Compact congestion left stale cargo work without exercising recovery.'
+      );
       assert(unservedToDock > 0, 'Compact congestion must exercise an unserved shopper departure path.');
     }
     summaries.push(
