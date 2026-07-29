@@ -926,14 +926,26 @@ audited checklist with no unsupported checked claims.
   subsequent dispatch review recorded the completed calls; no auto-admission
   policy was enabled.
 - [ ] Experience one successful short-stay flow.
-- [ ] Experience and recover from one failed long stay.
+- [x] Experience and recover from one failed long stay.
+  Evidence: frozen production browser play on `commitment-failure` advanced the
+  identical four-guest repair cohort until Stay Recovery showed four durable
+  `UNMET · no reachable meal` episodes tied to ship 95001. The player-facing
+  Emergency meal action changed to an exactly-once checked state; after one
+  simulation tick the panel reported 0 active failures and `Served 1 emergency
+  meals`, while the remaining recovery levers stayed available for other causes.
 - [ ] Build temporary guest lodging.
 - [x] Build a physical expansion through EVA construction.
 - [ ] Build the first medium Berth.
 - [ ] Operate overlapping Pod and Berth traffic.
 - [ ] Separate a harmful public/cargo route.
 - [ ] Recover from visible hull damage.
-- [ ] Introduce routine admission automation.
+- [x] Introduce routine admission automation.
+  Evidence: frozen production browser play on `admission-policy-pressure`
+  started with finite admission enabled for Pods and Berths, one interface of
+  each class reserved, six prepared meals reserved, and manual handling kept
+  for exceptions. With no player dispatch action, a routine traveler Pod was
+  admitted into Pod Dock 1; Approach Control then reported the visit in
+  progress and retained the explicit manual override contract.
 - [ ] Reach at least 50 crew and 50 simultaneous visitors.
 - [ ] Operate at least 5-10 mixed interfaces.
 - [x] Save, reload, and continue without stale reservations or lost commitments.
