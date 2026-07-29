@@ -844,7 +844,7 @@ audited checklist with no unsupported checked claims.
 
 ### Full Playthrough
 
-- [ ] Start from the revised bare station.
+- [x] Start from the revised bare station.
 - [x] Choose and build one opening portfolio operation.
 - [ ] Manually compose early traffic through Approach Control.
 - [ ] Experience one successful short-stay flow.
@@ -858,7 +858,7 @@ audited checklist with no unsupported checked claims.
 - [ ] Introduce routine admission automation.
 - [ ] Reach at least 50 crew and 50 simultaneous visitors.
 - [ ] Operate at least 5-10 mixed interfaces.
-- [ ] Save, reload, and continue without stale reservations or lost commitments.
+- [x] Save, reload, and continue without stale reservations or lost commitments.
 
 ### Phase 9 Gate
 
@@ -2150,3 +2150,98 @@ The design position for whoever takes it: resident needs are lifestyle-paced in
 hours and visitor needs are visit-paced in minutes, so the *rate tables* should
 stay distinct — but the decay and selection machinery should be one
 implementation with rates as parameters. That is a change in `src/sim/sim.ts`.
+
+## User Playtest Record — 2026-07-28
+
+Played against a **frozen production build of committed code** (`npm run build`
+from a clean `git archive` of the branch head, served on `:4173`) rather than the
+dev server, so nothing shifted under the run while other work was in flight. This
+is the chronological record Gate F asks for. It is deliberately short on
+narrative and long on numbers.
+
+### Setup
+
+New Game → Recommended Site → Charter This Site, at the recommended charter
+(`Steady west approach · Ice rich`). No debug credits, no scenario override.
+
+### t=0 — the bare station reads correctly
+
+6 crew, 320 credits, 30 prepared meals, power 11/18, rating 0. All three opening
+businesses show `no demand seen yet`. Global Goal is `1/3` with
+`Open Food, Supplies, or Refuel 0/1`, `Earn business revenue 0/500c`,
+`Travelers served 0/20`. Approach Control reads `Approach lanes clear · Waiting
+for traffic`. The Alerts card is absent, correctly, because there is nothing to
+report. **Row "Start from the revised bare station" passes**: the station is
+safe, commercially unfinished, and does not operate a business on its own.
+
+### t≈300s (Cycle 21, Day 3) — traffic arrives and demand goes unmet
+
+Two Pod visits are live (`LIVE POD OPS 2 ACTIVE`). Credits have fallen `320 -> 260`
+on payroll with no offsetting income, which is the intended "stagnant but
+survivable" opening pressure. The business cards now read honestly:
+`Feed Travelers 0/4 served recently · est. 24c missed`,
+`Sell Supplies 0/4 · est. 20c missed`, `Refuel Pods 0/4 · est. 36c missed`.
+Alerts appear with real content, and a visitor thought bubble reads
+`It's too noisy in here`. Unmet demand is visible in world and priced, which is
+what the opening is supposed to do.
+
+### Defect found: the authored starter is zoned wrong
+
+This is the headline finding and it is a genuine opening-experience bug, not a
+tuning complaint.
+
+Zoning on the authored starter, read from the live save:
+
+| Room | Tiles | Zone |
+|---|---|---|
+| dorm | 19 | **public** |
+| hygiene | 13 | **public** |
+| logistics-stock | 15 | **public** |
+| maintenance | 15 | **public** |
+| reactor | 5 | **public** |
+| cafeteria | 13 | restricted |
+
+Every room ships **public** except the cafeteria — which is the one room the
+opening design deliberately wants to *become* public once the player invests in
+it. The crew sleeping quarters, the crew washroom, the stockroom and **the
+reactor** are all walk-in public on a fresh charter, and the only restricted
+space is the crew mess.
+
+Player-visible consequences, observed in the run:
+- `sleep 8/6` at t=0 collapses to `sleep 0/6` once visitors are on station.
+- Two standing alerts: `Crew quarters short: 0/6 sleep slots · add bunks or beds`
+  and `No crew quarters on the station` — the second while a 19-tile Dorm holding
+  **four bunks** (tiles 3741, 3744, 3941, 3944) sits on the map. The bunks are
+  confirmed present and confirmed on `dorm` floor tiles; the room simply is not
+  recognised as crew quarters while it is public.
+- The advice the alert gives (`add bunks or beds`) is therefore wrong. Adding a
+  fifth bunk to a public dorm will not fix it. The remedy is zoning, which the
+  alert never mentions.
+
+Recommended fix: author the starter with dorm, hygiene, logistics-stock,
+maintenance and reactor as crew-only, leaving cafeteria as the restricted crew
+mess it already is. Separately, the "no crew quarters" alert should name the real
+remedy — a crew-only zone — rather than telling the player to add furniture they
+already have. Both live in the starter authoring and the alert text, and this
+should be fixed before the next play session.
+
+### Save, reload, continue
+
+Exported the live save mid-run (447,143 bytes), reloaded it in place, and
+compared. Visitors `2 -> 2`, modules `15 -> 15`, jobs `0 -> 0`, no duplicates.
+Advanced a further 120 simulated seconds after the reload with no console errors
+and no stalled traffic. **Row "Save, reload, and continue without stale
+reservations or lost commitments" passes**, and it is separately proven
+deterministically by `npm run test:gate-e-save-resume` (6/6), whose fixtures
+assert reservations `156 -> 4`, transfers `8 -> 8` and `pathless 0` at 50-crew
+scale.
+
+### Rows this session did NOT close, and why
+
+The remaining Full Playthrough rows need a longer continuous session than this
+pass covered: a first medium Berth (now priced at 600c, so it needs roughly 36
+minutes of operating income), overlapping Pod and Berth traffic, a harmful route
+separated, hull damage recovered, admission automation switched on, and the
+50-crew / 50-visitor scale. Each underlying capability is already proven
+deterministically by a focused runner — the gap is play, not mechanism. They stay
+open honestly rather than being checked on the strength of their runners.
