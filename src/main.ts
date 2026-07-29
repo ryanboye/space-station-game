@@ -38,6 +38,11 @@ import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
 import { shipHullAssetPath, shipHullProfile } from './sim/ship-hulls';
 import { deriveInterfaceDiagnosis, setSelectedInterface, type InterfaceDiagnosis } from './sim/interface-diagnosis';
+import {
+  applyPastedRoomSettings,
+  cloneStationStateForLayoutPreview,
+  type PastedRoomSetting
+} from './sim/layout-stamp';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -9507,6 +9512,70 @@ function pasteRoomStampAt(originX: number, originY: number): void {
   let skippedCells = 0;
   let firstFailure = '';
 
+  // A stamp containing a Berth is a capital commitment, so prove the complete
+  // tile-build + room-paint path against a clone before touching live state.
+  // Ordinary stamps retain their existing best-effort paste behavior.
+  const includesBerth = stampCells.some((cell) => cell.room === RoomType.Berth);
+  if (includesBerth) {
+    const preview = cloneStationStateForLayoutPreview(state);
+    for (const cell of stampCells) {
+      if (cell.tile === TileType.Space) continue;
+      const x = originX + cell.dx;
+      const y = originY + cell.dy;
+      if (!inBounds(x, y, preview.width, preview.height)) {
+        if (cell.room === RoomType.Berth) {
+          toolLockMessage = 'Cannot paste berth: footprint runs off map.';
+          return;
+        }
+        continue;
+      }
+      const idx = toIndex(x, y, preview.width);
+      if (preview.tiles[idx] !== cell.tile) {
+        removeModuleAtTile(preview, idx);
+        const changed = trySetTileWithCredits(preview, idx, cell.tile);
+        if (!changed.ok && cell.room === RoomType.Berth) {
+          toolLockMessage = `Cannot paste berth: ${changed.reason}.`;
+          return;
+        }
+        if (changed.ok) cancelConstructionAtTile(preview, idx);
+      }
+    }
+    const previewSettings: PastedRoomSetting[] = [];
+    for (const cell of stampCells) {
+      if (cell.tile === TileType.Space) continue;
+      const x = originX + cell.dx;
+      const y = originY + cell.dy;
+      if (!inBounds(x, y, preview.width, preview.height)) continue;
+      const idx = toIndex(x, y, preview.width);
+      if (preview.tiles[idx] === TileType.Space) {
+        if (cell.room === RoomType.Berth) {
+          toolLockMessage = 'Cannot paste berth: every berth cell needs built floor.';
+          return;
+        }
+        continue;
+      }
+      if (!starterLayoutEditorMode && cell.room !== RoomType.None && !isRoomUnlocked(preview, cell.room)) {
+        if (cell.room === RoomType.Berth) {
+          toolLockMessage = roomLockedMessage(cell.room);
+          return;
+        }
+        continue;
+      }
+      previewSettings.push({
+        tileIndex: idx,
+        room: cell.room,
+        zone: cell.zone,
+        housingPolicy: cell.housingPolicy
+      });
+    }
+    const preflight = applyPastedRoomSettings(preview, previewSettings);
+    if (!preflight.ok) {
+      toolLockMessage = `Cannot paste berth: ${preflight.reason}.`;
+      return;
+    }
+  }
+
+  const roomSettings: PastedRoomSetting[] = [];
   for (const cell of stampCells) {
     if (cell.tile === TileType.Space) continue;
     const x = originX + cell.dx;
@@ -9546,11 +9615,19 @@ function pasteRoomStampAt(originX: number, originY: number): void {
       skippedCells++;
       continue;
     }
-    setRoom(state, idx, cell.room);
-    setZone(state, idx, cell.zone);
-    setRoomHousingPolicy(state, idx, cell.housingPolicy);
-    paintedCells++;
+    roomSettings.push({
+      tileIndex: idx,
+      room: cell.room,
+      zone: cell.zone,
+      housingPolicy: cell.housingPolicy
+    });
   }
+  const roomPaste = applyPastedRoomSettings(state, roomSettings);
+  if (!roomPaste.ok) {
+    toolLockMessage = `Cannot paste berth: ${roomPaste.reason}.`;
+    return;
+  }
+  paintedCells = roomPaste.paintedCells;
 
   for (const dockConfig of roomClipboard.docks) {
     const x = originX + dockConfig.dx;

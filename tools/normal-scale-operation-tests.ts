@@ -8,7 +8,8 @@ import {
   ensureRoomClustersCache,
   getApproachConflictGroups,
   reconcileExteriorIntegrityTargets,
-  runMovementCoordinatorTestTick
+  runMovementCoordinatorTestTick,
+  setExteriorIntegrityTargetState
 } from '../src/sim/sim';
 import { buildStructuralSupportGraph } from '../src/sim/structural-support';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
@@ -16,7 +17,7 @@ import {
   ensureUtilityUnderlay,
   UTILITY_UNDERLAY_KINDS
 } from '../src/sim/utility-underlay';
-import { ModuleType, RoomType, TileType, VisitorState, type StationState } from '../src/sim/types';
+import { ModuleType, RoomType, TileType, VisitorState, isWalkable, type StationState } from '../src/sim/types';
 
 const STEP = 1 / 15;
 const DURATION_SECONDS = 240;
@@ -373,17 +374,15 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
     reactorDebt: 0,
     fires: 0
   };
-  // Hull integrity is measured, not asserted. Both authored stations cross the
-  // same station-wide exterior-integrity breach inside this window; see
-  // `hullIntegrity` in the report and the comparison note in `main`.
-  // `metrics.leakingTiles` exempts anything the pressure model can reach from
-  // an Airlock, so a station that owns one Airlock reports a clean hull while
-  // its decks are in vacuum. Count vented interior directly instead.
+  // Count the same built walkable surface the player-facing leak metric owns.
+  // Open Berths are intentional vacuum rooms; everything else must stay
+  // sealed throughout this operational window.
   const ventedInterior = (): number => {
     let count = 0;
     for (let tile = 0; tile < state.tiles.length; tile += 1) {
-      if (state.tiles[tile] !== TileType.Floor && state.tiles[tile] !== TileType.Door) continue;
+      if (!isWalkable(state.tiles[tile])) continue;
       if (state.rooms[tile] === RoomType.Berth) continue;
+      if (state.tiles[tile] === TileType.Dock) continue;
       if (!state.pressurized[tile]) count += 1;
     }
     return count;
@@ -494,6 +493,13 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   const cacheGuarantees = deep ? measureCacheGuarantees(state, actorCount, pathCallsP95) : null;
   const coverageP50 = percentile(phaseCoverage, 0.5);
   const coverageP05 = percentile(phaseCoverage, 0.05);
+  const finalVentedInteriorTiles = ventedInterior();
+  const reportedLeakingTiles = state.metrics.leakingTiles;
+  const deathsDuringWindow = state.metrics.deathsTotal - deathsAtStart;
+  const crewRemaining = state.crewMembers.length;
+  const debrisImpactedPanels = state.exteriorIntegrityTargets.filter((target) => target.lastImpactAt !== undefined).length;
+  const maxExteriorWear = Math.max(0, ...state.exteriorIntegrityTargets.map((target) => target.wear));
+  const naturallyBreachedPanels = state.exteriorIntegrityTargets.filter((target) => target.state === 'breached').length;
 
   const report = {
     geometry: label,
@@ -549,19 +555,16 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
       },
       queueEvery10Seconds: queueBySecond.filter((_, index) => (index + 1) % 10 === 0)
     },
-    // MEASURED, NOT ASSERTED. Both authored stations lose hull seal partway
-    // through this window because exterior integrity wear crosses its breach
-    // threshold faster than the maintenance loop closes it. It is a
-    // station-wide balance behavior, not a property of either floor plan, so
-    // the geometry comparison reports it side by side instead of hiding it
-    // behind a pass.
     hullIntegrity: {
       firstVentAtSeconds: firstVentAt === null ? null : Number(firstVentAt.toFixed(1)),
       peakVentedInteriorTiles: peakVentedTiles,
-      finalVentedInteriorTiles: ventedInterior(),
-      reportedLeakingTiles: state.metrics.leakingTiles,
-      deathsDuringWindow: state.metrics.deathsTotal - deathsAtStart,
-      crewRemaining: state.crewMembers.length,
+      finalVentedInteriorTiles,
+      reportedLeakingTiles,
+      deathsDuringWindow,
+      crewRemaining,
+      debrisImpactedPanels,
+      maxExteriorWear: Number(maxExteriorWear.toFixed(2)),
+      naturallyBreachedPanels,
       airlockTiles: state.tiles.reduce((total, tile) => total + (tile === TileType.Airlock ? 1 : 0), 0)
     },
     performanceMs: {
@@ -613,11 +616,34 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   assert(sawPodAndBerthOverlap, `${label}: Pod and Berth traffic never overlapped`);
   assert(mealsServed > 0, `${label}: cafeteria served no meals`);
   assert(minimumPowerReserve > 0, `${label}: station entered a power deficit (${minimumPowerReserve.toFixed(1)})`);
-  assert(queueDrain.ok, `${label}: cafeteria queue did not drain (${queueDrain.reason}): ${queueBySecond.join(',')}`);
   assert(state.metrics.requiredCriticalStaff.cafeteria === 0, `${label}: self-service cafeteria still requires a physical staff post`);
   assert(p95 < 25, `${label}: tick p95 ${p95.toFixed(2)}ms exceeds the 25ms practical budget`);
   assert(unprofiledPhaseTicks.size === 0, `${label}: phases never profiled at baseline scale: ${[...unprofiledPhaseTicks].join(', ')}`);
   assert(coverageP50 >= 0.75, `${label}: profiled phases only account for ${(coverageP50 * 100).toFixed(1)}% of the median tick`);
+  assert(firstVentAt === null && peakVentedTiles === 0 && finalVentedInteriorTiles === 0, `${label}: hull vented during normal operation`);
+  assert(reportedLeakingTiles === finalVentedInteriorTiles, `${label}: leak telemetry disagrees with vented built interior`);
+  assert(deathsDuringWindow === 0, `${label}: normal operation killed ${deathsDuringWindow} occupants`);
+  assert(crewRemaining === 50, `${label}: expected all 50 crew to survive, got ${crewRemaining}`);
+  assert(debrisImpactedPanels > 0 && maxExteriorWear >= 12, `${label}: debris hazards produced no meaningful exterior wear`);
+  assert(naturallyBreachedPanels === 0, `${label}: normal operation breached ${naturallyBreachedPanels} exterior panels`);
+
+  // Prove the metric is truthful in the failure case too. A zero/zero healthy
+  // station comparison alone would not catch the old Airlock flood exemption,
+  // which hid hundreds of vacuum-connected built tiles.
+  const telemetryProbeTarget = state.exteriorIntegrityTargets.find((target) => target.panel === 'hull');
+  assert(telemetryProbeTarget, `${label}: no exterior hull target available for leak telemetry probe`);
+  assert(
+    setExteriorIntegrityTargetState(state, telemetryProbeTarget.id, 'breached', 90),
+    `${label}: could not create the leak telemetry probe`
+  );
+  tick(state, 0);
+  const probeVentedInteriorTiles = ventedInterior();
+  assert(probeVentedInteriorTiles > 0, `${label}: breached hull probe did not vent built interior`);
+  assert(
+    state.metrics.leakingTiles === probeVentedInteriorTiles,
+    `${label}: breached hull reports ${state.metrics.leakingTiles} leaks for ${probeVentedInteriorTiles} vented built tiles`
+  );
+  assert(queueDrain.ok, `${label}: cafeteria queue did not drain (${queueDrain.reason}): ${queueBySecond.join(',')}`);
 
   return {
     label,
@@ -794,18 +820,11 @@ function main(): void {
         'Pod and Berth traffic overlap',
         'cafeteria serves meals with zero required staff posts',
         'cafeteria queue stays bounded and drains',
+        'station remains sealed with all 50 crew alive for 240s',
+        'leak telemetry exactly matches vented built interior in healthy and breached-hull probes',
         'tick p95 < 25ms with every top-level phase profiled'
       ],
-      geometries: [block, spine],
-      hullIntegrityNote:
-        'Both geometries vent most of their interior at the same point in the window and lose crew to '
-        + 'vacuum. The cause is station-wide exterior-integrity wear crossing its breach threshold faster '
-        + 'than the repair loop closes it, not either floor plan. It is reported per geometry above and is '
-        + 'deliberately NOT asserted here: making it a pass condition would either hide it or force a '
-        + 'balance change this runner does not own. Note also that metrics.leakingTiles reads 0 for the '
-        + 'compact block while 733 of its interior tiles are in vacuum, because the pressure model exempts '
-        + 'anything reachable from an Airlock and that station owns one; the spine owns none and reports '
-        + 'the same event honestly. That exemption is why this runner measures vented interior directly.'
+      geometries: [block, spine]
     }
   }, null, 2)}\n`);
 }

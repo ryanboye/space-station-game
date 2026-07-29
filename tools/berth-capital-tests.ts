@@ -19,6 +19,7 @@ import {
 } from '../src/sim/sim';
 import { BERTH_CAPITAL_COST } from '../src/sim/balance';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
+import { applyPastedRoomSettings } from '../src/sim/layout-stamp';
 import { RoomType, TileType, type StationState } from '../src/sim/types';
 
 let failures = 0;
@@ -280,8 +281,80 @@ check('a berth pays its class price once however it is assembled', () => {
     `15-tile widening 0c; total paid ${MEDIUM}c equals the medium class price`;
 });
 
+check('an affordable copied berth footprint is charged once', () => {
+  const state = fresh(2000);
+  const footprint = openRectangle(state, 4, 3);
+  const before = state.metrics.credits;
+  const pasted = applyPastedRoomSettings(state, footprint.map((tileIndex) => ({
+    tileIndex,
+    room: RoomType.Berth,
+    zone: state.zones[tileIndex],
+    housingPolicy: state.roomHousingPolicies[tileIndex]
+  })));
+
+  assert(pasted.ok, `affordable berth stamp failed: ${pasted.ok ? '' : pasted.reason}`);
+  assertEqual(pasted.berthCost, MEDIUM, 'stamp berth charge');
+  assertEqual(before - state.metrics.credits, MEDIUM, 'stamp credit debit');
+  assertEqual(berthTileCount(state), 12, 'stamp berth floor');
+  assertEqual(commissioningEvents(state).length, 1, 'stamp commissioning events');
+
+  return `12 copied berth cells painted atomically for one ${MEDIUM}c commitment and one ledger event`;
+});
+
+check('an unaffordable copied berth stamp is an atomic no-op', () => {
+  const state = fresh();
+  const patch = openRectangle(state, 5, 3);
+  const footprint = [0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13].map((offset) => patch[offset]);
+  const ordinaryTile = patch[4];
+  const originalRoom = state.rooms[ordinaryTile];
+  const opening = state.metrics.credits;
+  const pasted = applyPastedRoomSettings(state, [
+    {
+      tileIndex: ordinaryTile,
+      room: RoomType.Storage,
+      zone: state.zones[ordinaryTile],
+      housingPolicy: state.roomHousingPolicies[ordinaryTile]
+    },
+    ...footprint.map((tileIndex) => ({
+      tileIndex,
+      room: RoomType.Berth,
+      zone: state.zones[tileIndex],
+      housingPolicy: state.roomHousingPolicies[tileIndex]
+    }))
+  ]);
+
+  assert(!pasted.ok, 'unaffordable berth stamp succeeded');
+  assertEqual(pasted.reason, `Need ${MEDIUM} credits`, 'stamp refusal reason');
+  assertEqual(state.metrics.credits, opening, 'refused stamp moved credits');
+  assertEqual(berthTileCount(state), 0, 'refused stamp painted berth cells');
+  assertEqual(state.rooms[ordinaryTile], originalRoom, 'refused stamp partially painted an ordinary room');
+  assertEqual(commissioningEvents(state).length, 0, 'refused stamp wrote a ledger event');
+
+  return `mixed room/berth stamp refused with "${pasted.reason}"; credits and every room cell stayed unchanged`;
+});
+
+check('a copied ordinary room still pastes without a berth charge', () => {
+  const state = fresh(2000);
+  const footprint = openRectangle(state, 2, 2);
+  const before = state.metrics.credits;
+  const pasted = applyPastedRoomSettings(state, footprint.map((tileIndex) => ({
+    tileIndex,
+    room: RoomType.Storage,
+    zone: state.zones[tileIndex],
+    housingPolicy: state.roomHousingPolicies[tileIndex]
+  })));
+
+  assert(pasted.ok, 'ordinary room stamp failed');
+  assertEqual(pasted.berthCost, 0, 'ordinary stamp reported a berth charge');
+  assertEqual(state.metrics.credits, before, 'ordinary room paint moved credits');
+  assert(footprint.every((tile) => state.rooms[tile] === RoomType.Storage), 'ordinary room stamp did not paint all cells');
+  assertEqual(commissioningEvents(state).length, 0, 'ordinary room stamp wrote a berth event');
+
+  return '4 copied Storage cells pasted normally for 0c with no berth commissioning event';
+});
+
 if (failures > 0) {
   console.error(`berth-capital-tests: ${failures} check(s) failed`);
   process.exit(1);
 }
-console.log('berth-capital-tests: ok 5/5 checks');
+console.log('berth-capital-tests: ok 8/8 checks');

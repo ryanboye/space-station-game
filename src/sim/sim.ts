@@ -848,6 +848,12 @@ const MAINTENANCE_STAFF_REPAIR_PER_MIN = 4.5;
 const MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN = 0.08;
 const MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN = 1.75;
 const MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN = 0.34;
+// Debris is a station-scale event, not one independent dice roll per exposed
+// panel. Holding one exposed panel as the storm focus for a short window keeps
+// local wear and EVA maintenance meaningful without making a larger hull take
+// hundreds of simultaneous impacts against the same five-job repair budget.
+const MAINTENANCE_EXTERIOR_DEBRIS_IMPACT_CADENCE_SEC = 12;
+const MAINTENANCE_EXTERIOR_DEBRIS_FOCUS_SEC = 90;
 const MAINTENANCE_MODULE_IDLE_RISE_PER_MIN = 0.06;
 const MAINTENANCE_MODULE_LOAD_RISE_PER_MIN = 0.72;
 const MAINTENANCE_DOOR_TRAFFIC_RISE_PER_MIN = 0.22;
@@ -6121,50 +6127,6 @@ function computePressurization(state: StationState): void {
     }
   }
 
-  const airlockExterior = new Array<boolean>(n).fill(false);
-  const exteriorQueue: number[] = [];
-  const pushExteriorIfOpen = (idx: number): void => {
-    if (idx < 0 || idx >= n) return;
-    if (airlockExterior[idx]) return;
-    if (!vacuumReachable[idx]) return;
-    if (isBarrierAt(idx)) return;
-    if (state.tiles[idx] !== TileType.Space && state.rooms[idx] !== RoomType.None) return;
-    airlockExterior[idx] = true;
-    exteriorQueue.push(idx);
-  };
-  for (let i = 0; i < n; i++) {
-    if (state.tiles[i] !== TileType.Airlock) continue;
-    const p = fromIndex(i, state.width);
-    const deltas = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1]
-    ];
-    for (const [dx, dy] of deltas) {
-      const nx = p.x + dx;
-      const ny = p.y + dy;
-      if (!inBounds(nx, ny, state.width, state.height)) continue;
-      pushExteriorIfOpen(toIndex(nx, ny, state.width));
-    }
-  }
-  for (let qi = 0; qi < exteriorQueue.length; qi++) {
-    const idx = exteriorQueue[qi];
-    const p = fromIndex(idx, state.width);
-    const deltas = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1]
-    ];
-    for (const [dx, dy] of deltas) {
-      const nx = p.x + dx;
-      const ny = p.y + dy;
-      if (!inBounds(nx, ny, state.width, state.height)) continue;
-      pushExteriorIfOpen(toIndex(nx, ny, state.width));
-    }
-  }
-
   let builtWalkable = 0;
   let leakingWalkable = 0;
   for (let i = 0; i < n; i++) {
@@ -6173,9 +6135,12 @@ function computePressurization(state: StationState): void {
     state.pressurized[i] = pressurized;
     if (isBuiltWalkable) {
       builtWalkable++;
-      // Berths are intentionally open-to-space docking rooms. They should be
-      // visibly unpressurized, but not counted as damaged hull leaks.
-      if (!pressurized && !airlockExterior[i] && state.rooms[i] !== RoomType.Berth) leakingWalkable++;
+      // Berths and Dock interface tiles are intentionally open-to-space. They
+      // should be visibly unpressurized, but not counted as damaged hull
+      // leaks. Do not exempt the wider vacuum region beyond an Airlock: that
+      // region can include a breached station's entire built interior, which
+      // made the telemetry claim zero leaks while occupied decks were vented.
+      if (!pressurized && state.rooms[i] !== RoomType.Berth && state.tiles[i] !== TileType.Dock) leakingWalkable++;
     }
   }
 
@@ -10651,19 +10616,43 @@ function shouldEnqueueRepairJob(state: StationState, debt: StationState['mainten
   return true;
 }
 
+function exteriorDebrisFocus(
+  state: StationState,
+  candidates: ExteriorIntegrityCandidate[]
+): ExteriorIntegrityCandidate | null {
+  const focusPhase = Math.floor(state.now / MAINTENANCE_EXTERIOR_DEBRIS_FOCUS_SEC);
+  let focus: ExteriorIntegrityCandidate | null = null;
+  let focusScore = -Infinity;
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index];
+    const exposure = candidate.risk * candidate.mitigation;
+    if (exposure < 0.42) continue;
+    const jitter = 0.75 + deterministicUnit(
+      state.seedAtCreation + focusPhase * 101,
+      candidate.anchorTile * 5 + index
+    ) * 0.5;
+    const score = exposure * jitter;
+    if (score > focusScore) {
+      focus = candidate;
+      focusScore = score;
+    }
+  }
+  return focus;
+}
+
 function maybeRecordDebrisImpact(
   state: StationState,
   debt: StationState['maintenanceDebts'][number],
-  risk: number,
-  risePerMin: number
+  risk: number
 ): boolean {
-  if (risk < 0.42 || risePerMin <= MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN) return false;
-  const cadence = clamp(20 - risk * 14, 4, 18);
+  if (risk < 0.42) return false;
+  const cadence = MAINTENANCE_EXTERIOR_DEBRIS_IMPACT_CADENCE_SEC;
   const last = debt.lastImpactAt ?? -9999;
-  if (state.now - last < cadence) return false;
   const phase = Math.floor(state.now / cadence);
-  const trigger = (Math.sin(debt.anchorTile * 19.17 + state.seedAtCreation * 0.013 + phase * 5.31) + 1) / 2;
-  if (trigger <= 0.58) return false;
+  if (Math.floor(last / cadence) === phase) return false;
+  const trigger = deterministicUnit(state.seedAtCreation + phase * 17, debt.anchorTile + 5_310);
+  const chance = clamp(0.18 + risk * 0.65, 0.4, 0.88);
+  if (trigger > chance) return false;
   debt.lastImpactAt = state.now;
   return true;
 }
@@ -10751,6 +10740,7 @@ function processExteriorMaintenance(state: StationState, minutes: number, ensure
   const candidates = reconcileExteriorIntegrityTargets(state);
   if (minutes <= 0) return;
   const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const debrisFocus = exteriorDebrisFocus(state, candidates);
   for (const target of state.exteriorIntegrityTargets) {
     const candidate = candidateById.get(target.id);
     if (!candidate) continue;
@@ -10765,12 +10755,15 @@ function processExteriorMaintenance(state: StationState, minutes: number, ensure
       effect: candidate.effect
     });
     const wasOpen = target.wear >= MAINTENANCE_DEBT_WARNING;
+    const debrisExposure = candidate.risk * candidate.mitigation;
     const risePerMin =
       MAINTENANCE_EXTERIOR_IDLE_RISE_PER_MIN +
-      candidate.risk * candidate.mitigation * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN +
       candidate.traffic * MAINTENANCE_EXTERIOR_TRAFFIC_RISE_PER_MIN;
     debt.source = candidate.traffic > 0.2 ? 'traffic' : 'debris';
-    const impact = maybeRecordDebrisImpact(state, debt, candidate.risk * candidate.mitigation, risePerMin) ? 2 + candidate.risk * 4 : 0;
+    const impact =
+      candidate.id === debrisFocus?.id && maybeRecordDebrisImpact(state, debt, debrisExposure)
+        ? 2 + debrisExposure * MAINTENANCE_EXTERIOR_DEBRIS_RISE_PER_MIN * 2.3
+        : 0;
     target.lastImpactAt = debt.lastImpactAt;
     const nextWear = clamp(Math.max(target.wear, debt.debt) + risePerMin * minutes + impact, 0, 100);
     debt.debt = nextWear;
