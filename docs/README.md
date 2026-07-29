@@ -56,6 +56,7 @@ Every system doc follows the same shape:
 | `38-structural-frontage-visit-flow-implementation-plan.md` | Structural expansion, physical frontage, approach envelopes, longer visits, crowd flow, and hull exposure plan |
 | `39-structural-frontage-execution-checklist.md` | Master checklist for implementation, evidence, migration, performance, and user playtest review |
 | `41-checklist-takeover-handoff.md` | Handoff: what shipped, what is left, where art is needed, bugs found but not fixed, and open decisions |
+| `42-structural-frontage-checked-row-evidence-index.md` | Generated provenance index mapping each checked structural-frontage requirement to its closure commit and evidence files |
 | `99-trip-wires.md` | Cross-cutting invariants — read before committing |
 
 ## Conventions

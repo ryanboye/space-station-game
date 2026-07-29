@@ -15,7 +15,12 @@ compiles is not sufficient for player-facing work.
 
 ## Checklist Rules
 
-- [ ] Every completed item names a commit or changed files in its evidence note.
+- [x] Every completed item names a commit or changed files in its evidence note.
+  Evidence: commit `4a5beee` added
+  `tools/generate-checklist-evidence-index.mjs` and generated
+  `docs/42-structural-frontage-checked-row-evidence-index.md`; the deterministic
+  audit mapped all 533 previously checked rows to their closure commit and
+  evidence files with zero missing or duplicate mappings.
 - [ ] Every simulation item has a focused deterministic check.
 - [x] Every visual item has an inspected screenshot or live-browser observation.
 - [ ] Every gameplay item is tested in a deliberately bad layout and an improved
