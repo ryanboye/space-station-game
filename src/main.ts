@@ -37,7 +37,7 @@ import { computeCharterOperatingForecast } from './sim/site-charter';
 import { POD_DEMAND_FAMILIES } from './sim/pod-demand';
 import { evaluateOpeningRecipes, futureFacilities, type RecipeStepProgress } from './sim/opening-recipes';
 import { shipHullAssetPath, shipHullProfile } from './sim/ship-hulls';
-import { deriveInterfaceDiagnosis, type InterfaceDiagnosis } from './sim/interface-diagnosis';
+import { deriveInterfaceDiagnosis, setSelectedInterface, type InterfaceDiagnosis } from './sim/interface-diagnosis';
 import type { CapitalProjectId } from './sim/capital-projects';
 import {
   acceptOpeningCapitalProject,
@@ -8010,6 +8010,7 @@ function selectIncident(incidentId: number): boolean {
   selectedAgent = null;
   selectedDockId = null;
   selectedRoomTile = null;
+  setSelectedInterface(null);
   selectedBerthAnchor = null;
   agentModal.classList.add('hidden');
   dockModal.classList.add('hidden');
@@ -8438,6 +8439,9 @@ function refreshDockModal(): void {
   dockModalRoutingEl.classList.toggle('hidden', moduleBacked);
   dockModalDiagnosisEl.classList.toggle('hidden', !moduleBacked);
   if (moduleBacked) {
+    // Tell the renderer which interface the player is reading, so the problem
+    // this panel names is also framed in the world instead of only in prose.
+    setSelectedInterface({ kind: 'dock', dockId: dock.id });
     renderInterfaceDiagnosis(dockModalDiagnosisEl, deriveInterfaceDiagnosis(state, { kind: 'dock', dockId: dock.id }));
     const capabilities = ['Passenger access', ...(dock.podCapabilities ?? []).map((capability) =>
       capability === 'fuel' ? 'Fuel' : capability === 'freight' ? 'Freight' : 'Maintenance'
@@ -8865,6 +8869,7 @@ function refreshRoomModal(): void {
       ).join('');
       roomModalBerthReadinessReasonEl.textContent = `First action: ${readinessReason}`;
       roomModalBerthReadinessReasonEl.classList.toggle('clear', readinessReason === 'no physical berth blocker');
+      setSelectedInterface({ kind: 'berth', anchorTile: berth.anchorTile });
       renderInterfaceDiagnosis(
         roomModalBerthDiagnosisEl,
         deriveInterfaceDiagnosis(state, { kind: 'berth', anchorTile: berth.anchorTile })
@@ -8914,6 +8919,7 @@ function refreshRoomModal(): void {
     } else {
       roomModalBerthEl.textContent = 'Berth: cluster too small or not detected';
       roomModalBerthEl.style.color = '#ff7676';
+      setSelectedInterface(null);
       selectedBerthAnchor = null;
       roomModalBerthReadinessEl.classList.add('hidden');
       roomModalBerthDiagnosisEl.classList.add('hidden');
@@ -8922,6 +8928,7 @@ function refreshRoomModal(): void {
   } else {
     roomModalBerthEl.textContent = 'Berth: n/a';
     roomModalBerthEl.style.color = '#8ea2bd';
+    setSelectedInterface(null);
     selectedBerthAnchor = null;
     roomModalBerthReadinessEl.classList.add('hidden');
     roomModalBerthDiagnosisEl.classList.add('hidden');
@@ -10755,6 +10762,7 @@ wireModal({
   closeBtn: closeRoomBtn,
   beforeClose: () => {
     selectedRoomTile = null;
+    setSelectedInterface(null);
     selectedBerthAnchor = null;
   }
 });

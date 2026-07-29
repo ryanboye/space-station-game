@@ -686,10 +686,10 @@ audited checklist with no unsupported checked claims.
 - [x] Identify public/cargo route intersections.
 - [x] Measure freight staging/storage distance.
 - [x] Measure staff access to ship hardware.
-- [ ] Check utility and maintenance access.
+- [x] Check utility and maintenance access.
 - [x] Measure approach wait and Berth overstay.
 - [x] Show only the most actionable diagnosis by default.
-- [ ] Highlight the physical route, door, queue, or interface when selected.
+- [x] Highlight the physical route, door, queue, or interface when selected.
 
 ### Phase 6 Gate
 
@@ -2363,3 +2363,51 @@ open honestly rather than being checked on the strength of their runners.
   exists (the actions are accept/hold/pass). The new specs deliberately avoid
   those helpers and stage offers through a save round-trip, so they are
   independent of RNG and of the starter layout.
+
+2026-07-28 · The interface diagnosis now reaches the world
+
+- Commit or files: `utility-maintenance-access` branch, boarding measurement and
+  the selection register in `src/sim/interface-diagnosis.ts`;
+  `drawSelectedInterfaceFocus` in `src/render/render.ts`; selection wiring in
+  `src/main.ts`; new cases in `tools/interface-diagnosis-tests.ts`.
+- **Utility and maintenance access** had no metric code at all — the module never
+  read `state.maintenanceDebts` or the utility underlay. It now flags a
+  maintenance debt at or over the repair threshold whose work tile has no
+  standing tile (interior debts need a walkable neighbour, exterior debts need
+  Space/Truss adjacency for EVA), and a Fuel Coupler whose service tile has no
+  pipe or whose network has no tank. `hardwareTiles`/`hardwareModuleIds` scope it
+  to the selected interface, so a debt on an unrelated corridor is never blamed
+  on this dock. Absent underlay on hardware that never asked for it is
+  deliberately not reported — that would be a preference, not a fact.
+  `relevantChangeSignature` now includes the underlay version and the keys of
+  debts over threshold, so the branch invalidates on repaint rather than waiting
+  for the next traffic bucket.
+- Judgment worth recording: `getPodDockFuelSupplyView` was deliberately *not*
+  used, because it calls `ensureDockEntitiesUpToDate` and would rebuild
+  `state.docks` from a now render-reachable path.
+- **The implicated tile is finally drawn.** Every diagnosis has carried an
+  `implicatedTile` for a long time and both consumers wrote prose into a DOM
+  panel and ignored it. Selecting a dock or berth now registers the selection,
+  and the world draws the interface footprint as a dashed outline, route/queue
+  tiles as pips, a pulsing double frame with corner ticks on the implicated tile,
+  and one severity-coloured caption capped to the same width budget as the
+  approach labels. Render stays read-only: the register and the diagnosis both
+  live in the sim module.
+- Live-browser evidence, mine: on `?scenario=mixed-berth-visit` I clicked the
+  Berth, which opened the Room Inspector reading `Berth: active | 0/2 assigned
+  crew`, closed it, hid the HUD panels, and the berth still carries its dashed
+  amber focus outline in the open world at gameplay zoom. The implementer
+  separately captured the amber `Service access cut` caption and framed tile
+  after injecting a maintenance debt at berth tile 3672.
+- Gotcha recorded for whoever drives this next: Vite serves modules with a
+  `?t=<hash>` suffix, so `import('/src/sim/interface-diagnosis.ts')` from the
+  console yields a *second* module instance and the selection never reaches the
+  renderer. Import the exact URL from `performance.getEntriesByType('resource')`.
+- **Boarding distance and duration stays open.** The per-interface measurement
+  exists and is tested — longest route tiles, longest and total wait, farthest
+  boarder, all keyed by `identityKey`, plus a `boarding-distance` notice that
+  only fires when nothing is actually blocking so a long walk is distinguishable
+  from a jammed throat. What is missing is one call from the passenger transfer
+  path in `src/sim/sim.ts` to record completions, and durability: the tally lives
+  in a `WeakMap` keyed by StationState, so completed totals do not survive
+  save/load. Requested from the agent holding that file.

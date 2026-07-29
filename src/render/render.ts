@@ -24,6 +24,10 @@ import {
   type BuildTool,
   type StationState
 } from '../sim/types';
+import {
+  getSelectedInterfaceFocus,
+  type InterfaceDiagnosisSeverity
+} from '../sim/interface-diagnosis';
 import { MODULE_DEFINITIONS, VISIT_TIMINGS } from '../sim/balance';
 import { previewModulePlacement } from '../sim/construction';
 import {
@@ -7416,6 +7420,161 @@ function shouldDrawAirDistressPip(state: StationState, actorId: number, tileInde
   return Math.abs(actorId * 17 + cadence) % sampleEvery === 0;
 }
 
+const INTERFACE_FOCUS_COLORS: Record<InterfaceDiagnosisSeverity, string> = {
+  critical: '#ff6b6b',
+  warning: APPROACH_WARNING_COLOR,
+  notice: '#7ec8ff',
+  healthy: '#7ce0b4'
+};
+
+/** Outline only the edges of a tile set that face outward, not every cell. */
+function strokeTileSetOutline(ctx: CanvasRenderingContext2D, state: StationState, tiles: number[]): void {
+  const members = new Set(tiles);
+  ctx.beginPath();
+  for (const tile of tiles) {
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    const px = x * TILE_SIZE;
+    const py = y * TILE_SIZE;
+    if (!members.has(tile - state.width) || y === 0) {
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + TILE_SIZE, py);
+    }
+    if (!members.has(tile + state.width) || y === state.height - 1) {
+      ctx.moveTo(px, py + TILE_SIZE);
+      ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE);
+    }
+    if (x === 0 || !members.has(tile - 1)) {
+      ctx.moveTo(px, py);
+      ctx.lineTo(px, py + TILE_SIZE);
+    }
+    if (x === state.width - 1 || !members.has(tile + 1)) {
+      ctx.moveTo(px + TILE_SIZE, py);
+      ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE);
+    }
+  }
+  ctx.stroke();
+}
+
+/**
+ * World-space half of the per-interface diagnosis. The panel names a tile and
+ * a remedy; this puts the same answer on the station, so the player looks at
+ * the door, queue, or route instead of decoding a coordinate. Read-only: the
+ * selection register and the diagnosis both live in the sim module.
+ */
+function drawSelectedInterfaceFocus(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number },
+  visualTime: number
+): void {
+  const focus = getSelectedInterfaceFocus(state);
+  if (!focus) return;
+  const color = INTERFACE_FOCUS_COLORS[focus.diagnosis.severity];
+  const pulse = 0.6 + 0.4 * Math.sin(visualTime * 3.4);
+  ctx.save();
+  ctx.lineJoin = 'round';
+
+  // 1. The interface footprint, so a highlight far from it still reads as
+  // belonging to the selected Dock or Berth.
+  const footprint = focus.interfaceTiles.filter((tile) => tileInRange(tile, state, visibleTiles));
+  if (footprint.length > 0) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+    for (const tile of footprint) {
+      ctx.fillRect((tile % state.width) * TILE_SIZE, Math.floor(tile / state.width) * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = Math.max(1.5, TILE_SIZE * 0.06);
+    ctx.setLineDash([Math.round(6 * PX), Math.round(4 * PX)]);
+    ctx.lineDashOffset = -visualTime * 12;
+    strokeTileSetOutline(ctx, state, focus.interfaceTiles);
+    ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
+    ctx.globalAlpha = 1;
+  }
+
+  // 2. The offending route or queue. Small centre pips keep a long cargo path
+  // legible without repainting the floor under it.
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.42;
+  for (const tile of focus.routeTiles) {
+    if (!tileInRange(tile, state, visibleTiles)) continue;
+    const cx = (tile % state.width + 0.5) * TILE_SIZE;
+    const cy = (Math.floor(tile / state.width) + 0.5) * TILE_SIZE;
+    const r = TILE_SIZE * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + r, cy);
+    ctx.lineTo(cx, cy + r);
+    ctx.lineTo(cx - r, cy);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // 3. The blamed tile. A pulsing double frame with corner ticks stays visible
+  // over sprites, glow, and the diagnostic underlays.
+  const blamed = focus.implicatedTile;
+  const captionAnchor = blamed !== null && tileInRange(blamed, state, visibleTiles)
+    ? blamed
+    : footprint[0] ?? null;
+  if (blamed !== null && tileInRange(blamed, state, visibleTiles)) {
+    const px = (blamed % state.width) * TILE_SIZE;
+    const py = Math.floor(blamed / state.width) * TILE_SIZE;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.18 + 0.14 * pulse;
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(5, 12, 20, 0.9)';
+    ctx.lineWidth = Math.max(3, TILE_SIZE * 0.13);
+    ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1.6, TILE_SIZE * 0.07);
+    ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    const tick = TILE_SIZE * (0.3 + 0.08 * pulse);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const [ox, oy, sx, sy] of [
+      [0, 0, 1, 1],
+      [TILE_SIZE, 0, -1, 1],
+      [0, TILE_SIZE, 1, -1],
+      [TILE_SIZE, TILE_SIZE, -1, -1]
+    ] as const) {
+      ctx.moveTo(px + ox, py + oy + sy * tick);
+      ctx.lineTo(px + ox, py + oy);
+      ctx.lineTo(px + ox + sx * tick, py + oy);
+    }
+    ctx.stroke();
+  }
+
+  // 4. One short caption. Width is capped the same way the approach labels are,
+  // so it stays readable over a 32px tile instead of spanning the bay.
+  if (captionAnchor !== null) {
+    const fontPx = Math.max(9, Math.round(TILE_SIZE * 0.3));
+    ctx.font = `bold ${fontPx}px monospace`;
+    const pad = Math.max(4, Math.round(TILE_SIZE * 0.18));
+    const height = Math.max(16, Math.round(TILE_SIZE * 0.62));
+    const width = Math.min(TILE_SIZE * 7.5, ctx.measureText(focus.caption).width + pad * 2);
+    const anchorX = (captionAnchor % state.width + 0.5) * TILE_SIZE;
+    const anchorY = Math.floor(captionAnchor / state.width) * TILE_SIZE;
+    const x = Math.max(2, Math.min(state.width * TILE_SIZE - width - 2, anchorX - width * 0.5));
+    const y = Math.max(2, Math.min(state.height * TILE_SIZE - height - 2, anchorY - height - TILE_SIZE * 0.2));
+    ctx.fillStyle = 'rgba(5, 14, 23, 0.92)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, Math.max(2, TILE_SIZE * 0.1));
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(focus.caption, x + width * 0.5, y + height * 0.5, width - pad * 2);
+  }
+  ctx.restore();
+}
+
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -8513,5 +8672,8 @@ export function renderWorld(
     ctx.stroke();
     ctx.restore();
   }
+  // Last world pass: the selected interface's diagnosis must sit above the
+  // overlays it is describing.
+  drawSelectedInterfaceFocus(ctx, state, visibleTiles, visualTime);
   ctx.restore();
 }
