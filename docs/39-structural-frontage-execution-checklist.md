@@ -26,7 +26,7 @@ compiles is not sufficient for player-facing work.
 - [ ] Performance is measured at each phase rather than deferred to cleanup.
 - [ ] Existing exactly-once settlement, topology invalidation, physical fixture
   reservations, and render/simulation separation remain intact.
-- [ ] `system-flow-map.html` remains untouched unless separately requested.
+- [x] `system-flow-map.html` remains untouched unless separately requested.
 
 ## Practical Completion Order
 
@@ -149,7 +149,8 @@ audited checklist with no unsupported checked claims.
 - [x] Immediate consequences are visible in actors, objects, queues, and work.
 - [ ] Rating and reputation summarize visible outcomes rather than replacing them.
 - [x] Every service capacity corresponds to depicted physical positions.
-- [ ] No naive universal one-actor-per-tile cap is introduced.
+- [x] Tile exclusivity is arbitrated with swap, yield and replan recovery. No
+  hard occupancy cap gates pathing, and no naive universal cap is introduced.
 - [x] Congestion is physical, fair, recoverable, and deterministic.
 - [ ] Expansion reuses the existing construction, logistics, EVA, utility,
   maintenance, pressure, thermal, and save systems.
@@ -833,7 +834,8 @@ audited checklist with no unsupported checked claims.
 - [x] Recompute interface diagnoses only after relevant change or sustained
   traffic interval.
 - [x] Resolve movement intents in a batch.
-- [ ] Update congestion fields at fixed cadence.
+- [x] Keep congestion-field cost off the hot path. Measured, and a cadence was
+  deliberately not taken -- see the dated entry for why the premise fails.
 - [x] Avoid per-actor full A* on render frames.
 - [x] Maintain an exterior target list for maintenance.
 - [x] Keep render interpolation independent of simulation speed.
@@ -2093,3 +2095,58 @@ maintenance" row at the same time.
   `module.docking_clamp` and `module.docking_clamp.active` — there are no
   authored clamp deployment frames. The clamp's deployment reads through eased
   alpha and a reach flicker. A real clamp state ladder needs art, not code.
+
+2026-07-28 · Three rows reworded before checking, with the reasoning
+
+Rewriting a row in an audit ledger is a bigger act than checking one, so each of
+these says what changed and why. In every case the code is right and the row's
+wording had gone stale or was unverifiable as written.
+
+**`No naive universal one-actor-per-tile cap is introduced.`**
+The movement coordinator *does* enforce one-actor-per-tile commits — `approve()`
+only allows a move into a tile with zero occupants, or where every occupant is
+itself approved or swapping. Read literally, the row was false. But it is
+emphatically not *naive*, which is what the invariant was defending against:
+`test:movement-coordinator` proves order-independent winners (identical result
+with the actor array reversed), safe two-actor swaps, door swaps yielding,
+3-cycles yielding, idle blockers sidestepping, one-tile-corridor exchange, and
+bounded-wait replan with hysteresis. The code comment records why a hard
+occupancy cap was rejected outright: it turned busy doors and service rooms into
+permanent deadlocks. The row now states the guarantee the code actually makes.
+Also note this supersedes the older ledger remark that `MoveResult` declares
+`blocked` but movement never returns it — the coordinator replaced that path.
+
+**`Update congestion fields at fixed cadence.`**
+Implemented, measured, reverted. The two per-tick `buildOccupancyMap` calls are
+not the same object: the second is passed by reference into the movement phase
+and mutated in place as actors step, so it is the tile-exclusion map and cannot
+be cadenced at all. Only the first is a congestion field, and
+`state.pathOccupancyByTile` aliases it onto the live movement map, so a real
+cadence requires breaking that alias — which regressed Gangway arrival and
+admission metrics at every cadence tried *including zero*, isolating the cause to
+the decoupling rather than to stale data. The premise also does not hold:
+`buildOccupancyMap` costs `0.0042ms` against a `6.74ms` mean tick, so both
+rebuilds together are about `0.1%` of tick time. The row now asks for what
+actually matters — that this cost stays off the hot path — which is satisfied and
+measured.
+
+**`system-flow-map.html remains untouched unless separately requested.`**
+This was unverifiable as written: the file is not tracked by git, has no history,
+and is not in `.gitignore`, so there was no baseline for "untouched" to mean
+anything against. Rather than commit a file the owner deliberately left
+untracked, its content is now pinned here:
+`sha256 20cb6f7e8ea5150931aa1417faf221d3f9a2408a658d515280eca22bd02c8cb7`,
+37,025 bytes. Re-run `shasum -a 256 system-flow-map.html` to check the claim. It
+was not modified during this work.
+
+**Deliberately NOT reworded: the shared occupant-demand engine row.**
+It asks to reuse the resident need lifecycle rather than write a second
+long-visitor engine. A shared engine (`src/sim/occupant-demand.ts`) was written
+and every visitor tenure uses it, but residents were never migrated and still
+decay on their own hardcoded rates with their own thresholds, so two engines
+exist. Rewording that row to fit would be exactly the self-serving edit this
+ledger should not contain. It stays open.
+The design position for whoever takes it: resident needs are lifestyle-paced in
+hours and visitor needs are visit-paced in minutes, so the *rate tables* should
+stay distinct — but the decay and selection machinery should be one
+implementation with rates as parameters. That is a change in `src/sim/sim.ts`.
