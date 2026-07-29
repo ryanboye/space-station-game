@@ -21111,6 +21111,56 @@ function processCrewResignations(state: StationState, occupancyByTile: Map<numbe
   state.crew.free = Math.max(0, state.crew.total - state.crew.assigned);
 }
 
+/**
+ * Keep the small, player-facing crew census on the same live frame as the
+ * actors it describes. Full derived metrics intentionally run on a cadence,
+ * but resting/idle labels drive immediate HUD and alert decisions and cannot
+ * lag a visible state transition by one crew member.
+ */
+function syncLiveCrewStateMetrics(state: StationState): void {
+  const idleCrewByReason: Record<CrewIdleReason, number> = {
+    idle_available: 0,
+    idle_no_jobs: 0,
+    idle_resting: 0,
+    idle_no_path: 0,
+    idle_waiting_fixture: 0,
+    idle_waiting_reassign: 0
+  };
+  let crewAssignedWorking = 0;
+  let crewIdleAvailable = 0;
+  let crewResting = 0;
+  let crewOnLogisticsJobs = 0;
+  let crewBlockedNoPath = 0;
+  for (const crew of state.crewMembers) {
+    if (crew.resting) {
+      crewResting += 1;
+      idleCrewByReason.idle_resting += 1;
+      continue;
+    }
+    if (crew.activeJobId !== null) {
+      crewOnLogisticsJobs += 1;
+      continue;
+    }
+    if (crew.role !== 'idle') {
+      crewAssignedWorking += 1;
+      continue;
+    }
+    if (crew.idleReason === 'idle_no_path') crewBlockedNoPath += 1;
+    if (crew.idleReason === 'idle_available' || crew.idleReason === 'idle_no_jobs') {
+      crewIdleAvailable += 1;
+    }
+    idleCrewByReason[crew.idleReason] += 1;
+  }
+  state.metrics.crewAssignedWorking = crewAssignedWorking;
+  state.metrics.crewIdleAvailable = crewIdleAvailable;
+  state.metrics.crewResting = crewResting;
+  state.metrics.crewRestingNow = crewResting;
+  state.metrics.crewRestCap = Math.max(1, Math.ceil(Math.max(1, state.crewMembers.length) * CREW_MAX_RESTING_RATIO));
+  state.metrics.crewOnLogisticsJobs = crewOnLogisticsJobs;
+  state.metrics.crewBlockedNoPath = crewBlockedNoPath;
+  state.metrics.idleCrewByReason = idleCrewByReason;
+}
+
 function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
   purgeDeadCrewFromAir(state, dt, occupancyByTile);
   processCrewResignations(state, occupancyByTile);
@@ -22714,6 +22764,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       crew.idleReason = hasPendingJobs ? 'idle_waiting_reassign' : 'idle_no_jobs';
     }
   }
+  syncLiveCrewStateMetrics(state);
 }
 
 function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
@@ -27728,48 +27779,7 @@ function computeMetrics(state: StationState): void {
     kitchen: kitchenStaff.transit,
     cafeteria: cafeteriaStaff.transit
   };
-
-  const idleCrewByReason: Record<CrewIdleReason, number> = {
-    idle_available: 0,
-    idle_no_jobs: 0,
-    idle_resting: 0,
-    idle_no_path: 0,
-    idle_waiting_fixture: 0,
-    idle_waiting_reassign: 0
-  };
-  let crewAssignedWorking = 0;
-  let crewIdleAvailable = 0;
-  let crewResting = 0;
-  let crewOnLogisticsJobs = 0;
-  let crewBlockedNoPath = 0;
-  for (const crew of state.crewMembers) {
-    if (crew.resting) {
-      crewResting += 1;
-      idleCrewByReason.idle_resting += 1;
-      continue;
-    }
-    if (crew.activeJobId !== null) {
-      crewOnLogisticsJobs += 1;
-      continue;
-    }
-    if (crew.role !== 'idle') {
-      crewAssignedWorking += 1;
-      continue;
-    }
-    if (crew.idleReason === 'idle_no_path') crewBlockedNoPath += 1;
-    if (crew.idleReason === 'idle_available' || crew.idleReason === 'idle_no_jobs') {
-      crewIdleAvailable += 1;
-    }
-    idleCrewByReason[crew.idleReason] += 1;
-  }
-  state.metrics.crewAssignedWorking = crewAssignedWorking;
-  state.metrics.crewIdleAvailable = crewIdleAvailable;
-  state.metrics.crewResting = crewResting;
-  state.metrics.crewRestingNow = crewResting;
-  state.metrics.crewRestCap = Math.max(1, Math.ceil(Math.max(1, state.crewMembers.length) * CREW_MAX_RESTING_RATIO));
-  state.metrics.crewOnLogisticsJobs = crewOnLogisticsJobs;
-  state.metrics.crewBlockedNoPath = crewBlockedNoPath;
-  state.metrics.idleCrewByReason = idleCrewByReason;
+  syncLiveCrewStateMetrics(state);
   const grossCredits = state.usageTotals.creditsMarketGross + state.usageTotals.creditsMealPayoutGross + state.usageTotals.residentTaxesCollected;
   const payrollCredits = state.usageTotals.payrollPaid;
   state.metrics.creditsGrossPerMin = grossCredits / runMinutes;

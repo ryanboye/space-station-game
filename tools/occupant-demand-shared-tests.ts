@@ -251,6 +251,14 @@ function testCrewStalledSelfCareYieldsToCriticalSleep(): void {
   sampledEnergy.push(crew.energy);
   assert(crew.resting, 'critically fatigued crew stalled at a fixture did not begin assigned sleep');
   assert(sampledEnergy.every((energy) => energy >= 18), `crew crossed the hard energy floor before sleep: ${sampledEnergy.join(', ')}`);
+  const actualResting = state.crewMembers.filter((candidate) => candidate.resting).length;
+  assert(
+    state.metrics.crewRestingNow === actualResting &&
+    state.metrics.crewResting === actualResting &&
+    state.metrics.idleCrewByReason.idle_resting === actualResting,
+    `live rest census lagged actor truth: actual ${actualResting}, now ${state.metrics.crewRestingNow}, ` +
+    `derived ${state.metrics.crewResting}, idle ${state.metrics.idleCrewByReason.idle_resting}`
+  );
   assert(!crew.eating && !crew.carryingMeal, 'stalled meal intent survived critical-sleep handoff');
   assert(old.reservation.releaseReason === 'replaced', `stale crew claim did not release once (${old.reservation.releaseReason})`);
   assert(crew.assignedSleepTile !== null, 'critical crew did not retain an assigned physical sleep slot');
