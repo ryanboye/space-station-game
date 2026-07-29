@@ -6,6 +6,7 @@ import {
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
   OPENING_BALANCE,
+  OPENING_SERVICE_REVENUE,
   PORT_SETTLEMENT,
   PROCESS_RATES,
   ROOM_ENVIRONMENT_TRAITS,
@@ -15313,7 +15314,7 @@ function smallCraftService(
     // choosing or operating a business.
     ? { durationSec: 28, creditsEarned: 0, ratingDelta: 0 }
     : kind === 'refuel'
-      ? { durationSec: 18, creditsEarned: 12, ratingDelta: 0.14 }
+      ? { durationSec: 18, creditsEarned: OPENING_SERVICE_REVENUE.podRefuelCredits, ratingDelta: 0.14 }
       : kind === 'freight'
         ? { durationSec: 22, creditsEarned: 0, ratingDelta: 0.12 }
         : { durationSec: 30, creditsEarned: 16, ratingDelta: 0.18 };
@@ -24050,7 +24051,7 @@ function marketSpendPerSec(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity, 0.35, 1.05);
   const economy = deriveOpeningEconomyProfile(state.site);
   const pricing = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
-  return 1.15 * pricing.salePriceMultiplier * economy.retailDemandMultiplier *
+  return OPENING_SERVICE_REVENUE.marketSpendPerSecBase * pricing.salePriceMultiplier * economy.retailDemandMultiplier *
     visitor.spendMultiplier * taxPenalty * marketHelperMultiplier(state) *
     reputationSpendMultiplierAt(state, visitor.tileIndex);
 }
@@ -24479,7 +24480,8 @@ export function completeMarketCheckout(state: StationState, visitor: Visitor): b
 
 function mealExitPayout(state: StationState, visitor: Visitor): number {
   const taxPenalty = clamp(1 - state.controls.taxRate * visitor.taxSensitivity * 0.9, 0.3, 1.1);
-  const payout = (5 + state.controls.taxRate * 6) * visitor.spendMultiplier * taxPenalty; // Crowd-loop v1: income rides served meals
+  const payout = (5 + state.controls.taxRate * 6) * visitor.spendMultiplier * taxPenalty *
+    OPENING_SERVICE_REVENUE.mealSaleMultiplier; // Crowd-loop v1: income rides served meals
   return Math.max(0.6, payout);
 }
 

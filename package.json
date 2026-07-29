@@ -77,6 +77,7 @@
     "test:opening-economy": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-economy-tests.js",
     "test:opening-economy-save": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-economy-save-tests.js",
     "playtest:opening-business-runway": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-business-runway.js",
+    "test:first-berth-runway": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/first-berth-runway.js",
     "test:opening-economy-integration": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-economy-integration-tests.js",
     "test:opening-power": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-power-tests.js",
     "test:pod-freight": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/pod-freight-tests.js",

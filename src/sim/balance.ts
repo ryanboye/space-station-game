@@ -1000,6 +1000,25 @@ export const OPENING_BALANCE: {
   fuelLot: { units: 40, costCredits: 50 }
 };
 
+/**
+ * Earned unit revenue for the three opening businesses.
+ *
+ * These are paid only after a real physical service completes: a visitor
+ * finishes a meal, a stocked good clears checkout, or a pod consumes fuel.
+ * They are calibrated against the neutral starter's real traffic cadence,
+ * payroll, and replacement stock so every advertised opening can save for a
+ * contract-ready medium Berth without a Capital Project. They deliberately do
+ * not alter passive dock access, traffic volume, wages, or procurement.
+ */
+export const OPENING_SERVICE_REVENUE = {
+  /** Multiplies the existing quality/tax/spend-derived completed meal payout. */
+  mealSaleMultiplier: 8,
+  /** Gross credits per second of the completed market checkout calculation. */
+  marketSpendPerSecBase: 8.5,
+  /** Gross credits after one pod physically completes a four-unit refuel. */
+  podRefuelCredits: 48
+} as const;
+
 export const PORT_SETTLEMENT = {
   /** Share of the settled payout forfeited by a completely unserved call. */
   shortfallPenaltyShare: 0.85,

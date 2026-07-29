@@ -238,7 +238,15 @@ function run(route: RouteId) {
 assert(BERTH_PACKAGE_COST === 1150, `contract-ready Berth drifted to ${BERTH_PACKAGE_COST}c`);
 assert(SAFE_BUILD_CHECKPOINT === 1250, `safe build checkpoint drifted to ${SAFE_BUILD_CHECKPOINT}c`);
 
-const results = ROUTES.map(run);
+const requestedRoute = process.env.FIRST_BERTH_ROUTE as RouteId | undefined;
+assert(!requestedRoute || ROUTES.includes(requestedRoute), `unknown route filter ${requestedRoute}`);
+const routes = requestedRoute ? [requestedRoute] : ROUTES;
+const results: ReturnType<typeof run>[] = [];
+for (const route of routes) {
+  const result = run(route);
+  results.push(result);
+  console.log(`first-berth-runway: sampled ${route} at ${result.reachedAtSec ?? 'unreached'}s`);
+}
 console.log(JSON.stringify({
   assumptions: {
     seed: 411,
@@ -264,4 +272,4 @@ for (const result of results) {
   assert(result.routeStock > 0, `${result.route} reached the checkpoint with no operating stock`);
 }
 
-console.log('first-berth-runway: ok 3/3 routes');
+console.log(`first-berth-runway: ok ${results.length}/${routes.length} routes`);
