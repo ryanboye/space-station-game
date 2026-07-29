@@ -16,10 +16,11 @@ import {
   ensureUtilityUnderlay,
   UTILITY_UNDERLAY_KINDS
 } from '../src/sim/utility-underlay';
-import { RoomType, type StationState } from '../src/sim/types';
+import { ModuleType, RoomType, TileType, VisitorState, type StationState } from '../src/sim/types';
 
 const STEP = 1 / 15;
 const DURATION_SECONDS = 240;
+const MESS_OBSERVED_SECONDS = 180;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`normal-scale-operation: ${message}`);
@@ -33,6 +34,69 @@ function percentile(values: number[], fraction: number): number {
 
 function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+}
+
+/**
+ * Does a service line DRAIN, or does it only ever grow?
+ *
+ * The previous test compared the mean of the last 30 samples against the mean
+ * of the 30 before it. That reads as a drain test but is really a "was anyone
+ * standing in line at the end" test, and it failed whenever a fresh shipload
+ * happened to land inside the final seconds — a station working correctly.
+ * Confirmed as an intermittent failure at HEAD, not a regression.
+ *
+ * What actually distinguishes a working line from a jammed one is whether the
+ * line ever comes down and whether service keeps completing while people are
+ * standing in it. Both are checked directly here.
+ */
+function evaluateQueueDrain(
+  queueSamples: number[],
+  servedSamples: number[],
+  peakCeiling: number
+): {
+  ok: boolean;
+  peak: number;
+  final: number;
+  everFell: boolean;
+  fullyDrained: boolean;
+  servedWhileQueued: boolean;
+  reason: string | null;
+} {
+  const peak = queueSamples.length === 0 ? 0 : Math.max(...queueSamples);
+  const final = queueSamples[queueSamples.length - 1] ?? 0;
+  const everFell = queueSamples.some((value, index) => index > 0 && value < queueSamples[index - 1]!);
+  // A real drain: the line got substantial and then came back down to nearly
+  // nothing at some later moment.
+  let fullyDrained = false;
+  let sawSubstantial = false;
+  for (const value of queueSamples) {
+    if (value >= Math.max(4, peak * 0.5)) sawSubstantial = true;
+    else if (sawSubstantial && value <= Math.max(1, peak * 0.15)) fullyDrained = true;
+  }
+  // And service kept completing across every stretch where somebody waited.
+  // Halves, not smaller slices: physical meal service here is genuinely bursty
+  // — the blessed compact-block baseline serves 3 meals in its first 90s and 8
+  // more in the next 30 — so a tighter window would test burst phase rather
+  // than whether the line moves at all.
+  const half = Math.max(1, Math.floor(queueSamples.length / 2));
+  let servedWhileQueued = true;
+  for (let start = 0; start + half <= queueSamples.length; start += half) {
+    const window = queueSamples.slice(start, start + half);
+    if (!window.some((value) => value > 0)) continue;
+    const before = servedSamples[start] ?? 0;
+    const after = servedSamples[Math.min(servedSamples.length - 1, start + half - 1)] ?? 0;
+    if (after <= before) servedWhileQueued = false;
+  }
+  const reason = peak > peakCeiling
+    ? `peak queue ${peak} exceeded the ${peakCeiling} ceiling`
+    : !everFell
+      ? 'queue never decreased: it only grew across the whole window'
+      : !fullyDrained
+        ? `queue never drained back down after reaching ${peak}`
+        : !servedWhileQueued
+          ? 'a stretch with people waiting completed no service at all'
+          : null;
+  return { ok: reason === null, peak, final, everFell, fullyDrained, servedWhileQueued, reason };
 }
 
 function liveJob(job: StationState['jobs'][number]): boolean {
@@ -234,22 +298,28 @@ function assertUtilityUnderlayIdentity(): void {
   assert(ensureUtilityUnderlay(state) === resized, 'underlay rebuilt again after the resize was already reconciled');
 }
 
-function main(): void {
-  assertUtilityUnderlayIdentity();
-
+/**
+ * The Phase 9 operational floor, measured on ONE authored 50-crew /
+ * 50-visitor station.
+ *
+ * Called once per geometry. Everything asserted below is a claim about the
+ * station operating, not about a particular floor plan, so the compact block
+ * and the linear spine are held to exactly the same bar.
+ */
+function runGeometry(label: string, scenarioName: string, deep: boolean) {
   const state = createInitialState({
     seed: 915_502,
     physicalStarterInventory: true,
     manualTrafficAdmission: false
   });
-  assert(applyColdStartScenario(state, 'normal-scale-50'), 'normal-scale-50 scenario is not registered');
-  assert(state.crewMembers.length === 50, `expected 50 crew, got ${state.crewMembers.length}`);
-  assert(state.visitors.length === 50, `expected 50 initial visitors, got ${state.visitors.length}`);
-  assert(state.docks.length === 8, `expected eight Pod Docks, got ${state.docks.length}`);
-  assert(berthAnchors(state).length === 2, `expected two Berths, got ${berthAnchors(state).length}`);
+  assert(applyColdStartScenario(state, scenarioName), `${scenarioName} scenario is not registered`);
+  assert(state.crewMembers.length === 50, `${label}: expected 50 crew, got ${state.crewMembers.length}`);
+  assert(state.visitors.length === 50, `${label}: expected 50 initial visitors, got ${state.visitors.length}`);
+  assert(state.docks.length === 8, `${label}: expected eight Pod Docks, got ${state.docks.length}`);
+  assert(berthAnchors(state).length === 2, `${label}: expected two Berths, got ${berthAnchors(state).length}`);
   for (const dock of state.docks) {
     const placement = validateDockPlacement(state, dock.anchorTile);
-    assert(placement.valid, `Dock ${dock.id} lacks a legal station-side access path: ${placement.reason}`);
+    assert(placement.valid, `${label}: Dock ${dock.id} lacks a legal station-side access path: ${placement.reason}`);
   }
   const initialFreeCapacity = storageFreeCapacity(state);
   const initialStorageNodes = state.itemNodes
@@ -260,18 +330,23 @@ function main(): void {
       used: Number(Object.values(node.items).reduce((sum, amount) => sum + (amount ?? 0), 0).toFixed(1))
     }));
   const initialPowerReserve = state.metrics.powerSupply - state.metrics.powerDemand;
-  assert(initialFreeCapacity >= 30, `expected at least 30 units of physical cargo capacity, got ${initialFreeCapacity.toFixed(1)}`);
+  assert(initialFreeCapacity >= 30, `${label}: expected at least 30 units of physical cargo capacity, got ${initialFreeCapacity.toFixed(1)}`);
   assert(
     state.metrics.powerSupply >= state.metrics.powerDemand * 1.1,
-    `expected at least 10% power reserve, got ${state.metrics.powerSupply.toFixed(1)} supply / ${state.metrics.powerDemand.toFixed(1)} demand`
+    `${label}: expected at least 10% power reserve, got ${state.metrics.powerSupply.toFixed(1)} supply / ${state.metrics.powerDemand.toFixed(1)} demand`
+  );
+  assert(
+    state.metrics.leakingTiles === 0,
+    `${label}: authored station starts with ${state.metrics.leakingTiles} leaking tiles`
   );
 
   const mixedShip = state.arrivingShips.find((ship) => ship.portManifest?.callsign.startsWith('MIX-'));
-  assert(mixedShip, 'guaranteed mixed medium call was not admitted');
+  assert(mixedShip, `${label}: guaranteed mixed medium call was not admitted`);
   const mixedShipId = mixedShip.id;
   const initialMeals = state.serviceLog.visitorLifetimeByService.meal;
   const initialCargoHandled = state.portOps.cargoHandledLifetime;
   const queueBySecond: number[] = [];
+  const mealsBySecond: number[] = [];
   const tickMs: number[] = [];
   const pathCallsPerTick: number[] = [];
   const phaseSamples = new Map<string, number[]>();
@@ -298,6 +373,25 @@ function main(): void {
     reactorDebt: 0,
     fires: 0
   };
+  // Hull integrity is measured, not asserted. Both authored stations cross the
+  // same station-wide exterior-integrity breach inside this window; see
+  // `hullIntegrity` in the report and the comparison note in `main`.
+  // `metrics.leakingTiles` exempts anything the pressure model can reach from
+  // an Airlock, so a station that owns one Airlock reports a clean hull while
+  // its decks are in vacuum. Count vented interior directly instead.
+  const ventedInterior = (): number => {
+    let count = 0;
+    for (let tile = 0; tile < state.tiles.length; tile += 1) {
+      if (state.tiles[tile] !== TileType.Floor && state.tiles[tile] !== TileType.Door) continue;
+      if (state.rooms[tile] === RoomType.Berth) continue;
+      if (!state.pressurized[tile]) count += 1;
+    }
+    return count;
+  };
+  let firstVentAt: number | null = null;
+  let peakVentedTiles = ventedInterior();
+  const deathsAtStart = state.metrics.deathsTotal;
+  assert(peakVentedTiles === 0, `${label}: authored station starts with ${peakVentedTiles} vented interior tiles`);
 
   state.controls.paused = false;
   for (let step = 0; step < DURATION_SECONDS / STEP; step += 1) {
@@ -371,7 +465,15 @@ function main(): void {
         fires: state.effects.fires.length
       };
     }
-    if ((step + 1) % 15 === 0) queueBySecond.push(state.metrics.cafeteriaQueueingCount);
+    if ((step + 1) % 15 === 0) {
+      const vented = ventedInterior();
+      if (vented > 0 && firstVentAt === null) firstVentAt = state.now;
+      peakVentedTiles = Math.max(peakVentedTiles, vented);
+    }
+    if ((step + 1) % 15 === 0) {
+      queueBySecond.push(state.metrics.cafeteriaQueueingCount);
+      mealsBySecond.push(state.serviceLog.visitorLifetimeByService.meal - initialMeals);
+    }
   }
 
   const mealsServed = state.serviceLog.visitorLifetimeByService.meal - initialMeals;
@@ -383,20 +485,19 @@ function main(): void {
   const finalQueue = queueBySecond[queueBySecond.length - 1] ?? state.metrics.cafeteriaQueueingCount;
   const lateAverage = average(lateWindow);
   const precedingAverage = average(precedingWindow);
-  const queueBoundedOrRecovering = peakQueue <= 30 &&
-    finalQueue <= peakQueue &&
-    lateAverage <= precedingAverage + 2;
+  const queueDrain = evaluateQueueDrain(queueBySecond, mealsBySecond, 30);
   const p50 = percentile(tickMs, 0.5);
   const p95 = percentile(tickMs, 0.95);
   const p99 = percentile(tickMs, 0.99);
   const pathCallsP95 = percentile(pathCallsPerTick, 0.95);
   const actorCount = state.crewMembers.length + state.visitors.length;
-  const cacheGuarantees = measureCacheGuarantees(state, actorCount, pathCallsP95);
+  const cacheGuarantees = deep ? measureCacheGuarantees(state, actorCount, pathCallsP95) : null;
   const coverageP50 = percentile(phaseCoverage, 0.5);
   const coverageP05 = percentile(phaseCoverage, 0.05);
 
-  process.stdout.write(`${JSON.stringify({
-    scenario: 'normal-scale-50',
+  const report = {
+    geometry: label,
+    scenario: scenarioName,
     durationSeconds: DURATION_SECONDS,
     initial: {
       crew: 50,
@@ -436,6 +537,7 @@ function main(): void {
       finalQueue,
       precedingQueueAverage: Number(precedingAverage.toFixed(2)),
       lateQueueAverage: Number(lateAverage.toFixed(2)),
+      queueDrain,
       minimumPowerReserve: Number(minimumPowerReserve.toFixed(1)),
       minimumPowerSnapshot: {
         now: Number(minimumPowerSnapshot.now.toFixed(1)),
@@ -446,6 +548,21 @@ function main(): void {
         fires: minimumPowerSnapshot.fires
       },
       queueEvery10Seconds: queueBySecond.filter((_, index) => (index + 1) % 10 === 0)
+    },
+    // MEASURED, NOT ASSERTED. Both authored stations lose hull seal partway
+    // through this window because exterior integrity wear crosses its breach
+    // threshold faster than the maintenance loop closes it. It is a
+    // station-wide balance behavior, not a property of either floor plan, so
+    // the geometry comparison reports it side by side instead of hiding it
+    // behind a pass.
+    hullIntegrity: {
+      firstVentAtSeconds: firstVentAt === null ? null : Number(firstVentAt.toFixed(1)),
+      peakVentedInteriorTiles: peakVentedTiles,
+      finalVentedInteriorTiles: ventedInterior(),
+      reportedLeakingTiles: state.metrics.leakingTiles,
+      deathsDuringWindow: state.metrics.deathsTotal - deathsAtStart,
+      crewRemaining: state.crewMembers.length,
+      airlockTiles: state.tiles.reduce((total, tile) => total + (tile === TileType.Airlock ? 1 : 0), 0)
     },
     performanceMs: {
       p50: Number(p50.toFixed(3)),
@@ -482,25 +599,215 @@ function main(): void {
       },
       slowestTicks: slowTicks
     },
-    cacheGuarantees,
-    utilityUnderlayIdentityRegression: 'passed'
-  }, null, 2)}\n`);
+    cacheGuarantees
+  };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 
-  assert(sawInspection, 'mixed call never entered physical inspection');
-  assert(sawUnloading, 'mixed call never completed inspection and entered unloading');
-  assert(sawInboundCargoJob, 'released mixed cargo never created an inbound haul job');
+  assert(sawInspection, `${label}: mixed call never entered physical inspection`);
+  assert(sawUnloading, `${label}: mixed call never completed inspection and entered unloading`);
+  assert(sawInboundCargoJob, `${label}: released mixed cargo never created an inbound haul job`);
   assert(
     cargoHandled >= 10 && inboundHandled >= 10,
-    `mixed cargo did not complete its 10-unit physical unload (${cargoHandled}/${inboundHandled})`
+    `${label}: mixed cargo did not complete its 10-unit physical unload (${cargoHandled}/${inboundHandled})`
   );
-  assert(sawPodAndBerthOverlap, 'Pod and Berth traffic never overlapped');
-  assert(mealsServed > 0, 'cafeteria served no meals');
-  assert(minimumPowerReserve > 0, `station entered a power deficit (${minimumPowerReserve.toFixed(1)})`);
-  assert(queueBoundedOrRecovering, `cafeteria queue did not stabilize: ${queueBySecond.join(',')}`);
-  assert(state.metrics.requiredCriticalStaff.cafeteria === 0, 'self-service cafeteria still requires a physical staff post');
-  assert(p95 < 25, `tick p95 ${p95.toFixed(2)}ms exceeds the 25ms practical budget`);
-  assert(unprofiledPhaseTicks.size === 0, `phases never profiled at baseline scale: ${[...unprofiledPhaseTicks].join(', ')}`);
-  assert(coverageP50 >= 0.75, `profiled phases only account for ${(coverageP50 * 100).toFixed(1)}% of the median tick`);
+  assert(sawPodAndBerthOverlap, `${label}: Pod and Berth traffic never overlapped`);
+  assert(mealsServed > 0, `${label}: cafeteria served no meals`);
+  assert(minimumPowerReserve > 0, `${label}: station entered a power deficit (${minimumPowerReserve.toFixed(1)})`);
+  assert(queueDrain.ok, `${label}: cafeteria queue did not drain (${queueDrain.reason}): ${queueBySecond.join(',')}`);
+  assert(state.metrics.requiredCriticalStaff.cafeteria === 0, `${label}: self-service cafeteria still requires a physical staff post`);
+  assert(p95 < 25, `${label}: tick p95 ${p95.toFixed(2)}ms exceeds the 25ms practical budget`);
+  assert(unprofiledPhaseTicks.size === 0, `${label}: phases never profiled at baseline scale: ${[...unprofiledPhaseTicks].join(', ')}`);
+  assert(coverageP50 >= 0.75, `${label}: profiled phases only account for ${(coverageP50 * 100).toFixed(1)}% of the median tick`);
+
+  return {
+    label,
+    scenario: scenarioName,
+    footprintTiles: state.tiles.reduce(
+      (total, tile) => total + (tile === TileType.Floor || tile === TileType.Door ? 1 : 0),
+      0
+    ),
+    mealsServed,
+    cargoHandled: Number(cargoHandled.toFixed(1)),
+    peakQueue,
+    finalQueue,
+    minimumPowerReserve: Number(minimumPowerReserve.toFixed(1)),
+    p50: Number(p50.toFixed(3)),
+    p95: Number(p95.toFixed(3)),
+    hull: report.hullIntegrity
+  };
+}
+
+/**
+ * Row: "Bad layouts create visible problems with more than one valid remedy."
+ *
+ * One bad mess hall, measured, then the SAME measurement taken against two
+ * different interventions. The symptom is the only thing all three share: how
+ * many of an identical 24-guest cohort get physically fed inside 180 seconds.
+ *
+ * Deliberately NOT a staffing comparison. A self-service cafeteria requires no
+ * staff post, and the crew roster is asserted identical across all three, so
+ * neither remedy can be "hire someone" wearing a costume.
+ */
+function measureMessHall(scenarioName: string) {
+  const state = createInitialState({ seed: 771_003, physicalStarterInventory: true, manualTrafficAdmission: true });
+  assert(applyColdStartScenario(state, scenarioName), `${scenarioName} scenario is not registered`);
+  tick(state, 0);
+
+  const messTiles = new Set<number>();
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] === RoomType.Cafeteria) messTiles.add(tile);
+  }
+  const counters = state.moduleInstances.filter(
+    (module) => module.type === ModuleType.ServingStation && messTiles.has(module.originTile)
+  ).length;
+  const doorways = [...messTiles].filter((tile) => state.tiles[tile] === TileType.Door).length;
+  const tables = state.moduleInstances.filter(
+    (module) => module.type === ModuleType.Table && messTiles.has(module.originTile)
+  ).length;
+  const cohort = state.visitors.filter((visitor) => visitor.id >= 98_200 && visitor.id < 98_224);
+  assert(cohort.length === 24, `${scenarioName}: expected the authored 24-guest cohort, got ${cohort.length}`);
+  assert(
+    state.metrics.requiredCriticalStaff.cafeteria === 0,
+    `${scenarioName}: this comparison is only valid while the cafeteria needs no staff post`
+  );
+
+  state.controls.paused = false;
+  let peakQueue = 0;
+  for (let elapsed = 0; elapsed < MESS_OBSERVED_SECONDS; elapsed += 0.2) {
+    tick(state, 0.2);
+    peakQueue = Math.max(peakQueue, state.metrics.cafeteriaQueueingCount);
+  }
+  const fed = state.visitors.filter(
+    (visitor) => visitor.id >= 98_200 && visitor.id < 98_224 && visitor.completedServices.includes('meal')
+  ).length;
+
+  return {
+    scenario: scenarioName,
+    counters,
+    doorways,
+    tables,
+    crew: state.crewMembers.length,
+    requiredCafeteriaStaff: state.metrics.requiredCriticalStaff.cafeteria,
+    guestsFed: fed,
+    mealServiceEvents: state.serviceLog.visitorLifetimeByService.meal,
+    stillWaiting: state.visitors.filter((visitor) => visitor.state === VisitorState.Queueing).length,
+    peakQueue
+  };
+}
+
+function compareMessRemedies(): void {
+  const choked = measureMessHall('mess-line-choked');
+  const extraCounter = measureMessHall('mess-line-extra-counter');
+  const rerouted = measureMessHall('mess-line-rerouted');
+
+  // The bad layout has to actually be bad, or the comparison proves nothing.
+  assert(
+    choked.guestsFed * 4 < 24,
+    `mess-line-choked was supposed to fail its cohort, but fed ${choked.guestsFed}/24`
+  );
+  assert(
+    choked.stillWaiting >= 12,
+    `mess-line-choked was supposed to leave a visible line, but only ${choked.stillWaiting} were still waiting`
+  );
+
+  for (const remedy of [extraCounter, rerouted]) {
+    assert(
+      remedy.guestsFed >= 10,
+      `${remedy.scenario} did not clear the symptom: fed ${remedy.guestsFed}/24 in ${MESS_OBSERVED_SECONDS}s`
+    );
+    assert(
+      remedy.guestsFed > choked.guestsFed * 3,
+      `${remedy.scenario} is not a decisive improvement (${choked.guestsFed} -> ${remedy.guestsFed})`
+    );
+    assert(
+      remedy.stillWaiting < choked.stillWaiting,
+      `${remedy.scenario} left as many guests waiting as the bad layout did`
+    );
+    // No staffing confound, in either direction.
+    assert(
+      remedy.crew === choked.crew && remedy.requiredCafeteriaStaff === 0,
+      `${remedy.scenario} changed the staff situation (${choked.crew} -> ${remedy.crew} crew)`
+    );
+  }
+
+  // And the two remedies have to be genuinely different world changes.
+  assert(
+    extraCounter.counters > choked.counters && extraCounter.doorways === choked.doorways,
+    'the throughput remedy must add service positions and nothing else'
+  );
+  assert(
+    rerouted.doorways > choked.doorways && rerouted.counters === choked.counters,
+    'the circulation remedy must add doorways and no service position'
+  );
+  assert(
+    extraCounter.tables === choked.tables && rerouted.tables === choked.tables,
+    'seating must be held constant across the comparison'
+  );
+
+  process.stdout.write(`${JSON.stringify({
+    badLayoutRemedies: {
+      claim: 'one bad mess hall, two different interventions, the same symptom cleared',
+      symptom: `guests physically fed out of an identical 24-guest cohort in ${MESS_OBSERVED_SECONDS}s`,
+      bad: choked,
+      remedies: [extraCounter, rerouted],
+      note:
+        'The two remedies are not variations of each other. `mess-line-extra-counter` buys throughput: '
+        + 'two more counters on the same single doorway. `mess-line-rerouted` buys circulation: the same '
+        + 'two counters and no new fixture at all, with a doorway cut under each of them. Crew count and '
+        + 'required cafeteria staff are identical in all three, so neither remedy is a staffing change.'
+    }
+  }, null, 2)}\n`);
+}
+
+function main(): void {
+  assertUtilityUnderlayIdentity();
+
+  // Row: "Multiple station geometries remain viable."
+  //
+  // The two fixtures below carry the SAME population, the SAME interface
+  // count and the SAME guaranteed mixed call on deliberately different
+  // footprints. `normal-scale-50` is a solid block where every room touches
+  // its neighbours; `normal-scale-50-spine` is one long corridor with
+  // vacuum-separated pods branching off it, so every inter-room trip goes
+  // through the spine. Both are put through `runGeometry`, which is the only
+  // place the operational floor is defined.
+  compareMessRemedies();
+
+  const block = runGeometry('compact-block', 'normal-scale-50', true);
+  const spine = runGeometry('linear-spine', 'normal-scale-50-spine', false);
+
+  assert(
+    block.footprintTiles !== spine.footprintTiles,
+    'the two geometries must not be the same station under two names'
+  );
+  process.stdout.write(`${JSON.stringify({
+    geometryComparison: {
+      claim: 'both authored 50-crew / 50-visitor stations clear the same operational floor',
+      floor: [
+        '50 crew and 50 visitors present at load',
+        '8 legally accessible Pod Docks and 2 derived medium Berths',
+        'no leaking hull tile at load',
+        'at least 30 units of free physical cargo capacity',
+        'at least a 10% power reserve at load and no power deficit for 240s',
+        'guaranteed mixed medium call reaches inspection, then unloading',
+        'that call creates an inbound haul job and physically lands >= 10 units',
+        'Pod and Berth traffic overlap',
+        'cafeteria serves meals with zero required staff posts',
+        'cafeteria queue stays bounded and drains',
+        'tick p95 < 25ms with every top-level phase profiled'
+      ],
+      geometries: [block, spine],
+      hullIntegrityNote:
+        'Both geometries vent most of their interior at the same point in the window and lose crew to '
+        + 'vacuum. The cause is station-wide exterior-integrity wear crossing its breach threshold faster '
+        + 'than the repair loop closes it, not either floor plan. It is reported per geometry above and is '
+        + 'deliberately NOT asserted here: making it a pass condition would either hide it or force a '
+        + 'balance change this runner does not own. Note also that metrics.leakingTiles reads 0 for the '
+        + 'compact block while 733 of its interior tiles are in vacuum, because the pressure model exempts '
+        + 'anything reachable from an Airlock and that station owns one; the spine owns none and reports '
+        + 'the same event honestly. That exemption is why this runner measures vented interior directly.'
+    }
+  }, null, 2)}\n`);
 }
 
 main();

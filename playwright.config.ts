@@ -5,6 +5,14 @@ export default defineConfig({
   timeout: 120_000,
   retries: 0,
   workers: 1, // scenarios share side-effects; run serially
+  // Baseline screenshots are committed evidence, not throwaway run output.
+  // `test-results/` and the harness run dir are both gitignored, so a visual
+  // claim backed only by those has no artifact behind it once the run ends.
+  // Anything captured with `toHaveScreenshot` lands here instead, flat and
+  // per-platform (rasterisation differs between darwin and CI linux).
+  // Regenerate deliberately with `npm run test:harness:update-snapshots`.
+  snapshotDir: './tools/harness/baselines',
+  snapshotPathTemplate: '{snapshotDir}/{arg}-{platform}{ext}',
   use: {
     baseURL: process.env.HARNESS_BASE_URL || 'http://localhost:5173',
     headless: true,

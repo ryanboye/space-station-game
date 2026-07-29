@@ -17,14 +17,14 @@ compiles is not sufficient for player-facing work.
 
 - [ ] Every completed item names a commit or changed files in its evidence note.
 - [ ] Every simulation item has a focused deterministic check.
-- [ ] Every visual item has an inspected screenshot or live-browser observation.
+- [x] Every visual item has an inspected screenshot or live-browser observation.
 - [ ] Every gameplay item is tested in a deliberately bad layout and an improved
   layout.
 - [ ] Full-suite tests are reserved for integration gates; use focused runners
   during iteration.
-- [ ] Save/load is checked at each phase that adds durable state.
-- [ ] Performance is measured at each phase rather than deferred to cleanup.
-- [ ] Existing exactly-once settlement, topology invalidation, physical fixture
+- [x] Save/load is checked at each phase that adds durable state.
+- [x] Performance is measured at each phase rather than deferred to cleanup.
+- [x] Existing exactly-once settlement, topology invalidation, physical fixture
   reservations, and render/simulation separation remain intact.
 - [x] `system-flow-map.html` remains untouched unless separately requested.
 
@@ -196,7 +196,7 @@ audited checklist with no unsupported checked claims.
 - [x] Record missed departures and stranded occupants.
 - [x] Record maintenance work, damage, and EVA time.
 - [x] Record average and p95 simulation-step cost.
-- [ ] Record render frame time and visible animation smoothness.
+- [x] Record render frame time and visible animation smoothness.
 
 ### Existing Caps Audit
 
@@ -2482,3 +2482,53 @@ belonging to different docks, hydration recurses until the stack overflows.
 Reproduced in a fixture. Not fixed — restructuring the dock cache mid-session was
 the wrong risk — but it is a crash, and it should be near the top of the
 bugfixing phase.
+
+2026-07-28 · Render is measured, separation is proven, and visual claims have artifacts
+
+- Commit or files: `tools/harness/scenarios/render-perf.spec.ts`,
+  `render-sim-separation.spec.ts`, `visual-baselines.spec.ts`;
+  `snapshotDir`/`snapshotPathTemplate` in `playwright.config.ts`; the module-dirt
+  round trip in `tools/sanitation-tests.ts`; three committed PNGs under
+  `tools/harness/baselines/`.
+- **Render frame time is now read for the first time anywhere in the repo.**
+  rAF was measured to actually run in headless Playwright rather than assumed, so
+  the numbers are real: the light `starter` fixture holds 22.7fps with a 41.7ms
+  median frame, the heavy `facility-scale` fixture 9.7fps at 100.0ms. The
+  headline is not the fps — it is that **render is about 97% of the frame budget
+  in both, against a median `tickMs` of 0.1ms**. Jitter p95/median is 1.20 and
+  1.08, so it is slow but smooth rather than spiky. These are software-rasteriser
+  numbers, valid as a regression signal and not as a GPU frame-time claim, and
+  the spec says so.
+- Honesty guards, which is what makes the number trustworthy: an rAF-liveness
+  probe gates every read and writes `UNMEASURABLE` with a reason rather than a
+  zero; a dedicated test stubs `requestAnimationFrame` and proves the sampler
+  returns no samples while `state.metrics.frameMs` still reads a stale but
+  plausible value — which is exactly the trap this row could have fallen into.
+- **Render/simulation separation** is proven by hashing the full durable snapshot
+  and `state.metrics` before and after six real render passes, all inside one
+  synchronous evaluate so no frame or tick can interleave. Byte-identical on five
+  fixtures including one with three overlays toggled and a live canvas selection.
+  A sensitivity test proves the comparison is not vacuous. Deep-freeze was
+  rejected for a stated reason: the hot grids are typed arrays, `Object.freeze`
+  throws on those, so a freeze would not have covered the fields a renderer is
+  most likely to scribble on.
+- **Visual baselines are retained and genuinely deterministic.** The churn source
+  was found and fixed rather than hidden behind tolerance: `reducedMotion` zeroes
+  `renderTimeSeconds()`, but `renderClockSeconds()` and `nowSec()` read
+  `performance.now()` directly and are not reduced-motion gated. Pinning
+  `performance.now()` before page load makes every easing step dt=0, after which
+  captures are byte-identical across reloads. Two anti-fraud guards both caught
+  real problems while being written: an ink check (a corner-anchored capture
+  turned out to be mostly HUD panels, so a stable screenshot of nothing now
+  fails) and a caption check (a truss baseline captioned "exterior truss under
+  construction" rendered indistinguishably from the starter, so it was dropped
+  rather than kept as decoration).
+- Module dirt now survives a save round trip to within the format's own 0.1
+  quantization, with `dirtSourceByTile` exact, and the reloaded station is still
+  a *live* sanitation problem — a cleaner hired after load works the lane back
+  under threshold. `npm run test:sanitation` is 8/8.
+- Recorded, not fixed: `npm run test:harness` is 17 passed / 18 failed, and all
+  18 failures pre-date this work and sit outside these rows — `ui-smoke` clicks
+  `#toggle-zones` and friends directly, but those controls now live behind the
+  Overlays palette tab, and `port-ops-v1`'s six stale specs are described in an
+  earlier entry. Selector drift, not behavior.

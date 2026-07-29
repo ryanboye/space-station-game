@@ -371,7 +371,7 @@ function main(): void {
   // named precisely, and metrics that moved name the runner that owns them.
   console.log('ELSEWHERE | visit duration, approach-group wait, disembark/boarding duration, committed load, stranded occupants -> test:gate-g-metrics-admission');
   console.log('ELSEWHERE | recurring-need fixture use and reception effects -> test:gate-f-facility; live public/cargo conflict -> test:physical-cargo');
-  console.log('UNAVAILABLE | render frame time and visual smoothness (nothing reads state.metrics.frameMs yet)');
+  console.log('ELSEWHERE | render frame time and visual smoothness -> test:harness scenario render-perf (this runner is headless and has no renderer to measure)');
   console.log('NOTE | route metrics are deterministic path-overlap proxies. Tick cost is host-dependent, so compare tick_* only against runs on the same machine.');
   // The door/corridor/queue/EVA numbers above are a different kind of evidence
   // from the route proxies beside them: each was incremented at a real

@@ -16,6 +16,8 @@ import { ModuleType, RoomType, TileType, VisitorState, ZoneType, type StationSta
 const DT = 1 / 15;
 const WARMUP_TICKS = 30;
 const SAMPLE_TICKS = 180;
+/** Long enough for physical meal service to actually complete at scale. */
+const OPERATION_SECONDS = 180;
 const SEED = 74_221;
 const DOCK_TARGET = 10;
 const TARGET = process.argv.includes('--tier=100') ? 100 : 50;
@@ -331,12 +333,36 @@ function buildPublicApron(state: StationState, targetTiles = 240): void {
   for (let y = top + 1; y < bottom; y++) {
     for (let x = left + 1; x < right; x++) setRoom(state, toIndex(state, x, y), RoomType.Cafeteria);
   }
+  // Visitor food service is a deliberately PUBLIC operation: production
+  // refuses to treat a cluster with any restricted tile as one. The apron
+  // inherited whatever access policy the starter left behind, which is why it
+  // read as a crew mess. Publish the whole wing, spine included.
+  setTile(state, toIndex(state, coreX, tieInY), TileType.Door);
+  for (let y = tieInY; y <= bottom; y++) {
+    for (let x = left; x <= right; x++) {
+      const tile = toIndex(state, x, y);
+      if (state.tiles[tile] !== TileType.Floor && state.tiles[tile] !== TileType.Door) continue;
+      state.zones[tile] = ZoneType.Public;
+    }
+  }
+  for (let y = tieInY; y < top; y++) state.zones[toIndex(state, coreX, y)] = ZoneType.Public;
   const built = (bottom - top - 1) * (right - left - 1);
   assert(built >= targetTiles, `Authored apron must contribute at least ${targetTiles} tiles, got ${built}`);
   tick(state, 0);
 
-  const serving = tryPlaceModule(state, ModuleType.ServingStation, toIndex(state, left + 2, top + 2));
-  assert(serving.ok, `Scale cafeteria serving station failed: ${serving.reason ?? 'unknown'}`);
+  // Production only treats a cafeteria cluster as PUBLIC visitor food service
+  // once it holds two counters, two tables and a tray return. The old apron
+  // had one counter and no tray return, so it was a crew mess: the authored
+  // hungry visitors could never join a line and this benchmark was timing an
+  // operationally inert crowd. Build the real thing.
+  const counterTiles = [toIndex(state, left + 2, top + 2), toIndex(state, left + 2, top + 6)];
+  for (const tile of counterTiles) {
+    const serving = tryPlaceModule(state, ModuleType.ServingStation, tile);
+    assert(serving.ok, `Scale cafeteria serving station failed: ${serving.reason ?? 'unknown'}`);
+  }
+  const trayTile = toIndex(state, left + 2, top + 9);
+  const trayReturn = tryPlaceModule(state, ModuleType.TrayReturn, trayTile);
+  assert(trayReturn.ok, `Scale cafeteria tray return failed: ${trayReturn.reason ?? 'unknown'}`);
   for (let row = 0; row < 2; row++) {
     for (let column = 0; column < 4; column++) {
       const table = tryPlaceModule(
@@ -347,10 +373,12 @@ function buildPublicApron(state: StationState, targetTiles = 240): void {
       assert(table.ok, `Scale cafeteria table failed: ${table.reason ?? 'unknown'}`);
     }
   }
-  const servingNode = state.itemNodes.find((node) => node.tileIndex === toIndex(state, left + 2, top + 2));
-  assert(servingNode, 'Scale cafeteria serving station needs a physical stock node.');
-  servingNode.items.meal = 60;
-  servingNode.items.cleanTray = 60;
+  for (const tile of counterTiles) {
+    const servingNode = state.itemNodes.find((node) => node.tileIndex === tile);
+    assert(servingNode, 'Scale cafeteria serving station needs a physical stock node.');
+    servingNode.items.meal = 60;
+    servingNode.items.cleanTray = 60;
+  }
   tick(state, 0);
 }
 
@@ -624,6 +652,144 @@ function collectRun(template: FixtureTemplate, target: number): CollectedRun {
   };
 }
 
+/**
+ * Does the station still FUNCTION as a game at two to three times footprint?
+ *
+ * The timing runs above answer "is it fast". They are silent on whether
+ * anything actually happens, and a station where nobody can be served is
+ * extremely fast.
+ *
+ * Two things had to change before that question could even be asked:
+ *
+ *  1. The apron was a crew mess, not public food service. Production only
+ *     treats a cafeteria cluster as visitor-facing once it holds two counters,
+ *     two tables, a tray return and no restricted tile. The old apron had one
+ *     counter, no tray return and inherited access policy, so the authored
+ *     hungry visitors could never join a line at all.
+ *
+ *  2. The benchmark population does not survive being simulated. The authored
+ *     static visitors are save-valid synthetic actors with no origin ship; the
+ *     ordinary visitor lifecycle clears all fifty of them inside about a
+ *     minute. The 12-second timing sample never noticed. So the operational
+ *     window runs the station the way it is actually played instead: ordinary
+ *     seeded traffic arriving through the interfaces the fixture installed.
+ *
+ * The timing runs are deliberately left alone — they still measure the static
+ * crowd with traffic off, so the recorded performance baseline is unchanged.
+ */
+function collectOperationalRun(template: FixtureTemplate, target: number) {
+  const state = buildTierState(template, target);
+  // Real traffic, arriving through the fixture's own interfaces. This is the
+  // only population at this scale that sustains itself for long enough to
+  // observe physical service completing.
+  state.controls.shipsPerCycle = 6;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.portAutoAdmitEnabled = true;
+  for (let i = 0; i < WARMUP_TICKS; i++) tick(state, DT);
+
+  const queueSamples: number[] = [];
+  const servedSamples: number[] = [];
+  const populationSamples: number[] = [];
+  const probe: string[] = [];
+  const startedMeals = state.serviceLog.visitorLifetimeByService.meal;
+  const ticksPerSample = Math.round(1 / DT);
+  for (let i = 0; i < OPERATION_SECONDS / DT; i++) {
+    tick(state, DT);
+    if ((i + 1) % ticksPerSample === 0) {
+      queueSamples.push(state.metrics.cafeteriaQueueingCount);
+      servedSamples.push(state.serviceLog.visitorLifetimeByService.meal - startedMeals);
+      populationSamples.push(state.visitors.length);
+      if (queueSamples.length === 20 || queueSamples.length === 60) {
+        const byState: Record<string, number> = {};
+        for (const visitor of state.visitors) {
+          const key = `${visitor.state}|plan=${visitor.servicePlan.join('+') || 'none'}|wait=${visitor.movementWaitReason ?? '-'}`;
+          byState[key] = (byState[key] ?? 0) + 1;
+        }
+        probe.push(`t=${state.now.toFixed(0)} ${JSON.stringify(byState)}`);
+      }
+    }
+  }
+
+  const mealsServed = state.serviceLog.visitorLifetimeByService.meal - startedMeals;
+  // "Stranded" here means INERT: still owed a meal, and holding no line slot,
+  // no pickup reservation, no route and nothing carried. Somebody standing in
+  // a line that is moving is waiting, not stranded.
+  const liveReservationOwners = new Set(
+    state.reservations
+      .filter((reservation) => reservation.releaseReason === null && reservation.ownerKind === 'visitor')
+      .map((reservation) => reservation.ownerId)
+  );
+  const stranded = state.visitors.filter((visitor) =>
+    visitor.servicePlan.includes('meal') &&
+    !visitor.completedServices.includes('meal') &&
+    !visitor.carryingMeal &&
+    visitor.path.length === 0 &&
+    visitor.reservedServingTile === null &&
+    (visitor.queueProviderTile ?? null) === null &&
+    !liveReservationOwners.has(visitor.id)
+  );
+
+  const peakQueue = queueSamples.length === 0 ? 0 : Math.max(...queueSamples);
+  const everFell = queueSamples.some((value, index) => index > 0 && value < queueSamples[index - 1]!);
+  const monotonicGrowth = peakQueue > 0 && !everFell;
+  const half = Math.max(1, Math.floor(servedSamples.length / 2));
+  const servedFirstHalf = servedSamples[half - 1] ?? 0;
+  const servedSecondHalf = (servedSamples[servedSamples.length - 1] ?? 0) - servedFirstHalf;
+
+  const outcome = {
+    observedSeconds: OPERATION_SECONDS,
+    trafficDriven: true,
+    footprintTiles: state.width * state.height,
+    footprintMultiplier: Number(((state.width * state.height) / template.baselineFootprint).toFixed(3)),
+    interfaces: state.docks.length,
+    crew: state.crewMembers.length,
+    visitorsAtEnd: state.visitors.length,
+    peakVisitors: Math.max(...populationSamples),
+    mealsServed,
+    turnaroundsCompleted: state.metrics.turnaroundsCompletedLifetime,
+    strandedMealSeekers: stranded.length,
+    strandedIds: stranded.slice(0, 8).map((visitor) => visitor.id),
+    peakQueue,
+    finalQueue: queueSamples[queueSamples.length - 1] ?? 0,
+    queueEverFell: everFell,
+    queueGrewMonotonically: monotonicGrowth,
+    servedFirstHalf,
+    servedSecondHalf,
+    maxBlockedTicksObserved: state.metrics.maxBlockedTicksObserved
+  };
+
+  const diagnosis = `visitorsAtEnd=${outcome.visitorsAtEnd} peakVisitors=${outcome.peakVisitors} `
+    + `queue=[${queueSamples.filter((_, index) => (index + 1) % 20 === 0).join(',')}] `
+    + `served=[${servedSamples.filter((_, index) => (index + 1) % 20 === 0).join(',')}] probe=[${probe.join(' || ')}]`;
+
+  assert(
+    outcome.footprintMultiplier >= 2,
+    `Target scale must be at least twice the baseline footprint, got ${outcome.footprintMultiplier}x`
+  );
+  assert(
+    outcome.peakVisitors > 0,
+    `Target scale sustained no visitor population at all over ${OPERATION_SECONDS}s. ${diagnosis}`
+  );
+  assert(
+    mealsServed > 0,
+    `Target scale served no meals in ${OPERATION_SECONDS}s: the station is fast but not operating. ${diagnosis}`
+  );
+  assert(
+    !monotonicGrowth,
+    `Target-scale cafeteria queue grew monotonically for ${OPERATION_SECONDS}s. ${diagnosis}`
+  );
+  assert(
+    servedSecondHalf > 0,
+    `Target-scale service stopped completely in the second half of the window. ${diagnosis}`
+  );
+  assert(
+    stranded.length === 0,
+    `Target scale left ${stranded.length} guests inert — owed a meal with no line slot, reservation or route: `
+      + `${outcome.strandedIds.join(', ')}. ${diagnosis}`
+  );
+  return outcome;
+}
+
 function main(): void {
   const benchmarkStarted = performance.now();
   const template = makeTemplate();
@@ -637,6 +803,7 @@ function main(): void {
   const fingerprintDifference = deterministic
     ? null
     : firstFingerprintDifference(firstCollected.fingerprint, secondCollected.fingerprint);
+  const operational = collectOperationalRun(template, TARGET);
   const memory = process.memoryUsage();
   const output = {
     benchmark: 'target-scale-perf',
@@ -647,6 +814,18 @@ function main(): void {
     memoryAtExitMiB: {
       rss: Number((memory.rss / 1_048_576).toFixed(3)),
       heapUsed: Number((memory.heapUsed / 1_048_576).toFixed(3))
+    },
+    operationalPlausibility: {
+      claim: 'the target-scale station still functions as a game, not just as a fast tick',
+      checks: [
+        'footprint is at least twice the baseline',
+        'meals reach guests',
+        'the meal cohort is fed, not merely present',
+        'the cafeteria queue is not monotonically growing',
+        'service is still completing in the second half of the window',
+        'no cohort member is left inert: owed a meal with no slot, reservation or route'
+      ],
+      measured: operational
     },
     tiers: [{
       target: TARGET,

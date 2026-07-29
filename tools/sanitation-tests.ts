@@ -9,7 +9,8 @@
 //   3. scrubbing a filthy tile is watchable labor rather than a snap,
 //   4. an isolated speck still fades on its own, but a real patch does not.
 
-import { createInitialState, getRoomSanitationSummary, setRoom, setTile, tick } from '../src/sim/sim';
+import { createInitialState, getRoomSanitationSummary, setRoom, setTile, tick, tryPlaceModule } from '../src/sim/sim';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import { createEmptyStaffRoleCounts } from '../src/sim/content/command';
 import {
   ModuleType,
@@ -258,6 +259,129 @@ function testPassiveDecayDrainsSpeckButNotPatch(): void {
 }
 
 
+// 5. Dirt is durable state. A station the player walks away from and reloads
+// has to come back with the same floors: the same grime under the same
+// fixtures, still owned by the same source, and still the janitor's problem
+// rather than a frozen picture of one. Nothing in this runner touched the save
+// path before, which meant the one durable thing sanitation owns —
+// `dirtByTile` / `dirtSourceByTile` — was never checked across a round trip.
+//
+// The one tolerance allowed here is the save format's own quantization:
+// `captureSnapshot` stores dirt as `round(clamp(v, 0, 100) * 10) / 10`, so a
+// tile may come back up to 0.05 away from where it left. Anything larger is a
+// lost floor.
+const SAVE_DIRT_QUANTIZATION = 0.05;
+
+function testModuleDirtSurvivesSaveRoundTrip(): void {
+  const state = freshStation(4408);
+  buildHabitat(state);
+  paintRoom(state, RoomType.Cafeteria, 16, 10, 21, 13);
+
+  // Dirt under a fixture is the case that matters: a filthy table is the thing
+  // the player remembers, and the module footprint is the part of the grid most
+  // likely to be rebuilt rather than restored on load.
+  const moduleOrigin = toIndex(18, 11, state.width);
+  const placed = tryPlaceModule(state, ModuleType.Table, moduleOrigin);
+  assert(placed.ok, `Setup check: the table should place in the cafeteria (${placed.reason ?? 'no reason given'}).`);
+  const table = state.moduleInstances.find((module) => module.originTile === moduleOrigin);
+  assert(table !== undefined, 'Setup check: expected a placed table module instance.');
+  const moduleTiles = [...table!.tiles];
+  assert(moduleTiles.length > 0, 'Setup check: the placed table should own at least one tile.');
+
+  // Filth on the fixture, a lived-in lane beside it, and a tile that must stay
+  // clean so a round trip that smears dirt everywhere is caught too.
+  for (const tile of moduleTiles) {
+    state.dirtByTile[tile] = 71.5;
+    state.dirtSourceByTile[tile] = 2;
+  }
+  const lane = toIndex(18, 13, state.width);
+  const control = toIndex(16, 10, state.width);
+  state.dirtByTile[lane] = 44.3;
+  state.dirtSourceByTile[lane] = 1;
+  state.dirtByTile[control] = 0;
+  state.dirtSourceByTile[control] = 0;
+
+  const before = Array.from(state.dirtByTile);
+  const beforeSources = Array.from(state.dirtSourceByTile);
+
+  const parsed = parseAndMigrateSave(serializeSave('sanitation-round-trip', state, 'focused-test'));
+  assert(parsed.ok, `A sanitation save must parse: ${parsed.ok ? '' : parsed.error}`);
+  const hydrated = hydrateStateFromSave(parsed.save);
+  const reloaded = hydrated.state;
+
+  assert(
+    reloaded.dirtByTile.length === before.length,
+    `The reloaded dirt grid is ${reloaded.dirtByTile.length} tiles; the saved station had ${before.length}.`
+  );
+
+  let worstDrift = 0;
+  let worstTile = -1;
+  for (let tile = 0; tile < before.length; tile++) {
+    const drift = Math.abs((reloaded.dirtByTile[tile] ?? 0) - before[tile]);
+    if (drift > worstDrift) {
+      worstDrift = drift;
+      worstTile = tile;
+    }
+    assert(
+      (reloaded.dirtSourceByTile[tile] ?? 0) === beforeSources[tile],
+      `Tile ${tile} changed dirt source across a save round trip: ` +
+        `${beforeSources[tile]} -> ${reloaded.dirtSourceByTile[tile] ?? 0}.`
+    );
+  }
+  assert(
+    worstDrift <= SAVE_DIRT_QUANTIZATION,
+    `Dirt must survive a save round trip to within the save format's 0.1 quantization. ` +
+      `Tile ${worstTile} moved by ${worstDrift.toFixed(3)} ` +
+      `(${before[worstTile]?.toFixed(2)} -> ${(reloaded.dirtByTile[worstTile] ?? 0).toFixed(2)}).`
+  );
+
+  // The grime has to come back attached to the same fixture, not floating on a
+  // bare grid: reload has to restore the module footprint too, or the player
+  // sees clean floor where the dirty table was.
+  const reloadedTable = reloaded.moduleInstances.find((module) => module.originTile === moduleOrigin);
+  assert(
+    reloadedTable !== undefined && reloadedTable.type === ModuleType.Table,
+    'The table under the dirt did not survive the save round trip.'
+  );
+  assert(
+    reloadedTable!.tiles.length === moduleTiles.length &&
+      moduleTiles.every((tile) => reloadedTable!.tiles.includes(tile)),
+    `The reloaded table covers ${reloadedTable!.tiles.join(',')} but the saved one covered ${moduleTiles.join(',')}.`
+  );
+  for (const tile of moduleTiles) {
+    assert(
+      (reloaded.dirtByTile[tile] ?? 0) >= RENDER_GRIME_THRESHOLD,
+      `A filthy fixture must reload filthy: tile ${tile} came back at ` +
+        `${(reloaded.dirtByTile[tile] ?? 0).toFixed(1)}, below the render threshold of ${RENDER_GRIME_THRESHOLD}.`
+    );
+  }
+  assert(
+    (reloaded.dirtByTile[control] ?? 0) < 1,
+    `A clean tile must reload clean; it came back at ${(reloaded.dirtByTile[control] ?? 0).toFixed(2)}.`
+  );
+
+  // Restored numbers are only half the claim. The reloaded station also has to
+  // be a live sanitation problem — a cleaner hired after the load must be able
+  // to work the same floor down. `hydrateStateFromSave` deliberately reloads
+  // paused, exactly as the player's Load does, so this is the test pressing
+  // Play rather than a workaround.
+  assert(reloaded.controls.paused, 'A hydrated station is expected to arrive paused, as the player Load does.');
+  reloaded.controls.paused = false;
+  staffWith(reloaded, 'cleaner', 1, toIndex(10, 10, reloaded.width));
+  const laneBefore = reloaded.dirtByTile[lane] ?? 0;
+  runFor(reloaded, 240);
+  assert(
+    (reloaded.dirtByTile[lane] ?? 0) < RENDER_GRIME_THRESHOLD,
+    `A reloaded station must still be cleanable: the lane started at ${laneBefore.toFixed(1)} and ` +
+      `ended at ${(reloaded.dirtByTile[lane] ?? 0).toFixed(1)}, still above the render threshold.`
+  );
+  assert(
+    reloaded.usageTotals.sanitationJobsResolved > 0,
+    'A reloaded station must still spawn and resolve sanitize jobs; none were resolved.'
+  );
+}
+
+
 // ---------------------------------------------------------------------------
 // docs/30 PR 2 — dispatch. PR 1 found that a 171-tile backlog drained at
 // ~0.7 dirt/sec no matter how many sanitation crew the player hired, because
@@ -428,6 +552,7 @@ const tests: Array<[string, () => void]> = [
   ['corridor traffic becomes visible', testCorridorTrafficBecomesVisible],
   ['filthy tile takes real work', testFilthyTileTakesRealWork],
   ['passive decay drains speck not patch', testPassiveDecayDrainsSpeckButNotPatch],
+  ['module dirt survives a save round trip', testModuleDirtSurvivesSaveRoundTrip],
   ['more cleaners clear a backlog faster', testMoreCleanersClearBacklogFaster],
   ['sanitation lane target follows demand', testSanitationLaneTargetFollowsDemand],
   ['concurrent cleaners do not share tiles', testConcurrentCleanersDoNotShareTiles]
