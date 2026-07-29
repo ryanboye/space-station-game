@@ -9,6 +9,7 @@ import {
   expandMap,
   createInitialState,
   findPath,
+  getUnlockRequirement,
   getUnlockTier,
   getEligibleBerthsForOffer,
   getNextExpansionCost,
@@ -39,7 +40,9 @@ import {
   holdTrafficOffer,
   mapConditionAt,
   mapConditionSamplesAt,
+  moduleCreditBuildCost,
   setBerthCustomsPolicy,
+  setResidentAcceptance,
   setRoomHousingPolicy,
   setSecurityPosture,
   getVisitorInspectorById,
@@ -87,6 +90,8 @@ import {
   type Visitor
 } from '../src/sim/types';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { planStructuralPieceConstruction } from '../src/sim/construction';
+import { validateStructuralSupportPlan } from '../src/sim/structural-support';
 import { resolveDoorVariantFromMask, resolveWallVariantFromMask } from '../src/render/tile-variants';
 import { pickDualVariant, type DualWallShape } from '../src/render/wall-dual-tilemap';
 
@@ -101,6 +106,23 @@ function runFor(state: StationState, seconds: number, step = 0.25): void {
   for (let i = 0; i < steps; i++) {
     tick(state, step);
   }
+}
+
+// The "smooth simulation" perf pass put computeMetrics and updateUnlockProgress
+// behind a 250 ms *wall-clock* cadence, so a tick issued in the same
+// millisecond as the previous one returns before either runs. Tests that assert
+// "not unlocked yet", change a signal, then assert "unlocked now" therefore need
+// real elapsed time between the two ticks -- otherwise the second tick is a
+// no-op and the test reports a progression failure that the game does not have.
+// Spinning is deliberate: only wall clock clears a wall-clock cadence.
+const DERIVED_METRICS_CADENCE_WAIT_MS = 300;
+
+function tickAfterDerivedMetricsCadence(state: StationState, dt = 0): void {
+  const until = Date.now() + DERIVED_METRICS_CADENCE_WAIT_MS;
+  while (Date.now() < until) {
+    // Intentionally empty: wait out the cadence.
+  }
+  tick(state, dt);
 }
 
 function buildHabitat(state: StationState): void {
@@ -231,6 +253,15 @@ function createDockedTransientShip(state: StationState, dockId: number, shipId: 
     hullVariant: 'courier-pod',
     lane: dock.lane,
     originDockId: dock.id,
+    // The physical-approach loop resolves a ship's docking slot by source key,
+    // not by dock id (descriptorForShip -> `dock:${assignedDockSourceKey}`).
+    // Without it a fixture ship has no slot, so it can never hold an active
+    // approach commitment and silently sticks in whatever stage it was given --
+    // most visibly, a ship set to 'depart' never actually departs and none of
+    // the departure accounting runs. Production spawns set this (see
+    // cold-start-scenarios.ts assignedDockSourceKey: dock.sourceKey); this
+    // helper predates the field.
+    assignedDockSourceKey: dock.sourceKey,
     assignedDockId: dock.id,
     queueState: 'none',
     stage: 'docked',
@@ -481,22 +512,47 @@ function setupCoreRooms(state: StationState): void {
   paintRoom(state, RoomType.LifeSupport, 9, 6, 11, 7);
 }
 
-function testStarterCoreHasNoHardwiredReactor(): void {
+function testStarterCoreIsOrdinaryServiceableSpace(): void {
+  // This used to assert the starter contained no Reactor room at all, which was
+  // true when the core was a bare 3x3 frame. The honest starter power grid gave
+  // the station a small, visible reactor the player can actually reach, so the
+  // claim worth defending is no longer "no reactor" — it is that the core is
+  // ordinary, walkable, crew-serviceable space rather than an untouchable
+  // hardwired frame.
   const state = createInitialState({ seed: 1337 });
   const core = fromIndex(state.core.centerTile, state.width);
 
+  let walkableAroundCore = 0;
   for (let y = core.y - 1; y <= core.y + 1; y++) {
     for (let x = core.x - 1; x <= core.x + 1; x++) {
       const idx = toIndex(x, y, state.width);
-      assertCondition(state.tiles[idx] === TileType.Floor, 'Starter core should be open floor, not the old 3x3 reactor frame.');
-      assertCondition(state.rooms[idx] === RoomType.None, 'Starter core should not be painted as reactor space.');
+      assertCondition(
+        state.rooms[idx] !== RoomType.Reactor,
+        'Starter core should not be painted as reactor space.'
+      );
+      if (state.tiles[idx] === TileType.Floor || state.tiles[idx] === TileType.Door) {
+        walkableAroundCore += 1;
+      }
     }
   }
+  assertCondition(
+    walkableAroundCore >= 6,
+    `Starter core should stay mostly walkable, saw ${walkableAroundCore}/9 reachable tiles.`
+  );
 
+  // The reactor exists, but as a bounded room the player can see and service --
+  // not as the core itself, and not sprawling across the starter shell.
   const reactorTiles = state.rooms
     .map((room, idx) => (room === RoomType.Reactor ? idx : -1))
     .filter((idx) => idx >= 0);
-  assertCondition(reactorTiles.length === 0, 'Starter station should not retain a hardwired reactor room.');
+  assertCondition(
+    reactorTiles.length > 0 && reactorTiles.length <= 12,
+    `Starter reactor should be a small visible room, saw ${reactorTiles.length} tiles.`
+  );
+  assertCondition(
+    !reactorTiles.includes(state.core.centerTile),
+    'The reactor room must not sit on the core centre tile.'
+  );
   assertCondition(
     trySetTileWithCredits(state, state.core.serviceTile, TileType.Wall).ok,
     'The legacy core service tile should accept normal construction.'
@@ -527,12 +583,28 @@ function testTileBuildCostDoesNotScaleWithDistance(): void {
 
 function testCreditBuildDoesNotConsumeSuppliesOrNeedIntake(): void {
   const state = createInitialState({ seed: 13381 });
-  state.metrics.credits = 50;
+  // The fixture used to seed a flat 50 credits, which covered a Table back when
+  // seating cost 40. "make opening business choices truthful" repriced the
+  // Table to 80 so the three opening recipes cost comparable money, and the
+  // fixture quietly went bankrupt halfway through. Seeding from the live price
+  // keeps this test about credits-versus-supplies rather than re-litigating the
+  // price list; testCreditBuildBlocksOnCredits still guards the broke case.
+  state.metrics.credits = moduleCreditBuildCost(ModuleType.Table) + 50;
   state.legacyMaterialStock = 12;
   state.metrics.materials = 12;
 
   const core = fromIndex(state.core.centerTile, state.width);
-  const floorTile = toIndex(core.x, core.y + 10, state.width);
+  // The fixture tile has to be raw vacuum touching the hull: outside the
+  // pressurised shell (so nothing could have been hauled there) but still
+  // legal under the long-standing "every built tile stays joined to the core"
+  // rule. It used to be core.y + 10, which satisfied both when the starter was
+  // the old rectangular test hull reaching core.y + 8. The crew-sustainability
+  // slice carved the hull back to core.y + 7, leaving core.y + 10 floating two
+  // tiles out in space -- so the build was rejected for being disconnected,
+  // never reaching the credits-vs-supplies claim this test exists to make.
+  // core.y + 9 is the same "one step past the south hull" spot on the current
+  // station; the assertions below are unchanged.
+  const floorTile = toIndex(core.x, core.y + 9, state.width);
   const creditsBeforeFloor = state.metrics.credits;
   const suppliesBeforeFloor = state.metrics.materials;
   const floor = trySetTileWithCredits(state, floorTile, TileType.Floor);
@@ -556,7 +628,11 @@ function testCreditBuildBlocksOnCredits(): void {
   const state = createInitialState({ seed: 13382 });
   state.metrics.credits = 0;
   const core = fromIndex(state.core.centerTile, state.width);
-  const result = trySetTileWithCredits(state, toIndex(core.x, core.y + 10, state.width), TileType.Floor);
+  // Same stale fixture as above: core.y + 10 is now disconnected vacuum, so the
+  // build failed on connectivity rather than on price and the reason assertion
+  // below stopped testing anything about credits. core.y + 9 is a genuinely
+  // buildable spot, which is what makes "blocked purely by credits" meaningful.
+  const result = trySetTileWithCredits(state, toIndex(core.x, core.y + 9, state.width), TileType.Floor);
   assertCondition(!result.ok, 'Credits-first build should block when credits are insufficient.');
   if (result.ok) throw new Error('Expected insufficient-credit build failure.');
   assertCondition(result.reason.includes('credits'), 'Insufficient-credit build failure should mention credits.');
@@ -565,8 +641,15 @@ function testCreditBuildBlocksOnCredits(): void {
 function testTrussBuildRequiresEvaAndCanChain(): void {
   const state = createInitialState({ seed: 1339 });
   const core = fromIndex(state.core.centerTile, state.width);
-  const first = toIndex(core.x, core.y + 10, state.width);
-  const second = toIndex(core.x, core.y + 11, state.width);
+  // These two tiles have to be the first and second step off the south hull:
+  // the point is that scaffold anchors to the hull and then chains from its own
+  // planned blueprint. They were core.y + 10 / + 11, which was that pair while
+  // the starter hull still reached core.y + 8; the crew-sustainability slice
+  // pulled it back to core.y + 7, so the "first" tile was floating in open
+  // space and failed the anchor rule the test is asserting. Shifted one tile
+  // north so the fixture means what its assertion messages say again.
+  const first = toIndex(core.x, core.y + 9, state.width);
+  const second = toIndex(core.x, core.y + 10, state.width);
   const startingMaterials = state.metrics.materials;
 
   const planned = planTileConstruction(state, first, TileType.Truss);
@@ -588,13 +671,35 @@ function testTrussBuildRequiresEvaAndCanChain(): void {
 function testTrussExpansionCreatesDeferredConstructionProject(): void {
   const state = createInitialState({ seed: 1340 });
   const core = fromIndex(state.core.centerTile, state.width);
+  // Two separate things aged out from under this fixture. The patch used to sit
+  // at core.y + 10/+11, flush under the old rectangular test hull; the
+  // crew-sustainability slice pulled the hull back to core.y + 7, so the
+  // scaffold no longer touched anything walkable and the expansion was refused
+  // before it could be measured. Then structural support validation started
+  // rejecting any truss node with more than two neighbours -- which a 2x2 patch
+  // welded onto a hull always produces. Per that rule's own design note, the
+  // answer is to install the Truss Junctions the plan asks for, the same piece
+  // a player would place, rather than hunting for a shape that dodges the rule.
+  // The deferred-project assertions below are unchanged.
   const patch = [
-    toIndex(core.x, core.y + 10, state.width),
-    toIndex(core.x + 1, core.y + 10, state.width),
-    toIndex(core.x, core.y + 11, state.width),
-    toIndex(core.x + 1, core.y + 11, state.width)
+    toIndex(core.x + 5, core.y + 9, state.width),
+    toIndex(core.x + 6, core.y + 9, state.width),
+    toIndex(core.x + 5, core.y + 10, state.width),
+    toIndex(core.x + 6, core.y + 10, state.width)
   ];
   for (const index of patch) setTile(state, index, TileType.Truss);
+  for (const problem of validateStructuralSupportPlan(state).problems) {
+    if (problem.reason !== 'branch-requires-junction' || !patch.includes(problem.tile)) continue;
+    const planned = planStructuralPieceConstruction(state, problem.tile, 'junction');
+    assertCondition(planned.ok, `Scaffold junction should be placeable (${planned.reason ?? 'no reason'}).`);
+    const piece = state.structuralPieces.find((entry) => entry.id === planned.pieceId);
+    if (piece) piece.completed = true;
+    // The junctions are this fixture's prerequisite, not the work under test,
+    // so their own sites are cleared before the expansion is staged.
+    state.constructionSites = state.constructionSites.filter(
+      (site) => site.structuralPieceId !== planned.pieceId
+    );
+  }
   state.legacyMaterialStock = 11;
   state.metrics.materials = 11;
 
@@ -5443,11 +5548,28 @@ function testUnlockTier0StartsConstrained(): void {
   assertCondition(isRoomUnlocked(state, RoomType.Dorm), 'Tier 0 should include dorm.');
   assertCondition(isRoomUnlocked(state, RoomType.LogisticsStock), 'Tier 0 should include starter logistics stock.');
   assertCondition(!isRoomUnlocked(state, RoomType.Workshop), 'Tier 0 should not include workshop.');
-  assertCondition(!isRoomUnlocked(state, RoomType.Storage), 'Tier 0 should not include full storage.');
+  // Storage and its rack are tier-2 content that the crew-sustainability slice
+  // deliberately hands over at tier 0, alongside the cafeteria, logistics stock
+  // and berth: the starter station already ships those rooms, so the palette has
+  // to be able to repair and extend them from the first minute. "Storage is
+  // locked" is therefore no longer the claim worth defending. What is: the
+  // override is a narrow, explicit starter exception, and it did not drag the
+  // rest of tier 2 open with it -- the room still reports its real tier-2
+  // requirement (so progression UI and save data stay honest), while Workshop,
+  // its Workbench and everything above them are still gated.
+  const storage = getUnlockRequirement(state, { kind: 'room', room: RoomType.Storage });
+  assertCondition(storage.unlocked, 'Tier 0 starter override should keep storage buildable.');
+  assertCondition(storage.tier === 2, `Storage should still record its tier-2 requirement, saw ${storage.tier}.`);
   assertCondition(!isRoomUnlocked(state, RoomType.Security), 'Tier 0 should not include security.');
   assertCondition(isModuleUnlocked(state, ModuleType.IntakePallet), 'Tier 0 should include starter intake pallet.');
   assertCondition(!isModuleUnlocked(state, ModuleType.Workbench), 'Tier 0 should not include workbench.');
-  assertCondition(!isModuleUnlocked(state, ModuleType.StorageRack), 'Tier 0 should not include storage rack.');
+  // Same starter override as the Storage room above, checked the same way.
+  const storageRack = getUnlockRequirement(state, { kind: 'module', module: ModuleType.StorageRack });
+  assertCondition(storageRack.unlocked, 'Tier 0 starter override should keep the storage rack buildable.');
+  assertCondition(
+    storageRack.tier === 2,
+    `Storage rack should still record its tier-2 requirement, saw ${storageRack.tier}.`
+  );
   assertCondition(!isModuleUnlocked(state, ModuleType.Terminal), 'Tier 0 should not include terminal.');
   assertCondition(isShipTypeUnlocked(state, 'tourist'), 'Tier 0 should include tourist ships.');
   assertCondition(isShipTypeUnlocked(state, 'trader'), 'Tier 0 should include trader ships.');
@@ -5545,20 +5667,31 @@ function testUnlockTier2RequiresLogisticsSignal(): void {
     lounger: true,
     rusher: false,
   };
-  tick(state, 0);
+  tickAfterDerivedMetricsCadence(state);
   assertCondition(getUnlockTier(state) >= 2, 'Tier 2 should unlock after net credits and logistics jobs thresholds are met.');
 }
 
-function testUnlockTier3TriggersOnTradeCycle(): void {
+function testUnlockTier3TriggersOnShipTurnarounds(): void {
   const state = createInitialState({ seed: 5104 });
   buildHabitat(state);
   setUnlockTierForTest(state, 2);
   state.controls.paused = true;
   tick(state, 0);
-  assertCondition(getUnlockTier(state) === 2, 'Tier 3 should not unlock without a trade cycle.');
-  state.metrics.tradeCyclesCompletedLifetime = 1;
-  tick(state, 0);
-  assertCondition(getUnlockTier(state) >= 3, 'Tier 3 should unlock when tradeCyclesCompletedLifetime >= 1.');
+  assertCondition(getUnlockTier(state) === 2, 'Tier 3 should not unlock without completed ship turnarounds.');
+  // T3 used to gate on tradeCyclesCompletedLifetime: produce a trade good at a
+  // workshop, sell it at the market. The living-station work moved the gate to
+  // turnaroundsCompletedLifetime -- "complete three ship turnarounds" -- which
+  // is what "port operation proven" has to mean now that the starter station
+  // ships commercially empty and has no market to sell into. The claim under
+  // test is unchanged (T3 waits for proof the station can run its trade), only
+  // the proof did. The threshold is 3 rather than the old 1, so the one-short
+  // case is now worth asserting: it is what stops the gate drifting to "any".
+  state.metrics.turnaroundsCompletedLifetime = 2;
+  tickAfterDerivedMetricsCadence(state);
+  assertCondition(getUnlockTier(state) === 2, 'Tier 3 should not unlock one turnaround short of the threshold.');
+  state.metrics.turnaroundsCompletedLifetime = 3;
+  tickAfterDerivedMetricsCadence(state);
+  assertCondition(getUnlockTier(state) >= 3, 'Tier 3 should unlock when turnaroundsCompletedLifetime >= 3.');
 }
 
 function testUnlockTier4TriggersOnTreatmentAndIncident(): void {
@@ -5570,7 +5703,7 @@ function testUnlockTier4TriggersOnTreatmentAndIncident(): void {
   assertCondition(getUnlockTier(state) === 3, 'Tier 4 should not unlock without treatment and incident response.');
   state.metrics.actorsTreatedLifetime = 1;
   state.metrics.incidentsResolvedLifetime = 1;
-  tick(state, 0);
+  tickAfterDerivedMetricsCadence(state);
   assertCondition(getUnlockTier(state) >= 4, 'Tier 4 should unlock after treatment and one resolved incident.');
 }
 
@@ -6058,6 +6191,20 @@ function testActorsTreatedLifetimeIncrementsOnRecovery(): void {
   tick(state, 0);
   assertCondition(state.crewMembers.length >= 1, 'Setup: starter state should have crew after tick.');
   const crew = state.crewMembers[0];
+  // Exposure reads per-tile air now, not the station-wide average, so setting
+  // state.metrics.airQuality alone no longer reaches the actor. It also matters
+  // where the actor is standing: crew spawn on the core service tile, and the
+  // grid expansion to 100x80 moved the core outside buildHabitat's hardcoded
+  // 4,4..44,30 shell. Those core tiles are floor but unsealed, so their local
+  // air reads 5 (depressurized) and the patient accrues exposure instead of
+  // shedding it. Put the patient inside the pressurised volume, which is what
+  // "under clean air" always meant here and now has to be said physically.
+  const wardTile = toIndex(20, 15, state.width);
+  crew.tileIndex = wardTile;
+  crew.x = 20.5;
+  crew.y = 15.5;
+  crew.targetTile = wardTile;
+  crew.path = [];
   crew.airExposureSec = 25;
   crew.healthState = 'distressed';
   state.metrics.airQuality = 100;
@@ -6133,12 +6280,22 @@ function testTier0ShipServicesIgnoreLockedDemands(): void {
   );
 }
 
+// Two things about this fixture are worth stating plainly, because both were
+// silently untrue before. First, a ship parked at 'depart' only actually
+// departs once its physical approach commitment goes active, which takes more
+// than the single tick this used to run -- with no departure, neither branch of
+// the penalty ran and the test was comparing 0 against 0. Second,
+// securityCoveragePct is derived by computeMetrics from the built station, so
+// assigning it here is overwritten on the first tick: both stations really run
+// at 0% coverage, and the low-coverage surcharge applies to both. The surviving
+// difference between them -- and the thing this test genuinely proves -- is the
+// unresolved incident. The assertion is scoped to that rather than left
+// claiming a security-coverage contrast the fixture cannot actually create.
 function testMilitaryShipPenalizesLowSecurity(): void {
   const lowSecurity = createInitialState({ seed: 5104 });
   buildHabitat(lowSecurity);
   setUnlockTierForTest(lowSecurity, 3);
   lowSecurity.controls.shipsPerCycle = 0;
-  lowSecurity.metrics.securityCoveragePct = 0;
   const lowSecurityDock = placeEastHullDock(lowSecurity, 8, 9);
   const lowSecurityShip = createDockedTransientShip(lowSecurity, lowSecurityDock, 9501);
   lowSecurityShip.shipType = 'military';
@@ -6160,24 +6317,40 @@ function testMilitaryShipPenalizesLowSecurity(): void {
     residentParticipantIds: [],
     extendedResolveAt: null
   });
-  runFor(lowSecurity, 0.25);
+  // Two ticks to let the approach commitment go active and the ship leave, then
+  // one more past the derived-metrics cadence so stationRatingPenaltyTotal is
+  // recomputed from the usage totals the departure just wrote.
+  runFor(lowSecurity, 0.5);
+  tickAfterDerivedMetricsCadence(lowSecurity, 0.25);
+  assertCondition(
+    lowSecurity.arrivingShips.length === 0,
+    'Setup: the military ship should have actually departed.'
+  );
   const lowSecurityPenalty = lowSecurity.metrics.stationRatingPenaltyTotal.serviceFailure;
 
-  const secure = createInitialState({ seed: 5104 });
-  buildHabitat(secure);
-  setUnlockTierForTest(secure, 3);
-  secure.controls.shipsPerCycle = 0;
-  secure.metrics.securityCoveragePct = 100;
-  const secureDock = placeEastHullDock(secure, 8, 9);
-  const secureShip = createDockedTransientShip(secure, secureDock, 9502);
-  secureShip.shipType = 'military';
-  secureShip.stage = 'depart';
-  secureShip.stageTime = 2.2;
-  runFor(secure, 0.25);
-  const securePenalty = secure.metrics.stationRatingPenaltyTotal.serviceFailure;
+  const quiet = createInitialState({ seed: 5104 });
+  buildHabitat(quiet);
+  setUnlockTierForTest(quiet, 3);
+  quiet.controls.shipsPerCycle = 0;
+  const quietDock = placeEastHullDock(quiet, 8, 9);
+  const quietShip = createDockedTransientShip(quiet, quietDock, 9502);
+  quietShip.shipType = 'military';
+  quietShip.stage = 'depart';
+  quietShip.stageTime = 2.2;
+  runFor(quiet, 0.5);
+  tickAfterDerivedMetricsCadence(quiet, 0.25);
   assertCondition(
-    lowSecurityPenalty > securePenalty,
-    'Military departures should apply larger service penalties when incidents remain unresolved under low security.'
+    quiet.arrivingShips.length === 0,
+    'Setup: the control military ship should have actually departed.'
+  );
+  const quietPenalty = quiet.metrics.stationRatingPenaltyTotal.serviceFailure;
+  assertCondition(
+    quietPenalty > 0,
+    `A military departure at 0% security coverage should be penalised at all, saw ${quietPenalty}.`
+  );
+  assertCondition(
+    lowSecurityPenalty > quietPenalty,
+    'A military departure should be penalised harder when an incident is still unresolved.'
   );
 }
 
@@ -6193,6 +6366,30 @@ function testColonistShipBoostsConversionWhenHousingValid(): void {
   setDockPurpose(tourist, residentialDockTourist, 'residential');
   setDockAllowedShipType(tourist, residentialDockTourist, 'tourist', true);
   setupPrivateResidentHousing(tourist);
+  // Move-in now needs housing AND an explicit immigration policy -- "a
+  // successful visit can no longer convert into permanent load on its own".
+  // Without opening acceptance, maybeMoveInResident bails at the policy check
+  // and BOTH arms of this comparison score zero, which the > assertion reported
+  // as a colonist-vs-tourist result rather than as the fixture never running.
+  //
+  // KNOWN INCOMPLETE -- this test is still red, and opening immigration is only
+  // the first of three things that aged out from under it. The other two need a
+  // fixture rebuild rather than a one-line setter, so they are recorded here
+  // rather than half-patched:
+  //   1. runFor(..., 1.5) never reaches a move-in attempt at all.
+  //      maybeMoveInResident is behind RESIDENT_MOVE_IN_CADENCE_SEC = 8 sim
+  //      seconds (sim.ts), so 1.5s of sim time cannot trigger one. Both arms
+  //      finish still holding the initial-state placeholder result string
+  //      'waiting for eligible visitor exit' -- the code never ran.
+  //   2. stationRating is derived, not assignable. computeMetrics recomputes it
+  //      (sim.ts:26450, ratingFoundation + usageTotals.ratingDelta), so the 55
+  //      set below is overwritten to 32 on the first tick -- under the
+  //      RESIDENT_MOVE_IN_MIN_RATING = 50 gate, which would block move-in even
+  //      once the cadence is reached. The fixture has to earn the rating (or
+  //      drive usageTotals.ratingDelta) instead of assigning the metric.
+  // Both arms also end with zero visitors, so the eligible-visitor precondition
+  // needs a visitor that survives the run, not just one spawned at t=0.
+  setResidentAcceptance(tourist, true);
   const touristShip = createDockedTransientShip(tourist, visitorDockTourist, 9601);
   touristShip.shipType = 'tourist';
   spawnReturningVisitor(tourist, dockByIdOrThrow(tourist, visitorDockTourist).tiles[0], 5201, touristShip.id);
@@ -6210,6 +6407,7 @@ function testColonistShipBoostsConversionWhenHousingValid(): void {
   setDockPurpose(colonist, residentialDockColonist, 'residential');
   setDockAllowedShipType(colonist, residentialDockColonist, 'colonist', true);
   setupPrivateResidentHousing(colonist);
+  setResidentAcceptance(colonist, true);
   const colonistShip = createDockedTransientShip(colonist, visitorDockColonist, 9602);
   colonistShip.shipType = 'colonist';
   spawnReturningVisitor(colonist, dockByIdOrThrow(colonist, visitorDockColonist).tiles[0], 5202, colonistShip.id);
@@ -6737,7 +6935,7 @@ function testDualWallVariantTruthTable(): void {
 }
 
 function run(): void {
-  testStarterCoreHasNoHardwiredReactor();
+  testStarterCoreIsOrdinaryServiceableSpace();
   testTileBuildCostDoesNotScaleWithDistance();
   testCreditBuildDoesNotConsumeSuppliesOrNeedIntake();
   testCreditBuildBlocksOnCredits();
@@ -6748,7 +6946,7 @@ function run(): void {
   testTier0StarterDepotMaterialCapacity();
   testUnlockTier1TriggersAfterStability();
   testUnlockTier2RequiresLogisticsSignal();
-  testUnlockTier3TriggersOnTradeCycle();
+  testUnlockTier3TriggersOnShipTurnarounds();
   testUnlockTier4TriggersOnTreatmentAndIncident();
   testUnlockTier5TriggersOnPermanentHabitation();
   testRebuildDockEntitiesPreservesAllowedShips();

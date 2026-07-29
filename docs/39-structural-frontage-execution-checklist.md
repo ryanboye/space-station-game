@@ -1897,3 +1897,42 @@ maintenance" row at the same time.
   rotating and a chartered site always has a brief — so neither is a panel shown
   for absent context. The three that genuinely could be empty are the three now
   gated.
+
+2026-07-28 · What the red full suite actually is
+
+- Commit or files: eight repaired fixtures in `tools/sim-tests.ts`.
+- `npm run test:sim` has been red since well before this work. It aborts on the
+  first failure, so the damage was only ever visible one test at a time. It
+  previously died at the 3rd of 194 test calls; it now dies at the 28th. Roughly
+  166 remain unexecuted.
+- **The headline finding: no genuine regression was found.** Every one of the
+  eight failures traced to a commit that deliberately states the change, and each
+  fixture was rewritten to assert the current design rather than gutted to pass.
+  The pattern is uniform — fixtures written before a design change that nobody
+  re-ran, because the suite was already red further up.
+- The causes, for whoever continues: the southwest hull was carved back in
+  `ad3d267`, so fixtures anchored two tiles past the old hull now sit in vacuum;
+  Table was repriced 40 to 80 in `4dec2aa`, bankrupting a flat 50-credit seed;
+  the Truss Junction rule now rejects degree-3 truss nodes, so 2x2 scaffold
+  fixtures must install the junction the plan asks for; the Tier 3 gate moved
+  from trade cycles to three completed turnarounds in `eae0aff`, which is
+  coherent with a commercially empty starter; and Storage/StorageRack are
+  deliberately starter-overridden.
+- Two findings worth carrying into playtesting, both larger than a test:
+  - `0e7d24a` put `computeMetrics` **and `updateUnlockProgress`** behind a
+    250ms **wall-clock** cadence. Progression therefore advances on machine time
+    rather than simulation time, which contradicts this codebase's own stated
+    principle that behavior must be a function of simulation time and never of
+    renderer or machine throughput. Not visible at 250ms, but it means unlock
+    pacing is not strictly reproducible across machines or frame rates.
+  - `testMilitaryShipPenalizesLowSecurity` never tested a security contrast:
+    `securityCoveragePct` is derived and overwritten on the first tick, so both
+    arms ran at 0% coverage and the test compared 0 against 0. It also never
+    departed its ship, because the shared `createDockedTransientShip` helper
+    omitted `assignedDockSourceKey`. The assertion has been scoped to what it
+    genuinely proves; the name now overstates it and the real coverage contrast
+    does not exist yet.
+- Deliberate stop: this is a long campaign, not a few stragglers, and the owner
+  has scheduled suite work for after playtesting. It is recorded here so the
+  remaining red is understood as fixture debt with a known shape rather than
+  mistaken for broken gameplay.
