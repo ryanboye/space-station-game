@@ -19,10 +19,11 @@ import { selectShipHullVariant } from './ship-hulls';
 import { createEmptyStaffRoleCounts, totalStaffCount } from './content/command';
 import { resolveFacilitySlots, type FacilitySlotRole } from './facility-descriptors';
 import { buildSlotReservationRequest } from './facility-slots';
-import { createVisitorNeeds } from './occupant-demand';
+import { createVisitorNeeds, deriveVisitStayClass } from './occupant-demand';
 import { findPath } from './path';
 import { planStructuralPieceConstruction } from './construction';
-import { validateStructuralSupportPlan } from './structural-support';
+import { validateLiveStructuralInterfaces, validateStructuralSupportPlan } from './structural-support';
+import { computeCharterOperatingForecast, computeSiteProfile } from './site-charter';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType,
   type ModuleInstance,
   type ModuleRotation,
@@ -32,8 +33,8 @@ import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType,
   type ShipSize,
   isWalkable
 } from './types';
-import type { ArrivingShip, ItemType, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
-import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryCreateReservation, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
+import type { ArrivingShip, ItemType, SpaceLane, SpecialtyId, StationState, TrafficOffer, UnlockId, UnlockTier, Visitor, VisitorServiceFailureStage, RecurringNeedKind } from './types';
+import { admitTrafficOffer, buildStationExpansionOnTruss, buyMaterials, buyRawFood, canPlaceUtilityUnderlay, getApproachConflictGroups, getPodDockAttachmentView, getPodDockFuelSupplyView, getPodDockPlacementView, hireStaffRole, mapConditionAt, orderFuelDetailed, planStationExpansionOnTruss, planTileConstruction, reconcileExteriorIntegrityTargets, removeModuleAtTile, runMovementCoordinatorTestTick, setBerthCustomsPolicy, setBerthScreeningLevel, setDockPurpose, setExteriorIntegrityTargetState, setExteriorIntegrityTargetWear, setTile, setRoom, setModule, setUtilityUnderlayTile, tick, tryCreateReservation, tryPlaceModule, tryPlaceModuleWithCredits, validateDockPlacement } from './sim';
 
 type Scenario = (state: StationState) => void;
 
@@ -1100,6 +1101,35 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // --- Phase 0 baseline: the frontage tradeoff, made physical -------------
+  // The ordinary starter is the "compact hull with two Pod Docks" baseline.
+  // This fixture welds a narrow docking finger onto that same hull and hangs
+  // four more Pod Docks off it, so abundant frontage is paid for with a long
+  // single-file circulation spine and four overlapping approach envelopes
+  // rather than with a frontage counter. Compare with `?scenario=starter`.
+  'pod-dock-finger': (s) => {
+    stagePodDockFinger(s);
+  },
+
+  // --- Phase 0 baseline: one medium Berth with two Gangways ---------------
+  // `tools/passenger-transfer-tests.ts` proves two Gangways beat one, but it
+  // builds that berth inside the test. This is the same physical arrangement
+  // in the live game: the demo station's north Berth gets a second Gangway,
+  // the south Berth keeps its single one, and two identical medium passenger
+  // manifests are admitted to them so the difference is watchable side by side.
+  'berth-two-gangways': (s) => {
+    stageTwoGangwayBerth(s);
+  },
+
+  // --- Phase 0 baseline: three tenures against one facility set -----------
+  // A short errand pod, a medium shore-leave call, and a long repair contract
+  // share the same cafeteria, market, lounge, hygiene and lodging. Every stay
+  // class is derived by production `deriveVisitStayClass` from the admitted
+  // manifest, so dwell length and recurring-need behavior differ for real.
+  'mixed-tenure-day': (s) => {
+    stageMixedTenureDay(s);
+  },
+
   // Paired construction fixtures: one makes the missing-Airlock block easy
   // to inspect; the other runs the same project through real logistics/EVA.
   'structural-expansion-blocked': (s) => {
@@ -1136,6 +1166,19 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     const site = s.constructionSites.find((entry) => entry.tileIndex === candidate);
     if (site) site.buildWorkRequired = 60;
     s.controls.paused = false;
+  },
+
+  // --- Phase 0 baseline: the same wing on two different faces -------------
+  // Both arms charter the SAME site, so the debris flow, the seed, the hull
+  // and the wing geometry are identical. Only the face differs: one wing goes
+  // up on the charter's most debris-exposed frontage, the other on its most
+  // sheltered one. The map-conditions overlay opens on load so the field the
+  // choice is made against is visible rather than implied.
+  'debris-wing-exposed': (s) => {
+    stageDebrisFacingWing(s, 'exposed');
+  },
+  'debris-wing-sheltered': (s) => {
+    stageDebrisFacingWing(s, 'sheltered');
   },
 
   // A player-visible counterpart to the deterministic target-scale runner.
@@ -2288,7 +2331,634 @@ function seedScaleStorageReserve(state: StationState, freeCapacityTarget: number
   }
 }
 
-function planScenarioStructuralExpansion(state: StationState, withAirlock: boolean): void {
+// --- Phase 0 frontage baselines ---------------------------------------------
+//
+// The builders below produce real exterior frontage: a docking finger, a second
+// Gangway on a medium Berth, three concurrent visit tenures, and a wing on a
+// named hull face. They all mutate topology through `setTile`/`setRoom`/
+// `tryPlaceModule` and then let a zero-length tick derive docks, berth
+// facilities, pressure and the structural graph, so nothing here hand-writes a
+// `docks` entry, a berth facility, or a derived stay class.
+
+const LANE_OUTWARD_STEP: Record<SpaceLane, { dx: number; dy: number }> = {
+  north: { dx: 0, dy: -1 },
+  east: { dx: 1, dy: 0 },
+  south: { dx: 0, dy: 1 },
+  west: { dx: -1, dy: 0 }
+};
+
+const SCENARIO_LANES: readonly SpaceLane[] = ['north', 'east', 'south', 'west'];
+
+function scenarioTileAt(state: StationState, x: number, y: number): number | null {
+  if (x < 0 || y < 0 || x >= state.width || y >= state.height) return null;
+  return y * state.width + x;
+}
+
+function isStationStructureTile(state: StationState, x: number, y: number): boolean {
+  const tile = scenarioTileAt(state, x, y);
+  if (tile === null) return false;
+  const type = state.tiles[tile];
+  return type === TileType.Floor || type === TileType.Wall || type === TileType.Door ||
+    type === TileType.Airlock || type === TileType.Dock;
+}
+
+function stationCentroid(state: StationState): { x: number; y: number } {
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    const type = state.tiles[tile];
+    if (type === TileType.Space || type === TileType.Truss) continue;
+    sumX += tile % state.width;
+    sumY += Math.floor(tile / state.width);
+    count += 1;
+  }
+  if (count === 0) return { x: state.width / 2, y: state.height / 2 };
+  return { x: sumX / count, y: sumY / count };
+}
+
+/** True when every hull contact of `patch` lies behind it on `face`. */
+function patchHangsOffFace(state: StationState, patch: number[], face: SpaceLane): boolean {
+  const step = LANE_OUTWARD_STEP[face];
+  let touchesBehind = false;
+  for (const tile of patch) {
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    if (isStationStructureTile(state, x + step.dx, y + step.dy)) return false;
+    if (isStationStructureTile(state, x - step.dx, y - step.dy)) touchesBehind = true;
+  }
+  return touchesBehind;
+}
+
+/** Tiles an existing interface already owns, plus the lanes ships fly down. */
+function reservedInterfaceTiles(state: StationState): Set<number> {
+  const reserved = new Set<number>();
+  for (const dock of state.docks) {
+    for (const tile of dock.tiles) reserved.add(tile);
+    for (const tile of dock.approachTiles) reserved.add(tile);
+  }
+  return reserved;
+}
+
+function structuralProblemKeys(state: StationState): Set<string> {
+  return new Set(
+    validateLiveStructuralInterfaces(state).problems.map((problem) => `${problem.tile}:${problem.reason}`)
+  );
+}
+
+/**
+ * Install the Junctions a live structural read asks for, exactly as the
+ * expansion fixture does. New frontage that branches an existing support run
+ * is answered with the piece the player would place, never by reshaping the
+ * build until the rule stops firing.
+ */
+function settleScenarioStructuralDebt(state: StationState, label: string, before: Set<string>): void {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const outstanding = validateLiveStructuralInterfaces(state).problems
+      .filter((problem) => !before.has(`${problem.tile}:${problem.reason}`));
+    if (outstanding.length === 0) return;
+    let installed = 0;
+    for (const problem of outstanding) {
+      if (problem.reason !== 'branch-requires-junction' && problem.reason !== 'medium-load-requires-junction') continue;
+      const planned = planStructuralPieceConstruction(state, problem.tile, 'junction');
+      if (!planned.ok || planned.pieceId === undefined) continue;
+      const piece = state.structuralPieces.find((entry) => entry.id === planned.pieceId);
+      if (piece) piece.completed = true;
+      // The fixture ships a station that already owns its junctions; the
+      // prerequisite is not the work the scenario is presenting.
+      state.constructionSites = state.constructionSites.filter(
+        (site) => site.structuralPieceId !== planned.pieceId
+      );
+      installed += 1;
+    }
+    if (installed === 0) {
+      throw new Error(
+        `${label} left unsupported structure: ${outstanding.map((problem) => `${problem.tile}:${problem.reason}`).join(', ')}.`
+      );
+    }
+  }
+  const remaining = validateLiveStructuralInterfaces(state).problems
+    .filter((problem) => !before.has(`${problem.tile}:${problem.reason}`));
+  if (remaining.length > 0) {
+    throw new Error(
+      `${label} still unsupported after installing junctions: ${remaining.map((problem) => `${problem.tile}:${problem.reason}`).join(', ')}.`
+    );
+  }
+}
+
+/** Interior spine tiles a finger adds beyond the hull line. */
+const FINGER_SPINE_LENGTH = 6;
+/** Lateral open space each side dock needs: four approach tiles plus a margin. */
+const FINGER_APPROACH_CLEARANCE = 5;
+/** Where along the spine the two Pod Dock pairs sit on each side wall. */
+const FINGER_DOCK_OFFSETS: readonly number[] = [2, 5];
+
+interface FingerGeometry {
+  anchor: number;
+  face: SpaceLane;
+  spine: number[];
+  walls: number[];
+  /** Ordered [origin, rotation] pairs for the four Pod Docks. */
+  dockMounts: Array<{ origin: number; rotation: ModuleRotation }>;
+}
+
+function describeFingerAt(
+  state: StationState,
+  anchor: number,
+  face: SpaceLane,
+  reserved: Set<number>
+): FingerGeometry | null {
+  if (state.tiles[anchor] !== TileType.Wall) return null;
+  const ax = anchor % state.width;
+  const ay = Math.floor(anchor / state.width);
+  const step = LANE_OUTWARD_STEP[face];
+  const lateral = { dx: step.dy, dy: -step.dx };
+
+  // The throat has to open onto real station floor, and the wall it replaces
+  // has to be the hull's outward face rather than an interior partition.
+  const behind = scenarioTileAt(state, ax - step.dx, ay - step.dy);
+  if (behind === null || !isWalkable(state.tiles[behind])) return null;
+
+  const openSpace = (x: number, y: number): number | null => {
+    const tile = scenarioTileAt(state, x, y);
+    if (tile === null || state.tiles[tile] !== TileType.Space || reserved.has(tile)) return null;
+    return tile;
+  };
+
+  const spine: number[] = [];
+  const walls: number[] = [];
+  const wallBySide = new Map<string, number>();
+  for (let i = 1; i <= FINGER_SPINE_LENGTH + 1; i += 1) {
+    const cx = ax + step.dx * i;
+    const cy = ay + step.dy * i;
+    for (const side of [0, 1, -1]) {
+      const tile = openSpace(cx + lateral.dx * side, cy + lateral.dy * side);
+      if (tile === null) return null;
+      if (side === 0 && i <= FINGER_SPINE_LENGTH) spine.push(tile);
+      else {
+        walls.push(tile);
+        if (side !== 0) wallBySide.set(`${side}:${i}`, tile);
+      }
+    }
+    if (i > FINGER_SPINE_LENGTH) continue;
+    // Every side wall tile becomes potential dock frontage, so the four-tile
+    // approach lane beyond it must be open space no other interface claims.
+    for (const side of [1, -1]) {
+      for (let k = 2; k <= FINGER_APPROACH_CLEARANCE; k += 1) {
+        if (openSpace(cx + lateral.dx * side * k, cy + lateral.dy * side * k) === null) return null;
+      }
+    }
+  }
+
+  const dockMounts: FingerGeometry['dockMounts'] = [];
+  for (const side of [-1, 1]) {
+    for (const offset of FINGER_DOCK_OFFSETS) {
+      const first = wallBySide.get(`${side}:${offset}`);
+      const second = wallBySide.get(`${side}:${offset + 1}`);
+      if (first === undefined || second === undefined) return null;
+      const origin = Math.min(first, second);
+      // A 2x1 wall fixture expands right/down from its origin, so a vertical
+      // wall run needs the rotated footprint.
+      const rotation: ModuleRotation = Math.abs(first - second) === 1 ? 0 : 90;
+      dockMounts.push({ origin, rotation });
+    }
+  }
+  return { anchor, face, spine, walls, dockMounts };
+}
+
+/**
+ * Weld a narrow docking finger onto the starter hull and hang four Pod Docks
+ * off it. The finger is the frontage tradeoff made physical: four small-craft
+ * positions from one hull anchor, paid for with a long single-file spine and
+ * four approach lanes stacked along the same protrusion.
+ */
+function stagePodDockFinger(state: StationState): void {
+  state.metrics.credits = Math.max(state.metrics.credits, 1500);
+  // Derive the starter's own interfaces before reserving space: a finger built
+  // across an existing Pod Dock's approach lane would silently delete it.
+  tick(state, 0);
+  const reserved = reservedInterfaceTiles(state);
+  const structureBefore = structuralProblemKeys(state);
+
+  // Search the hull outward, the way the structural expansion fixture does.
+  // Raw map order starts in deep space where nothing can attach.
+  let finger: FingerGeometry | null = null;
+  for (let tile = 0; tile < state.tiles.length && finger === null; tile += 1) {
+    if (state.tiles[tile] !== TileType.Wall) continue;
+    for (const face of SCENARIO_LANES) {
+      const candidate = describeFingerAt(state, tile, face, reserved);
+      if (candidate) {
+        finger = candidate;
+        break;
+      }
+    }
+  }
+  if (!finger) {
+    throw new Error('Docking finger fixture found no exterior wall with room for a finger and its approach lanes.');
+  }
+
+  setTile(state, finger.anchor, TileType.Floor);
+  setRoom(state, finger.anchor, RoomType.None);
+  for (const tile of finger.spine) {
+    setTile(state, tile, TileType.Floor);
+    setRoom(state, tile, RoomType.None);
+  }
+  for (const tile of finger.walls) setTile(state, tile, TileType.Wall);
+  tick(state, 0);
+
+  for (const mount of finger.dockMounts) {
+    const view = getPodDockPlacementView(state, mount.origin);
+    if (!view.valid) {
+      throw new Error(`Docking finger Pod Dock at ${mount.origin} is not placeable: ${view.reason ?? 'unknown'}.`);
+    }
+    const placed = tryPlaceModule(state, ModuleType.PodDock, mount.origin, mount.rotation);
+    if (!placed.ok) {
+      throw new Error(`Docking finger could not install a Pod Dock at ${mount.origin}: ${placed.reason ?? 'unknown'}.`);
+    }
+  }
+  tick(state, 0);
+  settleScenarioStructuralDebt(state, 'Docking finger', structureBefore);
+
+  const fingerTiles = new Set([finger.anchor, ...finger.spine, ...finger.walls]);
+  const fingerDocks = state.docks.filter(
+    (dock) => dock.sourceKind === 'pod-dock-module' && dock.tiles.some((tile) => fingerTiles.has(tile))
+  );
+  if (fingerDocks.length !== 4) {
+    throw new Error(`Docking finger derived ${fingerDocks.length} Pod Dock interfaces instead of four.`);
+  }
+
+  // Small craft only: the point of the fixture is four live small-craft
+  // positions and the queueing their shared spine creates.
+  state.controls.shipsPerCycle = 4;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.paused = true;
+  state.controls.simSpeed = 1;
+}
+
+/** Gangway module origins belonging to one Berth room cluster. */
+function berthGangwayOrigins(state: StationState, anchor: number): number[] {
+  const cluster = new Set(roomClusterTilesForScenario(state, RoomType.Berth, anchor));
+  return state.moduleInstances
+    .filter((module) => module.type === ModuleType.Gangway && module.tiles.some((tile) => cluster.has(tile)))
+    .map((module) => module.originTile)
+    .sort((left, right) => left - right);
+}
+
+/** Add one more Gangway to a Berth using ordinary module placement rules. */
+function addBerthGangway(state: StationState, anchor: number): number {
+  const before = berthGangwayOrigins(state, anchor).length;
+  const candidate = roomClusterTilesForScenario(state, RoomType.Berth, anchor)
+    .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+    .find((tile) => tryPlaceModule(state, ModuleType.Gangway, tile).ok);
+  if (candidate === undefined) throw new Error(`No legal second Gangway position in the Berth at ${anchor}.`);
+  tick(state, 0);
+  const after = berthGangwayOrigins(state, anchor).length;
+  if (after !== before + 1) {
+    throw new Error(`Second Gangway did not join the Berth facility at ${anchor} (${before} -> ${after}).`);
+  }
+  return candidate;
+}
+
+/** One ordinary medium passenger manifest, used twice for the A/B compare. */
+function gangwayComparisonOffer(state: StationState, label: string, passengers: number): TrafficOffer {
+  const id = state.shipSpawnCounter++;
+  return {
+    id,
+    callsign: `${label}-${String(id).padStart(3, '0')}`,
+    shipName: `${label === 'TWIN' ? 'Twin Gangway' : 'Single Gangway'} Shuttle`,
+    // The demo station's two Berth mouths both open east.
+    lane: 'east',
+    shipType: 'tourist',
+    hullVariant: 'passenger-shuttle',
+    offerKind: 'passenger',
+    size: 'medium',
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 900,
+    passengersTotal: passengers,
+    manifestDemand: { cafeteria: 1, market: 0, lounge: 0 },
+    manifestMix: { diner: 1, shopper: 0, lounger: 0, rusher: 0 },
+    hospitalityDemand: { meal: passengers, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 },
+    inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+    outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    requestedServices: ['cafeteria'],
+    berthTimeSec: 190,
+    dockingFee: 0,
+    projectedSpend: 0,
+    riskLabel: 'low',
+    assignedBerthAnchor: null
+  };
+}
+
+/**
+ * The two-Gangway medium Berth, promoted out of the transfer runner.
+ *
+ * `tools/passenger-transfer-tests.ts` proves two Gangways materially beat one,
+ * but it builds that berth inside the test. Here the same arrangement exists in
+ * the live world next to an otherwise identical single-Gangway Berth, and both
+ * receive the same manifest, so the throughput difference is watchable.
+ */
+function stageTwoGangwayBerth(state: StationState): void {
+  unlockThrough(state, 3);
+  applyDemoStationOverlay(state);
+  state.metrics.credits = 6000;
+  // Passenger flow is the variable under test; keep the demo cafeteria public
+  // so arrival routing cannot stall for an unrelated access-policy reason.
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] === RoomType.Cafeteria) state.zones[tile] = ZoneType.Public;
+  }
+  tick(state, 0);
+
+  const anchors = roomClusterAnchorsForScenario(state, RoomType.Berth);
+  if (anchors.length < 2) throw new Error('Two-Gangway fixture requires two demo Berths.');
+  const [twinAnchor, singleAnchor] = anchors;
+  addBerthGangway(state, twinAnchor);
+  const twinCount = berthGangwayOrigins(state, twinAnchor).length;
+  const singleCount = berthGangwayOrigins(state, singleAnchor).length;
+  if (twinCount !== 2 || singleCount !== 1) {
+    throw new Error(`Two-Gangway fixture expected 2 and 1 Gangways, built ${twinCount} and ${singleCount}.`);
+  }
+
+  state.controls.shipsPerCycle = 0;
+  state.controls.manualTrafficAdmission = true;
+  state.controls.portAutoAdmitEnabled = false;
+  state.trafficOffers.length = 0;
+  state.arrivingShips.length = 0;
+  state.dockQueue.length = 0;
+  state.portOps.contracts.length = 0;
+  state.portOps.cargoLots.length = 0;
+  state.portOps.settlements.length = 0;
+
+  const twin = gangwayComparisonOffer(state, 'TWIN', 10);
+  const single = gangwayComparisonOffer(state, 'SINGLE', 10);
+  state.trafficOffers.push(twin, single);
+  const twinAdmitted = admitTrafficOffer(state, twin.id, twinAnchor);
+  if (!twinAdmitted.ok) throw new Error(`Two-Gangway Berth refused its manifest: ${twinAdmitted.reason ?? 'unknown'}.`);
+  const singleAdmitted = admitTrafficOffer(state, single.id, singleAnchor);
+  if (!singleAdmitted.ok) {
+    throw new Error(`Single-Gangway Berth refused its manifest: ${singleAdmitted.reason ?? 'unknown'}.`);
+  }
+  state.controls.paused = true;
+  state.controls.simSpeed = 1;
+}
+
+/** Mount one Pod Dock on the first hull wall production placement accepts. */
+function installScenarioPodDock(state: StationState, label: string): number {
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    if (state.tiles[tile] !== TileType.Wall) continue;
+    if (!getPodDockPlacementView(state, tile).valid) continue;
+    for (const rotation of [0, 90] as const) {
+      if (tryPlaceModule(state, ModuleType.PodDock, tile, rotation).ok) {
+        tick(state, 0);
+        return tile;
+      }
+    }
+  }
+  throw new Error(`${label} could not mount a Pod Dock on any exterior hull wall.`);
+}
+
+/** A manifest whose production-derived stay class is exactly `wanted`. */
+function tenureOffer(
+  state: StationState,
+  wanted: 'errand' | 'shore' | 'contract',
+  idBase: number
+): TrafficOffer {
+  const shipType: ShipType = wanted === 'contract' ? 'industrial' : 'tourist';
+  const size: ShipSize = wanted === 'errand' ? 'small' : 'medium';
+  const offerKind = wanted === 'contract' ? 'mixed' as const : 'passenger' as const;
+  let id = idBase;
+  while (id < idBase + 512) {
+    if (deriveVisitStayClass({ shipType, size, offerKind, seed: id }) === wanted) break;
+    id += 1;
+  }
+  if (deriveVisitStayClass({ shipType, size, offerKind, seed: id }) !== wanted) {
+    throw new Error(`Mixed-tenure fixture found no ${wanted} manifest id near ${idBase}.`);
+  }
+  const passengers = wanted === 'errand' ? 3 : wanted === 'shore' ? 8 : 6;
+  return {
+    id,
+    callsign: `${wanted.toUpperCase()}-${id}`,
+    shipName: wanted === 'errand'
+      ? 'Courier Pod'
+      : wanted === 'shore' ? 'Shore Leave Shuttle' : 'Longwatch Repair Crew',
+    lane: 'east',
+    shipType,
+    // A small pod takes the ordinary small hull for its type. The compact demo
+    // Berths accept a medium shuttle hull but not the wide exterior service
+    // clearance a repair-tender hull demands, so the repair crew arrives on a
+    // shuttle; its contract tenure is unchanged.
+    hullVariant: size === 'small' ? selectShipHullVariant(id, shipType, size) : 'passenger-shuttle',
+    offerKind,
+    size,
+    status: 'holding',
+    forecastAt: state.now,
+    arrivesAt: state.now,
+    expiresAt: state.now + 1200,
+    passengersTotal: passengers,
+    manifestDemand: wanted === 'errand'
+      ? { cafeteria: 0.2, market: 0.7, lounge: 0.1 }
+      : wanted === 'shore'
+        ? { cafeteria: 0.4, market: 0.2, lounge: 0.4 }
+        : { cafeteria: 0.6, market: 0.1, lounge: 0.3 },
+    manifestMix: wanted === 'errand'
+      ? { diner: 0.1, shopper: 0.6, lounger: 0, rusher: 0.3 }
+      : wanted === 'shore'
+        ? { diner: 0.3, shopper: 0.2, lounger: 0.45, rusher: 0.05 }
+        : { diner: 0.45, shopper: 0.1, lounger: 0.4, rusher: 0.05 },
+    hospitalityDemand: wanted === 'errand'
+      ? { meal: 0, drink: 1, leisure: 0, restroom: 2, hygiene: 0, comfort: 0 }
+      : wanted === 'shore'
+        ? { meal: 5, drink: 5, leisure: 6, restroom: 4, hygiene: 2, comfort: 2 }
+        : { meal: 6, drink: 3, leisure: 4, restroom: 4, hygiene: 4, comfort: 4 },
+    inboundCargo: { rawMaterial: 0, rawMeal: 0, tradeGood: 0 },
+    outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
+    requestedServices: wanted === 'errand' ? ['market'] : wanted === 'shore' ? ['cafeteria', 'lounge'] : ['cafeteria', 'lounge', 'workshop'],
+    berthTimeSec: wanted === 'errand' ? 90 : wanted === 'shore' ? 180 : 300,
+    dockingFee: wanted === 'errand' ? 25 : wanted === 'shore' ? 90 : 160,
+    projectedSpend: wanted === 'errand' ? 20 : wanted === 'shore' ? 140 : 110,
+    riskLabel: 'low',
+    assignedBerthAnchor: null
+  };
+}
+
+/**
+ * All three visit tenures at once, against one shared facility set.
+ *
+ * Every class is derived by production `deriveVisitStayClass` from the admitted
+ * manifest — a small pod is an errand, a medium tourist call is shore leave,
+ * and a medium industrial call is a contract. Only the long class carries
+ * recurring needs, so the difference in dwell and need behavior is real rather
+ * than annotated.
+ */
+function stageMixedTenureDay(state: StationState): void {
+  unlockThrough(state, 3);
+  applyDemoStationOverlay(state);
+  state.metrics.credits = 8000;
+  // Guest lodging: a contract crew that stays overnight needs somewhere to
+  // sleep that is not the crew dorm.
+  for (let y = 31; y < 42; y += 1) {
+    for (let x = 38; x < 49; x += 1) removeModuleAtTile(state, y * state.width + x);
+  }
+  paintRoom(state, 38, 31, 49, 42, RoomType.Dorm, 'north');
+  placeMod(state, 40, 34, ModuleType.BunkBank);
+  placeMod(state, 44, 34, ModuleType.BunkBank);
+  for (let y = 32; y < 41; y += 1) {
+    for (let x = 39; x < 48; x += 1) {
+      const tile = y * state.width + x;
+      state.zones[tile] = ZoneType.Public;
+      state.roomHousingPolicies[tile] = 'visitor';
+    }
+  }
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] === RoomType.Cafeteria) state.zones[tile] = ZoneType.Public;
+  }
+  tick(state, 0);
+
+  // The demo overlay replaces the starter shell, so the short errand needs a
+  // real small-craft interface of its own.
+  installScenarioPodDock(state, 'Mixed-tenure fixture');
+
+  const anchors = roomClusterAnchorsForScenario(state, RoomType.Berth);
+  if (anchors.length < 2) throw new Error('Mixed-tenure fixture requires two demo Berths.');
+
+  state.controls.shipsPerCycle = 0;
+  state.controls.manualTrafficAdmission = true;
+  state.controls.portAutoAdmitEnabled = false;
+  state.trafficOffers.length = 0;
+  state.arrivingShips.length = 0;
+  state.dockQueue.length = 0;
+  state.portOps.contracts.length = 0;
+  state.portOps.cargoLots.length = 0;
+  state.portOps.settlements.length = 0;
+
+  const errand = tenureOffer(state, 'errand', 97_000);
+  const shore = tenureOffer(state, 'shore', 97_100);
+  const contract = tenureOffer(state, 'contract', 97_200);
+  state.shipSpawnCounter = Math.max(state.shipSpawnCounter, 97_400);
+  state.trafficOffers.push(errand, shore, contract);
+
+  const admissions: Array<[TrafficOffer, number | undefined]> = [
+    [errand, undefined],
+    [shore, anchors[0]],
+    [contract, anchors[1]]
+  ];
+  for (const [offer, berthAnchor] of admissions) {
+    const admitted = admitTrafficOffer(state, offer.id, berthAnchor);
+    if (!admitted.ok) {
+      throw new Error(`Mixed-tenure fixture could not admit its ${offer.callsign} call: ${admitted.reason ?? 'unknown'}.`);
+    }
+  }
+  // Read the tenure back off the live ships, not off the offers that produced
+  // them: a small pod docks without a Berth contract, so the ship is the only
+  // place all three derived classes appear together.
+  const classes = state.arrivingShips.map((ship) => ship.stayClass ?? 'errand');
+  for (const wanted of ['errand', 'shore', 'contract'] as const) {
+    if (!classes.includes(wanted)) {
+      throw new Error(`Mixed-tenure fixture is missing a ${wanted} tenure (got ${classes.join(', ') || 'no ships'}).`);
+    }
+  }
+  state.controls.paused = true;
+  state.controls.simSpeed = 1;
+}
+
+/** The open tiles immediately outside the hull, grouped by the face they face. */
+function hullFaceSamples(state: StationState): Record<SpaceLane, number[]> {
+  const samples: Record<SpaceLane, number[]> = { north: [], east: [], south: [], west: [] };
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    if (state.tiles[tile] === TileType.Space || state.tiles[tile] === TileType.Truss) continue;
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    for (const face of SCENARIO_LANES) {
+      const step = LANE_OUTWARD_STEP[face];
+      const outward = scenarioTileAt(state, x + step.dx, y + step.dy);
+      if (outward !== null && state.tiles[outward] === TileType.Space) samples[face].push(outward);
+    }
+  }
+  return samples;
+}
+
+function meanDebrisRisk(state: StationState, tiles: readonly number[]): number {
+  if (tiles.length === 0) return 0;
+  let total = 0;
+  for (const tile of tiles) total += mapConditionAt(state, 'debris-risk', tile);
+  return total / tiles.length;
+}
+
+/**
+ * The chartered orbit whose debris flow this hull can actually feel.
+ *
+ * Scored on what the fixture presents: the difference in real tile debris risk
+ * between the charter's most exposed face and its most sheltered one. Scanned
+ * deterministically over normalized site positions, so both arms of the
+ * comparison charter the identical orbit and only the built face differs.
+ */
+function chooseDebrisContrastSite(state: StationState): {
+  site: NonNullable<StationState['site']>;
+  exposed: SpaceLane;
+  sheltered: SpaceLane;
+  exposedRisk: number;
+  shelteredRisk: number;
+} {
+  const system = state.system;
+  if (!system) throw new Error('Debris wing fixture requires a generated system map.');
+  const samples = hullFaceSamples(state);
+  const restore = state.site;
+  let best: ReturnType<typeof chooseDebrisContrastSite> | null = null;
+  for (let iy = 1; iy < 10; iy += 1) {
+    for (let ix = 1; ix < 10; ix += 1) {
+      const site = computeSiteProfile(system, ix / 10, iy / 10);
+      const faces = [...computeCharterOperatingForecast(site, system).faces]
+        .sort((left, right) => right.debrisExposure - left.debrisExposure || left.lane.localeCompare(right.lane));
+      const exposed = faces[0].lane;
+      const sheltered = faces[faces.length - 1].lane;
+      state.site = site;
+      const exposedRisk = meanDebrisRisk(state, samples[exposed]);
+      const shelteredRisk = meanDebrisRisk(state, samples[sheltered]);
+      const contrast = exposedRisk - shelteredRisk;
+      if (!best || contrast > best.exposedRisk - best.shelteredRisk + 1e-9) {
+        best = { site, exposed, sheltered, exposedRisk, shelteredRisk };
+      }
+    }
+  }
+  state.site = restore;
+  if (!best || best.exposedRisk <= best.shelteredRisk) {
+    throw new Error('Debris wing fixture found no chartered orbit this hull feels directionally.');
+  }
+  return best;
+}
+
+/**
+ * The debris comparison pair.
+ *
+ * Both arms charter the same orbit and stage the same wing project. Only the
+ * hull face differs: the charter's most debris-exposed frontage, or its most
+ * sheltered one. The tile field is checked against the charter before the
+ * geometry is committed, so the fixture cannot quietly build the wrong wing.
+ */
+function stageDebrisFacingWing(state: StationState, arm: 'exposed' | 'sheltered'): void {
+  unlockThrough(state, 3);
+  const choice = chooseDebrisContrastSite(state);
+  state.site = choice.site;
+  // Derive the starter interfaces before the scaffold search so the wing is
+  // never welded across a live approach lane.
+  tick(state, 0);
+  planScenarioStructuralExpansion(state, true, arm === 'exposed' ? choice.exposed : choice.sheltered);
+  reconcileExteriorIntegrityTargets(state);
+  state.controls.diagnosticOverlay = 'map-conditions';
+  state.controls.shipsPerCycle = 0;
+  state.controls.paused = false;
+  state.controls.simSpeed = 1;
+}
+
+function planScenarioStructuralExpansion(
+  state: StationState,
+  withAirlock: boolean,
+  // When present, only scaffolds that hang off THIS hull face are considered,
+  // so a fixture can name the frontage it is building on instead of taking
+  // whichever patch the raster scan reached first.
+  face?: SpaceLane
+): void {
   // A scaffold only plans if the finished wing can reach the existing core, so
   // candidates must be tried from the hull outward. Scanning raw map order
   // starts in deep space at the top-left corner, where every patch fails the
@@ -2313,6 +2983,11 @@ function planScenarioStructuralExpansion(state: StationState, withAirlock: boole
     return false;
   };
 
+  // A named-face wing has to share the hull with whatever frontage already
+  // exists there. Welding a scaffold across a live approach lane would delete
+  // an interface the fixture never mentions.
+  const reserved = face === undefined ? new Set<number>() : reservedInterfaceTiles(state);
+
   const candidates: number[][] = [];
   for (let y = 1; y < state.height - 2; y++) {
     for (let x = 1; x < state.width - 2; x++) {
@@ -2324,8 +2999,28 @@ function planScenarioStructuralExpansion(state: StationState, withAirlock: boole
       ];
       if (candidate.some((tile) => state.tiles[tile] !== TileType.Space)) continue;
       if (!touchesStation(candidate)) continue;
+      if (face !== undefined) {
+        if (!patchHangsOffFace(state, candidate, face)) continue;
+        if (candidate.some((tile) => reserved.has(tile))) continue;
+      }
       candidates.push(candidate);
     }
+  }
+  if (face !== undefined) {
+    // Keep the named-face wing near the middle of that frontage so the two
+    // arms of a comparison are the same wing in the same place on the hull,
+    // rather than one centred and one tucked into whichever corner the raster
+    // scan happened to reach first.
+    const centre = stationCentroid(state);
+    const alongFace = (patch: number[]): number => {
+      const across = face === 'north' || face === 'south';
+      const value = patch.reduce(
+        (sum, tile) => sum + (across ? tile % state.width : Math.floor(tile / state.width)),
+        0
+      ) / patch.length;
+      return Math.abs(value - (across ? centre.x : centre.y));
+    };
+    candidates.sort((left, right) => alongFace(left) - alongFace(right) || left[0] - right[0]);
   }
 
   // A 2x2 scaffold welded onto the hull always produces a degree-3 truss node,

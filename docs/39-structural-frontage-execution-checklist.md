@@ -162,21 +162,21 @@ audited checklist with no unsupported checked claims.
 ### Deterministic Scenarios
 
 - [x] Add a compact starter with two Pod Docks.
-- [ ] Add a four-Pod-Dock docking finger.
-- [ ] Add a medium Berth with two Gangways.
+- [x] Add a four-Pod-Dock docking finger.
+- [x] Add a medium Berth with two Gangways.
 - [x] Add a bad single-door passenger terminal.
 - [x] Add the same terminal with a second entrance or wider concourse.
 - [x] Add a public/cargo crossing scenario.
 - [x] Add a separated service-corridor comparison.
 - [x] Add an overwhelmed one-checkout market.
 - [x] Add a redesigned two-checkout market.
-- [ ] Add short errands, shore leave, and a long repair crew in one scenario.
+- [x] Add short errands, shore leave, and a long repair crew in one scenario.
 - [x] Add one medium mixed passenger/freight repair-tender call that uses the
   production Approach Control, Berth, transfer, cargo, service, extension,
   recall, stranding, and settlement lifecycle.
   Evidence: `mixed-berth-visit`, `tools/mixed-berth-visit-tests.ts`.
 - [x] Add reception-bypass and reception-assisted variants.
-- [ ] Add a debris-facing exterior wing.
+- [x] Add a debris-facing exterior wing.
 - [x] Add a scale baseline with at least 50 crew, 50 simultaneous visitors, and
   5-10 active interfaces.
 
@@ -1978,3 +1978,50 @@ maintenance" row at the same time.
      rating penalty shared with three unrelated paths.
   This is a real gameplay gap, not a measurement gap, and it belongs in
   playtesting: the market showcase never actually stresses its own bottleneck.
+
+2026-07-28 · The four missing Phase 0 comparison fixtures
+
+- Commit or files: `pod-dock-finger`, `berth-two-gangways`, `mixed-tenure-day`,
+  `debris-wing-exposed` and `debris-wing-sheltered` in
+  `src/sim/cold-start-scenarios.ts`. All five are reachable live as
+  `?scenario=<name>`.
+- Every fixture is built from the production APIs the player's tools use --
+  `setTile`/`setRoom`, `tryPlaceModule`, `admitTrafficOffer` -- and each throws
+  with a specific reason if its own geometry, dock derivation, gangway count or
+  tenure set is not what it claims. All five were verified byte-stable across two
+  applications.
+- **Pod-dock finger** is built on the plain starter so the two are a direct
+  comparison. It searches hull walls outward for an anchor where a six-deep
+  finger and every side wall's approach lane are clear, then installs four Pod
+  Docks. Live: `dockConfigs=6`, peak **6 occupied docks against 2** on the plain
+  starter at the same arrival rate, 33 distinct ships over 600s, and **three
+  approach-conflict groups of two** -- the stacked envelopes create real
+  contention, which is the tradeoff this fixture exists to expose.
+- **Two-Gangway berth**: north berth gets a second Gangway, south keeps one, and
+  two identical 10-passenger medium manifests are admitted. Live: all ten ashore
+  at **9.3s with two Gangways against 16.3s with one**, reproducing in the live
+  game what `test:passenger-transfer` proves in isolation.
+- **Mixed tenure day** derives each class rather than assigning it: it scans ship
+  ids until `deriveVisitStayClass` returns the wanted class. Live, all three
+  cohorts are ashore together between t=20s and t=70s -- errand 3 with no
+  recurring needs, shore 8 with none, contract 6 with **all six carrying
+  recurring needs**. The errand cohort is gone by 120s, shore begins leaving at
+  200s, contract is still aboard. Three tenures, visibly different behavior, one
+  screen.
+- **Debris wing pair** obeys the Truss Junction rule rather than dodging it: the
+  existing hull-outward search and junction installation were generalized with an
+  optional face, and the no-face path is byte-for-byte the previous behavior, so
+  the existing `structural-expansion-*` fixtures still produce 7 sites and 1
+  project. Both arms charter the *same* site and place mirrored wings in the same
+  rows, differing only in face. Measured wing-tile debris risk **0.672 exposed
+  against 0.431 sheltered**. The map-conditions overlay opens on load, so the
+  exposed wing is visibly inside the magenta debris corridor and the sheltered
+  one in the teal region.
+- Focused evidence: `npm run test:gate-e-save-resume` 6/6 and
+  `npm run test:gate-f-facility` 13/13 both unchanged, plus
+  `test:structural-expansion`, `test:structural-support`, `test:approach-control`
+  and a clean app typecheck.
+- Known limit: no runner asserts these five fixtures. They self-check on
+  application, but nothing in `tools/` would catch it if a future change made one
+  silently degrade. Worth a small guard runner before they are relied on as gate
+  evidence.
