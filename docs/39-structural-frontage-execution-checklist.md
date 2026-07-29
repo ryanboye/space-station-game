@@ -1018,7 +1018,16 @@ audited checklist with no unsupported checked claims.
 - [x] Build a physical expansion through EVA construction.
 - [ ] Build the first medium Berth.
 - [ ] Operate overlapping Pod and Berth traffic.
-- [ ] Separate a harmful public/cargo route.
+- [x] Separate a harmful public/cargo route.
+  Evidence: the persisted `baseline:frontage` comparison records one shared
+  public/cargo tile and `public_cargo_crossing=1` in the bad layout versus zero
+  shared tiles/crossings in the separated service corridor. Frozen browser play
+  on `market-compact-conflict` then used only normal player tools: Move relocated
+  the Shelf Aisle and Backroom Stock Bank from behind the customer line to the
+  service face at no cost, and the player added a second Checkout for `120c`.
+  In equal early 4x observation windows the untouched layout showed `$0`
+  revenue while the player-authored separated layout reached `$6`; the Foot
+  Traffic overlay remained available for direct route inspection throughout.
 - [x] Recover from visible hull damage.
   Evidence: frozen production browser play on `exterior-integrity-showcase`
   began with adjacent worn, orange-damaged, open-black breached, and teal
