@@ -1745,3 +1745,115 @@ Remaining uncertainty:
   for a player-toggleable structural overlay tinting supported, planned-support,
   overloaded, and unsupported tiles, which is a different surface from explaining
   one blocked project, and no such overlay exists yet.
+
+## Remaining Work, Triaged
+
+Seven parallel read-only audits went through every open row against the actual
+code, reading each runner's body rather than trusting its name. This is the
+result, grouped by what the row actually needs. It is written so the next phase
+can start on the right thing instead of re-deriving the state of the world.
+
+### Group 1 — One playthrough closes thirteen rows
+
+Every row under Full Playthrough is blocked on the same missing artifact: **no
+chronological play record exists anywhere.** Ten of the thirteen underlying
+capabilities are already proven deterministically — manual approach composition,
+short-stay flow, failed-stay recovery, temporary guest lodging, overlapping Pod
+and Berth traffic, harmful-route separation, hull-damage recovery, and admission
+automation each have a passing focused runner. They are unchecked because nobody
+has played and written it down, not because anything is missing.
+
+Three of the thirteen are genuinely partial and need a decision first:
+- Reaching 50 crew and 50 visitors, and operating 5-10 mixed interfaces, are
+  proven **as seeded fixtures**, never as something grown from the bare starter.
+  Either reword both rows to "operate at" — which is already true and provable —
+  or commit to one long growth session.
+- Building the first medium Berth has no check that a *player-built* cluster
+  crosses into the medium size class; every existing two-Berth test takes its
+  berths from an authored fixture.
+
+### Group 2 — Mechanism genuinely absent
+
+These need building, not evidence. Ordered roughly by player impact:
+
+- **Corridor and concourse capacity.** Every tile has a flat capacity of one.
+  There is no width or room-type input, so a one-tile corridor and a twenty-tile
+  hall are physically identical. Two rows.
+- **The planning overlay.** Four rows ask for supported / planned-support /
+  overloaded / unsupported tile states. `validateStructuralSupportPlan` already
+  computes exactly this data and the renderer never reads it; `DiagnosticOverlay`
+  has twelve members and none is structural.
+- **Display or Cold Case fixture** (1x3). No `ModuleType`, no descriptor, no
+  balance entry. It can reuse the ShelfAisle browse machinery wholesale.
+- **Luggage.** Absent from `ItemType` entirely; the only trace is an unused
+  sprite key. Meals, stock, supplies and freight are all already visible carried
+  objects, so this is the one gap in that row.
+- **Per-interface diagnosis gaps.** Boarding *duration* is measured but distance
+  is not, and neither is keyed by interface identity. Utility and maintenance
+  access has no metric branch at all.
+- **Rating does not attract traffic.** Offer weighting reads district prestige
+  and notoriety, never `stationRating`.
+
+### Group 3 — Built, but the proof is the wrong shape
+
+The behavior exists; the check does not demonstrate the claim.
+
+- **Reception and hidden demand.** Manifest demand genuinely drives arrivals, but
+  nothing asserts that a cafeteria-heavy manifest produces a cafeteria-heavy
+  cohort. Similarly, the two-seed divergence row has no test — and the existing
+  Reception pair deliberately uses the *same* seed, the opposite of what that row
+  wants.
+- **Critical needs override optional wants.** `shouldPreemptForCriticalNeed`
+  implements this with three anti-oscillation guards and is not exported, so no
+  test can reach it.
+- **Phase 1B gate.** The overwhelmed-checkout and larger-cantina rows compare
+  slot *counts* only. No actors are ever run through either layout, so peak queue
+  depth, abandonment, and simultaneous occupancy are unmeasured.
+- **Bad-layout comparison breadth.** Real poor/improved pairs exist only for the
+  market and passenger families. Note that one existing check proves throughput
+  by varying *steward count*, which is the proof shape Gate B explicitly forbids;
+  it should not be cited as Gate B evidence.
+
+### Group 4 — Rows whose wording no longer matches the code
+
+These should be rewritten before they are checked, or they will encode a false
+claim either way:
+
+- "No naive universal one-actor-per-tile cap is introduced." The movement
+  coordinator *does* enforce one-actor-per-tile commits — but it is emphatically
+  not naive: order-independent winners, swaps, door yields, 3-cycle yields,
+  sidesteps, and bounded-wait replan are all proven. The code is right and the
+  invariant text is wrong.
+- "Update congestion fields at fixed cadence." Measured and declined; see the
+  dated entry above for why the premise does not hold.
+- "Extract or reuse the resident need lifecycle as a shared occupant-demand
+  engine." A shared engine was written and every visitor tenure uses it, but
+  residents were never migrated onto it and still decay on their own rates. Either
+  migrate them or record that they keep a separate lifecycle by design.
+- "`system-flow-map.html` remains untouched." The file is untracked by git, so
+  "untouched" cannot be verified against anything. Commit it or record its hash.
+
+### Group 5 — Art and asset catalogue
+
+The fixture state matrix is further along than the boxes suggest: idle is fully
+proven, and dirty is authored for eleven of fourteen fixtures. The gap is narrow
+and specific — CheckoutBank, ShelfAisle and BunkBank are absent from
+`FACILITY_SPRITE_VARIANTS` entirely and render idle forever, despite all three
+having real public slots.
+
+One dependency is worth knowing before starting: the `damaged` state is
+**unreachable in production** for every Gate F fixture, because no Gate F fixture
+appears in `MODULE_MAINTENANCE_ROOMS` and so none can ever accrue module debt.
+Adding them fixes the damaged-state row and the "charge larger fixtures through
+maintenance" row at the same time.
+
+### Group 6 — Known-red checks, cause understood
+
+- `test:sim` has been red since well before this work and fails on tests
+  asserting the pre-redesign starter. `test:port-ops` and
+  `test:normal-scale-operation` are also red at HEAD.
+- `test:truth` fails five checks identically before and after this session's
+  changes.
+- These are stale-test debt rather than broken gameplay, and the owner has
+  scheduled suite work for after playtesting. They are recorded here so nobody
+  mistakes a red suite for a new regression.
