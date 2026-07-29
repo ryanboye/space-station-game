@@ -1029,7 +1029,7 @@ audited checklist with no unsupported checked claims.
   2/3/4` while the long-stay cohort circulated through the wing.
 - [x] Build a physical expansion through EVA construction.
 - [ ] Build the first medium Berth.
-- [x] Operate overlapping Pod and Berth traffic.
+- [x] Operate overlapping Pod and Berth traffic in one live operating window.
   Evidence: frozen production browser play on
   `normal-scale-50&diag=1&seed=915502` kept `MIX-001 · MIXED TURNAROUND · BERTH
   C` live while ordinary Traveler Pods simultaneously occupied Pod Docks 1, 4,
@@ -1041,6 +1041,8 @@ audited checklist with no unsupported checked claims.
   claim. The authored benchmark and its deterministic companion live in
   `src/sim/cold-start-scenarios.ts` and
   `tools/normal-scale-operation-tests.ts`.
+  Proof: commit `27ac676`, the `normal-scale-50` scenario, and
+  `npm run test:normal-scale-operation` retain the exact authored overlap state.
 - [x] Separate a harmful public/cargo route.
   Evidence: the persisted `baseline:frontage` comparison records one shared
   public/cargo tile and `public_cargo_crossing=1` in the bad layout versus zero
