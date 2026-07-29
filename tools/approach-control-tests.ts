@@ -7,6 +7,12 @@ import {
   passTrafficOffer,
   tick
 } from '../src/sim/sim';
+import {
+  AUTOMATABLE_SIZES,
+  DEFAULT_ADMISSION_POLICY,
+  MANUAL_REASON_LABEL,
+  createAdmissionPolicy
+} from '../src/sim/admission-policy';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import type { DockEntity, StationState, TrafficOffer } from '../src/sim/types';
@@ -140,11 +146,63 @@ function testSaveRoundTripKeepsPendingAndCommittedOffers(): void {
   assert(restoredPending?.status === 'holding', 'Pending offer did not survive save/load.');
 }
 
+/**
+ * The admission policy must stay a short form, not a priority spreadsheet.
+ *
+ * Nothing else pins that. The surface is deliberately finite — two ship
+ * classes, three numbers each, two station reserves, and a fixed list of call
+ * kinds automation may never answer — so this guard fails loudly the moment a
+ * change grows it into a rules table with priorities, weights or per-offer
+ * ordering.
+ */
+function testAdmissionPolicyStaysFinite(): void {
+  const policy = createAdmissionPolicy();
+  const topLevel = Object.keys(policy).sort();
+  assert(
+    topLevel.join(',') === 'berth,closedUntil,enabled,pod,reserveBeds,reserveMeals',
+    `Admission policy grew a new top-level field (${topLevel.join(', ')}). Keep it a short form, not a rules table.`
+  );
+  assert(topLevel.length === 6, 'Admission policy must stay six fields wide.');
+
+  // Exactly two classes, and each class is a switch, a ship-type list and
+  // three numbers. Anything more is a spreadsheet row.
+  for (const admissionClass of ['pod', 'berth'] as const) {
+    const rule = policy[admissionClass];
+    const keys = Object.keys(rule).sort();
+    assert(
+      keys.join(',') === 'enabled,maxStaySeconds,minMarginCredits,reserveFreeInterfaces,shipTypes',
+      `The ${admissionClass} rule grew a new condition (${keys.join(', ')}).`
+    );
+    const numbers = keys.filter((key) => typeof (rule as unknown as Record<string, unknown>)[key] === 'number');
+    assert(numbers.length === 3, `The ${admissionClass} rule must carry exactly three numbers, not ${numbers.length}.`);
+  }
+
+  assert(typeof policy.reserveBeds === 'number' && typeof policy.reserveMeals === 'number', 'Station reserves must stay two plain numbers.');
+  assert(DEFAULT_ADMISSION_POLICY.enabled === false, 'Automation must stay off until the player authors it.');
+
+  // Large commitments are never automatable, whatever the class rule says.
+  assert(!AUTOMATABLE_SIZES.includes('large'), 'AUTOMATABLE_SIZES must never include large commitments.');
+  assert(AUTOMATABLE_SIZES.length === 2, 'Only small and medium calls may be automated.');
+
+  const manualReasons = Object.keys(MANUAL_REASON_LABEL).sort();
+  assert(
+    manualReasons.join(',') === 'large,migrant,military,negotiated,uncertain',
+    `The always-manual list changed (${manualReasons.join(', ')}). Large, military, migrant, negotiated and uncertain calls must stay visible.`
+  );
+
+  // No priority/weight/order vocabulary anywhere in the authored surface.
+  const surface = JSON.stringify(policy).toLowerCase();
+  for (const banned of ['priority', 'weight', 'rank', 'order', 'score']) {
+    assert(!surface.includes(banned), `Admission policy introduced "${banned}" — that is the priority spreadsheet this row forbids.`);
+  }
+}
+
 function main(): void {
   testPodReservationsAndStatusGuards();
   testHoldAndPassAreBounded();
   testBerthPreviewAndReservation();
   testSaveRoundTripKeepsPendingAndCommittedOffers();
+  testAdmissionPolicyStaysFinite();
   console.log('approach-control-tests: ok');
 }
 

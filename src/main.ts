@@ -3659,7 +3659,19 @@ function refreshTrafficOffers(): void {
     const interfaceLabel = preview.compatibleInterface.kind === 'pod-dock' ? 'Pod Docks' : 'Berths';
     const range = (value: { min: number; max: number }, suffix: string) =>
       value.min === value.max ? `${value.min}${suffix}` : `${value.min}-${value.max}${suffix}`;
-    const cues = preview.serviceCues.slice(0, 4)
+    // The finite admission policy already refuses to answer a `high` risk call
+    // on its own, so the label driving that gate has to be readable here rather
+    // than only inside the policy's explanation. Faction gets no equivalent
+    // chip: no faction-standing system exists, so it would be exactly the
+    // illegible dependency the checklist forbids.
+    const riskChip = `<span class="traffic-cue traffic-risk-cue risk-${offer.riskLabel}" title="${
+      offer.riskLabel === 'high'
+        ? 'High-risk calls always stay a manual decision.'
+        : `Approach risk read as ${offer.riskLabel}.`
+    }">${offer.riskLabel.toUpperCase()} RISK</span>`;
+    // One fewer service cue keeps the chip row a single line: the card is a
+    // short decision surface, not a manifest.
+    const cues = preview.serviceCues.slice(0, 3)
       .map((cue) => `<span class="traffic-cue">${escapeHtml(cue)}</span>`)
       .join('');
     const load = preview.committedLoad;
@@ -3682,15 +3694,18 @@ function refreshTrafficOffers(): void {
     const projectionData = choice
       ? ` data-offer-slot-id="${escapeHtml(choice.slotId)}" data-offer-hull-variant="${offer.hullVariant}" data-offer-size="${offer.size}"`
       : '';
-    return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}" data-traffic-offer-id="${offer.id}"${projectionData} tabindex="0" aria-label="${escapeHtml(offer.callsign)}. ${choice ? `${choice.label}, ${choice.side ?? 'unknown'} approach.` : 'No compatible interface.'} Focus to project its physical approach envelope.">
+    return `<article class="traffic-offer decision-card ${className} ${offer.status === 'holding' ? 'is-holding' : ''} ${cleared ? 'is-cleared' : ''}" data-traffic-offer-id="${offer.id}" data-offer-lane="${offer.lane}" data-offer-risk="${offer.riskLabel}"${projectionData} tabindex="0" aria-label="${escapeHtml(offer.callsign)} on the ${offer.lane} lane, ${offer.riskLabel} risk. ${choice ? `${choice.label}, ${choice.side ?? 'unknown'} approach.` : 'No compatible interface.'} Focus to project its physical approach envelope.">
       <div class="traffic-offer-title-row">
         <span class="traffic-offer-class traffic-offer-class--${className}" aria-hidden="true"><i></i></span>
         <img class="traffic-offer-hull" src="${shipHullAssetPath(offer.hullVariant)}" alt="${escapeHtml(hull.variant.replace(/-/g, ' '))}">
         <div><strong>${escapeHtml(offer.callsign)}</strong><small>${escapeHtml(offer.shipName)}</small></div>
-        <span class="traffic-offer-timer" data-offer-timer="${offer.id}">${trafficOfferTimer(offer)}</span>
+        <span class="traffic-offer-approach">
+          <span class="traffic-offer-lane">${offer.lane.toUpperCase()} LANE</span>
+          <span class="traffic-offer-timer" data-offer-timer="${offer.id}">${trafficOfferTimer(offer)}</span>
+        </span>
       </div>
       <div class="traffic-offer-facts"><span>${preview.shipClass === 'pod' ? 'POD' : offer.size.toUpperCase()} · ${range(preview.partySize, ' guests')}</span><span>${range(preview.staySeconds, 's')} stay</span></div>
-      <div class="traffic-cues">${cues}</div>
+      <div class="traffic-cues">${riskChip}${cues}</div>
       <div class="traffic-interface ${preview.compatibleInterface.freeCount > 0 ? 'ready' : 'blocked'}"><b>${preview.compatibleInterface.freeCount}/${preview.compatibleInterface.compatibleCount}</b> ${interfaceLabel} free <span>· ${range(preview.expectedRevenue, 'c')}</span></div>
       ${interfaceChoice}
       <div class="traffic-load-strip" aria-label="Committed load">

@@ -420,20 +420,20 @@ audited checklist with no unsupported checked claims.
 
 ### Small-Port Manual Control
 
-- [ ] Present a short list of incoming ship silhouettes tied to physical lanes.
+- [x] Present a short list of incoming ship silhouettes tied to physical lanes.
 - [x] Show ship/visit class at a glance.
 - [x] Show likely party-size range.
 - [x] Show likely stay range.
 - [x] Show broad service or demand cues.
-- [ ] Show compatible interface and approach side.
+- [x] Show compatible interface and approach side.
 - [x] Show expected revenue range.
 - [x] Show committed capacity if accepted.
 - [x] Provide `Accept`, `Hold`, and `Pass` without opening a large manifest.
 - [x] Never pause automatically when an offer arrives.
 - [x] Bind acceptance to a compatible docking slot or Berth reservation.
-- [ ] Project the candidate approach envelope into the world on hover/focus.
+- [x] Project the candidate approach envelope into the world on hover/focus.
 - [x] Project expected Berth, bed, meal, hygiene, and staff load.
-- [ ] Surface conflicts with already accepted work.
+- [x] Surface conflicts with already accepted work.
 
 ### Scaling Automation
 
@@ -441,11 +441,11 @@ audited checklist with no unsupported checked claims.
 - [x] Add auto-admission conditions based on free compatible interface.
 - [x] Add reserve-capacity conditions for beds or core services.
 - [x] Add minimum-margin and maximum-stay conditions.
-- [ ] Add risk/faction conditions only when those systems are legible.
+- [x] Add risk/faction conditions only when those systems are legible.
 - [x] Allow manual override of an automation decision.
 - [x] Keep large, uncertain, negotiated, military, and migrant commitments visible.
 - [x] Aggregate routine lane pressure at large scale.
-- [ ] Avoid a priority spreadsheet.
+- [x] Avoid a priority spreadsheet.
 
 ## Phase 2: Structural Graph And Planning Overlay
 
@@ -2317,3 +2317,49 @@ open honestly rather than being checked on the strength of their runners.
 - Still open, and deliberately not fixed here: the alert text. `Crew quarters
   short ... add bunks or beds` names the wrong remedy when the cause is zoning.
   That lives in the alert copy, and it should say so.
+
+2026-07-28 · The offer card now names the lane and the risk it already gates on
+
+- Commit or files: offer-card markup in `src/main.ts`, chip styles in
+  `src/styles.css`, `testAdmissionPolicyStaysFinite` in
+  `tools/approach-control-tests.ts`, three new specs in
+  `tools/harness/scenarios/port-ops-v1.spec.ts`.
+- The card named the interface an offer would take but never the lane it was
+  actually arriving on, even though `offer.lane` drives generation and approach
+  alignment. It now shows `NORTH LANE` above the ETA and carries the lane in its
+  `aria-label`. Live: two staged offers render `NORTH LANE / ETA 300s` and
+  `EAST LANE / ETA 300s`, with card height unchanged.
+- `offer.riskLabel` already forced high-risk calls to stay a manual decision, but
+  nothing showed it, so the gate was invisible. A `LOW / GUARDED / HIGH RISK` chip
+  now leads the cue row, with service cues trimmed from four to three so the row
+  stays one line. A test asserts the chip row's height equals one chip, i.e. it
+  did not wrap, and that a 390px viewport still does not scroll horizontally.
+  **Faction was deliberately left alone**: no faction-standing system exists, so a
+  faction condition would be exactly the illegible dependency this row forbids.
+  That reasoning is in the code, not just here.
+- Three behaviours that were fully implemented and completely untested are now
+  regression-locked from the browser: the interface/approach-side readout, the
+  hover/focus envelope projection (captured idle -> focused -> blurred, asserting
+  the label appears only while focused and the canvas bitmap actually changes),
+  and the accepted-work conflict callout.
+- The conflict test carries a **negative control**, which is what makes it worth
+  having: with the first offer left pending instead of cleared, the same setup
+  draws `APPROACH SERIALIZES: 1 GROUP · QUIET` and the test fails. So it exercises
+  the real accepted-slot intersection rather than merely proving some label
+  appeared. The pure-helper extraction suggested earlier is therefore not needed
+  for coverage, only for a faster unit-level test of the intersection itself.
+- The finite-policy guard pins the surface against becoming a rules table: exact
+  key sets, exactly two classes, exactly three numbers per class, automation off
+  by default, `large` excluded from automation, the manual-reason set unchanged,
+  and no `priority|weight|rank|order|score` vocabulary anywhere in the serialized
+  policy.
+- Focused evidence: `npm run test:approach-control` passes with the new guard; the
+  three new Playwright specs pass against the live server; app typecheck clean.
+- Recorded for later, not fixed here: the **six pre-existing specs in
+  `port-ops-v1.spec.ts` were already failing** and still fail identically. They
+  are stale against the current UI — their helper expects three offer cards from
+  `?scenario=starter`, but manual offers now require a Berth and the starter has
+  none, and it targets a `data-traffic-action="assign"` button that no longer
+  exists (the actions are accept/hold/pass). The new specs deliberately avoid
+  those helpers and stage offers through a save round-trip, so they are
+  independent of RNG and of the starter layout.
