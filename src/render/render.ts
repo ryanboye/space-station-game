@@ -116,6 +116,7 @@ import {
   type StructuralSupportReason
 } from '../sim/structural-support';
 import { shipHullAssetPath, shipHullProfile } from '../sim/ship-hulls';
+import { shipHullLaneAngleRad } from './ship-hull-visual';
 import { PORT_INFRASTRUCTURE_SPRITE_KEYS, type SpriteAtlas, type SpriteFrame } from './sprite-atlas';
 import { drawEnvironmentAtlasCell, getEnvironmentPiece } from './environment-pieces';
 import {
@@ -3476,7 +3477,7 @@ function drawDockedPodShip(ctx: CanvasRenderingContext2D, state: StationState, s
     drawDockingCollar(ctx, contact.point, palette.engine, Math.max(3, TILE_SIZE * 0.18));
   }
   if (sprite) {
-    drawRotatedImage(ctx, sprite, center, length, width, laneAngleRad(contact.lane));
+    drawRotatedImage(ctx, sprite, center, length, width, shipHullLaneAngleRad(ship.hullVariant, contact.lane));
   } else {
     drawPodHull(ctx, center, contact.lane, length, width, palette, ship.stage === 'docked');
   }
@@ -3508,13 +3509,7 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   // native axis with the actual open berth face instead of stretching each
   // silhouette into a generic bay rectangle.
   const bayIsWide = visualLane === 'east' || visualLane === 'west';
-  const angle = visualLane === 'north'
-    ? 0
-    : visualLane === 'east'
-      ? Math.PI * 0.5
-      : visualLane === 'south'
-        ? Math.PI
-        : -Math.PI * 0.5;
+  const angle = shipHullLaneAngleRad(ship.hullVariant, visualLane);
   const imageAspect = sprite
     ? sprite.naturalWidth / Math.max(1, sprite.naturalHeight)
     : ship.size === 'large' ? 0.62 : ship.size === 'medium' ? 0.68 : 0.78;
@@ -6840,7 +6835,7 @@ function drawQueuedShips(ctx: CanvasRenderingContext2D, state: StationState, _sp
         drawH = maxH;
         drawW = drawH * aspect;
       }
-      drawRotatedImage(ctx, image, { x: cx, y: cy }, drawW, drawH, laneAngleRad(queued.lane));
+      drawRotatedImage(ctx, image, { x: cx, y: cy }, drawW, drawH, shipHullLaneAngleRad(queued.hullVariant, queued.lane));
       continue;
     }
     drawShipSilhouetteCells(ctx, silhouette, cx - chipW * 0.5, cy - chipH * 0.5, cellSize, palette, 0.4);
@@ -8720,7 +8715,14 @@ export function renderWorld(
         drawH = maxH;
         drawW = drawH * aspect;
       }
-      drawRotatedImage(ctx, image, { x: ship.bayCenterX * TILE_SIZE, y: ship.bayCenterY * TILE_SIZE }, drawW, drawH, laneAngleRad(ship.lane));
+      drawRotatedImage(
+        ctx,
+        image,
+        { x: ship.bayCenterX * TILE_SIZE, y: ship.bayCenterY * TILE_SIZE },
+        drawW,
+        drawH,
+        shipHullLaneAngleRad(ship.hullVariant, ship.lane)
+      );
     } else {
       const palette = shipPalette(ship.shipType, ship.stage === 'docked');
       drawShipSilhouetteCells(ctx, silhouette, posX, posY, cellSize, palette, 2);
