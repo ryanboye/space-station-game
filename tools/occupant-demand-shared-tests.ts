@@ -278,6 +278,24 @@ function testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor(): void {
   assert(crew.path.length === 0, 'ordinary critical-rest handoff retained a stale route');
 }
 
+function testCrewRestExitClearsLiveRestReason(): void {
+  const state = crewProductionState();
+  const serving = fixtureTile(state, ModuleType.ServingStation);
+  const crew = stageCrew(state, serving, 100);
+  crew.resting = true;
+  crew.restSessionActive = true;
+  crew.idleReason = 'idle_resting';
+
+  tick(state, 0.2);
+
+  assert(!crew.resting, 'fully recovered crew did not leave rest');
+  assert(crew.idleReason !== 'idle_resting', 'rest exit retained a stale idle_resting diagnostic');
+  assert(state.metrics.crewRestingNow === 0 && state.metrics.crewResting === 0,
+    `rest-exit census retained a stale actor: now ${state.metrics.crewRestingNow}, derived ${state.metrics.crewResting}`);
+  assert(state.metrics.idleCrewByReason.idle_resting === 0,
+    `rest-exit idle bucket retained ${state.metrics.idleCrewByReason.idle_resting}`);
+}
+
 function testCrewActiveMealIsNeverPreempted(): void {
   const state = crewProductionState();
   const table = fixtureTile(state, ModuleType.Table);
@@ -305,6 +323,7 @@ testResidentProductionPreemption();
 testPlannedVisitorServiceIsNotPreempted();
 testCrewStalledSelfCareYieldsToCriticalSleep();
 testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor();
+testCrewRestExitClearsLiveRestReason();
 testCrewActiveMealIsNeverPreempted();
 
 console.log('PASS shared occupant demand: profile decay, stable claims, visitor/resident/crew production preemption, active-service guards');

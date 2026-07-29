@@ -21921,6 +21921,7 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.assignedSystem = null;
         crew.assignmentHoldUntil = 0;
         crew.retargetAt = 0;
+        crew.idleReason = 'idle_available';
         currentResting = Math.max(0, currentResting - 1);
         state.metrics.crewRestingNow = currentResting;
       }
