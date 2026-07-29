@@ -254,10 +254,15 @@ const BASIC_PASSENGER_BERTH_HARDWARE_COST =
   MODULE_DEFINITIONS[ModuleType.BerthControl].capitalCost! +
   2 * MODULE_DEFINITIONS[ModuleType.DockingClamp].capitalCost! +
   MODULE_DEFINITIONS[ModuleType.Gangway].capitalCost!;
-const CONTRACT_READY_MEDIUM_BERTH_COST = MEDIUM_BERTH_FLOOR_COST + BASIC_PASSENGER_BERTH_HARDWARE_COST;
+// The stock starter's exact first-Berth fit also needs four 1c walls to seal
+// its north/south boundaries before the east hull is opened to space.
+const FIRST_MEDIUM_BERTH_SEALING_COST = 4;
+const CONTRACT_READY_MEDIUM_BERTH_COST =
+  MEDIUM_BERTH_FLOOR_COST + BASIC_PASSENGER_BERTH_HARDWARE_COST + FIRST_MEDIUM_BERTH_SEALING_COST;
 const RECOMMENDED_MEDIUM_BERTH_SAVINGS = CONTRACT_READY_MEDIUM_BERTH_COST + 100;
 const MEDIUM_BERTH_SAVINGS_COPY =
   `${MEDIUM_BERTH_FLOOR_COST}c floor · +${BASIC_PASSENGER_BERTH_HARDWARE_COST}c basic passenger hardware · ` +
+  `+${FIRST_MEDIUM_BERTH_SEALING_COST}c sealing · ` +
   `${CONTRACT_READY_MEDIUM_BERTH_COST.toLocaleString()}c contract-ready · recommended savings ` +
   `${RECOMMENDED_MEDIUM_BERTH_SAVINGS.toLocaleString()}c incl. 100c working capital`;
 
