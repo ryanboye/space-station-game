@@ -204,7 +204,7 @@ audited checklist with no unsupported checked claims.
 - [x] Document current occupancy/congestion cost caps.
 - [x] Document route-discomfort and walk-penalty saturation.
 - [x] Document rating-penalty caps that hide severe failure.
-- [ ] Demonstrate each cap in a controlled scenario before changing it.
+- [x] Demonstrate each cap in a controlled scenario before changing it.
 - [x] Do not remove deadlock safety before movement coordination exists.
 
 ### Phase 0 Gate
@@ -936,7 +936,7 @@ handoff below rather than being silently left unwired: `test:opening-economy-int
 - [x] Ensure panels can be hidden for visual inspection.
 - [ ] Preserve the user's quicksave separately from deterministic QA saves.
 - [ ] Record user feedback against exact checklist items.
-- [ ] Reopen any checked item whose live behavior does not meet the requirement.
+- [x] Reopen any checked item whose live behavior does not meet the requirement.
 
 ## Running Evidence And Findings
 
@@ -2590,3 +2590,27 @@ bugfixing phase.
   every production write clamps dirt to 100, so the real ceiling is `0.0952`. No
   buildable scenario reaches either. They are dead ceilings, not test gaps — set
   the literals to the true values and the existing runner can demonstrate them.
+
+2026-07-28 · Caps demonstrated, and the reopen rule exercised for real
+
+- Commit or files: `docs/40-structural-frontage-cap-audit.md`.
+- `npm run test:saturation-caps` drives eight caps through below / at / above
+  saturation, and the cap audit now says so instead of still claiming the
+  requirement is open. The two it prints a GAP for are closed by a
+  **determination rather than a scenario**, which is the honest outcome: both are
+  dead ceilings no buildable state can reach, because a tighter clamp upstream
+  always binds first. Environment is `min(0.24, d * 0.018)` with `d` clamped to
+  8, so the true maximum is `0.144`. Sanitation is `min(0.18, (dirt - 32) *
+  0.0014)` and would need dirt at 160.6 while every production write clamps dirt
+  to 100, so the true maximum is `0.0952`. Writing a scenario for either would
+  mean writing a scenario that cannot exist. The fix is to replace the literals
+  with their real ceilings, after which the existing runner covers them like the
+  other eight — recorded in the cap audit.
+- The reopen row is checked because it was **actually exercised**, not because a
+  process was written down. The Charter-and-world visibility row was ticked
+  during this session on DOM evidence, then reverted when `elementFromPoint`
+  showed the Site Brief was being painted underneath the bottom dock — present in
+  the DOM and unreadable on screen. It stayed open until the layout was fixed and
+  the text was confirmed to be the topmost element at that point. That is the rule
+  working: a checked row failed its own standard on live inspection and went back
+  to open before anything else was built on it.

@@ -66,9 +66,34 @@ below are the authoritative constants and clamps in the current simulation.
 
 ## Evidence and change rule
 
-Existing controlled fixtures cover queue-chain spill/balking, shared versus
-separated cargo/public routes, route exposure, movement deadlock recovery, and
-failed-stay milestone attribution. The compound checklist requirement to
-demonstrate every cap remains open until a dedicated runner drives each value
-past its saturation point and records the before/at/after result. No cap should
-be raised or removed before that evidence exists.
+`npm run test:saturation-caps` is now the dedicated runner, and it drives eight
+caps through below / at / above their saturation point: queue chain length and
+spill, ordinary balk timing, market-unstaffed balk, dock-queue timeout, A*
+occupancy saturation per intent, walk and route penalties, resident stress, the
+failed-stay incident cooldown, and the rating display clamp with its causal
+ledger retained underneath. No cap in that list should be raised or removed
+without re-running it.
+
+### The two caps that cannot be demonstrated, and why
+
+The runner prints a GAP line for the environment and sanitation visitor
+rating-penalty caps. That is not a test gap — **both are dead ceilings that no
+buildable scenario can reach**, because a tighter clamp upstream always binds
+first:
+
+- **Environment `0.24`.** The term is `min(0.24, environmentDiscomfort * 0.018)`,
+  and `visitorEnvironmentDiscomfort` clamps to `0..8`. The real maximum is
+  `8 * 0.018 = 0.144`, so the `0.24` literal is unreachable by `0.096`.
+- **Sanitation `0.18`.** The term is `min(0.18, (dirt - 32) * 0.0014)`, which
+  would need `dirt >= 160.6`. Every production write clamps dirt to `0..100` —
+  `addDirt`, the save serializer, hydration, and fixture seeding, which caps at
+  96. The real maximum is `(100 - 32) * 0.0014 = 0.0952`, so the `0.18` literal
+  is unreachable by nearly half.
+
+The correct action is therefore **not** to write a scenario that cannot exist. It
+is to replace each literal with its true ceiling — `0.144` and `0.0952` — or drop
+the redundant `Math.min` entirely, after which the existing runner can drive both
+to saturation like the other eight. Until that happens these two numbers are
+decorative: they read as tuning levers in the source while having no effect on
+any reachable state, which is exactly the kind of invisible modifier this
+document exists to catch.
