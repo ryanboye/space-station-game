@@ -951,7 +951,15 @@ audited checklist with no unsupported checked claims.
 - [ ] Build the first medium Berth.
 - [ ] Operate overlapping Pod and Berth traffic.
 - [ ] Separate a harmful public/cargo route.
-- [ ] Recover from visible hull damage.
+- [x] Recover from visible hull damage.
+  Evidence: frozen production browser play on `exterior-integrity-showcase`
+  began with adjacent worn, orange-damaged, open-black breached, and teal
+  patched exterior panels. At 4x, suited engineers crossed the real Airlock and
+  visible weld sparks ran on the breached face; by 128 simulated seconds the
+  damaged and breached faces both rendered patched, while Station Stock fell
+  exactly 100 to 96 for the four repair materials. The showcased inner wall
+  prevented decompression, so this evidence claims hull repair—not recovery
+  from an occupied-deck vent.
 - [x] Introduce routine admission automation.
   Evidence: frozen production browser play on `admission-policy-pressure`
   started with finite admission enabled for Pods and Berths, one interface of
