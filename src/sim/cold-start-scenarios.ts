@@ -1189,6 +1189,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     completeSpecialtyForScenario(s, 'mechanical-maintenance');
     applyDemoStationOverlay(s);
     installCompactScaleCrewHousing(s);
+    installCompactScaleServicePlant(s);
     installScalePowerReserve(s);
     tick(s, 0);
     installScaleDockInterfaces(s, 8);
@@ -1242,7 +1243,11 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       .slice(0, 4);
     for (let index = 0; index < receivingWatch.length; index += 1) {
       const crew = receivingWatch[index]!;
-      const tile = 40 * s.width + 52 + index;
+      // Start the receiving watch on the south edge of the local stock room,
+      // not back at the public-corridor bend. The dishwasher adds legitimate
+      // food-lane work; this shortens only the guaranteed cargo handoff and
+      // keeps its existing 240-second proof from depending on that new queue.
+      const tile = 39 * s.width + 60 + index;
       crew.shiftBucket = 0;
       crew.tileIndex = tile;
       crew.x = (tile % s.width) + 0.5;
@@ -2371,6 +2376,28 @@ function installScalePowerReserve(state: StationState): void {
   }
 }
 
+/**
+ * Complete the demo shell's finite starter services for its 50/50 scale use.
+ * Other demo-derived scenarios intentionally keep their smaller fixture mix;
+ * this plant belongs only to the sustained normal-scale station.
+ */
+function installCompactScaleServicePlant(state: StationState): void {
+  // Keep dish work behind the public pickup face so trays still travel over
+  // the authored back-of-house route instead of teleporting at the counter.
+  placeMod(state, 26, 7, ModuleType.Dishwasher);
+
+  // Four separated toilet and hygiene positions prevent the phased roster
+  // from forming one artificial all-station queue at the original fixtures.
+  placeMod(state, 61, 22, ModuleType.Toilet);
+  placeMod(state, 63, 22, ModuleType.Toilet);
+  placeMod(state, 57, 24, ModuleType.Shower);
+  placeMod(state, 59, 24, ModuleType.Shower);
+  placeMod(state, 61, 24, ModuleType.Sink);
+  placeMod(state, 63, 24, ModuleType.Sink);
+  placeMod(state, 62, 26, ModuleType.Toilet);
+  placeMod(state, 63, 26, ModuleType.WaterFountain);
+}
+
 function seedScaleStorageReserve(
   state: StationState,
   freeCapacityTarget: number,
@@ -2633,13 +2660,17 @@ function furnishSpineStation(state: StationState): void {
   placeMod(state, 28, 24, ModuleType.Stove);
   placeMod(state, 22, 27, ModuleType.Stove);
   placeMod(state, 25, 27, ModuleType.WaterFountain);
+  // The detached food pod owns its own closed tray-wash loop. Separating the
+  // washer from the public counters preserves the spine's real haul distance.
+  placeMod(state, 28, 27, ModuleType.Dishwasher);
 
   // Cafeteria (pod 2 north, spine side). Each counter's second tile sits
   // directly above its own doorway, so a full line runs out into the spine
   // rather than folding back across the seating.
   placeMod(state, 21, 36, ModuleType.ServingStation);
   placeMod(state, 24, 36, ModuleType.ServingStation);
-  placeMod(state, 27, 36, ModuleType.TrayReturn);
+  placeMod(state, 27, 36, ModuleType.ServingStation);
+  placeMod(state, 30, 36, ModuleType.TrayReturn);
   placeMod(state, 22, 31, ModuleType.Table);
   placeMod(state, 25, 31, ModuleType.Table);
   placeMod(state, 28, 31, ModuleType.Table);
@@ -2693,7 +2724,12 @@ function furnishSpineStation(state: StationState): void {
   placeMod(state, 38, 43, ModuleType.Shower);
   placeMod(state, 40, 43, ModuleType.Toilet);
   placeMod(state, 42, 43, ModuleType.Sink);
+  placeMod(state, 44, 43, ModuleType.Toilet);
   placeMod(state, 36, 46, ModuleType.WaterFountain);
+  placeMod(state, 38, 46, ModuleType.Toilet);
+  placeMod(state, 40, 46, ModuleType.Shower);
+  placeMod(state, 42, 46, ModuleType.Sink);
+  placeMod(state, 44, 46, ModuleType.Toilet);
   placeMod(state, 37, 50, ModuleType.Telescope);
   placeMod(state, 41, 53, ModuleType.Bench);
 
@@ -2758,12 +2794,14 @@ function stageLinearSpineScale(state: StationState): void {
   tick(state, 0);
 
   const seededMeals =
-    seedItemNodeStock(state, 21, 36, 'meal', 24) +
-    seedItemNodeStock(state, 24, 36, 'meal', 24) +
+    seedItemNodeStock(state, 21, 36, 'meal', 16) +
+    seedItemNodeStock(state, 24, 36, 'meal', 16) +
+    seedItemNodeStock(state, 27, 36, 'meal', 16) +
     seedItemNodeStock(state, 22, 24, 'meal', 12) +
     seedItemNodeStock(state, 25, 24, 'meal', 12);
-  seedItemNodeStock(state, 21, 36, 'cleanTray', 24);
-  seedItemNodeStock(state, 24, 36, 'cleanTray', 24);
+  seedItemNodeStock(state, 21, 36, 'cleanTray', 16);
+  seedItemNodeStock(state, 24, 36, 'cleanTray', 16);
+  seedItemNodeStock(state, 27, 36, 'cleanTray', 16);
   state.metrics.mealStock = seededMeals;
   seedItemNodeStock(state, 8, 43, 'tradeGood', 32);
   seedItemNodeStock(state, 11, 43, 'tradeGood', 32);
@@ -2842,7 +2880,10 @@ function stageLinearSpineScale(state: StationState): void {
     .slice(0, 4);
   for (let index = 0; index < receivingWatch.length; index += 1) {
     const crew = receivingWatch[index]!;
-    const tile = spineTile(state, HALL_X[0] + index, 44);
+    // Put the watch in the actual Berth hall, clear of the receiving-room
+    // fixtures and the long public spine. They still cross the Access Gate and
+    // perform the whole physical haul, but do not begin behind its crowd.
+    const tile = spineTile(state, HALL_X[0] + index, 34);
     crew.shiftBucket = 0;
     crew.tileIndex = tile;
     crew.x = (tile % state.width) + 0.5;
