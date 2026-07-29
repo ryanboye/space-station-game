@@ -12584,6 +12584,13 @@ function pickQueueSpotPath(
 const QUEUE_CHAIN_MAX_LEN = 24;
 const QUEUE_CHAIN_MAX_SPILL = 6;
 const QUEUE_BALK_WAIT_SEC = 16;
+// A guest who made it into a physical line gets a materially longer attempt
+// than somebody waiting outside a full room. It is still finite: a stalled
+// provider or impossible circulation must eventually become a visible failed
+// stay instead of pinning an occupant in Queueing forever.
+const MEAL_QUEUE_MAX_WAIT_SEC = 90;
+const PLANNED_MEAL_QUEUE_MAX_WAIT_SEC = 150;
+const MEAL_PICKUP_BLOCKED_REQUEUE_SEC = 6;
 const VISITOR_SERVICE_ORIENTATION_SEC = 4;
 const CROWD_FEED_MAX = 30;
 const CROWD_FLOATER_MAX = 40;
@@ -13046,6 +13053,22 @@ function maintainCafeteriaQueues(state: StationState): void {
     theater.floaters = theater.floaters.filter((f) => state.now - f.bornAt < CROWD_FLOATER_TTL_SEC);
   }
   ensureQueueChains(state);
+  const servingAnchors = new Set(collectServingPickupTargets(state));
+  for (const visitor of [...state.visitors]) {
+    if (visitor.state !== VisitorState.Queueing) continue;
+    if (visitor.queueProviderTile === null || visitor.queueProviderTile === undefined) continue;
+    if (!servingAnchors.has(visitor.queueProviderTile)) continue;
+    const joinedAt = visitor.queueJoinedAt;
+    if (joinedAt === null || joinedAt === undefined) continue;
+    const hasPendingPlannedMeal =
+      visitor.activeService === 'meal' &&
+      visitor.servicePlan.includes('meal') &&
+      !visitor.completedServices.includes('meal');
+    const maxWait = hasPendingPlannedMeal
+      ? PLANNED_MEAL_QUEUE_MAX_WAIT_SEC
+      : MEAL_QUEUE_MAX_WAIT_SEC;
+    if (state.now - joinedAt >= maxWait) balkFromServiceQueue(state, visitor);
+  }
   // A topology change can remove every physical slot while a visitor is
   // already waiting. Treat that as the same bounded service failure as a
   // full line, rather than leaving an invisible permanent queue state.
@@ -22215,16 +22238,29 @@ function assignPathToCafeteria(state: StationState, visitor: Visitor): void {
 function repathVisitorToReservedCafeteriaTarget(state: StationState, visitor: Visitor): boolean {
   scheduleVisitorPathRetry(state, visitor);
   if (!visitor.carryingMeal && visitor.reservedServingTile !== null && visitor.tileIndex !== visitor.reservedServingTile) {
+    const options = { allowRestricted: false, intent: 'visitor' as const, routeSeed: visitor.id };
     const path = findPath(
       state,
       visitor.tileIndex,
       visitor.reservedServingTile,
-      { allowRestricted: false, intent: 'visitor', routeSeed: visitor.id },
+      options,
       state.pathOccupancyByTile
     );
     if (path) {
       setVisitorPath(state, visitor, path);
+      visitor.serviceBlockedSince = null;
       return true;
+    }
+    visitor.serviceBlockedSince ??= state.now;
+    if (state.now - visitor.serviceBlockedSince >= MEAL_PICKUP_BLOCKED_REQUEUE_SEC) {
+      // A remote provider claim with no usable approach is not a queue place.
+      // Release it promptly so the physical line can advance; this visitor
+      // joins that bounded line and keeps the same unmet meal commitment.
+      releaseReservationsForOwner(state, 'visitor', visitor.id, 'replaced', ['provider-slot']);
+      visitor.reservedServingTile = null;
+      visitor.serveTimer = undefined;
+      visitor.serviceBlockedSince = null;
+      enterServingLineOrBail(state, visitor);
     }
   }
 
@@ -24048,10 +24084,18 @@ function updateVisitorLogic(
             const qpos = queuePositionOf(state, visitor.id, new Set(collectServingPickupTargets(state)));
             if (qpos === null) {
               enterServingLineOrBail(state, visitor);
-            } else if (qpos.index === 0 && hasUnreservedServingMeal(state)) {
+            } else if (
+              qpos.index === 0 &&
+              visitor.tileIndex === state.derived.queueTheater.chainsByAnchor.get(qpos.anchor)?.[0] &&
+              hasUnreservedServingMeal(state)
+            ) {
               // Strict FIFO matters physically: allowing position two to win
               // the reservation can make it path through the head of the line,
               // leaving the head blocked and the counter reserved behind it.
+              // The head must also have reached its physical slot. Promoting a
+              // still-approaching head compacts the next guest into the only
+              // route to the counter, deadlocking the promoted reservation on
+              // the wrong side of its own line.
               visitor.nextPathRetryAt = state.now;
               assignPathToCafeteria(state, visitor);
             } else {

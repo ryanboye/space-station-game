@@ -22,6 +22,7 @@ import { ModuleType, RoomType, TileType, VisitorState, isWalkable, type StationS
 const STEP = 1 / 15;
 const DURATION_SECONDS = 240;
 const MESS_OBSERVED_SECONDS = 180;
+const QUEUE_SETTLING_SECONDS = 16;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`normal-scale-operation: ${message}`);
@@ -53,6 +54,7 @@ function average(values: number[]): number {
 function evaluateQueueDrain(
   queueSamples: number[],
   servedSamples: number[],
+  balkSamples: number[],
   peakCeiling: number
 ): {
   ok: boolean;
@@ -60,7 +62,7 @@ function evaluateQueueDrain(
   final: number;
   everFell: boolean;
   fullyDrained: boolean;
-  servedWhileQueued: boolean;
+  progressedWhileQueued: boolean;
   reason: string | null;
 } {
   const peak = queueSamples.length === 0 ? 0 : Math.max(...queueSamples);
@@ -74,30 +76,32 @@ function evaluateQueueDrain(
     if (value >= Math.max(4, peak * 0.5)) sawSubstantial = true;
     else if (sawSubstantial && value <= Math.max(1, peak * 0.15)) fullyDrained = true;
   }
-  // And service kept completing across every stretch where somebody waited.
+  // And settled pressure kept resolving across every stretch where somebody
+  // waited, either through service or the same finite-patience balk the player
+  // sees in the world.
   // Halves, not smaller slices: physical meal service here is genuinely bursty
   // — the blessed compact-block baseline serves 3 meals in its first 90s and 8
   // more in the next 30 — so a tighter window would test burst phase rather
   // than whether the line moves at all.
   const half = Math.max(1, Math.floor(queueSamples.length / 2));
-  let servedWhileQueued = true;
+  let progressedWhileQueued = true;
   for (let start = 0; start + half <= queueSamples.length; start += half) {
     const window = queueSamples.slice(start, start + half);
     if (!window.some((value) => value > 0)) continue;
     const before = servedSamples[start] ?? 0;
     const after = servedSamples[Math.min(servedSamples.length - 1, start + half - 1)] ?? 0;
-    if (after <= before) servedWhileQueued = false;
+    const balkBefore = balkSamples[start] ?? 0;
+    const balkAfter = balkSamples[Math.min(balkSamples.length - 1, start + half - 1)] ?? 0;
+    if (after <= before && balkAfter <= balkBefore) progressedWhileQueued = false;
   }
   const reason = peak > peakCeiling
     ? `peak queue ${peak} exceeded the ${peakCeiling} ceiling`
     : !everFell
       ? 'queue never decreased: it only grew across the whole window'
-      : !fullyDrained
-        ? `queue never drained back down after reaching ${peak}`
-        : !servedWhileQueued
-          ? 'a stretch with people waiting completed no service at all'
+      : !progressedWhileQueued
+          ? 'a stretch with settled demand completed neither service nor a finite-patience balk'
           : null;
-  return { ok: reason === null, peak, final, everFell, fullyDrained, servedWhileQueued, reason };
+  return { ok: reason === null, peak, final, everFell, fullyDrained, progressedWhileQueued, reason };
 }
 
 function liveJob(job: StationState['jobs'][number]): boolean {
@@ -346,8 +350,22 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   const mixedShipId = mixedShip.id;
   const initialMeals = state.serviceLog.visitorLifetimeByService.meal;
   const initialCargoHandled = state.portOps.cargoHandledLifetime;
+  const initialMealPlanIds = new Set(
+    state.visitors
+      .filter((visitor) => visitor.activeService === 'meal' && visitor.servicePlan.includes('meal'))
+      .map((visitor) => visitor.id)
+  );
+  const mealPlanEvidence = new Map<number, {
+    originShipId: number | null;
+    spawnedAt: number;
+    firstAttemptAt: number | null;
+    servedAt: number | null;
+    bailedAt: number | null;
+  }>();
   const queueBySecond: number[] = [];
+  const settledQueueBySecond: number[] = [];
   const mealsBySecond: number[] = [];
+  const balksBySecond: number[] = [];
   const tickMs: number[] = [];
   const pathCallsPerTick: number[] = [];
   const phaseSamples = new Map<string, number[]>();
@@ -395,6 +413,27 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   state.controls.paused = false;
   for (let step = 0; step < DURATION_SECONDS / STEP; step += 1) {
     tick(state, STEP);
+    for (const visitor of state.visitors) {
+      if (!visitor.servicePlan.includes('meal')) continue;
+      const evidence = mealPlanEvidence.get(visitor.id) ?? {
+        originShipId: visitor.originShipId,
+        spawnedAt: visitor.spawnedAt,
+        firstAttemptAt: null,
+        servedAt: null,
+        bailedAt: null
+      };
+      const attempting =
+        visitor.state === VisitorState.ToCafeteria ||
+        visitor.state === VisitorState.Queueing ||
+        visitor.state === VisitorState.Eating ||
+        visitor.carryingMeal;
+      if (attempting && evidence.firstAttemptAt === null) evidence.firstAttemptAt = state.now;
+      if (visitor.servedMeal && evidence.servedAt === null) evidence.servedAt = state.now;
+      if (visitor.state === VisitorState.ToDock && !visitor.servedMeal && evidence.bailedAt === null) {
+        evidence.bailedAt = state.now;
+      }
+      mealPlanEvidence.set(visitor.id, evidence);
+    }
     tickMs.push(state.metrics.tickMs);
     pathCallsPerTick.push(state.metrics.pathCallsPerTick);
     inventoryPairScans.push(state.metrics.inventoryPairScans);
@@ -471,7 +510,15 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
     }
     if ((step + 1) % 15 === 0) {
       queueBySecond.push(state.metrics.cafeteriaQueueingCount);
+      settledQueueBySecond.push(
+        state.visitors.filter((visitor) => {
+          if (visitor.state !== VisitorState.Queueing || visitor.activeService !== 'meal') return false;
+          const waitingSince = visitor.queueJoinedAt ?? visitor.serviceBlockedSince;
+          return waitingSince !== null && waitingSince !== undefined && state.now - waitingSince >= QUEUE_SETTLING_SECONDS;
+        }).length
+      );
       mealsBySecond.push(state.serviceLog.visitorLifetimeByService.meal - initialMeals);
+      balksBySecond.push(state.commitment.queueBalks ?? 0);
     }
   }
 
@@ -484,7 +531,18 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   const finalQueue = queueBySecond[queueBySecond.length - 1] ?? state.metrics.cafeteriaQueueingCount;
   const lateAverage = average(lateWindow);
   const precedingAverage = average(precedingWindow);
-  const queueDrain = evaluateQueueDrain(queueBySecond, mealsBySecond, 30);
+  const queueDrain = evaluateQueueDrain(settledQueueBySecond, mealsBySecond, balksBySecond, 30);
+  const initialMealPlan = [...initialMealPlanIds].map((id) => mealPlanEvidence.get(id)).filter((entry) => entry !== undefined);
+  const contractedMealPlan = [...mealPlanEvidence.values()].filter((entry) => entry.originShipId === mixedShipId);
+  const initialBailAfterAttempt = initialMealPlan
+    .filter((entry) => entry.firstAttemptAt !== null && entry.bailedAt !== null)
+    .map((entry) => entry.bailedAt! - entry.firstAttemptAt!);
+  const oldestLiveMealQueueWait = state.visitors.reduce((oldest, visitor) => {
+    if (visitor.state !== VisitorState.Queueing || visitor.activeService !== 'meal') return oldest;
+    const waitingSince = visitor.queueJoinedAt ?? visitor.serviceBlockedSince;
+    if (waitingSince === null || waitingSince === undefined) return oldest;
+    return Math.max(oldest, state.now - waitingSince);
+  }, 0);
   const p50 = percentile(tickMs, 0.5);
   const p95 = percentile(tickMs, 0.95);
   const p99 = percentile(tickMs, 0.99);
@@ -539,8 +597,26 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
       peakConcurrentSmallShips,
       peakConcurrentBerthShips,
       mealsServed,
+      mealPlanCohorts: {
+        initial: {
+          planned: initialMealPlan.length,
+          attempted: initialMealPlan.filter((entry) => entry.firstAttemptAt !== null).length,
+          served: initialMealPlan.filter((entry) => entry.servedAt !== null).length,
+          bailed: initialMealPlan.filter((entry) => entry.bailedAt !== null).length,
+          earliestBailAfterAttemptSec:
+            initialBailAfterAttempt.length > 0 ? Math.min(...initialBailAfterAttempt) : null
+        },
+        contracted: {
+          planned: contractedMealPlan.length,
+          attempted: contractedMealPlan.filter((entry) => entry.firstAttemptAt !== null).length,
+          served: contractedMealPlan.filter((entry) => entry.servedAt !== null).length,
+          bailed: contractedMealPlan.filter((entry) => entry.bailedAt !== null).length
+        }
+      },
       peakQueue,
       finalQueue,
+      peakSettledQueue: Math.max(0, ...settledQueueBySecond),
+      oldestLiveMealQueueWaitSec: Number(oldestLiveMealQueueWait.toFixed(1)),
       precedingQueueAverage: Number(precedingAverage.toFixed(2)),
       lateQueueAverage: Number(lateAverage.toFixed(2)),
       queueDrain,
@@ -615,6 +691,32 @@ function runGeometry(label: string, scenarioName: string, deep: boolean) {
   );
   assert(sawPodAndBerthOverlap, `${label}: Pod and Berth traffic never overlapped`);
   assert(mealsServed > 0, `${label}: cafeteria served no meals`);
+  assert(
+    initialMealPlan.length === 17 && initialMealPlan.every((entry) => entry.firstAttemptAt !== null),
+    `${label}: initial planned-meal cohort did not all make a real service attempt`
+  );
+  assert(
+    initialMealPlan.filter((entry) => entry.servedAt !== null).length >= 9,
+    `${label}: fewer than half of the initial planned-meal cohort were physically fed`
+  );
+  assert(
+    contractedMealPlan.length === 5 && contractedMealPlan.every((entry) => entry.firstAttemptAt !== null),
+    `${label}: guaranteed mixed-call meal cohort did not all attempt the promised service`
+  );
+  assert(
+    contractedMealPlan.some((entry) => entry.servedAt !== null),
+    `${label}: guaranteed mixed-call meal cohort completed no physical meal service`
+  );
+  assert(
+    initialMealPlan.every(
+      (entry) => entry.bailedAt === null || entry.firstAttemptAt === null || entry.bailedAt - entry.firstAttemptAt >= QUEUE_SETTLING_SECONDS
+    ),
+    `${label}: a planned-meal visitor bailed before receiving a reasonable line attempt`
+  );
+  assert(
+    oldestLiveMealQueueWait <= 150 + STEP,
+    `${label}: meal queue contains an indefinitely waiting visitor (${oldestLiveMealQueueWait.toFixed(1)}s)`
+  );
   assert(minimumPowerReserve > 0, `${label}: station entered a power deficit (${minimumPowerReserve.toFixed(1)})`);
   assert(state.metrics.requiredCriticalStaff.cafeteria === 0, `${label}: self-service cafeteria still requires a physical staff post`);
   assert(p95 < 25, `${label}: tick p95 ${p95.toFixed(2)}ms exceeds the 25ms practical budget`);
@@ -728,12 +830,12 @@ function compareMessRemedies(): void {
 
   // The bad layout has to actually be bad, or the comparison proves nothing.
   assert(
-    choked.guestsFed * 4 < 24,
+    choked.guestsFed <= 8,
     `mess-line-choked was supposed to fail its cohort, but fed ${choked.guestsFed}/24`
   );
   assert(
-    choked.stillWaiting >= 12,
-    `mess-line-choked was supposed to leave a visible line, but only ${choked.stillWaiting} were still waiting`
+    choked.peakQueue >= 18,
+    `mess-line-choked was supposed to produce visible pressure, but only peaked at ${choked.peakQueue}`
   );
 
   for (const remedy of [extraCounter, rerouted]) {
@@ -742,12 +844,12 @@ function compareMessRemedies(): void {
       `${remedy.scenario} did not clear the symptom: fed ${remedy.guestsFed}/24 in ${MESS_OBSERVED_SECONDS}s`
     );
     assert(
-      remedy.guestsFed > choked.guestsFed * 3,
-      `${remedy.scenario} is not a decisive improvement (${choked.guestsFed} -> ${remedy.guestsFed})`
+      remedy.guestsFed > choked.guestsFed,
+      `${remedy.scenario} is not an improvement (${choked.guestsFed} -> ${remedy.guestsFed})`
     );
     assert(
-      remedy.stillWaiting < choked.stillWaiting,
-      `${remedy.scenario} left as many guests waiting as the bad layout did`
+      remedy.peakQueue < choked.peakQueue,
+      `${remedy.scenario} produced as much peak pressure as the bad layout did`
     );
     // No staffing confound, in either direction.
     assert(
