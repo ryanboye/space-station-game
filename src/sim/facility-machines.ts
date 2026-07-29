@@ -315,6 +315,10 @@ export function shelfMixOf(module: ModuleInstance): ShelfMixProfile {
   return SHELF_MIXES[module.shelfMix ?? 'essentials'];
 }
 
+export function isRetailDisplayModule(module: ModuleInstance): boolean {
+  return module.type === ModuleType.ShelfAisle || module.type === ModuleType.DisplayColdCase;
+}
+
 /**
  * How well the station's stocked shelves cover what a shopper wants.
  *
@@ -324,7 +328,7 @@ export function shelfMixOf(module: ModuleInstance): ShelfMixProfile {
 export function shelfAppealFor(state: StationState, preference: string): number {
   let best = 0;
   for (const module of state.moduleInstances) {
-    if (module.type !== ModuleType.ShelfAisle) continue;
+    if (!isRetailDisplayModule(module)) continue;
     const node = state.itemNodes.find((entry) => entry.tileIndex === module.originTile);
     if ((node?.items.tradeGood ?? 0) < 0.95) continue;
     const profile = shelfMixOf(module);
@@ -339,7 +343,7 @@ export function stockedShelfSlots(state: StationState, preference?: string): Fac
   const stocked = new Set<number>();
   const appealByOrigin = new Map<number, number>();
   for (const module of state.moduleInstances) {
-    if (module.type !== ModuleType.ShelfAisle) continue;
+    if (!isRetailDisplayModule(module)) continue;
     const node = state.itemNodes.find((entry) => entry.tileIndex === module.originTile);
     if ((node?.items.tradeGood ?? 0) < 0.95) continue;
     const profile = shelfMixOf(module);
@@ -347,7 +351,7 @@ export function stockedShelfSlots(state: StationState, preference?: string): Fac
     stocked.add(module.originTile);
     appealByOrigin.set(module.originTile, profile.demandAppeal);
   }
-  return freeSlotsOfRole(state, [ModuleType.ShelfAisle], 'browse')
+  return freeSlotsOfRole(state, [ModuleType.ShelfAisle, ModuleType.DisplayColdCase], 'browse')
     .filter((slot) => stocked.has(slot.moduleOriginTile))
     .sort(
       (a, b) =>
@@ -401,7 +405,7 @@ export function backroomOrigins(state: StationState): number[] {
 
 export function shelfOrigins(state: StationState): number[] {
   return state.moduleInstances
-    .filter((module) => module.type === ModuleType.ShelfAisle)
+    .filter(isRetailDisplayModule)
     .map((module) => module.originTile);
 }
 
@@ -423,7 +427,7 @@ export function marketChainStatus(state: StationState): MarketChainStatus {
   // to stand at a shelf AND somewhere to stand at a register. Either edge
   // walled in end to end breaks the chain.
   const banks = state.moduleInstances.filter((module) => module.type === ModuleType.CheckoutBank);
-  const shelfModules = state.moduleInstances.filter((module) => module.type === ModuleType.ShelfAisle);
+  const shelfModules = state.moduleInstances.filter(isRetailDisplayModule);
   return {
     receiving: stockAt(state, receiving),
     backroom: stockAt(state, backroom),

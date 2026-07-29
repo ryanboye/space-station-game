@@ -44,7 +44,7 @@ function registeredKeys(): Set<string> {
 
 function testCuratedMatrix(): string {
   const registered = registeredKeys();
-  assert(registered.size === 63, `Expected all 63 Gate F base/state frames, got ${registered.size}.`);
+  assert(registered.size === 68, `Expected all 68 curated facility base/state frames, got ${registered.size}.`);
   const has = (key: string): boolean => registered.has(key);
   let checked = 0;
   for (const [rawType, supported] of Object.entries(FACILITY_SPRITE_VARIANTS)) {
@@ -58,8 +58,8 @@ function testCuratedMatrix(): string {
       checked += 1;
     }
   }
-  assert(checked === 63, `Expected to exercise 63 curated frames, exercised ${checked}.`);
-  return `PASS curated fixture matrix (${checked}/63 frames)`;
+  assert(checked === 68, `Expected to exercise 68 curated frames, exercised ${checked}.`);
+  return `PASS curated fixture matrix (${checked}/68 frames)`;
 }
 
 function testPriorityAndFallback(): string {
@@ -116,7 +116,7 @@ function testPendingArtManifest(): string {
     pending += (variants ?? []).length;
   }
   assert(pending === 0, `Expected the Gate F art manifest to be closed, but it lists ${pending} frames.`);
-  return `PASS pending art manifest (${pending} frames outstanding, 63 authored)`;
+  return `PASS pending art manifest (${pending} frames outstanding, 68 authored)`;
 }
 
 function cantinaState(): StationState {

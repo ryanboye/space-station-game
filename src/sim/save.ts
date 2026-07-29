@@ -246,7 +246,7 @@ export interface StationSnapshotV1 {
     originTile: number;
     rotation: ModuleRotation;
     purchaseCost?: number;
-    /** Shelf Aisle stocking choice. Absent on other modules and legacy saves. */
+    /** Retail-display stocking choice. Absent on other modules and legacy saves. */
     shelfMix?: ShelfMix;
   }>;
   commercialUnits?: CommercialUnit[];

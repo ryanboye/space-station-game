@@ -373,6 +373,9 @@ export enum ModuleType {
   // footprints and saved stations remain valid.
   CheckoutBank = 'checkout-bank',
   ShelfAisle = 'shelf-aisle',
+  // Refrigerated 3-bay retail display. Uses the same broad assortment policy
+  // as a Shelf Aisle, but presents three shoppers along one public frontage.
+  DisplayColdCase = 'display-cold-case',
   BunkBank = 'bunk-bank',
   // Phase 1B, second wave. Every one of these is descriptor-driven: its
   // depicted counters, stools, seats, beds and wash positions are real
@@ -411,10 +414,10 @@ export interface ModuleInstance {
   purchaseCost?: number;
   legacyForced?: boolean;
   /**
-   * What a Shelf Aisle stocks. A strategic choice, not a checklist item: a
+   * What a retail display stocks. A strategic choice, not a checklist item: a
    * market may open with one category and simply miss the other demand.
-   * Absent on every other module type and on pre-Phase-1B saves, which read
-   * as the default 'essentials'.
+   * Absent on non-display modules and on pre-Phase-1B saves, which read as the
+   * default 'essentials'.
    */
   shelfMix?: ShelfMix;
 }

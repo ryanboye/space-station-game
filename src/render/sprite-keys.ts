@@ -111,6 +111,7 @@ export const MODULE_SPRITE_KEYS: Record<ModuleType, string> = {
   [ModuleType.MarketStall]: 'module.market_stall',
   [ModuleType.CheckoutBank]: 'module.checkout_bank',
   [ModuleType.ShelfAisle]: 'module.shelf_aisle',
+  [ModuleType.DisplayColdCase]: 'module.display_cold_case',
   [ModuleType.BunkBank]: 'module.bunk_bank',
   [ModuleType.BackroomStockBank]: 'module.backroom_stock_bank',
   [ModuleType.ServiceBar]: 'module.service_bar',

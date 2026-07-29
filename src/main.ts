@@ -644,6 +644,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-module="market-stall" title="Place Market Stall (-)"><span class="tool-key">-</span>Stall</button>
         <button class="tool-btn" data-tool-module="checkout-bank" title="Place Checkout Bank — two customer lanes for a Market"><span class="tool-key">·</span>Checkout</button>
         <button class="tool-btn" data-tool-module="shelf-aisle" title="Place Shelf Aisle — cargo stocks travel goods here"><span class="tool-key">·</span>Shelf Aisle</button>
+        <button class="tool-btn" data-tool-module="display-cold-case" title="Place Display Cold Case · ${MODULE_DEFINITIONS[ModuleType.DisplayColdCase].capitalCost}c — refrigerated three-bay retail frontage"><span class="tool-key">·</span>Cold Case · ${MODULE_DEFINITIONS[ModuleType.DisplayColdCase].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="backroom-stock-bank" title="Place Backroom Stock Bank · ${MODULE_DEFINITIONS[ModuleType.BackroomStockBank].capitalCost}c — bulk stock for a Market, Storage, or Logistics room; serves no customers"><span class="tool-key">·</span>Backroom Stock · ${MODULE_DEFINITIONS[ModuleType.BackroomStockBank].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="arrival-desk" title="Place Arrival Desk · ${MODULE_DEFINITIONS[ModuleType.ArrivalDesk].capitalCost}c — optional reception for a Lounge, Market, or Cafeteria"><span class="tool-key">·</span>Arrival Desk · ${MODULE_DEFINITIONS[ModuleType.ArrivalDesk].capitalCost}c</button>
         <button class="tool-btn" data-tool-module="workbench" title="Place Workbench (P)"><span class="tool-key">P</span>Bench</button>
@@ -1211,6 +1212,12 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
       toolLockMessage = result.message;
     } else if (action.type === 'set-pricing-policy') {
       setMarketPricingPolicy(state, action.policy);
+    } else if (action.type === 'set-shelf-mix') {
+      if (shopAnchorTile !== null && setShelfMix(state, shopAnchorTile, action.mix)) {
+        toolLockMessage = `${SHELF_MIXES[action.mix].label} selected for this retail display.`;
+        selectedRoomTile = shopAnchorTile;
+        refreshSelectionSummary();
+      }
     } else if (action.type === 'accept-project') {
       acceptOpeningCapitalProject(state, action.projectId as CapitalProjectId);
     }
@@ -1229,7 +1236,11 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
   const summary = getOpeningEconomySummary(state, 120);
   const marketTiles = new Set(
     state.moduleInstances
-      .filter((module) => module.type === ModuleType.MarketStall)
+      .filter((module) =>
+        module.type === ModuleType.MarketStall ||
+        module.type === ModuleType.ShelfAisle ||
+        module.type === ModuleType.DisplayColdCase
+      )
       .map((module) => module.originTile)
   );
   const marketNodes = state.itemNodes.filter((node) => marketTiles.has(node.tileIndex));
@@ -1251,6 +1262,25 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
     { label: 'Payroll and construction', credits: summary.byKind.wages.net + summary.byKind.construction.net }
   ].filter((group) => Math.abs(group.credits) > 0.01);
   const projects = getOpeningCapitalProjects(state);
+  const assortmentModule = shopAnchorTile === null
+    ? null
+    : state.moduleInstances.find((module) =>
+        module.originTile === shopAnchorTile &&
+        (module.type === ModuleType.ShelfAisle || module.type === ModuleType.DisplayColdCase)
+      ) ?? null;
+  const assortment = assortmentModule
+    ? {
+        fixtureLabel: assortmentModule.type === ModuleType.DisplayColdCase ? 'Display Cold Case' : 'Shelf Aisle',
+        mix: shelfMixOf(assortmentModule).mix,
+        options: (Object.keys(SHELF_MIXES) as ShelfMix[]).map((mix) => ({
+          mix,
+          label: SHELF_MIXES[mix].label,
+          appealPercent: Math.round(SHELF_MIXES[mix].demandAppeal * 100),
+          marginPercent: Math.round(SHELF_MIXES[mix].marginMultiplier * 100),
+          satisfies: SHELF_MIXES[mix].satisfies.join(' + ')
+        }))
+      }
+    : undefined;
   return {
     ledger: {
       credits: state.metrics.credits,
@@ -1281,7 +1311,8 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
       orderCost: travelSupplyQuote.creditCost,
       emptyStockMessage: travelSupplyQuote.ok
         ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
-        : travelSupplyQuote.message
+        : travelSupplyQuote.message,
+      assortment
     },
     // Same shared forecast the Charter screen rendered before the game
     // started, so the site reading stays recognizable after opening.
@@ -1326,6 +1357,7 @@ function refreshOpeningEconomyPanels(): void {
 const MARKET_FIXTURE_TYPES = new Set<ModuleType>([
   ModuleType.MarketStall,
   ModuleType.ShelfAisle,
+  ModuleType.DisplayColdCase,
   ModuleType.CheckoutBank,
   ModuleType.BackroomStockBank
 ]);
@@ -6047,14 +6079,15 @@ function refreshSelectionSummary(): void {
     const selectedModule = selectedModuleId === null
       ? null
       : state.moduleInstances.find((module) => module.id === selectedModuleId) ?? null;
-    if (selectedModule?.type === ModuleType.ShelfAisle) {
+    if (selectedModule?.type === ModuleType.ShelfAisle || selectedModule?.type === ModuleType.DisplayColdCase) {
       const mix = shelfMixOf(selectedModule);
+      const fixtureLabel = selectedModule.type === ModuleType.DisplayColdCase ? 'Display Cold Case' : 'Shelf Aisle';
       const buttons = (Object.keys(SHELF_MIXES) as ShelfMix[]).map((candidate) => {
         const profile = SHELF_MIXES[candidate];
         return `<button type="button" data-shelf-mix="${candidate}" aria-pressed="${candidate === mix.mix}">${escapeHtml(profile.label)}</button>`;
       }).join('');
       selectionSummaryEl.innerHTML = `<div class="shelf-mix-selection">
-        <span><b>Shelf mix: ${escapeHtml(mix.label)}</b> · ${Math.round(mix.demandAppeal * 100)}% appeal · ${Math.round(mix.marginMultiplier * 100)}% margin · suits ${escapeHtml(mix.satisfies.join(' + '))}</span>
+        <span><b>${fixtureLabel} mix: ${escapeHtml(mix.label)}</b> · ${Math.round(mix.demandAppeal * 100)}% appeal · ${Math.round(mix.marginMultiplier * 100)}% margin · suits ${escapeHtml(mix.satisfies.join(' + '))}</span>
         <span class="shelf-mix-actions" aria-label="Shelf goods category">${buttons}</span>
       </div>`;
       return;
@@ -7566,6 +7599,7 @@ const TOOLBAR_MODULE_MAP: Record<string, ModuleType> = {
   'market-stall': ModuleType.MarketStall,
   'checkout-bank': ModuleType.CheckoutBank,
   'shelf-aisle': ModuleType.ShelfAisle,
+  'display-cold-case': ModuleType.DisplayColdCase,
   'backroom-stock-bank': ModuleType.BackroomStockBank,
   'arrival-desk': ModuleType.ArrivalDesk,
   workbench: ModuleType.Workbench,
@@ -7659,6 +7693,7 @@ const MODULE_PALETTE_FALLBACK_LABEL: Record<ModuleType, string> = {
   [ModuleType.MarketStall]: 'MK',
   [ModuleType.CheckoutBank]: 'CB',
   [ModuleType.ShelfAisle]: 'SA',
+  [ModuleType.DisplayColdCase]: 'DC',
   [ModuleType.BunkBank]: 'BB',
   [ModuleType.BackroomStockBank]: 'SB',
   [ModuleType.ServiceBar]: 'BAR',
@@ -8391,6 +8426,7 @@ function centerViewportOnMapCenter(): void {
 const FACILITY_SHOWCASE_CAMERA_BOUNDS: Record<string, FitBounds> = {
   'market-compact-conflict': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
   'market-improved-flow': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
+  'display-cold-case': { minX: 40, minY: 47, maxX: 72, maxY: 60 },
   'cantina-undersized': { minX: 40, minY: 47, maxX: 58, maxY: 60 },
   'cantina-expanded': { minX: 40, minY: 47, maxX: 60, maxY: 62 },
   'reception-absent': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
@@ -10199,14 +10235,20 @@ canvas.addEventListener('mouseup', (e) => {
       // shelves is a request to work the shop, not to inspect the Market room.
       const marketFixture = marketFixtureOriginAtTile(clickedTile);
       if (marketFixture !== null) {
+        const fixtureModule = state.moduleInstances.find((module) => module.originTile === marketFixture) ?? null;
         selectedAgent = null;
         selectedDockId = null;
-        selectedRoomTile = null;
+        // Keep assortment-bearing displays selected while their shop is open;
+        // generic chain fixtures do not pretend to have a goods category.
+        selectedRoomTile = fixtureModule?.type === ModuleType.ShelfAisle || fixtureModule?.type === ModuleType.DisplayColdCase
+          ? clickedTile
+          : null;
         selectedIncidentId = null;
         agentModal.classList.add('hidden');
         dockModal.classList.add('hidden');
         roomModal.classList.add('hidden');
         openMarketSurface(marketFixture);
+        refreshSelectionSummary();
         isPainting = false;
         paintStart = null;
         paintCurrent = null;
@@ -10812,7 +10854,10 @@ selectionSummaryEl.addEventListener('click', (event) => {
   const mix = button.dataset.shelfMix as ShelfMix | undefined;
   if (!mix || !(mix in SHELF_MIXES)) return;
   if (setShelfMix(state, selectedRoomTile, mix)) {
-    toolLockMessage = `${SHELF_MIXES[mix].label} selected for this Shelf Aisle.`;
+    const moduleId = state.moduleOccupancyByTile[selectedRoomTile];
+    const selectedModule = moduleId === null ? null : state.moduleInstances.find((module) => module.id === moduleId) ?? null;
+    const fixtureLabel = selectedModule?.type === ModuleType.DisplayColdCase ? 'Display Cold Case' : 'Shelf Aisle';
+    toolLockMessage = `${SHELF_MIXES[mix].label} selected for this ${fixtureLabel}.`;
     refreshSelectionSummary();
   }
 });

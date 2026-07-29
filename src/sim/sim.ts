@@ -52,6 +52,7 @@ import {
   type FacilitySlotTarget as SharedFacilitySlotTarget
 } from './facility-slots';
 import {
+  SHELF_MIXES,
   backroomOrigins,
   barGroupAtTile,
   barGroups,
@@ -59,6 +60,7 @@ import {
   receivingOrigins,
   shelfOrigins,
   freeReceptionSlots,
+  isRetailDisplayModule,
   shelfMixOf,
   stockedShelfSlots,
   facilityUtilityDemand,
@@ -1876,6 +1878,7 @@ function moduleUsageSlotCount(moduleType: ModuleType): number {
     case ModuleType.CheckoutBank:
       return 2;
     case ModuleType.ShelfAisle:
+    case ModuleType.DisplayColdCase:
       return 3;
     case ModuleType.BunkBank:
       return 4;
@@ -1957,7 +1960,7 @@ function moduleTypesForRoomServices(room: RoomType): ModuleType[] {
   if (room === RoomType.Hydroponics) return [ModuleType.GrowStation];
   if (room === RoomType.Security) return [ModuleType.Terminal];
   if (room === RoomType.Lounge) return [ModuleType.Couch, ModuleType.GameStation, ModuleType.BoothBank, ModuleType.StandingRail];
-  if (room === RoomType.Market) return [ModuleType.MarketStall, ModuleType.ShelfAisle, ModuleType.CheckoutBank, ModuleType.BackroomStockBank];
+  if (room === RoomType.Market) return [ModuleType.MarketStall, ModuleType.ShelfAisle, ModuleType.DisplayColdCase, ModuleType.CheckoutBank, ModuleType.BackroomStockBank];
   if (room === RoomType.Cantina) return [ModuleType.BarCounter, ModuleType.ServiceBar, ModuleType.BarCorner, ModuleType.BarEnd];
   if (room === RoomType.Observatory) return [ModuleType.Telescope];
   if (room === RoomType.LogisticsStock) return [ModuleType.IntakePallet];
@@ -10950,6 +10953,7 @@ const MODULE_MAINTENANCE_ROOMS = new Map<ModuleType, { domain: MaintenanceDomain
   // never accrues debt is one the player can never be asked to look after.
   [ModuleType.CheckoutBank, { domain: 'module', room: RoomType.None, label: 'checkout bank', effect: 'checkout slowed at high wear' }],
   [ModuleType.ShelfAisle, { domain: 'module', room: RoomType.None, label: 'shelf aisle', effect: 'browsing slowed at high wear' }],
+  [ModuleType.DisplayColdCase, { domain: 'module', room: RoomType.None, label: 'display cold case', effect: 'refrigerated browsing slowed at high wear' }],
   [ModuleType.BunkBank, { domain: 'module', room: RoomType.None, label: 'bunk bank', effect: 'rest quality degraded at high wear' }],
   [ModuleType.StandingRail, { domain: 'module', room: RoomType.None, label: 'standing rail', effect: 'standing dwell degraded at high wear' }],
   [ModuleType.GuestCabin, { domain: 'module', room: RoomType.None, label: 'guest cabin', effect: 'guest rest degraded at high wear' }],
@@ -23260,7 +23264,7 @@ function enhancedMarketSlots(
 ): FacilitySlotTarget[] {
   return activeFacilitySlotTargets(
     state,
-    role === 'browse' ? [ModuleType.ShelfAisle] : [ModuleType.CheckoutBank],
+    role === 'browse' ? [ModuleType.ShelfAisle, ModuleType.DisplayColdCase] : [ModuleType.CheckoutBank],
     RoomType.Market,
     role
   );
@@ -23344,7 +23348,7 @@ export function getMarketFixtureStatus(
 ): MarketFixtureStatus | null {
   const module = state.moduleInstances.find((candidate) => candidate.id === moduleId);
   if (!module) return null;
-  if (module.type === ModuleType.ShelfAisle) {
+  if (isRetailDisplayModule(module)) {
     const stock = itemStockAtNode(state, module.originTile, 'tradeGood');
     const reserved = activeReservationAmount(
       state,
@@ -23416,7 +23420,23 @@ function visitorHasArrivedAtReservedProvider(state: StationState, visitor: Visit
 }
 
 function assignPathToMarketBrowse(state: StationState, visitor: Visitor): boolean {
-  const browseSlots = enhancedMarketSlots(state, 'browse').filter((slot) => {
+  const suitableSlots: FacilitySlotTarget[] = stockedShelfSlots(state, visitor.primaryPreference).map((slot) => ({
+    tileIndex: slot.tileIndex,
+    moduleId: slot.moduleId,
+    moduleType: slot.moduleType,
+    moduleOriginTile: slot.moduleOriginTile,
+    slotId: slot.id
+  }));
+  const bestDisplay = suitableSlots.length > 0
+    ? state.moduleInstances.find((module) => module.originTile === suitableSlots[0].moduleOriginTile) ?? null
+    : null;
+  const bestAppeal = bestDisplay ? shelfMixOf(bestDisplay).demandAppeal : 0;
+  // Assortment is a fixture-local promise. Shoppers choose the most appealing
+  // suitable stocked display that still has a free depicted bay; distance and
+  // crowding break ties only within that category.
+  const browseSlots = suitableSlots.filter((slot) => {
+    const display = state.moduleInstances.find((module) => module.originTile === slot.moduleOriginTile);
+    if (!display || shelfMixOf(display).demandAppeal + 0.0001 < bestAppeal) return false;
     const stock = itemStockAtNode(state, slot.moduleOriginTile, 'tradeGood');
     const reserved = activeReservationAmount(state, 'source-item', slot.moduleOriginTile, `market-stock:${slot.moduleOriginTile}`, 'tradeGood');
     return stock - reserved >= 0.95;
@@ -23623,6 +23643,10 @@ export function assignPathToTemporarySleep(state: StationState, visitor: Visitor
 export function completeMarketCheckout(state: StationState, visitor: Visitor): boolean {
   const sourceTile = visitor.marketTradeGoodSourceTile;
   if (sourceTile === null || sourceTile === undefined) return false;
+  const sourceDisplay = state.moduleInstances.find(
+    (module) => module.originTile === sourceTile && isRetailDisplayModule(module)
+  );
+  const assortment = sourceDisplay ? shelfMixOf(sourceDisplay) : SHELF_MIXES.essentials;
   const consumedGoods = takeItemStockAtNode(state, sourceTile, 'tradeGood', 1);
   releaseReservationsForOwner(state, 'visitor', visitor.id, consumedGoods >= 0.95 ? 'completed' : 'failed', ['provider-slot', 'source-item']);
   visitor.reservedTargetTile = null;
@@ -23634,7 +23658,7 @@ export function completeMarketCheckout(state: StationState, visitor: Visitor): b
   }
   const environment = roomEnvironmentScoreAt(state, visitor.tileIndex);
   const quality = clamp(1 + (environment.visitorStatus + environment.publicAppeal * 0.3 - environment.serviceNoise * 0.2) * 0.06, 0.85, 1.15);
-  const spend = marketSpendPerSec(state, visitor) * 5.5 * quality;
+  const spend = marketSpendPerSec(state, visitor) * 5.5 * quality * assortment.marginMultiplier;
   recordVisitorTransaction(state, visitor, spend, getCommercialUnitAt(state, visitor.tileIndex), 'market');
   state.usageTotals.tradeGoodsSold += consumedGoods;
   state.usageTotals.creditsTradeGoodsGross += spend;
@@ -24546,7 +24570,7 @@ function updateVisitorLogic(
         visitor.reservedTargetTile === visitor.tileIndex &&
         (visitor.receptionProcessedAt === null || visitor.receptionProcessedAt === undefined);
       const atShelfAisle =
-        currentModule === ModuleType.ShelfAisle &&
+        (currentModule === ModuleType.ShelfAisle || currentModule === ModuleType.DisplayColdCase) &&
         visitor.marketTradeGoodSourceTile !== null &&
         visitor.marketTradeGoodSourceTile !== undefined &&
         visitor.reservedTargetTile === visitor.tileIndex;
@@ -24755,7 +24779,7 @@ function updateVisitorLogic(
         }
 
         const completedMarketBrowse =
-          completedModule === ModuleType.ShelfAisle &&
+          (completedModule === ModuleType.ShelfAisle || completedModule === ModuleType.DisplayColdCase) &&
           visitor.marketTradeGoodSourceTile !== null &&
           visitor.marketTradeGoodSourceTile !== undefined &&
           visitor.reservedTargetTile === visitor.tileIndex;
@@ -28436,7 +28460,7 @@ export function getModuleMovePreview(
 }
 
 /**
- * Choose what a Shelf Aisle stocks.
+ * Choose what a Shelf Aisle or Display Cold Case stocks.
  *
  * A local decision made at the fixture, not a global policy screen: a market
  * may run three different mixes across three aisles, or bet the whole shop on
@@ -28447,7 +28471,7 @@ export function setShelfMix(state: StationState, tileIndex: number, mix: ShelfMi
   const module = moduleId === null
     ? null
     : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
-  if (!module || module.type !== ModuleType.ShelfAisle) return false;
+  if (!module || !isRetailDisplayModule(module)) return false;
   if (module.shelfMix === mix) return true;
   module.shelfMix = mix;
   state.moduleVersion += 1;
@@ -29098,7 +29122,7 @@ type SupplierOrderKind = 'travel-supplies' | 'fuel';
 
 function supplierOrderDestinations(state: StationState, stockKind: SupplierOrderKind): number[] {
   const moduleTypes = stockKind === 'travel-supplies'
-    ? [ModuleType.ShelfAisle, ModuleType.MarketStall]
+    ? [ModuleType.ShelfAisle, ModuleType.DisplayColdCase, ModuleType.MarketStall]
     : [ModuleType.FuelTank];
   // A supplier lot is unloaded into RECEIVING, not onto the shop floor. Once a
   // station has any back-of-house capacity, goods land there and crew carry

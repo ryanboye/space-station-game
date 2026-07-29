@@ -102,6 +102,18 @@ export const FACILITY_FIXTURE_DESCRIPTORS: Readonly<Partial<Record<ModuleType, F
       { id: 'browse-c', role: 'browse', x: 0, y: 2 }
     ]
   },
+  [ModuleType.DisplayColdCase]: {
+    module: ModuleType.DisplayColdCase,
+    width: 3,
+    height: 1,
+    publicUseFace: 'south',
+    stockServiceFace: 'north',
+    slots: [
+      { id: 'browse-a', role: 'browse', x: 0, y: 0 },
+      { id: 'browse-b', role: 'browse', x: 1, y: 0 },
+      { id: 'browse-c', role: 'browse', x: 2, y: 0 }
+    ]
+  },
   [ModuleType.BunkBank]: {
     module: ModuleType.BunkBank,
     width: 2,

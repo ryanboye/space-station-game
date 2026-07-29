@@ -1478,6 +1478,30 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.paused = true;
   },
 
+  // --- Refrigerated retail: one honest three-bay display -----------------
+  // Goods arrive at receiving, move through a backroom, reach the case from
+  // its north stock face, and leave only after a shopper uses one of the three
+  // south-facing browse bays and completes a staffed checkout.
+  'display-cold-case': (s) => {
+    readyFacilityScenario(s);
+    paintFacilityBlock(s, 42, 49, 18, 9, RoomType.Market);
+    paintFacilityBlock(s, 62, 49, 8, 8, RoomType.LogisticsStock, ZoneType.Restricted);
+    connectFacilityRooms(s, 60, 54, 61, 54);
+    const display = placeFixture(s, ModuleType.DisplayColdCase, 48, 54);
+    const backroom = placeFixture(s, ModuleType.BackroomStockBank, 49, 50);
+    const receiving = placeFixture(s, ModuleType.IntakePallet, 63, 51);
+    placeFixture(s, ModuleType.CheckoutBank, 54, 50);
+    tick(s, 0);
+    stockNode(s, display.originTile, 'tradeGood', 1);
+    stockNode(s, backroom.originTile, 'tradeGood', 12);
+    stockNode(s, receiving.originTile, 'tradeGood', 24);
+    display.shelfMix = 'gifts';
+    stageFacilityCargoHandlers(s, 2, 65, 55);
+    stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
+    stageFacilityVisitors(s, 6, 48, 56, 'market', [], 99840);
+    s.controls.paused = true;
+  },
+
   // --- Cantina: service capacity with nowhere to sit ----------------------
   // A full Service Bar and no dwell positions. Drinks get poured; drinkers
   // have nowhere to go, so the bar jams behind its own guests.

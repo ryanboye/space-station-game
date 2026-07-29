@@ -1461,7 +1461,7 @@ function testPublicUseFaceIsPhysical(): string {
   // customer edge, and it is the one whose entire design is not having one.
   const declared = Object.values(FACILITY_FIXTURE_DESCRIPTORS).filter((entry) => entry !== undefined);
   const backOfHouse = declared.filter((entry) => entry!.publicUseFace === null);
-  assert(declared.length === 14, `Expected 14 authored fixtures, found ${declared.length}.`);
+  assert(declared.length === 15, `Expected 15 authored fixtures, found ${declared.length}.`);
   assert(
     backOfHouse.length === 1 && backOfHouse[0]!.module === ModuleType.BackroomStockBank,
     `Only the Backroom Stock Bank may declare no public face, found ${backOfHouse.map((entry) => entry!.module).join(', ')}.`

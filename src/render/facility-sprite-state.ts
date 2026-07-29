@@ -39,6 +39,7 @@ export const FACILITY_SPRITE_VARIANTS: Readonly<Partial<Record<ModuleType, reado
   [ModuleType.WashBank]: ['damaged', 'dirty', 'active'],
   [ModuleType.CheckoutBank]: ['damaged', 'dirty', 'unstaffed', 'active'],
   [ModuleType.ShelfAisle]: ['damaged', 'dirty', 'empty', 'active'],
+  [ModuleType.DisplayColdCase]: ['damaged', 'dirty', 'empty', 'active'],
   [ModuleType.BunkBank]: ['damaged', 'dirty', 'active']
 };
 
@@ -149,7 +150,7 @@ export function deriveFacilitySpriteTruth(
     // Steward has to physically hold a checkout-staff position to open it, and
     // a shopper facing an unheld bank waits on 'market register unstaffed'.
     unstaffed = (report?.staffSlots ?? 0) > 0 && (report?.staffed ?? 0) <= 0;
-  } else if (module.type === ModuleType.ShelfAisle) {
+  } else if (module.type === ModuleType.ShelfAisle || module.type === ModuleType.DisplayColdCase) {
     // The shelf is the only stock a shopper can actually buy from, and uses the
     // same threshold as the market chain's 'no-stock' block.
     empty = itemStockAtNode(state, module.originTile, 'tradeGood') < 0.95;

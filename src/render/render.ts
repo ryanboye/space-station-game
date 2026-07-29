@@ -294,6 +294,7 @@ const moduleLetter: Record<ModuleType, string> = {
   [ModuleType.MarketStall]: '$',
   [ModuleType.CheckoutBank]: '$',
   [ModuleType.ShelfAisle]: '=',
+  [ModuleType.DisplayColdCase]: 'C',
   [ModuleType.BunkBank]: 'B',
   [ModuleType.BackroomStockBank]: '#',
   [ModuleType.ServiceBar]: 'Y',
@@ -5221,7 +5222,7 @@ function marketStockAtTile(state: StationState, tileIndex: number): number | nul
     : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
   if (!module) return state.modules[tileIndex] === ModuleType.MarketStall ? itemStockAtNode(state, tileIndex, 'tradeGood') : null;
   if (module.type === ModuleType.MarketStall) return itemStockAtNode(state, module.originTile, 'tradeGood');
-  if (module.type === ModuleType.ShelfAisle) {
+  if (module.type === ModuleType.ShelfAisle || module.type === ModuleType.DisplayColdCase) {
     const status = getMarketFixtureStatus(state, module.id);
     return status?.kind === 'shelf' ? status.available : null;
   }
@@ -7201,7 +7202,7 @@ function drawMarketFixtureFeedback(
   };
 
   for (const module of state.moduleInstances) {
-    if (module.type !== ModuleType.ShelfAisle && module.type !== ModuleType.CheckoutBank) continue;
+    if (module.type !== ModuleType.ShelfAisle && module.type !== ModuleType.DisplayColdCase && module.type !== ModuleType.CheckoutBank) continue;
     const status = getMarketFixtureStatus(state, module.id);
     if (!status) continue;
     if (status.kind === 'shelf') {

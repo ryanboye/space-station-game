@@ -3,6 +3,7 @@
 // decision through semantic callbacks.
 
 export type MarketPricingPolicy = 'budget' | 'standard' | 'premium';
+export type RetailAssortmentMix = 'essentials' | 'gifts' | 'technical';
 
 /**
  * Structural mirror of the simulation's economy-event categories.
@@ -52,6 +53,18 @@ export interface TravelSuppliesShopView {
   orderLabel?: string;
   orderCost?: number;
   emptyStockMessage?: string;
+  /** Present only when the panel is anchored to an assortment-bearing display. */
+  assortment?: {
+    fixtureLabel: string;
+    mix: RetailAssortmentMix;
+    options: Array<{
+      mix: RetailAssortmentMix;
+      label: string;
+      appealPercent: number;
+      marginPercent: number;
+      satisfies: string;
+    }>;
+  };
 }
 
 export interface SiteBriefView {
@@ -99,6 +112,7 @@ export interface OpeningEconomyPanelView {
 export type OpeningEconomyPanelAction =
   | { type: 'order-stock' }
   | { type: 'set-pricing-policy'; policy: MarketPricingPolicy }
+  | { type: 'set-shelf-mix'; mix: RetailAssortmentMix }
   | { type: 'accept-project'; projectId: string }
   | { type: 'open-ledger' }
   | { type: 'open-shop' }
@@ -497,7 +511,8 @@ function renderLedger(view: OperatingLedgerView): string {
     </section>`;
 }
 
-function renderShop(view: TravelSuppliesShopView): string {
+/** Pure markup seam used by focused UI checks as well as the mounted panel. */
+export function renderTravelSuppliesShop(view: TravelSuppliesShopView): string {
   const orderText = view.orderLabel ?? 'Order stock';
   const orderCost = view.orderCost === undefined ? '' : ` (${credits(-Math.abs(view.orderCost))})`;
   const stockout = view.stock <= 0 ? `<p class="oe-stockout">${escapeHtml(view.emptyStockMessage ?? 'The shop is out of stock. Travelers cannot buy supplies until a delivery arrives.')}</p>` : '';
@@ -521,6 +536,12 @@ function renderShop(view: TravelSuppliesShopView): string {
         <div class="oe-policy-row" aria-label="Travel supplies pricing policy">
           ${(['budget', 'standard', 'premium'] as const).map((policy) => `<button type="button" class="oe-policy${view.pricingPolicy === policy ? ' active' : ''}" data-oe-policy="${policy}" aria-pressed="${view.pricingPolicy === policy}">${policy[0].toUpperCase()}${policy.slice(1)}</button>`).join('')}
         </div>
+        ${view.assortment ? `
+          <div class="oe-policy-label">${escapeHtml(view.assortment.fixtureLabel)} assortment</div>
+          <div class="oe-policy-row" aria-label="Fixture goods category">
+            ${view.assortment.options.map((option) => `<button type="button" class="oe-policy${view.assortment!.mix === option.mix ? ' active' : ''}" data-oe-shelf-mix="${option.mix}" aria-pressed="${view.assortment!.mix === option.mix}" title="${option.appealPercent}% appeal · ${option.marginPercent}% margin · suits ${escapeHtml(option.satisfies)}">${escapeHtml(option.label)}</button>`).join('')}
+          </div>
+        ` : ''}
         <button class="oe-primary-action" type="button" data-oe-order-stock ${view.canOrderStock ? '' : 'disabled'}>${escapeHtml(orderText)}${orderCost}</button>
         ${stockout}
       </div>
@@ -662,7 +683,7 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     const content = openPanel === 'ledger'
       ? renderLedger(currentView.ledger)
       : openPanel === 'shop'
-        ? renderShop(currentView.shop!)
+        ? renderTravelSuppliesShop(currentView.shop!)
         : renderProjects(currentView.projects!);
     layer.hidden = false;
     const signature = `${openPanel}\n${content}`;
@@ -708,6 +729,11 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     const policy = target.closest<HTMLButtonElement>('[data-oe-policy]')?.dataset.oePolicy as MarketPricingPolicy | undefined;
     if (policy) {
       emit({ type: 'set-pricing-policy', policy });
+      return;
+    }
+    const mix = target.closest<HTMLButtonElement>('[data-oe-shelf-mix]')?.dataset.oeShelfMix as RetailAssortmentMix | undefined;
+    if (mix) {
+      emit({ type: 'set-shelf-mix', mix });
       return;
     }
     if (target.closest('[data-oe-order-stock]')) {

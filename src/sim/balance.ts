@@ -339,6 +339,15 @@ export const MODULE_DEFINITIONS: Record<ModuleType, ModuleDefinition> = {
     storageClass: 'ambient',
     capitalCost: 70
   },
+  [ModuleType.DisplayColdCase]: {
+    width: 3,
+    height: 1,
+    rotatable: true,
+    allowedRooms: [RoomType.Market],
+    itemNodeCapacity: 60,
+    storageClass: 'cold',
+    capitalCost: 110
+  },
   [ModuleType.IntakePallet]: {
     width: 2,
     height: 2,
@@ -868,6 +877,7 @@ export const FACILITY_OPERATING_LOAD: Readonly<Partial<Record<ModuleType, Facili
   [ModuleType.MarketStall]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.14, inUseSoilPerPositionPerMin: 0.7, soilSource: 'market' },
   [ModuleType.CheckoutBank]: { powerDraw: 0.3, idleSoilPerPositionPerMin: 0.2, inUseSoilPerPositionPerMin: 0.7, soilSource: 'market' },
   [ModuleType.ShelfAisle]: { powerDraw: 0.07, idleSoilPerPositionPerMin: 0.16, inUseSoilPerPositionPerMin: 0.6, soilSource: 'market' },
+  [ModuleType.DisplayColdCase]: { powerDraw: 0.22, idleSoilPerPositionPerMin: 0.18, inUseSoilPerPositionPerMin: 0.65, soilSource: 'market' },
   /** Back of house: lit and monitored, but nobody eats or spills here. */
   [ModuleType.BackroomStockBank]: { powerDraw: 0.11, idleSoilPerPositionPerMin: 0.12, inUseSoilPerPositionPerMin: 0.4, soilSource: 'market' },
 
