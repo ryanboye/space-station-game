@@ -864,8 +864,8 @@ audited checklist with no unsupported checked claims.
 
 - [ ] Desired baseline station remains smooth and readable.
 - [ ] Two- to three-times scale remains operationally plausible.
-- [ ] Multiple station geometries remain viable.
-- [ ] Bad layouts create visible problems with more than one valid remedy.
+- [x] Multiple station geometries remain viable.
+- [x] Bad layouts create visible problems with more than one valid remedy.
 - [ ] No phase depends on invisible modifiers as its primary consequence.
 
 ## Focused Runner Catalogue
@@ -2532,3 +2532,61 @@ bugfixing phase.
   `#toggle-zones` and friends directly, but those controls now live behind the
   Overlays palette tab, and `port-ops-v1`'s six stale specs are described in an
   earlier entry. Selector drift, not behavior.
+
+2026-07-28 · Two viable geometries, two valid remedies, and a station that vents
+
+- Commit or files: `normal-scale-50-spine` and the three `mess-line-*` fixtures in
+  `src/sim/cold-start-scenarios.ts`; `runGeometry` in
+  `tools/normal-scale-operation-tests.ts`; `collectOperationalRun` in
+  `tools/target-scale-perf.ts`.
+- **Multiple geometries.** A 74-tile circulation spine with ten vacuum-separated
+  room pods is now measured against the compact block through one shared
+  11-item operational floor, so neither gets a bespoke standard. Both clear it:
+  50/50 population, 8 accessible docks plus 2 derived Berths, mixed call through
+  inspection to inbound haul, Pod/Berth overlap, meals with zero required staff,
+  queue drains, p95 under budget. They are genuinely different topologies —
+  every inter-room trip crosses the spine, against a block where every room
+  shares a wall — and they perform differently: 29 meals against 13, peak queue
+  8 against 26, p95 16.3ms against 7.8ms.
+- **A design rule fell out of building it**, worth more than the row: a counter
+  only serves if its pickup tile stands over its own doorway. Counters buried
+  mid-room gave 5 meals per 240s; moving the same counters onto the door row gave
+  29. Same fixtures, same stock, same crowd.
+- **Two valid remedies.** One bad fixture, `mess-line-choked`, feeds 0 of 24
+  guests in 180s. Adding two counters feeds 12; cutting a doorway under each
+  existing counter — no new fixture at all — feeds 16. One buys throughput, the
+  other buys circulation. Crew count and required staff are asserted identical
+  across all three and seating is held constant, so the staff-stepper failure
+  mode this checklist forbids is structurally excluded rather than merely
+  avoided.
+- **The `test:normal-scale-operation` flake is diagnosed and fixed, and my
+  earlier attribution of it to the wall-clock cadence was wrong.** The real cause
+  was the queue check comparing the mean of the last 30 samples against the 30
+  before, which failed whenever a shipload landed in the final seconds — that is,
+  on a working station. Confirmed at pristine HEAD. Replaced with a direct drain
+  test: the line must fall, must fully drain after its peak, and no half of the
+  run may have people waiting with zero service. Four consecutive green runs.
+- **Two serious findings, measured and deliberately not asserted away:**
+  - **Both authored 50-crew stations vent most of their interior at t≈156s and
+    lose 33-37 crew to vacuum.** Reproduced against pristine HEAD, so it is
+    pre-existing and geometry-independent: exterior wear crosses its breach
+    threshold faster than the repair loop closes it. The 240s runner never
+    noticed because it asserted nothing about air.
+  - **`metrics.leakingTiles` reads 0 for the compact block while 733 of its
+    interior tiles are in vacuum**, because pressurization exempts anything
+    reachable from an Airlock and that station owns exactly one. The spine owns
+    none and reports 753 for the same event. The runner now counts vented
+    interior directly rather than trusting that metric.
+- Row 864 stays **open**: 2.1x footprint sustains a visitor population and 28
+  ships reach an interface, but **meals served is 0** — 17 visitors carried a meal
+  plan and all 17 left unfed while the apron was a fully qualifying public cluster
+  with free queue chains. They route to the dock about 20s after arrival instead
+  of joining an available line. Reported as an unmet claim rather than asserted
+  away; the fix is in the serving-line join path.
+- Row 867 stays **open with a determination rather than a test**: both caps the
+  audit named are structurally unreachable. The environment cap is `min(0.24, d *
+  0.018)` where `d` clamps to 8, so the real ceiling is `0.144`; the sanitation
+  cap is `min(0.18, (dirt - 32) * 0.0014)` and would need dirt at 160.6 while
+  every production write clamps dirt to 100, so the real ceiling is `0.0952`. No
+  buildable scenario reaches either. They are dead ceilings, not test gaps — set
+  the literals to the true values and the existing runner can demonstrate them.
