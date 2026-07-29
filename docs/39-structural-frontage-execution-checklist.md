@@ -621,6 +621,11 @@ audited checklist with no unsupported checked claims.
 - [x] Make small-craft reservations bind to a specific dock.
 - [x] Prevent two ships from owning the same slot.
 - [x] Unify holding queues without merging distinct settlement models.
+  Evidence: `65dfc12` replaces the walk-in `dockQueue` and per-ship approach
+  commitments with one durable `physicalHoldingQueue` spanning Pod and Berth
+  ingress/egress. `npm run test:physical-holding-queue` proves FIFO arbitration,
+  bounded walk-in timeout, visible unbound accepted ships, save/legacy migration,
+  and exactly-once `SmallCraftVisit` versus `PortContract` settlement (5/5).
 
 ### Fleet Shape And Scale
 
