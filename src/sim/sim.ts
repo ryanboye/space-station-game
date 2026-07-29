@@ -21188,8 +21188,12 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     (crew.cleaning && crew.cleanSessionActive) ||
     (crew.toileting && crew.toiletSessionActive) ||
     (crew.drinking && crew.drinkSessionActive);
-  const routeStalledCrewToAssignedSleep = (crew: CrewMember, previousIdleReason: CrewIdleReason): boolean => {
-    if (crew.energy > CREW_REST_CRITICAL_ENERGY_THRESHOLD || crew.resting || crew.activeJobId !== null) return false;
+  const routeStalledCrewToAssignedSleep = (
+    crew: CrewMember,
+    previousIdleReason: CrewIdleReason,
+    preDrainEnergyFloor: number
+  ): boolean => {
+    if (crew.energy > preDrainEnergyFloor || crew.resting || crew.activeJobId !== null) return false;
     if (crewHasActivePhysicalSelfCareSession(crew)) return false;
     const selfCareIntent = crew.eating || crew.cleaning || crew.toileting || crew.drinking || crew.leisure;
     if (!selfCareIntent) return false;
@@ -21374,7 +21378,15 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       !incidentDutyLocked &&
       !commandDutyLocked &&
       !protectedDutyLocked &&
-      routeStalledCrewToAssignedSleep(crew, previousIdleReason)
+      // Decide before the subsequent ordinary duty drain. The current route's
+      // public interference is known here, so this bounded one-step margin
+      // prevents a sampled crew energy value from slipping under the hard 18
+      // floor merely because it crossed between two ticks.
+      routeStalledCrewToAssignedSleep(
+        crew,
+        previousIdleReason,
+        CREW_REST_CRITICAL_ENERGY_THRESHOLD + dt * (0.24 + publicInterference * CREW_PUBLIC_CROWD_DRAIN) + 0.001
+      )
     ) {
       currentResting += 1;
       state.metrics.crewRestingNow = currentResting;

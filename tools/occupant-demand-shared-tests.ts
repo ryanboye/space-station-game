@@ -201,7 +201,7 @@ function testPlannedVisitorServiceIsNotPreempted(): void {
   assert(claim?.releaseReason === null, `planned comfort claim was released (${claim?.releaseReason})`);
 }
 
-function stageCrew(state: StationState, tile: number): CrewMember {
+function stageCrew(state: StationState, tile: number, energy = 0): CrewMember {
   const crew = state.crewMembers[0];
   assert(crew, 'starter production state must provide a real crew member');
   state.crewMembers = [crew];
@@ -218,7 +218,7 @@ function stageCrew(state: StationState, tile: number): CrewMember {
   crew.leisure = false;
   crew.carryingMeal = false;
   crew.eatSessionActive = false;
-  crew.energy = 0;
+  crew.energy = energy;
   crew.idleReason = 'idle_waiting_fixture';
   crew.retargetAt = state.now + 30;
   return crew;
@@ -236,7 +236,9 @@ function crewProductionState(): StationState {
 function testCrewStalledSelfCareYieldsToCriticalSleep(): void {
   const state = crewProductionState();
   const serving = fixtureTile(state, ModuleType.ServingStation);
-  const crew = stageCrew(state, serving);
+  // At 18.02, a normal 0.2s on-duty drain would otherwise land below the
+  // hard 18 floor before the next liveness decision gets a chance to run.
+  const crew = stageCrew(state, serving, 18.02);
   crew.eating = true;
   const old = tryCreateReservation(state, {
     ownerKind: 'crew', ownerId: crew.id, kind: 'provider-slot', targetTile: serving,
@@ -244,8 +246,11 @@ function testCrewStalledSelfCareYieldsToCriticalSleep(): void {
   });
   assert(old.ok, 'crew must obtain a real initial meal-provider claim');
 
-  tick(state, 0.01);
+  const sampledEnergy = [crew.energy];
+  tick(state, 0.2);
+  sampledEnergy.push(crew.energy);
   assert(crew.resting, 'critically fatigued crew stalled at a fixture did not begin assigned sleep');
+  assert(sampledEnergy.every((energy) => energy >= 18), `crew crossed the hard energy floor before sleep: ${sampledEnergy.join(', ')}`);
   assert(!crew.eating && !crew.carryingMeal, 'stalled meal intent survived critical-sleep handoff');
   assert(old.reservation.releaseReason === 'replaced', `stale crew claim did not release once (${old.reservation.releaseReason})`);
   assert(crew.assignedSleepTile !== null, 'critical crew did not retain an assigned physical sleep slot');
