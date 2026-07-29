@@ -16,6 +16,7 @@ import {
   TileType,
   toIndex,
   type ArrivingShip,
+  type InterfaceBoardingTally,
   type MaintenanceDebt,
   type StationState,
   type TransportJob,
@@ -362,27 +363,15 @@ export interface InterfaceBoardingMeasure {
   completedRouteTiles: number;
 }
 
-type BoardingTally = { completedBoardings: number; completedSeconds: number; completedRouteTiles: number };
+const EMPTY_BOARDING_TALLY: Readonly<InterfaceBoardingTally> = {
+  completedBoardings: 0,
+  completedSeconds: 0,
+  completedRouteTiles: 0
+};
 
-/**
- * Completed-boarding totals per interface. Held beside the station rather than
- * on it because `StationState` is owned elsewhere; the live half of the measure
- * needs no store at all.
- */
-const boardingTallies = new WeakMap<StationState, Map<string, BoardingTally>>();
-
-function boardingTallyFor(state: StationState, key: string): BoardingTally {
-  let byInterface = boardingTallies.get(state);
-  if (!byInterface) {
-    byInterface = new Map();
-    boardingTallies.set(state, byInterface);
-  }
-  let tally = byInterface.get(key);
-  if (!tally) {
-    tally = { completedBoardings: 0, completedSeconds: 0, completedRouteTiles: 0 };
-    byInterface.set(key, tally);
-  }
-  return tally;
+function writableBoardingTallyFor(state: StationState, key: string): InterfaceBoardingTally {
+  const tallies = state.interfaceBoardingTallies ?? (state.interfaceBoardingTallies = {});
+  return tallies[key] ?? (tallies[key] = { ...EMPTY_BOARDING_TALLY });
 }
 
 /** The interface a passenger was transferring across, from their origin ship. */
@@ -412,20 +401,20 @@ export function recordInterfaceBoardingCompletion(state: StationState, visitor: 
   const routeTiles = queueTile === null || stationTile === null || accessTile === null
     ? 0
     : manhattan(state, queueTile, stationTile) + manhattan(state, stationTile, accessTile);
-  const tally = boardingTallyFor(state, identityKey(identity));
+  const tally = writableBoardingTallyFor(state, identityKey(identity));
   tally.completedBoardings += 1;
   tally.completedSeconds += Math.max(0, elapsedSeconds);
   tally.completedRouteTiles += routeTiles;
 }
 
-/** Test seam: drop the per-interface boarding totals for one station. */
+/** Test seam: drop the durable per-interface boarding totals for one station. */
 export function resetInterfaceBoardingMeasuresForTests(state: StationState): void {
-  boardingTallies.delete(state);
+  state.interfaceBoardingTallies = {};
 }
 
 export function measureInterfaceBoarding(state: StationState, identity: InterfaceIdentity): InterfaceBoardingMeasure {
   const key = identityKey(identity);
-  const tally = boardingTallyFor(state, key);
+  const tally = state.interfaceBoardingTallies?.[key] ?? EMPTY_BOARDING_TALLY;
   const context = contextFor(state, identity);
   const boarding = context ? boardingVisitors(passengersFor(state, context.ship)) : [];
   let longestWaitSeconds = 0;

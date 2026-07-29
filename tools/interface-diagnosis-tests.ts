@@ -8,6 +8,7 @@ import {
   resetInterfaceDiagnosisCacheForTests,
   setSelectedInterface
 } from '../src/sim/interface-diagnosis';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import { createInitialState, tick } from '../src/sim/sim';
 import {
   ModuleType,
@@ -412,6 +413,89 @@ function testCompletedBoardingIsKeyedByInterface(): void {
   );
 }
 
+function roundTrip(state: StationState): StationState {
+  const parsed = parseAndMigrateSave(serializeSave('interface-boarding-durability', state, 'test'));
+  assert(parsed.ok, `Boarding measurement save failed to parse: ${parsed.ok ? '' : parsed.error}`);
+  return hydrateStateFromSave(parsed.save).state;
+}
+
+/** Row 685: completed measurements resume after save/load without replaying totals. */
+function testCompletedBoardingSurvivesSaveRoundTrip(): void {
+  const state = dockFixture(false);
+  resetInterfaceBoardingMeasuresForTests(state);
+  const identity = { kind: 'dock' as const, dockId: 77 };
+  const stationTile = 8 * state.width + 8;
+  const accessTile = stationTile - state.width;
+  const first = {
+    id: 9401,
+    originShipId: 701,
+    transferQueueTile: stationTile + state.width * 3,
+    transferStationTile: stationTile,
+    transferAccessTile: accessTile
+  } as unknown as Visitor;
+  state.arrivingShips = [{ id: 701, assignedDockId: 77 } as ArrivingShip];
+  // Deliberately seed keys out of lexical order; capture must canonicalize
+  // them so equal ledgers produce byte-stable save payloads.
+  state.interfaceBoardingTallies = {
+    'dock:9': { completedBoardings: 0, completedSeconds: 0, completedRouteTiles: 0 },
+    'berth:2': { completedBoardings: 0, completedSeconds: 0, completedRouteTiles: 0 }
+  };
+  recordInterfaceBoardingCompletion(state, first, 12.5);
+  const serialized = JSON.parse(serializeSave('interface-boarding-order', state, 'test')) as {
+    snapshot: { interfaceBoardingTallies: Record<string, unknown> };
+  };
+  assert(
+    Object.keys(serialized.snapshot.interfaceBoardingTallies).join(',') === 'berth:2,dock:77,dock:9',
+    'Interface boarding keys must serialize in deterministic lexical order.'
+  );
+
+  const loaded = roundTrip(state);
+  const resumed = measureInterfaceBoarding(loaded, identity);
+  assert(resumed.completedBoardings === 1, `Reload lost the first boarding: ${resumed.completedBoardings}.`);
+  assert(resumed.completedSeconds === 12.5, `Reload changed elapsed seconds: ${resumed.completedSeconds}.`);
+  assert(resumed.completedRouteTiles === 4, `Reload changed route tiles: ${resumed.completedRouteTiles}.`);
+
+  loaded.arrivingShips = [{ id: 702, assignedDockId: 77 } as ArrivingShip];
+  const second = {
+    id: 9402,
+    originShipId: 702,
+    transferQueueTile: stationTile + state.width * 2,
+    transferStationTile: stationTile,
+    transferAccessTile: accessTile
+  } as unknown as Visitor;
+  recordInterfaceBoardingCompletion(loaded, second, 7.5);
+  const completed = measureInterfaceBoarding(loaded, identity);
+  assert(completed.completedBoardings === 2, `Resumed tally did not accept one new completion: ${completed.completedBoardings}.`);
+  assert(completed.completedSeconds === 20, `Expected 20 resumed seconds, got ${completed.completedSeconds}.`);
+  assert(completed.completedRouteTiles === 7, `Expected 7 resumed route tiles, got ${completed.completedRouteTiles}.`);
+
+  const loadedAgain = roundTrip(loaded);
+  const repeated = measureInterfaceBoarding(loadedAgain, identity);
+  assert(repeated.completedBoardings === 2, `Repeated load replayed a completion: ${repeated.completedBoardings}.`);
+  assert(repeated.completedSeconds === 20, `Repeated load replayed elapsed time: ${repeated.completedSeconds}.`);
+  assert(repeated.completedRouteTiles === 7, `Repeated load replayed route distance: ${repeated.completedRouteTiles}.`);
+}
+
+/** Row 685 migration: a save written before the tally existed starts inert. */
+function testLegacySaveDefaultsBoardingMeasuresToZero(): void {
+  const state = dockFixture(false);
+  const raw = JSON.parse(serializeSave('legacy-interface-boarding', state, 'test')) as {
+    snapshot: Record<string, unknown>;
+  };
+  delete raw.snapshot.interfaceBoardingTallies;
+  const parsed = parseAndMigrateSave(JSON.stringify(raw));
+  assert(parsed.ok, `Legacy boarding save failed to parse: ${parsed.ok ? '' : parsed.error}`);
+  const loaded = hydrateStateFromSave(parsed.save).state;
+  assert(
+    measureInterfaceBoarding(loaded, { kind: 'dock', dockId: 77 }).completedBoardings === 0,
+    'A legacy save must hydrate an inert boarding tally.'
+  );
+  assert(
+    Object.keys(loaded.interfaceBoardingTallies ?? {}).length === 0,
+    'A legacy save must not synthesize measured interface history.'
+  );
+}
+
 /** Row 691: the world highlight reads the same diagnosis the panel shows. */
 function testSelectedInterfaceFocus(): void {
   const state = dockFixture(true);
@@ -454,5 +538,7 @@ testUnreachableMaintenanceAnchor();
 testInterfaceUtilityGap();
 testBoardingDistanceAndDurationByInterface();
 testCompletedBoardingIsKeyedByInterface();
+testCompletedBoardingSurvivesSaveRoundTrip();
+testLegacySaveDefaultsBoardingMeasuresToZero();
 testSelectedInterfaceFocus();
 console.log('interface-diagnosis-tests: ok');

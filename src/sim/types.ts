@@ -2913,6 +2913,19 @@ export interface OpeningEconomyState {
   capitalProjects: CapitalProjectsState;
 }
 
+/**
+ * Lifetime completed-boarding totals for one physical interface. The key in
+ * `InterfaceBoardingTallies` is the same stable identity used by interface
+ * diagnosis (`dock:<id>` or `berth:<anchorTile>`).
+ */
+export interface InterfaceBoardingTally {
+  completedBoardings: number;
+  completedSeconds: number;
+  completedRouteTiles: number;
+}
+
+export type InterfaceBoardingTallies = Record<string, InterfaceBoardingTally>;
+
 export interface StationState {
   /**
    * Canonical completed-service record (shared contract C1). Promises,
@@ -2977,6 +2990,12 @@ export interface StationState {
   plumbing: PlumbingState;
   mapConditionVersion: number;
   commitment: CommitmentMetrics;
+  /**
+   * Optional so pre-diagnosis saves and freshly created stations remain
+   * compatible. The first completed boarding initializes the durable ledger;
+   * save hydration supplies an empty object when the wire field is absent.
+   */
+  interfaceBoardingTallies?: InterfaceBoardingTallies;
   /**
    * Failed-stay episodes: who is failing, why, since when, and which
    * consequences have already been paid. Durable so a milestone cannot fire

@@ -56,6 +56,7 @@ import {
   type ModuleRotation,
   RoomType,
   type CommitmentMetrics,
+  type InterfaceBoardingTallies,
   type ShelfMix,
   type ShipSize,
   type ShipType,
@@ -522,6 +523,8 @@ export interface StationSnapshotV1 {
   admissionPolicy?: AdmissionPolicy;
   /** Running commitment measurements. Absent on legacy saves, which reset to zero. */
   commitment?: CommitmentMetrics;
+  /** Completed boarding totals by physical interface. Absent on legacy saves. */
+  interfaceBoardingTallies?: InterfaceBoardingTallies;
   portOps: PortOpsState;
   /** Pending approach decisions, including physical reservations made before arrival. */
   trafficOffers?: TrafficOffer[];
@@ -1076,6 +1079,38 @@ function captureLaneProfiles(profiles: Record<SpaceLane, LaneProfile>): Record<S
   }, {} as Record<SpaceLane, LaneProfile>);
 }
 
+const INTERFACE_BOARDING_KEY = /^(?:dock|berth):\d+$/;
+
+/**
+ * Accept only finite, non-negative cumulative values and emit keys in a stable
+ * order. The latter keeps otherwise-identical saves byte-deterministic even if
+ * interface completions occurred in a different object insertion order.
+ */
+function normalizeInterfaceBoardingTallies(
+  raw: unknown,
+  warnings?: string[]
+): InterfaceBoardingTallies {
+  if (raw === undefined) return {};
+  if (!isRecord(raw)) {
+    warnings?.push('interface boarding measurements invalid; reset to zero.');
+    return {};
+  }
+  const normalized: InterfaceBoardingTallies = {};
+  for (const key of Object.keys(raw).sort()) {
+    const entry = raw[key];
+    if (!INTERFACE_BOARDING_KEY.test(key) || !isRecord(entry)) {
+      warnings?.push(`interface boarding measurement ${key} invalid; dropped.`);
+      continue;
+    }
+    normalized[key] = {
+      completedBoardings: Math.max(0, Math.floor(asFiniteNumber(entry.completedBoardings, 0))),
+      completedSeconds: Math.max(0, asFiniteNumber(entry.completedSeconds, 0)),
+      completedRouteTiles: Math.max(0, asFiniteNumber(entry.completedRouteTiles, 0))
+    };
+  }
+  return normalized;
+}
+
 export function captureSnapshot(state: StationState): StationSnapshotV1 {
   const roleCounts =
     state.crew.roleCounts && totalStaffCount(state.crew.roleCounts) === state.crew.total
@@ -1408,6 +1443,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
     failureEpisodes: normalizeFailureEpisodeState(state.failureEpisodes),
     admissionPolicy: normalizeAdmissionPolicy(state.admissionPolicy),
     commitment: state.commitment,
+    interfaceBoardingTallies: normalizeInterfaceBoardingTallies(state.interfaceBoardingTallies),
     portOps: {
       ...state.portOps,
       contracts: state.portOps.contracts.map((contract) => ({
@@ -2868,6 +2904,10 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
   const commitment = isRecord(snapshotRaw.commitment)
     ? (snapshotRaw.commitment as unknown as CommitmentMetrics)
     : undefined;
+  const interfaceBoardingTallies = normalizeInterfaceBoardingTallies(
+    snapshotRaw.interfaceBoardingTallies,
+    warnings
+  );
 
   // Procedural identity. A legacy save carries none of this: `seedAtCreation`
   // stays undefined and hydration falls back to the documented default seed,
@@ -2969,6 +3009,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     failureEpisodes,
     admissionPolicy,
     commitment,
+    interfaceBoardingTallies,
     portOps,
     trafficOffers,
     activePortShips,
@@ -3497,6 +3538,7 @@ export function hydrateStateFromSave(
   // Merge over a zeroed baseline so a legacy save, or one written before a
   // field existed, still hydrates every counter.
   if (snapshot.commitment) next.commitment = { ...next.commitment, ...snapshot.commitment };
+  next.interfaceBoardingTallies = normalizeInterfaceBoardingTallies(snapshot.interfaceBoardingTallies);
   if (snapshot.admissionPolicy === undefined) {
     // Legacy saves keep their old two-scalar auto-admit setting as the seed for
     // the new policy, so a station that had auto-admit on does not silently
