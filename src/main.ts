@@ -17,6 +17,17 @@ import {
 } from './render/progression/wire';
 import { PROGRESSION_TOOLTIP_COPY } from './sim/content/progression-tooltips';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from './sim/save';
+import {
+  continueEligibleSaves,
+  parseSaveStore,
+  saveStorageKeys,
+  saveStorageScopeFromSearchParams,
+  sortSavesForUi,
+  trimSaveStore,
+  type LocalSaveRecord,
+  type SaveStorageScope,
+  type SaveStore
+} from './save-store';
 import { UNLOCK_DEFINITIONS } from './sim/content/unlocks';
 import {
   SPECIALTY_BRANCH_COMPLETION_REQUIREMENT,
@@ -224,6 +235,7 @@ import {
 // without early expansion bottlenecking on haul/build jobs.
 const INSTANT_BUILD_PLAYTEST = true;
 const startupParams = new URLSearchParams(window.location.search);
+let activeSaveStorageScope: SaveStorageScope = saveStorageScopeFromSearchParams(startupParams);
 const STRUCTURAL_EXPANSION_ENABLED = true;
 const STARTER_LAYOUT_DB_NAME = 'starlight-starter-layouts';
 const STARTER_LAYOUT_STORE_NAME = 'templates';
@@ -6697,14 +6709,7 @@ const market = {
 };
 
 const GAME_VERSION = '0.2.0-two-berth-shift';
-const SAVE_STORE_KEY = 'stationSim.saves.v1';
-const AUTOSAVE_KEY = 'spacegame-autosave';
 const AUTOSAVE_INTERVAL_MS = 60_000;
-const QUICKSAVE_ID = 'quicksave';
-const MAX_SAVE_SLOTS = 30;
-// localStorage is commonly capped per origin. Keep enough headroom for the
-// separate autosave and browser bookkeeping as stations grow.
-const MAX_SAVE_STORE_CHARS = 3_500_000;
 
 async function configureStarterLayoutEditor(): Promise<void> {
   if (!starterLayoutEditorMode) return;
@@ -6785,19 +6790,6 @@ async function configureStarterLayoutEditor(): Promise<void> {
 }
 
 void configureStarterLayoutEditor();
-
-type LocalSaveRecord = {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  payloadText: string;
-};
-
-type SaveStore = {
-  storeVersion: 1;
-  saves: LocalSaveRecord[];
-};
 
 type SelectedAgent = { kind: 'visitor' | 'resident' | 'crew'; id: number };
 type RoomStampCell = {
@@ -8449,18 +8441,6 @@ cameraResetBtn.addEventListener('click', () => {
   fitStationToViewport();
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function sortSavesForUi(saves: LocalSaveRecord[]): LocalSaveRecord[] {
-  return [...saves].sort((a, b) => {
-    if (a.id === QUICKSAVE_ID && b.id !== QUICKSAVE_ID) return -1;
-    if (a.id !== QUICKSAVE_ID && b.id === QUICKSAVE_ID) return 1;
-    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  });
-}
-
 function setSaveStatus(message: string, tone: 'ok' | 'warn' | 'error' | 'muted' = 'muted'): void {
   saveStatusEl.textContent = message;
   saveStatusEl.classList.remove('status-ok', 'status-warn', 'status-error', 'status-muted');
@@ -8469,7 +8449,7 @@ function setSaveStatus(message: string, tone: 'ok' | 'warn' | 'error' | 'muted' 
   );
 }
 
-function readSaveStore(): { store: SaveStore; warnings: string[] } {
+function readSaveStore(scope: SaveStorageScope = activeSaveStorageScope): { store: SaveStore; warnings: string[] } {
   const warnings: string[] = [];
   const fallback: SaveStore = {
     storeVersion: 1,
@@ -8477,64 +8457,34 @@ function readSaveStore(): { store: SaveStore; warnings: string[] } {
   };
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(SAVE_STORE_KEY);
+    raw = localStorage.getItem(saveStorageKeys(scope).storeKey);
   } catch {
     warnings.push('Unable to read localStorage. Save slots are unavailable.');
     return { store: fallback, warnings };
   }
-  if (!raw) return { store: fallback, warnings };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    warnings.push('Save storage was corrupted and has been reset.');
-    return { store: fallback, warnings };
-  }
-  if (!isRecord(parsed) || parsed.storeVersion !== 1 || !Array.isArray(parsed.saves)) {
+  const parsed = parseSaveStore(raw);
+  if (parsed.invalid) {
     warnings.push('Save storage format was invalid and has been reset.');
     return { store: fallback, warnings };
   }
-
-  const saves: LocalSaveRecord[] = [];
-  for (const entry of parsed.saves) {
-    if (!isRecord(entry)) continue;
-    if (
-      typeof entry.id !== 'string' ||
-      typeof entry.name !== 'string' ||
-      typeof entry.createdAt !== 'string' ||
-      typeof entry.updatedAt !== 'string' ||
-      typeof entry.payloadText !== 'string'
-    ) {
-      continue;
-    }
-    saves.push({
-      id: entry.id,
-      name: entry.name,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-      payloadText: entry.payloadText
-    });
-  }
-  return {
-    store: {
-      storeVersion: 1,
-      saves
-    },
-    warnings
-  };
+  return { store: parsed.store, warnings };
 }
 
-function writeSaveStore(store: SaveStore, allowAutosaveEviction = false): boolean {
+function writeSaveStore(
+  store: SaveStore,
+  allowAutosaveEviction = false,
+  scope: SaveStorageScope = activeSaveStorageScope
+): boolean {
+  const keys = saveStorageKeys(scope);
   const serialized = JSON.stringify(store);
   try {
-    localStorage.setItem(SAVE_STORE_KEY, serialized);
+    localStorage.setItem(keys.storeKey, serialized);
     return true;
   } catch (initialError) {
     if (allowAutosaveEviction) {
       try {
-        localStorage.removeItem(AUTOSAVE_KEY);
-        localStorage.setItem(SAVE_STORE_KEY, serialized);
+        localStorage.removeItem(keys.autosaveKey);
+        localStorage.setItem(keys.storeKey, serialized);
         autosaveStatusEl.classList.add('hidden');
         return true;
       } catch {
@@ -8546,29 +8496,6 @@ function writeSaveStore(store: SaveStore, allowAutosaveEviction = false): boolea
     setSaveStatus(`Save storage is full or unavailable${reason}. Delete or download an old save and try again.`, 'error');
     return false;
   }
-}
-
-function trimSaveStore(saves: LocalSaveRecord[], protectedSaveId?: string): { saves: LocalSaveRecord[]; removed: number } {
-  const ranked = [...saves].sort((a, b) => {
-    if (a.id === protectedSaveId && b.id !== protectedSaveId) return -1;
-    if (a.id !== protectedSaveId && b.id === protectedSaveId) return 1;
-    if (a.id === QUICKSAVE_ID && b.id !== QUICKSAVE_ID) return -1;
-    if (a.id !== QUICKSAVE_ID && b.id === QUICKSAVE_ID) return 1;
-    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  });
-  const kept: LocalSaveRecord[] = [];
-  for (const save of ranked) {
-    if (kept.length >= MAX_SAVE_SLOTS) continue;
-    const candidate = [...kept, save];
-    const candidateChars = JSON.stringify({ storeVersion: 1, saves: candidate }).length;
-    if (candidateChars <= MAX_SAVE_STORE_CHARS || save.id === protectedSaveId) {
-      kept.push(save);
-    }
-  }
-  return {
-    saves: kept,
-    removed: saves.length - kept.length
-  };
 }
 
 function formatByteSize(bytes: number): string {
@@ -8608,7 +8535,8 @@ function buildSaveDownloadFilename(save: LocalSaveRecord): string {
 
 function refreshSaveUi(preferredSaveId?: string): void {
   const { store, warnings } = readSaveStore();
-  const saves = sortSavesForUi(store.saves);
+  const quicksaveId = saveStorageKeys(activeSaveStorageScope).quicksaveId;
+  const saves = sortSavesForUi(store.saves, quicksaveId);
   saveSlotSelect.innerHTML = '';
   if (saves.length <= 0) {
     const emptyOpt = document.createElement('option');
@@ -8626,7 +8554,9 @@ function refreshSaveUi(preferredSaveId?: string): void {
     for (const save of saves) {
       const opt = document.createElement('option');
       opt.value = save.id;
-      const prefix = save.id === QUICKSAVE_ID ? '[Quick] ' : '';
+      const prefix = save.id === quicksaveId
+        ? activeSaveStorageScope === 'qa' ? '[QA Quick] ' : '[Quick] '
+        : activeSaveStorageScope === 'qa' ? '[QA] ' : '';
       const stamp = new Date(save.updatedAt).toLocaleString();
       opt.textContent = `${prefix}${save.name} (${stamp})`;
       saveSlotSelect.appendChild(opt);
@@ -11452,7 +11382,10 @@ saveCreateBtn.addEventListener('click', () => {
 });
 
 saveQuicksaveBtn.addEventListener('click', () => {
-  saveToSlot('Quicksave', QUICKSAVE_ID);
+  saveToSlot(
+    activeSaveStorageScope === 'qa' ? 'QA Quicksave' : 'Quicksave',
+    saveStorageKeys(activeSaveStorageScope).quicksaveId
+  );
 });
 
 saveLoadBtn.addEventListener('click', () => {
@@ -12111,7 +12044,8 @@ function frame(now: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Autosave — ticks every AUTOSAVE_INTERVAL_MS, single slot at AUTOSAVE_KEY.
+// Autosave — one slot per persistence domain. Deterministic scenario/repro
+// sessions cannot replace the player's ordinary autosave.
 // Opt-in load: player sees a "Load last session (saved HH:MM)" button on
 // arrival and decides whether to hydrate. Auto-loading on refresh would
 // override intentional reset attempts. Serialization gated by `stateDirty`
@@ -12159,10 +12093,10 @@ function markDirty(): void {
   stateDirty = true;
 }
 
-function readAutosaveRecord(): AutosaveRecord | null {
+function readAutosaveRecord(scope: SaveStorageScope = activeSaveStorageScope): AutosaveRecord | null {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(AUTOSAVE_KEY);
+    raw = localStorage.getItem(saveStorageKeys(scope).autosaveKey);
   } catch {
     return null;
   }
@@ -12183,8 +12117,8 @@ function writeAutosave(): void {
       savedAt: Date.now(),
       payloadText: serializeSave('__autosave__', state, GAME_VERSION)
     };
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(record));
-    autosaveStatusEl.textContent = `Autosaved ${formatClock(record.savedAt)}`;
+    localStorage.setItem(saveStorageKeys(activeSaveStorageScope).autosaveKey, JSON.stringify(record));
+    autosaveStatusEl.textContent = `${activeSaveStorageScope === 'qa' ? 'QA autosaved' : 'Autosaved'} ${formatClock(record.savedAt)}`;
     autosaveStatusEl.classList.remove('hidden');
   } catch (err) {
     // localStorage full, serialization error, or quota exhausted — log
@@ -12201,9 +12135,10 @@ function writeAutosave(): void {
  */
 function startFreshAutosaveEpoch(): void {
   pendingAutosaveLoad = false;
+  const autosaveKey = saveStorageKeys(activeSaveStorageScope).autosaveKey;
   try {
     localStorage.setItem(
-      AUTOSAVE_KEY,
+      autosaveKey,
       JSON.stringify({
         savedAt: Date.now(),
         payloadText: serializeSave('__autosave__', state, GAME_VERSION)
@@ -12213,7 +12148,7 @@ function startFreshAutosaveEpoch(): void {
     // Losing the slot is survivable; a stale record is not. Clear instead.
     console.warn('[autosave] could not seed new-game epoch:', err);
     try {
-      localStorage.removeItem(AUTOSAVE_KEY);
+      localStorage.removeItem(autosaveKey);
     } catch {
       /* ignore */
     }
@@ -12237,7 +12172,7 @@ function offerAutosaveLoadOnColdStart(): void {
       loadAutosaveBtn.title = failLabel;
       loadAutosaveBtn.setAttribute('aria-label', failLabel);
       try {
-        localStorage.removeItem(AUTOSAVE_KEY);
+        localStorage.removeItem(saveStorageKeys(activeSaveStorageScope).autosaveKey);
       } catch {
         /* ignore */
       }
@@ -12319,6 +12254,12 @@ window.__harnessExportSave = () => {
 };
 
 window.__harnessLoadSave = (json: string) => {
+  // Console-driven deterministic work should switch persistence domains just
+  // like ?scenario and ?loadId do, even when it began on a plain app URL.
+  if (activeSaveStorageScope !== 'qa') {
+    activeSaveStorageScope = 'qa';
+    refreshSaveUi();
+  }
   try {
     const parsed = parseAndMigrateSave(json);
     if (!parsed.ok) {
@@ -12409,7 +12350,7 @@ type ContinueCandidate = {
 };
 
 function getContinueCandidate(): ContinueCandidate | null {
-  const autosave = readAutosaveRecord();
+  const autosave = readAutosaveRecord('player');
   if (autosave) {
     const parsed = parseAndMigrateSave(autosave.payloadText);
     if (parsed.ok) {
@@ -12421,8 +12362,8 @@ function getContinueCandidate(): ContinueCandidate | null {
     }
   }
 
-  const { store } = readSaveStore();
-  const saves = [...store.saves].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const { store } = readSaveStore('player');
+  const saves = continueEligibleSaves('player', store.saves);
   for (const save of saves) {
     const parsed = parseAndMigrateSave(save.payloadText);
     if (!parsed.ok) continue;
