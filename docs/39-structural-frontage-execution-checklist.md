@@ -255,8 +255,11 @@ audited checklist with no unsupported checked claims.
 
 ### Shared Occupant Demand
 
-- [ ] Extract or reuse the resident need lifecycle as a shared occupant-demand
+- [x] Extract or reuse the resident need lifecycle as a shared occupant-demand
   engine rather than writing a second long-visitor engine.
+  Evidence: `npm run test:occupant-demand-shared` drives visitor, resident, and
+  crew profiles through the shared pure kernel, then proves production paths,
+  physical claims, and distinct caller-owned decay/modifier profiles.
 - [x] Preserve distinct actor identity and tenure contracts.
 - [x] Add `errand` tenure.
 - [x] Add `shore` tenure for shore leave.
@@ -270,7 +273,12 @@ audited checklist with no unsupported checked claims.
 - [x] Keep one-shot wants distinct from recurring needs.
 - [x] Derive broad tenure and demand from ship purpose.
 - [x] Add bounded seeded individual variation inside readable ship archetypes.
-- [ ] Ensure critical needs override optional wants without target oscillation.
+- [x] Ensure critical needs override optional wants without target oscillation.
+  Evidence: `npm run test:occupant-demand-shared` proves a severe need replaces
+  real optional Couch claims for a visitor and resident, retains one physical
+  target across five retries, preserves planned/active service claims, and
+  moves critically fatigued crew out of stalled—not active—self-care before
+  crossing the energy floor.
 
 ### Visit Lifecycle
 
@@ -324,8 +332,14 @@ audited checklist with no unsupported checked claims.
   serves a planned need, moves consigned freight, extends once, recalls,
   boards, strands missed passengers, cleans up and settles once.
   Evidence: `npm run test:mixed-berth-visit`.
-- [ ] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
-- [ ] Focused check: fixed and flexible schedules behave differently.
+- [x] Focused check: repair crew repeatedly eats, sleeps, washes, and recreates.
+  Evidence: `npm run test:repair-crew-cycle` observes four named contract crew
+  complete at least two canonical, physically claimed cycles of each service
+  before recall; the run finishes at 417.6 simulated seconds.
+- [x] Focused check: fixed and flexible schedules behave differently.
+  Evidence: `npm run test:failed-stay` gives shore traffic its firm scheduled
+  recall while unfinished contract work earns one bounded, durable
+  `remaining-work` extension; later recall/boarding still cleans up physically.
 - [x] Focused check: concurrent visits overlap without rapid replacement.
 
 ## Phase 1B: Physical Slots, Demand Discovery, And Facility Scale
@@ -2975,3 +2989,32 @@ bugfixing phase.
   496.5c (+25.1%) and premium traffic from 40.6% to 54.7% (+14.1 points). Every
   pair retained its lane and identical district premium/risky pull metrics, so
   the result is not district prestige silently changing under another name.
+
+2026-07-29 · One demand engine, stable preemption, and repeated contract life
+
+- Commits or files: `363ad51`, `aefa15a`, `d4d6d6d`, `114f899`, `7e2ba24`,
+  `85e689a`, and `3d9a37a`; `src/sim/occupant-demand.ts`; the production
+  resident, visitor, crew, lodging, and boarding seams in `src/sim/sim.ts`;
+  `tools/occupant-demand-shared-tests.ts`, `tools/repair-crew-cycle-tests.ts`,
+  and `tools/failed-stay-tests.ts`.
+- Visitor and resident values now pass through one caller-owned demand kernel.
+  The visitor profile retains its exact 0.30/0.22/0.16/0.20 rates, while the
+  resident profile retains 0.65/0.50/0.40 plus its existing environmental and
+  social terms. Identity and tenure do not collapse into one actor type.
+- Production preemption replaces a real optional Couch claim with one real meal
+  or bed claim and keeps that need sticky across retries. Planned visitor work,
+  another active critical recovery, and an actively occupied crew meal/wash/
+  toilet/drink session are protected. A pathless or fixture-waiting crew intent
+  yields before the next duty drain can cross energy 18. The live rest census
+  now updates on that same actor frame instead of lagging the world by one.
+- `npm run test:repair-crew-cycle` follows four named repair-tender crew for
+  417.6 simulated seconds. Counts were respectively meal/sleep/wash/recreation:
+  3/2/3/21, 3/2/2/6, 3/2/2/15, and 3/2/4/9. Every credited event had an observed
+  live physical claim; energy used Guest Cabin/Bunk Bank lodging, recreation
+  stayed separate, and no one boarded while the tender remained in
+  `visit-service`.
+- The boarding correction is phase-based rather than a distance exception: a
+  docked origin is not an exit until recall/boarding opens. Observable Pod calls
+  now open recall at their shared target after real non-passenger work resolves,
+  so the 8/8 Pod timing suite still proves physical passenger return; legacy
+  pre-field Pod saves retain their old boarding behavior.
