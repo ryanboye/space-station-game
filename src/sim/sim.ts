@@ -13576,6 +13576,14 @@ function createTrafficOffer(
       : shipType === 'industrial'
         ? 1 + roughPull * 0.35
         : 1;
+  // Authored onboarding, rescue, and procurement templates keep their
+  // published economics byte-for-byte. The rating premium is only applied to
+  // newly generated routine calls.
+  const ratingQuality = template ? 0 : stationRatingTrafficQuality(state);
+  const ratingValueMultiplier =
+    shipType === 'tourist' ? 0.88 + ratingQuality * 0.26 :
+    shipType === 'trader' ? 0.95 + ratingQuality * 0.10 :
+    shipType === 'industrial' ? 0.98 + ratingQuality * 0.04 : 1;
   const fuelEnabled = getUnlockTier(state) >= 2 && offerKind !== 'passenger';
   const fuelTrackRecord = state.portOps.telemetry.fuelTarget > 0
     ? clamp(state.portOps.telemetry.fuelCompleted / state.portOps.telemetry.fuelTarget, 0, 1)
@@ -13637,8 +13645,8 @@ function createTrafficOffer(
     berthTimeSec: template?.berthTimeSec ?? Math.round(
       42 + passengersTotal * 1.4 + cargoScale * 16 + (offerFuelSupply + offerFuelRequest) * 1.4
     ),
-    dockingFee: template?.dockingFee ?? Math.round((55 + passengersTotal * 4 + cargoScale * 45) * reputationValueMultiplier),
-    projectedSpend: template?.projectedSpend ?? Math.round(passengersTotal * (shipType === 'tourist' ? 18 : shipType === 'trader' ? 14 : 10) * reputationValueMultiplier),
+    dockingFee: template?.dockingFee ?? Math.round((55 + passengersTotal * 4 + cargoScale * 45) * reputationValueMultiplier * ratingValueMultiplier),
+    projectedSpend: template?.projectedSpend ?? Math.round(passengersTotal * (shipType === 'tourist' ? 18 : shipType === 'trader' ? 14 : 10) * reputationValueMultiplier * ratingValueMultiplier),
     riskLabel: template?.riskLabel ?? (shipType === 'military' ? 'high' : shipType === 'industrial' ? 'guarded' : 'low'),
     assignedBerthAnchor: null
   };
@@ -14015,13 +14023,24 @@ function availableOfferShipTypes(state: StationState): ShipType[] {
   return ['tourist', 'trader', 'industrial'];
 }
 
+/**
+ * The station rating is a station-wide promise, distinct from the local
+ * district pull calculated from security and customs. Ease its 0..100 range
+ * so early gains are legible without making a perfect score unbounded.
+ */
+function stationRatingTrafficQuality(state: StationState): number {
+  const normalized = clamp(state.metrics.stationRating / 100, 0, 1);
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
 function reputationAdjustedOfferWeight(state: StationState, shipType: ShipType, baseWeight: number): number {
   const premium = clamp(state.metrics.reputationPremiumDemandBonusPct / 100, 0, 0.35);
   const rough = clamp(state.metrics.reputationRiskyDemandBonusPct / 100, 0, 0.35);
+  const ratingQuality = stationRatingTrafficQuality(state);
   const multiplier =
-    shipType === 'tourist' ? 1 + premium * 2.1 :
-    shipType === 'trader' ? 1 + premium * 0.9 + rough * 0.25 :
-    shipType === 'industrial' ? 1 + rough * 1.7 :
+    shipType === 'tourist' ? (1 + premium * 2.1) * (0.76 + ratingQuality * 0.98) :
+    shipType === 'trader' ? (1 + premium * 0.9 + rough * 0.25) * (0.92 + ratingQuality * 0.28) :
+    shipType === 'industrial' ? (1 + rough * 1.7) * (1.04 - ratingQuality * 0.08) :
     shipType === 'military' ? 1 + rough * 1.2 : 1;
   const bank = getOperatingSchedule(state).trafficBank;
   const bankMultiplier = bank === 'passenger-bank'
