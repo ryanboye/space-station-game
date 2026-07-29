@@ -249,8 +249,14 @@ function testBoardingAndStranding(): void {
   normal.stayClass = 'errand';
   normal.needs = undefined;
   normal.state = VisitorState.ToDock;
-  // Boarding now owns a physical transfer slot and crossing animation; allow
-  // that visible movement to finish rather than asserting the old instant exit.
+  const normalContract = state.portOps.contracts.find((entry) => entry.id === normalShip.id);
+  assert(normalContract, 'Normal boarding fixture needs its active contract.');
+  // Open the production recall seam first. A docked origin is not itself an
+  // exit: boarding begins only when its contract calls the passenger home.
+  normalContract.boardingStartsAt = state.now;
+  normalContract.hardDepartureAt = state.now + 30;
+  // Boarding owns a physical transfer slot and crossing animation; allow that
+  // visible movement to finish rather than asserting the old instant exit.
   advance(state, 3);
   assert(!state.visitors.some((visitor) => visitor.id === normal.id), 'A normally boarded passenger must leave the visitor list.');
 

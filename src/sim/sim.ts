@@ -8032,7 +8032,13 @@ function updatePassengerTransferVisitor(
 
 function queueVisitorForBoardingTransfer(state: StationState, visitor: Visitor): boolean {
   const ship = originShipForVisitor(state, visitor);
-  if (!ship || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
+  // A docked ship is a visitor's origin, not an open exit. Letting every
+  // ToDock reroute enter this queue made long-stay contract crew disappear
+  // through the Gangway while their tender was still in visit-service.
+  // Departure traffic is real only after the ship has called recall (or is
+  // already resolving its departure); every caller shares this gate.
+  const boardingOpen = ship?.visitPhase === 'recall' || ship?.visitPhase === 'boarding' || ship?.stage === 'depart';
+  if (!ship || !boardingOpen || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
   if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding');
   return true;
 }
@@ -23297,10 +23303,20 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
   if (visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined) {
     return assignPathToMarketCheckout(state, visitor);
   }
-  if (visitor.recurringNeedActive === 'energy' && visitor.activeService === 'comfort') {
+  // `needs.active` is the durable sticky selection. Keep it alongside the
+  // runtime-facing field here: a retry/preemption boundary may clear the
+  // latter between path attempts, but must not turn sleep into recreation.
+  const energyNeedsLodging =
+    visitor.activeService === 'comfort' &&
+    (visitor.recurringNeedActive === 'energy' || visitor.needs?.active === 'energy');
+  if (energyNeedsLodging) {
     if (assignPathToTemporarySleep(state, visitor)) return true;
-    // Older saves remain playable without guest lodging: comfort fixtures are
-    // the intentional fallback until the player builds temporary beds.
+    // Once the station owns visitor lodging, energy is a sleep commitment.
+    // A full bunk bank means wait and retry for that real slot; routing a
+    // tired contract crew to a Game Station would incorrectly complete its
+    // recurring energy cycle as recreation. Older saves without any visitor
+    // lodging retain the generic-comfort fallback below.
+    if (temporarySleepSlots(state).length > 0) return false;
   }
   const loungeTargets = activeModuleUsageTargets(
     state,
@@ -23333,10 +23349,12 @@ function assignPathToPreferredLeisure(state: StationState, visitor: Visitor): bo
       ],
       restroom: preferredVisitorToiletTargets(state),
       hygiene: preferredVisitorWashTargets(state),
-      comfort: [
-        ...activeModuleUsageTargets(state, [ModuleType.GameStation], [RoomType.Lounge]),
-        ...activeModuleUsageTargets(state, [ModuleType.Telescope], [RoomType.Observatory])
-      ]
+      comfort: energyNeedsLodging && temporarySleepSlots(state).length > 0
+        ? []
+        : [
+          ...activeModuleUsageTargets(state, [ModuleType.GameStation], [RoomType.Lounge]),
+          ...activeModuleUsageTargets(state, [ModuleType.Telescope], [RoomType.Observatory])
+        ]
     };
     const targets = serviceTargets[visitor.activeService];
     if (targets.length === 0) return false;
@@ -25209,6 +25227,20 @@ function updateVisitorLogic(
         }
       }
     } else {
+      const originShip = originShipForVisitor(state, visitor);
+      if (
+        isLongStayClass(visitor.stayClass) &&
+        originShip?.visitPhase === 'visit-service' &&
+        originShip.stage === 'docked'
+      ) {
+        // A recurring contract occupant has no business walking toward its
+        // still-open tender. Clear the stale dock route before selecting the
+        // next durable need, otherwise routeLongStayVisitor would retain it.
+        setVisitorPath(state, visitor, []);
+        routeLongStayVisitor(state, visitor);
+        keep.push(visitor);
+        continue;
+      }
       if (queueVisitorForBoardingTransfer(state, visitor)) {
         keep.push(visitor);
         continue;
