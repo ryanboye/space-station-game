@@ -6,6 +6,7 @@ import {
   getFailureEpisodes,
   getStrandedReliefQuote,
   setAdmissionPolicy,
+  setShelfMix,
   transferStrandedVisitor
 } from './sim/sim';
 import { DockEconomyFeedbackLayer, type DockDepartureResult } from './render/dock-economy-feedback';
@@ -200,6 +201,7 @@ import {
   type ShipSize,
   type ShipHullVariant,
   type ShipType,
+  type ShelfMix,
   type HousingPolicy,
   type ItemType,
   type JobStallReason,
@@ -229,6 +231,7 @@ import {
   type RouteExposure,
   type UnlockTier
 } from './sim/types';
+import { SHELF_MIXES, shelfMixOf } from './sim/facility-machines';
 
 // Temporary playtest valve: construction/EVA remains implemented, but the
 // primary build tools place immediately so other station systems can be tested
@@ -6040,6 +6043,22 @@ function refreshSelectionSummary(): void {
   }
   if (selectedRoomTile !== null) {
     const room = state.rooms[selectedRoomTile];
+    const selectedModuleId = state.moduleOccupancyByTile[selectedRoomTile];
+    const selectedModule = selectedModuleId === null
+      ? null
+      : state.moduleInstances.find((module) => module.id === selectedModuleId) ?? null;
+    if (selectedModule?.type === ModuleType.ShelfAisle) {
+      const mix = shelfMixOf(selectedModule);
+      const buttons = (Object.keys(SHELF_MIXES) as ShelfMix[]).map((candidate) => {
+        const profile = SHELF_MIXES[candidate];
+        return `<button type="button" data-shelf-mix="${candidate}" aria-pressed="${candidate === mix.mix}">${escapeHtml(profile.label)}</button>`;
+      }).join('');
+      selectionSummaryEl.innerHTML = `<div class="shelf-mix-selection">
+        <span><b>Shelf mix: ${escapeHtml(mix.label)}</b> · ${Math.round(mix.demandAppeal * 100)}% appeal · ${Math.round(mix.marginMultiplier * 100)}% margin · suits ${escapeHtml(mix.satisfies.join(' + '))}</span>
+        <span class="shelf-mix-actions" aria-label="Shelf goods category">${buttons}</span>
+      </div>`;
+      return;
+    }
     const diagnostic = getRoomDiagnosticAt(state, selectedRoomTile);
     const clusterMeta = state.derived.clusterByTile.get(selectedRoomTile);
     const cluster = clusterMeta?.cluster ?? [selectedRoomTile];
@@ -10785,6 +10804,17 @@ settlementSummaryEl.addEventListener('click', (event) => {
   hoveredTile = tileIndex;
   selectedRoomTile = tileIndex;
   refreshSelectionSummary();
+});
+
+selectionSummaryEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-shelf-mix]');
+  if (!button || selectedRoomTile === null) return;
+  const mix = button.dataset.shelfMix as ShelfMix | undefined;
+  if (!mix || !(mix in SHELF_MIXES)) return;
+  if (setShelfMix(state, selectedRoomTile, mix)) {
+    toolLockMessage = `${SHELF_MIXES[mix].label} selected for this Shelf Aisle.`;
+    refreshSelectionSummary();
+  }
 });
 
 taxInput.addEventListener('input', () => {
