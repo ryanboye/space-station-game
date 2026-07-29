@@ -117,7 +117,7 @@ export function openingRecipes(): OpeningRecipe[] {
         roomStep(
           RoomType.Market,
           24,
-          'Shape one 24-tile PUBLIC Market cluster'
+          "Shape one 24-tile PUBLIC Market cluster (the starter's east apron fits a 3\u00d78 strip)"
         ),
         moduleStep(ModuleType.CheckoutBank, 1, 'One Checkout Bank'),
         moduleStep(ModuleType.ShelfAisle, 1, 'One Shelf Aisle (stocked by cargo)'),
