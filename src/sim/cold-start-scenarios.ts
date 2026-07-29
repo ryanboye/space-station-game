@@ -1443,7 +1443,11 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     void checkout;
     stageFacilityCargoHandlers(s, 2, 63, 55);
     stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
-    stageFacilityVisitors(s, 6, 51, 52, 'market');
+    // The playable comparison carries the same full cohort as the focused
+    // throughput check. Six shoppers rarely fill even one visible register
+    // line before the first sales complete; twelve make the cheap layout's
+    // single-checkout bottleneck legible without inventing extra demand later.
+    stageFacilityVisitors(s, 12, 51, 52, 'market');
     s.controls.paused = true;
   },
 
@@ -1470,7 +1474,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     shelfTwo.shelfMix = 'gifts';
     stageFacilityCargoHandlers(s, 2, 63, 55);
     stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
-    stageFacilityVisitors(s, 6, 51, 55, 'market');
+    stageFacilityVisitors(s, 12, 51, 55, 'market');
     s.controls.paused = true;
   },
 

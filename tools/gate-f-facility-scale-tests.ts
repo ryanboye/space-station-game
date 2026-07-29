@@ -415,6 +415,11 @@ function testMarketLayoutComparison(): string {
     pickedUp: number;
   };
   const runMarket = (state: StationState): MarketRun => {
+    // The browser scenarios expose the entire 12-person crowd immediately so
+    // the bottleneck is readable on load. For the throughput comparison,
+    // preserve the harsher two-wave contract that proves the improved layout
+    // can recover and restock before demand returns.
+    state.visitors.splice(6);
     const physicalStock = (): number =>
       state.itemNodes.reduce((total, node) => total + Math.max(0, node.items.tradeGood ?? 0), 0);
     const startingPhysicalStock = physicalStock();
