@@ -53,6 +53,7 @@ import {
 import { selectShipHullVariant, shipHullProfile } from './ship-hulls';
 import {
   facilityUsageTilesForModule,
+  publicApproachTilesForModule,
   resolveFacilitySlots,
   type FacilitySlotRole
 } from './facility-descriptors';
@@ -13106,6 +13107,25 @@ function serviceQueueCirculation(
   state: StationState,
   providers: readonly ServiceQueueProvider[]
 ): QueueCirculationRequirement[] {
+  const routeRemainsOpen = (requirement: QueueCirculationRequirement, occupied: number): boolean => {
+    if (requirement.from === occupied) return false;
+    const destinations = new Set(requirement.toAny.filter((tile) => tile !== occupied));
+    if (destinations.size === 0) return false;
+    const visited = new Set<number>([requirement.from]);
+    const frontier = [requirement.from];
+    let cursor = 0;
+    while (cursor < frontier.length) {
+      const tile = frontier[cursor++]!;
+      if (destinations.has(tile)) return true;
+      for (const neighbor of adjacentWalkableTiles(state, tile)) {
+        if (neighbor === occupied || visited.has(neighbor)) continue;
+        if (state.moduleOccupancyByTile[neighbor] !== null) continue;
+        visited.add(neighbor);
+        frontier.push(neighbor);
+      }
+    }
+    return false;
+  };
   const requirements = new Map<string, QueueCirculationRequirement>();
   for (const provider of providers) {
     const cluster = clusterForRoomTile(state, provider.room, provider.tile);
@@ -13138,7 +13158,18 @@ function serviceQueueCirculation(
     );
     if (from === undefined) continue;
     const key = `${provider.room}:${Math.min(...cluster)}`;
-    requirements.set(key, { key, from, toAny: [...exits].sort((a, b) => a - b) });
+    const requirement = { key, from, toAny: [...exits].sort((a, b) => a - b) };
+    // Two doors only constitute a circulation promise when the room geometry
+    // can actually honour it while serving at least one customer. A compact
+    // 3-wide market has one customer lane between its counter and both exits:
+    // treating that impossible promise as mandatory made the valid opening
+    // shop entirely unqueueable instead of visibly cramped. Genuinely
+    // redundant multi-door rooms retain the promise and protect a drain.
+    const realHeads = [...providerHeads].filter(
+      (tile) => isWalkable(state.tiles[tile]) && state.moduleOccupancyByTile[tile] === null
+    );
+    if (!realHeads.some((head) => routeRemainsOpen(requirement, head))) continue;
+    requirements.set(key, requirement);
   }
   return [...requirements.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -13188,8 +13219,33 @@ function serviceQueueReadinessCapacity(
   const cached = cache.capacityByProviderSet.get(providerSetKey);
   if (cached !== undefined) return cached;
 
-  const demand = new Map(providers.map((provider) => [provider.key, 1]));
-  const plan = serviceQueuePlan(state, providers, demand);
+  // Readiness asks whether the depicted customer position has one walkable
+  // square immediately outside the fixture's authored public face. Restricting
+  // the transient head candidates to that face prevents side/back floor from
+  // making a hull-blocked checkout look usable. A single customer standing at
+  // the counter is not a queue spill, so the multi-door drain promise applies
+  // only when live demand grows a line beyond this readiness probe.
+  const readinessProviders = providers.map((provider) => {
+    const moduleId = state.moduleOccupancyByTile[provider.tile];
+    const module = moduleId === null
+      ? null
+      : state.moduleInstances.find((candidate) => candidate.id === moduleId) ?? null;
+    const publicApproach = new Set(
+      module ? publicApproachTilesForModule(module, state.width, state.height) : []
+    );
+    return {
+      ...provider,
+      heads: provider.heads.filter((tile) => publicApproach.has(tile))
+    };
+  });
+  const requests: QueueProviderRequest[] = readinessProviders.map((provider) => ({
+    key: provider.key,
+    servingTile: provider.tile,
+    room: provider.room,
+    requestedDemand: 1,
+    headCandidates: provider.heads
+  }));
+  const plan = planQueueLayout({ tiles: queueTopologyTiles(state), providers: requests, circulation: [] });
   const capacity = providers.reduce(
     (total, provider) => total + Math.min(1, plan.allocationsByProvider.get(provider.key)?.length ?? 0),
     0
