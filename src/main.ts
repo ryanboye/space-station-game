@@ -3733,18 +3733,50 @@ function chosenOfferInterface(offer: TrafficOffer, preview: TrafficOfferPreview)
 }
 
 let renderedBerthOpsHtml = '';
+/**
+ * Per-interface disclosure, keyed by ship id.
+ *
+ * The cards are rebuilt from scratch whenever their text changes and re-placed
+ * every frame, so the expanded/collapsed choice cannot live on the DOM node.
+ * Ship id is the only handle that stays stable across a whole turnaround.
+ */
 const collapsedBerthOpsCards = new Map<number, boolean>();
 
+// Every live interface rests as a one-line chip. A card only earns the space to
+// explain itself when the player asks it to: three pods docked at once must not
+// bury the station they are docked to. An explicit expand is sticky for that
+// ship until it departs.
 function berthOpsCardCollapsed(shipId: number): boolean {
-  const activeInterfaceCount = state.arrivingShips.filter((ship) =>
-    ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
-  ).length;
-  // One or two calls can afford to explain themselves in place. At fleet
-  // scale, default new cards to their compact world chip so a five-interface
-  // bank does not turn the map into an operations spreadsheet. A player's
-  // explicit Show/Hide choice remains sticky for that ship.
-  return collapsedBerthOpsCards.get(shipId)
-    ?? (window.matchMedia('(max-width: 760px)').matches || activeInterfaceCount >= 3);
+  return collapsedBerthOpsCards.get(shipId) ?? true;
+}
+
+/**
+ * Trouble that has to stay legible at chip size.
+ *
+ * `blocked` is work that has stopped and needs a decision; `late` is work still
+ * running against a clock it is about to lose. Both are carried as colour on
+ * the card edge and a dot on the chip, never as another line of text.
+ */
+type BerthOpsAttention = 'blocked' | 'late' | null;
+
+function berthOpsAttentionClass(attention: BerthOpsAttention): string {
+  return attention === null ? '' : ` needs-attention attention-${attention}`;
+}
+
+/**
+ * The resting form of a live-ops card: callsign, phase, and completion on one
+ * line. The chip is also the disclosure control, so the whole line is the hit
+ * target and the card underneath needs no second toggle.
+ */
+function berthOpsChip(
+  shipId: number,
+  callsign: string,
+  status: string,
+  attention: BerthOpsAttention,
+  collapsed: boolean
+): string {
+  const flag = attention === null ? '' : '<i class="berth-ops-flag" aria-hidden="true"></i>';
+  return `<button class="traffic-offer-head berth-ops-chip" data-berth-ops-toggle="${shipId}" type="button" aria-expanded="${String(!collapsed)}" title="${collapsed ? 'Show turnaround details' : 'Hide turnaround details'}"><strong>${flag}${escapeHtml(callsign)}</strong><span>${escapeHtml(status)}</span></button>`;
 }
 
 function disclosedVisitRange(value: number, spread: number, step = 1): string {
@@ -3909,12 +3941,21 @@ function refreshTrafficOffers(): void {
         `${podDockServiceLabel(service.kind, service.freightDirection)} ${service.status.toUpperCase()} ${Math.round(service.progress * 100)}%`
       ).join(' · ');
       const collapsed = berthOpsCardCollapsed(ship.id);
-      return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor${collapsed ? ' is-collapsed' : ''}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
-        <div class="traffic-offer-head"><strong>${escapeHtml(ship.portManifest?.callsign ?? `POD ${ship.id}`)} · POD DOCK</strong><span>${ship.stage.toUpperCase()} · ${progress}%</span></div>
-        <div class="traffic-offer-meta">${escapeHtml(liveVisitPurpose(ship))} · ${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'}</div>
-        <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
-        <button class="berth-ops-detail-toggle" data-berth-ops-toggle="${ship.id}" type="button" aria-expanded="${String(!collapsed)}">${collapsed ? 'Show details' : 'Hide details'}</button>
+      // A pod that has stopped is blocked; one still working with its patience
+      // nearly spent is late and will leave unserved if nothing changes.
+      const patienceLeft = ship.smallCraftVisit.patienceExpiresAt > 0
+        ? ship.smallCraftVisit.patienceExpiresAt - state.now
+        : Number.POSITIVE_INFINITY;
+      const attention: BerthOpsAttention = firstBlocked !== null
+        ? 'blocked'
+        : progress < 100 && patienceLeft <= 20
+          ? 'late'
+          : null;
+      return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor${collapsed ? ' is-collapsed' : ''}${berthOpsAttentionClass(attention)}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
+        ${berthOpsChip(ship.id, ship.portManifest?.callsign ?? `POD ${ship.id}`, `${ship.stage.toUpperCase()} · ${progress}%`, attention, collapsed)}
         <div class="berth-ops-detail">
+          <div class="traffic-offer-meta">${escapeHtml(liveVisitPurpose(ship))} · ${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'}</div>
+          <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
           <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
           <div class="small-craft-service-summary">${escapeHtml(serviceSummary)}</div>
           ${firstBlocked ? `<small class="small-craft-blocked">Action: ${escapeHtml(firstBlocked)}</small>` : ''}
@@ -3934,12 +3975,18 @@ function refreshTrafficOffers(): void {
       return `<div class="turnaround-promise ${complete ? 'complete' : ''}"><span>${promise.label}</span><b>${Math.floor(promise.completed)}/${Math.floor(promise.target)}</b></div>`;
     }).join('') ?? '<div class="traffic-offer-line">Preparing contract...</div>';
     const collapsed = berthOpsCardCollapsed(ship.id);
-    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'} berth-ops-anchor${collapsed ? ' is-collapsed' : ''}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
-      <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase} · ${secondsLeft}s</span></div>
-      <div class="traffic-offer-meta">${escapeHtml(liveVisitPurpose(ship))} · BERTH ${berthStanding?.serviceGrade ?? 'C'}</div>
-      <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
-      <button class="berth-ops-detail-toggle" data-berth-ops-toggle="${ship.id}" type="button" aria-expanded="${String(!collapsed)}">${collapsed ? 'Show details' : 'Hide details'}</button>
+    // Berth work has no blocked flag of its own, but it does have a clock: an
+    // unfinished promise set inside the boarding window, or inside the last
+    // half-minute, is late and needs the player before the ship leaves.
+    const onTheClock = Boolean(contract || turn);
+    const attention: BerthOpsAttention =
+      onTheClock && progress < 100 && (contract?.status === 'boarding' || secondsLeft <= 24) ? 'late' : null;
+    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'} berth-ops-anchor${collapsed ? ' is-collapsed' : ''}${berthOpsAttentionClass(attention)}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
+      ${berthOpsChip(ship.id, offer.callsign, `${phase} · ${progress}%`, attention, collapsed)}
       <div class="berth-ops-detail">
+        <div class="traffic-offer-meta">${escapeHtml(offer.shipName)} · ${escapeHtml(liveVisitPurpose(ship))} · BERTH ${berthStanding?.serviceGrade ?? 'C'}</div>
+        <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
+        <div class="traffic-offer-meta">${secondsLeft}s LEFT</div>
         <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
         <div class="turnaround-promises">${promiseRows}</div>
       </div>
@@ -4098,6 +4145,8 @@ function refreshTrafficOffers(): void {
   refreshTrafficOfferTimers(visibleOffers);
 }
 
+// Delegated because the cards are rebuilt whenever their text changes: the
+// chip that was clicked may not be the node that renders the new state.
 berthOpsAnchorsEl.addEventListener('click', (event) => {
   const target = event.target instanceof HTMLElement
     ? event.target.closest<HTMLButtonElement>('[data-berth-ops-toggle]')
@@ -4107,6 +4156,7 @@ berthOpsAnchorsEl.addEventListener('click', (event) => {
   if (!Number.isFinite(shipId)) return;
   const card = target.closest<HTMLElement>('[data-berth-ops-ship]');
   const collapsed = !(card?.classList.contains('is-collapsed') ?? false);
+  // Only the clicked interface changes; every other card keeps its own state.
   collapsedBerthOpsCards.set(shipId, collapsed);
   renderedBerthOpsHtml = '';
   refreshTrafficOffers();
@@ -12500,6 +12550,7 @@ declare global {
     __harnessPauseAndFlush: () => void;
     __harnessAdvanceSim: (seconds: number, step?: number) => void;
     __harnessDiagnoseFoodChain: () => unknown;
+    __harnessDiagnoseRecipes: () => unknown;
     __harnessReady: boolean;
   }
 }
@@ -12575,6 +12626,27 @@ window.__harnessAdvanceSim = (seconds: number, step = 0.25) => {
 window.__harnessDiagnoseFoodChain = () => {
   return JSON.parse(JSON.stringify(diagnoseFoodChain(state)));
 };
+
+// Opening-recipe evidence. The recipe readout and the room inspector can
+// disagree about the same cluster, and when they do the player is told to fix
+// something that is already done. Expose what the evaluator actually saw.
+window.__harnessDiagnoseRecipes = () => JSON.parse(JSON.stringify(
+  evaluateOpeningRecipes(state).map((recipe) => ({
+    id: recipe.id,
+    built: recipe.built,
+    operational: recipe.operational,
+    candidateAccess: recipe.candidateAccess,
+    operationalReasons: recipe.operationalReasons,
+    steps: recipe.steps.map((step) => ({
+      kind: step.kind,
+      module: step.module ?? null,
+      label: step.label,
+      have: step.have,
+      count: step.count,
+      satisfied: step.satisfied
+    }))
+  }))
+));
 
 window.__harnessReady = true;
 
