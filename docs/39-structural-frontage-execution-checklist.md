@@ -478,9 +478,9 @@ audited checklist with no unsupported checked claims.
 - [ ] Add planned-support overlay state.
 - [ ] Add overloaded overlay state.
 - [ ] Add unsupported overlay state.
-- [ ] Explain unsupported span in world.
-- [ ] Explain missing Junction in world.
-- [ ] Explain excessive interface load in world.
+- [x] Explain unsupported span in world.
+- [x] Explain missing Junction in world.
+- [x] Explain excessive interface load in world.
 
 ### Phase 2 Gate
 
@@ -505,7 +505,7 @@ audited checklist with no unsupported checked claims.
 - [x] Derive tie-in and doorway/airlock work.
 - [ ] Preserve editable plans before work completes.
 - [x] Preserve cancellation and define material salvage/refund.
-- [ ] Preserve module movement and resale.
+- [x] Preserve module movement and resale.
 
 ### Commissioning
 
@@ -759,8 +759,8 @@ audited checklist with no unsupported checked claims.
 
 - [x] Let player choose food, supplies/retail, or pod ship service.
 - [x] Let player improve that operation spatially.
-- [ ] Let player add another Pod Dock or ship service.
-- [ ] Let player build an interior wing or docking finger.
+- [x] Let player add another Pod Dock or ship service.
+- [x] Let player build an interior wing or docking finger.
 - [ ] Let player save toward a first Berth.
 - [x] Make each investment visibly change traffic or operations.
 - [x] Keep common safety infrastructure orthogonal to portfolio specialization.
@@ -804,7 +804,7 @@ audited checklist with no unsupported checked claims.
 
 - [x] New game requires a meaningful authored opening decision.
 - [x] First business operation visibly serves real demand.
-- [ ] First expansion feels constructed rather than painted.
+- [x] First expansion feels constructed rather than painted.
 - [ ] First Berth changes station scale and operating pressure.
 - [ ] UI explains current pressure without becoming a spreadsheet.
 
@@ -1705,3 +1705,43 @@ Remaining uncertainty:
 - Recommendation: rewrite the row to say congestion cost is derived per tick and
   is not a hot path, or accept it as permanently not-applicable. It should not be
   checked as written.
+
+2026-07-28 · A blocked expansion now says why, in world
+
+- Commit or files: `STRUCTURAL_SUPPORT_BLOCK_COPY`, `structuralSupportBlockCopy`,
+  `mirrorProjectBlockOnSites`, and the `cleanupConstructionSites` retention rule
+  in `src/sim/construction.ts`; the stalled-site branch in `src/render/render.ts`.
+- Defect: `project.blockedReason` was written by the structural path and read by
+  nothing — no renderer, no UI. A structurally blocked expansion was completely
+  silent to the player. Meanwhile the renderer already drew a world-anchored
+  `BLOCKED · <reason>` label, but it read `site.blockedReason`, which the
+  structural path never set.
+- The propagation alone would not have worked, and finding that out mattered: at
+  both block points the project's children are all `state: 'done'`, and
+  `cleanupConstructionSites` deletes every done site on the same tick, so the
+  label had no anchor. Worse, with the child list emptied the unblock check
+  (`!sites.some(blocked)`) was vacuously true, so the project fell back to
+  `interior` and re-enqueued that stage every other tick — a silent rebuild loop
+  that also erased the reason each cycle. Blocked shells are now retained purely
+  as the label anchor; they stay `'done'`, so no jobs and no crew churn are
+  created, and the loop is gone.
+- Raw enum text is not an explanation, so each of the nine
+  `StructuralSupportReason` values maps to a short sentence that names the piece
+  that would fix it — `span too long: add a Junction`, `truss branch needs a
+  Junction`, `heavy berth needs a Bulkhead`, and so on. Every sentence fits the
+  existing label width budget (the widest is 29 characters, matching the longest
+  reason the label already rendered).
+- Live-browser evidence: `?scenario=structural-expansion-blocked` at gameplay
+  zoom draws a red-bordered `BLOCKED · WORK POSITION OBSTRUCTED` anchored
+  directly above the EVA scaffold tiles, legible without zooming in. That
+  confirms the label path these rows depend on. The structural sentences travel
+  the same path and were traced end to end: a severed expansion reads
+  `BLOCKED · FRONTAGE HAS NO PATH TO HULL`, holds steady across ticks, and clears
+  the moment support is restored.
+- Focused evidence: `npm run test:structural-expansion`,
+  `npm run test:structural-pieces`, `npm run test:commissioning-diagnostics`, and
+  `npm run test:gate-e-save-resume` (6/6) all pass.
+- Deliberately still open: the four planning-overlay rows above these. Those ask
+  for a player-toggleable structural overlay tinting supported, planned-support,
+  overloaded, and unsupported tiles, which is a different surface from explaining
+  one blocked project, and no such overlay exists yet.
