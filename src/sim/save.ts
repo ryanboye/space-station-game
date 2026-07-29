@@ -110,6 +110,16 @@ import { normalizeAdmissionPolicy, type AdmissionPolicy } from './admission-poli
 import { createPodDemandLog, normalizePodDemandLog } from './pod-demand';
 import { createCapitalProjectsState, hydrateCapitalProjectsState } from './capital-projects';
 import {
+  luggageIdentity,
+  luggageJobIdentity,
+  reconcileLuggageCustody,
+  type LuggageCustodyState,
+  type LuggageLeg,
+  type LuggageLocation,
+  type LuggagePhase,
+  type LuggageJobState
+} from './luggage';
+import {
   validatePodFreightOperation,
   type CourierHandling,
   type PodFreightDirection,
@@ -146,6 +156,15 @@ const PASSENGER_TRANSFER_PHASES: PassengerTransferPhase[] = [
   'boarding-queued',
   'boarding-crossing'
 ];
+const LUGGAGE_PHASES: readonly LuggagePhase[] = [
+  'aboard',
+  'inbound-transit',
+  'claim',
+  'outbound-transit',
+  'returned'
+];
+const LUGGAGE_LEGS: readonly LuggageLeg[] = ['inbound', 'outbound'];
+const LUGGAGE_JOB_STATES: readonly LuggageJobState[] = ['pending', 'carried', 'completed', 'cancelled'];
 const SHIP_VISIT_PHASES = ['announced', 'approach', 'secure', 'visit-service', 'recall', 'boarding', 'depart'] as const;
 const VISIT_SCHEDULE_REASONS = ['remaining-work', 'service-failure'] as const;
 const BERTH_SCREENING_LEVELS: BerthScreeningLevel[] = ['open', 'standard', 'strict'];
@@ -359,6 +378,8 @@ export interface StationSnapshotV1 {
       movementReplanCooldownUntil?: number;
       /** An active haul remains physically held by this crew member across save/load. */
       activeJobId?: number | null;
+      /** Passenger luggage is a separate, identity-bearing custody job. */
+      activeLuggageJobId?: string | null;
       carryingItemType?: ItemType | null;
       carryingAmount?: number;
     }>;
@@ -385,6 +406,8 @@ export interface StationSnapshotV1 {
     'stalledSince' | 'blockedReason' | 'portShipId' | 'portCargoLotId' |
     'portCargoDirection' | 'portFuelNodeTile'
   >>;
+  /** Optional so saves created before physical luggage hydrate to an inert ledger. */
+  luggageCustody?: LuggageCustodyState;
   controls: {
     shipsPerCycle: number;
     taxRate: number;
@@ -944,6 +967,157 @@ function normalizeVisitorNeeds(value: unknown): VisitorNeeds | undefined {
   };
 }
 
+function canonicalLuggageId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^luggage:(\d+):(\d+)$/.exec(value);
+  if (!match) return null;
+  const shipId = Number(match[1]);
+  const passengerId = Number(match[2]);
+  if (!Number.isSafeInteger(shipId) || shipId < 0 || !Number.isSafeInteger(passengerId) || passengerId < 0) {
+    return null;
+  }
+  return luggageIdentity(shipId, passengerId);
+}
+
+function canonicalLuggageJobId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(luggage:\d+:\d+):(inbound|outbound)$/.exec(value);
+  if (!match) return null;
+  const luggageId = canonicalLuggageId(match[1]);
+  if (!luggageId) return null;
+  return luggageJobIdentity(luggageId, match[2] as LuggageLeg);
+}
+
+function strictNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizeLuggageLocation(value: unknown, tileCount: number): LuggageLocation | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === 'carrier') {
+    const carrierId = strictNonNegativeInteger(value.carrierId);
+    return carrierId !== null ? { kind: 'carrier', carrierId } : null;
+  }
+  if (value.kind !== 'ship' && value.kind !== 'claim' && value.kind !== 'loose') return null;
+  const tile = strictNonNegativeInteger(value.tile);
+  if (tile === null || tile >= tileCount) return null;
+  return { kind: value.kind, tile };
+}
+
+function normalizeLuggageCustody(
+  value: unknown,
+  tileCount: number,
+  warnings: string[]
+): LuggageCustodyState {
+  const empty: LuggageCustodyState = { bags: [], jobs: [], carriers: [] };
+  if (value === undefined) return empty;
+  if (!isRecord(value)) {
+    warnings.push('luggageCustody malformed; defaulted.');
+    return empty;
+  }
+
+  if (Array.isArray(value.bags)) {
+    for (let index = 0; index < value.bags.length; index++) {
+      const entry = value.bags[index];
+      if (!isRecord(entry)) {
+        warnings.push(`luggageCustody.bags[${index}] invalid; skipped.`);
+        continue;
+      }
+      const shipId = strictNonNegativeInteger(entry.shipId);
+      const passengerId = strictNonNegativeInteger(entry.passengerId);
+      const shipTile = strictNonNegativeInteger(entry.shipTile);
+      const claimTile = entry.claimTile === null ? null : strictNonNegativeInteger(entry.claimTile);
+      const location = normalizeLuggageLocation(entry.location, tileCount);
+      if (
+        shipId === null ||
+        passengerId === null ||
+        shipTile === null || shipTile >= tileCount ||
+        (entry.claimTile !== null && (claimTile === null || claimTile >= tileCount)) ||
+        !isOneOf(entry.phase, LUGGAGE_PHASES) ||
+        !location
+      ) {
+        warnings.push(`luggageCustody.bags[${index}] has invalid identity, phase, or location; skipped.`);
+        continue;
+      }
+      empty.bags.push({
+        id: luggageIdentity(shipId, passengerId),
+        shipId,
+        passengerId,
+        shipTile,
+        claimTile,
+        phase: entry.phase,
+        location,
+        returnRequested: entry.returnRequested === true,
+        passengerStranded: entry.passengerStranded === true
+      });
+    }
+  } else if (value.bags !== undefined) {
+    warnings.push('luggageCustody.bags malformed; defaulted.');
+  }
+
+  if (Array.isArray(value.jobs)) {
+    for (let index = 0; index < value.jobs.length; index++) {
+      const entry = value.jobs[index];
+      if (!isRecord(entry)) {
+        warnings.push(`luggageCustody.jobs[${index}] invalid; skipped.`);
+        continue;
+      }
+      const luggageId = canonicalLuggageId(entry.luggageId);
+      const fromTile = strictNonNegativeInteger(entry.fromTile);
+      const toTile = strictNonNegativeInteger(entry.toTile);
+      const carrierId = entry.carrierId === null ? null : strictNonNegativeInteger(entry.carrierId);
+      if (
+        !luggageId ||
+        !isOneOf(entry.leg, LUGGAGE_LEGS) ||
+        !isOneOf(entry.state, LUGGAGE_JOB_STATES) ||
+        fromTile === null || fromTile >= tileCount ||
+        toTile === null || toTile >= tileCount ||
+        (entry.carrierId !== null && carrierId === null)
+      ) {
+        warnings.push(`luggageCustody.jobs[${index}] has invalid identity, state, or tile; skipped.`);
+        continue;
+      }
+      empty.jobs.push({
+        id: luggageJobIdentity(luggageId, entry.leg),
+        luggageId,
+        leg: entry.leg,
+        fromTile,
+        toTile,
+        state: entry.state,
+        carrierId
+      });
+    }
+  } else if (value.jobs !== undefined) {
+    warnings.push('luggageCustody.jobs malformed; defaulted.');
+  }
+
+  if (Array.isArray(value.carriers)) {
+    for (let index = 0; index < value.carriers.length; index++) {
+      const entry = value.carriers[index];
+      if (!isRecord(entry)) {
+        warnings.push(`luggageCustody.carriers[${index}] invalid; skipped.`);
+        continue;
+      }
+      const carrierId = strictNonNegativeInteger(entry.carrierId);
+      const luggageId = canonicalLuggageId(entry.luggageId);
+      if (carrierId === null || !luggageId || !isOneOf(entry.leg, LUGGAGE_LEGS)) {
+        warnings.push(`luggageCustody.carriers[${index}] has invalid identity; skipped.`);
+        continue;
+      }
+      empty.carriers.push({
+        carrierId,
+        luggageId,
+        jobId: luggageJobIdentity(luggageId, entry.leg),
+        leg: entry.leg
+      });
+    }
+  } else if (value.carriers !== undefined) {
+    warnings.push('luggageCustody.carriers malformed; defaulted.');
+  }
+
+  return empty;
+}
+
 function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | null {
   if (!isRecord(value) || !Number.isFinite(value.id) || !Number.isFinite(value.tileIndex) || !isOneOf(value.state, Object.values(VisitorState))) {
     return null;
@@ -1015,6 +1189,7 @@ function normalizeSavedVisitor(value: unknown, tileCount: number): Visitor | nul
     transferStationTile: null,
     transferCrossingStartedAt,
     transferBlockedTile: null,
+    luggageId: canonicalLuggageId(value.luggageId) ?? undefined,
     stayClass,
     needs: stayClass === 'contract' || stayClass === 'extended' ? needs : undefined,
     recurringNeedActive: needs?.active ?? null,
@@ -1331,6 +1506,7 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         blockedTicks: crew.blockedTicks,
         movementReplanCooldownUntil: crew.movementReplanCooldownUntil,
         activeJobId: crew.activeJobId,
+        activeLuggageJobId: crew.activeLuggageJobId,
         carryingItemType: crew.carryingItemType,
         carryingAmount: crew.carryingAmount
       }))
@@ -1393,6 +1569,11 @@ export function captureSnapshot(state: StationState): StationSnapshotV1 {
         portFuelNodeTile: job.portFuelNodeTile
       }))
       .sort((a, b) => a.id - b.id),
+    luggageCustody: {
+      bags: state.luggageCustody.bags.map((bag) => ({ ...bag, location: { ...bag.location } })),
+      jobs: state.luggageCustody.jobs.map((job) => ({ ...job })),
+      carriers: state.luggageCustody.carriers.map((carrier) => ({ ...carrier }))
+    },
     controls: {
       shipsPerCycle: state.controls.shipsPerCycle,
       taxRate: state.controls.taxRate,
@@ -2380,6 +2561,9 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
           : Number.isFinite(entry.activeJobId)
             ? Math.max(0, Math.floor(asFiniteNumber(entry.activeJobId, 0)))
             : undefined,
+        activeLuggageJobId: entry.activeLuggageJobId === null
+          ? null
+          : canonicalLuggageJobId(entry.activeLuggageJobId) ?? undefined,
         carryingItemType: entry.carryingItemType === null
           ? null
           : isOneOf(entry.carryingItemType, ITEM_TYPES)
@@ -2923,6 +3107,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         return visitor ? [visitor] : [];
       })
     : [];
+  const luggageCustody = normalizeLuggageCustody(snapshotRaw.luggageCustody, expectedLength, warnings);
   const transportJobs: NonNullable<StationSnapshotV1['transportJobs']> = [];
   if (Array.isArray(snapshotRaw.transportJobs)) {
     const seenJobIds = new Set<number>();
@@ -3043,6 +3228,7 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
     command,
     inventoryByTile,
     transportJobs,
+    luggageCustody,
     controls: {
       shipsPerCycle,
       taxRate,
@@ -3976,10 +4162,40 @@ export function hydrateStateFromSave(
     crew.blockedTicks = Math.max(0, Math.floor(saved.blockedTicks ?? 0));
     crew.movementReplanCooldownUntil = Math.max(0, saved.movementReplanCooldownUntil ?? 0);
     crew.activeJobId = saved.activeJobId ?? null;
+    crew.activeLuggageJobId = saved.activeLuggageJobId ?? null;
     crew.carryingItemType = saved.carryingItemType ?? null;
     crew.carryingAmount = Math.max(0, saved.carryingAmount ?? 0);
   }
   restorePersistedTransportJobs(next, snapshot.transportJobs ?? [], warnings);
+  const persistedLuggage = snapshot.luggageCustody ?? { bags: [], jobs: [], carriers: [] };
+  const crewById = new Map(next.crewMembers.map((crew) => [crew.id, crew]));
+  const authorizedCarrierLinks = persistedLuggage.carriers.filter((link) =>
+    crewById.get(link.carrierId)?.activeLuggageJobId === link.jobId &&
+    crewById.get(link.carrierId)?.activeJobId === null &&
+    crewById.get(link.carrierId)?.carryingItemType === null
+  );
+  next.luggageCustody = reconcileLuggageCustody({
+    bags: persistedLuggage.bags,
+    jobs: persistedLuggage.jobs,
+    carriers: authorizedCarrierLinks
+  });
+  const claimedActiveJobs = new Set<string>();
+  for (const crew of [...next.crewMembers].sort((left, right) => left.id - right.id)) {
+    const activeId = crew.activeLuggageJobId;
+    if (!activeId) continue;
+    const job = next.luggageCustody.jobs.find((candidate) => candidate.id === activeId);
+    const ownsCarriedJob = job?.state === 'carried' && next.luggageCustody.carriers.some((link) =>
+      link.carrierId === crew.id && link.jobId === activeId
+    );
+    const ownsPendingJob = job?.state === 'pending' && crew.activeJobId === null &&
+      crew.carryingItemType === null && !claimedActiveJobs.has(activeId);
+    if (!ownsCarriedJob && !ownsPendingJob) {
+      crew.activeLuggageJobId = null;
+      warnings.push(`Crew ${crew.id} had stale luggage custody authority; cleared.`);
+      continue;
+    }
+    claimedActiveJobs.add(activeId);
+  }
   next.crewSpawnCounter = Math.max(
     next.crewSpawnCounter,
     next.crewMembers.reduce((max, crew) => Math.max(max, crew.id + 1), 1)

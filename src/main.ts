@@ -8079,7 +8079,12 @@ function toolPaletteSection(tool: BuildTool): PaletteSection {
   if (tool.kind === 'room') return 'rooms';
   if (tool.kind === 'module' || tool.kind === 'move-module') return 'modules';
   if (tool.kind === 'hire-staff') return 'crew';
-  if (tool.kind === 'zone') return 'overlays';
+  // The Public access / Crew only controls live in the Businesses section, not
+  // in Overlays. Sending the palette to Overlays on selection threw the player
+  // to a panel with no zoning controls and no active state, so painting access
+  // read as doing nothing at all. Overlays owns the Zones *lens*, which is a
+  // different thing from the zoning *tool*.
+  if (tool.kind === 'zone') return 'businesses';
   return 'structure';
 }
 

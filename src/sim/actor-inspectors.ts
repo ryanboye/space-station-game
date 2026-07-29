@@ -387,7 +387,7 @@ function crewInspectorDesire(crew: CrewMember): CrewDesire {
   if (crew.drinking) return 'drink';
   if (crew.cleaning) return 'clean';
   if (crew.leisure) return 'social';
-  if (crew.activeJobId !== null) return 'logistics';
+  if (crew.activeJobId !== null || crew.activeLuggageJobId) return 'logistics';
   if (crew.bladder <= CREW_BLADDER_TOILET_THRESHOLD) return 'toilet';
   if (crew.thirst <= CREW_THIRST_DRINK_THRESHOLD) return 'drink';
   if (crew.hunger <= CREW_HUNGER_MEAL_THRESHOLD) return 'eat';
@@ -397,6 +397,15 @@ function crewInspectorDesire(crew: CrewMember): CrewDesire {
 }
 
 function crewInspectorTargetTile(state: StationState, crew: CrewMember): number | null {
+  if (crew.activeLuggageJobId) {
+    const job = state.luggageCustody.jobs.find((candidate) => candidate.id === crew.activeLuggageJobId);
+    if (job) {
+      const carrying = state.luggageCustody.carriers.some(
+        (link) => link.carrierId === crew.id && link.jobId === job.id
+      );
+      return carrying || job.state === 'carried' ? job.toTile : job.fromTile;
+    }
+  }
   if (crew.activeJobId !== null) {
     const job = state.jobs.find((j) => j.id === crew.activeJobId);
     if (job) return crew.carryingItemType !== null || job.state === 'in_progress' ? job.toTile : job.fromTile;
@@ -411,6 +420,29 @@ function crewInspectorAction(
   crew: CrewMember,
   desire: CrewDesire
 ): { currentAction: string; actionReason: string; stateLabel: string } {
+  if (crew.activeLuggageJobId) {
+    const job = state.luggageCustody.jobs.find((candidate) => candidate.id === crew.activeLuggageJobId);
+    if (job) {
+      const carrying = state.luggageCustody.carriers.some(
+        (link) => link.carrierId === crew.id && link.jobId === job.id
+      );
+      const destination = job.leg === 'inbound' ? 'claim' : 'ship';
+      return {
+        currentAction: carrying
+          ? `carrying passenger luggage to ${destination}`
+          : 'walking to passenger luggage pickup',
+        // The stable string identity is deliberately visible even though the
+        // existing CrewInspector output only has a numeric activeJobId field.
+        actionReason: `luggage job ${job.id} ${job.state} | bag ${job.luggageId} | ${job.fromTile}->${job.toTile}`,
+        stateLabel: 'luggage logistics'
+      };
+    }
+    return {
+      currentAction: 'luggage assignment missing',
+      actionReason: `active luggage job ${crew.activeLuggageJobId} no longer exists`,
+      stateLabel: 'luggage logistics'
+    };
+  }
   if (crew.activeJobId !== null) {
     const job = state.jobs.find((j) => j.id === crew.activeJobId);
     if (job) {

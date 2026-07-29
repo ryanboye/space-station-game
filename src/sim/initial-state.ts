@@ -558,6 +558,7 @@ export function createInitialState(options?: {
     admissionPolicy: createAdmissionPolicy(),
     pathOccupancyByTile: new Map(),
     jobs: [],
+    luggageCustody: { bags: [], jobs: [], carriers: [] },
     reservations: [],
     constructionSites: [],
     structuralPieces: [],

@@ -4464,6 +4464,77 @@ function drawCarriedInventorySprite(
   drawItemWorldSprite(ctx, itemType, centerX + TILE_SIZE * 0.22, centerY + TILE_SIZE * 0.2, TILE_SIZE * 0.44);
 }
 
+function drawLuggageWorldSprite(
+  ctx: CanvasRenderingContext2D,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  centerX: number,
+  centerY: number,
+  size: number
+): void {
+  if (useSprites && drawSpriteByKey(
+    ctx,
+    spriteAtlas,
+    STRUCTURAL_FRONTAGE_SPRITE_KEYS.carriedCargo.luggage,
+    centerX - size * 0.5,
+    centerY - size * 0.5,
+    size,
+    size
+  )) return;
+
+  // Readable fallback for atlas-disabled/debug modes: a small handled case,
+  // deliberately distinct from the fungible cargo-crate silhouettes.
+  ctx.save();
+  ctx.fillStyle = '#17222d';
+  ctx.strokeStyle = '#f1bd68';
+  ctx.lineWidth = Math.max(1, size * 0.07);
+  const x = centerX - size * 0.34;
+  const y = centerY - size * 0.19;
+  const width = size * 0.68;
+  const height = size * 0.55;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeRect(x, y, width, height);
+  ctx.beginPath();
+  ctx.moveTo(centerX - size * 0.15, y);
+  ctx.lineTo(centerX - size * 0.15, y - size * 0.16);
+  ctx.lineTo(centerX + size * 0.15, y - size * 0.16);
+  ctx.lineTo(centerX + size * 0.15, y);
+  ctx.stroke();
+  ctx.fillStyle = '#79cfe0';
+  ctx.fillRect(centerX - size * 0.04, y + size * 0.09, size * 0.08, size * 0.2);
+  ctx.restore();
+}
+
+function drawLocatedLuggageSprites(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  spriteAtlas: SpriteAtlas,
+  useSprites: boolean,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const bagsByTile = new Map<number, number>();
+  for (const bag of state.luggageCustody?.bags ?? []) {
+    if (bag.location.kind !== 'claim' && bag.location.kind !== 'loose') continue;
+    const tile = bag.location.tile;
+    if (!tileInRange(tile, state, visibleTiles)) continue;
+    const stack = bagsByTile.get(tile) ?? 0;
+    bagsByTile.set(tile, stack + 1);
+    const p = fromIndex(tile, state.width);
+    // A compact fan keeps several passenger-owned bags legible at one desk
+    // without pretending they have merged into an inventory stack.
+    const offsetX = ((stack % 3) - 1) * TILE_SIZE * 0.13;
+    const offsetY = -Math.floor(stack / 3) * TILE_SIZE * 0.1;
+    drawLuggageWorldSprite(
+      ctx,
+      spriteAtlas,
+      useSprites,
+      (p.x + 0.66) * TILE_SIZE + offsetX,
+      (p.y + 0.68) * TILE_SIZE + offsetY,
+      TILE_SIZE * 0.48
+    );
+  }
+}
+
 function drawTransportJobMarkers(
   ctx: CanvasRenderingContext2D,
   state: StationState,
@@ -8144,6 +8215,7 @@ export function renderWorld(
   // goods visible in the normal world view so players can watch that flow
   // without switching to a diagnostic overlay.
   drawLocatedInventorySprites(ctx, state, visibleTiles);
+  drawLocatedLuggageSprites(ctx, state, spriteAtlas, useSprites, visibleTiles);
   drawTransportJobMarkers(ctx, state, visibleTiles);
 
   drawCommercialOfferPreviews(ctx, state, spriteAtlas, useSprites, visibleTiles);
@@ -8600,6 +8672,13 @@ export function renderWorld(
     if (thought && shouldDrawThought(r.id, cx, cy, urgent)) drawWorldThought(ctx, thought, cx, cy, urgent);
   }
 
+  const luggageCarrierIds = new Set(
+    (state.luggageCustody?.carriers ?? [])
+      .filter((link) => state.luggageCustody.bags.some(
+        (bag) => bag.id === link.luggageId && bag.location.kind === 'carrier' && bag.location.carrierId === link.carrierId
+      ))
+      .map((link) => link.carrierId)
+  );
   for (const c of state.crewMembers) {
     if (!actorInVisibleRange(c.x, c.y)) continue;
     const o = c.eatSessionActive ? seatedAgentOffset(state, c.tileIndex, c.id) : agentOffset(c.id);
@@ -8639,10 +8718,16 @@ export function renderWorld(
         ctx.lineWidth = Math.max(1, TILE_SIZE * 0.055);
         ctx.stroke();
         drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
+        if (luggageCarrierIds.has(c.id)) {
+          drawLuggageWorldSprite(ctx, spriteAtlas, useSprites, cx + TILE_SIZE * 0.25, cy + TILE_SIZE * 0.22, TILE_SIZE * 0.46);
+        }
         continue;
       }
       drawEvaSuitAgentFallback(ctx, cx, cy, TILE_SIZE * AGENT_SPRITE_SCALE);
       drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
+      if (luggageCarrierIds.has(c.id)) {
+        drawLuggageWorldSprite(ctx, spriteAtlas, useSprites, cx + TILE_SIZE * 0.25, cy + TILE_SIZE * 0.22, TILE_SIZE * 0.46);
+      }
       continue;
     }
     const crewSpriteDrawn = useSprites && drawTintedAgentSprite(
@@ -8656,6 +8741,9 @@ export function renderWorld(
       ctx.fill();
     }
     drawCarriedInventorySprite(ctx, c.carryingItemType, c.carryingAmount, cx, cy);
+    if (luggageCarrierIds.has(c.id)) {
+      drawLuggageWorldSprite(ctx, spriteAtlas, useSprites, cx + TILE_SIZE * 0.25, cy + TILE_SIZE * 0.22, TILE_SIZE * 0.46);
+    }
     if (c.healthState === 'critical') drawAgentStatusPip(ctx, cx, cy, '+', '#ff6b6b');
     else if (c.healthState === 'distressed' && shouldDrawAirDistressPip(state, c.id, c.tileIndex)) {
       drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2');

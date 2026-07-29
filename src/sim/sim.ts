@@ -52,11 +52,22 @@ import {
 } from './approach-envelopes';
 import { selectShipHullVariant, shipHullProfile } from './ship-hulls';
 import {
+  facilitySlotsForRole,
   facilityUsageTilesForModule,
   publicApproachTilesForModule,
   resolveFacilitySlots,
   type FacilitySlotRole
 } from './facility-descriptors';
+import {
+  assignLuggageCarrier,
+  canPassengerBoardWithLuggage,
+  completeLuggageJob,
+  ensureManifestLuggage,
+  interruptLuggageCarrier,
+  luggageIdentity,
+  requestLuggageReturn,
+  strandPassengerLuggage
+} from './luggage';
 import {
   FACILITY_SESSIONS,
   releaseOrphanedFacilityClaims,
@@ -7322,6 +7333,7 @@ function makeCrewMember(id: number, tileIndex: number, width: number): CrewMembe
     drinking: false,
     leisure: false,
     activeJobId: null,
+    activeLuggageJobId: null,
     carryingItemType: null,
     carryingAmount: 0,
     blockedTicks: 0,
@@ -7739,16 +7751,50 @@ function transferQueueSort(a: Visitor, b: Visitor): number {
   return (a.transferQueuedAt ?? Number.POSITIVE_INFINITY) - (b.transferQueuedAt ?? Number.POSITIVE_INFINITY) || a.id - b.id;
 }
 
-function passengerTransferSpawnTile(state: StationState, ship: ArrivingShip): number {
+function passengerTransferSpawnSlot(state: StationState, ship: ArrivingShip): PassengerTransferSlot | null {
   const slots = passengerTransferSlotsForShip(state, ship);
   const loadFor = (slot: PassengerTransferSlot): number => state.visitors.filter(
     (visitor) => visitor.originShipId === ship.id && visitor.transferSlotKey === slot.key && passengerTransferPhase(visitor) !== 'station'
   ).length;
-  const slot = [...slots].sort((a, b) => loadFor(a) - loadFor(b) || a.key.localeCompare(b.key))[0];
-  // Arrivals originate at the interface, not at a station-side queue tail.
-  // `rebuildPassengerTransferQueues` immediately stages queued arrivals just
-  // outside this tile until their real crossing begins.
-  return slot?.accessTile ?? ship.bayTiles[0] ?? 0;
+  return [...slots].sort((a, b) => loadFor(a) - loadFor(b) || a.key.localeCompare(b.key))[0] ?? null;
+}
+
+function reachableArrivalDeskClaimTile(state: StationState, handoffTile: number): number | null {
+  const candidates = facilitySlotsForRole(state, [ModuleType.ArrivalDesk], 'reception')
+    .map((slot) => ({
+      tile: slot.tileIndex,
+      path: findPath(state, handoffTile, slot.tileIndex, { allowRestricted: true, intent: 'logistics' })
+    }))
+    .filter((candidate): candidate is { tile: number; path: number[] } => candidate.path !== null)
+    .sort((a, b) => a.path.length - b.path.length || a.tile - b.tile);
+  return candidates[0]?.tile ?? null;
+}
+
+function bindVisitorLuggage(
+  state: StationState,
+  visitor: Visitor,
+  shipId: number,
+  handoffTile: number
+): void {
+  const id = luggageIdentity(shipId, visitor.id);
+  const claimTile = reachableArrivalDeskClaimTile(state, handoffTile);
+  state.luggageCustody = ensureManifestLuggage(state.luggageCustody, {
+    shipId,
+    shipTile: handoffTile,
+    passengerIds: [visitor.id],
+    arrivalDeskTile: claimTile
+  });
+  visitor.luggageId = id;
+}
+
+/** Focused integration seam; production calls the same binder at spawn. */
+export function bindVisitorLuggageForTest(
+  state: StationState,
+  visitor: Visitor,
+  shipId: number,
+  handoffTile: number
+): void {
+  bindVisitorLuggage(state, visitor, shipId, handoffTile);
 }
 
 function refreshPassengerTransferReservation(state: StationState, visitor: Visitor, slotKey: string, targetTile: number): void {
@@ -8109,6 +8155,15 @@ function updatePassengerTransferVisitor(
     return 'keep';
   }
 
+  // A hydrated crossing or a queue assembled before luggage integration must
+  // still obey the physical custody gate. Returning the visitor to the same
+  // durable queue preserves their rank while a Cargo Handler finishes the
+  // real claim-to-ship handoff.
+  if (!requestAndCheckVisitorLuggage(state, visitor)) {
+    restoreQueuedPassengerTransfer(state, visitor);
+    return 'keep';
+  }
+
   if (visitor.tileIndex !== accessTile) {
     const moveResult = moveAlongPath(state, visitor, dt, occupancyByTile);
     if (moveResult === 'blocked') {
@@ -8135,6 +8190,18 @@ function updatePassengerTransferVisitor(
   return 'remove';
 }
 
+function requestAndCheckVisitorLuggage(state: StationState, visitor: Visitor): boolean {
+  const luggageId = visitor.luggageId;
+  if (!luggageId) return true;
+  state.luggageCustody = requestLuggageReturn(state.luggageCustody, luggageId);
+  return canPassengerBoardWithLuggage(state.luggageCustody, luggageId);
+}
+
+/** Focused proof seam for the production boarding gate. */
+export function requestVisitorLuggageReturnForTest(state: StationState, visitor: Visitor): boolean {
+  return requestAndCheckVisitorLuggage(state, visitor);
+}
+
 function queueVisitorForBoardingTransfer(
   state: StationState,
   visitor: Visitor,
@@ -8154,6 +8221,7 @@ function queueVisitorForBoardingTransfer(
     ship?.stage === 'depart' ||
     legacySmallCraftBoarding;
   if (!ship || !boardingOpen || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
+  if (!requestAndCheckVisitorLuggage(state, visitor)) return false;
   if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding', options);
   return true;
 }
@@ -8355,6 +8423,7 @@ function ensureCrewPool(state: StationState): void {
     occupiedSpawnTiles.add(spawnTile);
   }
   if (state.crewMembers.length > state.crew.total) {
+    for (const crew of state.crewMembers.slice(state.crew.total)) interruptCrewLuggage(state, crew);
     state.crewMembers.length = state.crew.total;
   }
   assignStaffRolesToCrew(state);
@@ -16473,6 +16542,12 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
       cancelledShipSide.add(visitor.id);
       continue;
     }
+    // Recall is the one authoritative moment that asks every station-side bag
+    // to come back. If the inbound leg is still moving, the pure custody model
+    // remembers the request and creates the outbound leg at claim.
+    if (visitor.luggageId) {
+      state.luggageCustody = requestLuggageReturn(state.luggageCustody, visitor.luggageId);
+    }
     // A passenger already crossing into the station owns the interface until
     // emergence, then joins the ordinary boarding queue from station-side.
     if (phase === 'disembark-crossing' || phase === 'boarding-queued' || phase === 'boarding-crossing') continue;
@@ -16521,6 +16596,24 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   );
 }
 
+function strandVisitorLuggage(state: StationState, visitor: Visitor): void {
+  const luggageId = visitor.luggageId;
+  if (!luggageId) return;
+  const link = state.luggageCustody.carriers.find((candidate) => candidate.luggageId === luggageId) ?? null;
+  const carrier = link
+    ? state.crewMembers.find((candidate) => candidate.id === link.carrierId) ?? null
+    : null;
+  state.luggageCustody = strandPassengerLuggage(
+    state.luggageCustody,
+    luggageId,
+    carrier?.tileIndex
+  );
+  if (link && carrier && carrier.activeLuggageJobId === link.jobId) {
+    carrier.activeLuggageJobId = null;
+    setCrewPath(state, carrier, []);
+  }
+}
+
 function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void {
   const cancelledArrivals = new Set<number>();
   for (const visitor of state.visitors) {
@@ -16541,6 +16634,7 @@ function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void 
       visitor.x = center.x;
       visitor.y = center.y;
     }
+    strandVisitorLuggage(state, visitor);
     clearPassengerTransferState(state, visitor);
     releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
     removeVisitorFromQueues(state, visitor.id);
@@ -16563,6 +16657,34 @@ function strandUnboardedVisitors(state: StationState, ship: ArrivingShip): void 
   if (cancelledArrivals.size > 0) {
     state.visitors = state.visitors.filter((visitor) => !cancelledArrivals.has(visitor.id));
   }
+}
+
+function purgeDepartedShipLuggage(state: StationState, shipId: number): void {
+  const departingBagIds = new Set(
+    state.luggageCustody.bags
+      // Preserve station-side property for stranded passengers, but a bag
+      // that never left the ship departs with it instead of lingering as an
+      // invisible orphaned ledger row.
+      .filter((bag) => bag.shipId === shipId && (!bag.passengerStranded || bag.location.kind === 'ship'))
+      .map((bag) => bag.id)
+  );
+  if (departingBagIds.size === 0) return;
+  const departingJobIds = new Set(
+    state.luggageCustody.jobs
+      .filter((job) => departingBagIds.has(job.luggageId))
+      .map((job) => job.id)
+  );
+  for (const crew of state.crewMembers) {
+    if (crew.activeLuggageJobId && departingJobIds.has(crew.activeLuggageJobId)) {
+      crew.activeLuggageJobId = null;
+      setCrewPath(state, crew, []);
+    }
+  }
+  state.luggageCustody = {
+    bags: state.luggageCustody.bags.filter((bag) => !departingBagIds.has(bag.id)),
+    jobs: state.luggageCustody.jobs.filter((job) => !departingBagIds.has(job.luggageId)),
+    carriers: state.luggageCustody.carriers.filter((link) => !departingBagIds.has(link.luggageId))
+  };
 }
 
 function strandedReliefCost(visitor: Visitor): number {
@@ -16734,9 +16856,17 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.passengersSpawned + inFlightArrivals() < ship.passengersTotal
       ) {
         const passengerIndex = ship.passengersSpawned + inFlightArrivals();
-        spawnVisitor(state, passengerTransferSpawnTile(state, ship), ship, passengerIndex);
+        const transferSlot = passengerTransferSpawnSlot(state, ship);
+        if (!transferSlot) break;
+        // The passenger is depicted ship-side at accessTile. Their bag's
+        // station endpoint is the selected interface's real station-side
+        // handoff, so a Cargo Handler can physically reach both directions.
+        spawnVisitor(state, transferSlot.accessTile, ship, passengerIndex);
         const visitor = state.visitors[state.visitors.length - 1];
-        if (visitor) queuePassengerTransfer(state, visitor, 'disembark');
+        if (visitor) {
+          bindVisitorLuggage(state, visitor, ship.id, transferSlot.stationTile);
+          queuePassengerTransfer(state, visitor, 'disembark', { preferredSlotKey: transferSlot.key });
+        }
         ship.spawnCarry -= 1;
       }
       if (
@@ -16868,6 +16998,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
           dock.occupiedByShipId = null;
         }
       }
+      purgeDepartedShipLuggage(state, ship.id);
       releasePhysicalHoldingEntry(state, ship.id);
       continue;
     }
@@ -16887,6 +17018,7 @@ function tryBoardVisitorOriginShipAtTile(
     const byId = originShipForVisitor(state, visitor);
     if (byId && byId.stage === 'docked' && byId.bayTiles.includes(dockTile)) {
       if (passengerTransferSlotsForShip(state, byId).length > 0) return { boarded: false, ship: byId };
+      if (!requestAndCheckVisitorLuggage(state, visitor)) return { boarded: false, ship: byId };
       if (byId.kind === 'transient') {
         byId.passengersBoarded++;
         advancePortPromise(state, byId.id, 'passengers-returned', 1);
@@ -16899,6 +17031,7 @@ function tryBoardVisitorOriginShipAtTile(
     if (ship.stage !== 'docked') continue;
     if (!ship.bayTiles.includes(dockTile)) continue;
     if (passengerTransferSlotsForShip(state, ship).length > 0) return { boarded: false, ship };
+    if (!requestAndCheckVisitorLuggage(state, visitor)) return { boarded: false, ship };
     if (ship.kind === 'transient') {
       ship.passengersBoarded++;
       advancePortPromise(state, ship.id, 'passengers-returned', 1);
@@ -18676,6 +18809,102 @@ function cargoDeliveryDispatchRank(role: StaffRole): number {
   if (role === 'industrial-officer') return 60;
   if (role === 'docking-officer') return 35;
   return 0;
+}
+
+function passengerForLuggage(state: StationState, luggageId: string): Visitor | null {
+  const bag = state.luggageCustody.bags.find((candidate) => candidate.id === luggageId);
+  if (!bag) return null;
+  return state.visitors.find((visitor) => visitor.id === bag.passengerId) ?? null;
+}
+
+function luggageJobIsDispatchable(state: StationState, jobId: string): boolean {
+  const job = state.luggageCustody.jobs.find((candidate) => candidate.id === jobId);
+  if (!job || job.state !== 'pending') return false;
+  const bag = state.luggageCustody.bags.find((candidate) => candidate.id === job.luggageId);
+  if (!bag || bag.passengerStranded || bag.claimTile === null) return false;
+  const passenger = passengerForLuggage(state, bag.id);
+  if (!passenger) return false;
+  // Do not unload a ship-side passenger's bag before that passenger has
+  // physically entered the station. Recall may cancel an arrival cleanly.
+  if (job.leg === 'inbound' && passengerTransferPhase(passenger) !== 'station') return false;
+  return job.leg === 'inbound' || bag.returnRequested;
+}
+
+function assignPendingLuggageJobs(state: StationState): void {
+  const claimedJobs = new Set(
+    state.crewMembers
+      .map((crew) => crew.activeLuggageJobId ?? null)
+      .filter((id): id is string => id !== null)
+  );
+  const jobs = state.luggageCustody.jobs
+    .filter((job) => luggageJobIsDispatchable(state, job.id) && !claimedJobs.has(job.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (jobs.length === 0) return;
+  const crew = state.crewMembers
+    .filter((candidate) =>
+      candidate.staffRole === 'cargo-handler' &&
+      !candidate.resting &&
+      candidate.activeJobId === null &&
+      (candidate.activeLuggageJobId === null || candidate.activeLuggageJobId === undefined) &&
+      state.now >= candidate.taskLockUntil &&
+      !candidate.carryingMeal &&
+      candidate.carryingItemType === null &&
+      !candidate.eating &&
+      !candidate.cleaning &&
+      !candidate.toileting &&
+      !candidate.drinking &&
+      !candidate.leisure &&
+      !candidate.evaSuit &&
+      !isCrewReservedForCommandDuty(state, candidate) &&
+      !isCrewHoldingProtectedPost(state, candidate) &&
+      !isCrewHandlingActiveIncident(state, candidate.id)
+    )
+    .sort((a, b) => cargoDeliveryDispatchRank(b.staffRole) - cargoDeliveryDispatchRank(a.staffRole) || a.id - b.id);
+  for (const candidate of crew) {
+    let selected: { id: string; fromTile: number; path: number[] } | null = null;
+    for (const job of jobs) {
+      if (claimedJobs.has(job.id)) continue;
+      const path = findPath(
+        state,
+        candidate.tileIndex,
+        job.fromTile,
+        { allowRestricted: true, intent: 'logistics', routeSeed: candidate.id },
+        state.pathOccupancyByTile
+      ) ?? findPath(state, candidate.tileIndex, job.fromTile, { allowRestricted: true, intent: 'logistics', routeSeed: candidate.id });
+      if (!path) continue;
+      if (!selected || path.length < selected.path.length || (path.length === selected.path.length && job.id < selected.id)) {
+        selected = { id: job.id, fromTile: job.fromTile, path };
+      }
+    }
+    if (!selected) continue;
+    candidate.activeLuggageJobId = selected.id;
+    candidate.role = 'idle';
+    candidate.targetTile = null;
+    candidate.assignedSystem = null;
+    candidate.lastSystem = null;
+    candidate.assignmentHoldUntil = 0;
+    candidate.idleReason = 'idle_waiting_reassign';
+    setCrewPath(state, candidate, selected.path);
+    claimedJobs.add(selected.id);
+  }
+}
+
+function interruptCrewLuggage(state: StationState, crew: CrewMember): void {
+  const jobId = crew.activeLuggageJobId;
+  if (!jobId) return;
+  const carrier = state.luggageCustody.carriers.find(
+    (link) => link.carrierId === crew.id && link.jobId === jobId
+  );
+  if (carrier) {
+    state.luggageCustody = interruptLuggageCarrier(state.luggageCustody, crew.id, crew.tileIndex);
+  }
+  crew.activeLuggageJobId = null;
+  setCrewPath(state, crew, []);
+}
+
+/** Focused job-board seam; production runs this on the ordinary cadence. */
+export function runLuggageAssignmentTestTick(state: StationState): void {
+  assignPendingLuggageJobs(state);
 }
 
 function itemNodeFreeCapacity(state: StationState, tileIndex: number): number {
@@ -21182,6 +21411,7 @@ function assignJobsToIdleCrew(state: StationState): void {
       (crew) =>
         !crew.resting &&
         crew.activeJobId === null &&
+        (crew.activeLuggageJobId === null || crew.activeLuggageJobId === undefined) &&
         state.now >= crew.taskLockUntil &&
         !crewHasTrueCriticalNeed(crew) &&
         !crew.carryingMeal &&
@@ -21265,7 +21495,7 @@ function assignJobsToIdleCrew(state: StationState): void {
     for (const crew of candidatesForLane) {
       if (dispatched >= maxAssignments) break;
       if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
-      if (crew.activeJobId !== null) continue;
+      if (crew.activeJobId !== null || crew.activeLuggageJobId) continue;
       const ownLane = crew.workLane === lane;
       const flex = crew.workLane === 'flex';
       // Called in off-watch for their own lane's backlog only — never borrowed
@@ -21808,6 +22038,7 @@ function refreshJobMetrics(state: StationState): void {
 
 export function releaseCrewJobsOnDeath(state: StationState, crewId: number): void {
   const crew = state.crewMembers.find((candidate) => candidate.id === crewId) ?? null;
+  if (crew) interruptCrewLuggage(state, crew);
   for (const job of state.jobs) {
     if (job.assignedCrewId !== crewId) continue;
     if (job.state !== 'assigned' && job.state !== 'in_progress') continue;
@@ -21868,6 +22099,89 @@ function processCrewResignations(state: StationState, occupancyByTile: Map<numbe
   state.crew.free = Math.max(0, state.crew.total - state.crew.assigned);
 }
 
+function advanceCrewLuggageJob(
+  state: StationState,
+  crew: CrewMember,
+  dt: number,
+  occupancyByTile: Map<number, number>
+): boolean {
+  const jobId = crew.activeLuggageJobId;
+  if (!jobId) return false;
+  let job = state.luggageCustody.jobs.find((candidate) => candidate.id === jobId);
+  if (!job || job.state === 'completed' || job.state === 'cancelled') {
+    crew.activeLuggageJobId = null;
+    setCrewPath(state, crew, []);
+    return true;
+  }
+  let carrier = state.luggageCustody.carriers.find(
+    (link) => link.carrierId === crew.id && link.jobId === jobId
+  ) ?? null;
+  if (job.state === 'carried' && !carrier) {
+    // Another actor owns this exact bag/job after reconciliation.
+    crew.activeLuggageJobId = null;
+    setCrewPath(state, crew, []);
+    return true;
+  }
+  let targetTile = carrier ? job.toTile : job.fromTile;
+  const atPhysicalHandoff = (tile: number): boolean => {
+    if (crew.tileIndex === tile) return true;
+    const crewPoint = fromIndex(crew.tileIndex, state.width);
+    const targetPoint = fromIndex(tile, state.width);
+    // Claim positions and passenger-transfer handoffs are interaction points,
+    // not actor parking spaces. A handler standing cardinally beside one can
+    // pass the depicted bag across it without competing with the passenger or
+    // receptionist who legitimately occupies that position.
+    return Math.abs(crewPoint.x - targetPoint.x) + Math.abs(crewPoint.y - targetPoint.y) === 1;
+  };
+  if (atPhysicalHandoff(targetTile)) {
+    if (!carrier) {
+      state.luggageCustody = assignLuggageCarrier(state.luggageCustody, job.id, crew.id);
+      job = state.luggageCustody.jobs.find((candidate) => candidate.id === jobId)!;
+      carrier = state.luggageCustody.carriers.find(
+        (link) => link.carrierId === crew.id && link.jobId === jobId
+      ) ?? null;
+      if (!carrier) {
+        crew.activeLuggageJobId = null;
+        setCrewPath(state, crew, []);
+        return true;
+      }
+      targetTile = job.toTile;
+      setCrewPath(state, crew, []);
+    } else {
+      state.luggageCustody = completeLuggageJob(state.luggageCustody, job.id);
+      crew.activeLuggageJobId = null;
+      crew.blockedTicks = 0;
+      setCrewPath(state, crew, []);
+      const point = fromIndex(crew.tileIndex, state.width);
+      pushCrowdFloater(state, point.x + 0.5, point.y + 0.5, 'LUGGAGE', '#7ed6ff');
+      return true;
+    }
+  }
+
+  if (crew.path.length === 0 || crew.path[crew.path.length - 1] !== targetTile) {
+    setCrewPath(
+      state,
+      crew,
+      findPath(
+        state,
+        crew.tileIndex,
+        targetTile,
+        { allowRestricted: true, intent: 'logistics', routeSeed: crew.id },
+        state.pathOccupancyByTile
+      ) ?? findPath(state, crew.tileIndex, targetTile, { allowRestricted: true, intent: 'logistics', routeSeed: crew.id }) ?? []
+    );
+  }
+  const moveResult = moveAlongPath(state, crew, dt, occupancyByTile);
+  if (moveResult === 'moved') crew.blockedTicks = 0;
+  if (moveResult === 'blocked') {
+    crew.blockedTicks = Math.min(9999, crew.blockedTicks + 1);
+    crew.movementWaitReason = carrier ? 'passenger flow blocking luggage return' : 'passenger flow blocking luggage claim';
+    if (crew.blockedTicks >= MOVEMENT_REPLAN_BLOCKED_TICKS) setCrewPath(state, crew, []);
+  }
+  crew.idleReason = moveResult === 'blocked' ? 'idle_no_path' : 'idle_waiting_reassign';
+  return true;
+}
+
 /**
  * Keep the small, player-facing crew census on the same live frame as the
  * actors it describes. Full derived metrics intentionally run on a cadence,
@@ -21894,7 +22208,7 @@ function syncLiveCrewStateMetrics(state: StationState): void {
       idleCrewByReason.idle_resting += 1;
       continue;
     }
-    if (crew.activeJobId !== null) {
+    if (crew.activeJobId !== null || crew.activeLuggageJobId) {
       crewOnLogisticsJobs += 1;
       continue;
     }
@@ -22045,7 +22359,9 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     const incidentDutyLocked = isCrewHandlingActiveIncident(state, crew.id);
     const commandDutyLocked = isCrewReservedForCommandDuty(state, crew);
     const protectedDutyLocked = protectedPostByCrewId.has(crew.id);
-    const publicInterference = crew.activeJobId !== null ? routePublicInterference(crew.lastRouteExposure) : 0;
+    const publicInterference = crew.activeJobId !== null || crew.activeLuggageJobId
+      ? routePublicInterference(crew.lastRouteExposure)
+      : 0;
     if (publicInterference > 0) state.usageTotals.crewPublicInterference += publicInterference * dt;
     crew.hygiene = clamp(crew.hygiene - dt * (0.06 + publicInterference * CREW_PUBLIC_CROWD_DRAIN * 0.45), 0, 100);
     if (!crew.toileting) {
@@ -22077,6 +22393,14 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     ) {
       crew.resignationNoticeAt = state.now;
       pushCrowdEvent(state, 'danger', `${crew.name} will resign in 60s · improve needs and restore payroll`);
+    }
+    if (crew.activeLuggageJobId) {
+      if (incidentDutyLocked || commandDutyLocked) {
+        interruptCrewLuggage(state, crew);
+      } else {
+        advanceCrewLuggageJob(state, crew, dt, occupancyByTile);
+        continue;
+      }
     }
     if (crew.activeJobId === null && crew.evaSuit) {
       if (state.tiles[crew.tileIndex] === TileType.Airlock) {
@@ -30998,6 +31322,7 @@ export function tick(state: StationState, frameDt: number): void {
     phasePathCalls.trafficJobProduction = state.metrics.pathCallsPerTick - jobProductionPathCallsStarted;
     const jobAssignmentStarted = perfNowMs();
     const jobAssignmentPathCallsStarted = state.metrics.pathCallsPerTick;
+    assignPendingLuggageJobs(state);
     assignJobsToIdleCrew(state);
     phaseMs.trafficJobAssignment = perfNowMs() - jobAssignmentStarted;
     phasePathCalls.trafficJobAssignment = state.metrics.pathCallsPerTick - jobAssignmentPathCallsStarted;

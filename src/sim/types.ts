@@ -6,6 +6,7 @@ import type { ServiceLog } from './service-truth';
 
 import type { FailureEpisodeState } from './failed-stay';
 import type { AdmissionPolicy } from './admission-policy';
+import type { LuggageCustodyState } from './luggage';
 
 export const GRID_WIDTH = 100;
 export const GRID_HEIGHT = 80;
@@ -593,6 +594,8 @@ export interface Visitor {
   primaryPreference: VisitorPreference;
   spawnedAt: number;
   originShipId: number | null;
+  /** Stable identity for this transient passenger's non-fungible physical bag. */
+  luggageId?: string | null;
   airExposureSec: number;
   healthState: 'healthy' | 'distressed' | 'critical';
   lastRouteExposure?: RouteExposure;
@@ -1131,6 +1134,8 @@ export interface CrewMember {
   drinking: boolean;
   leisure: boolean;
   activeJobId: number | null;
+  /** Transport-only custody job. Deliberately separate from fungible inventory jobs. */
+  activeLuggageJobId?: string | null;
   carryingItemType: ItemType | null;
   carryingAmount: number;
   blockedTicks: number;
@@ -3029,6 +3034,8 @@ export interface StationState {
   admissionPolicy: AdmissionPolicy;
   pathOccupancyByTile: Map<number, number>;
   jobs: TransportJob[];
+  /** Identity-stable passenger bags and their physical custody transitions. */
+  luggageCustody: LuggageCustodyState;
   reservations: Reservation[];
   constructionSites: ConstructionSite[];
   structuralPieces: StructuralPiece[];
