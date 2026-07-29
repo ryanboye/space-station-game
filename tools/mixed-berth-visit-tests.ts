@@ -224,6 +224,7 @@ function testMediumMixedBerthVisit(): void {
   // before advancing its hard deadline, then let production cleanup settle it.
   contract.boardingStartsAt = state.now;
   contract.hardDepartureAt = state.now + 60;
+  const boardingWindowSec = contract.hardDepartureAt - state.now;
   let observedBoardingCrossing = false;
   waitFor(
     state,
@@ -236,7 +237,7 @@ function testMediumMixedBerthVisit(): void {
       );
       return observedBoardingCrossing && active.passengersBoarded > 0;
     },
-    50
+    boardingWindowSec + STEP
   );
   assert(ship.recallAt !== null && contract.status === 'boarding', `Recall did not take ownership of passenger return. ${diagnostics(state)}`);
   assert(observedBoardingCrossing, `Passenger return skipped the physical berth crossing. ${diagnostics(state)}`);

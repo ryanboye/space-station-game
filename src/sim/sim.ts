@@ -7501,6 +7501,7 @@ type PassengerTransferSlot = {
 };
 
 const PASSENGER_TRANSFER_RESERVATION_TTL_SEC = 18;
+const PASSENGER_TRANSFER_REPATH_BLOCKED_TICKS = 45;
 // The passenger stays visibly on the real collar/Gangway tile for this
 // interval before emerging or disappearing.  This is deliberately separate
 // from walk speed so an empty corridor cannot collapse a cohort into one tick.
@@ -8003,6 +8004,21 @@ function updateQueuedPassengerTransferVisitor(
   if (moveResult === 'blocked') {
     visitor.blockedTicks = Math.min(9999, visitor.blockedTicks + 1);
     passengerTransferWait(state, visitor, dt);
+    const queueTile = visitor.transferQueueTile;
+    if (
+      visitor.blockedTicks >= PASSENGER_TRANSFER_REPATH_BLOCKED_TICKS &&
+      isLongStayClass(visitor.stayClass) &&
+      queueTile !== null && queueTile !== undefined &&
+      visitor.tileIndex !== queueTile &&
+      visitorPathRetryReady(state, visitor)
+    ) {
+      scheduleVisitorPathRetry(state, visitor);
+      // Queue rank and claimed physical slot remain unchanged. Only the stale
+      // walk to that slot is recomputed against current corridor occupancy.
+      setVisitorPath(state, visitor, []);
+      passengerTransferPath(state, visitor, queueTile);
+      visitor.blockedTicks = 0;
+    }
   } else if (moveResult === 'moved') {
     visitor.blockedTicks = 0;
   }
@@ -16063,6 +16079,70 @@ function recallRouteLengthToSlot(state: StationState, visitor: Visitor, slot: Pa
     Number.POSITIVE_INFINITY;
 }
 
+const PHYSICAL_RECALL_SAMPLE_SEC = 2;
+
+/**
+ * How much of the published stay must remain for the cohort to make the real
+ * trip back to its ship?
+ *
+ * The ordinary count-based lead is enough for a compact station whose guests
+ * pre-assemble near the Berth. Long-stay passengers keep using the station,
+ * though, so their final call also has to account for the route they occupy
+ * right now. The deadline remains immutable: a long walk consumes visit time.
+ */
+function physicalPassengerRecallLeadSec(state: StationState, ship: ArrivingShip): number | null {
+  if (
+    ship.kind !== 'transient' ||
+    ship.stage !== 'docked' ||
+    !isLongStayClass(ship.stayClass) ||
+    ship.passengersSpawned < ship.passengersTotal
+  ) {
+    return null;
+  }
+  const slots = passengerTransferSlotsForShip(state, ship);
+  if (slots.length === 0) return null;
+  const cohort = state.visitors.filter(
+    (visitor) => visitor.originShipId === ship.id && passengerTransferPhase(visitor) === 'station'
+  );
+  if (cohort.length === 0) return null;
+
+  let longestWalkSec = 0;
+  for (const visitor of cohort) {
+    const routeLength = slots.reduce(
+      (best, slot) => Math.min(best, recallRouteLengthToSlot(state, visitor, slot)),
+      Number.POSITIVE_INFINITY
+    );
+    // A transiently unavailable path (door arbitration, cache rebuild, etc.)
+    // is not evidence for an infinite walk and must not cancel service at once.
+    // The ordinary published boarding timestamp remains the safe fallback.
+    if (!Number.isFinite(routeLength)) return null;
+    const tilesPerSec = Math.max(0.1, visitor.speed * movementSpeedFactor(state, visitor));
+    longestWalkSec = Math.max(longestWalkSec, routeLength / tilesPerSec);
+  }
+
+  const crossingWaves = Math.ceil(cohort.length / slots.length);
+  const crossingSec = crossingWaves * PASSENGER_TRANSFER_CROSSING_SEC;
+  // A real path is the unobstructed answer. Reserve a bounded fraction for
+  // doors, opposed traffic, and joining the physical line without turning a
+  // busy station into an unbounded extension of the accepted timetable.
+  const congestionReserveSec = Math.min(30, 6 + longestWalkSec * 0.5);
+  return longestWalkSec + VISIT_TIMINGS.recallAssemblySec + crossingSec + congestionReserveSec;
+}
+
+function shouldBeginPhysicalPassengerRecall(
+  state: StationState,
+  ship: ArrivingShip,
+  contract: PortContract,
+  dt: number
+): boolean {
+  if (contract.status !== 'active') return false;
+  const previousSample = Math.floor(Math.max(0, state.now - Math.max(0, dt)) / PHYSICAL_RECALL_SAMPLE_SEC);
+  const currentSample = Math.floor(state.now / PHYSICAL_RECALL_SAMPLE_SEC);
+  if (previousSample === currentSample) return false;
+  const required = physicalPassengerRecallLeadSec(state, ship);
+  return required !== null && contract.hardDepartureAt - state.now <= required;
+}
+
 /**
  * Rank a recall once, at the moment it is announced.
  *
@@ -16386,7 +16466,9 @@ function updateArrivingShips(state: StationState, dt: number): void {
         beginShipRecall(state, ship);
       }
       if (contract && contract.status === 'active') tryRecallFailedLongStay(state, ship, contract);
-      if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
+      if (contract && shouldBeginPhysicalPassengerRecall(state, ship, contract, dt)) {
+        beginShipRecall(state, ship);
+      } else if (contract && state.now >= contract.boardingStartsAt && contract.status === 'active') {
         if (!tryExtendLongStayVisit(state, ship, contract)) beginShipRecall(state, ship);
       }
       if (
@@ -16903,7 +16985,16 @@ function assignMovementYieldPaths(
     const target = inbound.actor.path[0];
     const blockers = occupantByTile.get(target) ?? [];
     for (const blocker of blockers) {
-      const yieldsFromCurrentTile = canYieldMovementTile(state, blocker.kind, blocker.actor);
+      const inboundVisitor = inbound.kind === 'visitor' ? inbound.actor as Visitor : null;
+      const blockerVisitor = blocker.kind === 'visitor' ? blocker.actor as Visitor : null;
+      const queuedFollowerYields =
+        inboundVisitor !== null &&
+        blockerVisitor !== null &&
+        passengerTransferPhase(inboundVisitor) === 'boarding-queued' &&
+        passengerTransferPhase(blockerVisitor) === 'boarding-queued' &&
+        (inboundVisitor.transferQueuedAt ?? Number.POSITIVE_INFINITY) <
+          (blockerVisitor.transferQueuedAt ?? Number.POSITIVE_INFINITY);
+      const yieldsFromCurrentTile = canYieldMovementTile(state, blocker.kind, blocker.actor) || queuedFollowerYields;
       const rerouteContestedNarrow = canRerouteIdleCrewOutOfContestedNarrowTile(
         state,
         inbound.actor,
