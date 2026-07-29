@@ -377,7 +377,14 @@ audited checklist with no unsupported checked claims.
 
 ### Phase 1B Gate
 
-- [ ] One checkout visibly becomes overwhelmed.
+- [x] One checkout visibly becomes overwhelmed.
+  Evidence: frozen production browser play on `market-compact-conflict` after
+  `ec7ace2` loaded twelve shoppers against the single Checkout Bank. At gameplay
+  zoom the line extended across the Market floor while the opening-business card
+  reported only 1 served and 6 missed, and Operations showed seven active plus
+  two stalled jobs. The same run's anchored shop then exhausted its physical
+  shelf stock, so the bottleneck and its lost demand were visible in-world and
+  in the operating surface rather than inferred from a runner.
 - [x] A second checkout or redesigned queue improves measured throughput.
 - [x] A larger cantina visibly supports more simultaneous occupants.
 - [x] Large fixtures create meaningful queue, route, stock, staffing, and floor
@@ -857,7 +864,14 @@ audited checklist with no unsupported checked claims.
 
 - [x] Start from the revised bare station.
 - [x] Choose and build one opening portfolio operation.
-- [ ] Manually compose early traffic through Approach Control.
+- [x] Manually compose early traffic through Approach Control.
+  Evidence: frozen production browser play on `demo-station` after `a0cf5fa`
+  opened the first passenger/freight/mixed onboarding bank in Approach Control,
+  inspected its interface, load, stay, and revenue projections, and manually
+  committed N-001 to the passenger Berth and N-002 to the broad cargo Berth.
+  The accepted passenger became a live berth-anchored turnaround card and the
+  subsequent dispatch review recorded the completed calls; no auto-admission
+  policy was enabled.
 - [ ] Experience one successful short-stay flow.
 - [ ] Experience and recover from one failed long stay.
 - [ ] Build temporary guest lodging.
