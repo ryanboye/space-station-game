@@ -3103,7 +3103,7 @@ function refreshDispatchTrigger(): void {
   if (openOffers.length > 0) {
     dispatchTriggerTitleEl.textContent = `${openOffers.length} ship${openOffers.length === 1 ? '' : 's'} waiting to approach`;
     dispatchTriggerMetaEl.textContent = holdingCount > 0
-      ? `${holdingCount} in holding orbit · choose a dock or berth`
+      ? `${holdingCount} awaiting clearance · choose a dock or berth`
       : hasBerthCapacity ? 'Compare capacity and committed load' : 'Pod Dock traffic ready';
   } else if (clearedOffers.length > 0) {
     dispatchTriggerTitleEl.textContent = `${clearedOffers.length} ship${clearedOffers.length === 1 ? '' : 's'} cleared for approach`;
@@ -3166,7 +3166,7 @@ function refreshTrafficStatus(): void {
   }
   if (offerCount > 0) {
     const holding = state.trafficOffers.filter((offer) => offer.status === 'holding').length;
-    setTrafficStatus(`${offerCount} manifest${offerCount === 1 ? '' : 's'} · ${holding} in holding orbit`, holding > 0 ? 'warn' : 'ok');
+    setTrafficStatus(`${offerCount} manifest${offerCount === 1 ? '' : 's'} · ${holding} awaiting clearance`, holding > 0 ? 'warn' : 'ok');
     return;
   }
   if (activeTransientShips > 0 || state.pendingSpawns.length > 0) {
@@ -3484,7 +3484,7 @@ function trafficOfferTimer(offer: StationState['trafficOffers'][number]): string
     return `COMMITTED · ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
   }
   if (offer.status === 'holding') {
-    return `HOLD · ${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s`;
+    return `AWAITING CLEARANCE · ${Math.max(0, Math.ceil(offer.expiresAt - state.now))}s`;
   }
   return `ETA ${Math.max(1, Math.ceil(offer.arrivesAt - state.now))}s`;
 }
@@ -10727,7 +10727,7 @@ trafficOfferListEl.addEventListener('click', (event) => {
     trafficActionNoteEl.className = `traffic-action-note ${result.ok ? 'tone-ok' : 'tone-warn'}`;
   } else if (action === 'hold') {
     const held = holdTrafficOffer(state, offerId);
-    trafficActionNoteEl.textContent = held ? 'Holding window extended 25 seconds.' : 'Ship has not reached holding orbit.';
+    trafficActionNoteEl.textContent = held ? 'Clearance window extended 25 seconds.' : 'Ship is not awaiting clearance.';
     trafficActionNoteEl.className = `traffic-action-note ${held ? 'tone-ok' : 'tone-warn'}`;
   } else if (action === 'pass' || action === 'refuse') {
     const passed = passTrafficOffer(state, offerId);
