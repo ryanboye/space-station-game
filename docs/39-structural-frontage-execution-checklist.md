@@ -137,8 +137,16 @@ audited checklist with no unsupported checked claims.
 
 ## Non-Negotiable Design Invariants
 
-- [ ] Frontage emerges from hull geometry, structure, construction, approach
+- [x] Frontage emerges from hull geometry, structure, construction, approach
   clearance, interior support, and exposure rather than a frontage currency.
+  Evidence: `structural-support.ts`, `construction.ts`, and
+  `approach-envelopes.ts` derive usable interfaces from exterior hull faces,
+  completed Junction/Bulkhead load paths, commissioned pressure geometry, and
+  hull-specific clear approach envelopes. `structural-piece-tests`,
+  `structural-expansion-tests`, `phase8-opening-expansion-tests`,
+  `approach-envelope-tests`, and `exterior-integrity-tests` prove each physical
+  input and directional debris exposure; no frontage balance exists in runtime
+  or save state.
 - [x] Poor but physically legal layouts are allowed to open and fail visibly.
   Evidence: `107b2ef`/`e78a12d` deliberately open the legal
   `mess-line-choked` layout and measure its physical failure at 3/24 guests fed
