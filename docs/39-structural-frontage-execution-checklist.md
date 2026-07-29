@@ -761,7 +761,21 @@ audited checklist with no unsupported checked claims.
 - [x] Permit queue spill into circulation.
 - [x] Make a queue covering a door reduce door throughput.
 - [x] Let actors balk after appropriate wait and alternatives.
-- [ ] Lift queue and congestion caps only after deadlock safety exists.
+- [x] Lift queue and congestion caps only after deadlock safety exists.
+  Evidence: commits `f6ab5e7` and `16551f6` replace the service-line constants
+  (24 positions / 6 spill tiles, plus the four-place Market special case) with
+  fair demand-bound allocation from real walkable geometry. `npm run
+  test:queue-layout-planner` grows one line from 6 to 40 places and allocates
+  adjacent providers 8/8 in alternating rounds; `npm run test:saturation-caps`
+  admits 23, then 30, then the cramped layout's physical maximum 34 of 40,
+  exposes the remaining six as `queue full: no safe floor slot`, and grows
+  outside-room spill 5 -> 12 -> 16 instead of stopping at six. This landed only
+  after `test:movement-coordinator` retained all eight swap/yield/cycle/fairness
+  groups and `test:queue-spill` retained bounded balk/rebuild, real Door
+  throttling, and an open drain in genuinely redundant multi-entrance rooms.
+  The intentionally compact 3x8 opening Market remains functional but
+  consequential through an actual sale (`test:opening-businesses` 9/9), while
+  passenger assembly keeps its separate bounded transfer discipline.
 - [x] Show why an actor is waiting.
 
 ### Phase 5 Gate
