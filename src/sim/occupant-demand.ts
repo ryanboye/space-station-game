@@ -14,6 +14,89 @@ export const VISITOR_NEED_RATES = {
 
 export type RecurringNeedKind = 'hunger' | 'energy' | 'hygiene' | 'leisure';
 
+export type OccupantDemandValues = Record<RecurringNeedKind, number>;
+
+/**
+ * Callers own their values and any environmental modifiers. The common kernel
+ * only owns the stable, comparable four-need behaviour.
+ */
+export type OccupantDemandProfile = {
+  rates: OccupantDemandValues;
+  seekAt: number;
+  severeAt: number;
+  restoreAmount: number;
+};
+
+export const VISITOR_DEMAND_PROFILE: OccupantDemandProfile = {
+  rates: {
+    hunger: VISITOR_NEED_RATES.hungerPerSec,
+    energy: VISITOR_NEED_RATES.energyPerSec,
+    hygiene: VISITOR_NEED_RATES.hygienePerSec,
+    leisure: VISITOR_NEED_RATES.leisurePerSec
+  },
+  seekAt: VISITOR_NEED_RATES.seekAt,
+  severeAt: VISITOR_NEED_RATES.severeAt,
+  restoreAmount: VISITOR_NEED_RATES.restoreAmount
+};
+
+// Residents retain their existing environmental penalties and social model in
+// sim.ts; this is their unmodified baseline before those caller-owned terms.
+export const RESIDENT_DEMAND_PROFILE: OccupantDemandProfile = {
+  rates: { hunger: 0.65, energy: 0.5, hygiene: 0.4, leisure: 0 },
+  seekAt: 55,
+  severeAt: 18,
+  restoreAmount: 68
+};
+
+export function decayOccupantDemand(
+  needs: OccupantDemandValues,
+  dt: number,
+  profile: OccupantDemandProfile,
+  rateMultiplier: Partial<OccupantDemandValues> = {}
+): void {
+  for (const need of recurringNeedKinds()) {
+    needs[need] = clampNeed(needs[need] - dt * profile.rates[need] * (rateMultiplier[need] ?? 1));
+  }
+}
+
+/**
+ * An active need stays authoritative until its owner completes or explicitly
+ * invalidates it. This is the small bit of hysteresis that prevents a nearly
+ * tied pair of needs from swapping a physical reservation every retry.
+ */
+export function selectOccupantDemand(
+  needs: OccupantDemandValues,
+  profile: OccupantDemandProfile,
+  active: RecurringNeedKind | null = null
+): RecurringNeedKind | null {
+  if (active !== null) return active;
+  const candidates = recurringNeedKinds()
+    .map((kind) => [kind, needs[kind]] as const)
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+  const [kind, value] = candidates[0];
+  return value <= profile.seekAt ? kind : null;
+}
+
+export function selectCriticalOccupantDemand(
+  needs: OccupantDemandValues,
+  profile: OccupantDemandProfile
+): RecurringNeedKind | null {
+  const selected = selectOccupantDemand(needs, profile);
+  return selected !== null && needs[selected] <= profile.severeAt ? selected : null;
+}
+
+export type DemandActivity = 'optional' | 'committed' | 'critical';
+
+export function shouldPreemptOccupantDemand(input: {
+  criticalNeed: RecurringNeedKind | null;
+  activeNeed: RecurringNeedKind | null;
+  activity: DemandActivity;
+}): boolean {
+  return input.activity === 'optional' &&
+    input.criticalNeed !== null &&
+    input.criticalNeed !== input.activeNeed;
+}
+
 export function isLongStayClass(stayClass: VisitStayClass | undefined): boolean {
   return stayClass === 'contract' || stayClass === 'extended';
 }
@@ -52,22 +135,11 @@ export function createVisitorNeeds(seed: number): VisitorNeeds {
 }
 
 export function decayVisitorNeeds(needs: VisitorNeeds, dt: number): void {
-  needs.hunger = clampNeed(needs.hunger - dt * VISITOR_NEED_RATES.hungerPerSec);
-  needs.energy = clampNeed(needs.energy - dt * VISITOR_NEED_RATES.energyPerSec);
-  needs.hygiene = clampNeed(needs.hygiene - dt * VISITOR_NEED_RATES.hygienePerSec);
-  needs.leisure = clampNeed(needs.leisure - dt * VISITOR_NEED_RATES.leisurePerSec);
+  decayOccupantDemand(needs, dt, VISITOR_DEMAND_PROFILE);
 }
 
 export function selectRecurringNeed(needs: VisitorNeeds): RecurringNeedKind | null {
-  const candidates: Array<[RecurringNeedKind, number]> = [
-    ['hunger', needs.hunger],
-    ['energy', needs.energy],
-    ['hygiene', needs.hygiene],
-    ['leisure', needs.leisure]
-  ];
-  candidates.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
-  const [kind, value] = candidates[0];
-  return value <= VISITOR_NEED_RATES.seekAt ? kind : null;
+  return selectOccupantDemand(needs, VISITOR_DEMAND_PROFILE, needs.active);
 }
 
 export function serviceForRecurringNeed(need: RecurringNeedKind): HospitalityServiceKind {
@@ -89,7 +161,11 @@ export function restoreRecurringNeed(needs: VisitorNeeds, need: RecurringNeedKin
 }
 
 export function hasSevereUnmetNeed(needs: VisitorNeeds): boolean {
-  return Math.min(needs.hunger, needs.energy, needs.hygiene, needs.leisure) <= VISITOR_NEED_RATES.severeAt;
+  return selectCriticalOccupantDemand(needs, VISITOR_DEMAND_PROFILE) !== null;
+}
+
+function recurringNeedKinds(): readonly RecurringNeedKind[] {
+  return ['hunger', 'energy', 'hygiene', 'leisure'];
 }
 
 function clampNeed(value: number): number {

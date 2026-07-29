@@ -16,13 +16,18 @@ import {
 } from './balance';
 import {
   createVisitorNeeds,
+  decayOccupantDemand,
   decayVisitorNeeds,
   deriveVisitStayClass,
   hasSevereUnmetNeed,
   isLongStayClass,
+  RESIDENT_DEMAND_PROFILE,
   restoreRecurringNeed,
+  selectCriticalOccupantDemand,
   selectRecurringNeed,
-  serviceForRecurringNeed
+  serviceForRecurringNeed,
+  shouldPreemptOccupantDemand,
+  VISITOR_DEMAND_PROFILE
 } from './occupant-demand';
 import { podVisitTargetSeconds, previewTrafficOffer } from './approach-control';
 import {
@@ -24126,7 +24131,7 @@ function clearVisitorServiceFailure(visitor: Visitor): void {
 function severeNeedForVisitor(visitor: Visitor): RecurringNeedKind | null {
   const needs = visitor.needs;
   if (!needs || !hasSevereUnmetNeed(needs)) return null;
-  return selectRecurringNeed(needs);
+  return selectCriticalOccupantDemand(needs, VISITOR_DEMAND_PROFILE);
 }
 
 function visitorCannotCompleteNeed(state: StationState, visitor: Visitor): boolean {
@@ -24215,6 +24220,9 @@ function updateLongStayVisitorNeeds(state: StationState, visitor: Visitor, dt: n
     scheduleVisitorPathRetry(state, visitor);
     visitor.activeService = null;
     visitor.recurringNeedActive = null;
+    // The new severe need is an explicit invalidation boundary for the sticky
+    // selection. Its replacement route owns the old leisure/provider claim.
+    visitor.needs.active = null;
     if (!routeStrandedVisitor(state, visitor)) routeLongStayVisitor(state, visitor);
   }
   updateVisitorServiceFailure(state, visitor);
@@ -24235,15 +24243,27 @@ function shouldPreemptForCriticalNeed(state: StationState, visitor: Visitor): bo
   const severe = severeNeedForVisitor(visitor);
   if (!severe) return false;
   const wanted = serviceForRecurringNeed(severe);
-  // Already serving the severe need: let it finish.
+  // Already serving the severe need, or another critical recurring need: let
+  // that physical commitment finish rather than trading provider claims.
   if (visitor.activeService === wanted) return false;
+  if (
+    visitor.recurringNeedActive !== null &&
+    visitor.recurringNeedActive !== undefined &&
+    visitor.needs[visitor.recurringNeedActive] <= 18
+  ) return false;
   // Only an OPTIONAL want may be preempted; a planned contract service is a
   // commitment the station made and is not interrupted by need pressure.
   const onPlan = visitor.activeService !== null
     && visitor.servicePlan.includes(visitor.activeService)
     && !visitor.completedServices.includes(visitor.activeService);
   if (onPlan) return false;
-  return true;
+  const optionalLeisure =
+    visitor.state === VisitorState.ToLeisure || visitor.state === VisitorState.Leisure;
+  return shouldPreemptOccupantDemand({
+    criticalNeed: severe,
+    activeNeed: visitor.recurringNeedActive ?? null,
+    activity: optionalLeisure ? 'optional' : 'committed'
+  });
 }
 
 function routeContractVisitorToNextService(state: StationState, visitor: Visitor): boolean {
@@ -25259,6 +25279,76 @@ function updateResidentRoutinePhase(state: StationState, resident: Resident): Re
 
 function residentLeisureTargets(state: StationState): number[] {
   return crewLeisureTargets(state);
+}
+
+function residentDemandValues(resident: Resident): Record<RecurringNeedKind, number> {
+  return {
+    hunger: resident.hunger,
+    energy: resident.energy,
+    hygiene: resident.hygiene,
+    // Social recovery remains caller-owned below; it occupies the shared
+    // leisure channel so selection and preemption use the same vocabulary.
+    leisure: resident.social
+  };
+}
+
+function residentActiveNeed(resident: Resident): RecurringNeedKind | null {
+  switch (resident.state) {
+    case ResidentState.ToCafeteria:
+    case ResidentState.Eating:
+      return 'hunger';
+    case ResidentState.ToDorm:
+    case ResidentState.Sleeping:
+      return 'energy';
+    case ResidentState.ToHygiene:
+    case ResidentState.Cleaning:
+      return 'hygiene';
+    case ResidentState.ToLeisure:
+    case ResidentState.Leisure:
+      return 'leisure';
+    default:
+      return null;
+  }
+}
+
+function tryAssignResidentCriticalNeed(
+  state: StationState,
+  resident: Resident,
+  need: RecurringNeedKind
+): boolean {
+  if (need === 'energy') {
+    const targets = residentBedTarget(state, resident);
+    resident.state = ResidentState.ToDorm;
+    if (targets.length > 0 && assignResidentUsagePath(state, resident, targets, 'bed')) return true;
+    noteFailedNeedAttempt(state, 'dorm');
+    noteFailedNeedAttempt(state, 'energy');
+    return false;
+  }
+  if (need === 'hygiene') {
+    const targets = residentHygieneTargets(state);
+    resident.state = ResidentState.ToHygiene;
+    if (targets.length > 0 && assignResidentUsagePath(state, resident, targets, 'hygiene')) return true;
+    noteFailedNeedAttempt(state, 'hygiene');
+    return false;
+  }
+  if (need === 'hunger') {
+    const targets = collectServingTargets(state);
+    resident.state = ResidentState.ToCafeteria;
+    if (targets.length > 0 && state.metrics.mealStock > 3 && assignResidentMealPath(state, resident)) return true;
+    noteFailedNeedAttempt(state, 'hunger');
+    return false;
+  }
+  return false;
+}
+
+function shouldPreemptResidentForCriticalNeed(resident: Resident): RecurringNeedKind | null {
+  const active = residentActiveNeed(resident);
+  const critical = selectCriticalOccupantDemand(residentDemandValues(resident), RESIDENT_DEMAND_PROFILE);
+  return shouldPreemptOccupantDemand({
+    criticalNeed: critical,
+    activeNeed: active,
+    activity: active === 'leisure' ? 'optional' : active === null ? 'committed' : 'critical'
+  }) ? critical : null;
 }
 
 /**
@@ -26326,9 +26416,16 @@ function updateResidentLogic(
 
     const airPenalty = state.metrics.airQuality < 40 ? 0.25 : 0;
     const healthPenalty = resident.healthState === 'critical' ? 0.35 : resident.healthState === 'distressed' ? 0.18 : 0;
-    resident.hunger = clamp(resident.hunger - dt * (0.65 + airPenalty), 0, 100);
-    resident.energy = clamp(resident.energy - dt * (0.5 + healthPenalty), 0, 100);
-    resident.hygiene = clamp(resident.hygiene - dt * (0.4 + healthPenalty * 0.6), 0, 100);
+    const residentNeeds = residentDemandValues(resident);
+    decayOccupantDemand(residentNeeds, dt, RESIDENT_DEMAND_PROFILE, {
+      hunger: (0.65 + airPenalty) / RESIDENT_DEMAND_PROFILE.rates.hunger,
+      energy: (0.5 + healthPenalty) / RESIDENT_DEMAND_PROFILE.rates.energy,
+      hygiene: (0.4 + healthPenalty * 0.6) / RESIDENT_DEMAND_PROFILE.rates.hygiene,
+      leisure: 0
+    });
+    resident.hunger = residentNeeds.hunger;
+    resident.energy = residentNeeds.energy;
+    resident.hygiene = residentNeeds.hygiene;
     const localPopulation = nearbyPopulationCount(state, resident.tileIndex, 2);
     const localAura = clamp(securityAuraByTile.get(resident.tileIndex) ?? 0, 0, 1);
     const localSuppression = incidentSuppressionAtTile(securityAuraByTile, resident.tileIndex);
@@ -26342,6 +26439,21 @@ function updateResidentLogic(
       resident.social = clamp(resident.social - dt * RESIDENT_SOCIAL_DECAY_PER_SEC * 1.2, 0, 100);
     } else {
       resident.social = clamp(resident.social - dt * RESIDENT_SOCIAL_DECAY_PER_SEC * 0.35, 0, 100);
+    }
+
+    const residentCriticalNeed = shouldPreemptResidentForCriticalNeed(resident);
+    if (residentCriticalNeed !== null) {
+      // The release happens once at the interruption boundary; normal routing
+      // then owns the new provider claim. Do not disrupt boarding/meal/sleep
+      // work — only the inferred leisure state is interruptible here.
+      releaseReservationsForOwner(state, 'resident', resident.id, 'replaced', ['provider-slot', 'seat-use-slot']);
+      resident.reservedTargetTile = null;
+      resident.reservedServingTile = null;
+      setResidentPath(state, resident, []);
+      if (!tryAssignResidentCriticalNeed(state, resident, residentCriticalNeed)) {
+        resident.state = ResidentState.Idle;
+        resident.retargetAt = state.now + 1;
+      }
     }
 
     const safetyDecay =
