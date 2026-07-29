@@ -104,7 +104,6 @@ import {
   getPreparedMealInventory,
   type PreparedMealInventory,
   getHousingInspectorAt,
-  getLifeSupportCoverageDiagnostics,
   getLifeSupportTileDiagnostic,
   getAirDuctNetworkDiagnostics,
   getFuelPipeNetworkDiagnostics,
@@ -2977,26 +2976,23 @@ function preparedMealServiceSnapshot(): PreparedMealInventory {
   return getPreparedMealInventory(state);
 }
 
-function occupiedPoorAirCoverage(): { count: number; tile: number | null; room: string | null } {
-  const coverage = getLifeSupportCoverageDiagnostics(state);
-  if (!coverage.hasLifeSupportSystem || coverage.sourceCount <= 0) {
-    return { count: 0, tile: null, room: null };
-  }
+function occupiedUnsafeAir(): { count: number; tile: number | null; room: string | null } {
   const actorTiles = [
     ...state.crewMembers.map((actor) => actor.tileIndex),
     ...state.residents.map((actor) => actor.tileIndex),
     ...state.visitors.map((actor) => actor.tileIndex)
   ];
-  const poorOccupiedTiles = new Set(actorTiles.filter((tile) => {
-    const x = tile % state.width;
-    const y = Math.floor(tile / state.width);
-    return getLifeSupportTileDiagnostic(state, x, y, coverage)?.poorCoverage === true;
-  }));
-  const tile = poorOccupiedTiles.values().next().value as number | undefined;
+  // Coverage distance is planning feedback, not an emergency by itself. The
+  // local actor simulation already consumes per-tile oxygen truth, so the HUD
+  // escalates only when an occupied tile is actually unpressurized or unsafe.
+  const unsafeOccupiedTiles = new Set(actorTiles.filter((tile) =>
+    !state.pressurized[tile] || (state.airQualityByTile[tile] ?? 0) < 70
+  ));
+  const tile = unsafeOccupiedTiles.values().next().value as number | undefined;
   if (tile === undefined) return { count: 0, tile: null, room: null };
   const room = state.rooms[tile];
   return {
-    count: actorTiles.filter((actorTile) => poorOccupiedTiles.has(actorTile)).length,
+    count: actorTiles.filter((actorTile) => unsafeOccupiedTiles.has(actorTile)).length,
     tile,
     room: room && room !== RoomType.None ? room : null
   };
@@ -3023,7 +3019,7 @@ function refreshHudStatus(): void {
   // Empty corridors and interface aprons remain visible in Air Coverage, but
   // they must not paint the global HUD as an emergency. Escalate the headline
   // only when a real occupant is currently standing in the weak service area.
-  const occupiedAirRisk = occupiedPoorAirCoverage();
+  const occupiedAirRisk = occupiedUnsafeAir();
   const localCoverageRisk = occupiedAirRisk.count > 0;
   const airWarning =
     oxygen < 70 ||
@@ -3820,11 +3816,14 @@ function syncBerthOpsAnchors(): void {
     // Prefer sitting to the right of the interface, flipping only at the edge,
     // so the card never covers the berth it is reporting on.
     const gap = anchor.size * 0.6 + 8;
-    const flip = anchor.x + gap + width + 10 > window.innerWidth;
+    const flip = anchor.x + gap + width + 10 > wrap.right;
     const left = flip ? anchor.x - gap - width : anchor.x + gap;
-    const boundedLeft = clamp(left, 10, Math.max(10, window.innerWidth - width - 10));
-    const desiredTop = clamp(anchor.y - height * 0.5, 10, Math.max(10, window.innerHeight - height - 10));
-    const maxTop = Math.max(10, window.innerHeight - height - 10);
+    const minLeft = wrap.left + 10;
+    const maxLeft = Math.max(minLeft, wrap.right - width - 10);
+    const boundedLeft = clamp(left, minLeft, maxLeft);
+    const minTop = wrap.top + 10;
+    const maxTop = Math.max(minTop, wrap.bottom - height - 10);
+    const desiredTop = clamp(anchor.y - height * 0.5, minTop, maxTop);
     const horizontalOverlap = (candidateLeft: number, candidateRight: number, other: typeof placed[number]) =>
       candidateLeft < other.right + 8 && candidateRight > other.left - 8;
     const verticalOverlap = (candidateTop: number, candidateBottom: number, other: typeof placed[number]) =>
@@ -3837,11 +3836,11 @@ function syncBerthOpsAnchors(): void {
     // Nearby interfaces can be active at the same time. Preserve each card's
     // physical anchoring, but stack colliding cards at the nearest free edge
     // instead of painting two unreadable panels on top of one another.
-    const topCandidates = [desiredTop, 10, maxTop];
+    const topCandidates = [desiredTop, minTop, maxTop];
     for (const other of placed) {
       if (!horizontalOverlap(boundedLeft, boundedLeft + width, other)) continue;
-      topCandidates.push(clamp(other.bottom + 8, 10, maxTop));
-      topCandidates.push(clamp(other.top - height - 8, 10, maxTop));
+      topCandidates.push(clamp(other.bottom + 8, minTop, maxTop));
+      topCandidates.push(clamp(other.top - height - 8, minTop, maxTop));
     }
     const top = topCandidates
       .filter((candidate, index) => topCandidates.indexOf(candidate) === index)
