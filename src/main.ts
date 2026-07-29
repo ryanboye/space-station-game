@@ -3652,6 +3652,42 @@ function chosenOfferInterface(offer: TrafficOffer, preview: TrafficOfferPreview)
 }
 
 let renderedBerthOpsHtml = '';
+const collapsedBerthOpsCards = new Map<number, boolean>();
+
+function berthOpsCardCollapsed(shipId: number): boolean {
+  return collapsedBerthOpsCards.get(shipId) ?? window.matchMedia('(max-width: 760px)').matches;
+}
+
+function disclosedVisitRange(value: number, spread: number, step = 1): string {
+  const rounded = Math.max(step, Math.round(value / step) * step);
+  const minimum = Math.max(step, Math.floor((rounded * (1 - spread)) / step) * step);
+  const maximum = Math.max(minimum, Math.ceil((rounded * (1 + spread)) / step) * step);
+  return minimum === maximum ? String(minimum) : `${minimum}-${maximum}`;
+}
+
+function liveVisitPurpose(ship: StationState['arrivingShips'][number]): string {
+  const kind = ship.portManifest?.offerKind;
+  if (kind === 'freight') return 'FREIGHT CALL';
+  if (kind === 'passenger') return 'PASSENGER STAY';
+  if (kind === 'mixed') return 'MIXED TURNAROUND';
+  const services = ship.smallCraftVisit?.services ?? [];
+  const carriesFreight = services.some((service) => service.kind === 'freight');
+  const carriesTravelers = ship.passengersTotal > 0;
+  if (carriesFreight && carriesTravelers) return 'MIXED POD CALL';
+  if (carriesFreight) return 'FREIGHT POD';
+  if (carriesTravelers) return 'TRAVELER POD';
+  return 'SERVICE CALL';
+}
+
+function liveVisitExpectation(ship: StationState['arrivingShips'][number]): string {
+  if (ship.passengersTotal <= 0) {
+    const stay = disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
+    return `cargo only · ${stay}s stay`;
+  }
+  const party = disclosedVisitRange(ship.passengersTotal, 0.2);
+  const stay = disclosedVisitRange(ship.portManifest?.berthTimeSec ?? 90, 0.15, 10);
+  return `${party} guest${party === '1' ? '' : 's'} · ${stay}s stay`;
+}
 
 /**
  * The physical interface a live turnaround is running on.
@@ -3741,12 +3777,17 @@ function refreshTrafficOffers(): void {
       const serviceSummary = services.map((service) =>
         `${podDockServiceLabel(service.kind, service.freightDirection)} ${service.status.toUpperCase()} ${Math.round(service.progress * 100)}%`
       ).join(' · ');
-      return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor" data-berth-ops-tile="${anchorTile}">
+      const collapsed = berthOpsCardCollapsed(ship.id);
+      return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor${collapsed ? ' is-collapsed' : ''}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
         <div class="traffic-offer-head"><strong>${escapeHtml(ship.portManifest?.callsign ?? `POD ${ship.id}`)} · POD DOCK</strong><span>${ship.stage.toUpperCase()} · ${progress}%</span></div>
-        <div class="traffic-offer-meta">${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'} · ${ship.passengersTotal} GUEST${ship.passengersTotal === 1 ? '' : 'S'}</div>
-        <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
-        <div class="small-craft-service-summary">${escapeHtml(serviceSummary)}</div>
-        ${firstBlocked ? `<small class="small-craft-blocked">Action: ${escapeHtml(firstBlocked)}</small>` : ''}
+        <div class="traffic-offer-meta">${escapeHtml(liveVisitPurpose(ship))} · ${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'}</div>
+        <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
+        <button class="berth-ops-detail-toggle" data-berth-ops-toggle="${ship.id}" type="button" aria-expanded="${String(!collapsed)}">${collapsed ? 'Show details' : 'Hide details'}</button>
+        <div class="berth-ops-detail">
+          <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
+          <div class="small-craft-service-summary">${escapeHtml(serviceSummary)}</div>
+          ${firstBlocked ? `<small class="small-craft-blocked">Action: ${escapeHtml(firstBlocked)}</small>` : ''}
+        </div>
       </article>`;
     }
     const offer = ship.portManifest!;
@@ -3761,11 +3802,16 @@ function refreshTrafficOffers(): void {
       const complete = promise.completed >= promise.target - 0.001;
       return `<div class="turnaround-promise ${complete ? 'complete' : ''}"><span>${promise.label}</span><b>${Math.floor(promise.completed)}/${Math.floor(promise.target)}</b></div>`;
     }).join('') ?? '<div class="traffic-offer-line">Preparing contract...</div>';
-    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'} berth-ops-anchor" data-berth-ops-tile="${anchorTile}">
+    const collapsed = berthOpsCardCollapsed(ship.id);
+    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'} berth-ops-anchor${collapsed ? ' is-collapsed' : ''}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase} · ${secondsLeft}s</span></div>
-      <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} SHIFT · BERTH ${berthStanding?.serviceGrade ?? 'C'} · ${offer.passengersTotal} pax</div>
-      <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
-      <div class="turnaround-promises">${promiseRows}</div>
+      <div class="traffic-offer-meta">${escapeHtml(liveVisitPurpose(ship))} · BERTH ${berthStanding?.serviceGrade ?? 'C'}</div>
+      <div class="traffic-offer-meta berth-ops-expectation">EXPECTED ${escapeHtml(liveVisitExpectation(ship))}</div>
+      <button class="berth-ops-detail-toggle" data-berth-ops-toggle="${ship.id}" type="button" aria-expanded="${String(!collapsed)}">${collapsed ? 'Show details' : 'Hide details'}</button>
+      <div class="berth-ops-detail">
+        <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
+        <div class="turnaround-promises">${promiseRows}</div>
+      </div>
     </article>`;
   }).join('');
   if (activeHtml !== renderedBerthOpsHtml) {
@@ -3920,6 +3966,20 @@ function refreshTrafficOffers(): void {
   trafficOfferListEl.innerHTML = offersHtml;
   refreshTrafficOfferTimers(visibleOffers);
 }
+
+berthOpsAnchorsEl.addEventListener('click', (event) => {
+  const target = event.target instanceof HTMLElement
+    ? event.target.closest<HTMLButtonElement>('[data-berth-ops-toggle]')
+    : null;
+  if (!target) return;
+  const shipId = Number(target.dataset.berthOpsToggle);
+  if (!Number.isFinite(shipId)) return;
+  const card = target.closest<HTMLElement>('[data-berth-ops-ship]');
+  const collapsed = !(card?.classList.contains('is-collapsed') ?? false);
+  collapsedBerthOpsCards.set(shipId, collapsed);
+  renderedBerthOpsHtml = '';
+  refreshTrafficOffers();
+});
 
 let routeConflictCalloutSampledAt = Number.NEGATIVE_INFINITY;
 let routeConflictCallout: { tileIndex: number; label: string } | null = null;

@@ -2952,6 +2952,28 @@ h2 {
   display: none;
 }
 
+.berth-ops-expectation {
+  color: #a9c9c2;
+  letter-spacing: 0.025em;
+}
+
+.berth-ops-detail-toggle {
+  margin: 5px 0 2px;
+  padding: 2px 6px;
+  border-color: rgba(114, 221, 181, 0.35);
+  background: rgba(10, 34, 32, 0.74);
+  color: #aee8d5;
+  font-size: 10px;
+}
+
+.berth-ops-anchor.is-collapsed {
+  width: min(242px, calc(100vw - 20px));
+}
+
+.berth-ops-anchor.is-collapsed .berth-ops-detail {
+  display: none;
+}
+
 #toggle-ui-panels .panel-visibility-slash {
   display: none;
   stroke-width: 2.4;
@@ -2990,6 +3012,10 @@ h2 {
 
   .berth-ops-anchor {
     width: min(250px, calc(100vw - 20px));
+  }
+
+  .berth-ops-detail-toggle {
+    min-height: 28px;
   }
 }
 
