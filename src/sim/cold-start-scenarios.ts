@@ -1188,6 +1188,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     completeSpecialtyForScenario(s, 'security-command');
     completeSpecialtyForScenario(s, 'mechanical-maintenance');
     applyDemoStationOverlay(s);
+    installCompactScaleCrewHousing(s);
     installScalePowerReserve(s);
     tick(s, 0);
     installScaleDockInterfaces(s, 8);
@@ -1217,10 +1218,13 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     tick(s, 0);
     for (const crew of s.crewMembers) {
       crew.energy = 100;
-      crew.hunger = 100;
-      crew.hygiene = 100;
+      // Fifty identical full meters create one artificial restroom/meal wave
+      // several minutes later. Phase ordinary needs across the roster so this
+      // authored running station starts at different points in real watches.
+      crew.hunger = 55 + ((crew.id * 37) % 46);
+      crew.hygiene = 50 + ((crew.id * 31) % 51);
       crew.bladder = 100;
-      crew.thirst = 100;
+      crew.thirst = 40 + ((crew.id * 29) % 61);
       crew.morale = 100;
       crew.missedPayrollCycles = 0;
       crew.needsStrainSec = 0;
@@ -1246,6 +1250,11 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
       crew.targetTile = null;
       crew.path = [];
       crew.activeJobId = null;
+    }
+    for (const crew of s.crewMembers) {
+      const watchOffset = crew.shiftBucket === 2 ? 0 : crew.shiftBucket === 0 ? 1 : 2;
+      const withinWatch = Math.floor((crew.id - 1) / 3);
+      crew.bladder = 25 + (watchOffset * 135 + withinWatch * 7) * 0.16;
     }
 
     const publicFloors = s.tiles
@@ -2603,13 +2612,20 @@ function buildSpineShell(state: StationState): void {
 
 function furnishSpineStation(state: StationState): void {
   // Dorms (pod 1 north).
-  for (const [x, y] of [[8, 24], [11, 24], [14, 24], [16, 27], [8, 27], [11, 27]] as const) {
-    placeMod(state, x, y, ModuleType.Bed);
+  // Twelve depicted four-position banks plus two ordinary beds give every
+  // member of the 50-person roster a real position. Keep the banks in two
+  // rows per room so their access faces stay clear of the divider/throat.
+  for (const [x, y] of [
+    [7, 23], [10, 23], [13, 23], [16, 23],
+    [7, 31], [10, 31], [13, 31], [16, 31]
+  ] as const) {
+    placeFixture(state, ModuleType.BunkBank, x, y);
   }
-  for (const [x, y] of [[8, 32], [11, 32], [14, 32], [16, 35], [8, 35], [11, 35]] as const) {
-    placeMod(state, x, y, ModuleType.Bed);
+  for (const [x, y] of [[7, 28], [12, 28], [7, 35], [12, 35]] as const) {
+    placeFixture(state, ModuleType.BunkBank, x, y, 90);
   }
-  placeMod(state, 14, 35, ModuleType.Plant);
+  placeMod(state, 7, 27, ModuleType.Bed);
+  placeMod(state, 10, 27, ModuleType.Bed);
 
   // Kitchen (pod 2 north, outer) feeding the Cafeteria behind it.
   placeMod(state, 22, 24, ModuleType.Stove);
@@ -2795,10 +2811,12 @@ function stageLinearSpineScale(state: StationState): void {
   tick(state, 0);
   for (const crew of state.crewMembers) {
     crew.energy = 100;
-    crew.hunger = 100;
-    crew.hygiene = 100;
+    // Match the compact benchmark's phased watches instead of synchronizing
+    // all fifty ordinary needs into one fixture stampede.
+    crew.hunger = 55 + ((crew.id * 37) % 46);
+    crew.hygiene = 50 + ((crew.id * 31) % 51);
     crew.bladder = 100;
-    crew.thirst = 100;
+    crew.thirst = 40 + ((crew.id * 29) % 61);
     crew.morale = 100;
     crew.missedPayrollCycles = 0;
     crew.needsStrainSec = 0;
@@ -2824,6 +2842,11 @@ function stageLinearSpineScale(state: StationState): void {
     crew.targetTile = null;
     crew.path = [];
     crew.activeJobId = null;
+  }
+  for (const crew of state.crewMembers) {
+    const watchOffset = crew.shiftBucket === 2 ? 0 : crew.shiftBucket === 0 ? 1 : 2;
+    const withinWatch = Math.floor((crew.id - 1) / 3);
+    crew.bladder = 25 + (watchOffset * 135 + withinWatch * 7) * 0.16;
   }
 
   const publicFloors = state.tiles
@@ -3969,6 +3992,33 @@ function applyDemoStationOverlay(
   }
   for (let y = 7; y < 14; y++) {
     for (let x = 6; x < 14; x++) state.roomHousingPolicies[y * state.width + x] = 'crew';
+  }
+}
+
+/**
+ * Give the compact 50-crew benchmark an authored second crew dorm.
+ *
+ * The shared demo remains an eighteen-person station, so this conversion is
+ * deliberately scale-scenario-only. Its former Brig is already sealed and
+ * reachable from the operations deck; replacing two Cell Consoles with eight
+ * four-position banks adds 32 positions to the original dorm's 20.
+ */
+function installCompactScaleCrewHousing(state: StationState): void {
+  for (const [x, y] of [[40, 34], [43, 34]] as const) {
+    removeModuleAtTile(state, y * state.width + x);
+  }
+
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] !== RoomType.Brig) continue;
+    setRoom(state, tile, RoomType.Dorm);
+    state.zones[tile] = ZoneType.Restricted;
+    state.roomHousingPolicies[tile] = 'crew';
+  }
+
+  for (const y of [32, 36] as const) {
+    for (const x of [39, 41, 43, 45] as const) {
+      placeFixture(state, ModuleType.BunkBank, x, y);
+    }
   }
 }
 
