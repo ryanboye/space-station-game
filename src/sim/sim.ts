@@ -21183,7 +21183,51 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     if (result === 'blocked') crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
     else if (result === 'moved') crew.blockedTicks = 0;
   };
+  const crewHasActivePhysicalSelfCareSession = (crew: CrewMember): boolean =>
+    (crew.eating && (crew.eatSessionActive || crew.carryingMeal)) ||
+    (crew.cleaning && crew.cleanSessionActive) ||
+    (crew.toileting && crew.toiletSessionActive) ||
+    (crew.drinking && crew.drinkSessionActive);
+  const routeStalledCrewToAssignedSleep = (crew: CrewMember, previousIdleReason: CrewIdleReason): boolean => {
+    if (crew.energy > CREW_REST_CRITICAL_ENERGY_THRESHOLD || crew.resting || crew.activeJobId !== null) return false;
+    if (crewHasActivePhysicalSelfCareSession(crew)) return false;
+    const selfCareIntent = crew.eating || crew.cleaning || crew.toileting || crew.drinking || crew.leisure;
+    if (!selfCareIntent) return false;
+    const hasLiveClaim = reservationsForOwner(state, 'crew', crew.id)
+      .some((reservation) => reservation.kind === 'provider-slot' || reservation.kind === 'seat-use-slot');
+    const retryElapsedWithoutPath = crew.path.length === 0 && state.now >= crew.retargetAt;
+    const stalled = !hasLiveClaim || previousIdleReason === 'idle_waiting_fixture' || retryElapsedWithoutPath;
+    if (!stalled) return false;
+    // This is the one interruption boundary for a stalled intent. Completed
+    // meals and live wash/toilet/drink sessions returned above untouched.
+    releaseCrewUsageTarget(state, crew, 'replaced');
+    crew.eating = false;
+    crew.carryingMeal = false;
+    crew.eatSessionActive = false;
+    crew.eatUntil = 0;
+    crew.cleaning = false;
+    crew.cleanSessionActive = false;
+    crew.toileting = false;
+    crew.toiletSessionActive = false;
+    crew.drinking = false;
+    crew.drinkSessionActive = false;
+    crew.leisure = false;
+    crew.leisureSessionActive = false;
+    crew.leisureUntil = 0;
+    crew.resting = true;
+    crew.restSessionActive = false;
+    crew.restLockUntil = state.now + CREW_REST_LOCK_SEC;
+    crew.role = 'idle';
+    crew.targetTile = null;
+    crew.lastSystem = null;
+    crew.assignedSystem = null;
+    crew.assignmentHoldUntil = 0;
+    setCrewPath(state, crew, []);
+    crew.idleReason = 'idle_resting';
+    return true;
+  };
   for (const crew of state.crewMembers) {
+    const previousIdleReason = crew.idleReason;
     crew.idleReason = 'idle_available';
     const watchStatus: CrewWatchStatus = getCrewWatchStatus(state, crew);
     const routineSelfCareAllowed = watchStatus !== 'on-duty';
@@ -21325,6 +21369,15 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
         crew.assignmentStickyUntil = Math.max(crew.assignmentStickyUntil, state.now + CREW_ASSIGNMENT_STICKY_SEC);
         crew.assignmentHoldUntil = Math.max(crew.assignmentHoldUntil, state.now + INCIDENT_ESCORT_GRACE_SEC);
       }
+    }
+    if (
+      !incidentDutyLocked &&
+      !commandDutyLocked &&
+      !protectedDutyLocked &&
+      routeStalledCrewToAssignedSleep(crew, previousIdleReason)
+    ) {
+      currentResting += 1;
+      state.metrics.crewRestingNow = currentResting;
     }
     if (!crew.resting && !incidentDutyLocked && !commandDutyLocked && !protectedDutyLocked) {
       const dutyDrain = watchStatus === 'off-duty' ? 0.08 : watchStatus === 'reserve' ? 0.16 : 0.24;

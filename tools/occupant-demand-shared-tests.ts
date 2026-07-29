@@ -15,7 +15,15 @@ import {
   tryCreateReservation
 } from '../src/sim/sim';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
-import { ModuleType, ResidentState, VisitorState, type Resident, type StationState, type Visitor } from '../src/sim/types';
+import {
+  ModuleType,
+  ResidentState,
+  VisitorState,
+  type CrewMember,
+  type Resident,
+  type StationState,
+  type Visitor
+} from '../src/sim/types';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -193,11 +201,82 @@ function testPlannedVisitorServiceIsNotPreempted(): void {
   assert(claim?.releaseReason === null, `planned comfort claim was released (${claim?.releaseReason})`);
 }
 
+function stageCrew(state: StationState, tile: number): CrewMember {
+  const crew = state.crewMembers[0];
+  assert(crew, 'starter production state must provide a real crew member');
+  state.crewMembers = [crew];
+  crew.tileIndex = tile;
+  crew.x = (tile % state.width) + 0.5;
+  crew.y = Math.floor(tile / state.width) + 0.5;
+  crew.path = [];
+  crew.targetTile = tile;
+  crew.activeJobId = null;
+  crew.resting = false;
+  crew.cleaning = false;
+  crew.toileting = false;
+  crew.drinking = false;
+  crew.leisure = false;
+  crew.carryingMeal = false;
+  crew.eatSessionActive = false;
+  crew.energy = 0;
+  crew.idleReason = 'idle_waiting_fixture';
+  crew.retargetAt = state.now + 30;
+  return crew;
+}
+
+function crewProductionState(): StationState {
+  const state = createInitialState({ seed: 88_200, physicalStarterInventory: true, manualTrafficAdmission: true });
+  // This focused scenario hires real staff while retaining the starter's
+  // actual ServingStation, Table, and crew Dorm.
+  assert(applyColdStartScenario(state, 'reception-staffed'), 'crew production fixture must load');
+  state.controls.paused = false;
+  return state;
+}
+
+function testCrewStalledSelfCareYieldsToCriticalSleep(): void {
+  const state = crewProductionState();
+  const serving = fixtureTile(state, ModuleType.ServingStation);
+  const crew = stageCrew(state, serving);
+  crew.eating = true;
+  const old = tryCreateReservation(state, {
+    ownerKind: 'crew', ownerId: crew.id, kind: 'provider-slot', targetTile: serving,
+    targetId: `meal-pickup:${serving}`, amount: 1, capacity: 1, ttlSec: 75
+  });
+  assert(old.ok, 'crew must obtain a real initial meal-provider claim');
+
+  tick(state, 0.01);
+  assert(crew.resting, 'critically fatigued crew stalled at a fixture did not begin assigned sleep');
+  assert(!crew.eating && !crew.carryingMeal, 'stalled meal intent survived critical-sleep handoff');
+  assert(old.reservation.releaseReason === 'replaced', `stale crew claim did not release once (${old.reservation.releaseReason})`);
+  assert(crew.assignedSleepTile !== null, 'critical crew did not retain an assigned physical sleep slot');
+}
+
+function testCrewActiveMealIsNeverPreempted(): void {
+  const state = crewProductionState();
+  const table = fixtureTile(state, ModuleType.Table);
+  const crew = stageCrew(state, table);
+  crew.eating = true;
+  crew.carryingMeal = true;
+  crew.eatSessionActive = true;
+  crew.eatUntil = state.now + 30;
+  const claim = tryCreateReservation(state, {
+    ownerKind: 'crew', ownerId: crew.id, kind: 'seat-use-slot', targetTile: table,
+    targetId: `meal-seat:${table}`, amount: 1, capacity: 1, ttlSec: 75
+  });
+  assert(claim.ok, 'crew must obtain a real meal-seat claim');
+
+  tick(state, 0.01);
+  assert(!crew.resting && crew.eating && crew.eatSessionActive, 'active physical crew meal was incorrectly preempted');
+  assert(claim.reservation.releaseReason === null, `active meal claim was released (${claim.reservation.releaseReason})`);
+}
+
 testSharedDecayPreservesProfiles();
 testStableCriticalSelectionAndSingleClaim();
 testCriticalPreemptionPolicy();
 testVisitorProductionPreemption();
 testResidentProductionPreemption();
 testPlannedVisitorServiceIsNotPreempted();
+testCrewStalledSelfCareYieldsToCriticalSleep();
+testCrewActiveMealIsNeverPreempted();
 
-console.log('PASS shared occupant demand: profile decay, stable claims, visitor/resident production preemption, planned-service guard');
+console.log('PASS shared occupant demand: profile decay, stable claims, visitor/resident/crew production preemption, active-service guards');
