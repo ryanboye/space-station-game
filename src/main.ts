@@ -7898,17 +7898,22 @@ function recipeMachineReadout(recipe: ReturnType<typeof evaluateOpeningRecipes>[
 }
 
 function recipeNextControl(recipe: ReturnType<typeof evaluateOpeningRecipes>[number]): string {
-  const roomReady = recipe.steps.find((step) => step.kind === 'room')?.satisfied ?? true;
-  if (
-    roomReady &&
-    !recipe.operational &&
-    recipe.operationalReasons.some((reason) => reason.includes('PUBLIC'))
-  ) {
+  const roomStep = recipe.steps.find((step) => step.kind === 'room');
+  const needsCoherentPublicRoom = recipe.id === 'feed-travelers' || recipe.id === 'sell-supplies';
+  if (!recipe.operational && recipe.candidateAccess === 'restricted') {
     return '<button class="tool-btn recipe-step recipe-action" data-tool-zone="public" title="Paint Public access over the whole guest-facing cluster">Paint Public access <span>zone the whole cluster</span></button>';
   }
-  const next = recipe.steps.find((step) => !step.satisfied);
+  // A scattered total can satisfy the numeric room row without producing the
+  // coherent cluster the recipe evaluator uses. Keep the room tool as the next
+  // action until that real candidate exists; unrelated reason copy must never
+  // turn fragmented paint into a zoning recommendation.
+  const needsCoherentRoom = needsCoherentPublicRoom && recipe.candidateAccess === null && roomStep !== undefined;
+  const next = needsCoherentRoom ? roomStep : recipe.steps.find((step) => !step.satisfied);
   if (next) {
-    return `<button class="tool-btn recipe-step recipe-action"${recipeStepAttributes(next)} title="${escapeHtml(next.label)}">${escapeHtml(next.label)} <span>${escapeHtml(recipeStepDetail(recipe.id, next))}</span></button>`;
+    const detail = needsCoherentRoom
+      ? 'shape one coherent room cluster'
+      : recipeStepDetail(recipe.id, next);
+    return `<button class="tool-btn recipe-step recipe-action"${recipeStepAttributes(next)} title="${escapeHtml(next.label)}">${escapeHtml(next.label)} <span>${escapeHtml(detail)}</span></button>`;
   }
   return '';
 }
