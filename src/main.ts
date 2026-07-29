@@ -419,13 +419,13 @@ app.innerHTML = `
           <button id="open-ops-modal" class="mini-action-btn">Shift Roster</button>
         </div>
         <div id="bottom-role-coverage" class="bottom-role-coverage" aria-live="polite"></div>
-        <div class="row compact list-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
-        <div class="row compact list-row"><span>Fuel</span><span class="value" id="fuel-status">No tanks</span></div>
+        <div class="row compact list-row hidden" id="cargo-arm-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
+        <div class="row compact list-row hidden" id="fuel-row"><span>Fuel</span><span class="value" id="fuel-status">No tanks</span></div>
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
         <div class="row compact list-row hidden"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Kitchen 0/0 | Life Support 0/0</span></div>
         <div class="row compact list-row hidden"><span>Residents</span><span class="value" id="ops-residents">0 | waiting</span></div>
-        <div class="row compact list-row"><span>Work Queue</span><span class="value" id="jobs">No queued work</span></div>
+        <div class="row compact list-row hidden" id="work-queue-row"><span>Work Queue</span><span class="value" id="jobs">No queued work</span></div>
         <small id="critical-staffing-line"></small>
       </section>
       <section id="settlement-card" class="dock-card settlement-card">
@@ -446,7 +446,7 @@ app.innerHTML = `
         <small id="rating-reasons" class="hidden"></small>
         <small id="morale-reasons" class="hidden"></small>
       </section>
-      <section class="dock-card diagnostics-card">
+      <section id="diagnostics-card" class="dock-card diagnostics-card hidden">
         <div class="hud-card-title">Alerts</div>
         <div id="alert-list" class="alert-list is-clear">No active alerts</div>
         <div id="incident-list" class="incident-list is-empty">Incidents: none</div>
@@ -1833,7 +1833,9 @@ if (typeof ResizeObserver !== 'undefined') {
 window.addEventListener('resize', publishBottomDockHeight);
 publishBottomDockHeight();
 
+const cargoArmRowEl = document.querySelector<HTMLElement>('#cargo-arm-row')!;
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
+const fuelRowEl = document.querySelector<HTMLElement>('#fuel-row')!;
 const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
 const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
@@ -2250,6 +2252,7 @@ const resourcesEl = document.querySelector<HTMLSpanElement>('#resources')!;
 const pressureEl = document.querySelector<HTMLSpanElement>('#pressure')!;
 const economyEl = document.querySelector<HTMLSpanElement>('#economy')!;
 const economyFlowEl = document.querySelector<HTMLElement>('#economy-flow')!;
+const workQueueRowEl = document.querySelector<HTMLElement>('#work-queue-row')!;
 const jobsEl = document.querySelector<HTMLSpanElement>('#jobs')!;
 const jobsExtraEl = document.querySelector<HTMLElement>('#jobs-extra')!;
 const idleReasonsEl = document.querySelector<HTMLElement>('#idle-reasons')!;
@@ -2506,6 +2509,7 @@ const hudRatingEl = document.querySelector<HTMLElement>('#hud-rating')!;
 const hudMoraleEl = document.querySelector<HTMLElement>('#hud-morale')!;
 const hudClockEl = document.querySelector<HTMLElement>('#hud-clock')!;
 const alertListEl = document.querySelector<HTMLElement>('#alert-list')!;
+const diagnosticsCardEl = document.querySelector<HTMLElement>('#diagnostics-card')!;
 const tierChecklistEl = document.querySelector<HTMLElement>('#tier-checklist')!;
 const selectionSummaryEl = document.querySelector<HTMLElement>('#selection-summary')!;
 const devTierOverlayEl = document.querySelector<HTMLElement>('#dev-tier-overlay')!;
@@ -3519,14 +3523,20 @@ function refreshTrafficOffers(): void {
   refreshAdmissionPolicyEditor();
   const cargoOps = state.portOps;
   const cargoArmCount = state.moduleInstances.filter((module) => module.type === ModuleType.CargoArm).length;
+  // Contextual UI: strain and repair readouts describe hardware. A station that
+  // has never installed a cargo arm gets no row for one.
+  cargoArmRowEl.classList.toggle('hidden', cargoArmCount <= 0);
   cargoArmStatusEl.textContent = cargoOps.cargoArmStatus === 'fault'
     ? cargoArmCount >= 2
       ? `PRIMARY FAULT · spare at 55% · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
       : `FAULT · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
     : `${cargoOps.cargoArmStatus === 'warning' ? 'Strained' : 'Ready'} · ${Math.round(cargoOps.cargoArmStrain)}% strain${cargoArmCount >= 2 ? ` · ${cargoArmCount} arms` : ''}`;
   cargoArmStatusEl.className = `value cargo-arm-${cargoOps.cargoArmStatus}`;
-  const fuelTankNodes = state.moduleInstances
-    .filter((module) => module.type === ModuleType.FuelTank)
+  const fuelTankModules = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
+  // Contextual UI: propellant stock is only a fact once a tank exists. Until
+  // then the row is a permanent "No tanks" that answers a question nobody asked.
+  fuelRowEl.classList.toggle('hidden', fuelTankModules.length <= 0);
+  const fuelTankNodes = fuelTankModules
     .map((module) => state.itemNodes.find((node) => node.tileIndex === module.originTile))
     .filter((node): node is NonNullable<typeof node> => node !== undefined);
   const fuelStock = fuelTankNodes.reduce((sum, node) => sum + (node.items.fuel ?? 0), 0);
@@ -4841,7 +4851,26 @@ function cafeteriaStaffingSnapshot(): {
   return { active, rostered: eligible.length, assigned, selfCare, diagnosis };
 }
 
+// Contextual UI: a station with nothing wrong has nothing to say here, so the
+// Alerts card leaves the dock entirely instead of holding a column open for
+// "No active alerts". The list elements keep their own is-clear/is-empty state,
+// so this reads the same truth the panels just rendered.
+function refreshAlertsCardVisibility(): void {
+  const hasAlerts = !alertListEl.classList.contains('is-clear');
+  const hasIncidents = !incidentListEl.classList.contains('is-empty');
+  const showCard = hasAlerts || hasIncidents;
+  diagnosticsCardEl.classList.toggle('hidden', !showCard);
+  // The dock is a fixed-column grid; without this it keeps an empty cell where
+  // the card used to be. Mirrors the pod-only reflow in refreshSettlementSummary.
+  bottomDockEl.classList.toggle('alerts-clear', !showCard);
+}
+
 function refreshAlertPanel(): void {
+  renderAlertPanel();
+  refreshAlertsCardVisibility();
+}
+
+function renderAlertPanel(): void {
   if (strandedReliefFeedback && state.now >= strandedReliefFeedback.expiresAt) strandedReliefFeedback = null;
   const stranded = strandedAlert();
   if (state.controls.manualTrafficAdmission) {
@@ -5268,9 +5297,11 @@ function refreshIncidentList(): void {
   if (incidents.length === 0) {
     incidentListEl.textContent = 'Incidents: none';
     incidentListEl.classList.add('is-empty');
+    refreshAlertsCardVisibility();
     return;
   }
   incidentListEl.classList.remove('is-empty');
+  refreshAlertsCardVisibility();
   incidentListEl.innerHTML = incidents
     .slice(0, 4)
     .map((incident) => {
@@ -11412,6 +11443,12 @@ function frame(now: number): void {
   pressureEl.style.color = state.metrics.pressurizationPct > 85 ? '#6edb8f' : state.metrics.pressurizationPct > 60 ? '#ffcf6e' : '#ff7676';
   economyEl.textContent = `Supplies ${Math.round(state.metrics.materials)} | Credits ${Math.round(state.metrics.credits)}`;
   economyFlowEl.textContent = `Credits/min: +${state.metrics.creditsGrossPerMin.toFixed(1)} gross | -${state.metrics.creditsPayrollPerMin.toFixed(1)} payroll | net ${state.metrics.creditsNetPerMin >= 0 ? '+' : ''}${state.metrics.creditsNetPerMin.toFixed(1)}`;
+  // Contextual UI: the queue row appears with the queue. Same inputs
+  // jobsSummaryText() uses to decide there is nothing to report.
+  workQueueRowEl.classList.toggle(
+    'hidden',
+    state.metrics.pendingJobs + state.metrics.assignedJobs + state.metrics.sanitationJobsOpen <= 0
+  );
   jobsEl.textContent = jobsSummaryText();
   idleReasonsEl.textContent = idleReasonsText();
   stallReasonsEl.textContent = stallReasonsText();

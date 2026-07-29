@@ -777,15 +777,15 @@ audited checklist with no unsupported checked claims.
 
 ### Contextual UI
 
-- [ ] Keep Approach Control compact and hideable.
-- [ ] Keep alerts contextual/pop-out.
+- [x] Keep Approach Control compact and hideable.
+- [x] Keep alerts contextual/pop-out.
 - [ ] Put market operations at the market.
 - [ ] Put dock/Berth operations at the physical interface.
 - [ ] Keep future-load forecasting contextual to admission.
-- [ ] Avoid permanent panels for Alpha Watch, charter details, fuel, cargo arm, and
+- [x] Avoid permanent panels for Alpha Watch, charter details, fuel, cargo arm, and
   work queue when no related context exists.
 - [ ] Use world-space chips and overlays before sidebar prose.
-- [ ] Never create overwide scheduling or operations panels.
+- [x] Never create overwide scheduling or operations panels.
 
 ### Structural And Operational Art
 
@@ -1857,3 +1857,43 @@ maintenance" row at the same time.
 - These are stale-test debt rather than broken gameplay, and the owner has
   scheduled suite work for after playtesting. They are recorded here so nobody
   mistakes a red suite for a new regression.
+
+2026-07-28 · Permanent panels now appear only when they have something to say
+
+- Commit or files: `refreshAlertsCardVisibility` and the gated ops rows in
+  `src/main.ts`; the `alerts-clear` dock reflow in `src/styles.css`.
+- Alerts were a permanently mounted dock card that read `No active alerts` and
+  `Incidents: none` on a station with neither. It now hides itself, driven by the
+  `is-clear`/`is-empty` markers the existing renderers already set from sim
+  state, and the fixed-column dock reflows so no empty column is left behind.
+- The ops card unconditionally rendered a Cargo Arm row on a station with no
+  cargo arm, a Fuel row reading `No tanks`, and a Work Queue row reading `No
+  queued work`. Each is now gated on the physical predicate it describes: a
+  placed CargoArm, a placed FuelTank, and a non-zero pending/assigned/sanitation
+  job count.
+- Live-browser measurement on a fresh chartered station, before and after: the
+  bottom dock fell from `250px` to `163px` tall and the ops card from `238px` to
+  `151px`, so the published `--bottom-dock-h` fell with it and the left HUD stack
+  grew from `344px` to `431px` of usable height. `getComputedStyle` reports
+  `display: none` for all four surfaces, and `document.body.innerText` no longer
+  contains `No active alerts`, `Incidents: none`, `Cargo Arm`, `No tanks`, or
+  `Work Queue`.
+- The return path was checked too, which matters more than the hiding: ordering a
+  wall build and pressing Play brought the Work Queue row back reading
+  `7 active | construct`, and the dock grew `163px -> 182px` with
+  `--bottom-dock-h` following. The mechanism reacts to real state in both
+  directions.
+- This also improves the Site Brief legibility limit recorded earlier. With the
+  dock shorter, `elementFromPoint` over the brief now returns the brief's own
+  content rather than requiring a scroll first.
+- Approach Control and panel width were verified rather than rebuilt. Approach
+  Control is already a `320x66` trigger card that opens a modal and restores
+  `aria-expanded` on close. At 1280x720 nothing is overwide: `#hud-status` is
+  590px against a 760px cap, the dispatch modal is capped at 760px, and
+  `document.documentElement.scrollWidth` equals the viewport width, so there is
+  no horizontal overflow to fix.
+- Reading of the Alpha Watch and charter-details half of the permanent-panel row:
+  both always carry live context once the station exists — a watch is always
+  rotating and a chartered site always has a brief — so neither is a panel shown
+  for absent context. The three that genuinely could be empty are the three now
+  gated.

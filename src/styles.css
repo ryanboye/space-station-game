@@ -3585,6 +3585,17 @@ button.alert-item {
   grid-template-columns: 0.95fr 1.3fr 0.9fr;
 }
 
+/* The Alerts card only mounts when it has something to report, so drop its
+   column with it — otherwise a quiet station keeps an empty cell where the
+   card used to sit. Same reflow idea as .pod-only above, one card narrower. */
+#bottom-dock.alerts-clear {
+  grid-template-columns: 0.95fr 1.3fr 0.9fr;
+}
+
+#bottom-dock.pod-only.alerts-clear {
+  grid-template-columns: 1fr 1.35fr;
+}
+
 .command-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4676,7 +4687,12 @@ button.alert-item {
     max-height: none;
   }
 
-  #bottom-dock {
+  /* The stacked narrow dock ignores card count entirely; the class-based
+     reflows above are desktop-only and must not out-specify this. */
+  #bottom-dock,
+  #bottom-dock.pod-only,
+  #bottom-dock.alerts-clear,
+  #bottom-dock.pod-only.alerts-clear {
     grid-template-columns: 1fr;
   }
 
