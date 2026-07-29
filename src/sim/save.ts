@@ -443,6 +443,13 @@ export interface StationSnapshotV1 {
         leisureService: number;
         successfulExit: number;
         residentRetention: number;
+        /**
+         * Station-side awards. Optional on the wire: a save written before
+         * these buckets existed simply omits them, and the parser below
+         * defaults them to 0 so the cumulative ledger still reconciles.
+         */
+        capitalProject?: number;
+        smallCraftService?: number;
       };
     };
   };
@@ -2504,7 +2511,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         routeExposure: nonNegative(ratingPenaltiesRaw?.routeExposure),
         environment: nonNegative(ratingPenaltiesRaw?.environment),
         sanitation: nonNegative(ratingPenaltiesRaw?.sanitation),
-        residentDeparture: nonNegative(ratingPenaltiesRaw?.residentDeparture)
+        // Unlike its neighbours, this bucket accumulates a SIGNED movement
+        // rather than a magnitude — `departResident` subtracts from it. Passing
+        // it through `nonNegative` silently clamped every departure penalty to
+        // zero on load, so a resumed station could no longer explain that part
+        // of its own rating. Kept signed, and still guarded against NaN.
+        residentDeparture: asFiniteNumber(ratingPenaltiesRaw?.residentDeparture, 0)
       },
       failureReasons: {
         noLeisurePath: nonNegative(ratingFailuresRaw?.noLeisurePath),
@@ -2517,7 +2529,12 @@ function normalizeSnapshot(snapshotRaw: Record<string, unknown>, warnings: strin
         mealService: nonNegative(ratingBonusesRaw?.mealService),
         leisureService: nonNegative(ratingBonusesRaw?.leisureService),
         successfulExit: nonNegative(ratingBonusesRaw?.successfulExit),
-        residentRetention: nonNegative(ratingBonusesRaw?.residentRetention)
+        residentRetention: nonNegative(ratingBonusesRaw?.residentRetention),
+        // Absent on every save written before these two writers were
+        // attributed. A silent zero is the truthful migration: that station
+        // never recorded the split, and zero is what it actually knows.
+        capitalProject: nonNegative(ratingBonusesRaw?.capitalProject),
+        smallCraftService: nonNegative(ratingBonusesRaw?.smallCraftService)
       }
     }
   };

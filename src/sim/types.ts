@@ -666,6 +666,16 @@ export interface Visitor {
   receptionProcessedAt?: number | null;
   /** Set once a guest has walked to a wrong first choice and been redirected. */
   redirectedFrom?: HospitalityServiceKind | null;
+  /** When that redirect happened, so the correction can be timed. */
+  redirectedAt?: number | null;
+  /**
+   * Exactly-once settlement stamps for the two reception durations. The cause
+   * fields above stay set forever because the UI reads them; these say whether
+   * the matching interval has already been paid into the station aggregate, so
+   * a guest with several later services cannot be counted twice.
+   */
+  receptionRevealSettledAt?: number | null;
+  redirectCorrectionSettledAt?: number | null;
   /** Durable service-failure state for long-stay and stranded occupants. */
   serviceFailureStage?: VisitorServiceFailureStage;
   failureSince?: number | null;
@@ -2155,6 +2165,13 @@ export interface Metrics {
   residentsConvertedLifetime: number;
   cafeteriaNonNodeSeatedCount: number;
   maxBlockedTicksObserved: number;
+  /**
+   * Live readout of the durable door-wait total in `commitment`, kept here so
+   * a congestion panel can show contention and door wait from one place.
+   * Optional because it is mirrored, not owned: a state built before the
+   * counter existed simply has nothing to mirror yet.
+   */
+  doorWaitSeconds?: number;
   pendingJobs: number;
   assignedJobs: number;
   expiredJobs: number;
@@ -2454,6 +2471,45 @@ export interface CommitmentMetrics {
   /** Departures missed and occupants left behind. */
   missedDepartures: number;
   strandedOccupants: number;
+  //
+  // Phase 0 flow counters. Every field below landed after this interface
+  // shipped, so each is optional: a save written before it exists hydrates as
+  // absent, and every write site supplies the `?? 0` migration default the way
+  // `portOps.telemetry.publicCargoConflictSeconds` already does. The whole
+  // object is persisted by value and merged over a zeroed baseline on load, so
+  // no separate serializer entry is needed.
+  //
+  /**
+   * Queue members standing outside the room their provider is in, and the
+   * high-water mark of the same. Counted from the physical slot each member
+   * holds after the queue maintenance pass compacts the lines, never estimated
+   * from line length.
+   */
+  queueSpillMembers?: number;
+  queueSpillPeak?: number;
+  /** Service lines abandoned after a bounded wait, counted at the balk itself. */
+  queueBalks?: number;
+  /**
+   * Actor-seconds the serialized crossing arbiter deferred at a Door or
+   * Airlock, and how many deferred steps produced them. Accrued only where an
+   * actor actually attempted the step and lost the narrow crossing.
+   */
+  doorWaitSeconds?: number;
+  doorWaitDeferrals?: number;
+  /**
+   * Reception effect timing. `receptionRevealSeconds` runs from the desk
+   * stamping `receptionProcessedAt` to that guest finishing the first service
+   * their plan actually wanted; `redirectCorrectionSeconds` runs from a wrong
+   * first-choice guess to the corrected service completing. Both settle once
+   * per guest.
+   */
+  receptionRevealSeconds?: number;
+  receptionRevealsResolved?: number;
+  redirectCorrectionSeconds?: number;
+  redirectCorrectionsResolved?: number;
+  /** Crew-seconds spent suited on an unpressurized tile, and the live count. */
+  evaSuitedSeconds?: number;
+  evaSuitedCrew?: number;
 }
 
 export interface DerivedCache {
@@ -3047,6 +3103,15 @@ export interface StationState {
       leisureService: number;
       successfulExit: number;
       residentRetention: number;
+      /**
+       * Station-side awards that are not a single guest's success but still
+       * had to name their cause: a finished capital project and a completed
+       * small-craft service. Optional because they were added after the
+       * bucket shipped; the save parser defaults them to 0, so an older
+       * station reconciles at zero rather than at `undefined`.
+       */
+      capitalProject?: number;
+      smallCraftService?: number;
     };
     residentTaxesCollected: number;
     residentConversionAttempts: number;

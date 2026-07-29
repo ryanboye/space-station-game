@@ -187,14 +187,14 @@ audited checklist with no unsupported checked claims.
 - [x] Record concurrent ships and occupants.
 - [x] Record holding-orbit and approach-group wait.
 - [x] Record disembark and boarding duration.
-- [ ] Record queue length, spill length, balks, and provider utilization.
-- [ ] Record door wait and corridor congestion.
+- [x] Record queue length, spill length, balks, and provider utilization.
+- [x] Record door wait and corridor congestion.
 - [x] Record public/cargo conflicts.
 - [x] Record recurring need demand and fixture utilization.
-- [ ] Record reception reveal and redirection time.
+- [x] Record reception reveal and redirection time.
 - [x] Record committed future Berth, bed, service, and staff load.
 - [x] Record missed departures and stranded occupants.
-- [ ] Record maintenance work, damage, and EVA time.
+- [x] Record maintenance work, damage, and EVA time.
 - [x] Record average and p95 simulation-step cost.
 - [ ] Record render frame time and visible animation smoothness.
 
@@ -414,7 +414,7 @@ audited checklist with no unsupported checked claims.
 - [x] Require housing availability and explicit policy for resident acceptance.
 - [x] Let an accepted resident's origin ship depart normally.
 - [ ] Apply rating/faction effects at meaningful milestones or resolution.
-- [ ] Verify every rating change traces back to visible behavior.
+- [x] Verify every rating change traces back to visible behavior.
 
 ## Approach Control And Admission Portfolio
 
@@ -2411,3 +2411,74 @@ open honestly rather than being checked on the strength of their runners.
   path in `src/sim/sim.ts` to record completions, and durability: the tally lives
   in a `WeakMap` keyed by StationState, so completed totals do not survive
   save/load. Requested from the agent holding that file.
+
+2026-07-28 · The four missing Phase 0 metrics, and rating that reconciles
+
+- Commit or files: counters in `src/sim/sim.ts` and `src/sim/types.ts`, rating
+  bucket persistence in `src/sim/save.ts`, five new cases in
+  `tools/gate-g-metrics-admission-tests.ts`, and the surfaced metrics in
+  `tools/frontage-baseline.ts`.
+- **Spill and balks** are now counted, not inferred. Spill is a census of queue
+  members whose claimed slot tile is in a different room than their provider
+  anchor, so a long line entirely inside a large room correctly reports `0`. A
+  6-deep line reports 0 spill and a 24-deep line reports 6, cross-checked against
+  the same census recomputed by hand from live reservations. The balk counter
+  sits at the single give-up site and fires `0` at 15.999s and exactly `1` at
+  16s. The cantina repeat-drink skip is deliberately excluded and commented:
+  declining an optional second drink is not unserved demand.
+- **Door wait** accrues at the move site rather than at the arbiter, which is
+  what makes it exactly once per actor per tick — only an actor close enough to
+  take the step pays. Proven both ways: the loser of a contested door accrues
+  0.2s then 0.4s with the two distinct narrow-crossing reasons, and a
+  single-user door costs `0`, so it is not merely tracking every blocked step.
+- **Reception timing** is settled only on an on-plan completion, with new durable
+  settle stamps as the exactly-once guard rather than the cause fields, which the
+  UI keeps forever. `reception-staffed` yields 3/3 reveals in 34-39s;
+  `reception-absent` yields 4/4 corrections in about 45s; running 90s further
+  leaves existing stamps byte-identical.
+- **EVA time** accrues only for crew both suited and standing on unpressurized
+  tile, driven through a real Airlock into a genuinely sealed cell with the
+  pressure left to the production flood fill. Exactly 1.0 crew-second over five
+  0.2s ticks, and accrual stops when the airlock removes the suit.
+- **Rating now reconciles.** Two writers added straight to `ratingDelta` without
+  attribution; both route through named buckets, and `getRatingAttribution`
+  returns a residual that is asserted `0` after a live run, after a capital
+  project completes through the ordinary tick, and across save and resume.
+- **A real save bug fell out of exactly that round-trip assertion.**
+  `rating.penalties.residentDeparture` is accumulated as a *signed* movement but
+  was parsed through `nonNegative`, so every departure penalty was silently
+  clamped to `0` on load while `ratingDelta` survived — a resumed station could
+  not explain part of its own rating. Fixed, and asserted twice: through a real
+  production departure, and at the wire level.
+- Baseline surface: door wait, corridor contention, queue spill, counted balks
+  and EVA seconds are out of `UNAVAILABLE` and reported per scenario from the
+  tick window each already ran. The starter genuinely produces `9.75` door-wait
+  actor-seconds over `39` deferrals, so these are measurements rather than
+  zero-filled columns. Only render frame time remains unavailable.
+
+2026-07-28 · Two findings that outlive this checklist
+
+**Progression runs on wall clock, and it is observable.** Confirmed with hard
+evidence, not inference. `shouldRefreshDerivedMetrics` uses `perfNowMs()` and
+gates `computeMetrics`, `updateUnlockProgress` *and* `updateOpeningCapitalProjects`.
+Three functions below it, `roomOpsRefreshDt` carries the comment "must be a
+function of simulation time, never renderer or machine throughput" — the
+contradiction is literal and adjacent. Observably: 50 ticks, 10 simulated
+seconds, executing in under 250ms of wall clock produced **zero** derived
+refreshes, so an accepted capital project whose world conditions were fully met
+was never awarded. An assertion written against it passed, then began failing
+purely because an unrelated change altered tick cost — same simulation, different
+machine throughput, different progression. **This also explains the
+`test:normal-scale-operation` flakiness**: measured 3 runs at exit 0/1/0 with the
+maintenance change and 0/1/1 without it, same "cafeteria queue did not drain"
+message, so the non-determinism is not caused by any recent edit. Left unchanged
+deliberately — it is a behavior risk and a design decision, not a checklist item.
+
+**A reachable stack overflow in dock hydration.** `ensureDockEntitiesUpToDate`
+claims its cache version *after* `rebuildDockEntities` returns, but
+`rebuildDockEntities` re-enters it through `chooseDockFacingForPlacement` ->
+`getDockByTile` -> `ensureDockByTileCache`. With two **adjacent** Dock tiles
+belonging to different docks, hydration recurses until the stack overflows.
+Reproduced in a fixture. Not fixed — restructuring the dock cache mid-session was
+the wrong risk — but it is a crash, and it should be near the top of the
+bugfixing phase.

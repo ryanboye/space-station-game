@@ -13,8 +13,10 @@ import * as path from 'node:path';
 import { findPath } from '../src/sim/path';
 import {
   createInitialState,
+  getCommitmentMetrics,
   getPortOpsTelemetry,
   getRoomInspectorAt,
+  getRoutePressureDiagnostics,
   rebuildDockEntities,
   setRoom,
   setTile,
@@ -140,6 +142,27 @@ function measureTickCost(state: StationState): TickCost {
   };
 }
 
+/**
+ * The live flow counters the measured tick window actually produced.
+ *
+ * These are not path proxies like the route numbers above: each one was
+ * incremented at a real production event during `measureTickCost`, so a layout
+ * that costs its occupants nothing honestly reports zero. Read after the tick
+ * window, never before.
+ */
+function flowMetrics(state: StationState): Record<string, number> {
+  const commitment = getCommitmentMetrics(state);
+  return {
+    door_wait_seconds: commitment.doorWaitSeconds ?? 0,
+    door_wait_deferrals: commitment.doorWaitDeferrals ?? 0,
+    corridor_max_blocked_ticks: state.metrics.maxBlockedTicksObserved,
+    corridor_conflict_tiles: getRoutePressureDiagnostics(state).conflictTiles,
+    queue_spill_peak: commitment.queueSpillPeak ?? 0,
+    queue_balks: commitment.queueBalks ?? 0,
+    eva_suited_seconds: commitment.evaSuitedSeconds ?? 0
+  };
+}
+
 function compactStarter(): Record<string, number> {
   const state = freshState();
   const podDocks = state.moduleInstances.filter((module) => module.type === ModuleType.PodDock).length;
@@ -153,6 +176,7 @@ function compactStarter(): Record<string, number> {
     freight_lockers: freightLockers,
     walkable_tiles: publicWalkableTiles,
     port_offers_accepted: telemetry.offersAccepted,
+    ...flowMetrics(state),
     tick_avg_ms: performanceCost.avgMs,
     tick_p95_ms: performanceCost.p95Ms
   };
@@ -185,6 +209,7 @@ function terminalFlow(secondDoor: boolean): Record<string, number> {
     peak_route_load: flow.maxTileLoad,
     door_tiles_used: flow.doorTilesUsed,
     door_peak_load: flow.doorPeakLoad,
+    ...flowMetrics(state),
     tick_avg_ms: cost.avgMs,
     tick_p95_ms: cost.p95Ms
   };
@@ -222,6 +247,7 @@ function crossingFlow(separated: boolean): Record<string, number> {
     cargo_route_tiles: cargoPath.length,
     public_cargo_shared_tiles: sharedTiles,
     public_cargo_crossing: sharedTiles > 0 ? 1 : 0,
+    ...flowMetrics(state),
     tick_avg_ms: cost.avgMs,
     tick_p95_ms: cost.p95Ms
   };
@@ -245,6 +271,7 @@ function marketCapacity(twoStalls: boolean): Record<string, number> {
     market_stock_capacity: inspector.inventory?.capacity ?? 0,
     market_cluster_tiles: inspector.clusterSize,
     market_doors: inspector.doorCount,
+    ...flowMetrics(state),
     tick_avg_ms: cost.avgMs,
     tick_p95_ms: cost.p95Ms
   };
@@ -344,9 +371,14 @@ function main(): void {
   // named precisely, and metrics that moved name the runner that owns them.
   console.log('ELSEWHERE | visit duration, approach-group wait, disembark/boarding duration, committed load, stranded occupants -> test:gate-g-metrics-admission');
   console.log('ELSEWHERE | recurring-need fixture use and reception effects -> test:gate-f-facility; live public/cargo conflict -> test:physical-cargo');
-  console.log('UNAVAILABLE | physical door wait seconds, corridor contention, queue spill length, and a counted queue balk');
-  console.log('UNAVAILABLE | EVA suited-seconds, and render frame time / visual smoothness (nothing reads state.metrics.frameMs yet)');
+  console.log('UNAVAILABLE | render frame time and visual smoothness (nothing reads state.metrics.frameMs yet)');
   console.log('NOTE | route metrics are deterministic path-overlap proxies. Tick cost is host-dependent, so compare tick_* only against runs on the same machine.');
+  // The door/corridor/queue/EVA numbers above are a different kind of evidence
+  // from the route proxies beside them: each was incremented at a real
+  // production event during the measured tick window, so a zero means the
+  // layout genuinely cost its occupants nothing over those ticks — not that the
+  // simulation cannot report it.
+  console.log('NOTE | door_wait_*, corridor_*, queue_spill_peak, queue_balks and eva_suited_seconds are live counts from the measured tick window, not proxies. Zero means it did not happen.');
 
   writeBaselineArtifact({
     'compact-starter-two-pod-docks': starter,

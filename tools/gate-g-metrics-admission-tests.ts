@@ -12,12 +12,17 @@ import {
   type AdmissionContext
 } from '../src/sim/admission-policy';
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
+  acceptOpeningCapitalProject,
   admitTrafficOffer,
   createInitialState,
   getAdmissionPressure,
   getCommitmentMetrics,
+  getRatingAttribution,
   passTrafficOffer,
+  runMovementCoordinatorTestTick,
+  runQueueMaintenanceTestTick,
   setDockPurpose,
   setAdmissionPolicy,
   setResidentAcceptance,
@@ -25,16 +30,19 @@ import {
   setRoomHousingPolicy,
   setTile,
   tick,
-  tryPlaceModule
+  tryPlaceModule,
+  updateEvaSuitForRoute
 } from '../src/sim/sim';
 import {
   ModuleType,
   RoomType,
   TileType,
   VisitorState,
+  ZoneType,
   fromIndex,
   toIndex,
   type ArrivingShip,
+  type CrewMember,
   type StationState,
   type TrafficOffer,
   type TrafficOfferPreview,
@@ -545,7 +553,524 @@ function testResidentConversionMetric(): string {
   assert(state.usageTotals.residentConversionAttempts === 1, 'Exactly one conversion attempt must be recorded.');
   assert(state.usageTotals.residentConversionSuccesses === 1, 'Exactly one resident conversion must succeed.');
   assert(state.residents.length === 1 && state.residents[0].homeDockId === residentDock.id, 'Conversion must create one physically housed resident with a home dock.');
-  return `resident conversion 1/1 with depicted private bed and residential dock`;
+
+  // The one rating bucket that stores a signed movement rather than a
+  // magnitude, driven here through the production leave path. Its save round
+  // trip is asserted in the rating-attribution test instead: this fixture's
+  // hand-carved adjacent Dock tiles trip an unrelated re-entrancy in the
+  // dock-entity cache during hydration, which is not what this test is about.
+  const departureBefore = getRatingAttribution(state);
+  state.residents[0].leaveIntent = 100;
+  tick(state, 0.2);
+  const stillHoused: number = state.residents.length;
+  assert(stillHoused === 0 && state.usageTotals.residentDepartures === 1, 'A resident past the leave threshold must actually depart.');
+  const departed = getRatingAttribution(state);
+  near(departed.delta, departureBefore.delta - 0.4, 'A departure must move the ledger by its own penalty', 1e-9);
+  near(departed.residual, 0, 'A departure must stay attributed to its named reason', 1e-9);
+  assert(state.usageTotals.ratingFromResidentDeparture < 0, 'The departure bucket records a signed movement.');
+  return `resident conversion 1/1 with depicted private bed and residential dock; 1 attributed departure`;
+}
+
+function at(state: StationState, x: number, y: number): number {
+  return toIndex(x, y, state.width);
+}
+
+function center(state: StationState, tile: number): { x: number; y: number } {
+  return { x: (tile % state.width) + 0.5, y: Math.floor(tile / state.width) + 0.5 };
+}
+
+/** A starter station with its world cleared, so a fixture owns every tile. */
+function blankFixture(seed: number): StationState {
+  const state = createInitialState({ seed, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(state, 0);
+  state.controls.paused = false;
+  state.controls.shipsPerCycle = 0;
+  state.tiles.fill(TileType.Space);
+  state.rooms.fill(RoomType.None);
+  state.zones.fill(ZoneType.Public);
+  state.modules.fill(ModuleType.None);
+  state.moduleOccupancyByTile.fill(null);
+  state.moduleInstances = [];
+  state.visitors = [];
+  state.residents = [];
+  state.crewMembers = [];
+  state.reservations = [];
+  state.itemNodes = [];
+  return state;
+}
+
+function queueVisitor(state: StationState, id: number, anchor: number | null, joinedAt: number, tile: number): Visitor {
+  return {
+    id,
+    name: `Spill ${id}`,
+    ...center(state, tile),
+    tileIndex: tile,
+    state: VisitorState.ToLeisure,
+    path: [],
+    speed: 5,
+    patience: 0,
+    eatTimer: 0,
+    trespassed: false,
+    servedMeal: false,
+    carryingMeal: false,
+    carryingDrink: false,
+    reservedServingTile: null,
+    reservedTargetTile: null,
+    blockedTicks: 0,
+    archetype: 'lounger',
+    taxSensitivity: 1,
+    spendMultiplier: 1,
+    patienceMultiplier: 1,
+    primaryPreference: 'lounge',
+    spawnedAt: 0,
+    originShipId: null,
+    airExposureSec: 0,
+    healthState: 'healthy',
+    leisureLegsRemaining: 0,
+    leisureLegsPlanned: 0,
+    lastLeisureKind: null,
+    servicePlan: [],
+    completedServices: [],
+    activeService: 'drink',
+    optionalDrinkActive: false,
+    repeatDrinksServed: 0,
+    queueProviderTile: anchor,
+    queueJoinedAt: joinedAt,
+    serviceBlockedSince: null,
+    stayClass: 'errand',
+    recurringNeedActive: null
+  } as unknown as Visitor;
+}
+
+/**
+ * One bar counter at the top of a one-tile corridor whose room ends part way
+ * down, so a long enough line physically stands outside the room it is queueing
+ * for. Deliberately the same geometry the saturation runner uses to compute
+ * spill by hand, so the production counter can be checked against it.
+ */
+function spillFixture(seed: number, waiting: number): { state: StationState; anchor: number } {
+  const state = blankFixture(seed);
+  const x = 20;
+  const anchor = at(state, x, 8);
+  const other = at(state, x + 1, 8);
+  for (let y = 8; y <= 42; y += 1) {
+    const tile = at(state, x, y);
+    state.tiles[tile] = TileType.Floor;
+    state.rooms[tile] = y <= 26 ? RoomType.Cantina : RoomType.None;
+    state.pressurized[tile] = true;
+    if (y > 8) {
+      state.tiles[at(state, x - 1, y)] = TileType.Wall;
+      state.tiles[at(state, x + 1, y)] = TileType.Wall;
+    }
+  }
+  state.tiles[other] = TileType.Floor;
+  state.rooms[other] = RoomType.Cantina;
+  state.pressurized[other] = true;
+  state.moduleInstances.push({ id: 700, type: ModuleType.BarCounter, originTile: anchor, rotation: 0, width: 2, height: 1, tiles: [anchor, other] });
+  state.modules[anchor] = ModuleType.BarCounter;
+  state.modules[other] = ModuleType.BarCounter;
+  state.moduleOccupancyByTile[anchor] = 700;
+  state.moduleOccupancyByTile[other] = 700;
+  state.moduleVersion += 1;
+  state.roomVersion += 1;
+  state.topologyVersion += 1;
+  state.visitors = Array.from({ length: waiting }, (_, index) =>
+    queueVisitor(state, index + 1, anchor, index + 1, at(state, x, 40))
+  );
+  runQueueMaintenanceTestTick(state);
+  return { state, anchor };
+}
+
+/** Queue slots outside the provider room, recomputed by hand from reservations. */
+function reservedSlotsOutsideRoom(state: StationState, anchor: number): number {
+  const ids = new Set(state.derived.queueTheater.membersByAnchor.get(anchor) ?? []);
+  return state.reservations.filter((reservation) =>
+    reservation.releaseReason === null &&
+    reservation.ownerKind === 'visitor' &&
+    ids.has(Number(reservation.ownerId)) &&
+    reservation.targetTile !== null &&
+    state.rooms[reservation.targetTile] !== state.rooms[anchor]
+  ).length;
+}
+
+function testQueueSpillAndCountedBalk(): string {
+  // Spill length. A short line fits inside the room; a long one does not, and
+  // the counter has to see the difference from the physical slots alone.
+  const short = spillFixture(77020, 6);
+  const long = spillFixture(77021, 24);
+  const shortSpill = getCommitmentMetrics(short.state).queueSpillMembers ?? -1;
+  const longSpill = getCommitmentMetrics(long.state).queueSpillMembers ?? -1;
+  assert(shortSpill === 0, `A line that fits inside its room must report no spill, got ${shortSpill}.`);
+  assert(longSpill === 6, `A saturated line must report its six corridor slots, got ${longSpill}.`);
+  assert(
+    longSpill === reservedSlotsOutsideRoom(long.state, long.anchor),
+    'The production spill counter must equal the same census taken from live slot reservations.'
+  );
+  assert(
+    (getCommitmentMetrics(long.state).queueSpillPeak ?? -1) === 6,
+    'The high-water mark must retain the worst spill the station has physically had.'
+  );
+  // The peak is durable while the gauge is live: emptying the line must drop
+  // one and keep the other.
+  long.state.visitors.length = 0;
+  runQueueMaintenanceTestTick(long.state);
+  const drained = getCommitmentMetrics(long.state);
+  assert(drained.queueSpillMembers === 0, 'An emptied line must return the live spill gauge to zero.');
+  assert((drained.queueSpillPeak ?? -1) === 6, 'Draining the line must not erase the recorded peak.');
+
+  // Counted balk, through the production give-up path rather than a stage read.
+  const balking = blankFixture(77022);
+  const tile = at(balking, 20, 20);
+  balking.tiles[tile] = TileType.Floor;
+  const abandoned = queueVisitor(balking, 1, null, 0, tile);
+  abandoned.state = VisitorState.Queueing;
+  abandoned.serviceBlockedSince = 0;
+  balking.visitors = [abandoned];
+  balking.now = 15.999;
+  runQueueMaintenanceTestTick(balking);
+  assert((getCommitmentMetrics(balking).queueBalks ?? 0) === 0, 'A guest still inside the wait window must not be counted as a balk.');
+  balking.now = 16;
+  runQueueMaintenanceTestTick(balking);
+  assert((getCommitmentMetrics(balking).queueBalks ?? -1) === 1, 'Crossing the balk wait must count exactly one balk.');
+  runQueueMaintenanceTestTick(balking);
+  assert(
+    (getCommitmentMetrics(balking).queueBalks ?? -1) === 1,
+    'A visitor who already left the line must not be counted again on the next pass.'
+  );
+  return `spill 0/6 members (peak 6 retained); 1 counted balk at the 16s wait`;
+}
+
+function testDoorWaitAtSerializedCrossing(): string {
+  const seedState = createInitialState({ seed: 77023, physicalStarterInventory: true });
+  tick(seedState, 0);
+  const template = seedState.crewMembers[0];
+  assert(template, 'Door-wait fixture needs one starter crew template.');
+
+  const state = blankFixture(77023);
+  const x = 30;
+  for (let y = 10; y <= 16; y += 1) {
+    const tile = at(state, x, y);
+    state.tiles[tile] = y === 13 ? TileType.Door : TileType.Floor;
+    state.pressurized[tile] = true;
+    state.tiles[at(state, x - 1, y)] = TileType.Wall;
+    state.tiles[at(state, x + 1, y)] = TileType.Wall;
+  }
+  state.topologyVersion += 1;
+  const door = at(state, x, 13);
+  const crewAt = (id: number, tile: number, path: number[]): CrewMember => {
+    const next = structuredClone(template);
+    next.id = id;
+    next.tileIndex = tile;
+    next.path = [...path];
+    next.speed = 10;
+    next.blockedTicks = 0;
+    next.targetTile = null;
+    next.carryingItemType = null;
+    next.carryingAmount = 0;
+    // Neither actor may carry a priority bonus, so the arbiter has to settle
+    // the crossing on the deterministic id tiebreak rather than on urgency.
+    next.evaSuit = false;
+    next.staffRole = 'cargo-handler';
+    next.role = 'idle';
+    next.movementWaitReason = undefined;
+    next.movementReplanCooldownUntil = 0;
+    Object.assign(next, center(state, tile));
+    return next;
+  };
+  // One actor is standing ON the door and stepping off it; the other wants to
+  // step onto it. Different destinations, one shared narrow tile — exactly the
+  // case the serialized-crossing pass exists to arbitrate.
+  const leaving = crewAt(1, door, [at(state, x, 14)]);
+  const entering = crewAt(2, at(state, x, 12), [door]);
+  state.crewMembers = [leaving, entering];
+
+  const results = runMovementCoordinatorTestTick(state, 0.2, false, true);
+  const yieldReason: string | undefined = entering.movementWaitReason;
+  assert(results.get('crew:1') === 'moved', 'The winning actor must actually cross the door.');
+  assert(results.get('crew:2') === 'blocked', 'The losing actor must be deferred at the door.');
+  assert(
+    yieldReason === 'yielding at narrow crossing',
+    `The deferral must come from the narrow-crossing pass, got ${yieldReason}.`
+  );
+  const first = getCommitmentMetrics(state);
+  near(first.doorWaitSeconds ?? -1, 0.2, 'One deferred actor must accrue exactly one tick of door wait');
+  assert((first.doorWaitDeferrals ?? -1) === 1, 'Exactly one deferred step must be counted.');
+
+  // The door stays claimed for its clearance interval, so the same actor waits
+  // again on the next tick and the counter accrues a second, equal tick.
+  state.now += 0.2;
+  runMovementCoordinatorTestTick(state, 0.2);
+  const occupiedReason: string | undefined = entering.movementWaitReason;
+  const second = getCommitmentMetrics(state);
+  near(second.doorWaitSeconds ?? -1, 0.4, 'A second deferred tick must accrue the same wait');
+  assert((second.doorWaitDeferrals ?? -1) === 2, 'Each deferred step is counted once.');
+  assert(
+    occupiedReason === 'narrow crossing occupied',
+    `A door inside its clearance interval must report occupancy, got ${occupiedReason}.`
+  );
+
+  // An unobstructed crossing costs nothing: the counter must not simply track
+  // every blocked step.
+  const quiet = blankFixture(77024);
+  for (let y = 10; y <= 16; y += 1) {
+    const tile = at(quiet, x, y);
+    quiet.tiles[tile] = y === 13 ? TileType.Door : TileType.Floor;
+    quiet.pressurized[tile] = true;
+  }
+  quiet.topologyVersion += 1;
+  const solo = structuredClone(template);
+  solo.id = 5;
+  solo.tileIndex = at(quiet, x, 12);
+  solo.path = [at(quiet, x, 13)];
+  solo.speed = 10;
+  solo.blockedTicks = 0;
+  Object.assign(solo, center(quiet, solo.tileIndex));
+  quiet.crewMembers = [solo];
+  runMovementCoordinatorTestTick(quiet, 0.2, false, true);
+  assert((getCommitmentMetrics(quiet).doorWaitSeconds ?? 0) === 0, 'A door with one user must cost no wait at all.');
+  return `door wait 0.4 actor-s over 2 deferrals (yield then occupied); uncontested door 0s`;
+}
+
+function testReceptionRevealAndRedirectTiming(): string {
+  const staffed = fixture(77025);
+  applyColdStartScenario(staffed, 'reception-staffed');
+  staffed.controls.paused = false;
+  advance(staffed, 150);
+  const staffedMetrics = getCommitmentMetrics(staffed);
+  const processed = staffed.visitors.filter(
+    (visitor) => visitor.receptionProcessedAt !== null && visitor.receptionProcessedAt !== undefined
+  );
+  const settledReveals = staffed.visitors.filter(
+    (visitor) => visitor.receptionRevealSettledAt !== null && visitor.receptionRevealSettledAt !== undefined
+  );
+  assert(processed.length > 0, 'The staffed desk fixture must actually process arrivals.');
+  assert(
+    (staffedMetrics.receptionRevealsResolved ?? 0) > 0,
+    'A processed guest who then completes a wanted service must resolve one reveal interval.'
+  );
+  assert(
+    (staffedMetrics.receptionRevealsResolved ?? -1) === settledReveals.length,
+    'The reveal count must equal the number of guests carrying a settlement stamp.'
+  );
+  assert(
+    settledReveals.length <= processed.length,
+    'A reveal cannot settle for a guest reception never processed.'
+  );
+  assert(
+    (staffedMetrics.receptionRevealSeconds ?? 0) > 0,
+    'Resolved reveals must carry positive measured time from the desk to the service.'
+  );
+  for (const visitor of settledReveals) {
+    assert(
+      (visitor.receptionRevealSettledAt ?? 0) >= (visitor.receptionProcessedAt ?? 0),
+      'A reveal cannot settle before the desk processed the guest.'
+    );
+  }
+
+  // Redirects are the failure the desk removes, so measure them where there is
+  // no desk and guests have to discover their real want by walking.
+  const bare = fixture(77026);
+  applyColdStartScenario(bare, 'reception-absent');
+  bare.controls.paused = false;
+  advance(bare, 150);
+  const bareMetrics = getCommitmentMetrics(bare);
+  const redirected = bare.visitors.filter((visitor) => visitor.redirectedFrom);
+  const settledRedirects = bare.visitors.filter(
+    (visitor) => visitor.redirectCorrectionSettledAt !== null && visitor.redirectCorrectionSettledAt !== undefined
+  );
+  assert(redirected.length > 0, 'The deskless fixture must produce real wrong first choices.');
+  assert(
+    redirected.every((visitor) => typeof visitor.redirectedAt === 'number'),
+    'Every redirect must be stamped at the moment it happens.'
+  );
+  assert(
+    (bareMetrics.redirectCorrectionsResolved ?? 0) > 0,
+    'A redirected guest who reaches the right service must resolve one correction interval.'
+  );
+  assert(
+    (bareMetrics.redirectCorrectionsResolved ?? -1) === settledRedirects.length,
+    'The correction count must equal the number of guests carrying a settlement stamp.'
+  );
+  assert(
+    settledRedirects.length <= redirected.length,
+    'A correction cannot settle for a guest who was never redirected.'
+  );
+  assert(
+    (bareMetrics.redirectCorrectionSeconds ?? 0) > 0,
+    'Resolved corrections must carry positive measured time from the wrong stop to the right one.'
+  );
+
+  // Exactly once: running the same station on does not re-charge a guest whose
+  // interval already settled, even as they complete further services.
+  const resolvedBefore = bareMetrics.redirectCorrectionsResolved ?? 0;
+  const stampsBefore = settledRedirects.map((visitor) => `${visitor.id}:${visitor.redirectCorrectionSettledAt}`).join('|');
+  advance(bare, 90);
+  const stampsAfter = bare.visitors
+    .filter((visitor) => visitor.redirectCorrectionSettledAt !== null && visitor.redirectCorrectionSettledAt !== undefined)
+    .filter((visitor) => settledRedirects.some((earlier) => earlier.id === visitor.id))
+    .map((visitor) => `${visitor.id}:${visitor.redirectCorrectionSettledAt}`)
+    .join('|');
+  assert(stampsAfter === stampsBefore, 'An already-settled correction must never be restamped.');
+  assert(
+    (getCommitmentMetrics(bare).redirectCorrectionsResolved ?? 0) >= resolvedBefore,
+    'The correction counter must never move backwards.'
+  );
+  return (
+    `reveals ${staffedMetrics.receptionRevealsResolved}/${processed.length} in ` +
+    `${(staffedMetrics.receptionRevealSeconds ?? 0).toFixed(1)}s; corrections ` +
+    `${bareMetrics.redirectCorrectionsResolved}/${redirected.length} in ${(bareMetrics.redirectCorrectionSeconds ?? 0).toFixed(1)}s`
+  );
+}
+
+function testEvaSuitedTime(): string {
+  const seedState = createInitialState({ seed: 77027, physicalStarterInventory: true });
+  tick(seedState, 0);
+  const template = seedState.crewMembers[0];
+  assert(template, 'EVA fixture needs one starter crew template.');
+
+  const state = blankFixture(77027);
+  // A genuinely sealed cell with an airlock in its wall, and a bare walkway
+  // outside it. Pressure is left to the production flood fill rather than being
+  // asserted by hand, so "outside" means what the simulation means by it.
+  const airlock = at(state, 30, 21);
+  for (let x = 28; x <= 32; x += 1) {
+    state.tiles[at(state, x, 17)] = TileType.Wall;
+    state.tiles[at(state, x, 21)] = TileType.Wall;
+  }
+  for (let y = 17; y <= 21; y += 1) {
+    state.tiles[at(state, 28, y)] = TileType.Wall;
+    state.tiles[at(state, 32, y)] = TileType.Wall;
+  }
+  for (let y = 18; y <= 20; y += 1) {
+    for (let x = 29; x <= 31; x += 1) state.tiles[at(state, x, y)] = TileType.Floor;
+  }
+  state.tiles[airlock] = TileType.Airlock;
+  const outside = [at(state, 30, 22), at(state, 30, 23), at(state, 30, 24)];
+  for (const tile of outside) state.tiles[tile] = TileType.Floor;
+  const inside = at(state, 30, 19);
+  state.topologyVersion += 1;
+  tick(state, 0);
+  assert(state.pressurized[inside], 'The sealed cell must read as pressurized.');
+  assert(!state.pressurized[outside[2]], 'The walkway beyond the airlock must read as vacuum.');
+
+  const worker = structuredClone(template);
+  worker.id = 9;
+  worker.tileIndex = airlock;
+  worker.path = [outside[0]];
+  worker.activeJobId = null;
+  // Slow enough that the idle-return route cannot carry the worker back inside
+  // during the measured window; the metric is what is under test, not walking.
+  worker.speed = 0.4;
+  Object.assign(worker, center(state, airlock));
+  state.crewMembers = [worker];
+
+  // Production suit-up: the same routine the crew loop calls when a route
+  // leaves an airlock for an unpressurized tile.
+  updateEvaSuitForRoute(state, worker, 0.2);
+  assert(worker.evaSuit, 'Stepping out of an airlock onto vacuum must issue a suit.');
+
+  // Suited but still inside is not EVA time.
+  worker.tileIndex = inside;
+  Object.assign(worker, center(state, inside));
+  tick(state, 0.2);
+  assert((getCommitmentMetrics(state).evaSuitedSeconds ?? -1) === 0, 'A suited worker still on a pressurized tile is not outside yet.');
+
+  worker.tileIndex = outside[2];
+  Object.assign(worker, center(state, outside[2]));
+  for (let i = 0; i < 5; i += 1) tick(state, 0.2);
+  const outsideMetrics = getCommitmentMetrics(state);
+  assert(worker.evaSuit && !state.pressurized[worker.tileIndex], 'The fixture must keep the worker suited and outside for the measured window.');
+  assert((outsideMetrics.evaSuitedCrew ?? -1) === 1, 'Exactly one crew member must read as suited outside.');
+  near(outsideMetrics.evaSuitedSeconds ?? -1, 1, 'Five 0.2s ticks outside must accrue one crew-second', 0.001);
+
+  // Coming back through the airlock ends the accrual, and the total stands.
+  worker.tileIndex = airlock;
+  worker.path = [inside];
+  Object.assign(worker, center(state, airlock));
+  updateEvaSuitForRoute(state, worker, 0.2);
+  assert(!worker.evaSuit, 'Returning through the airlock must remove the suit.');
+  for (let i = 0; i < 5; i += 1) tick(state, 0.2);
+  const settled = getCommitmentMetrics(state);
+  near(settled.evaSuitedSeconds ?? -1, 1, 'A returned worker must stop accruing EVA time', 0.001);
+  assert((settled.evaSuitedCrew ?? -1) === 0, 'Nobody is outside once the suit is returned.');
+  return `1 crew-second suited outside across 5 ticks; 0 while suited inside; accrual stops at the airlock`;
+}
+
+function testRatingAttributionReconciles(): string {
+  const state = fixture(77028);
+  applyColdStartScenario(state, 'long-stay-guest-wing');
+  state.controls.paused = false;
+  advance(state, 180);
+  const live = getRatingAttribution(state);
+  assert(Math.abs(live.delta) > 0, 'The scenario must actually move the rating ledger.');
+  near(live.residual, 0, 'Every live rating movement must be claimed by a named reason', 1e-9);
+
+  // The capital-project award used to bypass attribution entirely. Stage the
+  // history one accepted project needs, then let the ordinary tick award it.
+  assert(acceptOpeningCapitalProject(state, 'roadside-rest-stop'), 'Rating fixture needs one accepted capital project.');
+  state.openingEconomy.ledger.lifetime['dock-fee'].count = 12;
+  state.metrics.mealsServedTotal = Math.max(state.metrics.mealsServedTotal, 8);
+  state.usageTotals.tradeGoodsSold = Math.max(state.usageTotals.tradeGoodsSold, 6);
+  const before = state.usageTotals.ratingFromVisitorSuccessByReason.capitalProject ?? 0;
+  // Deliberately condition-driven rather than a fixed number of ticks: the
+  // capital-project evaluator sits behind `shouldRefreshDerivedMetrics`, which
+  // is a WALL-CLOCK cadence, so how many simulated seconds it takes to fire
+  // depends on how fast the host runs the loop. Waiting for the award keeps
+  // this evidence about attribution instead of about machine throughput.
+  let after = before;
+  for (let i = 0; i < 20_000 && after === before; i += 1) {
+    tick(state, 0.2);
+    after = state.usageTotals.ratingFromVisitorSuccessByReason.capitalProject ?? 0;
+  }
+  assert(after - before === 2, `A completed project must credit its own named bucket, got ${after - before}.`);
+  const awarded = getRatingAttribution(state);
+  near(awarded.residual, 0, 'A project award must leave the ledger fully attributed', 1e-9);
+
+  // The half that catches a bucket which is live-correct but does not persist:
+  // `ratingDelta` survives a save, so its attribution has to survive with it.
+  const parsed = parseAndMigrateSave(serializeSave('gate-g-rating', state, 'test'));
+  assert(parsed.ok, `Rating fixture must serialize: ${parsed.ok ? '' : parsed.error}`);
+  const restored = hydrateStateFromSave(parsed.save).state;
+  const roundTrip = getRatingAttribution(restored);
+  near(roundTrip.delta, awarded.delta, 'Save/resume must preserve the cumulative rating ledger', 1e-9);
+  near(roundTrip.bonuses, awarded.bonuses, 'Save/resume must preserve every attributed bonus', 1e-9);
+  near(roundTrip.penalties, awarded.penalties, 'Save/resume must preserve every attributed penalty', 1e-9);
+  near(roundTrip.residual, 0, 'A resumed station must still be able to explain its whole rating', 1e-9);
+  assert(
+    (restored.usageTotals.ratingFromVisitorSuccessByReason.capitalProject ?? -1) === after,
+    'The capital-project bucket must survive save/resume rather than resetting to zero.'
+  );
+
+  // The resident-departure bucket is stored as a SIGNED movement (see
+  // `departResident`, which subtracts from both it and the ledger). The save
+  // parser used to clamp it at zero, which silently unattributed every
+  // departure a resumed station had paid for. Written onto the wire exactly as
+  // production writes it, then resumed.
+  const signedWire = JSON.parse(serializeSave('gate-g-rating-departure', state, 'test'));
+  signedWire.snapshot.progression.rating.penalties.residentDeparture = -0.4;
+  signedWire.snapshot.progression.rating.delta = awarded.delta - 0.4;
+  const signed = parseAndMigrateSave(JSON.stringify(signedWire));
+  assert(signed.ok, 'Signed-penalty fixture must parse.');
+  const signedState = hydrateStateFromSave(signed.save).state;
+  near(signedState.usageTotals.ratingFromResidentDeparture, -0.4, 'A signed departure penalty must survive the save parser', 1e-9);
+  near(getRatingAttribution(signedState).residual, 0, 'A resumed departure penalty must still be attributed', 1e-9);
+
+  // A save written before these buckets existed must migrate to a reconciled
+  // zero, not to `undefined` arithmetic. Stripped from the wire text, so the
+  // parser really is the thing supplying the default.
+  const wire = JSON.parse(serializeSave('gate-g-rating-legacy', state, 'test'));
+  const legacyBonuses = wire.snapshot.progression.rating.bonuses as Record<string, number>;
+  delete legacyBonuses.capitalProject;
+  delete legacyBonuses.smallCraftService;
+  const legacy = parseAndMigrateSave(JSON.stringify(wire));
+  assert(legacy.ok, 'Legacy migration fixture must parse.');
+  const migrated = hydrateStateFromSave(legacy.save).state;
+  const migratedBonuses = migrated.usageTotals.ratingFromVisitorSuccessByReason;
+  assert(
+    (migratedBonuses.capitalProject ?? null) === 0 && (migratedBonuses.smallCraftService ?? null) === 0,
+    'A save without the new buckets must hydrate them as a truthful zero.'
+  );
+  return `residual 0 live and after resume; capital-project bucket +2 preserved; absent buckets migrate to 0`;
 }
 
 type Test = { name: string; run: () => string };
@@ -557,7 +1082,12 @@ const TESTS: Test[] = [
   { name: 'failure, early departure, extension, and call outcomes', run: testFailureEarlyExtensionAndCallOutcomes },
   { name: 'finite admission policy matrix', run: testFiniteAdmissionMatrix },
   { name: 'live admission and manual preservation', run: testLivePolicyAdmissionAndManualPreservation },
-  { name: 'resident conversion metric', run: testResidentConversionMetric }
+  { name: 'resident conversion metric', run: testResidentConversionMetric },
+  { name: 'queue spill length and counted balk', run: testQueueSpillAndCountedBalk },
+  { name: 'door wait at the serialized crossing', run: testDoorWaitAtSerializedCrossing },
+  { name: 'reception reveal and redirection time', run: testReceptionRevealAndRedirectTiming },
+  { name: 'EVA suited time', run: testEvaSuitedTime },
+  { name: 'rating attribution reconciles', run: testRatingAttributionReconciles }
 ];
 
 let passed = 0;

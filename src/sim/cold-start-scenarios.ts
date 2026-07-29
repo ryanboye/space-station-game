@@ -1300,6 +1300,26 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.controls.simSpeed = 1;
   },
 
+  // The same 50 crew / 50 visitors / 8 Pod Docks / 2 Berths as
+  // `normal-scale-50`, on a completely different footprint: one long spine
+  // with detached room pods instead of a solid block. Phase 9's "multiple
+  // station geometries remain viable" row is the pair, not either alone.
+  'normal-scale-50-spine': (s) => {
+    stageLinearSpineScale(s);
+  },
+
+  // One bad mess hall and two different valid answers to it. See
+  // `stageMessHall` for what each variant changes and what it costs.
+  'mess-line-choked': (s) => {
+    stageMessHall(s, 'choked');
+  },
+  'mess-line-extra-counter': (s) => {
+    stageMessHall(s, 'extra-counter');
+  },
+  'mess-line-rerouted': (s) => {
+    stageMessHall(s, 'rerouted');
+  },
+
   // Commercial-unit prototype: a mature station with one large vacant shell
   // ready for the player to solicit and compare tenant proposals.
   'commercial-units': (s) => {
@@ -2173,11 +2193,14 @@ function createScaleVisitor(
   state: StationState,
   id: number,
   tileIndex: number,
-  ordinal: number
+  ordinal: number,
+  // `'meal'` forces every visitor into the food line. The scale fixtures leave
+  // this undefined and keep the mixed one-in-three split.
+  intent?: 'meal'
 ): Visitor {
   const needs = createVisitorNeeds(id);
-  const seekingMeal = ordinal % 3 === 0;
-  const seekingHygiene = ordinal % 5 === 0;
+  const seekingMeal = intent === 'meal' || ordinal % 3 === 0;
+  const seekingHygiene = intent === undefined && ordinal % 5 === 0;
   const seekingLeisure = !seekingMeal && !seekingHygiene;
   needs.hunger = seekingMeal ? 18 : 88;
   needs.hygiene = seekingHygiene ? 22 : 90;
@@ -2303,8 +2326,11 @@ function installScalePowerReserve(state: StationState): void {
   }
 }
 
-function seedScaleStorageReserve(state: StationState, freeCapacityTarget: number): void {
-  const receivingTile = 34 * state.width + 64;
+function seedScaleStorageReserve(
+  state: StationState,
+  freeCapacityTarget: number,
+  receivingTile = 34 * state.width + 64
+): void {
   const physicalStorage = state.itemNodes.filter(
     (node) => state.rooms[node.tileIndex] === RoomType.LogisticsStock || state.rooms[node.tileIndex] === RoomType.Storage
   );
@@ -2329,6 +2355,476 @@ function seedScaleStorageReserve(state: StationState, freeCapacityTarget: number
   if (excessFree > 0.01) {
     throw new Error(`Normal-scale fixture could not reduce storage reserve to ${freeCapacityTarget}.`);
   }
+}
+
+// --- Phase 9 gate: a second, structurally different 50/50 station ------------
+//
+// `normal-scale-50` is a COMPACT BLOCK: one solid 73x39 rectangle in which every
+// room shares a wall with its neighbours, so almost any two rooms are a few
+// tiles apart and circulation has many redundant routes.
+//
+// `normal-scale-50-spine` below is the opposite shape at the same population: a
+// single 74-tile circulation spine with detached room pods branching off it.
+// Pods are separated from each other by vacuum, each pod is entered through one
+// door, and its far room is reachable only through its near room. Every trip
+// between two rooms therefore traverses the spine, and the longest service walk
+// is roughly four times the compact block's.
+//
+// Both are authored the same way the demo overlay is — `setTile`/`setRoom`/
+// `setModule` plus a zero-length tick — so docks, berth facilities, pressure,
+// clusters and the structural graph are all derived by production code.
+
+/** Spine interior rows. */
+const SPINE_ROWS = [38, 39, 40] as const;
+/** Spine interior columns. */
+const SPINE_X0 = 6;
+const SPINE_X1 = 79;
+/** Interior column ranges of the five pod stacks, north and south. */
+const SPINE_POD_COLUMNS: ReadonlyArray<readonly [number, number]> = [
+  [7, 17], [21, 31], [35, 45], [49, 59], [63, 73]
+];
+/** North pod: outer room rows, divider row, spine-side room rows, throat row. */
+const NORTH_OUTER_ROWS = [23, 29] as const;
+const NORTH_DIVIDER_ROW = 30;
+const NORTH_INNER_ROWS = [31, 36] as const;
+const NORTH_THROAT_ROW = 37;
+/** South pod mirrors the north one across the spine. */
+const SOUTH_THROAT_ROW = 41;
+const SOUTH_INNER_ROWS = [42, 47] as const;
+const SOUTH_DIVIDER_ROW = 48;
+const SOUTH_OUTER_ROWS = [49, 55] as const;
+/** One doorway under the second tile of each cafeteria counter fixture. */
+const CAFETERIA_COUNTER_DOORS = [22, 25, 28] as const;
+/** East circulation hall between the spine and the two Berths. */
+const HALL_X = [76, 79] as const;
+const HALL_ROWS = [31, 41] as const;
+/** Receiving room hung off the hall's south end, next to both Berth doors. */
+const RECEIVING_ROWS = [43, 55] as const;
+
+function spineTile(state: StationState, x: number, y: number): number {
+  return y * state.width + x;
+}
+
+function paintSpineFloor(
+  state: StationState,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  room: RoomType
+): void {
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const tile = spineTile(state, x, y);
+      setTile(state, tile, TileType.Floor);
+      setRoom(state, tile, room);
+    }
+  }
+}
+
+/**
+ * Wall every vacuum tile that touches pressurized structure.
+ *
+ * The spine is authored as a set of floor patches; sealing is derived from that
+ * geometry rather than hand-drawn, so a pod can be moved without leaving an
+ * open seam. Diagonals are included: an unsealed corner is a real oxygen leak.
+ */
+function sealSpineHull(state: StationState): void {
+  const toWall = new Set<number>();
+  const neighbours = [
+    [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]
+  ] as const;
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    const type = state.tiles[tile];
+    if (type !== TileType.Floor && type !== TileType.Door) continue;
+    const x = tile % state.width;
+    const y = Math.floor(tile / state.width);
+    for (const [dx, dy] of neighbours) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+      const neighbour = spineTile(state, nx, ny);
+      if (state.tiles[neighbour] === TileType.Space) toWall.add(neighbour);
+    }
+  }
+  for (const tile of toWall) {
+    setTile(state, tile, TileType.Wall);
+    setRoom(state, tile, RoomType.None);
+  }
+}
+
+/** Room assignments per pod stack, outermost room first. */
+const SPINE_NORTH_ROOMS: ReadonlyArray<readonly [RoomType, RoomType]> = [
+  [RoomType.Dorm, RoomType.Dorm],
+  [RoomType.Kitchen, RoomType.Cafeteria],
+  [RoomType.Hydroponics, RoomType.Clinic],
+  [RoomType.Workshop, RoomType.Storage],
+  [RoomType.Reactor, RoomType.LifeSupport]
+];
+const SPINE_SOUTH_ROOMS: ReadonlyArray<readonly [RoomType, RoomType]> = [
+  [RoomType.Lounge, RoomType.Market],
+  [RoomType.RecHall, RoomType.Cantina],
+  [RoomType.Observatory, RoomType.Hygiene],
+  [RoomType.Security, RoomType.LogisticsStock],
+  [RoomType.Brig, RoomType.Reactor]
+];
+
+/** Rooms the spine keeps behind an access policy, exactly as the block does. */
+const SPINE_RESTRICTED_ROOMS = new Set<RoomType>([
+  RoomType.Dorm,
+  RoomType.Kitchen,
+  RoomType.Hydroponics,
+  RoomType.Workshop,
+  RoomType.Storage,
+  RoomType.Reactor,
+  RoomType.LifeSupport,
+  RoomType.LogisticsStock,
+  RoomType.Brig,
+  RoomType.Security
+]);
+
+function buildSpineShell(state: StationState): void {
+  for (let y = 2; y < state.height - 2; y += 1) {
+    for (let x = 2; x < state.width - 2; x += 1) {
+      const tile = spineTile(state, x, y);
+      setTile(state, tile, TileType.Space);
+      setRoom(state, tile, RoomType.None);
+    }
+  }
+
+  // The spine itself: one long public corridor, no rooms on it.
+  paintSpineFloor(state, SPINE_X0, SPINE_ROWS[0], SPINE_X1, SPINE_ROWS[2], RoomType.None);
+
+  for (let index = 0; index < SPINE_POD_COLUMNS.length; index += 1) {
+    const [x0, x1] = SPINE_POD_COLUMNS[index]!;
+    const centre = Math.floor((x0 + x1) / 2);
+    const [northOuter, northInner] = SPINE_NORTH_ROOMS[index]!;
+    const [southOuter, southInner] = SPINE_SOUTH_ROOMS[index]!;
+
+    paintSpineFloor(state, x0, NORTH_OUTER_ROWS[0], x1, NORTH_OUTER_ROWS[1], northOuter);
+    paintSpineFloor(state, x0, NORTH_INNER_ROWS[0], x1, NORTH_INNER_ROWS[1], northInner);
+    paintSpineFloor(state, x0, SOUTH_INNER_ROWS[0], x1, SOUTH_INNER_ROWS[1], southInner);
+    paintSpineFloor(state, x0, SOUTH_OUTER_ROWS[0], x1, SOUTH_OUTER_ROWS[1], southOuter);
+
+    // One door between the two rooms of a pod, and one throat to the spine.
+    const northDivider = spineTile(state, centre, NORTH_DIVIDER_ROW);
+    setTile(state, northDivider, TileType.Door);
+    setRoom(state, northDivider, northInner);
+    const northThroat = spineTile(state, centre, NORTH_THROAT_ROW);
+    setTile(state, northThroat, TileType.Door);
+    setRoom(state, northThroat, RoomType.None);
+
+    const southDivider = spineTile(state, centre, SOUTH_DIVIDER_ROW);
+    setTile(state, southDivider, TileType.Door);
+    setRoom(state, southDivider, southInner);
+    const southThroat = spineTile(state, centre, SOUTH_THROAT_ROW);
+    setTile(state, southThroat, TileType.Door);
+    setRoom(state, southThroat, RoomType.None);
+  }
+
+  // The cafeteria pod is the one pod whose throat is not a single door.
+  // A counter only works when its line has somewhere to form: in the compact
+  // block each counter sits directly above its own doorway, so the queue chain
+  // runs out of the room instead of folding back across the seating. Reproduce
+  // that relationship rather than inventing a new one, and close the generic
+  // centre throat so the pod has exactly one entrance per counter fixture.
+  const cafeteriaPod = SPINE_POD_COLUMNS[1]!;
+  const cafeteriaCentre = Math.floor((cafeteriaPod[0] + cafeteriaPod[1]) / 2);
+  setTile(state, spineTile(state, cafeteriaCentre, NORTH_THROAT_ROW), TileType.Wall);
+  setRoom(state, spineTile(state, cafeteriaCentre, NORTH_THROAT_ROW), RoomType.None);
+  for (const x of CAFETERIA_COUNTER_DOORS) {
+    const tile = spineTile(state, x, NORTH_THROAT_ROW);
+    setTile(state, tile, TileType.Door);
+    setRoom(state, tile, RoomType.Cafeteria);
+  }
+
+  // East circulation hall plus the receiving room hung off its south end.
+  paintSpineFloor(state, HALL_X[0], HALL_ROWS[0], HALL_X[1], HALL_ROWS[1], RoomType.None);
+  paintSpineFloor(state, HALL_X[0], RECEIVING_ROWS[0], HALL_X[1], RECEIVING_ROWS[1], RoomType.LogisticsStock);
+  const receivingDoor = spineTile(state, 77, 42);
+  setTile(state, receivingDoor, TileType.Door);
+  setRoom(state, receivingDoor, RoomType.LogisticsStock);
+
+  // Two medium Berths, built with the same recipe the compact block uses: a
+  // west-facing door and an east room edge left open to ship traffic.
+  paintRoom(state, 80, 30, 88, 36, RoomType.Berth, 'west');
+  paintRoom(state, 80, 36, 88, 42, RoomType.Berth, 'west');
+
+  sealSpineHull(state);
+
+  for (const y of [31, 32, 33, 34, 37, 38, 39, 40]) {
+    paintFloorTile(state, 87, y, TileType.Floor);
+    setRoom(state, spineTile(state, 87, y), RoomType.Berth);
+    setTile(state, spineTile(state, 88, y), TileType.Space);
+    setRoom(state, spineTile(state, 88, y), RoomType.None);
+  }
+
+  for (let index = 0; index < state.tiles.length; index += 1) {
+    if (state.tiles[index] !== TileType.Floor && state.tiles[index] !== TileType.Door) continue;
+    state.zones[index] = SPINE_RESTRICTED_ROOMS.has(state.rooms[index]) ? ZoneType.Restricted : ZoneType.Public;
+  }
+}
+
+function furnishSpineStation(state: StationState): void {
+  // Dorms (pod 1 north).
+  for (const [x, y] of [[8, 24], [11, 24], [14, 24], [16, 27], [8, 27], [11, 27]] as const) {
+    placeMod(state, x, y, ModuleType.Bed);
+  }
+  for (const [x, y] of [[8, 32], [11, 32], [14, 32], [16, 35], [8, 35], [11, 35]] as const) {
+    placeMod(state, x, y, ModuleType.Bed);
+  }
+  placeMod(state, 14, 35, ModuleType.Plant);
+
+  // Kitchen (pod 2 north, outer) feeding the Cafeteria behind it.
+  placeMod(state, 22, 24, ModuleType.Stove);
+  placeMod(state, 25, 24, ModuleType.Stove);
+  placeMod(state, 28, 24, ModuleType.Stove);
+  placeMod(state, 22, 27, ModuleType.Stove);
+  placeMod(state, 25, 27, ModuleType.WaterFountain);
+
+  // Cafeteria (pod 2 north, spine side). Each counter's second tile sits
+  // directly above its own doorway, so a full line runs out into the spine
+  // rather than folding back across the seating.
+  placeMod(state, 21, 36, ModuleType.ServingStation);
+  placeMod(state, 24, 36, ModuleType.ServingStation);
+  placeMod(state, 27, 36, ModuleType.TrayReturn);
+  placeMod(state, 22, 31, ModuleType.Table);
+  placeMod(state, 25, 31, ModuleType.Table);
+  placeMod(state, 28, 31, ModuleType.Table);
+  placeMod(state, 22, 33, ModuleType.Table);
+  placeMod(state, 25, 33, ModuleType.Table);
+  placeMod(state, 28, 33, ModuleType.Table);
+
+  // Hydroponics / Clinic.
+  for (const [x, y] of [[36, 24], [39, 24], [42, 24], [36, 27], [39, 27]] as const) {
+    placeMod(state, x, y, ModuleType.GrowStation);
+  }
+  placeMod(state, 37, 32, ModuleType.MedBed);
+  placeMod(state, 40, 32, ModuleType.MedBed);
+  placeMod(state, 43, 32, ModuleType.Sink);
+
+  // Workshop / Storage.
+  placeMod(state, 50, 24, ModuleType.Workbench);
+  placeMod(state, 53, 24, ModuleType.Workbench);
+  placeMod(state, 50, 27, ModuleType.Plant);
+  for (const [x, y] of [[50, 32], [53, 32], [56, 32], [50, 35], [53, 35]] as const) {
+    placeMod(state, x, y, ModuleType.StorageRack);
+  }
+
+  // North power plant plus life support.
+  placeMod(state, 65, 25, ModuleType.ReactorCore);
+  placeMod(state, 70, 24, ModuleType.FireExtinguisher);
+  for (const [x, y] of [[64, 28], [66, 28], [68, 28], [70, 28], [72, 28]] as const) {
+    placeMod(state, x, y, ModuleType.SolarPanel);
+  }
+  placeMod(state, 64, 32, ModuleType.Vent);
+  placeMod(state, 68, 32, ModuleType.Vent);
+  placeMod(state, 71, 35, ModuleType.WaterFountain);
+
+  // South public band.
+  placeMod(state, 8, 43, ModuleType.MarketStall);
+  placeMod(state, 11, 43, ModuleType.MarketStall);
+  placeMod(state, 8, 46, ModuleType.VendingMachine);
+  placeMod(state, 11, 46, ModuleType.Bench);
+  placeMod(state, 8, 50, ModuleType.Couch);
+  placeMod(state, 11, 50, ModuleType.GameStation);
+  placeMod(state, 8, 53, ModuleType.Bench);
+
+  placeMod(state, 22, 43, ModuleType.BarCounter);
+  placeMod(state, 25, 43, ModuleType.Tap);
+  placeMod(state, 22, 46, ModuleType.Bench);
+  placeMod(state, 22, 50, ModuleType.RecUnit);
+  placeMod(state, 25, 50, ModuleType.Bench);
+  placeMod(state, 22, 53, ModuleType.VendingMachine);
+
+  placeMod(state, 36, 43, ModuleType.Shower);
+  placeMod(state, 38, 43, ModuleType.Shower);
+  placeMod(state, 40, 43, ModuleType.Toilet);
+  placeMod(state, 42, 43, ModuleType.Sink);
+  placeMod(state, 36, 46, ModuleType.WaterFountain);
+  placeMod(state, 37, 50, ModuleType.Telescope);
+  placeMod(state, 41, 53, ModuleType.Bench);
+
+  // Logistics and security.
+  placeMod(state, 50, 43, ModuleType.IntakePallet);
+  placeMod(state, 54, 43, ModuleType.IntakePallet);
+  placeMod(state, 50, 46, ModuleType.StorageRack);
+  placeMod(state, 50, 50, ModuleType.Terminal);
+  placeMod(state, 53, 50, ModuleType.Terminal);
+  placeMod(state, 50, 53, ModuleType.Plant);
+
+  // South power plant plus the brig.
+  placeMod(state, 65, 44, ModuleType.ReactorCore);
+  for (const [x, y] of [[64, 47], [66, 47], [68, 47], [70, 47], [72, 47]] as const) {
+    placeMod(state, x, y, ModuleType.SolarPanel);
+  }
+  placeMod(state, 64, 50, ModuleType.CellConsole);
+  placeMod(state, 67, 50, ModuleType.CellConsole);
+
+  // Receiving room beside the Berths: this is where inbound custody lands.
+  // The pallet sits on its first row so an inbound haul is a short trip from
+  // either Berth door, the same relationship the compact block gives its own
+  // receiving room.
+  placeMod(state, 77, 43, ModuleType.IntakePallet);
+  placeMod(state, 77, 46, ModuleType.StorageRack);
+  placeMod(state, 77, 49, ModuleType.StorageRack);
+  placeMod(state, 77, 52, ModuleType.StorageRack);
+
+  // Berth hardware, mirroring the compact block's two medium bays.
+  placeMod(state, 80, 33, ModuleType.AccessGate);
+  placeMod(state, 87, 32, ModuleType.Gangway);
+  placeMod(state, 81, 32, ModuleType.CustomsCounter);
+  placeMod(state, 85, 31, ModuleType.CargoArm);
+  placeMod(state, 80, 39, ModuleType.AccessGate);
+  placeMod(state, 87, 38, ModuleType.Gangway);
+  placeMod(state, 81, 38, ModuleType.CustomsCounter);
+  placeMod(state, 85, 37, ModuleType.CargoArm);
+}
+
+/**
+ * The linear-spine counterpart to `normal-scale-50`.
+ *
+ * Same population, same interface count, same guaranteed mixed call, same
+ * operational floor. Different shape.
+ */
+function stageLinearSpineScale(state: StationState): void {
+  unlockThrough(state, 3);
+  completeSpecialtyForScenario(state, 'sanitation-program');
+  completeSpecialtyForScenario(state, 'security-command');
+  completeSpecialtyForScenario(state, 'mechanical-maintenance');
+
+  buildSpineShell(state);
+  furnishSpineStation(state);
+
+  state.metrics.credits = 5000;
+  state.legacyMaterialStock = 500;
+  state.metrics.materials = 500;
+  state.metrics.waterStock = 180;
+  state.metrics.airQuality = 95;
+  buyRawFood(state, 0, 90);
+  buyMaterials(state, 0, 120);
+  tick(state, 0);
+
+  const seededMeals =
+    seedItemNodeStock(state, 21, 36, 'meal', 24) +
+    seedItemNodeStock(state, 24, 36, 'meal', 24) +
+    seedItemNodeStock(state, 22, 24, 'meal', 12) +
+    seedItemNodeStock(state, 25, 24, 'meal', 12);
+  seedItemNodeStock(state, 21, 36, 'cleanTray', 24);
+  seedItemNodeStock(state, 24, 36, 'cleanTray', 24);
+  state.metrics.mealStock = seededMeals;
+  seedItemNodeStock(state, 8, 43, 'tradeGood', 32);
+  seedItemNodeStock(state, 11, 43, 'tradeGood', 32);
+
+  // The spine is the station's only through-route, so its middle is the
+  // logical service anchor rather than a room interior.
+  state.core.serviceTile = spineTile(state, 40, 39);
+  for (let index = 0; index < state.crewMembers.length; index += 1) {
+    const crew = state.crewMembers[index]!;
+    const tile = spineTile(state, 20 + (index % 40), SPINE_ROWS[1]);
+    crew.tileIndex = tile;
+    crew.x = (tile % state.width) + 0.5;
+    crew.y = Math.floor(tile / state.width) + 0.5;
+    crew.targetTile = null;
+    crew.path = [];
+  }
+  for (let y = NORTH_OUTER_ROWS[0]; y <= NORTH_INNER_ROWS[1]; y += 1) {
+    for (let x = SPINE_POD_COLUMNS[0]![0]; x <= SPINE_POD_COLUMNS[0]![1]; x += 1) {
+      state.roomHousingPolicies[spineTile(state, x, y)] = 'crew';
+    }
+  }
+
+  tick(state, 0);
+  installScaleDockInterfaces(state, 8);
+  tick(state, 0);
+  seedScaleStorageReserve(state, 40, spineTile(state, 77, 43));
+
+  const counts = createEmptyStaffRoleCounts();
+  counts.captain = 1;
+  counts.cook = 6;
+  counts.steward = 6;
+  counts['cargo-handler'] = 12;
+  counts.cleaner = 5;
+  counts.janitor = 3;
+  counts.botanist = 3;
+  counts.technician = 4;
+  counts.engineer = 4;
+  counts['security-guard'] = 3;
+  counts.assistant = 3;
+  state.crew.roleCounts = counts;
+  state.crew.total = totalStaffCount(counts);
+  state.crew.free = state.crew.total;
+  state.crew.assigned = 0;
+  state.command.officers.captain = true;
+  tick(state, 0);
+  for (const crew of state.crewMembers) {
+    crew.energy = 100;
+    crew.hunger = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.morale = 100;
+    crew.missedPayrollCycles = 0;
+    crew.needsStrainSec = 0;
+    crew.resignationNoticeAt = null;
+    crew.airExposureSec = 0;
+    crew.healthState = 'healthy';
+  }
+  // The spine's whole point is that the Berths are far from everything else.
+  // Station a receiving watch in the hall for the same reason the compact
+  // block stations one beside its Berths: the scale proof is about the layout,
+  // not about which end of a 74-tile corridor a handler happened to start on.
+  const receivingWatch = state.crewMembers
+    .filter((crew) => crew.staffRole === 'cargo-handler')
+    .sort((left, right) => left.id - right.id)
+    .slice(0, 4);
+  for (let index = 0; index < receivingWatch.length; index += 1) {
+    const crew = receivingWatch[index]!;
+    const tile = spineTile(state, HALL_X[0] + index, 44);
+    crew.shiftBucket = 0;
+    crew.tileIndex = tile;
+    crew.x = (tile % state.width) + 0.5;
+    crew.y = Math.floor(tile / state.width) + 0.5;
+    crew.targetTile = null;
+    crew.path = [];
+    crew.activeJobId = null;
+  }
+
+  const publicFloors = state.tiles
+    .map((tile, index) => ({ tile, index }))
+    .filter(
+      ({ tile, index }) =>
+        tile === TileType.Floor &&
+        state.zones[index] === ZoneType.Public &&
+        state.moduleOccupancyByTile[index] === null &&
+        state.rooms[index] !== RoomType.None &&
+        state.rooms[index] !== RoomType.Berth
+    )
+    .map(({ index }) => index);
+  if (publicFloors.length === 0) throw new Error('Spine-scale fixture needs public floor tiles.');
+  state.visitors = Array.from({ length: 50 }, (_, index) =>
+    createScaleVisitor(state, 960_000 + index, publicFloors[(index * 17) % publicFloors.length]!, index)
+  );
+
+  state.metrics.credits = 20_000;
+  state.controls.shipsPerCycle = 6;
+  state.controls.manualTrafficAdmission = false;
+  state.controls.portAutoAdmitEnabled = true;
+  const mixedOffer = mixedBerthShowcaseOffer(state);
+  mixedOffer.hullVariant = 'passenger-shuttle';
+  mixedOffer.shipName = 'Longwatch Cargo Shuttle';
+  mixedOffer.hospitalityDemand = { meal: 5, drink: 0, leisure: 0, restroom: 0, hygiene: 0, comfort: 0 };
+  mixedOffer.inboundCargo = { rawMaterial: 6, rawMeal: 0, tradeGood: 4 };
+  mixedOffer.outboundRequest = { rawMaterial: 0, meal: 0, tradeGood: 0 };
+  mixedOffer.requestedServices = ['cafeteria'];
+  mixedOffer.berthTimeSec = 480;
+  state.trafficOffers.push(mixedOffer);
+  const admitted = admitTrafficOffer(state, mixedOffer.id);
+  if (!admitted.ok) {
+    throw new Error(`Spine-scale fixture could not admit its mixed call: ${admitted.reason ?? 'unknown'}`);
+  }
+  state.controls.paused = true;
+  state.controls.simSpeed = 1;
 }
 
 // --- Phase 0 frontage baselines ---------------------------------------------
@@ -3360,6 +3856,125 @@ function applyDemoStationOverlay(state: StationState): void {
   for (let y = 7; y < 14; y++) {
     for (let x = 6; x < 14; x++) state.roomHousingPolicies[y * state.width + x] = 'crew';
   }
+}
+
+// --- Phase 9 gate: one bad layout, two different valid remedies -------------
+//
+// The bad mess hall below is over-seated and under-circulated: a legal,
+// buildable room whose two counters both stand away from its single doorway,
+// so neither serving line has anywhere to run and the whole cohort competes
+// for one throat. Its measured symptom is how few of 24 hungry guests are
+// actually fed inside a fixed window.
+//
+// Two DIFFERENT interventions clear that same symptom:
+//   * `mess-line-extra-counter` buys throughput — one more counter, whose
+//     pickup tile stands over the existing doorway.
+//   * `mess-line-rerouted`      buys circulation — the same two counters and
+//     no new fixture at all, with a doorway cut under each of them.
+//
+// Neither changes staff. A self-service cafeteria requires no staff post at
+// all (`metrics.requiredCriticalStaff.cafeteria === 0`), which is exactly why
+// this comparison is safe from the "prove throughput by hiring" failure mode
+// the checklist forbids.
+
+/** Interior of every mess-hall variant: same rectangle, same fixtures' walk. */
+const MESS_ROOM = { x: 42, y: 49, width: 14, height: 8 } as const;
+/** Sealed hall the cohort waits in; its south wall is the mess's north wall. */
+const MESS_HOLD = { y: 44, height: 4 } as const;
+/** Counter row, hard against the wall the hall is on the other side of. */
+const MESS_COUNTER_ROW = 49;
+/** Origins of the two counters every variant has, and the tray return. */
+const MESS_COUNTER_X = [44, 50] as const;
+const MESS_TRAY_X = 53;
+/** The one doorway the choked layout gives 24 guests. */
+const MESS_BASE_DOOR_X = 48;
+/** `extra-counter` adds a serving bank either side of that doorway. */
+const MESS_EXTRA_COUNTER_X = [46, 48] as const;
+/** `rerouted` instead cuts a doorway under each existing counter. */
+const MESS_REROUTED_DOOR_X = [45, 51] as const;
+/** Dining tables, identical in all three variants. */
+const MESS_DINING_COLUMNS = [43, 45, 47, 49, 51, 53] as const;
+const MESS_DINING_ROWS = [52, 54] as const;
+
+function stageMessHall(
+  state: StationState,
+  variant: 'choked' | 'extra-counter' | 'rerouted'
+): void {
+  readyFacilityScenario(state);
+  // A sealed holding hall north of the mess, sharing the mess's north wall, so
+  // the cohort waits somewhere real and every doorway below is cut through the
+  // wall between the two. Painted first: the mess block rewrites that shared
+  // wall, and the doorways are cut afterwards.
+  paintFacilityBlock(state, MESS_ROOM.x, MESS_HOLD.y, MESS_ROOM.width, MESS_HOLD.height, RoomType.None);
+  const strayDoor = (MESS_HOLD.y - 1) * state.width + MESS_ROOM.x + 1;
+  state.tiles[strayDoor] = TileType.Wall;
+  state.rooms[strayDoor] = RoomType.None;
+  paintFacilityBlock(state, MESS_ROOM.x, MESS_ROOM.y, MESS_ROOM.width, MESS_ROOM.height, RoomType.Cafeteria);
+
+  const wallRow = MESS_ROOM.y - 1;
+  const doorAt = (x: number): void => {
+    const tile = wallRow * state.width + x;
+    state.tiles[tile] = TileType.Door;
+    state.rooms[tile] = RoomType.Cafeteria;
+    state.zones[tile] = ZoneType.Public;
+  };
+  const sealAt = (x: number): void => {
+    const tile = wallRow * state.width + x;
+    state.tiles[tile] = TileType.Wall;
+    state.rooms[tile] = RoomType.None;
+  };
+  // paintFacilityBlock always cuts its own door at x+1; this fixture decides
+  // its own doorways, so that one is walled back up.
+  sealAt(MESS_ROOM.x + 1);
+  doorAt(MESS_BASE_DOOR_X);
+  if (variant === 'rerouted') for (const x of MESS_REROUTED_DOOR_X) doorAt(x);
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+
+  // This comparison is about ONE mess hall, so the starter station's own food
+  // service is removed. Otherwise a variant could look better only because
+  // some guests wandered off to a counter no variant authored.
+  for (let tile = 0; tile < state.modules.length; tile += 1) {
+    const module = state.modules[tile];
+    if (module !== ModuleType.ServingStation && module !== ModuleType.ServingLine) continue;
+    removeModuleAtTile(state, tile);
+  }
+
+  // Two counters and a tray return: the minimum a cluster needs before
+  // production treats it as public visitor food service at all. Their
+  // positions are identical in all three variants.
+  const counters = MESS_COUNTER_X.map((x) =>
+    placeFixture(state, ModuleType.ServingStation, x, MESS_COUNTER_ROW)
+  );
+  if (variant === 'extra-counter') {
+    for (const x of MESS_EXTRA_COUNTER_X) {
+      counters.push(placeFixture(state, ModuleType.ServingStation, x, MESS_COUNTER_ROW));
+    }
+  }
+  placeFixture(state, ModuleType.TrayReturn, MESS_TRAY_X, MESS_COUNTER_ROW);
+  for (const column of MESS_DINING_COLUMNS) {
+    for (const row of MESS_DINING_ROWS) placeFixture(state, ModuleType.Table, column, row);
+  }
+  tick(state, 0);
+
+  // Identical food and tray stock per counter in every variant, so nothing
+  // here is a comparison between a stocked and an unstocked kitchen.
+  for (const module of counters) {
+    stockNode(state, module.originTile, 'meal', 40);
+    stockNode(state, module.originTile, 'cleanTray', 40);
+  }
+
+  // The same 24 hungry guests, on the same tiles, in all three layouts,
+  // waiting in the hall outside the door the way an arrival cohort would.
+  const crowd: Visitor[] = [];
+  for (let index = 0; index < 24; index += 1) {
+    const x = MESS_ROOM.x + 1 + (index % 12);
+    const y = MESS_HOLD.y + Math.floor(index / 12);
+    crowd.push(createScaleVisitor(state, 98_200 + index, y * state.width + x, index, 'meal'));
+  }
+  state.visitors = crowd;
+  tick(state, 0);
+  state.controls.paused = true;
 }
 
 /** Apply a named scenario to a fresh state. Returns true if the name

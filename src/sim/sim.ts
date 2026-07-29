@@ -335,6 +335,10 @@ import {
   getDockByTile,
   pruneOrphanedBerthConfigs
 } from './dock-controls';
+// Cyclic by module graph but not at load time: interface-diagnosis runs no
+// sim call at module scope, so this import is resolved long before either
+// module's functions are reachable.
+import { recordInterfaceBoardingCompletion } from './interface-diagnosis';
 
 const BASE_CAPACITY = 30;
 export const CYCLE_DURATION = 15;
@@ -508,7 +512,7 @@ function updateOpeningCapitalProjects(state: StationState): void {
       label: completedNames.length === 1 ? `${completedNames[0]} completed` : 'Capital projects completed'
     }, { countAsEarned: false });
   }
-  if (mutation.ratingAwarded > 0) state.usageTotals.ratingDelta += mutation.ratingAwarded;
+  if (mutation.ratingAwarded > 0) stationAwardRatingBonus(state, mutation.ratingAwarded, 'capitalProject');
 }
 
 export function getCommercialUnitAt(state: StationState, tileIndex: number): CommercialUnit | null {
@@ -1502,6 +1506,59 @@ function visitorSuccessRatingBonus(
 ): void {
   state.usageTotals.ratingDelta += amount;
   state.usageTotals.ratingFromVisitorSuccessByReason[reason] += amount;
+}
+
+/**
+ * The same award path for credit the STATION earned rather than one guest.
+ *
+ * A finished capital project and a completed small-craft service both used to
+ * add straight to `ratingDelta`, which made those two movements the only ones
+ * the rating breakdown could not explain. They share the bonus ledger so the
+ * reconciliation stays a single sum; the reason is what keeps them traceable.
+ */
+function stationAwardRatingBonus(
+  state: StationState,
+  amount: number,
+  reason: 'capitalProject' | 'smallCraftService'
+): void {
+  if (amount <= 0) return;
+  const byReason = state.usageTotals.ratingFromVisitorSuccessByReason;
+  state.usageTotals.ratingDelta += amount;
+  byReason[reason] = (byReason[reason] ?? 0) + amount;
+}
+
+/**
+ * Every rating movement, split into the buckets that were actually attributed.
+ *
+ * `residual` is the part of the cumulative ledger no named reason claims, and
+ * is the assertion Gate G uses: a non-zero residual means some writer moved the
+ * player's rating without saying why. Sub-breakdowns are deliberately excluded
+ * — `ratingFromVisitorFailureByReason` refines `ratingFromVisitorFailure`,
+ * `ratingFromSanitation` refines `ratingFromEnvironment`, and
+ * `ratingFromResidentRetention` mirrors the retention bonus — so counting them
+ * here would double-count movements that were only made once.
+ */
+export function getRatingAttribution(state: StationState): {
+  delta: number;
+  bonuses: number;
+  penalties: number;
+  attributed: number;
+  residual: number;
+} {
+  const totals = state.usageTotals;
+  const bonuses = Object.values(totals.ratingFromVisitorSuccessByReason)
+    .reduce((sum: number, value) => sum + (value ?? 0), 0);
+  const penalties =
+    totals.ratingFromShipTimeout +
+    totals.ratingFromShipSkip +
+    totals.ratingFromVisitorFailure +
+    totals.ratingFromWalkDissatisfaction +
+    totals.ratingFromRouteExposure +
+    totals.ratingFromEnvironment;
+  // Resident departures already accumulate as a signed movement rather than a
+  // magnitude, so they are added, not subtracted.
+  const attributed = bonuses - penalties + totals.ratingFromResidentDeparture;
+  return { delta: totals.ratingDelta, bonuses, penalties, attributed, residual: totals.ratingDelta - attributed };
 }
 
 function addVisitorFailurePenalty(
@@ -7459,6 +7516,10 @@ function clearPassengerTransferState(state: StationState, visitor: Visitor): voi
     } else {
       state.commitment.boardingSeconds += elapsed;
       state.commitment.boardingCompleted += 1;
+      // The station-wide totals cannot say WHICH interface was slow. Charge the
+      // same completed crossing to the interface that carried it, from the one
+      // site that already knows the crossing finished.
+      recordInterfaceBoardingCompletion(state, visitor, elapsed);
     }
   }
   clearPassengerTransferReservation(state, visitor, 'completed');
@@ -10716,7 +10777,21 @@ const MODULE_MAINTENANCE_ROOMS = new Map<ModuleType, { domain: MaintenanceDomain
   [ModuleType.FireExtinguisher, { domain: 'module', room: RoomType.None, label: 'fire extinguisher', effect: 'fire response risk' }],
   [ModuleType.CargoArm, { domain: 'berth', room: RoomType.Berth, label: 'berth cargo arm', effect: 'cargo handling slowed at high wear' }],
   [ModuleType.Gangway, { domain: 'berth', room: RoomType.Berth, label: 'berth gangway', effect: 'boarding flow slowed at high wear' }],
-  [ModuleType.CustomsCounter, { domain: 'berth', room: RoomType.Berth, label: 'customs counter', effect: 'ship processing slowed at high wear' }]
+  [ModuleType.CustomsCounter, { domain: 'berth', room: RoomType.Berth, label: 'customs counter', effect: 'ship processing slowed at high wear' }],
+  // The large Gate F fixtures. Without an entry here they accrue no debt at
+  // all, which made the whole `damaged` presentation unreachable in play and
+  // left the biggest, busiest furniture on the station as the only equipment
+  // that never wears. `RoomType.None` makes the loop inherit each fixture's
+  // real room from its origin tile — the FireExtinguisher pattern — because
+  // these span Market, Cantina, Cafeteria and Hygiene rather than one room.
+  [ModuleType.BackroomStockBank, { domain: 'module', room: RoomType.None, label: 'backroom stock bank', effect: 'restocking slowed at high wear' }],
+  [ModuleType.ServiceBar, { domain: 'module', room: RoomType.None, label: 'service bar', effect: 'drink service slowed at high wear' }],
+  [ModuleType.BarCorner, { domain: 'module', room: RoomType.None, label: 'bar corner', effect: 'bar seating degraded at high wear' }],
+  [ModuleType.BarEnd, { domain: 'module', room: RoomType.None, label: 'bar end', effect: 'bar seating degraded at high wear' }],
+  [ModuleType.BoothBank, { domain: 'module', room: RoomType.None, label: 'booth bank', effect: 'seated dwell degraded at high wear' }],
+  [ModuleType.ServingLine, { domain: 'module', room: RoomType.None, label: 'serving line', effect: 'meal pickup slowed at high wear' }],
+  [ModuleType.CommunityTable, { domain: 'module', room: RoomType.None, label: 'community table', effect: 'seated dwell degraded at high wear' }],
+  [ModuleType.WashBank, { domain: 'module', room: RoomType.None, label: 'wash bank', effect: 'hygiene service slowed at high wear' }]
 ]);
 
 export function ensureStructuralPieceMaintenanceTarget(
@@ -12827,6 +12902,31 @@ function joinMarketCheckoutQueue(state: StationState, visitor: Visitor): boolean
   return true;
 }
 
+/**
+ * How much of each service line is standing outside its own room.
+ *
+ * `buildQueueChain` already permits a bounded spill through the door, so this
+ * is a census of the physical slots that pass just handed out: a member whose
+ * claimed slot tile sits in a different room than its provider is physically
+ * queueing in the corridor. Counted from the compacted slot map rather than
+ * from line length, so a long line entirely inside a large cafeteria reports
+ * no spill at all.
+ */
+function recordQueueSpillLength(state: StationState): void {
+  const theater = state.derived.queueTheater;
+  let spilled = 0;
+  for (const [anchor, members] of theater.membersByAnchor) {
+    const providerRoom = state.rooms[anchor];
+    for (const memberId of members) {
+      const slot = theater.slotByVisitorId.get(memberId);
+      if (slot === undefined) continue;
+      if (state.rooms[slot] !== providerRoom) spilled += 1;
+    }
+  }
+  state.commitment.queueSpillMembers = spilled;
+  state.commitment.queueSpillPeak = Math.max(state.commitment.queueSpillPeak ?? 0, spilled);
+}
+
 /** Per-tick upkeep: prune leavers, compact slots, march everyone forward. */
 function maintainCafeteriaQueues(state: StationState): void {
   const theater = state.derived.queueTheater;
@@ -12846,7 +12946,10 @@ function maintainCafeteriaQueues(state: StationState): void {
       balkFromServiceQueue(state, visitor);
     }
   }
-  if (theater.membersByAnchor.size === 0) return;
+  if (theater.membersByAnchor.size === 0) {
+    recordQueueSpillLength(state);
+    return;
+  }
   const byId = new Map<number, Visitor>();
   for (const v of state.visitors) byId.set(v.id, v);
   for (const [anchor, members] of [...theater.membersByAnchor]) {
@@ -12875,6 +12978,7 @@ function maintainCafeteriaQueues(state: StationState): void {
       else v.movementWaitReason = 'waiting for service';
     }
   }
+  recordQueueSpillLength(state);
 }
 
 /** Focused harness hook. Production invokes this during the visitor phase. */
@@ -12883,6 +12987,12 @@ export function runQueueMaintenanceTestTick(state: StationState): void {
 }
 
 function balkFromServiceQueue(state: StationState, visitor: Visitor): void {
+  // The one place a guest gives up on a service line. Counting here — rather
+  // than inferring balks from the failure ledger — keeps the number equal to
+  // the number of visible "line too long!" moments. The cantina repeat-drink
+  // limit is deliberately NOT counted: declining an optional second drink is
+  // not demand the station failed to serve.
+  state.commitment.queueBalks = (state.commitment.queueBalks ?? 0) + 1;
   visitor.angryUntil = state.now + 5;
   pushCrowdFloater(state, visitor.x, visitor.y, 'line too long!', '#ff9f5f');
   pushCrowdEvent(state, 'warn', `A ${visitor.archetype} left the food line after waiting`);
@@ -13940,6 +14050,19 @@ function updateCommitmentMetrics(state: StationState, dt: number): void {
   commitment.fixtureOccupiedSeconds += occupied * dt;
   commitment.fixtureCapacitySeconds += capacity * dt;
 
+  // EVA time. The suit flag and the tile's pressure are both real physical
+  // facts the crew loop maintains, so this is a census of who is genuinely
+  // outside right now rather than an estimate from job counts. A suited worker
+  // who has stepped back into a pressurized module has stopped doing EVA even
+  // though the suit is still on, and stops accruing here.
+  let suitedOutside = 0;
+  for (const crew of state.crewMembers) {
+    if (!crew.evaSuit || state.pressurized[crew.tileIndex]) continue;
+    suitedOutside += 1;
+  }
+  commitment.evaSuitedCrew = suitedOutside;
+  commitment.evaSuitedSeconds = (commitment.evaSuitedSeconds ?? 0) + suitedOutside * dt;
+
   // Committed future load across everything already accepted.
   let berthSeconds = 0;
   let beds = 0;
@@ -14931,7 +15054,7 @@ function completeSmallCraftService(
     const visit = ship.smallCraftVisit;
     if (visit) recordSmallCraftServiceCompletion(visit, service.kind);
   }
-  state.usageTotals.ratingDelta += service.ratingDelta;
+  stationAwardRatingBonus(state, service.ratingDelta, 'smallCraftService');
 }
 
 function blockSmallCraftService(service: SmallCraftService, reason: string): void {
@@ -16470,6 +16593,19 @@ function moveAlongPath(
       ) {
         state.portOps.telemetry.publicCargoConflictSeconds =
           (state.portOps.telemetry.publicCargoConflictSeconds ?? 0) + dt;
+      }
+      // Door wait, measured the same way. These two reasons are set only by
+      // the narrow-crossing pass in beginMovementCoordinator, which runs only
+      // over Door and Airlock tiles, so an actor reaching here with one of them
+      // really did lose a serialized crossing this tick. Accruing it here and
+      // not at the arbiter is what keeps it exactly once per actor per tick:
+      // only an actor close enough to take the step pays for waiting on it.
+      if (
+        actor.movementWaitReason === 'narrow crossing occupied' ||
+        actor.movementWaitReason === 'yielding at narrow crossing'
+      ) {
+        state.commitment.doorWaitSeconds = (state.commitment.doorWaitSeconds ?? 0) + dt;
+        state.commitment.doorWaitDeferrals = (state.commitment.doorWaitDeferrals ?? 0) + 1;
       }
       return 'blocked';
     }
@@ -22432,6 +22568,10 @@ function realizeVisitorNeedAtFirstChoice(state: StationState, visitor: Visitor):
   if (guessedService === wanted) return false;
 
   visitor.redirectedFrom = guessedService;
+  // The reveal side already had a timestamp; the redirect side did not, so the
+  // cost of a wrong first guess could not be measured. Stamped at the one site
+  // that performs the redirect, beside the cause it belongs to.
+  visitor.redirectedAt = state.now;
   const from = tileCenter(visitor.tileIndex, state.width);
   pushCrowdFloater(state, from.x, from.y - 0.35, `Need: ${wanted} ↪`, '#f5c86a');
   pushCrowdEvent(
@@ -23241,6 +23381,41 @@ function noteVisitorServiceObserved(visitor: Visitor, service: HospitalityServic
   }
 }
 
+/**
+ * Close out the two reception timings for a guest who just finished a service
+ * their plan actually wanted.
+ *
+ * This is the only place either interval settles, and each one settles at most
+ * once per guest — the settlement stamp, not the cause field, is the guard, so
+ * a guest who goes on to eat, wash and sit still contributes exactly one reveal
+ * interval and at most one correction interval. Called only on an on-plan
+ * completion: a recurring-need top-up or an opportunistic second drink is not
+ * the want reception surfaced.
+ */
+function settleReceptionEffectTiming(state: StationState, visitor: Visitor): void {
+  const commitment = state.commitment;
+  const processedAt = visitor.receptionProcessedAt ?? null;
+  if (
+    processedAt !== null &&
+    (visitor.receptionRevealSettledAt === null || visitor.receptionRevealSettledAt === undefined)
+  ) {
+    visitor.receptionRevealSettledAt = state.now;
+    commitment.receptionRevealSeconds =
+      (commitment.receptionRevealSeconds ?? 0) + Math.max(0, state.now - processedAt);
+    commitment.receptionRevealsResolved = (commitment.receptionRevealsResolved ?? 0) + 1;
+  }
+  const redirectedAt = visitor.redirectedAt ?? null;
+  if (
+    redirectedAt !== null &&
+    (visitor.redirectCorrectionSettledAt === null || visitor.redirectCorrectionSettledAt === undefined)
+  ) {
+    visitor.redirectCorrectionSettledAt = state.now;
+    commitment.redirectCorrectionSeconds =
+      (commitment.redirectCorrectionSeconds ?? 0) + Math.max(0, state.now - redirectedAt);
+    commitment.redirectCorrectionsResolved = (commitment.redirectCorrectionsResolved ?? 0) + 1;
+  }
+}
+
 function completeVisitorHospitalityService(
   state: StationState,
   visitor: Visitor,
@@ -23264,7 +23439,10 @@ function completeVisitorHospitalityService(
   });
   if (!recorded) return false;
   visitor.serviceCompletionsRecorded = (visitor.serviceCompletionsRecorded ?? 0) + 1;
-  if (onPlan) visitor.completedServices.push(service);
+  if (onPlan) {
+    visitor.completedServices.push(service);
+    settleReceptionEffectTiming(state, visitor);
+  }
   if (recurringNeed !== null && visitor.needs) {
     restoreRecurringNeed(visitor.needs, recurringNeed);
     state.commitment.needSatisfied[recurringNeed] += 1;
@@ -26577,6 +26755,11 @@ function computeMetrics(state: StationState): void {
   state.metrics.crewAvgHygiene = avgCrewHygiene;
   state.metrics.cafeteriaQueueingCount =
     state.visitors.filter((v) => v.state === VisitorState.Queueing).length;
+  // Congestion readout: `maxBlockedTicksObserved` says how badly one actor
+  // stalled, this says how much total actor-time the station's doors cost.
+  // Mirrored from the durable counter rather than re-derived, so the panel and
+  // the save can never disagree.
+  state.metrics.doorWaitSeconds = state.commitment.doorWaitSeconds ?? 0;
   state.metrics.cafeteriaEatingCount =
     state.visitors.filter((v) => v.state === VisitorState.Eating).length +
     state.residents.filter((r) => r.state === ResidentState.Eating).length;
