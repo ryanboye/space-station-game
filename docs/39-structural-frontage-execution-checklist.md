@@ -390,7 +390,7 @@ audited checklist with no unsupported checked claims.
 - [x] Poor contract-crew needs reduce cooperation or work productivity.
 - [x] Extended/stranded guests consume temporary food, hygiene, and lodging.
 - [ ] Residents accumulate persistent stress and can withdraw from work or leave.
-- [ ] Implement visible `unmet` escalation.
+- [x] Implement visible `unmet` escalation.
 - [x] Implement visible `balking` escalation.
 - [x] Implement visible `distressed` escalation.
 - [x] Implement bounded `disruptive` escalation.
@@ -590,8 +590,8 @@ audited checklist with no unsupported checked claims.
 - [x] Render hard obstruction in red.
 - [x] Render shared/serialized approach in amber.
 - [x] Show resulting conflict group.
-- [ ] Show charter-facing lane traffic.
-- [ ] Show obvious interior throat or boarding warning.
+- [x] Show charter-facing lane traffic.
+- [x] Show obvious interior throat or boarding warning.
 
 ### Phase 4 Gate
 
@@ -793,11 +793,11 @@ audited checklist with no unsupported checked claims.
 - [x] Generate low-resolution Reinforced Bulkhead art.
 - [ ] Add planned/delivered/welding/complete/overloaded structural states.
 - [ ] Add scaffold/floor/wall/seal/pressurizing states.
-- [ ] Add approach reservation animation.
+- [x] Add approach reservation animation.
 - [x] Add carried resource sprites.
-- [ ] Add Gangway and clamp deployment states.
+- [x] Add Gangway and clamp deployment states.
 - [x] Add hull wear/damage/breach/repair states.
-- [ ] Add door contention and late-boarding indicators.
+- [x] Add door contention and late-boarding indicators.
 - [ ] Verify every asset at actual gameplay size in the live renderer.
 
 ### Phase 8 Gate
@@ -2049,3 +2049,47 @@ maintenance" row at the same time.
   that owns them, and what is genuinely missing is stated precisely: door wait
   seconds, corridor contention, queue spill length, a counted queue balk, EVA
   suited-seconds, and render frame time.
+
+2026-07-28 · World-space feedback for boarding, doors, approach and demand
+
+- Commit or files: `gangwayVisualState`/`GANGWAY_SPRITE_KEYS`,
+  `drawDoorContentionIndicators`, `drawGangwayStatusLabels`,
+  `interiorAccessWarning`, and the animated waiting chips in
+  `src/render/render.ts`. All six rows are read-only derivations; render still
+  writes nothing to simulation state.
+- **Gangway states were dead assets.** All five authored frames
+  (`closed/deploying/connected/blocked/late`) plus the clamp frame were packed in
+  the atlas and keyed, while the renderer hardcoded `module.gangway.active` and
+  varied only alpha. A selector mirroring `structuralPieceVisualState` now picks
+  the real frame from ship stage, the durable `transferSlotKey`, the blocked
+  tile/wait reason, unboarded passenger count, and the contract's hard departure.
+  The late threshold is derived from `VISIT_TIMINGS.boardingLeadSec` rather than
+  a magic number — a first attempt used a fixed 25s and fired the instant
+  boarding opened.
+- **Door contention** counts each actor's tile, its first committed path steps,
+  and — for actors with no path at all — the ring around them. That last clause
+  is the one that matters: a stalled transfer queue has no path, so the bodies
+  packed at the mouth are exactly the ones two earlier attempts missed.
+- Interior throat warning is genuinely new information rather than a restatement:
+  `validateDockingSlot` only checks *exterior* clearance, so nothing previously
+  told the player their berth had a one-tile interior throat or no second
+  Gangway.
+- Live evidence recorded by the implementer, per row and per scenario:
+  `?scenario=meal-queue-boarding-conflict` shows a contention ring with a legible
+  `4` badge on the Logistics door with three crew visibly jammed at it, plus
+  `GANGWAY BLOCKED | 10 PAX`; `?scenario=mixed-berth-visit` shows `closed`,
+  `connected` and `late` collars, `LATE BOARDING | 5 PAX` at recall,
+  `APPROACH BLOCKED: ... · STEADY`, `ACCEPTED WORK CONFLICT: Berth 3269 ·
+  STEADY`, `INTERIOR THROAT: 1 TILE · NO SECOND GANGWAY`, and a dashed
+  `WAITING 0S: APPROACH OCCUPIED` chip while the commitment is waiting;
+  `?scenario=commitment-failure` shows cool-slate `unmet` pips and a neutral
+  `Looking for food` bubble at about 22s.
+- Lead verification: confirmed the six authored gangway keys are now selected
+  rather than hardcoded, and that all five new draw paths are wired and called.
+  Independently confirmed in the browser that the alerts card *appears* on a
+  station with real alerts, which is the return direction of the contextual-panel
+  work that a fresh station could not exercise.
+- Open limit, flagged rather than papered over: the atlas contains only
+  `module.docking_clamp` and `module.docking_clamp.active` — there are no
+  authored clamp deployment frames. The clamp's deployment reads through eased
+  alpha and a reach flicker. A real clamp state ladder needs art, not code.

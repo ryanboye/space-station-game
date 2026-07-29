@@ -24,7 +24,7 @@ import {
   type BuildTool,
   type StationState
 } from '../sim/types';
-import { MODULE_DEFINITIONS } from '../sim/balance';
+import { MODULE_DEFINITIONS, VISIT_TIMINGS } from '../sim/balance';
 import { previewModulePlacement } from '../sim/construction';
 import {
   collectActiveRoomTiles,
@@ -3665,32 +3665,47 @@ function drawApproachWaitingChips(
   occupied: BerthChipRect[]
 ): void {
   const descriptors = new Map(getDockingSlotDescriptors(state).map((descriptor) => [descriptor.id, descriptor]));
-  const text = 'WAITING: APPROACH OCCUPIED';
+  // The held reservation is a live claim on shared space, so the chip is sized
+  // from a fixed template and animated instead of redrawn at a new width every
+  // second — a jittering chip would move under the berth it belongs to.
+  const widthTemplate = 'WAITING 000S: APPROACH OCCUPIED';
   const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.29));
   const height = Math.max(18, Math.round(TILE_SIZE * 0.78));
   const padding = Math.max(9, Math.round(TILE_SIZE * 0.42));
+  const now = renderClockSeconds();
+  const dash = Math.max(3, TILE_SIZE * 0.22);
   ctx.save();
   ctx.font = `bold ${fontSize}px monospace`;
-  const width = Math.max(TILE_SIZE * 4.6, Math.min(TILE_SIZE * 8.5, ctx.measureText(text).width + padding * 2));
+  const width = Math.max(TILE_SIZE * 4.6, Math.min(TILE_SIZE * 9.5, ctx.measureText(widthTemplate).width + padding * 2));
   for (const ship of state.arrivingShips) {
     if (ship.approachCommitment?.status !== 'waiting') continue;
     const descriptor = descriptors.get(ship.approachCommitment.slotId);
     if (!descriptor) continue;
     const rect = placeBerthChip(state, descriptor.hullTiles, width, height, occupied);
     if (!rect) continue;
+    const heldSec = Math.max(0, Math.floor(state.now - ship.approachCommitment.queuedAt));
+    const pulse = 0.72 + Math.sin(now * 2.6 + ship.id) * 0.24;
     ctx.fillStyle = 'rgba(28, 20, 7, 0.94)';
-    ctx.strokeStyle = '#ffd36a';
-    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.04);
     ctx.beginPath();
     ctx.roundRect(rect.x, rect.y, rect.w, rect.h, Math.max(2, TILE_SIZE * 0.1));
     ctx.fill();
+    // Marching dashes make the hold read as an active claim rather than a
+    // frozen box; the phase is render-clock driven so it never stalls with the
+    // simulation tick.
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = '#ffd36a';
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.05);
+    ctx.setLineDash([dash, dash * 0.62]);
+    ctx.lineDashOffset = -(now * TILE_SIZE * 1.4) % (dash * 1.62);
     ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = '#ffd36a';
     ctx.fillRect(rect.x, rect.y, Math.max(2, TILE_SIZE * 0.11), rect.h);
     ctx.fillStyle = '#fff0bd';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, rect.x + padding, rect.y + rect.h * 0.5);
+    ctx.fillText(`WAITING ${Math.min(999, heldSec)}S: APPROACH OCCUPIED`, rect.x + padding, rect.y + rect.h * 0.5);
   }
   ctx.restore();
 }
@@ -3707,6 +3722,22 @@ const ACTIVE_INFRASTRUCTURE_SPRITE_KEYS: Partial<Record<ModuleType, string>> = {
   [ModuleType.Gangway]: 'module.gangway.active',
   [ModuleType.DockingClamp]: 'module.docking_clamp.active'
 };
+
+export type GangwayVisualState = 'closed' | 'deploying' | 'connected' | 'active' | 'blocked' | 'late';
+
+const GANGWAY_SPRITE_KEYS: Record<GangwayVisualState, string> = {
+  closed: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.closed,
+  deploying: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.deploying,
+  connected: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.connected,
+  active: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.active,
+  blocked: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.blocked,
+  late: STRUCTURAL_FRONTAGE_SPRITE_KEYS.gangway.late
+};
+
+// Boarding opens one authored lead before the hard departure, so "late" has to
+// be a fraction of that window rather than a fixed number of seconds: at half
+// the lead a queue that has not cleared will not clear in time.
+const GANGWAY_LATE_BOARDING_SEC = VISIT_TIMINGS.boardingLeadSec * 0.5;
 
 function renderClockSeconds(): number {
   return typeof performance === 'undefined' ? Date.now() / 1000 : performance.now() / 1000;
@@ -3730,10 +3761,17 @@ function moduleFacing(module: StationState['moduleInstances'][number]): SpaceLan
   return module.rotation === 90 ? 'south' : 'east';
 }
 
-function shipServiceCompletion(state: StationState, ship: StationState['arrivingShips'][number]): number {
-  const contract = ship.portContractId === undefined
+function shipPortContract(
+  state: StationState,
+  ship: StationState['arrivingShips'][number]
+): StationState['portOps']['contracts'][number] | null {
+  return ship.portContractId === undefined
     ? state.portOps.contracts.find((entry) => entry.shipId === ship.id) ?? null
     : state.portOps.contracts.find((entry) => entry.id === ship.portContractId) ?? null;
+}
+
+function shipServiceCompletion(state: StationState, ship: StationState['arrivingShips'][number]): number {
+  const contract = shipPortContract(state, ship);
   if (contract) return portPromiseCompletion(contract.promises);
   if (ship.portTurnaround) return clamp01(ship.portTurnaround.fulfillmentRatio);
   if (ship.passengersTotal <= 0) return ship.stage === 'docked' ? 0.5 : 0;
@@ -3745,6 +3783,71 @@ function infrastructureTargetForShip(ship: StationState['arrivingShips'][number]
   if (ship.stage === 'approach') return 0.38;
   if (ship.stage === 'depart') return 0.16;
   return 1;
+}
+
+/** Passengers the sim has physically bound to one Gangway's crossing tile. */
+type GangwayTransferLoad = {
+  transferring: number;
+  blocked: boolean;
+};
+
+function gangwayTransferLoad(
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  berthAnchor: number | null
+): GangwayTransferLoad {
+  // The durable transfer slot key names the Gangway module the sim bound this
+  // passenger to; `transferAccessTile` is the same interface as a live tile.
+  // Matching either attributes a passenger to the collar they actually queue
+  // at rather than to the whole berth, and survives save/resume.
+  const slotKey = berthAnchor === null ? null : `berth:${berthAnchor}:gangway:${module.id}`;
+  let transferring = 0;
+  let blocked = false;
+  for (const visitor of state.visitors) {
+    const phase = visitor.transferPhase ?? 'station';
+    if (phase === 'station') continue;
+    const mine = slotKey !== null && visitor.transferSlotKey === slotKey;
+    if (!mine && visitor.transferAccessTile !== module.originTile) continue;
+    transferring += 1;
+    if (
+      (visitor.transferBlockedTile ?? null) !== null ||
+      visitor.movementWaitReason === 'cargo crossing blocking boarding'
+    ) blocked = true;
+  }
+  return { transferring, blocked };
+}
+
+/** Passengers a docked ship is still owed before it may leave clean. */
+function shipUnboardedPassengers(ship: StationState['arrivingShips'][number]): number {
+  return Math.max(0, ship.passengersSpawned - ship.passengersBoarded);
+}
+
+/**
+ * Purely selects from ship stage, the live passenger transfers bound to this
+ * Gangway's crossing tile, and the contract stay clock. The berth ship is
+ * resolved once by the caller so the selector stays cheap per module.
+ */
+export function gangwayVisualState(
+  state: StationState,
+  module: StationState['moduleInstances'][number],
+  ship: StationState['arrivingShips'][number] | null
+): GangwayVisualState {
+  if (!ship || ship.stage === 'depart') return 'closed';
+  if (ship.stage === 'approach') return 'deploying';
+  const boarding = ship.visitPhase === 'recall' || ship.visitPhase === 'boarding';
+  const deadline = shipPortContract(state, ship)?.hardDepartureAt ?? ship.plannedDepartureAt ?? null;
+  const load = gangwayTransferLoad(state, module, ship.assignedBerthAnchor ?? null);
+  // A late call is the worst reading available: people are still on the wrong
+  // side of the collar with the hard departure inside the boarding lead.
+  if (
+    boarding &&
+    shipUnboardedPassengers(ship) > 0 &&
+    deadline !== null &&
+    deadline - state.now <= GANGWAY_LATE_BOARDING_SEC
+  ) return 'late';
+  if (load.blocked) return 'blocked';
+  if (load.transferring > 0) return 'active';
+  return 'connected';
 }
 
 function drawAuthoredInfrastructureState(
@@ -3863,9 +3966,21 @@ function renderDockInfrastructureAnimationPass(
     if (module.type === ModuleType.PodDock) {
       drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
     } else if (module.type === ModuleType.Gangway) {
-      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
+      // The authored key now carries the deployment stage, so alpha only
+      // softens the extension instead of standing in for it. A closed collar
+      // is finished art in its own right and stays opaque.
+      const gangwayState = gangwayVisualState(state, module, ship);
+      const attention = gangwayState === 'blocked' || gangwayState === 'late'
+        ? 0.78 + Math.sin(now * 4.4 + module.id) * 0.22
+        : 1;
+      const alpha = gangwayState === 'closed' ? 1 : (0.55 + deployment * 0.45) * attention;
+      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, GANGWAY_SPRITE_KEYS[gangwayState], alpha);
     } else if (module.type === ModuleType.DockingClamp) {
-      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], deployment);
+      // Clamp art has one authored engaged frame, so its deployment reads
+      // through the eased alpha plus a reach flicker while the hull closes in.
+      const reaching = ship?.stage === 'approach';
+      const clampAlpha = reaching ? deployment * (0.72 + Math.sin(now * 3.1 + module.id) * 0.22) : deployment;
+      drawAuthoredInfrastructureState(ctx, state, module, spriteAtlas, useSprites, ACTIVE_INFRASTRUCTURE_SPRITE_KEYS[module.type], clampAlpha);
     } else if (module.type === ModuleType.MaintenanceSocket) {
       const dock = state.docks.find((entry) => entry.attachmentModuleIds?.maintenance === module.id);
       const dockShip = dock ? state.arrivingShips.find((ship) => ship.assignedDockId === dock.id) ?? null : null;
@@ -3921,7 +4036,8 @@ function drawFuelTankFillGauges(
   }
 }
 
-function drawFuelConnectionLabel(
+/** Shared compact world label for a module-anchored status line. */
+function drawModuleStatusLabel(
   ctx: CanvasRenderingContext2D,
   text: string,
   centerX: number,
@@ -3975,7 +4091,7 @@ function drawFuelCouplerConnectionIndicators(
         tank.height * TILE_SIZE - 4
       );
       ctx.setLineDash([]);
-      drawFuelConnectionLabel(
+      drawModuleStatusLabel(
         ctx,
         connected ? 'TANK CONNECTED' : 'PIPE TO ANY TANK TILE',
         (origin.x + tank.width * 0.5) * TILE_SIZE,
@@ -4057,7 +4173,7 @@ function drawFuelCouplerConnectionIndicators(
         : fuelStock <= 0.01
           ? 'COUPLER: LINE OK, TANK EMPTY'
           : `COUPLER: READY · ${Math.floor(fuelStock)} FUEL`;
-    drawFuelConnectionLabel(ctx, label, socketX, socketY + TILE_SIZE * 0.35, color);
+    drawModuleStatusLabel(ctx, label, socketX, socketY + TILE_SIZE * 0.35, color);
   }
   ctx.restore();
 }
@@ -4701,20 +4817,27 @@ function drawApproachArrow(ctx: CanvasRenderingContext2D, rect: { x: number; y: 
   ctx.fill();
 }
 
+const APPROACH_WARNING_COLOR = '#ffbe5c';
+
 function drawApproachLabel(
   ctx: CanvasRenderingContext2D,
   state: StationState,
   descriptor: DockingSlotDescriptor,
   text: string,
-  color: string
+  color: string,
+  warning: string | null = null
 ): void {
   const anchor = descriptor.anchorTile === null ? null : fromIndex(descriptor.anchorTile, state.width);
   if (!anchor) return;
   const fontPx = Math.max(8, Math.round(TILE_SIZE * 0.29));
   const pad = Math.max(4, Math.round(TILE_SIZE * 0.18));
   ctx.font = `bold ${fontPx}px monospace`;
-  const width = Math.min(TILE_SIZE * 18, ctx.measureText(text).width + pad * 2);
-  const height = Math.max(17, Math.round(TILE_SIZE * 0.7));
+  const width = Math.min(
+    TILE_SIZE * 18,
+    Math.max(ctx.measureText(text).width, warning === null ? 0 : ctx.measureText(warning).width) + pad * 2
+  );
+  const rowHeight = Math.max(17, Math.round(TILE_SIZE * 0.7));
+  const height = warning === null ? rowHeight : rowHeight * 2;
   const gap = Math.max(3, TILE_SIZE * 0.13);
   const anchorX = (anchor.x + 0.5) * TILE_SIZE;
   const anchorY = (anchor.y + 0.5) * TILE_SIZE;
@@ -4736,7 +4859,55 @@ function drawApproachLabel(
   ctx.fillStyle = color;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, x + pad, y + height * 0.5);
+  ctx.fillText(text, x + pad, y + rowHeight * 0.5);
+  if (warning !== null) {
+    ctx.fillStyle = APPROACH_WARNING_COLOR;
+    ctx.fillText(warning, x + pad, y + rowHeight * 1.5);
+  }
+}
+
+/** A one-tile opening still warns; two is the point where a line can pass. */
+const INTERIOR_THROAT_WARNING_TILES = 2;
+
+/**
+ * The station-side width behind an interface. `accessTiles` is the berth
+ * cluster or the dock collar, so the walkable tiles that touch it from inside
+ * are the throat every passenger and cargo job squeezes through. Purely
+ * derived from the same descriptor the approach validator already reads —
+ * which checks exterior clearance and says nothing about interior access.
+ */
+function interiorAccessWarning(state: StationState, descriptor: DockingSlotDescriptor): string | null {
+  const access = new Set(descriptor.accessTiles);
+  const hull = new Set(descriptor.hullTiles);
+  const throat = new Set<number>();
+  for (const tile of access) {
+    const p = fromIndex(tile, state.width);
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+      const x = p.x + dx;
+      const y = p.y + dy;
+      if (!inBounds(x, y, state.width, state.height)) continue;
+      const neighbor = toIndex(x, y, state.width);
+      if (access.has(neighbor) || hull.has(neighbor)) continue;
+      if (!isWalkable(state.tiles[neighbor])) continue;
+      throat.add(neighbor);
+    }
+  }
+  if (throat.size === 0) return 'NO INTERIOR ACCESS';
+  const throatNote = throat.size <= INTERIOR_THROAT_WARNING_TILES
+    ? `INTERIOR THROAT: ${throat.size} TILE${throat.size === 1 ? '' : 'S'}`
+    : null;
+  // A Berth boards through its Gangways, so even a wide corridor behind a
+  // single collar still serialises the whole manifest. Both facts fit one line.
+  let gangwayNote: string | null = null;
+  if (descriptor.kind === 'berth') {
+    const gangways = state.moduleInstances.filter(
+      (module) => module.type === ModuleType.Gangway && module.tiles.some((tile) => access.has(tile))
+    ).length;
+    const takesBigCalls = descriptor.acceptedSizes.includes('medium') || descriptor.acceptedSizes.includes('large');
+    gangwayNote = gangways === 0 ? 'NO GANGWAY' : gangways < 2 && takesBigCalls ? 'NO SECOND GANGWAY' : null;
+  }
+  if (throatNote && gangwayNote) return `${throatNote} · ${gangwayNote}`;
+  return throatNote ?? gangwayNote;
 }
 
 function drawApproachEnvelopePreview(
@@ -4858,16 +5029,19 @@ function drawApproachEnvelopePreview(
     ? approachLaneAlignment(projectedOffer.lane, descriptor.facing)
     : liveShip ? approachLaneAlignment(liveShip.lane, descriptor.facing) : null;
   const geometry = `${descriptor.facing.toUpperCase()} ${trafficLabel} · ${environmentLabel}`;
+  // Charter lane weight is exactly what decides a contested face, so it stays
+  // on the blocked/serialising/conflicting branches too — those are the ones
+  // the player reads while choosing between frontages.
   const label = conflictsWithAcceptedWork
-    ? `ACCEPTED WORK CONFLICT: ${acceptedConflictLabels.join(', ')}`
+    ? `ACCEPTED WORK CONFLICT: ${acceptedConflictLabels.join(', ')} · ${trafficLabel}`
     : reason
-    ? `APPROACH BLOCKED: ${reason}`
+    ? `APPROACH BLOCKED: ${reason} · ${trafficLabel}`
     : conflictGroups.length > 0
-      ? `APPROACH SERIALIZES: ${conflictGroups.length} GROUP${conflictGroups.length === 1 ? '' : 'S'}`
+      ? `APPROACH SERIALIZES: ${conflictGroups.length} GROUP${conflictGroups.length === 1 ? '' : 'S'} · ${trafficLabel}`
       : liveAlignment && liveAlignment.label !== 'direct'
         ? `${geometry} · ${liveAlignment.label.toUpperCase()} ROUTE`
         : `APPROACH CLEAR · ${geometry}`;
-  drawApproachLabel(ctx, state, descriptor, label, color);
+  drawApproachLabel(ctx, state, descriptor, label, color, interiorAccessWarning(state, descriptor));
 }
 
 function agentOffset(id: number): { x: number; y: number } {
@@ -4999,6 +5173,10 @@ function visitorFailureThought(visitor: StationState['visitors'][number]): World
   if (visitor.serviceFailureStage === 'disruptive') return { text: `I need ${needText} now!`, tone: 'negative' };
   if (visitor.serviceFailureStage === 'distressed') return { text: `I still need ${needText}!`, tone: 'negative' };
   if (visitor.serviceFailureStage === 'balking') return { text: `I cannot find ${needText}`, tone: 'negative' };
+  // First rung of the failed-stay ladder. It is deliberately the quiet one: a
+  // neutral want, not a complaint, so the three escalations above still read
+  // as escalations when they arrive.
+  if (visitor.serviceFailureStage === 'unmet') return { text: `Looking for ${needText}`, tone: 'neutral' };
   return null;
 }
 
@@ -5015,7 +5193,9 @@ function visitorWorldThought(state: StationState, visitor: StationState['visitor
     return { text: 'My ship left. I need transport.', tone: 'negative' };
   }
   const failureThought = visitorFailureThought(visitor);
-  if (failureThought && visitor.serviceFailureStage !== 'balking') return failureThought;
+  const quietFailureStage =
+    visitor.serviceFailureStage === 'balking' || visitor.serviceFailureStage === 'unmet';
+  if (failureThought && !quietFailureStage) return failureThought;
   if (failureThought && shouldVoiceRouteComplaint(state, visitor.id, 5)) return failureThought;
   const hasEnteredStation =
     state.now - visitor.spawnedAt >= 4 &&
@@ -7066,6 +7246,138 @@ function drawLocalAirWarnings(
   ctx.restore();
 }
 
+// A door is contended by the people standing in its mouth and by the people
+// whose committed route runs through it. A stalled transfer queue has no path
+// at all, so bodies packed around the throat count too — that is the pinch the
+// player is meant to see and widen. One person walking through is ordinary
+// traffic; three converging on the same tile is not.
+const DOOR_CONTENTION_MIN_ACTORS = 3;
+const DOOR_CONTENTION_LOOKAHEAD = 8;
+
+function drawDoorContentionIndicators(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  const contendersByTile = new Map<number, number>();
+  const waitingByTile = new Map<number, number>();
+  const counted = new Set<number>();
+  const isThroat = (tile: number): boolean =>
+    state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock;
+  const note = (tile: number | null | undefined, waiting: boolean): void => {
+    if (tile === null || tile === undefined || counted.has(tile)) return;
+    if (tile < 0 || tile >= state.tiles.length || !isThroat(tile)) return;
+    if (!tileInRange(tile, state, visibleTiles)) return;
+    counted.add(tile);
+    contendersByTile.set(tile, (contendersByTile.get(tile) ?? 0) + 1);
+    if (waiting) waitingByTile.set(tile, (waitingByTile.get(tile) ?? 0) + 1);
+  };
+  const noteActor = (actor: { tileIndex: number; path: number[]; movementWaitReason?: string }): void => {
+    counted.clear();
+    const waiting = actor.movementWaitReason !== undefined || actor.path.length === 0;
+    note(actor.tileIndex, waiting);
+    for (let step = 0; step < Math.min(DOOR_CONTENTION_LOOKAHEAD, actor.path.length); step++) {
+      note(actor.path[step], waiting);
+    }
+    // A body parked in the mouth of a throat blocks it whether or not it still
+    // holds a route, so sample the ring around anyone who has stopped moving.
+    if (actor.path.length > 0) return;
+    const here = fromIndex(actor.tileIndex, state.width);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const x = here.x + dx;
+        const y = here.y + dy;
+        if (!inBounds(x, y, state.width, state.height)) continue;
+        note(toIndex(x, y, state.width), true);
+      }
+    }
+  };
+  for (const actor of state.visitors) noteActor(actor);
+  for (const actor of state.residents) noteActor(actor);
+  for (const actor of state.crewMembers) noteActor(actor);
+
+  const contended = [...contendersByTile.entries()]
+    .filter(([, count]) => count >= DOOR_CONTENTION_MIN_ACTORS)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  if (contended.length === 0) return;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const [tile, count] of contended) {
+    const p = fromIndex(tile, state.width);
+    const cx = (p.x + 0.5) * TILE_SIZE;
+    const cy = (p.y + 0.5) * TILE_SIZE;
+    const stalled = (waitingByTile.get(tile) ?? 0) > 0;
+    const color = stalled || count >= DOOR_CONTENTION_MIN_ACTORS + 2 ? '#ff8f5c' : '#ffd36a';
+    const pulse = 0.62 + Math.sin(state.now * 3.4 + tile * 0.31) * 0.2;
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.07);
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE_SIZE * (0.42 + pulse * 0.1), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    // Clear the bodies standing in the throat: the count is the whole point of
+    // the marker, and a queue is exactly what covers the tile it sits on.
+    const badgeRadius = Math.max(5, TILE_SIZE * 0.2);
+    const badgeY = cy - TILE_SIZE * 0.92;
+    ctx.fillStyle = 'rgba(5, 10, 16, 0.9)';
+    ctx.beginPath();
+    ctx.arc(cx, badgeY, badgeRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, TILE_SIZE * 0.045);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(7, Math.round(TILE_SIZE * 0.3))}px Consolas, Menlo, monospace`;
+    ctx.fillText(String(Math.min(99, count)), cx, badgeY + 0.5);
+  }
+  ctx.restore();
+}
+
+/**
+ * The authored `blocked`/`late` Gangway frames say something is wrong at the
+ * collar; these lines say what, in the same short world-label form the fuel
+ * and maintenance indicators already use.
+ */
+function drawGangwayStatusLabels(
+  ctx: CanvasRenderingContext2D,
+  state: StationState,
+  visibleTiles: { minX: number; maxX: number; minY: number; maxY: number }
+): void {
+  ctx.save();
+  for (const ship of state.arrivingShips) {
+    if (ship.stage !== 'docked') continue;
+    const anchor = ship.assignedBerthAnchor;
+    if (anchor === null || anchor === undefined) continue;
+    const facility = getBerthFacilityAt(state, anchor);
+    if (!facility) continue;
+    const gangwayIds = new Set(facility.serviceModuleIds[ModuleType.Gangway] ?? []);
+    if (gangwayIds.size === 0) continue;
+    for (const module of state.moduleInstances) {
+      if (module.type !== ModuleType.Gangway || !gangwayIds.has(module.id)) continue;
+      if (!module.tiles.some((tile) => tileInRange(tile, state, visibleTiles))) continue;
+      const visualState = gangwayVisualState(state, module, ship);
+      if (visualState !== 'blocked' && visualState !== 'late') continue;
+      const origin = fromIndex(module.originTile, state.width);
+      const text = visualState === 'late'
+        ? `LATE BOARDING | ${shipUnboardedPassengers(ship)} PAX`
+        : `GANGWAY BLOCKED | ${gangwayTransferLoad(state, module, anchor).transferring} PAX`;
+      drawModuleStatusLabel(
+        ctx,
+        text,
+        (origin.x + module.width * 0.5) * TILE_SIZE,
+        origin.y * TILE_SIZE - Math.max(18, TILE_SIZE * 0.62),
+        visualState === 'late' ? '#ff7a76' : '#ffd36a'
+      );
+    }
+  }
+  ctx.restore();
+}
+
 function drawAgentStatusPip(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -7625,7 +7937,13 @@ export function renderWorld(
       drawAgentStatusPip(ctx, cx, cy, 'O2', '#72dff2', pipOffset);
       pipOffset++;
     }
-    if (failureStage === 'balking') {
+    if (failureStage === 'unmet') {
+      // Quietest rung of the ladder. Colour is already the escalation axis
+      // (gold -> orange -> red), so the first rung keeps the same query glyph
+      // in a cool hue: visible in world, but never mistaken for a warning.
+      drawAgentStatusPip(ctx, cx, cy, '?', '#8fb2c9', pipOffset);
+      pipOffset++;
+    } else if (failureStage === 'balking') {
       drawAgentStatusPip(ctx, cx, cy, '?', '#f3bd62', pipOffset);
       pipOffset++;
     } else if (failureStage === 'distressed') {
@@ -7863,6 +8181,8 @@ export function renderWorld(
     }
   }
 
+  drawDoorContentionIndicators(ctx, state, visibleTiles);
+  drawGangwayStatusLabels(ctx, state, visibleTiles);
   const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);
   drawApproachWaitingChips(ctx, state, occupiedInfrastructureChips);
   // Pod demand and transaction summaries are drawn by the opening-economy
