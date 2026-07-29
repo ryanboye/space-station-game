@@ -342,6 +342,30 @@ export function createInitialState(options?: {
   addStarterModule(ModuleType.PodDock, coreX + 3, starterWallMinY, 0);
   addStarterModule(ModuleType.FreightLocker, coreX + 5, starterWallMinY, 0);
 
+  // The grid defaults to Public, and before this only the crew mess was ever
+  // zoned. That shipped a station whose dorm, washroom, stockroom, plant deck
+  // and reactor were all walk-in public: crew sleep capacity read 8/6 at t=0 and
+  // collapsed to 0/6 the moment visitors arrived, while the station reported
+  // "No crew quarters on the station" with four bunks sitting in the dorm. The
+  // remedy is zoning, not furniture, so the crew spaces are zoned here rather
+  // than left for the player to discover through an alert that names the wrong
+  // fix. The public deck, the apron and the dock frontage stay Public: those are
+  // where travellers are supposed to be.
+  // Scoped to the three rooms that are genuinely private or hazardous. Zoning
+  // LogisticsStock and Maintenance as well was tried and reverted: the authored
+  // public deck routes through the stock room, so restricting it cut ordinary
+  // shoppers off from the market shelves and broke a real opening-business
+  // behaviour. Back-of-house traversal is a layout question for a later pass,
+  // not something to force here.
+  const crewOnlyRooms = new Set<RoomType>([
+    RoomType.Dorm,
+    RoomType.Hygiene,
+    RoomType.Reactor
+  ]);
+  for (let index = 0; index < rooms.length; index++) {
+    if (crewOnlyRooms.has(rooms[index])) zones[index] = ZoneType.Restricted;
+  }
+
   // Construction stock begins as physical inventory in the authored intake
   // and store rooms. The old invisible global pool remains only as a save
   // migration fallback; a fresh game must preserve and route actual stock.

@@ -2291,3 +2291,29 @@ open honestly rather than being checked on the strength of their runners.
   accrue a debt carrying its module id. That also explains why "charge larger
   fixtures through ... maintenance" is only partly true. Requested as a small
   addition from the agent holding `src/sim/sim.ts`.
+
+2026-07-28 · Starter zoning defect fixed, and the overreach that fixing it exposed
+
+- Commit or files: crew-space zoning pass in `src/sim/initial-state.ts`.
+- Fixes the headline finding from the playtest record above: the grid defaults to
+  `Public` and only the crew mess was ever zoned, so a fresh charter shipped its
+  dorm, washroom and reactor as walk-in public. Crew sleep read `8/6` at t=0 and
+  collapsed to `0/6` once visitors arrived, with the station reporting `No crew
+  quarters on the station` while four bunks sat in a 19-tile dorm.
+- **First attempt was too broad and a test caught it.** Zoning
+  `LogisticsStock` and `Maintenance` crew-only as well broke
+  `test:opening-businesses` at `a completed supplies choice sells physical shelf
+  stock to ordinary pod traffic`. Confirmed it was mine by running the same check
+  against committed code, where it passes. The cause is a real layout fact worth
+  recording: **the authored public deck routes through the stock room**, so
+  restricting it cuts ordinary shoppers off from the market shelves.
+- The fix is therefore scoped to the three rooms that are genuinely private or
+  hazardous — Dorm, Hygiene, Reactor. Back-of-house traversal is a layout
+  question for a later pass, not something to force through zoning. The public
+  deck, apron and dock frontage stay Public, which is where travellers belong.
+- Focused evidence: `test:opening-businesses`, `test:opening-procurement`,
+  `test:gate-e-save-resume` (6/6), `test:gate-f-facility` (13/13) and
+  `test:sanitation` all pass with the change; the app typecheck is clean.
+- Still open, and deliberately not fixed here: the alert text. `Crew quarters
+  short ... add bunks or beds` names the wrong remedy when the cause is zoning.
+  That lives in the alert copy, and it should say so.
