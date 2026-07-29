@@ -331,6 +331,9 @@ sprites:
   module.checkout_bank.dirty:
     prompt: "Top-down low-resolution pixel art station module: long market checkout bank, DIRTY state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY TWO registers WEST, staff lane EAST, overlaid with large olive-green spill blobs, scattered litter and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.checkout_bank.damaged:
+    prompt: "Top-down low-resolution pixel art station module: long market checkout bank, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY TWO registers WEST and staff lane EAST, crossed by a bold red-orange fracture with two dark failure patches, cracked register screens, broken belt detail and restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.shelf_aisle:
     prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle. 1x4 footprint, three distinct stocked browsing bays, transparent background, readable at 18x72."
     rotation: 0
@@ -343,6 +346,9 @@ sprites:
   module.shelf_aisle.dirty:
     prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, DIRTY state. 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE stocked browsing bays overlaid with large olive-green spill blobs, dropped packaging and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.shelf_aisle.damaged:
+    prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, DAMAGED state. 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE browsing bays remain legible, crossed by a bold red-orange fracture with two dark failure patches, a bent shelf and fallen goods, plus restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.bunk_bank:
     prompt: "Top-down low-resolution pixel art station module: temporary bunk bank. 2x4 footprint, four unmistakable separate sleeping positions, transparent background, readable at 36x72."
     rotation: 0
@@ -351,6 +357,9 @@ sprites:
     rotation: 0
   module.bunk_bank.dirty:
     prompt: "Top-down low-resolution pixel art station module: temporary bunk bank, DIRTY state. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY FOUR separate sleeping positions with soiled bedding, overlaid with large olive-green stain blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bunk_bank.damaged:
+    prompt: "Top-down low-resolution pixel art station module: temporary bunk bank, DAMAGED state. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY FOUR separate sleeping positions arranged two plus two, crossed by a bold red-orange fracture with two dark failure patches, one buckled frame and torn bedding, plus restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
   module.intake_pallet:
     prompt: "Top-down pixel art station module sprite: intake pallet. 2x2 footprint,
@@ -1311,6 +1320,9 @@ sprites:
   module.standing_rail.dirty:
     prompt: "Top-down low-resolution pixel art station module: narrow standing rail, DIRTY state. 1x4 footprint (64x256 authored, readable at 32x128). Continuous rail plus EXACTLY FOUR standing pads, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.standing_rail.damaged:
+    prompt: "Top-down low-resolution pixel art station module: narrow standing rail, DAMAGED state. 1x4 footprint (64x256 authored, readable at 32x128). Continuous EAST rail and EXACTLY FOUR WEST standing pads remain legible, crossed by a bold red-orange fracture with two dark failure patches, a broken rail section and restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.serving_line:
     prompt: "Top-down low-resolution pixel art station module: cafeteria serving line. 2x5 footprint (128x320 authored, readable at 64x160). WEST column shows EXACTLY THREE meal pickup positions - three separated tray bays with a plated meal on the counter beside each. A brushed steel counter runs down the middle. EAST column is the staff hot line and must look obviously different from the guest side: dark deck lane with warming wells, no tray bays. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
@@ -1350,6 +1362,9 @@ sprites:
   module.guest_cabin.dirty:
     prompt: "Top-down low-resolution pixel art station module: small private guest cabin, DIRTY state. 3x4 footprint (192x256 authored, readable at 96x128). Enclosed cabin with EXACTLY TWO beds, locker, desk and hatch, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  module.guest_cabin.damaged:
+    prompt: "Top-down low-resolution pixel art station module: small private guest cabin, DAMAGED state. 3x4 footprint (192x256 authored, readable at 96x128). Enclosed cabin with EXACTLY TWO beds, locker, desk and south hatch, crossed by a bold red-orange fracture with two dark failure patches, a broken panel and restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.arrival_desk:
     prompt: "Top-down low-resolution pixel art station module: arrivals reception desk. 2x4 footprint (128x256 authored, readable at 64x128). A steel desk slab runs down the middle. The WEST column holds EXACTLY TWO customer positions - two separated queue bays with floor chevrons. The EAST column holds EXACTLY TWO staff processor stations, each an obviously different shape: a lit console screen plus a crew chair. Two customers, two processors, clearly distinguishable from one another. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
@@ -1361,6 +1376,9 @@ sprites:
     rotation: 0
   module.arrival_desk.dirty:
     prompt: "Top-down low-resolution pixel art station module: arrivals reception desk, DIRTY state. 2x4 footprint (128x256 authored, readable at 64x128). TWO customer positions WEST and TWO staffed processor stations EAST, overlaid with large olive-green grime blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.arrival_desk.damaged:
+    prompt: "Top-down low-resolution pixel art station module: arrivals reception desk, DAMAGED state. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY TWO customer positions WEST and TWO processor stations EAST remain distinct, crossed by a bold red-orange fracture with two dark failure patches, cracked screens and restrained red warning corners. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
   module.wash_bank:
     prompt: "Top-down low-resolution pixel art station module: communal wash bank. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR wash positions run down the WEST column - four separated basins, each with its own faucet and water pool, evenly spaced with clear gaps. A vertical plumbing spine runs down the EAST column with one branch pipe and shutoff valve per basin. Four basins, four branches, no more. Transparent background, no text, at least 3px clear margin on every edge."

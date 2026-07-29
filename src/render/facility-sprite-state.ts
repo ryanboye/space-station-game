@@ -31,33 +31,25 @@ export const FACILITY_SPRITE_VARIANTS: Readonly<Partial<Record<ModuleType, reado
   [ModuleType.BarCorner]: ['damaged', 'dirty', 'active'],
   [ModuleType.BarEnd]: ['damaged', 'dirty', 'active'],
   [ModuleType.BoothBank]: ['damaged', 'dirty', 'active'],
-  [ModuleType.StandingRail]: ['dirty', 'active'],
+  [ModuleType.StandingRail]: ['damaged', 'dirty', 'active'],
   [ModuleType.ServingLine]: ['damaged', 'dirty', 'empty', 'unstaffed', 'active'],
   [ModuleType.CommunityTable]: ['damaged', 'dirty', 'active'],
-  [ModuleType.GuestCabin]: ['dirty', 'active'],
-  [ModuleType.ArrivalDesk]: ['dirty', 'unstaffed', 'active'],
-  [ModuleType.WashBank]: ['damaged', 'dirty', 'active']
+  [ModuleType.GuestCabin]: ['damaged', 'dirty', 'active'],
+  [ModuleType.ArrivalDesk]: ['damaged', 'dirty', 'unstaffed', 'active'],
+  [ModuleType.WashBank]: ['damaged', 'dirty', 'active'],
+  [ModuleType.CheckoutBank]: ['damaged', 'dirty', 'unstaffed', 'active'],
+  [ModuleType.ShelfAisle]: ['damaged', 'dirty', 'empty', 'active'],
+  [ModuleType.BunkBank]: ['damaged', 'dirty', 'active']
 };
 
 /**
- * States whose truth the simulation derives today but whose art has never been
- * drawn. Each entry is a real, reachable condition on a fixture with real
- * public positions, so the fixture currently renders idle while occupied,
- * unstaffed, out of stock, or dirty.
- *
- * Closing one means: author `tools/sprites/curated/<key with dots as
- * underscores>.png` at the fixture's native footprint, add the key to
- * `tools/sprites/required-keys-v1.json`, add the variant to
- * `FACILITY_SPRITE_VARIANTS` above, and repack the atlas. Prompts and pipeline
- * frame sizes for every key below are already declared in `tools/sprites`.
+ * Evidence ledger for reachable conditions that still lack authored art.
+ * Gate F is currently complete, so this stays empty until a new fixture state
+ * is deliberately deferred.
  */
 export const PENDING_FACILITY_SPRITE_FRAMES: Readonly<
   Partial<Record<ModuleType, readonly FacilitySpriteVariant[]>>
-> = {
-  [ModuleType.CheckoutBank]: ['dirty', 'unstaffed', 'active'],
-  [ModuleType.ShelfAisle]: ['dirty', 'empty', 'active'],
-  [ModuleType.BunkBank]: ['dirty', 'active']
-};
+> = {};
 
 const FACILITY_VARIANT_PRIORITY: readonly FacilitySpriteVariant[] = [
   'damaged',

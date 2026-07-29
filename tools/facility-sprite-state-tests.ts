@@ -44,7 +44,7 @@ function registeredKeys(): Set<string> {
 
 function testCuratedMatrix(): string {
   const registered = registeredKeys();
-  assert(registered.size === 46, `Expected all 46 Gate F base/state frames, got ${registered.size}.`);
+  assert(registered.size === 63, `Expected all 63 Gate F base/state frames, got ${registered.size}.`);
   const has = (key: string): boolean => registered.has(key);
   let checked = 0;
   for (const [rawType, supported] of Object.entries(FACILITY_SPRITE_VARIANTS)) {
@@ -58,8 +58,8 @@ function testCuratedMatrix(): string {
       checked += 1;
     }
   }
-  assert(checked === 46, `Expected to exercise 46 curated frames, exercised ${checked}.`);
-  return `PASS curated fixture matrix (${checked}/46 frames)`;
+  assert(checked === 63, `Expected to exercise 63 curated frames, exercised ${checked}.`);
+  return `PASS curated fixture matrix (${checked}/63 frames)`;
 }
 
 function testPriorityAndFallback(): string {
@@ -71,8 +71,8 @@ function testPriorityAndFallback(): string {
     'Service Bar priority must be damaged > dirty > empty > unstaffed > active.'
   );
   assert(
-    selectFacilitySpriteKey(ModuleType.StandingRail, all, has).endsWith('.dirty'),
-    'Unsupported damaged state must advance to the highest authored Standing Rail state.'
+    selectFacilitySpriteKey(ModuleType.StandingRail, all, has).endsWith('.damaged'),
+    'Standing Rail damage must use the authored damaged state.'
   );
   const missingActive = new Set(registered);
   missingActive.delete('module.booth_bank.active');
@@ -97,11 +97,7 @@ function testPriorityAndFallback(): string {
   return 'PASS deterministic priority and missing-frame fallback';
 }
 
-/**
- * The art gap is an explicit, checked manifest rather than a comment: every
- * entry must be a real Gate F fixture with a real public face whose art has not
- * been drawn, and no entry may overlap the authored set.
- */
+/** Pending art remains an explicit checked manifest even when the ledger is closed. */
 function testPendingArtManifest(): string {
   let pending = 0;
   for (const [rawType, variants] of Object.entries(PENDING_FACILITY_SPRITE_FRAMES)) {
@@ -119,8 +115,8 @@ function testPendingArtManifest(): string {
     assert((variants ?? []).includes('active'), `${moduleType} owns public positions, so it must want occupied art.`);
     pending += (variants ?? []).length;
   }
-  assert(pending === 8, `Expected 8 outstanding Gate F frames, manifest lists ${pending}.`);
-  return `PASS pending art manifest (${pending} frames outstanding, 46 authored)`;
+  assert(pending === 0, `Expected the Gate F art manifest to be closed, but it lists ${pending} frames.`);
+  return `PASS pending art manifest (${pending} frames outstanding, 63 authored)`;
 }
 
 function cantinaState(): StationState {
@@ -144,12 +140,11 @@ function moduleOfType(state: StationState, type: ModuleType): ModuleInstance {
 }
 
 /**
- * The three frontage fixtures that own real public positions but have no state
- * art yet. Their condition must still be derived correctly from production
- * truth, and selection must still resolve to the idle frame — an unpainted
- * state may never be claimed as depicted.
+ * The three frontage fixtures that own real public positions now also own
+ * authored state art. Their condition must derive from production truth and
+ * select the corresponding curated frame without changing slot geometry.
  */
-function testUnpaintedFrontageTruth(): string {
+function testFrontageStateTruth(): string {
   const keys = registeredKeys();
   const has = (key: string): boolean => keys.has(key);
   const market = scenarioState('market-improved-flow');
@@ -172,8 +167,20 @@ function testUnpaintedFrontageTruth(): string {
   claim(market, slotsOnModule(market, checkout, 'checkout')[0], 'visitor', 76001);
   assert(deriveFacilitySpriteTruth(market, checkout).active, 'A shopper at the counter must derive in-service truth.');
   assert(
-    facilitySpriteKeyForModule(market, checkout, has) === 'module.checkout_bank',
-    'Checkout Bank has no state art, so every condition must still resolve to the idle frame.'
+    facilitySpriteKeyForModule(market, checkout, has) === 'module.checkout_bank.active',
+    'An occupied Checkout Bank must select its active frame.'
+  );
+  market.maintenanceDebts.push({
+    key: `module:${checkout.id}`,
+    domain: 'module',
+    anchorTile: checkout.originTile,
+    moduleId: checkout.id,
+    debt: 60,
+    lastServicedAt: market.now
+  });
+  assert(
+    facilitySpriteKeyForModule(market, checkout, has) === 'module.checkout_bank.damaged',
+    'Severe Checkout Bank debt must override occupancy with the damaged frame.'
   );
 
   const shelfNode = market.itemNodes.find((candidate) => candidate.tileIndex === shelf.originTile);
@@ -188,8 +195,20 @@ function testUnpaintedFrontageTruth(): string {
   market.dirtByTile[shelf.tiles[0]] = 40;
   assert(deriveFacilitySpriteTruth(market, shelf).dirty, 'Sanitation dirt on the aisle must derive dirty truth.');
   assert(
-    facilitySpriteKeyForModule(market, shelf, has) === 'module.shelf_aisle',
-    'Shelf Aisle has no state art, so every condition must still resolve to the idle frame.'
+    facilitySpriteKeyForModule(market, shelf, has) === 'module.shelf_aisle.dirty',
+    'A dirty Shelf Aisle must select its dirty frame.'
+  );
+  market.maintenanceDebts.push({
+    key: `module:${shelf.id}`,
+    domain: 'module',
+    anchorTile: shelf.originTile,
+    moduleId: shelf.id,
+    debt: 60,
+    lastServicedAt: market.now
+  });
+  assert(
+    facilitySpriteKeyForModule(market, shelf, has) === 'module.shelf_aisle.damaged',
+    'Severe Shelf Aisle debt must override dirt and occupancy with the damaged frame.'
   );
 
   const wing = scenarioState('long-stay-guest-wing');
@@ -201,10 +220,22 @@ function testUnpaintedFrontageTruth(): string {
   claim(wing, beds[0], 'visitor', 77001);
   assert(deriveFacilitySpriteTruth(wing, bunks).active, 'A claimed bunk must derive occupied truth.');
   assert(
-    facilitySpriteKeyForModule(wing, bunks, has) === 'module.bunk_bank',
-    'Bunk Bank has no state art, so occupancy must still resolve to the idle frame.'
+    facilitySpriteKeyForModule(wing, bunks, has) === 'module.bunk_bank.active',
+    'An occupied Bunk Bank must select its active frame.'
   );
-  return 'PASS unpainted frontage derives occupied, unstaffed, empty, and dirty truth';
+  wing.maintenanceDebts.push({
+    key: `module:${bunks.id}`,
+    domain: 'module',
+    anchorTile: bunks.originTile,
+    moduleId: bunks.id,
+    debt: 60,
+    lastServicedAt: wing.now
+  });
+  assert(
+    facilitySpriteKeyForModule(wing, bunks, has) === 'module.bunk_bank.damaged',
+    'Severe Bunk Bank debt must override occupancy with the damaged frame.'
+  );
+  return 'PASS frontage art derives and selects occupied, unstaffed, empty, and dirty truth';
 }
 
 function clearClaims(state: StationState): void {
@@ -305,7 +336,7 @@ const results = [
   testPendingArtManifest(),
   testPriorityAndFallback(),
   testProductionTruthClears(),
-  testUnpaintedFrontageTruth()
+  testFrontageStateTruth()
 ];
 for (const result of results) console.log(result);
 console.log(`PASS facility sprite state (${results.length}/${results.length})`);
