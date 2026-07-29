@@ -5,13 +5,14 @@
 //
 // Run with `npm run test:gate-f-facility`. Filter with GATE_F_TEST_FILTER=<substring>.
 
-import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
+import { applyColdStartScenario, stageFacilityVisitors } from '../src/sim/cold-start-scenarios';
 import {
   createInitialState,
   getCrewSustainabilitySummary,
   hireCrew,
   moduleCreditBuildCost,
   quoteMaterialImportCost,
+  runJobAssignmentTestTick,
   setRoom,
   setShelfMix,
   setTile,
@@ -183,7 +184,12 @@ function testMarketChainExactlyOnce(): string {
 
   const retailStock = (target: StationState): number =>
     target.moduleInstances
-      .filter((m) => m.type === ModuleType.ShelfAisle || m.type === ModuleType.BackroomStockBank)
+      .filter(
+        (m) =>
+          m.type === ModuleType.ShelfAisle ||
+          m.type === ModuleType.BackroomStockBank ||
+          m.type === ModuleType.IntakePallet
+      )
       .reduce((sum, m) => sum + stockOf(target, m.originTile, 'tradeGood'), 0);
   const totalBefore = retailStock(state);
   const soldBefore = state.usageTotals.tradeGoodsSold;
@@ -213,7 +219,119 @@ function testMarketChainExactlyOnce(): string {
     assert(event.costBasis >= 0, 'A retail sale must carry a non-negative cost basis.');
   }
 
-  return `stock conserved (${totalBefore.toFixed(1)} in, ${totalAfter.toFixed(1)} stored + ${carried.toFixed(1)} carried + ${sold.toFixed(1)} sold), ${retailEvents.length} retail events`;
+  return `stock conserved across receiving/backroom/shelf (${totalBefore.toFixed(1)} in, ${totalAfter.toFixed(1)} stored + ${carried.toFixed(1)} carried + ${sold.toFixed(1)} sold), ${retailEvents.length} retail events`;
+}
+
+// ---------------------------------------------------------------------------
+// 2b. One unreachable worker/source pair cannot starve the logistics lane
+// ---------------------------------------------------------------------------
+
+function testCargoDispatchPairFairness(): string {
+  const prepare = (): {
+    state: StationState;
+    source: number;
+    destination: number;
+    cargo: StationState['crewMembers'];
+    assistant: StationState['crewMembers'][number];
+  } => {
+    const state = scenario('market-improved-flow', 8181);
+    state.jobs.length = 0;
+    const cargo = state.crewMembers
+      .filter((crew) => crew.staffRole === 'cargo-handler')
+      .sort((a, b) => a.id - b.id);
+    const assistant = state.crewMembers.find((crew) => crew.staffRole === 'assistant');
+    assert(cargo.length >= 2 && assistant, 'Dispatcher fixture needs two cargo handlers and one assistant.');
+    const source = state.moduleInstances.find((module) => module.type === ModuleType.IntakePallet)!.originTile;
+    const destination = state.moduleInstances.find((module) => module.type === ModuleType.ShelfAisle)!.originTile;
+    for (const crew of state.crewMembers) {
+      crew.activeJobId = null;
+      crew.path = [];
+      crew.targetTile = null;
+      crew.resting = crew !== cargo[0] && crew !== cargo[1] && crew !== assistant;
+    }
+    for (const crew of [...cargo, assistant]) {
+      crew.role = 'idle';
+      crew.workLane = 'logistics';
+      crew.lastWorkLane = 'logistics';
+      crew.shiftBucket = 0;
+      crew.energy = 100;
+      crew.hunger = 100;
+      crew.hygiene = 100;
+      crew.bladder = 100;
+      crew.thirst = 100;
+      crew.carryingMeal = false;
+      crew.carryingItemType = null;
+      crew.carryingAmount = 0;
+    }
+    for (let index = 0; index < 6; index += 1) {
+      state.jobs.push({
+        id: state.jobSpawnCounter++,
+        type: 'deliver',
+        itemType: 'tradeGood',
+        amount: 1,
+        fromTile: source,
+        toTile: destination,
+        assignedCrewId: null,
+        createdAt: state.now,
+        expiresAt: state.now + 90,
+        state: 'pending',
+        pickedUpAmount: 0,
+        completedAt: null,
+        lastProgressAt: state.now,
+        stallReason: 'none'
+      });
+    }
+    state.metrics.pathCallsPerTick = 0;
+    return { state, source, destination, cargo, assistant };
+  };
+
+  const roleOrdered = prepare();
+  // The assistant has a lower id and is made unreachable. Dedicated cargo
+  // labor must be considered first, not lose the whole lane to generic
+  // fallback's duplicate source probes.
+  const sealedTile = 75 * roleOrdered.state.width + 95;
+  roleOrdered.state.tiles[sealedTile] = TileType.Floor;
+  roleOrdered.state.pressurized[sealedTile] = true;
+  roleOrdered.assistant.tileIndex = sealedTile;
+  roleOrdered.assistant.x = 95.5;
+  roleOrdered.assistant.y = 75.5;
+  roleOrdered.cargo[0].tileIndex = roleOrdered.source + roleOrdered.state.width;
+  roleOrdered.cargo[0].x = (roleOrdered.cargo[0].tileIndex % roleOrdered.state.width) + 0.5;
+  roleOrdered.cargo[0].y = Math.floor(roleOrdered.cargo[0].tileIndex / roleOrdered.state.width) + 0.5;
+  runJobAssignmentTestTick(roleOrdered.state);
+  assert(
+    roleOrdered.cargo.some((crew) => crew.activeJobId !== null) && roleOrdered.assistant.activeJobId === null,
+    'A reachable cargo specialist must outrank an unreachable generic assistant for delivery work.'
+  );
+
+  const pairFair = prepare();
+  pairFair.cargo[0].tileIndex = sealedTile;
+  pairFair.cargo[0].x = 95.5;
+  pairFair.cargo[0].y = 75.5;
+  pairFair.cargo[1].tileIndex = pairFair.source + pairFair.state.width;
+  pairFair.cargo[1].x = (pairFair.cargo[1].tileIndex % pairFair.state.width) + 0.5;
+  pairFair.cargo[1].y = Math.floor(pairFair.cargo[1].tileIndex / pairFair.state.width) + 0.5;
+  pairFair.assistant.resting = true;
+  runJobAssignmentTestTick(pairFair.state);
+  const pathCalls = pairFair.state.metrics.pathCallsPerTick;
+  assert(
+    pairFair.cargo[0].activeJobId === null && pairFair.cargo[1].activeJobId !== null,
+    'One unreachable cargo/source pair must leave enough bounded lane budget for the next handler.'
+  );
+  assert(pathCalls <= 6, `Logistics lane exceeded its six-call path budget (${pathCalls}).`);
+
+  const carrying = prepare();
+  carrying.cargo[0].carryingItemType = 'tradeGood';
+  carrying.cargo[0].carryingAmount = 2;
+  carrying.cargo[1].resting = true;
+  carrying.assistant.resting = true;
+  runJobAssignmentTestTick(carrying.state);
+  assert(
+    carrying.cargo[0].activeJobId === null && carrying.cargo[0].carryingAmount === 2,
+    'An unowned carried stack must not be overwritten by a fresh assignment.'
+  );
+
+  return `cargo role won generic fallback; duplicate source probing stayed bounded and the second handler dispatched in ${pathCalls} path calls; unowned carried stock was not overwritten`;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,15 +393,139 @@ function testMarketLayoutComparison(): string {
     improvedStaffed > compactStaffed,
     `Two Checkout Banks must let more stewards open a register at once (${compactStaffed} vs ${improvedStaffed}).`
   );
-  advance(compact, 40);
-  advance(improved, 40);
   assert(
     improvedChain.registers >= compactChain.registers * 2,
     'Two Checkout Banks must expose twice the register positions of one.'
   );
 
+  type MarketRun = {
+    sold: number;
+    soldAfterSecondWave: number;
+    shelfLow: number;
+    shelfRefill: number;
+    backroomPeak: number;
+    backroomDrawdown: number;
+    receivingDrawdown: number;
+    queuePeak: number;
+    stockouts: number;
+    served: number;
+    unserved: number;
+    accountingDelta: number;
+    carried: number;
+    pickedUp: number;
+  };
+  const runMarket = (state: StationState): MarketRun => {
+    const physicalStock = (): number =>
+      state.itemNodes.reduce((total, node) => total + Math.max(0, node.items.tradeGood ?? 0), 0);
+    const startingPhysicalStock = physicalStock();
+    const startingReceiving = marketChainStatus(state).receiving;
+    let shelfLow = marketChainStatus(state).shelves;
+    let shelfHighAfterLow = shelfLow;
+    let backroomPeak = marketChainStatus(state).backroom;
+    let queuePeak = 0;
+    let salesAtSecondWave = 0;
+    const checkoutTiles = new Set(
+      slotsOfRole(state, [ModuleType.CheckoutBank], 'checkout').map((slot) => slot.tileIndex)
+    );
+    state.controls.paused = false;
+    for (let step = 0; step < 500; step += 1) {
+      if (step === 175) {
+        salesAtSecondWave = state.usageTotals.tradeGoodsSold;
+        stageFacilityVisitors(state, 6, 51, 55, 'market', [], 99700);
+      }
+      tick(state, 0.2);
+      const chain = marketChainStatus(state);
+      if (chain.shelves < shelfLow - 0.01) {
+        shelfLow = chain.shelves;
+        shelfHighAfterLow = chain.shelves;
+      } else {
+        shelfHighAfterLow = Math.max(shelfHighAfterLow, chain.shelves);
+      }
+      backroomPeak = Math.max(backroomPeak, chain.backroom);
+      queuePeak = Math.max(
+        queuePeak,
+        state.visitors.filter(
+          (visitor) =>
+            visitor.state === VisitorState.Queueing &&
+            visitor.queueProviderTile !== null &&
+            visitor.queueProviderTile !== undefined &&
+            checkoutTiles.has(visitor.queueProviderTile)
+        ).length
+      );
+    }
+    const final = marketChainStatus(state);
+    const carried = state.crewMembers.reduce(
+      (total, crew) => total + (crew.carryingItemType === 'tradeGood' ? crew.carryingAmount : 0),
+      0
+    );
+    const served = state.serviceLog.visitorLifetimeByService.retail;
+    return {
+      sold: state.usageTotals.tradeGoodsSold,
+      soldAfterSecondWave: state.usageTotals.tradeGoodsSold - salesAtSecondWave,
+      shelfLow,
+      shelfRefill: shelfHighAfterLow - shelfLow,
+      backroomPeak,
+      backroomDrawdown: backroomPeak - final.backroom,
+      receivingDrawdown: startingReceiving - final.receiving,
+      queuePeak,
+      stockouts: state.usageTotals.marketStockouts,
+      served,
+      unserved: 12 - served,
+      accountingDelta: physicalStock() + carried + state.usageTotals.tradeGoodsSold - startingPhysicalStock,
+      carried,
+      pickedUp: state.jobs
+        .filter((job) => job.itemType === 'tradeGood' && job.state === 'in_progress')
+        .reduce((total, job) => total + job.pickedUpAmount, 0)
+    };
+  };
+  const compactRun = runMarket(compact);
+  const improvedRun = runMarket(improved);
+  const compactRepeat = runMarket(scenario('market-compact-conflict'));
+  const improvedRepeat = runMarket(scenario('market-improved-flow'));
+
+  const deterministicSignature = (run: MarketRun): string =>
+    [
+      run.sold,
+      run.soldAfterSecondWave,
+      run.shelfLow.toFixed(3),
+      run.shelfRefill.toFixed(3),
+      run.backroomPeak.toFixed(3),
+      run.backroomDrawdown.toFixed(3),
+      run.receivingDrawdown.toFixed(3),
+      run.queuePeak,
+      run.stockouts,
+      run.served,
+      run.unserved,
+      run.accountingDelta.toFixed(3)
+    ].join('|');
+  assert(
+    deterministicSignature(compactRun) === deterministicSignature(compactRepeat) &&
+      deterministicSignature(improvedRun) === deterministicSignature(improvedRepeat),
+    'Same-seed market throughput must be deterministic across repeated runs.'
+  );
+
+  assert(improvedRun.receivingDrawdown > 0, 'The improved market must move goods out of physical receiving.');
+  assert(improvedRun.backroomPeak > 0, 'The receiving leg must visibly put stock in the backroom.');
+  assert(improvedRun.backroomDrawdown > 0, 'The shelf leg must visibly draw stock back out of the backroom.');
+  assert(improvedRun.shelfRefill >= 1, `Shelves must refill after depletion (refill ${improvedRun.shelfRefill.toFixed(1)}).`);
+  assert(improvedRun.soldAfterSecondWave > 0, 'A second shopper wave must make additional sales after restocking.');
+  assert(
+    improvedRun.sold >= compactRun.sold + 4,
+    `The separated layout must decisively outperform the compact conflict (${compactRun.sold} vs ${improvedRun.sold} sales).`
+  );
+  assert(
+    compactRun.accountingDelta < 1.5 && improvedRun.accountingDelta < 1.5,
+    `Neither market may create stock (net delta ${compactRun.accountingDelta.toFixed(2)}/${improvedRun.accountingDelta.toFixed(2)}; carried ${compactRun.carried}/${improvedRun.carried}; picked up ${compactRun.pickedUp}/${improvedRun.pickedUp}).`
+  );
+
   return `registers ${compactChain.registers} -> ${improvedChain.registers}; restock crosses the checkout frontage in the compact layout and not in the improved one `
-    + `(span ${routeLength(compact)} -> ${routeLength(improved)} tiles: the improvement is separation, not distance); staffed ${compactStaffed} -> ${improvedStaffed}`;
+    + `(span ${routeLength(compact)} -> ${routeLength(improved)} tiles); staffed ${compactStaffed} -> ${improvedStaffed}; `
+    + `two 6-shopper waves over 100s: sold ${compactRun.sold}/${improvedRun.sold}, served ${compactRun.served}/${improvedRun.served}, `
+    + `peak checkout queue ${compactRun.queuePeak}/${improvedRun.queuePeak}, unserved by deadline ${compactRun.unserved}/${improvedRun.unserved}, stockouts ${compactRun.stockouts}/${improvedRun.stockouts}; `
+    + `receiving drawdown ${compactRun.receivingDrawdown.toFixed(1)}/${improvedRun.receivingDrawdown.toFixed(1)}, backroom peak/drawdown `
+    + `${compactRun.backroomPeak.toFixed(1)}/${compactRun.backroomDrawdown.toFixed(1)} vs ${improvedRun.backroomPeak.toFixed(1)}/${improvedRun.backroomDrawdown.toFixed(1)}, `
+    + `shelf low/refill ${improvedRun.shelfLow.toFixed(1)}/+${improvedRun.shelfRefill.toFixed(1)}, second-wave sales ${improvedRun.soldAfterSecondWave}; `
+    + `net stock delta ${compactRun.accountingDelta.toFixed(1)}/${improvedRun.accountingDelta.toFixed(1)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1745,7 @@ function testPriceLadderIsCoherent(): string {
 const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '1 exclusive claims and cleanup', run: testExclusiveClaimsAndCleanup },
   { name: '2 market chain exactly once', run: testMarketChainExactlyOnce },
+  { name: '2b cargo dispatch pair fairness', run: testCargoDispatchPairFairness },
   { name: '3+4 market layout comparison', run: testMarketLayoutComparison },
   { name: '5 connected bar geometry', run: testConnectedBarGeometry },
   { name: '6+7 throughput vs dwell, dry vs staffed', run: testThroughputAndDwellAreIndependent },

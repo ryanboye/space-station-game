@@ -944,6 +944,7 @@ const PATH_TARGET_SHORTLIST_SIZE = 4;
 const JOB_ASSIGNMENT_SHORTLIST_SIZE = 6;
 const JOB_ASSIGNMENT_PATH_BUDGET = 30;
 const JOB_ASSIGNMENT_LANE_PATH_BUDGET = 6;
+const JOB_ASSIGNMENT_CREW_PATH_BUDGET = 3;
 export const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
 const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const JOB_BOARD_CADENCE_SEC = 0.35;
@@ -17552,6 +17553,19 @@ function crewSuitabilityForJob(crew: CrewMember, job: StationState['jobs'][numbe
   return 0;
 }
 
+/**
+ * Prefer the people hired to move cargo before generic assistants when the
+ * logistics lane has physical deliveries waiting. This ordering is separate
+ * from per-job suitability because candidate dispatch happens before a crew
+ * member's shortlist is built.
+ */
+function cargoDeliveryDispatchRank(role: StaffRole): number {
+  if (role === 'cargo-handler') return 90;
+  if (role === 'industrial-officer') return 60;
+  if (role === 'docking-officer') return 35;
+  return 0;
+}
+
 function itemNodeFreeCapacity(state: StationState, tileIndex: number): number {
   const node = itemNodeAt(state, tileIndex);
   if (!node) return 0;
@@ -20005,7 +20019,13 @@ function assignJobsToIdleCrew(state: StationState): void {
   const surgeOnly = new Set<number>();
 
   const candidates = state.crewMembers
-    .filter((crew) => !crew.resting && crew.activeJobId === null && !crew.carryingMeal)
+    .filter(
+      (crew) =>
+        !crew.resting &&
+        crew.activeJobId === null &&
+        !crew.carryingMeal &&
+        (crew.carryingItemType === null || crew.carryingAmount <= 0.001)
+    )
     .filter((crew) => {
       if (
         getCrewWatchStatus(state, crew) !== 'off-duty' ||
@@ -20055,6 +20075,14 @@ function assignJobsToIdleCrew(state: StationState): void {
     const lanePathCallsStarted = state.metrics.pathCallsPerTick;
     const hasLanePathBudget = (): boolean =>
       state.metrics.pathCallsPerTick - lanePathCallsStarted < JOB_ASSIGNMENT_LANE_PATH_BUDGET;
+    const hasPhysicalDeliveryWork =
+      lane === 'logistics' &&
+      pendingJobs.some(
+        (job) =>
+          job.state === 'pending' &&
+          jobWorkLane(state, job) === lane &&
+          (job.type === 'deliver' || job.type === 'pickup')
+      );
     const candidatesForLane = [...candidates].sort((a, b) => {
       const aHomeLane = staffRoleWorkLane(a.staffRole);
       const bHomeLane = staffRoleWorkLane(b.staffRole);
@@ -20062,11 +20090,13 @@ function assignJobsToIdleCrew(state: StationState): void {
         (aHomeLane === lane ? 1000 : 0) +
         (a.workLane === lane ? 300 : 0) +
         (a.workLane === 'flex' ? 120 : 0) +
+        (hasPhysicalDeliveryWork ? cargoDeliveryDispatchRank(a.staffRole) : 0) +
         (staffRoleAllowsFallback(a.staffRole) ? 20 : 0);
       const bRank =
         (bHomeLane === lane ? 1000 : 0) +
         (b.workLane === lane ? 300 : 0) +
         (b.workLane === 'flex' ? 120 : 0) +
+        (hasPhysicalDeliveryWork ? cargoDeliveryDispatchRank(b.staffRole) : 0) +
         (staffRoleAllowsFallback(b.staffRole) ? 20 : 0);
       if (aRank !== bRank) return bRank - aRank;
       return (candidateOrder.get(a.id) ?? 0) - (candidateOrder.get(b.id) ?? 0);
@@ -20126,8 +20156,23 @@ function assignJobsToIdleCrew(state: StationState): void {
       }
 
       rankedJobs.sort((a, b) => b.approximateScore - a.approximateScore || a.job.id - b.job.id);
-      for (const { job, site } of rankedJobs.slice(0, JOB_ASSIGNMENT_SHORTLIST_SIZE)) {
-        if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
+      // Several transport jobs may share one source. For path assignment they
+      // are the same crew/source question, so probing all of them lets a single
+      // unreachable actor exhaust the lane's entire A* budget before a nearby
+      // cargo handler is considered. Keep the best-ranked job for each source
+      // and cap each actor's contribution while preserving deterministic order.
+      const distinctSources = new Set<number>();
+      const distinctRankedJobs = rankedJobs.filter(({ job }) => {
+        const source = jobWorkTile(state, job);
+        if (distinctSources.has(source)) return false;
+        distinctSources.add(source);
+        return true;
+      });
+      const crewPathCallsStarted = state.metrics.pathCallsPerTick;
+      const hasCrewPathBudget = (): boolean =>
+        state.metrics.pathCallsPerTick - crewPathCallsStarted < JOB_ASSIGNMENT_CREW_PATH_BUDGET;
+      for (const { job, site } of distinctRankedJobs.slice(0, JOB_ASSIGNMENT_SHORTLIST_SIZE)) {
+        if (!hasAssignmentPathBudget() || !hasLanePathBudget() || !hasCrewPathBudget()) break;
         let path =
           job.type === 'construct' && site
             ? job.constructionMode === 'build'
@@ -20143,7 +20188,7 @@ function assignJobsToIdleCrew(state: StationState): void {
                   state.pathOccupancyByTile
                 );
         if (!path && (ownLane || staffRoleWorkLane(crew.staffRole) === lane)) {
-          if (!hasAssignmentPathBudget() || !hasLanePathBudget()) break;
+          if (!hasAssignmentPathBudget() || !hasLanePathBudget() || !hasCrewPathBudget()) break;
           path =
             job.type === 'construct' && site
               ? job.constructionMode === 'build'
@@ -20205,6 +20250,11 @@ function assignJobsToIdleCrew(state: StationState): void {
 
   state.metrics.logisticsDispatchSlots = assignedNow;
   state.metrics.workforceBorrowedCrew = borrowedNow;
+}
+
+/** Focused regression hook for deterministic job-board assignment checks. */
+export function runJobAssignmentTestTick(state: StationState): void {
+  assignJobsToIdleCrew(state);
 }
 
 function extendActiveReservationsForOwner(

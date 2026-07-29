@@ -1428,17 +1428,22 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   'market-compact-conflict': (s) => {
     readyFacilityScenario(s);
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Market);
+    paintFacilityBlock(s, 60, 49, 8, 8, RoomType.LogisticsStock, ZoneType.Restricted);
+    connectFacilityRooms(s, 58, 54, 59, 54);
     const checkout = placeFixture(s, ModuleType.CheckoutBank, 46, 50);
     const shelf = placeFixture(s, ModuleType.ShelfAisle, 43, 50);
     // Backroom sits BEHIND the customer frontage, so every restock bundle has
     // to cross the queue that forms west of the register.
     const backroom = placeFixture(s, ModuleType.BackroomStockBank, 43, 55);
+    const receiving = placeFixture(s, ModuleType.IntakePallet, 61, 51);
     tick(s, 0);
-    stockNode(s, shelf.originTile, 'tradeGood', 6);
-    stockNode(s, backroom.originTile, 'tradeGood', 90);
+    stockNode(s, shelf.originTile, 'tradeGood', 2);
+    stockNode(s, backroom.originTile, 'tradeGood', 8);
+    stockNode(s, receiving.originTile, 'tradeGood', 24);
     void checkout;
+    stageFacilityCargoHandlers(s, 2, 63, 55);
     stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
-    stageFacilityVisitors(s, 8, 51, 52, 'market');
+    stageFacilityVisitors(s, 6, 51, 52, 'market');
     s.controls.paused = true;
   },
 
@@ -1448,19 +1453,24 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
   'market-improved-flow': (s) => {
     readyFacilityScenario(s);
     paintFacilityBlock(s, 42, 49, 16, 9, RoomType.Market);
+    paintFacilityBlock(s, 60, 49, 8, 8, RoomType.LogisticsStock, ZoneType.Restricted);
+    connectFacilityRooms(s, 58, 54, 59, 54);
     placeFixture(s, ModuleType.CheckoutBank, 46, 50);
     placeFixture(s, ModuleType.CheckoutBank, 49, 50);
-    const shelf = placeFixture(s, ModuleType.ShelfAisle, 43, 50);
-    const shelfTwo = placeFixture(s, ModuleType.ShelfAisle, 44, 50);
+    const shelf = placeFixture(s, ModuleType.ShelfAisle, 53, 50);
+    const shelfTwo = placeFixture(s, ModuleType.ShelfAisle, 54, 50);
     // Backroom on the shelves' service side: restock never enters the queue.
     const backroom = placeFixture(s, ModuleType.BackroomStockBank, 55, 50);
+    const receiving = placeFixture(s, ModuleType.IntakePallet, 61, 51);
     tick(s, 0);
-    stockNode(s, shelf.originTile, 'tradeGood', 6);
-    stockNode(s, shelfTwo.originTile, 'tradeGood', 6);
-    stockNode(s, backroom.originTile, 'tradeGood', 90);
+    stockNode(s, shelf.originTile, 'tradeGood', 1);
+    stockNode(s, shelfTwo.originTile, 'tradeGood', 1);
+    stockNode(s, backroom.originTile, 'tradeGood', 8);
+    stockNode(s, receiving.originTile, 'tradeGood', 24);
     shelfTwo.shelfMix = 'gifts';
+    stageFacilityCargoHandlers(s, 2, 63, 55);
     stageFacilityStaff(s, ModuleType.CheckoutBank, 'checkout-staff');
-    stageFacilityVisitors(s, 8, 51, 52, 'market');
+    stageFacilityVisitors(s, 6, 51, 55, 'market');
     s.controls.paused = true;
   },
 
@@ -4072,7 +4082,7 @@ function stockNode(state: StationState, tileIndex: number, itemType: ItemType, a
  * something, so these are ordinary visitors with a market preference standing
  * inside the room, not scripted sale events.
  */
-function stageFacilityVisitors(
+export function stageFacilityVisitors(
   state: StationState,
   count: number,
   originX: number,
@@ -4179,6 +4189,44 @@ function stageFacilityStaff(state: StationState, moduleType: ModuleType, role: F
     staffed += 1;
   }
   return staffed;
+}
+
+/** Put real cargo specialists beside a showcase's receiving stock. */
+function stageFacilityCargoHandlers(
+  state: StationState,
+  count: number,
+  originX: number,
+  originY: number
+): number {
+  state.crew.roleCounts['cargo-handler'] += count;
+  state.crew.total += count;
+  tick(state, 0);
+  const handlers = state.crewMembers.filter((crew) => crew.staffRole === 'cargo-handler').slice(0, count);
+  for (let index = 0; index < handlers.length; index += 1) {
+    const crew = handlers[index];
+    const tileIndex = originY * state.width + originX + index;
+    crew.tileIndex = tileIndex;
+    crew.x = (tileIndex % state.width) + 0.5;
+    crew.y = Math.floor(tileIndex / state.width) + 0.5;
+    crew.path = [];
+    crew.targetTile = null;
+    crew.activeJobId = null;
+    crew.assignedSystem = null;
+    crew.lastSystem = null;
+    crew.role = 'idle';
+    crew.workLane = 'logistics';
+    crew.lastWorkLane = 'logistics';
+    crew.shiftBucket = 0;
+    crew.resting = false;
+    crew.energy = 100;
+    crew.hunger = 100;
+    crew.hygiene = 100;
+    crew.bladder = 100;
+    crew.thirst = 100;
+    crew.morale = 100;
+    crew.taskLockUntil = 0;
+  }
+  return handlers.length;
 }
 
 function readyFacilityScenario(state: StationState): void {
