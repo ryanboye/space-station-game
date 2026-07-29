@@ -992,7 +992,14 @@ audited checklist with no unsupported checked claims.
   The accepted passenger became a live berth-anchored turnaround card and the
   subsequent dispatch review recorded the completed calls; no auto-admission
   policy was enabled.
-- [ ] Experience one successful short-stay flow.
+- [x] Experience one successful short-stay flow.
+  Evidence: commit `1680911` added the chronological
+  `tools/short-stay-passenger-loop-tests.ts` proof and repaired physical return
+  staging. Frozen production browser play on that exact commit admitted the
+  first `demo-station` passenger manifest through Approach Control, watched ten
+  visitors enter and use the station, and ended with the Berth turnaround card
+  reporting `8/8` meals, `5/5` restroom visits, `10/10` passengers returned,
+  `All promises fulfilled`, `+130c earned`, and no incidents.
 - [x] Experience and recover from one failed long stay.
   Evidence: frozen production browser play on `commitment-failure` advanced the
   identical four-guest repair cohort until Stay Recovery showed four durable
