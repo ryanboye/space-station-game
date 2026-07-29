@@ -1029,6 +1029,10 @@ const RESIDENT_SAFETY_RECOVERY_PER_SEC = 1.8;
 export const CREW_REST_ENERGY_THRESHOLD = 58;
 const CREW_REST_EXIT_ENERGY_THRESHOLD = 86;
 const CREW_REST_CRITICAL_ENERGY_THRESHOLD = 18;
+// Keep the hard floor stable across the coarse normal-scale actor cadence.
+// This is deliberately much smaller than the ordinary rest band: it only
+// advances the existing stalled/pathless critical-sleep handoff by one sample.
+const CREW_REST_PREEMPTION_MARGIN = 0.25;
 const CREW_REST_EMERGENCY_WAKE_MIN_ENERGY = 30;
 const CREW_REST_COOLDOWN_SEC = 12;
 const CREW_REST_LOCK_SEC = 10;
@@ -21465,7 +21469,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       routeStalledCrewToAssignedSleep(
         crew,
         previousIdleReason,
-        CREW_REST_CRITICAL_ENERGY_THRESHOLD + dt * (0.24 + publicInterference * CREW_PUBLIC_CROWD_DRAIN) + 0.001
+        CREW_REST_CRITICAL_ENERGY_THRESHOLD + CREW_REST_PREEMPTION_MARGIN +
+          dt * (0.24 + publicInterference * CREW_PUBLIC_CROWD_DRAIN) + 0.001
       )
     ) {
       currentResting += 1;
