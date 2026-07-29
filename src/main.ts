@@ -3720,6 +3720,7 @@ function syncBerthOpsAnchors(): void {
   const cards = berthOpsAnchorsEl.querySelectorAll<HTMLElement>('.berth-ops-anchor');
   if (cards.length === 0) return;
   const wrap = gameWrap.getBoundingClientRect();
+  const placed: Array<{ left: number; right: number; top: number; bottom: number }> = [];
   for (const card of cards) {
     const tile = Number(card.dataset.berthOpsTile);
     if (!Number.isFinite(tile)) continue;
@@ -3738,9 +3739,35 @@ function syncBerthOpsAnchors(): void {
     const gap = anchor.size * 0.6 + 8;
     const flip = anchor.x + gap + width + 10 > window.innerWidth;
     const left = flip ? anchor.x - gap - width : anchor.x + gap;
+    const boundedLeft = clamp(left, 10, Math.max(10, window.innerWidth - width - 10));
+    const desiredTop = clamp(anchor.y - height * 0.5, 10, Math.max(10, window.innerHeight - height - 10));
+    const maxTop = Math.max(10, window.innerHeight - height - 10);
+    const horizontalOverlap = (candidateLeft: number, candidateRight: number, other: typeof placed[number]) =>
+      candidateLeft < other.right + 8 && candidateRight > other.left - 8;
+    const verticalOverlap = (candidateTop: number, candidateBottom: number, other: typeof placed[number]) =>
+      candidateTop < other.bottom + 8 && candidateBottom > other.top - 8;
+    const collides = (candidateTop: number) => placed.some((other) =>
+      horizontalOverlap(boundedLeft, boundedLeft + width, other) &&
+      verticalOverlap(candidateTop, candidateTop + height, other)
+    );
+
+    // Nearby interfaces can be active at the same time. Preserve each card's
+    // physical anchoring, but stack colliding cards at the nearest free edge
+    // instead of painting two unreadable panels on top of one another.
+    const topCandidates = [desiredTop, 10, maxTop];
+    for (const other of placed) {
+      if (!horizontalOverlap(boundedLeft, boundedLeft + width, other)) continue;
+      topCandidates.push(clamp(other.bottom + 8, 10, maxTop));
+      topCandidates.push(clamp(other.top - height - 8, 10, maxTop));
+    }
+    const top = topCandidates
+      .filter((candidate, index) => topCandidates.indexOf(candidate) === index)
+      .filter((candidate) => !collides(candidate))
+      .sort((a, b) => Math.abs(a - desiredTop) - Math.abs(b - desiredTop))[0] ?? desiredTop;
     card.classList.toggle('anchor-left', flip);
-    card.style.left = `${Math.round(clamp(left, 10, Math.max(10, window.innerWidth - width - 10)))}px`;
-    card.style.top = `${Math.round(clamp(anchor.y - height * 0.5, 10, Math.max(10, window.innerHeight - height - 10)))}px`;
+    card.style.left = `${Math.round(boundedLeft)}px`;
+    card.style.top = `${Math.round(top)}px`;
+    placed.push({ left: boundedLeft, right: boundedLeft + width, top, bottom: top + height });
   }
 }
 
