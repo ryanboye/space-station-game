@@ -934,7 +934,13 @@ audited checklist with no unsupported checked claims.
 - [x] First business operation visibly serves real demand.
 - [x] First expansion feels constructed rather than painted.
 - [ ] First Berth changes station scale and operating pressure.
-- [ ] UI explains current pressure without becoming a spreadsheet.
+- [x] UI explains current pressure without becoming a spreadsheet.
+  Evidence: frozen production-browser inspection after `dc769f8` showed the
+  live mixed-turnaround card beside its physical Berth with purpose, bounded
+  party/stay ranges, and four causal progress bars. Its explicit collapse
+  reduced the card to a 242x84 world chip, and the same positioning kept both
+  expanded and collapsed states inside the station viewport without covering
+  the build palette.
 
 ## Phase 9: Save Migration, Performance, And Full Playthrough
 
@@ -1016,7 +1022,14 @@ audited checklist with no unsupported checked claims.
 
 ### Phase 9 Gate
 
-- [ ] Desired baseline station remains smooth and readable.
+- [x] Desired baseline station remains smooth and readable.
+  Evidence: frozen production-browser inspection of `normal-scale-50` after
+  `0672968` and `dc769f8` kept the station, goals, build palette, operations,
+  and interface context legible together at Fit Station. A safe 95% oxygen
+  reserve no longer produced a global emergency merely because distant floor
+  exceeded planning-distance guidance, while the Air Coverage tooltip retained
+  all 1,687 distant tiles. The focused scale runner measured p95 tick times of
+  9.945 ms compact and 16.109 ms spine with 50 crew alive in both geometries.
 - [x] Two- to three-times scale remains operationally plausible.
   Evidence: frozen production browser play on `normal-scale-50` remained
   responsive at 4x while operating 50 crew, 58 simultaneous visitors, one mixed
