@@ -101,7 +101,8 @@ import {
   ROOM_SPRITE_KEYS,
   TILE_SPRITE_KEYS,
   WALL_SPRITE_VARIANT_KEYS,
-  STRUCTURAL_SPRITE_KEYS
+  STRUCTURAL_SPRITE_KEYS,
+  CONSTRUCTION_PHASE_SPRITE_KEYS
 } from './sprite-keys';
 import {
   structuralPieceDimensions,
@@ -2525,6 +2526,70 @@ export function structuralPieceSpriteKey(
     : STRUCTURAL_SPRITE_KEYS.reinforcedBulkhead;
   if (visualState === 'damaged' && piece.kind === 'junction') return family.complete;
   return family[visualState as keyof typeof family] ?? family.complete;
+}
+
+export type ConstructionPhaseVisualState = 'scaffold' | 'floor' | 'wall' | 'seal' | 'pressurizing';
+
+const FLOOR_CONSTRUCTION_TARGETS = new Set<TileType>([
+  TileType.Floor,
+  TileType.Dock,
+  TileType.Cafeteria,
+  TileType.Reactor,
+  TileType.Security
+]);
+
+const WALL_CONSTRUCTION_TARGETS = new Set<TileType>([
+  TileType.Wall,
+  TileType.Door,
+  TileType.Airlock
+]);
+
+/**
+ * Selects physical fabrication art from durable construction truth only. A
+ * structural expansion starts as open lattice while material is arriving,
+ * then reveals the actual floor or wall fabric once its delivery is complete.
+ */
+export function constructionPhaseVisualState(
+  site: StationState['constructionSites'][number]
+): Exclude<ConstructionPhaseVisualState, 'pressurizing'> | null {
+  if (site.kind !== 'tile' || site.targetTile === undefined) return null;
+  if (site.structuralStage === 'seal-check') return 'seal';
+  if (site.targetTile === TileType.Truss) return 'scaffold';
+
+  const materialReady = site.requiredMaterials <= 0 || site.deliveredMaterials + 0.05 >= site.requiredMaterials;
+  if (!materialReady && site.requiresEva) return 'scaffold';
+  if (site.structuralStage === 'interior' || FLOOR_CONSTRUCTION_TARGETS.has(site.targetTile)) return 'floor';
+  if (site.structuralStage === 'perimeter' || WALL_CONSTRUCTION_TARGETS.has(site.targetTile)) return 'wall';
+  return null;
+}
+
+export function constructionPhaseSpriteKey(visualState: ConstructionPhaseVisualState): string {
+  return CONSTRUCTION_PHASE_SPRITE_KEYS[visualState];
+}
+
+/**
+ * Commissioning writes the whole shell atomically after the pressure pass for
+ * that tick. On the next tick pressure becomes live; the existing project
+ * completion time holds that honest pressure-on transition long enough to be
+ * seen. The same short bound prevents a later breach/recovery from masquerading
+ * as first commissioning.
+ */
+export function constructionPressurizingTiles(state: StationState): number[] {
+  const tiles = new Set<number>();
+  for (const project of state.structuralExpansionProjects) {
+    if (
+      project.phase !== 'commissioned' ||
+      !project.commissioned ||
+      project.finishedAt === null ||
+      state.now - project.finishedAt > 3
+    ) continue;
+    for (const target of project.targets) {
+      if (!isWalkable(target.targetTile) || !state.pressurized[target.tileIndex]) continue;
+      if (state.tiles[target.tileIndex] !== target.targetTile) continue;
+      tiles.add(target.tileIndex);
+    }
+  }
+  return [...tiles].sort((left, right) => left - right);
 }
 
 function drawStructuralPieces(
@@ -8097,12 +8162,26 @@ export function renderWorld(
     // its own seal/support verdict, so the reason — not the site state — is
     // what marks the whole shell as stalled.
     const stalled = site.state === 'blocked' || !!site.blockedReason;
-    ctx.fillStyle = site.requiresEva ? 'rgba(111, 216, 255, 0.28)' : 'rgba(255, 207, 110, 0.24)';
-    ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
-    ctx.strokeStyle = stalled ? '#ff7676' : site.requiresEva ? '#6fd8ff' : '#ffcf6e';
-    ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
-    ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), TILE_SIZE - Math.round(5 * PX), TILE_SIZE - Math.round(5 * PX));
-    ctx.setLineDash([]);
+    const constructionVisual = constructionPhaseVisualState(site);
+    const drewConstructionSprite = constructionVisual !== null && useSprites && drawSpriteByKey(
+      ctx,
+      spriteAtlas,
+      constructionPhaseSpriteKey(constructionVisual),
+      px,
+      py,
+      TILE_SIZE,
+      TILE_SIZE
+    );
+    if (!drewConstructionSprite) {
+      ctx.fillStyle = site.requiresEva ? 'rgba(111, 216, 255, 0.28)' : 'rgba(255, 207, 110, 0.24)';
+      ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
+    }
+    if (!drewConstructionSprite || stalled) {
+      ctx.strokeStyle = stalled ? '#ff7676' : site.requiresEva ? '#6fd8ff' : '#ffcf6e';
+      ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
+      ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), TILE_SIZE - Math.round(5 * PX), TILE_SIZE - Math.round(5 * PX));
+      ctx.setLineDash([]);
+    }
     ctx.fillStyle = 'rgba(7, 12, 18, 0.86)';
     ctx.fillRect(px + Math.round(4 * PX), py + TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX), Math.round(4 * PX));
     ctx.fillStyle = stalled ? '#ff7676' : '#6edb8f';
@@ -8112,14 +8191,16 @@ export function renderWorld(
       Math.round((TILE_SIZE - Math.round(8 * PX)) * progress),
       Math.round(4 * PX)
     );
-    ctx.fillStyle = '#e5f0ff';
-    ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const constructionLabel = site.structuralStage === 'seal-check'
-      ? 'SEAL'
-      : site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD';
-    ctx.fillText(constructionLabel, px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
+    if (!drewConstructionSprite) {
+      ctx.fillStyle = '#e5f0ff';
+      ctx.font = `bold ${Math.round(8 * PX)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const constructionLabel = site.structuralStage === 'seal-check'
+        ? 'SEAL'
+        : site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD';
+      ctx.fillText(constructionLabel, px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
+    }
 
     if (stalled && site.blockedReason) {
       const labelKey = site.structuralProjectId ?? -site.id;
@@ -8139,6 +8220,22 @@ export function renderWorld(
         ctx.textBaseline = 'middle';
         ctx.fillText(reason, labelX, labelY + Math.round(5.5 * PX));
       }
+    }
+  }
+
+  if (useSprites) {
+    for (const tile of constructionPressurizingTiles(state)) {
+      if (!tileInRange(tile, state, visibleTiles)) continue;
+      const point = fromIndex(tile, state.width);
+      drawSpriteByKey(
+        ctx,
+        spriteAtlas,
+        constructionPhaseSpriteKey('pressurizing'),
+        point.x * TILE_SIZE,
+        point.y * TILE_SIZE,
+        TILE_SIZE,
+        TILE_SIZE
+      );
     }
   }
 

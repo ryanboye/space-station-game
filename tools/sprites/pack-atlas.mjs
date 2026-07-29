@@ -111,6 +111,13 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.plant': { w: 1, h: 1 },
   'module.reactor_core': { w: 2, h: 2 },
   'module.solar_panel': { w: 1, h: 1 },
+  // Construction-phase overlays are always authored and rendered one target
+  // tile at a time, independent of the parent expansion footprint.
+  'construction.scaffold': { w: 1, h: 1 },
+  'construction.floor': { w: 1, h: 1 },
+  'construction.wall': { w: 1, h: 1 },
+  'construction.seal': { w: 1, h: 1 },
+  'construction.pressurizing': { w: 1, h: 1 },
   // Structural-frontage pieces are atlas assets before their world renderer
   // lands. Every state keeps the same physical footprint and attachment axes.
   'module.truss_junction': { w: 1, h: 1 },

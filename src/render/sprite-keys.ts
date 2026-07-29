@@ -182,3 +182,12 @@ export const STRUCTURAL_SPRITE_KEYS = {
     damaged: 'module.reinforced_bulkhead.damaged'
   }
 } as const;
+
+/** One-tile fabrication states for ordinary and structural-expansion sites. */
+export const CONSTRUCTION_PHASE_SPRITE_KEYS = {
+  scaffold: 'construction.scaffold',
+  floor: 'construction.floor',
+  wall: 'construction.wall',
+  seal: 'construction.seal',
+  pressurizing: 'construction.pressurizing'
+} as const;

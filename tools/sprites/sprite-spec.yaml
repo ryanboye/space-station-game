@@ -1392,6 +1392,21 @@ sprites:
   module.wash_bank.damaged:
     prompt: "Top-down low-resolution pixel art station module: communal wash bank, DAMAGED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY FOUR basins WEST with the plumbing spine EAST, split by a bold red pipe fracture with two dark breach patches and a red warning frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
+  construction.scaffold:
+    prompt: "Top-down low-resolution pixel art station construction SCAFFOLD state. 1x1 footprint (64x64 authored, readable at 32x32). Open steel lattice with four perimeter posts, X-bracing, exposed fastener plates, restrained amber delivery straps and tiny cyan work lights. Skeletal and unmistakably unfinished, not a floor or wall. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  construction.floor:
+    prompt: "Top-down low-resolution pixel art station construction FLOOR FABRICATION state. 1x1 footprint (64x64 authored, readable at 32x32). Steel joist frame with roughly two-thirds-installed dark diamond-plate deck, two broad open gaps exposing braces, loose clamps and amber unfinished edges. More assembled than scaffold but not a finished floor. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  construction.wall:
+    prompt: "Top-down low-resolution pixel art station construction WALL FABRICATION state. 1x1 footprint (64x64 authored, readable at 32x32). Heavy raised square blue-grey bulkhead panel, mostly plated with one broad missing bay exposing inner ribs, gasket channel, bolts and one amber temporary brace. Thick wall fabric, not floor plate. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  construction.seal:
+    prompt: "Top-down low-resolution pixel art station construction SEAL CHECK state. 1x1 footprint (64x64 authored, readable at 32x32). Dark square pressure gasket with four corner clamps, continuous cyan inspection loop, one localized white-blue weld arc and restrained amber test tabs. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
+  construction.pressurizing:
+    prompt: "Top-down low-resolution pixel art station construction PRESSURIZING state. 1x1 footprint (64x64 authored, readable at 32x32). Completed dark deck inside a pressure gasket with four green ready lamps and three bold concentric cyan air pulses sweeping inward to a central pressure indicator. Atmosphere coming online, not water or smoke. Transparent background, no text, at least 3px clear margin."
+    rotation: 0
   module.truss_junction:
     prompt: "Top-down low-resolution pixel art exterior Truss Junction, COMPLETE state. 1x1 footprint (64x64), visibly braced four-way steel hub with identical north/east/south/west attachment endpoints, central load collar, X-bracing, cyan status lamp and restrained yellow hazard tabs. Transparent background, no text, at least 3px clear margin."
     rotation: 0

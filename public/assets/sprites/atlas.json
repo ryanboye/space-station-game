@@ -1,5 +1,5 @@
 {
-  "version": "sprite-v1-2026-07-29T05:07:18.555Z",
+  "version": "sprite-v1-2026-07-29T05:58:39.233Z",
   "cellSize": 64,
   "imagePath": "atlas.png",
   "frames": {
@@ -1875,80 +1875,110 @@
       "w": 128,
       "h": 320
     },
-    "module.truss_junction": {
+    "construction.scaffold": {
       "x": 1778,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.truss_junction.planned": {
+    "construction.floor": {
       "x": 1846,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.truss_junction.delivered": {
+    "construction.wall": {
       "x": 1914,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.truss_junction.welding": {
+    "construction.seal": {
       "x": 1982,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.truss_junction.complete": {
+    "construction.pressurizing": {
       "x": 2050,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.truss_junction.overloaded": {
+    "module.truss_junction": {
       "x": 2118,
       "y": 3434,
       "w": 64,
       "h": 64
     },
-    "module.reinforced_bulkhead": {
+    "module.truss_junction.planned": {
       "x": 2186,
+      "y": 3434,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.delivered": {
+      "x": 2254,
+      "y": 3434,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.welding": {
+      "x": 2322,
+      "y": 3434,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.complete": {
+      "x": 2390,
+      "y": 3434,
+      "w": 64,
+      "h": 64
+    },
+    "module.truss_junction.overloaded": {
+      "x": 2458,
+      "y": 3434,
+      "w": 64,
+      "h": 64
+    },
+    "module.reinforced_bulkhead": {
+      "x": 2526,
       "y": 3434,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.planned": {
-      "x": 2318,
+      "x": 2658,
       "y": 3434,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.delivered": {
-      "x": 2450,
+      "x": 2790,
       "y": 3434,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.welding": {
-      "x": 2582,
+      "x": 2922,
       "y": 3434,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.complete": {
-      "x": 2714,
-      "y": 3434,
+      "x": 2,
+      "y": 3758,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.overloaded": {
-      "x": 2846,
-      "y": 3434,
+      "x": 134,
+      "y": 3758,
       "w": 128,
       "h": 64
     },
     "module.reinforced_bulkhead.damaged": {
-      "x": 2,
+      "x": 266,
       "y": 3758,
       "w": 128,
       "h": 64
