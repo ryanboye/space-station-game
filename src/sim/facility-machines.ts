@@ -18,14 +18,89 @@ import {
   type FacilityBlockedReason,
   type FacilitySlotTarget
 } from './facility-slots';
-import { facilityDescriptorFor } from './facility-descriptors';
+import {
+  facilityDescriptorFor,
+  facilityUsageTilesForModule,
+  publicRouteIsBlocked
+} from './facility-descriptors';
+import { facilityOperatingLoad } from './balance';
 import {
   ModuleType,
   RoomType,
   type ModuleInstance,
+  type SanitationSource,
   type ShelfMix,
   type StationState
 } from './types';
+
+// ---------------------------------------------------------------------------
+// What placed fixtures cost to run
+// ---------------------------------------------------------------------------
+
+/**
+ * The depicted positions of a fixture, for load that scales with capacity.
+ *
+ * Chunky Gate F fixtures declare theirs; the compact alternatives they replace
+ * (Market Stall, Bar Counter, Serving Station, Table) are small enough that
+ * every footprint tile *is* a usage position, which is what their definitions
+ * have always said. Falling back to the footprint is therefore not a guess.
+ */
+function fixturePositionTiles(module: ModuleInstance): number[] {
+  const declared = facilityUsageTilesForModule(module);
+  return declared.length > 0 ? declared : module.tiles;
+}
+
+/**
+ * Per-fixture power draw across every placed fixture.
+ *
+ * Deliberately a plain sum over `moduleInstances` rather than over active room
+ * clusters: the whole complaint this answers is that a 2x5 Checkout Bank and a
+ * 2x1 Market Stall drew the same power because only the *room* was counted.
+ * An unpowered or unbuilt fixture is not in `moduleInstances` at all, so no
+ * activity gate is needed here.
+ */
+export function facilityUtilityDemand(state: StationState): number {
+  let total = 0;
+  for (const module of state.moduleInstances) {
+    total += facilityOperatingLoad(module.type)?.powerDraw ?? 0;
+  }
+  return total;
+}
+
+export interface FixtureSoilLoad {
+  tileIndex: number;
+  /** Dirt per second this depicted position lays down right now. */
+  perSec: number;
+  /** Keeps the room's "sanitation dirty: <source>" diagnostic truthful. */
+  source: SanitationSource;
+}
+
+/**
+ * The cleaning load every placed fixture imposes on its own positions.
+ *
+ * Returned as data rather than applied here so this module keeps owning no
+ * simulation loop: the sanitation pass in `sim.ts` walks the list once and
+ * adds it the same way it adds kitchen and hydroponics load.
+ */
+export function fixtureCleaningLoad(state: StationState): FixtureSoilLoad[] {
+  const out: FixtureSoilLoad[] = [];
+  for (const module of state.moduleInstances) {
+    const load = facilityOperatingLoad(module.type);
+    if (!load) continue;
+    for (const tileIndex of fixturePositionTiles(module)) {
+      const rate = slotIsOccupied(state, tileIndex)
+        ? load.inUseSoilPerPositionPerMin
+        : load.idleSoilPerPositionPerMin;
+      if (rate > 0) out.push({ tileIndex, perSec: rate / 60, source: load.soilSource });
+    }
+  }
+  return out;
+}
+
+/** Total fixture-driven cleaning load, in dirt points per minute. */
+export function fixtureCleaningLoadPerMin(state: StationState): number {
+  return fixtureCleaningLoad(state).reduce((sum, entry) => sum + entry.perSec, 0) * 60;
+}
 
 // ---------------------------------------------------------------------------
 // Connected bar runs
@@ -49,6 +124,19 @@ export interface BarGroup {
   tiles: number[];
   /** Origin tiles that carry drink stock. */
   stockTiles: number[];
+}
+
+/**
+ * Does every one of these fixtures have its customer edge walled in?
+ *
+ * Stated over a whole set rather than per fixture because a machine is only
+ * unreachable when *nothing* in it can be walked up to: one open Checkout Bank
+ * still gives the market a front door, and one reachable segment still gives a
+ * bar run one. An empty set is not blocked — that is a different complaint,
+ * and `firstBlockedReason` has better words for it.
+ */
+export function everyPublicRouteBlocked(state: StationState, modules: readonly ModuleInstance[]): boolean {
+  return modules.length > 0 && modules.every((module) => publicRouteIsBlocked(state, module));
 }
 
 /** Do two placed modules share at least one footprint edge? */
@@ -177,6 +265,7 @@ export function barGroupStatus(state: StationState, group: BarGroup, stewards: n
   // A longer bar only serves more people when the extra length brought both a
   // guest position and a staff position that somebody is standing in.
   const serviceCapacity = Math.min(group.guestSlots.length, Math.max(stewards, staffedPositions) * 2);
+  const pieces = state.moduleInstances.filter((module) => group.moduleIds.includes(module.id));
   return {
     group,
     freeGuestSlots,
@@ -188,7 +277,10 @@ export function barGroupStatus(state: StationState, group: BarGroup, stewards: n
       'no-stock': stock < 0.16,
       'no-staff': stewards <= 0 && staffedPositions <= 0,
       'no-free-provider': freeGuestSlots <= 0,
-      'no-free-seat': dwellCapacity <= 0
+      'no-free-seat': dwellCapacity <= 0,
+      // A run whose every guest side is walled in has stools nobody can walk
+      // up to. Reported last because a route is the slowest thing to fix.
+      'public-route-blocked': everyPublicRouteBlocked(state, pieces)
     })
   };
 }
@@ -327,6 +419,11 @@ export function marketChainStatus(state: StationState): MarketChainStatus {
   const staffSlots = slotsOfRole(state, [ModuleType.CheckoutBank], 'checkout-staff');
   const shelfStock = stockAt(state, shelves);
   const staffedRegisters = staffSlots.filter((slot) => slotIsOccupied(state, slot.tileIndex)).length;
+  // Frontage is a property of the whole shop floor: a shopper needs somewhere
+  // to stand at a shelf AND somewhere to stand at a register. Either edge
+  // walled in end to end breaks the chain.
+  const banks = state.moduleInstances.filter((module) => module.type === ModuleType.CheckoutBank);
+  const shelfModules = state.moduleInstances.filter((module) => module.type === ModuleType.ShelfAisle);
   return {
     receiving: stockAt(state, receiving),
     backroom: stockAt(state, backroom),
@@ -339,7 +436,9 @@ export function marketChainStatus(state: StationState): MarketChainStatus {
       'no-stock': shelfStock < 0.95,
       'no-staff': registerSlots.length > 0 && staffedRegisters <= 0,
       'no-free-provider':
-        registerSlots.length > 0 && registerSlots.every((slot) => slotIsOccupied(state, slot.tileIndex))
+        registerSlots.length > 0 && registerSlots.every((slot) => slotIsOccupied(state, slot.tileIndex)),
+      'public-route-blocked':
+        everyPublicRouteBlocked(state, banks) || everyPublicRouteBlocked(state, shelfModules)
     })
   };
 }
@@ -362,6 +461,7 @@ export function receptionStatus(state: StationState): ReceptionStatus {
   const staffSlots = slotsOfRole(state, [ModuleType.ArrivalDesk], 'reception-staff');
   const staffed = staffSlots.filter((slot) => slotIsOccupied(state, slot.tileIndex)).length;
   const freeProcessors = processors.filter((slot) => !slotIsOccupied(state, slot.tileIndex)).length;
+  const desks = state.moduleInstances.filter((module) => module.type === ModuleType.ArrivalDesk);
   return {
     processors: processors.length,
     freeProcessors,
@@ -369,7 +469,8 @@ export function receptionStatus(state: StationState): ReceptionStatus {
     // A full or unstaffed desk is never a hard block: arrivals simply bypass it.
     blockedReason: firstBlockedReason({
       'no-staff': processors.length > 0 && staffed <= 0,
-      'no-free-provider': processors.length > 0 && freeProcessors <= 0
+      'no-free-provider': processors.length > 0 && freeProcessors <= 0,
+      'public-route-blocked': everyPublicRouteBlocked(state, desks)
     })
   };
 }

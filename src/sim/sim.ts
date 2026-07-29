@@ -1,6 +1,7 @@
 import { findPath as findPathCore } from './path';
 import {
   BERTH_CAPITAL_COST,
+  repairServiceCost,
   BERTH_SIZE_MIN,
   MODULE_DEFINITIONS,
   OPENING_BALANCE,
@@ -59,7 +60,9 @@ import {
   shelfOrigins,
   freeReceptionSlots,
   shelfMixOf,
-  stockedShelfSlots
+  stockedShelfSlots,
+  facilityUtilityDemand,
+  fixtureCleaningLoad
 } from './facility-machines';
 import { RESIDENT_ROLE_WEIGHTS, RESIDENT_WORK_BONUS } from './content/residents';
 import {
@@ -10800,7 +10803,16 @@ const MODULE_MAINTENANCE_ROOMS = new Map<ModuleType, { domain: MaintenanceDomain
   [ModuleType.BoothBank, { domain: 'module', room: RoomType.None, label: 'booth bank', effect: 'seated dwell degraded at high wear' }],
   [ModuleType.ServingLine, { domain: 'module', room: RoomType.None, label: 'serving line', effect: 'meal pickup slowed at high wear' }],
   [ModuleType.CommunityTable, { domain: 'module', room: RoomType.None, label: 'community table', effect: 'seated dwell degraded at high wear' }],
-  [ModuleType.WashBank, { domain: 'module', room: RoomType.None, label: 'wash bank', effect: 'hygiene service slowed at high wear' }]
+  [ModuleType.WashBank, { domain: 'module', room: RoomType.None, label: 'wash bank', effect: 'hygiene service slowed at high wear' }],
+  // The remaining six. These have no damaged artwork yet, so they will not
+  // change appearance at high wear, but they should still wear: a fixture that
+  // never accrues debt is one the player can never be asked to look after.
+  [ModuleType.CheckoutBank, { domain: 'module', room: RoomType.None, label: 'checkout bank', effect: 'checkout slowed at high wear' }],
+  [ModuleType.ShelfAisle, { domain: 'module', room: RoomType.None, label: 'shelf aisle', effect: 'browsing slowed at high wear' }],
+  [ModuleType.BunkBank, { domain: 'module', room: RoomType.None, label: 'bunk bank', effect: 'rest quality degraded at high wear' }],
+  [ModuleType.StandingRail, { domain: 'module', room: RoomType.None, label: 'standing rail', effect: 'standing dwell degraded at high wear' }],
+  [ModuleType.GuestCabin, { domain: 'module', room: RoomType.None, label: 'guest cabin', effect: 'guest rest degraded at high wear' }],
+  [ModuleType.ArrivalDesk, { domain: 'module', room: RoomType.None, label: 'arrival desk', effect: 'reception slowed at high wear' }]
 ]);
 
 export function ensureStructuralPieceMaintenanceTarget(
@@ -18222,6 +18234,10 @@ function updateSanitation(state: StationState, dt: number): void {
   for (const tile of activeRoomTargets(state, RoomType.Market)) {
     if (state.metrics.marketTradeGoodUseRate > 0) addDirt(state, tile, 0.09 * dt, 'market');
   }
+  // Fixture-scaled cleaning: a large fixture soils its own depicted positions
+  // whether or not anyone is standing at one, so keeping it clean is a cost of
+  // owning it rather than a side effect of who walked past.
+  for (const load of fixtureCleaningLoad(state)) addDirt(state, load.tileIndex, load.perSec * dt, load.source);
   for (const fire of state.effects.fires) {
     addDirt(state, fire.anchorTile, (0.2 + fire.intensity / 280) * dt, 'fire');
   }
@@ -21740,6 +21756,18 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
               releaseReservationsForOwner(state, 'crew', crew.id, 'completed', ['actor-job']);
               releaseReservationsForOwner(state, 'job', job.id, 'completed');
               state.usageTotals.maintenanceJobsResolved += 1;
+              // Neglect costs money, once, at the moment the repair lands. The
+              // passive staff grind-down stays unpriced: that is crew whose
+              // wages the station already pays.
+              const repairFee = repairServiceCost(job.repairProgress ?? 0);
+              applyEconomyTransaction(state, {
+                at: state.now,
+                kind: 'maintenance',
+                credits: -repairFee,
+                costBasis: repairFee,
+                label: `Repair · ${debtEntry.label}`,
+                tileIndex: debtEntry.targetTile
+              }, { countAsEarned: false });
             }
           } else {
             // Debt target vanished (room/module/tile removed). Cancel cleanly.
@@ -26465,7 +26493,10 @@ function computeMetrics(state: StationState): void {
     state.ops.loungeActive * 1.0 +
     state.ops.marketActive * 1.1 +
     state.ops.cantinaActive * 1.0 +
-    state.ops.observatoryActive * 0.9;
+    state.ops.observatoryActive * 0.9 +
+    // Per-fixture draw. Without this a 2x5 Checkout Bank costs exactly what a
+    // 2x1 Market Stall costs, because only the room was ever counted.
+    facilityUtilityDemand(state);
 
   const powerDeficit = Math.max(0, powerDemand - powerSupply);
   const powerPressure = powerDeficit * 1.9;

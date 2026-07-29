@@ -1,4 +1,4 @@
-import { ModuleType, type ModuleInstance, type ModuleRotation, type StationState } from './types';
+import { ModuleType, isWalkable, type ModuleInstance, type ModuleRotation, type StationState } from './types';
 
 /**
  * What a depicted position on a fixture is *for*.
@@ -301,6 +301,13 @@ export function facilityDescriptorFor(module: ModuleType): FacilityFixtureDescri
   return FACILITY_FIXTURE_DESCRIPTORS[module] ?? null;
 }
 
+/**
+ * Turn a declared face with the placed module.
+ *
+ * The mapping is the one `orientedSlotPosition` already implies: a 90° turn
+ * sends (x, y) to (height - 1 - y, x), so the low-x edge becomes the low-y
+ * edge. West therefore becomes north, north becomes east, and so on.
+ */
 export function rotateFacilityFace(face: FacilityFace, rotation: ModuleRotation): FacilityFace {
   if (rotation === 0) return face;
   switch (face) {
@@ -309,6 +316,84 @@ export function rotateFacilityFace(face: FacilityFace, rotation: ModuleRotation)
     case 'south': return 'west';
     case 'west': return 'north';
   }
+}
+
+/** The face a placed fixture actually presents to customers, or null. */
+export function publicFaceOfModule(module: ModuleInstance): FacilityFace | null {
+  const declared = facilityDescriptorFor(module.type)?.publicUseFace ?? null;
+  return declared === null ? null : rotateFacilityFace(declared, module.rotation);
+}
+
+/**
+ * The footprint squares along one rotated face, in ascending tile order.
+ *
+ * Reads `module.tiles` rather than recomputing geometry, so a fixture that was
+ * placed, rotated, saved and rehydrated reports the same face it draws.
+ */
+function faceTilesOfModule(module: ModuleInstance, face: FacilityFace): number[] {
+  const tiles: number[] = [];
+  const at = (x: number, y: number): number | undefined => module.tiles[y * module.width + x];
+  if (face === 'north' || face === 'south') {
+    const y = face === 'north' ? 0 : module.height - 1;
+    for (let x = 0; x < module.width; x += 1) {
+      const tile = at(x, y);
+      if (tile !== undefined) tiles.push(tile);
+    }
+  } else {
+    const x = face === 'west' ? 0 : module.width - 1;
+    for (let y = 0; y < module.height; y += 1) {
+      const tile = at(x, y);
+      if (tile !== undefined) tiles.push(tile);
+    }
+  }
+  return tiles.sort((a, b) => a - b);
+}
+
+/**
+ * The floor squares immediately *outside* the public face — where a guest
+ * stands to use the fixture, and where its queue forms.
+ *
+ * Off-map neighbours are dropped rather than wrapped: a fixture flush against
+ * the west edge of the station has no west approach at all, which is exactly
+ * the condition the caller wants to hear about.
+ */
+export function publicApproachTilesForModule(
+  module: ModuleInstance,
+  stationWidth: number,
+  stationHeight: number
+): number[] {
+  const face = publicFaceOfModule(module);
+  if (face === null) return [];
+  const step = face === 'north' ? -stationWidth : face === 'south' ? stationWidth : face === 'west' ? -1 : 1;
+  const tileCount = stationWidth * stationHeight;
+  const approach: number[] = [];
+  for (const tile of faceTilesOfModule(module, face)) {
+    const neighbour = tile + step;
+    if (neighbour < 0 || neighbour >= tileCount) continue;
+    // A west/east step must not roll onto the far side of the row.
+    if ((face === 'west' || face === 'east') && Math.floor(neighbour / stationWidth) !== Math.floor(tile / stationWidth)) {
+      continue;
+    }
+    approach.push(neighbour);
+  }
+  return approach;
+}
+
+/**
+ * Can a customer physically reach this fixture's public face?
+ *
+ * A fixture whose customer edge is buried in hull, open to vacuum, or hard
+ * against the map border cannot be walked up to, however well stocked and
+ * staffed it is. Walkability is the whole test: modules never block movement
+ * here, so a bench or a stall in front of a counter is still somewhere a guest
+ * can stand. Back-of-house fixtures (`publicUseFace: null`) are never flagged —
+ * having no customer edge is their whole design.
+ */
+export function publicRouteIsBlocked(state: StationState, module: ModuleInstance): boolean {
+  if (publicFaceOfModule(module) === null) return false;
+  const approach = publicApproachTilesForModule(module, state.width, state.height);
+  if (approach.length === 0) return true;
+  return !approach.some((tile) => isWalkable(state.tiles[tile]));
 }
 
 export function resolveFacilitySlots(module: ModuleInstance, stationWidth: number): ResolvedFacilitySlot[] {

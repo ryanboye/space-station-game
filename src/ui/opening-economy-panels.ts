@@ -107,6 +107,20 @@ export type OpeningEconomyPanelAction =
 
 export type OpeningEconomyPanelName = 'ledger' | 'shop' | 'projects';
 
+/**
+ * Viewport-space point a panel should hang off, in client pixels.
+ *
+ * Operations belong at the thing they operate on, so a panel opened from a
+ * physical fixture is placed beside that fixture instead of in the middle of
+ * the screen. The caller owns the world-to-screen conversion and re-supplies
+ * the point whenever the camera moves; this module only does the placement and
+ * the viewport clamp.
+ */
+export interface OpeningEconomyPanelAnchor {
+  x: number;
+  y: number;
+}
+
 export interface OpeningEconomyPanelsOptions {
   /** Host element, typically the game root. */
   host: HTMLElement;
@@ -124,7 +138,12 @@ export interface OpeningEconomyPanelsOptions {
 
 export interface OpeningEconomyPanelsController {
   render(view: OpeningEconomyPanelView): void;
-  open(panel: OpeningEconomyPanelName): void;
+  /** Opens centered, or beside `anchor` when the caller has a world fixture. */
+  open(panel: OpeningEconomyPanelName, anchor?: OpeningEconomyPanelAnchor | null): void;
+  /** Keeps an already-anchored panel pinned while the camera moves. */
+  setAnchor(anchor: OpeningEconomyPanelAnchor | null): void;
+  /** The panel currently open, so the caller can drop a stale anchor. */
+  openPanelName(): OpeningEconomyPanelName | null;
   close(): void;
   setSiteBriefVisible(visible: boolean): void;
   destroy(): void;
@@ -217,6 +236,7 @@ const STYLE_TEXT = `
   gap: 5px;
   margin-top: 8px;
 }
+.oe-site-actions-single { grid-template-columns: 1fr; }
 .oe-site-action {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -246,6 +266,14 @@ const STYLE_TEXT = `
   pointer-events: auto;
 }
 .oe-panel-layer[hidden], .oe-site-brief[hidden] { display: none; }
+/* Anchored to a world fixture: no dimming scrim, and the layer stops eating
+   clicks so the station stays operable behind the panel. */
+.oe-panel-layer.is-anchored {
+  display: block;
+  padding: 0;
+  background: none;
+  pointer-events: none;
+}
 .oe-panel {
   width: min(440px, 100%);
   max-height: min(680px, calc(100vh - 32px));
@@ -255,6 +283,28 @@ const STYLE_TEXT = `
   background: linear-gradient(180deg, #182735 0%, #101a24 100%);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.52);
 }
+.oe-panel-layer.is-anchored .oe-panel {
+  position: absolute;
+  width: min(376px, calc(100vw - 20px));
+  max-height: min(520px, calc(100vh - 24px));
+  border-color: #6ba9c4;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.62);
+  pointer-events: auto;
+}
+/* Leader mark back toward the fixture the panel was opened from. */
+.oe-panel-layer.is-anchored .oe-panel::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  border-left: 1px solid #6ba9c4;
+  border-bottom: 1px solid #6ba9c4;
+  background: #182735;
+  transform: rotate(45deg);
+}
+.oe-panel-layer.is-anchored .oe-panel.anchor-right::before { left: auto; right: -5px; transform: rotate(225deg); }
 .oe-panel-head {
   display: flex;
   align-items: flex-start;
@@ -523,11 +573,40 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
 
   let currentView: OpeningEconomyPanelView | null = null;
   let openPanel: OpeningEconomyPanelName | null = null;
+  let panelAnchor: OpeningEconomyPanelAnchor | null = null;
   let siteBriefVisible = options.showSiteBrief ?? true;
   let renderedSiteBrief = '';
   let renderedPanel = '';
 
   const emit = (action: OpeningEconomyPanelAction): void => options.onAction?.(action);
+
+  /**
+   * Place the open panel beside its fixture and keep it inside the viewport.
+   *
+   * The fixture usually sits left of centre, so the panel prefers the right
+   * side and flips only when it would run off the edge. Measured after layout
+   * so the clamp uses the panel's real size rather than the CSS maximum.
+   */
+  const applyAnchorPlacement = (): void => {
+    const panel = layer.querySelector<HTMLElement>('.oe-panel');
+    layer.classList.toggle('is-anchored', panelAnchor !== null);
+    if (!panel) return;
+    if (!panelAnchor) {
+      panel.classList.remove('anchor-right');
+      panel.style.left = '';
+      panel.style.top = '';
+      return;
+    }
+    const gap = 18;
+    const margin = 10;
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const flip = panelAnchor.x + gap + width + margin > window.innerWidth;
+    const left = flip ? panelAnchor.x - gap - width : panelAnchor.x + gap;
+    panel.classList.toggle('anchor-right', flip);
+    panel.style.left = `${Math.round(Math.max(margin, Math.min(left, window.innerWidth - width - margin)))}px`;
+    panel.style.top = `${Math.round(Math.max(margin, Math.min(panelAnchor.y - 22, window.innerHeight - height - margin)))}px`;
+  };
 
   const renderSiteBrief = (force = false): void => {
     const brief = currentView?.siteBrief;
@@ -536,12 +615,14 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
       renderedSiteBrief = '';
       return;
     }
-    const shop = currentView?.shop;
+    // The shop deliberately has no launcher here. Retail is an operation, and
+    // operations belong at the fixture they run on: the caller opens the shop
+    // from the Market Stall, Shelf Aisle, or Checkout Bank in the world.
+    // Capital projects have no physical fixture to click, so they keep theirs.
     const projects = currentView?.projects;
-    const actions = shop || projects
-      ? `<div class="oe-site-actions">
-          ${shop ? `<button type="button" class="oe-site-action${shop.stock <= 0 ? ' warn' : ''}" data-oe-open-shop><span>Travel supplies</span><b>${Math.round(shop.stock)}/${Math.round(shop.capacity)}</b></button>` : ''}
-          ${projects ? `<button type="button" class="oe-site-action" data-oe-open-projects><span>Capital projects</span><b>${projects.activeCount}/${projects.maxActive} active</b></button>` : ''}
+    const actions = projects
+      ? `<div class="oe-site-actions oe-site-actions-single">
+          <button type="button" class="oe-site-action" data-oe-open-projects><span>Capital projects</span><b>${projects.activeCount}/${projects.maxActive} active</b></button>
         </div>`
       : '';
     const content = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}${brief.composition ? `<p class="oe-site-detail oe-site-composition">${escapeHtml(brief.composition)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
@@ -555,24 +636,25 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
   };
 
   const renderOpenPanel = (force = false): void => {
-    if (!currentView || !openPanel) {
+    const clear = (): void => {
+      panelAnchor = null;
+      layer.classList.remove('is-anchored');
       layer.hidden = true;
       if (renderedPanel !== '') layer.innerHTML = '';
       renderedPanel = '';
+    };
+    if (!currentView || !openPanel) {
+      clear();
       return;
     }
     if (openPanel === 'shop' && !currentView.shop) {
       openPanel = null;
-      layer.hidden = true;
-      layer.innerHTML = '';
-      renderedPanel = '';
+      clear();
       return;
     }
     if (openPanel === 'projects' && !currentView.projects) {
       openPanel = null;
-      layer.hidden = true;
-      layer.innerHTML = '';
-      renderedPanel = '';
+      clear();
       return;
     }
     const previousPanel = layer.querySelector<HTMLElement>('.oe-panel');
@@ -584,28 +666,27 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
         : renderProjects(currentView.projects!);
     layer.hidden = false;
     const signature = `${openPanel}\n${content}`;
-    if (signature === renderedPanel) return;
+    if (signature === renderedPanel) {
+      applyAnchorPlacement();
+      return;
+    }
     const hoveredPanel = layer.querySelector<HTMLElement>('.oe-panel');
     if (!force && hoveredPanel?.matches(':hover')) return;
     layer.innerHTML = content;
     renderedPanel = signature;
     const nextPanel = layer.querySelector<HTMLElement>('.oe-panel');
     if (nextPanel && previousScrollTop > 0) nextPanel.scrollTop = previousScrollTop;
+    applyAnchorPlacement();
   };
 
   // The brief may be reparented into the game's left HUD stack, outside this
-  // controller's root. Give its compact launch buttons their own listener.
+  // controller's root. Give its compact launch button its own listener.
   const handleSiteBriefClick = (event: Event): void => {
     const target = event.target as Element | null;
     if (!target) return;
-    if (target.closest('[data-oe-open-shop]') && currentView?.shop) {
-      openPanel = 'shop';
-      renderOpenPanel();
-      emit({ type: 'open-shop' });
-      return;
-    }
     if (target.closest('[data-oe-open-projects]') && currentView?.projects) {
       openPanel = 'projects';
+      panelAnchor = null;
       renderOpenPanel();
       emit({ type: 'open-projects' });
     }
@@ -619,6 +700,7 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
     if (close) {
       const panel = close.dataset.oeClose as OpeningEconomyPanelName;
       openPanel = null;
+      panelAnchor = null;
       renderOpenPanel();
       emit({ type: 'close-panel', panel });
       return;
@@ -642,18 +724,28 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
       renderSiteBrief();
       renderOpenPanel();
     },
-    open(panel): void {
+    open(panel, anchor): void {
       if (!currentView || (panel === 'shop' && !currentView.shop) || (panel === 'projects' && !currentView.projects)) return;
       openPanel = panel;
+      panelAnchor = anchor ?? null;
       renderOpenPanel(true);
       if (panel === 'ledger') emit({ type: 'open-ledger' });
       if (panel === 'shop') emit({ type: 'open-shop' });
       if (panel === 'projects') emit({ type: 'open-projects' });
     },
+    setAnchor(anchor): void {
+      if (!openPanel) return;
+      panelAnchor = anchor;
+      applyAnchorPlacement();
+    },
+    openPanelName(): OpeningEconomyPanelName | null {
+      return openPanel;
+    },
     close(): void {
       if (!openPanel) return;
       const panel = openPanel;
       openPanel = null;
+      panelAnchor = null;
       renderOpenPanel();
       emit({ type: 'close-panel', panel });
     },

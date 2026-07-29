@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type BerthSizeClass, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type ShipType } from './types';
+import { ModuleType, RoomType, type BerthSizeClass, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type SanitationSource, type ShipType } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -809,6 +809,133 @@ export const BERTH_CAPITAL_COST: Record<BerthSizeClass, number> = {
   medium: 600,
   large: 1500
 };
+
+/**
+ * What a fixture costs to *run*, as opposed to what it cost to buy.
+ *
+ * Footprint, staffing, stock and queue frontage already charge a large fixture:
+ * it occupies more floor, a Steward must physically hold each register, its
+ * `itemNodeCapacity` has to be filled, and its queue eats real tiles. Two of
+ * the seven levers were still free, and this table is both of them.
+ *
+ * `powerDraw` is per *placed fixture*, in the same units as the room terms in
+ * `sim.ts` (a whole active Cantina is 1.0). It is not guessed per row: it is
+ * footprint tiles times one of three class rates —
+ *   - 0.030/tile for a powered service counter (registers, bars with a staff
+ *     lane, heated serving lines, wash spines, reception);
+ *   - 0.0175/tile for stocked shelving, which is lit and monitored but idle;
+ *   - 0.0075/tile for passive seating and bunks, which is lighting only.
+ * A 2x5 Checkout Bank therefore draws 0.30 against a 2x1 Market Stall's 0.06.
+ * Five times the floor is five times the bill, which is the whole point: the
+ * big fixture buys absolute capacity, never free running costs.
+ *
+ * The rates are sized against the room terms they sit beside rather than chosen
+ * for effect. A fully fitted Market (two Checkout Banks, two Shelf Aisles and a
+ * Backroom Stock Bank) draws 0.85 against the Market room's own 1.1, so fitting
+ * a room out roughly doubles its bill instead of quietly quadrupling it.
+ * Measured against the authored scenarios that leaves the starter at 63.3% of
+ * its reactor — inside the band `opening-power-tests` asserts — demo-station at
+ * 78%, and the deliberately over-fitted long-stay guest wing at 87%: pressured,
+ * which is the point, but never dark.
+ *
+ * The soil rates are per *depicted position*, per minute, and are laid on the
+ * fixture's own positions rather than on whoever happens to walk past. That is
+ * the difference the checklist asks for: cleaning becomes a carrying cost of
+ * owning the fixture instead of a side effect of actor traffic. The idle rate
+ * is the honest part — a big empty dining hall still needs wiping down.
+ *
+ * The seat comparison this pays off: eight diners at one Community Table soil
+ * 0.55*8 idle + 2.2*8 in use = 22.0/min, where the same eight at two compact
+ * Tables soil 0.35*8 + 1.6*8 = 15.6/min. The larger fixture is ~41% heavier to
+ * keep clean for identical seating — which is exactly what its definition
+ * comment ("efficient floor use, heavier cleaning burden") has always claimed
+ * and never charged. One cleaner clears 420/min, so this is a real load at
+ * station scale without being a new crisis at opening scale.
+ */
+export interface FacilityOperatingLoad {
+  /** Power drawn by one placed fixture, in the sim's room-term units. */
+  powerDraw: number;
+  /** Dirt per minute laid on each depicted position standing empty. */
+  idleSoilPerPositionPerMin: number;
+  /** Dirt per minute laid on each depicted position that is in use. */
+  inUseSoilPerPositionPerMin: number;
+  /** What the room diagnostic should blame this fixture's grime on. */
+  soilSource: SanitationSource;
+}
+
+export const FACILITY_OPERATING_LOAD: Readonly<Partial<Record<ModuleType, FacilityOperatingLoad>>> = {
+  // --- Market: one large fixture against its compact alternative -----------
+  [ModuleType.MarketStall]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.14, inUseSoilPerPositionPerMin: 0.7, soilSource: 'market' },
+  [ModuleType.CheckoutBank]: { powerDraw: 0.3, idleSoilPerPositionPerMin: 0.2, inUseSoilPerPositionPerMin: 0.7, soilSource: 'market' },
+  [ModuleType.ShelfAisle]: { powerDraw: 0.07, idleSoilPerPositionPerMin: 0.16, inUseSoilPerPositionPerMin: 0.6, soilSource: 'market' },
+  /** Back of house: lit and monitored, but nobody eats or spills here. */
+  [ModuleType.BackroomStockBank]: { powerDraw: 0.11, idleSoilPerPositionPerMin: 0.12, inUseSoilPerPositionPerMin: 0.4, soilSource: 'market' },
+
+  // --- Cantina -------------------------------------------------------------
+  [ModuleType.BarCounter]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.18, inUseSoilPerPositionPerMin: 1.2, soilSource: 'meals' },
+  [ModuleType.ServiceBar]: { powerDraw: 0.3, idleSoilPerPositionPerMin: 0.26, inUseSoilPerPositionPerMin: 1.2, soilSource: 'meals' },
+  [ModuleType.BarCorner]: { powerDraw: 0.12, idleSoilPerPositionPerMin: 0.26, inUseSoilPerPositionPerMin: 1.2, soilSource: 'meals' },
+  /** An End caps a run with stools and no work step, so it is passive wiring. */
+  [ModuleType.BarEnd]: { powerDraw: 0.03, idleSoilPerPositionPerMin: 0.26, inUseSoilPerPositionPerMin: 1.2, soilSource: 'meals' },
+  [ModuleType.BoothBank]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.45, inUseSoilPerPositionPerMin: 2.0, soilSource: 'meals' },
+  /** Short dwell, no table to clear: the cheapest dwell to keep clean. */
+  [ModuleType.StandingRail]: { powerDraw: 0.03, idleSoilPerPositionPerMin: 0.22, inUseSoilPerPositionPerMin: 1.0, soilSource: 'meals' },
+
+  // --- Cafeteria -----------------------------------------------------------
+  [ModuleType.ServingStation]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.2, inUseSoilPerPositionPerMin: 1.1, soilSource: 'meals' },
+  [ModuleType.ServingLine]: { powerDraw: 0.3, idleSoilPerPositionPerMin: 0.3, inUseSoilPerPositionPerMin: 1.1, soilSource: 'meals' },
+  [ModuleType.Table]: { powerDraw: 0.03, idleSoilPerPositionPerMin: 0.35, inUseSoilPerPositionPerMin: 1.6, soilSource: 'meals' },
+  [ModuleType.CommunityTable]: { powerDraw: 0.09, idleSoilPerPositionPerMin: 0.55, inUseSoilPerPositionPerMin: 2.2, soilSource: 'meals' },
+
+  // --- Lodging, reception, hygiene -----------------------------------------
+  [ModuleType.BunkBank]: { powerDraw: 0.06, idleSoilPerPositionPerMin: 0.3, inUseSoilPerPositionPerMin: 1.1, soilSource: 'traffic' },
+  [ModuleType.GuestCabin]: { powerDraw: 0.09, idleSoilPerPositionPerMin: 0.36, inUseSoilPerPositionPerMin: 1.1, soilSource: 'traffic' },
+  [ModuleType.ArrivalDesk]: { powerDraw: 0.24, idleSoilPerPositionPerMin: 0.16, inUseSoilPerPositionPerMin: 0.5, soilSource: 'traffic' },
+  /** A wet room is the dirtiest thing on the station, occupied or not. */
+  [ModuleType.WashBank]: { powerDraw: 0.3, idleSoilPerPositionPerMin: 0.6, inUseSoilPerPositionPerMin: 2.6, soilSource: 'hygiene' }
+};
+
+export function facilityOperatingLoad(module: ModuleType): FacilityOperatingLoad | null {
+  return FACILITY_OPERATING_LOAD[module] ?? null;
+}
+
+/**
+ * What neglect costs in credits.
+ *
+ * Repairs used to consume `REPAIR_SUPPLY_PARTS` of raw material and nothing
+ * else, so a station could run every fixture into the ground and pay only in
+ * spare parts it had probably already bought. These two numbers give a
+ * completed repair a price on the ledger.
+ *
+ * They are bracketed rather than picked: a repair must cost clearly more than
+ * the structure under it, and clearly less than the fixture it saves, or the
+ * correct play becomes "let it burn and rebuild". Against the current catalog
+ * that means
+ *   - a routine job (`REPAIR_JOB_DEBT_THRESHOLD` 45 down to
+ *     `REPAIR_JOB_COMPLETE_DEBT` 8, so 37 points) costs 10.7c — about five
+ *     hull tiles, or most of a minute of an operating opening line's net
+ *     income, and comfortably over half a 14c structural junction;
+ *   - a debt left to fester to the fire threshold (84 points cleared) costs
+ *     19.1c, and the absolute worst case 20.6c;
+ *   - 20.6c stays under half the 45c Bar End, the cheapest fixture that
+ *     accrues module wear, so repairing always beats replacing.
+ *
+ * This is a runtime drain, not a build cost: module wear rises at 0.06-0.72
+ * per minute, so nothing here reaches a first repair inside the window where
+ * the opening business (~130-277c) or the medium berth (600c) is being saved
+ * for. Neither calibration moves.
+ */
+export const MAINTENANCE_PRICING = {
+  /** Charged once when a repair job completes, whatever it repaired. */
+  callOutCredits: 4,
+  /** Charged per wear point the job actually cleared. */
+  creditsPerWearPoint: 0.18
+} as const;
+
+/** What one completed repair costs the station in credits. */
+export function repairServiceCost(wearCleared: number): number {
+  return MAINTENANCE_PRICING.callOutCredits + Math.max(0, wearCleared) * MAINTENANCE_PRICING.creditsPerWearPoint;
+}
 
 export const SERVICE_CAPACITY = {
   tableMaxDiners: MODULE_DEFINITIONS[ModuleType.Table].visitorCapacity ?? 3,

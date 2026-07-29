@@ -1285,6 +1285,16 @@ small {
   overflow-wrap: anywhere;
 }
 
+/* Secondary reading under a metric — the live rate beside a cumulative total.
+   Deliberately quiet: adding it must not turn one row into two. */
+.metric-note {
+  min-width: 0;
+  color: #7c90a8;
+  font-size: 9px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
 .metric-pill.tone-ok {
   border-color: rgba(88, 184, 125, 0.52);
 }
@@ -2906,94 +2916,40 @@ h2 {
   line-height: 1;
 }
 
-.berth-ops-widget {
+/* Live berth and pod operations stand beside the interface they run on instead
+   of collecting in a floating HUD card. The layer itself is inert; each card is
+   positioned in client pixels by syncBerthOpsAnchors() and takes its own
+   pointer events so the station stays clickable around it. */
+.berth-ops-anchors {
   position: fixed;
+  inset: 0;
   z-index: 10;
-  top: 74px;
-  right: 366px;
-  width: min(350px, 36vw);
-  max-height: min(48vh, 390px);
-  overflow-y: auto;
-  pointer-events: auto;
-  border: 1px solid rgba(91, 201, 166, 0.58);
-  background: linear-gradient(180deg, rgba(11, 28, 31, 0.95), rgba(7, 15, 21, 0.92));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
 }
 
-.berth-ops-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.berth-ops-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.berth-ops-count {
-  color: #72ddb5;
-  font: 700 10px Consolas, Menlo, monospace;
-}
-
-.panel-collapse-button {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-  border: 1px solid rgba(91, 201, 166, 0.42);
-  border-radius: 3px;
-  background: rgba(10, 25, 28, 0.78);
-  color: #b9e9d7;
-}
-
-.panel-collapse-button svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 120ms ease;
-}
-
-.panel-collapse-button:hover,
-.panel-collapse-button:focus-visible {
-  border-color: #72ddb5;
-  color: #f3fff9;
-}
-
-.berth-ops-widget.collapsed {
-  width: min(235px, calc(100vw - 28px));
-  max-height: none;
-  overflow: hidden;
-}
-
-.berth-ops-widget.collapsed .berth-ops-head {
-  margin-bottom: 0;
-}
-
-.berth-ops-widget.collapsed .berth-ops-list {
-  display: none;
-}
-
-.berth-ops-widget.collapsed .panel-collapse-button svg {
-  transform: rotate(180deg);
-}
-
-.berth-ops-list {
-  display: grid;
-  gap: 7px;
-}
-
-.berth-ops-list .traffic-offer {
+.berth-ops-anchor {
+  position: fixed;
+  width: min(286px, calc(100vw - 20px));
   margin: 0;
+  border: 1px solid rgba(91, 201, 166, 0.62);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(11, 28, 31, 0.96), rgba(7, 15, 21, 0.94));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.46);
+  pointer-events: auto;
+}
+
+/* Flipped to the interface's left: keep the accent edge facing the berth. */
+.berth-ops-anchor.anchor-left {
+  border-left-width: 1px;
+  border-right-width: 3px;
+}
+
+/* A card whose interface has scrolled out of view is hidden rather than
+   clamped to the edge, so it never claims to describe a berth that is not
+   on screen. */
+.berth-ops-anchor.is-offscreen {
+  display: none;
 }
 
 #toggle-ui-panels .panel-visibility-slash {
@@ -3021,7 +2977,7 @@ h2 {
 
 #app.ui-panels-hidden #panel,
 #app.ui-panels-hidden .left-stack,
-#app.ui-panels-hidden #berth-ops-widget,
+#app.ui-panels-hidden #berth-ops-anchors,
 #app.ui-panels-hidden #agent-side-panel,
 #app.ui-panels-hidden #bottom-dock {
   display: none !important;
@@ -3032,12 +2988,8 @@ h2 {
     width: min(290px, calc(100vw - 28px));
   }
 
-  .berth-ops-widget {
-    top: auto;
-    right: 14px;
-    bottom: 122px;
-    width: min(330px, calc(100vw - 28px));
-    max-height: 30vh;
+  .berth-ops-anchor {
+    width: min(250px, calc(100vw - 20px));
   }
 }
 
@@ -3286,12 +3238,6 @@ h2 {
 .hud-stock-button.purchase-failed {
   color: var(--danger);
   border-color: var(--danger);
-}
-
-@media (min-width: 761px) and (max-width: 1100px) {
-  .berth-ops-widget {
-    right: 18px;
-  }
 }
 
 .hud-card,
@@ -4151,6 +4097,28 @@ button.alert-item {
 
 .traffic-load-strip span:last-child { border-right: 0; }
 .traffic-load-strip b { color: #e1edf3; font-size: 10px; }
+
+/* Future load, in the admission decision rather than a panel of its own: one
+   wrapping line under the strip that says where the whole station lands. */
+.traffic-load-forecast {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+  padding: 4px 0 1px;
+  color: #9fb6c6;
+  font-size: 8px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.traffic-load-forecast-label {
+  color: #7f96a6;
+  font-weight: 800;
+}
+
+.traffic-load-forecast .short { color: var(--warn); font-weight: 800; }
+.traffic-load-forecast.is-short .traffic-load-forecast-label { color: var(--warn); }
+
 .traffic-offer-blocker { color: var(--warn); font-size: 9px; line-height: 1.25; }
 .traffic-commitment { color: #9ee0ba; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 
@@ -4975,10 +4943,6 @@ button.alert-item {
 }
 
 @media (max-width: 760px) {
-  .berth-ops-widget {
-    width: min(330px, calc(100vw - 28px));
-  }
-
   .port-service-row,
   .port-readiness-row {
     grid-template-columns: minmax(0, 1fr);

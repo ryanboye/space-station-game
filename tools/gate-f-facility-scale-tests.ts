@@ -8,12 +8,19 @@
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import {
   createInitialState,
+  getCrewSustainabilitySummary,
+  hireCrew,
+  moduleCreditBuildCost,
+  quoteMaterialImportCost,
   setRoom,
   setShelfMix,
+  setTile,
   tick,
+  tileBuildCost,
   tryCreateReservation,
   tryPlaceModule
 } from '../src/sim/sim';
+import { planStructuralPieceConstruction } from '../src/sim/construction';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
 import {
   buildSlotReservationRequest,
@@ -26,20 +33,38 @@ import {
   type FacilitySlotTarget
 } from '../src/sim/facility-slots';
 import {
+  barGroupStatus,
   barGroups,
   dwellSlotsInRoom,
+  facilityUtilityDemand,
+  fixtureCleaningLoadPerMin,
   freeReceptionSlots,
   marketChainStatus,
   receptionStatus,
   shelfAppealFor,
   SHELF_MIXES
 } from '../src/sim/facility-machines';
-import { resolveFacilitySlots } from '../src/sim/facility-descriptors';
+import {
+  FACILITY_FIXTURE_DESCRIPTORS,
+  publicApproachTilesForModule,
+  publicFaceOfModule,
+  publicRouteIsBlocked,
+  resolveFacilitySlots
+} from '../src/sim/facility-descriptors';
+import {
+  BERTH_CAPITAL_COST,
+  FACILITY_OPERATING_LOAD,
+  MAINTENANCE_PRICING,
+  facilityOperatingLoad,
+  repairServiceCost
+} from '../src/sim/balance';
 import {
   ModuleType,
   ResidentState,
   RoomType,
+  TileType,
   VisitorState,
+  type ModuleInstance,
   type StationState,
   type Visitor
 } from '../src/sim/types';
@@ -1174,6 +1199,306 @@ function testSeededRunsDifferButStayInferable(): string {
 }
 
 // ---------------------------------------------------------------------------
+// 15. A declared public use face is a physical customer edge
+// ---------------------------------------------------------------------------
+
+/** Seal every floor square a guest could stand on to use this fixture. */
+function wallInPublicFace(state: StationState, module: ModuleInstance): number[] {
+  const approach = publicApproachTilesForModule(module, state.width, state.height);
+  for (const tile of approach) setTile(state, tile, TileType.Wall);
+  return approach;
+}
+
+function testPublicUseFaceIsPhysical(): string {
+  // (a) The contract itself. Exactly one fixture is allowed to have no
+  // customer edge, and it is the one whose entire design is not having one.
+  const declared = Object.values(FACILITY_FIXTURE_DESCRIPTORS).filter((entry) => entry !== undefined);
+  const backOfHouse = declared.filter((entry) => entry!.publicUseFace === null);
+  assert(declared.length === 14, `Expected 14 authored fixtures, found ${declared.length}.`);
+  assert(
+    backOfHouse.length === 1 && backOfHouse[0]!.module === ModuleType.BackroomStockBank,
+    `Only the Backroom Stock Bank may declare no public face, found ${backOfHouse.map((entry) => entry!.module).join(', ')}.`
+  );
+
+  // (b) The face resolves to real tiles that lie OUTSIDE the footprint, on the
+  // declared side, and it turns with the fixture.
+  const market = scenario('market-improved-flow');
+  const bank = market.moduleInstances.find((module) => module.type === ModuleType.CheckoutBank)!;
+  const approach = publicApproachTilesForModule(bank, market.width, market.height);
+  const footprint = new Set(bank.tiles);
+  assert(approach.length > 0, 'A placed Checkout Bank must expose customer-side floor squares.');
+  assert(
+    approach.every((tile) => !footprint.has(tile)),
+    'The public approach must be floor beside the fixture, never the fixture itself.'
+  );
+  assert(
+    publicFaceOfModule(bank) === 'west' && approach.every((tile) => footprint.has(tile + 1)),
+    'An unrotated Checkout Bank must present its west column to customers, one square west of each register row.'
+  );
+  const turned: ModuleInstance = { ...bank, rotation: 90 };
+  assert(
+    publicFaceOfModule(turned) === 'north',
+    `Rotating a fixture must turn its public face too, got ${publicFaceOfModule(turned)}.`
+  );
+
+  // (c) An open frontage is not blocked, and the market says so.
+  assert(!publicRouteIsBlocked(market, bank), 'A Checkout Bank with open floor in front of it is reachable.');
+  const openChain = marketChainStatus(market);
+  assert(
+    openChain.blockedReason !== 'public-route-blocked',
+    `A reachable market must not report a blocked customer route, got ${openChain.blockedReason}.`
+  );
+
+  // (d) Seal every register frontage and the SAME reading flips. The market is
+  // still stocked and still staffed, so nothing more actionable can outrank it.
+  const sealed = scenario('market-improved-flow');
+  const sealedBanks = sealed.moduleInstances.filter((module) => module.type === ModuleType.CheckoutBank);
+  const sealedTiles = sealedBanks.flatMap((module) => wallInPublicFace(sealed, module));
+  assert(sealedTiles.length > 0, 'The sealing step must actually wall something in.');
+  assert(
+    sealedBanks.every((module) => publicRouteIsBlocked(sealed, module)),
+    'A Checkout Bank walled in along its customer edge must read as unreachable.'
+  );
+  const sealedChain = marketChainStatus(sealed);
+  assert(sealedChain.shelves > 0.95, 'The sealed market must still be stocked, or a stock complaint would win.');
+  assert(sealedChain.staffedRegisters > 0, 'The sealed market must still be staffed, or a staffing complaint would win.');
+  assert(
+    sealedChain.blockedReason === 'public-route-blocked',
+    `A market with no customer frontage must report 'public-route-blocked', got ${sealedChain.blockedReason}.`
+  );
+
+  // (e) Back-of-house is exempt by design: burying a Backroom Stock Bank is a
+  // restocking problem, never a customer-route one.
+  const backroom = sealed.moduleInstances.find((module) => module.type === ModuleType.BackroomStockBank)!;
+  for (const tile of backroom.tiles) {
+    for (const step of [-1, 1, -sealed.width, sealed.width]) {
+      const neighbour = tile + step;
+      if (neighbour >= 0 && neighbour < sealed.tiles.length && !backroom.tiles.includes(neighbour)) {
+        setTile(sealed, neighbour, TileType.Wall);
+      }
+    }
+  }
+  assert(
+    !publicRouteIsBlocked(sealed, backroom),
+    'A fixture that deliberately has no public face must never be flagged for lacking one.'
+  );
+
+  // (f) The same derivation drives a connected bar run, not just the market.
+  const cantina = scenario('cantina-expanded');
+  const openBar = barGroupStatus(cantina, barGroups(cantina)[0], 2);
+  assert(
+    openBar.blockedReason !== 'public-route-blocked',
+    `An open bar run must not report a blocked guest side, got ${openBar.blockedReason}.`
+  );
+  for (const id of barGroups(cantina)[0].moduleIds) {
+    wallInPublicFace(cantina, cantina.moduleInstances.find((module) => module.id === id)!);
+  }
+  const sealedBar = barGroupStatus(cantina, barGroups(cantina)[0], 2);
+  assert(
+    sealedBar.stock >= 0.16 && sealedBar.freeGuestSlots > 0 && sealedBar.dwellCapacity > 0,
+    'The sealed bar must remain stocked, free and seated so the route is the only true complaint.'
+  );
+  assert(
+    sealedBar.blockedReason === 'public-route-blocked',
+    `A bar run walled in along every guest side must report 'public-route-blocked', got ${sealedBar.blockedReason}.`
+  );
+
+  return `14 fixtures declare a face, 1 (Backroom Stock Bank) deliberately null; Checkout Bank west face resolved to ${approach.length} outside floor squares and rotated to north; `
+    + `sealing ${sealedTiles.length} frontage squares flipped a stocked, staffed market from '${openChain.blockedReason ?? 'clear'}' to '${sealedChain.blockedReason}', and a stocked bar run to '${sealedBar.blockedReason}'; buried backroom still exempt`;
+}
+
+// ---------------------------------------------------------------------------
+// 16. A bigger fixture costs more to RUN, not just more to buy
+// ---------------------------------------------------------------------------
+
+const CANTINA_FIXTURES = new Set<ModuleType>([
+  ModuleType.ServiceBar,
+  ModuleType.BarCorner,
+  ModuleType.BarEnd,
+  ModuleType.BoothBank,
+  ModuleType.StandingRail
+]);
+
+function testLargerFixturesAreChargedToRun(): string {
+  // Footprint, staffing, stock and queue frontage already charge scale. These
+  // are the two levers that were still free, plus the maintenance lever the
+  // Gate F fixtures only just started paying.
+  const undersized = scenario('cantina-undersized');
+  const expanded = scenario('cantina-expanded');
+
+  // (a) Utilities. The complaint being answered is that a 2x5 fixture drew
+  // exactly what a 2x1 one drew because only the ROOM was counted.
+  const stall = facilityOperatingLoad(ModuleType.MarketStall)!;
+  const bank = facilityOperatingLoad(ModuleType.CheckoutBank)!;
+  assert(
+    bank.powerDraw >= stall.powerDraw * 4,
+    `A 2x5 Checkout Bank must draw far more than a 2x1 Market Stall (${bank.powerDraw} vs ${stall.powerDraw}).`
+  );
+  for (const [module, load] of Object.entries(FACILITY_OPERATING_LOAD)) {
+    assert(load!.powerDraw > 0, `${module} must declare a real utility draw.`);
+  }
+  const utilityUnder = facilityUtilityDemand(undersized);
+  const utilityOver = facilityUtilityDemand(expanded);
+  assert(
+    utilityOver > utilityUnder,
+    `The expanded cantina must draw more power than the undersized one (${utilityUnder.toFixed(2)} vs ${utilityOver.toFixed(2)}).`
+  );
+
+  // (b) Cleaning, charged against the fixture's own depicted positions rather
+  // than against whoever walks past. Eight seats at one Community Table must
+  // cost more to keep clean than the same eight at two compact Tables — which
+  // is what the Community Table's own definition comment has always claimed.
+  const table = facilityOperatingLoad(ModuleType.Table)!;
+  const community = facilityOperatingLoad(ModuleType.CommunityTable)!;
+  const eightSeatsCompact = 8 * (table.idleSoilPerPositionPerMin + table.inUseSoilPerPositionPerMin);
+  const eightSeatsLarge = 8 * (community.idleSoilPerPositionPerMin + community.inUseSoilPerPositionPerMin);
+  assert(
+    eightSeatsLarge > eightSeatsCompact,
+    `Eight seats of Community Table must be a heavier cleaning burden than eight of compact Tables (${eightSeatsLarge.toFixed(2)} vs ${eightSeatsCompact.toFixed(2)}).`
+  );
+  const soilUnder = fixtureCleaningLoadPerMin(undersized);
+  const soilOver = fixtureCleaningLoadPerMin(expanded);
+  assert(soilUnder > 0, 'Even one Service Bar must lay down a real cleaning load.');
+  assert(
+    soilOver > soilUnder,
+    `The expanded cantina must be dirtier to keep (${soilUnder.toFixed(2)}/min vs ${soilOver.toFixed(2)}/min).`
+  );
+
+  // (c) Maintenance. Every Gate F fixture in the room must actually accrue
+  // module wear, and the bigger room must accrue strictly more of it.
+  const wearOf = (state: StationState): { targets: number; debt: number } => {
+    const ids = new Set(
+      state.moduleInstances.filter((module) => CANTINA_FIXTURES.has(module.type)).map((module) => module.id)
+    );
+    const debts = state.maintenanceDebts.filter(
+      (debt) => debt.moduleId !== undefined && ids.has(debt.moduleId)
+    );
+    return { targets: debts.length, debt: debts.reduce((sum, debt) => sum + debt.debt, 0) };
+  };
+  advance(undersized, 120);
+  advance(expanded, 120);
+  const wearUnder = wearOf(undersized);
+  const wearOver = wearOf(expanded);
+  assert(wearUnder.debt > 0, 'A Service Bar must accrue real module wear over two minutes.');
+  assert(
+    wearOver.targets > wearUnder.targets,
+    `The expanded cantina must put more fixtures on the maintenance books (${wearUnder.targets} vs ${wearOver.targets}).`
+  );
+  assert(
+    wearOver.debt > wearUnder.debt,
+    `The expanded cantina must accrue more maintenance debt (${wearUnder.debt.toFixed(2)} vs ${wearOver.debt.toFixed(2)}).`
+  );
+
+  return `utilities ${utilityUnder.toFixed(2)} -> ${utilityOver.toFixed(2)} power (Checkout Bank ${bank.powerDraw} vs Market Stall ${stall.powerDraw}); `
+    + `cleaning ${soilUnder.toFixed(1)} -> ${soilOver.toFixed(1)} dirt/min (8 seats: Community Table ${eightSeatsLarge.toFixed(1)} vs two Tables ${eightSeatsCompact.toFixed(1)}/min); `
+    + `maintenance ${wearUnder.targets} target at ${wearUnder.debt.toFixed(2)} -> ${wearOver.targets} targets at ${wearOver.debt.toFixed(2)} after 120s`;
+}
+
+// ---------------------------------------------------------------------------
+// 17. The credit ladder: Truss -> hull -> module -> labor -> maintenance
+// ---------------------------------------------------------------------------
+
+function testPriceLadderIsCoherent(): string {
+  // Every rung is MEASURED through the production pricing API, never restated
+  // here, so a change to any catalog price shows up as a failure rather than a
+  // quietly stale duplicate.
+  const state = createInitialState({ seed: 5150, physicalStarterInventory: true, manualTrafficAdmission: true });
+  tick(state, 0);
+  state.metrics.credits = 5000;
+
+  // Structure is priced in materials, so it enters the ladder at the rate the
+  // player actually buys materials at. Quoted in bulk to skip the 1-credit
+  // minimum on a single-unit import.
+  const creditsPerMaterial = quoteMaterialImportCost(state, 100) / 100;
+  const truss = tileBuildCost(TileType.Truss) * creditsPerMaterial;
+  const hull = tileBuildCost(TileType.Wall) * creditsPerMaterial;
+
+  // A structural junction is the cheapest act that costs real credits.
+  const beforeJunction = state.metrics.credits;
+  const trussTile = state.tiles.findIndex((tile) => tile === TileType.Truss);
+  let junction = 0;
+  if (trussTile >= 0) {
+    const planned = planStructuralPieceConstruction(state, trussTile, 'junction');
+    assert(planned.ok, `The ladder needs one placeable junction: ${planned.reason ?? 'unknown'}.`);
+    junction = beforeJunction - state.metrics.credits + tileBuildCost(TileType.Wall) * creditsPerMaterial;
+  }
+  assert(junction > 0, 'A structural junction must cost credits.');
+
+  // The cheapest facility module a player can buy.
+  const moduleCost = moduleCreditBuildCost(ModuleType.MarketStall);
+
+  // Labor is the only rung that never stops. Priced as one crew member's first
+  // hour: the hiring fee plus a full hour of payroll cycles.
+  const beforeHire = state.metrics.credits;
+  assert(hireCrew(state), 'The ladder needs one hire.');
+  const hireFee = beforeHire - state.metrics.credits;
+  const summary = getCrewSustainabilitySummary(state);
+  const payrollPeriodSec = summary.secondsToPayroll;
+  assert(payrollPeriodSec > 0, 'A payroll period must be measurable from a fresh station.');
+  const wagePerCrewPerCycle = summary.payrollPerCycle / Math.max(1, state.crew.total);
+  const crewHour = hireFee + wagePerCrewPerCycle * (3600 / payrollPeriodSec);
+
+  // Maintenance: a routine job runs the debt threshold (45) down to the
+  // completion floor (8); the worst possible job clears a saturated 100.
+  const routineRepair = repairServiceCost(45 - 8);
+  const worstRepair = repairServiceCost(100 - 8);
+  const berth = BERTH_CAPITAL_COST.medium;
+
+  // THE STATED LADDER. Each one-off rung is at least 2.5x and at most 8x the
+  // rung below it: below 2.5x a step is a rounding error the player cannot
+  // feel, above 8x it is a cliff that makes the cheaper option strictly
+  // correct. The berth is included because it has to extend the same ladder
+  // rather than sit outside it.
+  const MIN_STEP = 2.5;
+  const MAX_STEP = 8;
+  const rungs: Array<{ label: string; credits: number }> = [
+    { label: 'truss tile', credits: truss },
+    { label: 'hull tile', credits: hull },
+    { label: 'structural junction', credits: junction },
+    { label: 'cheapest facility module', credits: moduleCost },
+    { label: "one crew member's first hour", credits: crewHour },
+    { label: 'medium berth', credits: berth }
+  ];
+  const steps: string[] = [];
+  for (let index = 1; index < rungs.length; index += 1) {
+    const step = rungs[index].credits / rungs[index - 1].credits;
+    assert(
+      step >= MIN_STEP && step <= MAX_STEP,
+      `${rungs[index - 1].label} -> ${rungs[index].label} stepped ${step.toFixed(2)}x, outside the stated ${MIN_STEP}-${MAX_STEP}x ladder `
+        + `(${rungs[index - 1].credits.toFixed(2)}c -> ${rungs[index].credits.toFixed(2)}c).`
+    );
+    steps.push(`${rungs[index].label} ${step.toFixed(1)}x`);
+  }
+
+  // Maintenance is bracketed rather than ranked, because a repair that
+  // out-prices the fixture it saves turns "let it burn" into the right move.
+  assert(
+    routineRepair >= junction * 0.5,
+    `A routine repair (${routineRepair.toFixed(2)}c) must not be cheaper than half a structural junction (${(junction * 0.5).toFixed(2)}c).`
+  );
+  const cheapestWearingFixture = moduleCreditBuildCost(ModuleType.BarEnd);
+  assert(
+    worstRepair < cheapestWearingFixture * 0.5,
+    `The worst possible repair (${worstRepair.toFixed(2)}c) must stay under half the cheapest fixture that can wear out `
+      + `(${cheapestWearingFixture}c), or replacing beats repairing.`
+  );
+  assert(
+    MAINTENANCE_PRICING.callOutCredits > 0 && MAINTENANCE_PRICING.creditsPerWearPoint > 0,
+    'Maintenance must carry both a fixed call-out and a per-wear price, or neglect is free.'
+  );
+
+  // And the ladder must not have moved the two recently calibrated numbers.
+  assert(berth === 600, `The medium berth capital cost must stay at its calibrated 600c, got ${berth}.`);
+  assert(
+    moduleCreditBuildCost(ModuleType.MarketStall) === 50 && moduleCreditBuildCost(ModuleType.ServingStation) === 50,
+    'The opening-business hardware prices must stay where OPEN-04 calibrated them.'
+  );
+
+  return `${rungs.map((rung) => `${rung.label} ${rung.credits.toFixed(2)}c`).join(' -> ')}; steps ${steps.join(', ')} all inside ${MIN_STEP}-${MAX_STEP}x; `
+    + `maintenance bracketed: routine ${routineRepair.toFixed(1)}c >= half a junction ${(junction * 0.5).toFixed(1)}c, worst ${worstRepair.toFixed(1)}c < half a Bar End ${(cheapestWearingFixture * 0.5).toFixed(1)}c`;
+}
+
+// ---------------------------------------------------------------------------
 
 const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '1 exclusive claims and cleanup', run: testExclusiveClaimsAndCleanup },
@@ -1188,7 +1513,10 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '11 save/load rebuilds fixtures', run: testSaveLoadRebuildsFixtures },
   { name: '12 death frees its position same tick', run: testDeathFreesItsPositionSameTick },
   { name: '13 larger cantina holds more occupants at once', run: testLargerCantinaHoldsMoreOccupantsAtOnce },
-  { name: '14 seeded runs differ but stay inferable', run: testSeededRunsDifferButStayInferable }
+  { name: '14 seeded runs differ but stay inferable', run: testSeededRunsDifferButStayInferable },
+  { name: '15 public use face is a physical customer edge', run: testPublicUseFaceIsPhysical },
+  { name: '16 larger fixtures are charged to run', run: testLargerFixturesAreChargedToRun },
+  { name: '17 price ladder is coherent', run: testPriceLadderIsCoherent }
 ];
 
 function main(): void {

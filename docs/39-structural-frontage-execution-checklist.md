@@ -347,14 +347,14 @@ audited checklist with no unsupported checked claims.
 - [x] Implement Arrival Desk, initial target 2x4 with two processors.
 - [x] Implement Wash Bank, initial target 2x5.
 - [x] Validate every footprint at actual play zoom before locking dimensions.
-- [ ] Ensure each fixture has a public use face.
+- [x] Ensure each fixture has a public use face.
 - [x] Ensure staffed fixtures have a staff work face.
 - [x] Ensure stocked fixtures have a delivery/service route.
 - [x] Give larger fixtures greater absolute capacity and useful staffing
   efficiency.
-- [ ] Charge larger fixtures through footprint, staffing, stock, utilities,
+- [x] Charge larger fixtures through footprint, staffing, stock, utilities,
   cleaning, maintenance, and queue frontage.
-- [ ] Preserve compact alternatives where irregular layouts make them useful.
+- [x] Preserve compact alternatives where irregular layouts make them useful.
 
 ### Large Fixture Artwork
 
@@ -769,24 +769,24 @@ audited checklist with no unsupported checked claims.
 
 ### Economy And Progression
 
-- [ ] Price Truss, hull, modules, labor, and maintenance coherently.
+- [x] Price Truss, hull, modules, labor, and maintenance coherently.
 - [ ] Make first Berth a major but attainable capital achievement.
 - [x] Keep capabilities visible rather than hidden behind arbitrary unlocks.
 - [ ] Use rating to attract more valuable traffic.
 - [x] Use Capital Projects as optional subsidies, not exclusive gates.
 - [x] Reconcile global goal, business path, and legacy tier messaging.
-- [ ] Preserve a visible cumulative station rating with causal breakdown.
+- [x] Preserve a visible cumulative station rating with causal breakdown.
 
 ### Contextual UI
 
 - [x] Keep Approach Control compact and hideable.
 - [x] Keep alerts contextual/pop-out.
-- [ ] Put market operations at the market.
-- [ ] Put dock/Berth operations at the physical interface.
-- [ ] Keep future-load forecasting contextual to admission.
+- [x] Put market operations at the market.
+- [x] Put dock/Berth operations at the physical interface.
+- [x] Keep future-load forecasting contextual to admission.
 - [x] Avoid permanent panels for Alpha Watch, charter details, fuel, cargo arm, and
   work queue when no related context exists.
-- [ ] Use world-space chips and overlays before sidebar prose.
+- [x] Use world-space chips and overlays before sidebar prose.
 - [x] Never create overwide scheduling or operations panels.
 
 ### Structural And Operational Art
@@ -2709,3 +2709,64 @@ bugfixing phase.
 - Noted for a separate decision: `drawDiagnosticOverlayLegend` in `render.ts` has
   no callers — pre-existing dead code, since the player-facing legend is the
   `#diagnostic-key` panel in `main.ts`.
+
+2026-07-28 · Fixtures cost what they are, and operations moved to the thing they operate
+
+- Commit or files: `FACILITY_OPERATING_LOAD`, `MAINTENANCE_PRICING` and
+  `repairServiceCost` in `src/sim/balance.ts`; public-face geometry and the load
+  derivations in `src/sim/facility-descriptors.ts` and
+  `src/sim/facility-machines.ts`; the four wiring points in `src/sim/sim.ts`;
+  anchored panels in `src/main.ts`, `src/styles.css` and
+  `src/ui/opening-economy-panels.ts`; cases 15-17 in
+  `tools/gate-f-facility-scale-tests.ts` and a new case in
+  `tools/facility-slots-tests.ts`.
+- **`publicUseFace` was declared on all 14 descriptors and read nowhere**, and
+  `'public-route-blocked'` was a declared reason no observer produced. The face
+  now rotates with the placed module and resolves to the floor squares outside
+  it, and a fixture whose approach has no walkable square feeds that reason
+  through the three machine statuses the renderer already reads — so it reaches
+  the player with no render change. Asserted by sealing 10 frontage squares and
+  watching a **still-stocked, still-staffed** market flip to blocked. Two helper
+  exports written during the work were deleted once nothing consumed them, since
+  shipping exported dead code is the exact defect this row is about.
+- **Large fixtures now cost what they are.** Power is footprint tiles times one
+  of three class rates, so a 2x5 Checkout Bank draws `0.30` against a 2x1 Market
+  Stall's `0.06` — five times the floor, five times the bill. Cleaning is per
+  depicted position per minute whether or not anyone is standing there, which is
+  the shape the row asks for: eight diners at one Community Table soil `22.0`
+  per minute against `15.6` for the same eight at two compact Tables, finally
+  charging what that fixture's own comment always claimed. Maintenance now costs
+  credits at `4c + 0.18c` per wear point, bracketed so repair always beats
+  replacement — worst case `20.6c` against the cheapest wearing fixture at `45c`.
+- The **price ladder** is measured through the production pricing API rather than
+  restated, so a catalog change fails the test instead of going stale: truss tile
+  `0.68c` → hull `2.04c` → junction `14.04c` → cheapest facility module `50c` →
+  a crew member's first hour `160c` → medium berth `600c`, with a stated rule
+  that each rung is 2.5x-8x the one below. Below that band a step is a rounding
+  error; above it, the cheaper option is strictly correct.
+- **Operations moved to the thing they operate.** The Travel Supplies shop opens
+  by clicking a market fixture and is anchored beside it with no scrim, so the
+  station stays operable behind it and the panel tracks the camera. The floating
+  `#berth-ops-widget` is deleted outright and replaced by one card per live
+  turnaround anchored to its own interface, which hides rather than clamping when
+  its interface scrolls off screen. Admission now carries a projected-load line
+  *inside* the decision card, read from the same commitment totals the admission
+  policy itself judges against, so the forecast cannot disagree with the gate.
+- **Only two prose readouts were removed**, and both had a strictly better world
+  equivalent: the Fuel row (tanks carry graduated fill gauges and couplers print
+  their own connection state) and `Docked n` (each docked ship already draws a
+  chip at its own interface with callsign, phase, passengers and countdown).
+  Everything else was kept with a stated reason — role coverage, cargo-arm
+  strain, the work-state census, queue backlog and crew needs have no world
+  equivalent, and deleting them would have been loss dressed as progress.
+- **The rating breakdown now explains the number on screen.** The cumulative
+  totals existed, persisted, and were rendered nowhere; the modal showed only
+  per-minute rates. Total is now the primary value with the rate as a quiet
+  second line, so the row count did not grow. The filter also changed: a cause
+  shows when it has *ever* contributed rather than only while still firing —
+  a penalty that stopped a minute ago is still part of the score, and hiding it
+  is what made the score unexplainable.
+- Balance calls made here that deserve a playtest opinion: the three per-tile
+  power class rates, the per-position soil rates and the 41% Community Table
+  premium, the `4c + 0.18c` maintenance price, and the 2.5x-8x ladder band. All
+  four are documented in place with their derivation.

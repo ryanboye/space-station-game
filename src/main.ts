@@ -294,7 +294,7 @@ app.innerHTML = `
           <circle cx="12" cy="12" r="3" />
         </svg>
       </button>
-      <button id="toggle-ui-panels" class="topbar-btn utility-icon" type="button" aria-label="Hide interface panels" title="Hide interface panels" aria-pressed="false" aria-controls="panel bottom-dock berth-ops-widget">
+      <button id="toggle-ui-panels" class="topbar-btn utility-icon" type="button" aria-label="Hide interface panels" title="Hide interface panels" aria-pressed="false" aria-controls="panel bottom-dock berth-ops-anchors">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <rect x="3" y="4" width="18" height="16" rx="1" />
           <path d="M8 4v16" />
@@ -378,18 +378,7 @@ app.innerHTML = `
         <div id="diagnostic-key-rows" class="diagnostic-key-rows"></div>
       </section>
     </div>
-    <section id="berth-ops-widget" class="hud-card berth-ops-widget overlay-card hidden" aria-live="polite">
-      <div class="hud-card-title berth-ops-head">
-        <span id="berth-ops-title">Live Berth Ops</span>
-        <span class="berth-ops-head-actions">
-          <span id="berth-ops-count" class="berth-ops-count">0 ACTIVE</span>
-          <button id="toggle-berth-ops" class="panel-collapse-button" type="button" aria-label="Collapse live berth operations" title="Collapse ship details" aria-expanded="true" aria-controls="berth-ops-list">
-            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M5 12l5-5 5 5" /></svg>
-          </button>
-        </span>
-      </div>
-      <div id="berth-ops-list" class="berth-ops-list"></div>
-    </section>
+    <div id="berth-ops-anchors" class="berth-ops-anchors" aria-label="Live berth and pod operations" aria-live="polite"></div>
     <section id="agent-side-panel" class="side-inspector side-agent-panel floating-agent-panel hidden" aria-live="polite">
       <div class="side-inspector-head">
         <h3 id="agent-side-title">Agent Inspector</h3>
@@ -422,7 +411,10 @@ app.innerHTML = `
         </div>
         <div id="bottom-role-coverage" class="bottom-role-coverage" aria-live="polite"></div>
         <div class="row compact list-row hidden" id="cargo-arm-row"><span>Cargo Arm</span><span class="value" id="cargo-arm-status">Ready · 0% strain</span></div>
-        <div class="row compact list-row hidden" id="fuel-row"><span>Fuel</span><span class="value" id="fuel-status">No tanks</span></div>
+        <!-- No Fuel row. Every fact it carried is already drawn on the hardware:
+             each Fuel Tank shows a graduated fill gauge and a TANK CONNECTED /
+             PIPE TO ANY TANK TILE label, and each Fuel Coupler shows
+             "COUPLER: READY · n FUEL", "LINE OK, TANK EMPTY", or "NO TANK". -->
         <div class="row compact list-row"><span>Crew</span><span class="value" id="crew">Working 0 | Idle 0 | Resting 0</span></div>
         <div class="row compact list-row"><span>Traffic</span><span class="value" id="ops-traffic">Visitors 0 | Ships 0 | Exits 0/min</span></div>
         <div class="row compact list-row hidden"><span>Systems</span><span class="value" id="ops">Cafeteria 0/0 | Kitchen 0/0 | Life Support 0/0</span></div>
@@ -675,6 +667,7 @@ app.innerHTML = `
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="life-support" title="Show oxygen quality and life-support coverage across the station">Air Coverage</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="visitor-status" title="Show which public spaces visitors enjoy or avoid">Guest Appeal</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="sanitation" title="Show dirt, grime, cleaning pressure, and its source">Cleanliness</button>
+        <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="structural" title="Show which frontage is structurally supported, planned, overloaded, or unsupported">Structural Support</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show visitor, crew, and freight routes plus conflicts">Foot Traffic</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show local control, notoriety, value, and crime pressure">Security & Risk</button>
         <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Storage: OFF</button>
@@ -784,16 +777,16 @@ app.innerHTML = `
       <div class="rating-modal-effect" id="rating-modal-effect">Reputation affects which traffic finds the station.</div>
       <div class="rating-factor-grid">
         <section class="rating-factor-group rating-factor-group-positive">
-          <div class="rating-factor-heading"><strong>Helping now</strong><small>positive rating per minute</small></div>
+          <div class="rating-factor-heading"><strong>What earned the score</strong><small>points total · rate now</small></div>
           <div id="rating-modal-bonuses" class="metric-list rating-driver-list" data-metric-title="Service"></div>
         </section>
         <section class="rating-factor-group rating-factor-group-negative">
-          <div class="rating-factor-heading"><strong>Hurting now</strong><small>negative rating per minute</small></div>
+          <div class="rating-factor-heading"><strong>What cost the score</strong><small>points total · rate now</small></div>
           <div id="rating-modal-penalties" class="metric-list rating-driver-list" data-metric-title="Pressure"></div>
         </section>
       </div>
       <section class="rating-factor-group rating-factor-group-failures">
-        <div class="rating-factor-heading"><strong>Why service is failing</strong><small>live failure reasons per minute</small></div>
+        <div class="rating-factor-heading"><strong>Why service failed</strong><small>points total · rate now</small></div>
         <div id="rating-modal-failures" class="metric-list rating-driver-list" data-metric-title="Misses"></div>
       </section>
       <div class="rating-modal-driver-block">
@@ -1297,6 +1290,67 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
 
 function refreshOpeningEconomyPanels(): void {
   openingEconomyPanels.render(openingEconomyPanelView());
+}
+
+// Market operations belong at the market. Every fixture on the retail chain
+// opens the same shop surface: the stall, the shelves shoppers browse, the
+// checkout they queue at, and the backroom that refills the shelves.
+const MARKET_FIXTURE_TYPES = new Set<ModuleType>([
+  ModuleType.MarketStall,
+  ModuleType.ShelfAisle,
+  ModuleType.CheckoutBank,
+  ModuleType.BackroomStockBank
+]);
+
+/** Origin tile the shop panel is currently pinned to, or null when closed. */
+let shopAnchorTile: number | null = null;
+
+/** The clicked tile's market fixture, reported by its origin tile. */
+function marketFixtureOriginAtTile(tileIndex: number): number | null {
+  const moduleId = state.moduleOccupancyByTile[tileIndex] ?? -1;
+  if (moduleId < 0) return null;
+  const module = state.moduleInstances.find((entry) => entry.id === moduleId);
+  return module && MARKET_FIXTURE_TYPES.has(module.type) ? module.originTile : null;
+}
+
+function firstMarketFixtureTile(): number | null {
+  return state.moduleInstances.find((module) => MARKET_FIXTURE_TYPES.has(module.type))?.originTile ?? null;
+}
+
+/**
+ * Open the retail surface beside a physical fixture.
+ *
+ * With no fixture on the station yet — the recipe opens the shop before the
+ * Shelf Aisle exists so the player can price the opening order — there is
+ * nothing to anchor to and the panel falls back to the centered layout.
+ */
+function openMarketSurface(anchorTile: number | null): void {
+  shopAnchorTile = anchorTile;
+  refreshOpeningEconomyPanels();
+  if (anchorTile === null) {
+    openingEconomyPanels.open('shop');
+    return;
+  }
+  const fixture = tileClientRect(anchorTile);
+  openingEconomyPanels.open('shop', { x: fixture.x + fixture.size * 0.5, y: fixture.y });
+}
+
+/** Keep the anchored shop pinned to its fixture while the camera moves. */
+function syncAnchoredShopPanel(): void {
+  if (shopAnchorTile === null) return;
+  if (openingEconomyPanels.openPanelName() !== 'shop') {
+    shopAnchorTile = null;
+    return;
+  }
+  // Selling or demolishing the fixture takes its operating surface with it,
+  // rather than leaving a shop card pointing at empty floor.
+  if (marketFixtureOriginAtTile(shopAnchorTile) === null) {
+    shopAnchorTile = null;
+    openingEconomyPanels.close();
+    return;
+  }
+  const fixture = tileClientRect(shopAnchorTile);
+  openingEconomyPanels.setAnchor({ x: fixture.x + fixture.size * 0.5, y: fixture.y });
 }
 
 function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
@@ -1812,11 +1866,7 @@ const admissionPodEnabledEl = document.querySelector<HTMLInputElement>('#admissi
 const admissionBerthEnabledEl = document.querySelector<HTMLInputElement>('#admission-berth-enabled')!;
 const admissionPressureEl = document.querySelector<HTMLElement>('#admission-pressure')!;
 const admissionManualOverrideEl = document.querySelector<HTMLButtonElement>('#admission-manual-override')!;
-const berthOpsWidgetEl = document.querySelector<HTMLElement>('#berth-ops-widget')!;
-const berthOpsTitleEl = document.querySelector<HTMLElement>('#berth-ops-title')!;
-const berthOpsCountEl = document.querySelector<HTMLElement>('#berth-ops-count')!;
-const berthOpsListEl = document.querySelector<HTMLElement>('#berth-ops-list')!;
-const toggleBerthOpsBtn = document.querySelector<HTMLButtonElement>('#toggle-berth-ops')!;
+const berthOpsAnchorsEl = document.querySelector<HTMLElement>('#berth-ops-anchors')!;
 const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
 const settlementCardEl = document.querySelector<HTMLElement>('#settlement-card')!;
 const bottomDockEl = document.querySelector<HTMLElement>('#bottom-dock')!;
@@ -1837,8 +1887,6 @@ publishBottomDockHeight();
 
 const cargoArmRowEl = document.querySelector<HTMLElement>('#cargo-arm-row')!;
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
-const fuelRowEl = document.querySelector<HTMLElement>('#fuel-row')!;
-const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
 const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;
 const taxInput = document.querySelector<HTMLInputElement>('#tax')!;
 const taxLabel = document.querySelector<HTMLSpanElement>('#tax-label')!;
@@ -1872,6 +1920,7 @@ const DIAGNOSTIC_OVERLAY_LABELS: Record<DiagnosticOverlay, string> = {
   none: 'Normal View',
   'life-support': 'Air Coverage',
   'utility-underlay': 'Utility Networks',
+  structural: 'Structural Support',
   thermal: 'Thermal',
   'visitor-status': 'Guest Appeal',
   'resident-comfort': 'Resident Comfort',
@@ -1886,6 +1935,7 @@ const DIAGNOSTIC_OVERLAYS: DiagnosticOverlay[] = [
   'none',
   'life-support',
   'utility-underlay',
+  'structural',
   'thermal',
   'visitor-status',
   'resident-comfort',
@@ -2048,6 +2098,17 @@ function refreshDiagnosticReadout(): void {
 
 function diagnosticKeyModel(): DiagnosticKeyModel | null {
   switch (state.controls.diagnosticOverlay) {
+    case 'structural':
+      return {
+        title: 'Structural Support',
+        stats: `pieces ${state.structuralPieces.length} | see the in-world legend for live counts`,
+        rows: [
+          { color: '#6edb8f', label: 'Supported - load reaches a structural root' },
+          { color: '#61c8ff', label: 'Planned support - pending or previewed piece (hatched)' },
+          { color: '#ffd65c', label: 'Overloaded - needs a Junction or Reinforced Bulkhead' },
+          { color: '#ee4f4f', label: 'Unsupported - disconnected, over-span, or no load path' }
+        ]
+      };
     case 'life-support':
       return {
         title: 'Air Coverage',
@@ -3411,6 +3472,46 @@ function compactLoadItem(label: string, value: string): string {
   return `<span><b>${escapeHtml(value)}</b>${label}</span>`;
 }
 
+type ProjectedAdmissionLoad = {
+  berthMinutes: number;
+  beds: number;
+  meals: number;
+  hygiene: number;
+  staffMinutes: number;
+  /** Prepared meals physically on the station right now. */
+  mealsReady: number;
+};
+
+/**
+ * What the station would be committed to if this offer were accepted.
+ *
+ * Every term already exists. `state.commitment` carries the accepted-contract
+ * totals the sim refreshes each pass for the admission policy's own headroom
+ * checks, and `preview.committedLoad` carries this offer's share; the forecast
+ * is their sum, so it can never disagree with the gate that will judge the
+ * accept. Hygiene has no commitment field, so the in-flight visits are summed
+ * from the same offer previews the sim reads when it builds the other totals.
+ * Nothing here simulates anything new.
+ */
+function projectedAdmissionLoad(preview: TrafficOfferPreview): ProjectedAdmissionLoad {
+  const committed = state.commitment;
+  let committedHygiene = 0;
+  for (const ship of state.arrivingShips) {
+    if (ship.stage === 'depart' || !ship.portManifest) continue;
+    const shipPreview = getTrafficOfferPreview(state, ship.portManifest.id);
+    committedHygiene += shipPreview?.committedLoad.hygieneVisits ?? 0;
+  }
+  const load = preview.committedLoad;
+  return {
+    berthMinutes: (committed.committedBerthSeconds + load.berthSeconds) / 60,
+    beds: committed.committedBeds + load.bedNights,
+    meals: committed.committedMeals + load.meals,
+    hygiene: committedHygiene + load.hygieneVisits,
+    staffMinutes: committed.committedStaffMinutes + load.staffMinutes,
+    mealsReady: state.itemNodes.reduce((sum, node) => sum + Math.max(0, node.items.meal ?? 0), 0)
+  };
+}
+
 const RECOVERY_ACTION_LABELS = [
   ['emergency-meals', 'Emergency meal'],
   ['temporary-lodging', 'Temporary bunk'],
@@ -3525,6 +3626,63 @@ function chosenOfferInterface(offer: TrafficOffer, preview: TrafficOfferPreview)
   return { id: choice.id, label: choice.label, slotId, side };
 }
 
+let renderedBerthOpsHtml = '';
+
+/**
+ * The physical interface a live turnaround is running on.
+ *
+ * Berth work anchors on the berth's own anchor tile; pod work anchors on the
+ * Pod Dock module the craft is clamped to. A ship that has not been given an
+ * interface yet has nothing to stand beside, and is left to Approach Control.
+ */
+function berthOpsAnchorTile(ship: StationState['arrivingShips'][number]): number | null {
+  if (ship.assignedBerthAnchor !== null && ship.assignedBerthAnchor !== undefined) {
+    return ship.assignedBerthAnchor;
+  }
+  if (ship.assignedDockId === null) return null;
+  const dock = state.docks.find((entry) => entry.id === ship.assignedDockId);
+  if (!dock) return null;
+  return dock.moduleId === undefined
+    ? dock.tiles[0] ?? null
+    : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile ?? dock.tiles[0] ?? null;
+}
+
+/**
+ * Place each live-ops card beside the interface it reports on.
+ *
+ * Runs every frame because the camera can move between UI refreshes. Cards
+ * whose interface has scrolled off screen are hidden rather than clamped: a
+ * card pinned to the viewport edge would claim to describe a berth that is not
+ * there, which is exactly the floating-HUD problem this replaces.
+ */
+function syncBerthOpsAnchors(): void {
+  const cards = berthOpsAnchorsEl.querySelectorAll<HTMLElement>('.berth-ops-anchor');
+  if (cards.length === 0) return;
+  const wrap = gameWrap.getBoundingClientRect();
+  for (const card of cards) {
+    const tile = Number(card.dataset.berthOpsTile);
+    if (!Number.isFinite(tile)) continue;
+    const anchor = tileClientRect(tile);
+    const width = card.offsetWidth;
+    const height = card.offsetHeight;
+    const offScreen =
+      anchor.x < wrap.left - anchor.size ||
+      anchor.x > wrap.right + anchor.size ||
+      anchor.y < wrap.top - anchor.size ||
+      anchor.y > wrap.bottom + anchor.size;
+    card.classList.toggle('is-offscreen', offScreen);
+    if (offScreen) continue;
+    // Prefer sitting to the right of the interface, flipping only at the edge,
+    // so the card never covers the berth it is reporting on.
+    const gap = anchor.size * 0.6 + 8;
+    const flip = anchor.x + gap + width + 10 > window.innerWidth;
+    const left = flip ? anchor.x - gap - width : anchor.x + gap;
+    card.classList.toggle('anchor-left', flip);
+    card.style.left = `${Math.round(clamp(left, 10, Math.max(10, window.innerWidth - width - 10)))}px`;
+    card.style.top = `${Math.round(clamp(anchor.y - height * 0.5, 10, Math.max(10, window.innerHeight - height - 10)))}px`;
+  }
+}
+
 function refreshTrafficOffers(): void {
   refreshRecoveryEpisodes();
   refreshAdmissionPolicyEditor();
@@ -3539,29 +3697,15 @@ function refreshTrafficOffers(): void {
       : `FAULT · repair ${cargoOps.cargoArmRepairProgress.toFixed(1)}/8s`
     : `${cargoOps.cargoArmStatus === 'warning' ? 'Strained' : 'Ready'} · ${Math.round(cargoOps.cargoArmStrain)}% strain${cargoArmCount >= 2 ? ` · ${cargoArmCount} arms` : ''}`;
   cargoArmStatusEl.className = `value cargo-arm-${cargoOps.cargoArmStatus}`;
-  const fuelTankModules = state.moduleInstances.filter((module) => module.type === ModuleType.FuelTank);
-  // Contextual UI: propellant stock is only a fact once a tank exists. Until
-  // then the row is a permanent "No tanks" that answers a question nobody asked.
-  fuelRowEl.classList.toggle('hidden', fuelTankModules.length <= 0);
-  const fuelTankNodes = fuelTankModules
-    .map((module) => state.itemNodes.find((node) => node.tileIndex === module.originTile))
-    .filter((node): node is NonNullable<typeof node> => node !== undefined);
-  const fuelStock = fuelTankNodes.reduce((sum, node) => sum + (node.items.fuel ?? 0), 0);
-  const fuelCapacity = fuelTankNodes.reduce((sum, node) => sum + node.capacity, 0);
-  const fuelJobs = state.jobs.filter(
-    (job) => job.itemType === 'fuel' && job.state !== 'done' && job.state !== 'expired'
-  );
-  fuelStatusEl.textContent = fuelTankNodes.length <= 0
-    ? 'No tanks'
-    : `${Math.floor(fuelStock)}/${fuelCapacity} · ${fuelJobs.length} load${fuelJobs.length === 1 ? '' : 's'} moving`;
   const activeTurnarounds = state.arrivingShips.filter((ship) =>
     ship.stage !== 'depart' && (ship.portManifest || ship.smallCraftVisit)
   );
-  berthOpsTitleEl.textContent = activeTurnarounds.some((ship) => !ship.smallCraftVisit)
-    ? 'Live Berth Ops'
-    : 'Live Pod Ops';
   refreshShiftBrief(activeTurnarounds.filter((ship) => ship.portManifest && !ship.smallCraftVisit));
   const activeHtml = activeTurnarounds.map((ship) => {
+    // Dock/berth operations are anchored to the interface they run on, so each
+    // card carries the tile it belongs to and syncBerthOpsAnchors places it.
+    const anchorTile = berthOpsAnchorTile(ship);
+    if (anchorTile === null) return '';
     if (ship.smallCraftVisit) {
       const dock = ship.assignedDockId === null ? null : state.docks.find((entry) => entry.id === ship.assignedDockId) ?? null;
       const services = ship.smallCraftVisit.services;
@@ -3572,7 +3716,7 @@ function refreshTrafficOffers(): void {
       const serviceSummary = services.map((service) =>
         `${podDockServiceLabel(service.kind, service.freightDirection)} ${service.status.toUpperCase()} ${Math.round(service.progress * 100)}%`
       ).join(' · ');
-      return `<article class="traffic-offer port-turnaround small-craft-turnaround">
+      return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor" data-berth-ops-tile="${anchorTile}">
         <div class="traffic-offer-head"><strong>${escapeHtml(ship.portManifest?.callsign ?? `POD ${ship.id}`)} · POD DOCK</strong><span>${ship.stage.toUpperCase()} · ${progress}%</span></div>
         <div class="traffic-offer-meta">${dock ? `DOCK ${dock.id}` : 'DOCK LINK LOST'} · ${ship.passengersTotal} GUEST${ship.passengersTotal === 1 ? '' : 'S'}</div>
         <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
@@ -3592,16 +3736,18 @@ function refreshTrafficOffers(): void {
       const complete = promise.completed >= promise.target - 0.001;
       return `<div class="turnaround-promise ${complete ? 'complete' : ''}"><span>${promise.label}</span><b>${Math.floor(promise.completed)}/${Math.floor(promise.target)}</b></div>`;
     }).join('') ?? '<div class="traffic-offer-line">Preparing contract...</div>';
-    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'}">
+    return `<article class="traffic-offer port-turnaround phase-${turn?.phase ?? 'approach'} berth-ops-anchor" data-berth-ops-tile="${anchorTile}">
       <div class="traffic-offer-head"><strong>${offer.callsign} · ${offer.shipName}</strong><span>${phase} · ${secondsLeft}s</span></div>
       <div class="traffic-offer-meta">${(offer.offerKind ?? 'mixed').toUpperCase()} SHIFT · BERTH ${berthStanding?.serviceGrade ?? 'C'} · ${offer.passengersTotal} pax</div>
       <div class="turnaround-track"><i style="width:${Math.max(3, progress)}%"></i></div>
       <div class="turnaround-promises">${promiseRows}</div>
     </article>`;
   }).join('');
-  berthOpsWidgetEl.classList.toggle('hidden', activeTurnarounds.length === 0);
-  berthOpsCountEl.textContent = `${activeTurnarounds.length} ACTIVE`;
-  berthOpsListEl.innerHTML = activeHtml;
+  if (activeHtml !== renderedBerthOpsHtml) {
+    renderedBerthOpsHtml = activeHtml;
+    berthOpsAnchorsEl.innerHTML = activeHtml;
+  }
+  syncBerthOpsAnchors();
   if (!state.controls.manualTrafficAdmission) {
     trafficOfferListEl.innerHTML = '';
     return;
@@ -3628,6 +3774,16 @@ function refreshTrafficOffers(): void {
     manual: state.controls.manualTrafficAdmission,
     hasBerthCapacity,
     policy: state.admissionPolicy,
+    // The projected-load line moves with the station's standing commitments and
+    // its meal stock, neither of which is a property of any single offer, so
+    // they have to enter the render key on their own.
+    commitment: [
+      Math.round(state.commitment.committedBerthSeconds / 30),
+      state.commitment.committedBeds,
+      Math.round(state.commitment.committedMeals),
+      Math.round(state.commitment.committedStaffMinutes),
+      Math.floor(state.itemNodes.reduce((sum, node) => sum + Math.max(0, node.items.meal ?? 0), 0))
+    ],
     offers: offerViews.map(({ offer, preview, choice }) => [
       offer.id,
       offer.status,
@@ -3675,6 +3831,21 @@ function refreshTrafficOffers(): void {
       .map((cue) => `<span class="traffic-cue">${escapeHtml(cue)}</span>`)
       .join('');
     const load = preview.committedLoad;
+    // Future-load forecasting belongs to the admission decision, not to a panel
+    // of its own: the strip states what this call adds, and the line under it
+    // states where the whole station lands if you say yes. Meals carry the only
+    // honest denominator available — the prepared meals physically in stock —
+    // because that is the number the admission gate itself compares against.
+    const projected = projectedAdmissionLoad(preview);
+    const mealsShort = projected.meals > projected.mealsReady;
+    const forecast = `<div class="traffic-load-forecast${mealsShort ? ' is-short' : ''}" title="Station-wide load once every accepted call is served, this offer included.">
+      <span class="traffic-load-forecast-label">If accepted</span>
+      <span>${Math.ceil(projected.berthMinutes)}m berth</span>
+      <span>${projected.beds} bed${projected.beds === 1 ? '' : 's'}</span>
+      <span class="${mealsShort ? 'short' : ''}">${Math.ceil(projected.meals)}/${Math.floor(projected.mealsReady)} meals</span>
+      <span>${Math.ceil(projected.hygiene)} hygiene</span>
+      <span>${Math.ceil(projected.staffMinutes)}m staff</span>
+    </div>`;
     const hull = shipHullProfile(offer.hullVariant);
     const blocker = !cleared && !preview.canAccept && preview.acceptReason
       ? `<small class="traffic-offer-blocker">${escapeHtml(preview.acceptReason)}</small>`
@@ -3708,13 +3879,14 @@ function refreshTrafficOffers(): void {
       <div class="traffic-cues">${riskChip}${cues}</div>
       <div class="traffic-interface ${preview.compatibleInterface.freeCount > 0 ? 'ready' : 'blocked'}"><b>${preview.compatibleInterface.freeCount}/${preview.compatibleInterface.compatibleCount}</b> ${interfaceLabel} free <span>· ${range(preview.expectedRevenue, 'c')}</span></div>
       ${interfaceChoice}
-      <div class="traffic-load-strip" aria-label="Committed load">
+      <div class="traffic-load-strip" aria-label="Load this call commits">
         ${compactLoadItem('berth', `${Math.ceil(load.berthSeconds / 60)}m`)}
         ${compactLoadItem('beds', String(load.bedNights))}
         ${compactLoadItem('meals', String(load.meals))}
         ${compactLoadItem('hygiene', String(load.hygieneVisits))}
         ${compactLoadItem('staff', `${load.staffMinutes}m`)}
       </div>
+      ${forecast}
       ${blocker}
       ${policyNote}
       <div class="traffic-offer-actions">${actions}</div>
@@ -4059,7 +4231,18 @@ type OpsMetricTone = 'default' | 'ok' | 'warn' | 'danger' | 'muted';
 type OpsMetricItem = {
   label: string;
   value: string | number;
+  /** Optional second line under the value, for a rate beside a total. */
+  note?: string;
   tone?: OpsMetricTone;
+};
+/** One cause of the cumulative station rating: what it has done, and how fast. */
+type RatingCauseItem = {
+  label: string;
+  total: number;
+  perMin: number;
+  /** '+' for causes that raise the score, '-' for causes that lower it. */
+  sign: '+' | '-';
+  tone: OpsMetricTone;
 };
 type OpsDetailItem = {
   label: string;
@@ -4096,14 +4279,41 @@ function setMetricList(el: HTMLElement, items: OpsMetricItem[]): void {
     value.textContent = String(item.value);
 
     metric.append(label, value);
+    if (item.note !== undefined) {
+      const note = document.createElement('small');
+      note.className = 'metric-note';
+      note.textContent = item.note;
+      metric.append(note);
+    }
     return metric;
   });
   el.replaceChildren(...nodes);
 }
 
-function setActiveRatingMetricList(el: HTMLElement, items: OpsMetricItem[]): void {
-  const active = items.filter((item) => Number.parseFloat(String(item.value)) > 0);
-  setMetricList(el, active.length > 0 ? active : [{ label: 'None', value: '0.0/m', tone: 'default' }]);
+/**
+ * Cumulative-first cause pill for the rating modal.
+ *
+ * The score the player is looking at is cumulative, so the total is the value
+ * and the live rate is the pill's second line — the same information the three
+ * lists used to carry, without doubling the row count of an already
+ * spreadsheet-shaped surface. A cause is shown when it has ever contributed,
+ * not only while it is still firing: a penalty that stopped a minute ago is
+ * still part of the number on screen, and hiding it is what made the score
+ * unexplainable.
+ */
+function setRatingCauseList(el: HTMLElement, items: RatingCauseItem[]): void {
+  const active = items.filter((item) => item.total > 0.05 || item.perMin > 0.005);
+  setMetricList(
+    el,
+    active.length > 0
+      ? active.map((item) => ({
+          label: item.label,
+          value: `${item.sign}${item.total.toFixed(1)}`,
+          note: `${item.perMin.toFixed(2)}/m now`,
+          tone: item.total > 0.05 ? item.tone : 'muted'
+        }))
+      : [{ label: 'None', value: '0.0', note: '0.00/m now', tone: 'default' }]
+  );
 }
 
 function setDetailList(el: HTMLElement, items: OpsDetailItem[], emptyText = 'None'): void {
@@ -4273,27 +4483,36 @@ function refreshRatingModal(): void {
   ratingModalEffectEl.textContent =
     `Traffic pull: premium +${Math.round(state.metrics.reputationPremiumDemandBonusPct)}% · ` +
     `higher-risk +${Math.round(state.metrics.reputationRiskyDemandBonusPct)}%`;
-  setActiveRatingMetricList(ratingModalBonusesEl, [
-    { label: 'Meals', value: `${state.metrics.stationRatingBonusPerMin.mealService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.mealService > 0 ? 'ok' : 'default' },
-    { label: 'Leisure', value: `${state.metrics.stationRatingBonusPerMin.leisureService.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.leisureService > 0 ? 'ok' : 'default' },
-    { label: 'Exits', value: `${state.metrics.stationRatingBonusPerMin.successfulExit.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.successfulExit > 0 ? 'ok' : 'default' },
-    { label: 'Residents', value: `${state.metrics.stationRatingBonusPerMin.residentRetention.toFixed(1)}/m`, tone: state.metrics.stationRatingBonusPerMin.residentRetention > 0 ? 'ok' : 'default' },
+  // Cumulative rating points earned and lost by cause, with the live rate as
+  // each pill's second line. The score above is a running total, so the totals
+  // are what actually explain it; the rates say which way it is still moving.
+  const bonusTotal = state.metrics.stationRatingBonusTotal;
+  const bonusRate = state.metrics.stationRatingBonusPerMin;
+  setRatingCauseList(ratingModalBonusesEl, [
+    { label: 'Meals', total: bonusTotal.mealService, perMin: bonusRate.mealService, sign: '+', tone: 'ok' },
+    { label: 'Leisure', total: bonusTotal.leisureService, perMin: bonusRate.leisureService, sign: '+', tone: 'ok' },
+    { label: 'Exits', total: bonusTotal.successfulExit, perMin: bonusRate.successfulExit, sign: '+', tone: 'ok' },
+    { label: 'Residents', total: bonusTotal.residentRetention, perMin: bonusRate.residentRetention, sign: '+', tone: 'ok' },
   ]);
-  setActiveRatingMetricList(ratingModalPenaltiesEl, [
-    { label: 'Queue timeouts', value: `${state.metrics.stationRatingPenaltyPerMin.queueTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.queueTimeout > 0 ? 'danger' : 'default' },
-    { label: 'No eligible dock', value: `${state.metrics.stationRatingPenaltyPerMin.noEligibleDock.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.noEligibleDock > 0 ? 'warn' : 'default' },
-    { label: 'Service failures', value: `${state.metrics.stationRatingPenaltyPerMin.serviceFailure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.serviceFailure > 0 ? 'warn' : 'default' },
-    { label: 'Long routes', value: `${state.metrics.stationRatingPenaltyPerMin.longWalks.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.longWalks > 0 ? 'warn' : 'default' },
-    { label: 'Bad routes', value: `${state.metrics.stationRatingPenaltyPerMin.routeExposure.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.routeExposure > 0 ? 'warn' : 'default' },
-    { label: 'Environment', value: `${state.metrics.stationRatingPenaltyPerMin.environment.toFixed(1)}/m`, tone: state.metrics.stationRatingPenaltyPerMin.environment > 0 ? 'warn' : 'default' },
-    { label: 'Sanitation', value: `${state.metrics.sanitationPenaltyPerMin.toFixed(1)}/m`, tone: state.metrics.sanitationPenaltyPerMin > 0 ? 'warn' : 'default' },
+  const penaltyTotal = state.metrics.stationRatingPenaltyTotal;
+  const penaltyRate = state.metrics.stationRatingPenaltyPerMin;
+  setRatingCauseList(ratingModalPenaltiesEl, [
+    { label: 'Queue timeouts', total: penaltyTotal.queueTimeout, perMin: penaltyRate.queueTimeout, sign: '-', tone: 'danger' },
+    { label: 'No eligible dock', total: penaltyTotal.noEligibleDock, perMin: penaltyRate.noEligibleDock, sign: '-', tone: 'warn' },
+    { label: 'Service failures', total: penaltyTotal.serviceFailure, perMin: penaltyRate.serviceFailure, sign: '-', tone: 'warn' },
+    { label: 'Long routes', total: penaltyTotal.longWalks, perMin: penaltyRate.longWalks, sign: '-', tone: 'warn' },
+    { label: 'Bad routes', total: penaltyTotal.routeExposure, perMin: penaltyRate.routeExposure, sign: '-', tone: 'warn' },
+    { label: 'Environment', total: penaltyTotal.environment, perMin: penaltyRate.environment, sign: '-', tone: 'warn' },
+    { label: 'Sanitation', total: state.metrics.sanitationPenaltyTotal, perMin: state.metrics.sanitationPenaltyPerMin, sign: '-', tone: 'warn' },
   ]);
-  setActiveRatingMetricList(ratingModalFailuresEl, [
-    { label: 'No leisure path', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.noLeisurePath > 0 ? 'warn' : 'default' },
-    { label: 'Missing ship services', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.shipServicesMissing > 0 ? 'warn' : 'default' },
-    { label: 'Patience bail', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.patienceBail > 0 ? 'warn' : 'default' },
-    { label: 'Dock timeout', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.dockTimeout > 0 ? 'danger' : 'default' },
-    { label: 'Trespass', value: `${state.metrics.stationRatingServiceFailureByReasonPerMin.trespass.toFixed(1)}/m`, tone: state.metrics.stationRatingServiceFailureByReasonPerMin.trespass > 0 ? 'danger' : 'default' },
+  const failureTotal = state.metrics.stationRatingServiceFailureByReasonTotal;
+  const failureRate = state.metrics.stationRatingServiceFailureByReasonPerMin;
+  setRatingCauseList(ratingModalFailuresEl, [
+    { label: 'No leisure path', total: failureTotal.noLeisurePath, perMin: failureRate.noLeisurePath, sign: '-', tone: 'warn' },
+    { label: 'Missing ship services', total: failureTotal.shipServicesMissing, perMin: failureRate.shipServicesMissing, sign: '-', tone: 'warn' },
+    { label: 'Patience bail', total: failureTotal.patienceBail, perMin: failureRate.patienceBail, sign: '-', tone: 'warn' },
+    { label: 'Dock timeout', total: failureTotal.dockTimeout, perMin: failureRate.dockTimeout, sign: '-', tone: 'danger' },
+    { label: 'Trespass', total: failureTotal.trespass, perMin: failureRate.trespass, sign: '-', tone: 'danger' },
   ]);
   setRatingDriverList(ratingModalDriversEl, drivers);
 }
@@ -4384,8 +4603,11 @@ function trafficOpsSummaryText(): string {
   const m = state.metrics;
   const fails = m.visitFailuresThisCycle > 0 ? ` ${m.visitFailuresThisCycle} lost` : '';
   const stall = m.visitorExitStalled ? ' | departures backing up' : '';
+  // No "Docked n". Every docked ship already draws its own world chip on the
+  // berth or Pod Dock it occupies, carrying callsign, phase, passengers,
+  // countdown, and completion. The count restated less, further away.
   return (
-    `Visitors ${m.visitorsCount} | Docked ${m.dockedShips} | Exits ${m.exitsPerMin}/min | ` +
+    `Visitors ${m.visitorsCount} | Exits ${m.exitsPerMin}/min | ` +
     `Cycle: ${m.visitsThisCycle} done${fails} | rev $${Math.round(m.visitRevenueThisCycle)}${stall}`
   );
 }
@@ -6678,8 +6900,11 @@ function restoreViewAfterUtilityTool(): void {
 }
 let panStartScrollTop = 0;
 let uiPanelsHidden = false;
-let berthOpsCollapsed = !state.rooms.includes(RoomType.Berth);
 
+// Live berth/pod ops used to be one floating card with its own collapse
+// control. Now that each turnaround stands beside its own interface there is
+// no shared card to fold away, and the panel-visibility toggle already hides
+// the whole anchor layer.
 function syncPanelVisibility(): void {
   app!.classList.toggle('ui-panels-hidden', uiPanelsHidden);
   toggleUiPanelsBtn.classList.toggle('active', uiPanelsHidden);
@@ -6687,11 +6912,6 @@ function syncPanelVisibility(): void {
   toggleUiPanelsBtn.setAttribute('aria-label', uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels');
   toggleUiPanelsBtn.title = uiPanelsHidden ? 'Show interface panels' : 'Hide interface panels';
   openingEconomyPanels.setSiteBriefVisible(!uiPanelsHidden);
-
-  berthOpsWidgetEl.classList.toggle('collapsed', berthOpsCollapsed);
-  toggleBerthOpsBtn.setAttribute('aria-expanded', String(!berthOpsCollapsed));
-  toggleBerthOpsBtn.setAttribute('aria-label', berthOpsCollapsed ? 'Expand live berth operations' : 'Collapse live berth operations');
-  toggleBerthOpsBtn.title = berthOpsCollapsed ? 'Show ship details' : 'Collapse ship details';
 }
 
 toggleUiPanelsBtn.addEventListener('click', () => {
@@ -6703,11 +6923,6 @@ toggleUiPanelsBtn.addEventListener('click', () => {
     updateStageLayout();
     centerViewportOnWorldPx(center.x, center.y);
   });
-});
-
-toggleBerthOpsBtn.addEventListener('click', () => {
-  berthOpsCollapsed = !berthOpsCollapsed;
-  syncPanelVisibility();
 });
 
 syncPanelVisibility();
@@ -7728,9 +7943,11 @@ function wireToolbar(): void {
     } else if (stockKind === 'travel-supplies') {
       // Supplies are purchased from their pricing-and-stock panel, not from a
       // generic recipe action that could accidentally issue another commodity.
+      // Anchored on the shop's own fixture once one is built, so the recipe
+      // step and a click on the shelves land on the same surface.
       currentTool = { kind: 'none' };
       toolLockMessage = 'Travel Supplies Shop opened. Review the pod order before buying stock.';
-      openingEconomyPanels.open('shop');
+      openMarketSurface(firstMarketFixtureTile());
       return;
     } else if (stockKind === 'fuel') {
       const result = orderFuelDetailed(state);
@@ -9032,6 +9249,26 @@ function toWorldCoords(clientX: number, clientY: number): { x: number; y: number
   return { x: worldX, y: worldY };
 }
 
+/**
+ * Inverse of `toWorldCoords`: where a tile currently sits on screen.
+ *
+ * World-anchored HTML surfaces (the market shop panel, the per-berth ops
+ * cards) are positioned in client pixels, so they need the same camera terms
+ * `toWorldCoords` reads — scroll, zoom, and the padded stage offset — applied
+ * the other way round. Returns the tile's centre and its on-screen size so a
+ * caller can hang a card off the fixture's edge rather than its middle.
+ */
+function tileClientRect(tileIndex: number): { x: number; y: number; size: number } {
+  const rect = gameWrap.getBoundingClientRect();
+  const point = fromIndex(tileIndex, state.width);
+  const size = TILE_SIZE * zoom;
+  return {
+    x: rect.left + (point.x + 0.5) * size + mapContentOffsetX() - gameWrap.scrollLeft,
+    y: rect.top + (point.y + 0.5) * size + mapContentOffsetY() - gameWrap.scrollTop,
+    size
+  };
+}
+
 function formatTileLabel(tileIndex: number | null): string {
   if (tileIndex === null) return 'none';
   if (tileIndex < 0 || tileIndex >= state.tiles.length) return `unknown (#${tileIndex})`;
@@ -9742,6 +9979,23 @@ canvas.addEventListener('mouseup', (e) => {
 
     if (canOpenInspectors && singleClick && clickedTile !== null) {
       clearAlertDiagnosis();
+      // Market fixtures answer before the room they stand in does: clicking the
+      // shelves is a request to work the shop, not to inspect the Market room.
+      const marketFixture = marketFixtureOriginAtTile(clickedTile);
+      if (marketFixture !== null) {
+        selectedAgent = null;
+        selectedDockId = null;
+        selectedRoomTile = null;
+        selectedIncidentId = null;
+        agentModal.classList.add('hidden');
+        dockModal.classList.add('hidden');
+        roomModal.classList.add('hidden');
+        openMarketSurface(marketFixture);
+        isPainting = false;
+        paintStart = null;
+        paintCurrent = null;
+        return;
+      }
       const dock = getDockByTile(state, clickedTile);
       if (dock) {
         selectedDockId = dock.id;
@@ -10694,8 +10948,7 @@ openEconomyLedgerBtn.addEventListener('click', () => {
   openingEconomyPanels.open('ledger');
 });
 openTravelShopBtn.addEventListener('click', () => {
-  refreshOpeningEconomyPanels();
-  openingEconomyPanels.open('shop');
+  openMarketSurface(firstMarketFixtureTile());
 });
 openCapitalProjectsBtn.addEventListener('click', () => {
   refreshOpeningEconomyPanels();
@@ -11383,6 +11636,12 @@ function frame(now: number): void {
     restoreActorPositions();
   }
   state.metrics.renderMs = performance.now() - renderStart;
+
+  // World-anchored HTML follows the camera, so it re-places every frame rather
+  // than on the slower UI cadence — otherwise a pan visibly drags the card off
+  // the fixture it belongs to.
+  syncAnchoredShopPanel();
+  syncBerthOpsAnchors();
 
   if (hoveredTile !== lastHoverDiagnosticTile || now >= nextHoverDiagnosticRefreshAt) {
     cachedHoverDiagnostic = hoveredTile !== null ? getRoomDiagnosticAt(state, hoveredTile) : null;

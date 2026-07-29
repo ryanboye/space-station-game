@@ -568,6 +568,120 @@ function testTemporarySleepAndHydration(): void {
   assert(rivals.length === 0, 'Hydration must never leave two guests holding one bunk.');
 }
 
+/**
+ * A Market that no 2x5 fixture can fit inside.
+ *
+ * A 4x4 head with a one-tile-wide arm running off it. The shape is chosen
+ * against the geometry, not for looks: a Checkout Bank needs a clear 2x5 or
+ * 5x2 rectangle, and nowhere in here are two adjacent rows (or columns) five
+ * squares long. Comfortably over the Market's 10-tile minimum either way.
+ */
+function setLShapedMarket(state: StationState): number[] {
+  const cells: number[] = [];
+  for (let y = 49; y <= 52; y += 1) {
+    for (let x = 42; x <= 45; x += 1) cells.push(tile(state, x, y));
+  }
+  for (let x = 46; x <= 53; x += 1) cells.push(tile(state, x, 49));
+  const room = new Set(cells);
+  for (const cell of cells) {
+    state.tiles[cell] = TileType.Floor;
+    state.rooms[cell] = RoomType.Market;
+    state.pressurized[cell] = true;
+  }
+  for (const cell of cells) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const neighbour = cell + dy * state.width + dx;
+        if (room.has(neighbour)) continue;
+        state.tiles[neighbour] = TileType.Wall;
+        state.rooms[neighbour] = RoomType.None;
+      }
+    }
+  }
+  // One door onto the starter hull's south edge, exactly as the rectangular
+  // fixture rooms above attach.
+  const door = tile(state, 43, 48);
+  state.tiles[door] = TileType.Door;
+  state.rooms[door] = RoomType.None;
+  state.utilityUnderlay.layers['power-conduit'].fill(1);
+  state.utilityUnderlay.version += 1;
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+  return cells;
+}
+
+/**
+ * The compact fixture is not legacy clutter — it is the only thing that fits
+ * some rooms, and it still has to trade when it is the only thing there.
+ */
+function testCompactAlternativeSurvivesIrregularRooms(): void {
+  const state = createInitialState({ seed: 33108, physicalStarterInventory: true, manualTrafficAdmission: true });
+  const cells = setLShapedMarket(state);
+  state.metrics.credits = 10_000;
+  state.pressurized.fill(true);
+
+  // Nowhere in this room, at either orientation, does the 2x5 fixture fit.
+  let attempts = 0;
+  for (const cell of cells) {
+    for (const rotation of [0, 90] as const) {
+      attempts += 1;
+      const result = tryPlaceModule(state, ModuleType.CheckoutBank, cell, rotation);
+      assert(
+        !result.ok,
+        `An L-shaped Market must reject a 2x5 Checkout Bank, but one fitted at ${cell} rotated ${rotation}.`
+      );
+    }
+  }
+  assert(attempts >= 40, `The rejection sweep must actually cover the room, tried ${attempts} placements.`);
+  assert(
+    !state.moduleInstances.some((module) => module.type === ModuleType.CheckoutBank),
+    'A rejected placement must not leave a Checkout Bank behind.'
+  );
+
+  // The 2x1 counter does, which is the whole reason it is still in the catalog.
+  const stallOrigin = tile(state, 42, 51);
+  const stall = tryPlaceModule(state, ModuleType.MarketStall, stallOrigin);
+  assert(stall.ok, `The same room must accept a 2x1 Market Stall: ${stall.reason ?? 'unknown error'}.`);
+  tick(state, 0);
+  const placed = fixture(state, ModuleType.MarketStall);
+  assert(
+    placed.tiles.every((cell) => state.rooms[cell] === RoomType.Market),
+    'The compact stall must stand entirely inside the irregular Market.'
+  );
+
+  // And it still trades. Nothing else on the station sells anything, so the
+  // sale that lands can only have come through the compact fixture.
+  const node = state.itemNodes.find((candidate) => candidate.tileIndex === placed.originTile);
+  assert(node, 'A placed Market Stall must own a stock node.');
+  node.items.tradeGood = 8;
+  // A small crowd rather than one guest: a stall's counter is one tile wide, so
+  // shoppers have to take turns at it, and the check should be about the
+  // fixture trading rather than about which square one guest happened to pick.
+  const shoppers: Visitor[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const shopper = makeVisitor(state, 880 + index, tile(state, 44 + index, 49));
+    shopper.stayClass = 'errand';
+    shopper.needs = undefined;
+    shopper.recurringNeedActive = null;
+    shopper.activeService = null;
+    shopper.primaryPreference = 'market';
+    shopper.leisureLegsRemaining = 1;
+    state.visitors.push(shopper);
+    shoppers.push(shopper);
+  }
+
+  const creditsBefore = state.metrics.credits;
+  state.controls.paused = false;
+  for (let elapsed = 0; elapsed < 90 && state.usageTotals.tradeGoodsSold < 1; elapsed += 0.1) tick(state, 0.1);
+  assert(
+    state.usageTotals.tradeGoodsSold >= 1,
+    `The compact stall must still complete a sale (shoppers ${shoppers.map((visitor) => `${visitor.state}@${visitor.tileIndex}`).join(' ')}, `
+      + `stall origin ${placed.originTile}, stock ${node.items.tradeGood}, market active ${state.ops.marketActive}).`
+  );
+  assert(node.items.tradeGood < 8, 'The sale must consume physical stall stock.');
+  assert(state.metrics.credits > creditsBefore, 'The compact stall must pay the station for the sale.');
+}
+
 function testBunkBankHousingPolicyOwnership(): void {
   const state = buildFacilityState();
   const bank = fixture(state, ModuleType.BunkBank);
@@ -601,6 +715,7 @@ function main(): void {
   testUnrelatedQueueDoesNotCreateMarketDemand();
   testTemporarySleepAndHydration();
   testBunkBankHousingPolicyOwnership();
+  testCompactAlternativeSurvivesIrregularRooms();
   console.log('facility-slots-tests: ok');
 }
 
