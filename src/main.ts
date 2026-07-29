@@ -5249,10 +5249,22 @@ function renderAlertPanel(): void {
         tile: mostStrainedCrew.tileIndex
       });
     } else if (crewSustainability.sleepSlots < state.crew.total) {
+      const anyDormTile = state.rooms.findIndex((room) => room === RoomType.Dorm);
+      const unassignedDormFixture = state.moduleInstances.find(
+        (module) =>
+          (module.type === ModuleType.Bed || module.type === ModuleType.Bunk || module.type === ModuleType.BunkBank) &&
+          state.rooms[module.originTile] === RoomType.Dorm &&
+          state.roomHousingPolicies[module.originTile] !== 'crew'
+      );
       portAlerts.push({
         tone: 'warn',
-        text: `Crew quarters short: ${crewSustainability.sleepSlots}/${state.crew.total} sleep slots · add bunks or beds`,
-        tile: state.moduleInstances.find((module) => module.type === ModuleType.Bed || module.type === ModuleType.Bunk)?.originTile ?? null
+        text: unassignedDormFixture
+          ? `Crew quarters unavailable: ${crewSustainability.sleepSlots}/${state.crew.total} crew sleep slots · set a Dorm to Crew housing`
+          : `Crew quarters short: ${crewSustainability.sleepSlots}/${state.crew.total} sleep slots · zone a Dorm for Crew and add bunks or beds`,
+        tile: unassignedDormFixture?.originTile ?? (anyDormTile >= 0 ? anyDormTile : null),
+        diagnosis: unassignedDormFixture
+          ? 'Sleeping fixtures exist, but their Dorm is not assigned to crew. Select the highlighted Dorm and set its housing policy to Crew.'
+          : 'Crew need a Dorm assigned to Crew housing with enough bunks or beds. Zone the room first, then add sleep fixtures until every crew member has a slot.'
       });
     } else if (
       crewSustainability.strainedCrew >= Math.max(6, Math.ceil(state.crew.total * 0.6)) ||
@@ -5272,6 +5284,13 @@ function renderAlertPanel(): void {
             ? hygieneTile
             : null;
       const sleepSlots = crewSustainability.sleepSlots;
+      const remedies = [
+        crewSustainability.tiredCrew > 0 ? 'crew-zone a Dorm and add sleep slots' : '',
+        crewSustainability.hungryCrew > 0 ? 'keep a reachable Cafeteria stocked with meals' : '',
+        crewSustainability.thirstyCrew > 0 ? 'add a reachable drink fixture' : '',
+        crewSustainability.restroomNeedsCrew > 0 ? 'add crew-accessible toilets' : '',
+        crewSustainability.hygieneNeedsCrew > 0 ? 'add crew-accessible showers or sinks' : ''
+      ].filter(Boolean);
       portAlerts.push({
         tone: 'warn',
         text: `Crew needs building: ${crewSustainability.strainedCrew} strained · ${crewSustainability.occupiedSleepSlots} sleeping${fixtureWait > 0 ? ` · ${fixtureWait} waiting for fixtures` : ''}`,
@@ -5280,7 +5299,7 @@ function renderAlertPanel(): void {
           `${crewSustainability.strainedCrew} of ${state.crew.total} crew are running low on a need. ` +
           `Sleep slots ${sleepSlots}/${state.crew.total}` +
           (fixtureWait > 0 ? `, ${fixtureWait} waiting on a hygiene fixture` : '') +
-          `. Add toilets, showers or bunks in the highlighted room, or expand it first if the ghost says the footprint is blocked.`
+          `. ${remedies.length > 0 ? `Respond here: ${remedies.join('; ')}.` : 'Inspect the highlighted room for the blocked service.'}`
       });
     }
     // A walled-off wing is a silent killer: crew simply never arrive, and
