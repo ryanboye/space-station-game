@@ -66,6 +66,8 @@
     "test:phase9-save": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/phase9-save-migration-tests.js",
     "test:normal-scale-operation": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-operation-tests.js",
     "test:normal-scale-housing": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-housing-tests.js",
+    "test:local-air-contract": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/local-air-contract-tests.js",
+    "test:short-stay-passenger-loop": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/short-stay-passenger-loop-tests.js",
     "test:gate-e-save-resume": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/gate-e-save-resume-tests.js",
     "test:save-store-isolation": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/save-store-isolation-tests.js",
     "test:module-edit": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/module-edit-tests.js",

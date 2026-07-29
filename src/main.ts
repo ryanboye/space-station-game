@@ -4,6 +4,7 @@ import {
   applyRecoveryAction,
   getAdmissionPressure,
   getFailureEpisodes,
+  isOperationalAirUnsafe,
   getStrandedReliefQuote,
   setAdmissionPolicy,
   setShelfMix,
@@ -2986,7 +2987,7 @@ function occupiedUnsafeAir(): { count: number; tile: number | null; room: string
   // local actor simulation already consumes per-tile oxygen truth, so the HUD
   // escalates only when an occupied tile is actually unpressurized or unsafe.
   const unsafeOccupiedTiles = new Set(actorTiles.filter((tile) =>
-    !state.pressurized[tile] || (state.airQualityByTile[tile] ?? 0) < 70
+    isOperationalAirUnsafe(state, tile)
   ));
   const tile = unsafeOccupiedTiles.values().next().value as number | undefined;
   if (tile === undefined) return { count: 0, tile: null, room: null };

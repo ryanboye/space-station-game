@@ -6961,7 +6961,7 @@ function updateLocalAirQuality(state: StationState, dt: number): void {
       const dist = coverage.distanceByTile[tile];
       if (dist < 0) {
         // Pressurized but unreachable from any LS source — slow suffocation.
-        target = 18;
+        target = AIR_DISTRESS_THRESHOLD;
       } else if (dist === 0) {
         target = 100;
       } else if (dist <= 6) {
@@ -6974,11 +6974,15 @@ function updateLocalAirQuality(state: StationState, dt: number): void {
         target = 28;
       }
       // Fire suppression: burning tile and neighbors lose oxygen rapidly.
-      if (fireTiles.has(tile)) target = Math.min(target, 18);
+      if (fireTiles.has(tile)) target = Math.min(target, AIR_DISTRESS_THRESHOLD);
     }
     // Smooth toward target so single-tick disruptions don't whiplash exposure.
     const current = state.airQualityByTile[tile];
-    const settle = current < 0 || Number.isNaN(current) ? target : current + (target - current) * Math.min(1, dt * 1.2);
+    const smoothed = current < 0 || Number.isNaN(current) ? target : current + (target - current) * Math.min(1, dt * 1.2);
+    // A smoothed value can otherwise asymptotically hover one float epsilon
+    // above the exact distress threshold forever, making a target of 15 safer
+    // than 15. Snap only after the gradual onset has effectively completed.
+    const settle = Math.abs(smoothed - target) <= 0.01 ? target : smoothed;
     state.airQualityByTile[tile] = clamp(settle, 0, 100);
   }
 }
@@ -7210,6 +7214,21 @@ function operationalAirAt(state: StationState, tileIndex: number): number {
   // and the ship-side transfer seal are abstracted so dock workers and
   // passengers can use it without making EVA another opening-loop system.
   return state.rooms[tileIndex] === RoomType.Berth ? 100 : airQualityAt(state, tileIndex);
+}
+
+/**
+ * One player-facing answer to the same local-air question actor exposure uses.
+ *
+ * Distant but connected coverage can settle near 28: that is useful planning
+ * feedback, not an emergency. A real pressure loss is unsafe immediately for
+ * the HUD even while the smoothed local-air field begins its gradual descent.
+ * Berths retain the same suit/ship-seal abstraction as actor health.
+ */
+export function isOperationalAirUnsafe(state: StationState, tileIndex: number): boolean {
+  if (tileIndex < 0 || tileIndex >= state.tiles.length) return true;
+  if (state.rooms[tileIndex] === RoomType.Berth) return false;
+  if (!state.pressurized[tileIndex]) return true;
+  return operationalAirAt(state, tileIndex) <= AIR_DISTRESS_THRESHOLD;
 }
 
 function updateActorHealthFromExposure(
