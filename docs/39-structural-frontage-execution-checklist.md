@@ -155,8 +155,11 @@ audited checklist with no unsupported checked claims.
 - [ ] Expansion reuses the existing construction, logistics, EVA, utility,
   maintenance, pressure, thermal, and save systems.
 - [ ] Catastrophic failure is forecastable, attributable, and mitigable.
-- [ ] The intended 50-crew, 50-plus-visitor station is a baseline, not a stress
+- [x] The intended 50-crew, 50-plus-visitor station is a baseline, not a stress
   test.
+  Evidence: both authored geometries sustain 50 crew and 50 visitors with mixed
+  Pod/Berth traffic, cargo, meals, zero venting/deaths, and bounded tick cost in
+  `npm run test:normal-scale-operation`.
 
 ## Phase 0: Baselines And Instrumentation
 
@@ -362,11 +365,13 @@ audited checklist with no unsupported checked claims.
 - [x] Use transparent backgrounds and silhouettes readable at gameplay zoom.
 - [x] Match sprite dimensions to simulation footprint exactly.
 - [x] Add idle state.
-- [ ] Add occupied/in-service state.
-- [ ] Add unstaffed state where applicable.
-- [ ] Add low-stock/empty state where applicable.
-- [ ] Add dirty state.
-- [ ] Add damaged state.
+- [x] Add occupied/in-service state.
+- [x] Add unstaffed state where applicable.
+- [x] Add low-stock/empty state where applicable.
+- [x] Add dirty state.
+- [x] Add damaged state.
+  Evidence: curated native-footprint variants and production truth selection
+  exercise 63/63 facility frames in `npm run test:facility-sprite-state`.
 - [x] Add connected straight/corner/end bar rendering.
 - [x] Verify sprites in the live game rather than only as source images.
 
@@ -458,7 +463,9 @@ audited checklist with no unsupported checked claims.
 - [x] Keep Pod Dock as the small docking collar.
 - [x] Keep Gangway as the passenger connection and boarding provider.
 - [x] Keep Docking Clamp as vessel mass support.
-- [ ] Add no decorative structural checklist pieces.
+- [x] Add no decorative structural checklist pieces.
+  Evidence: the only new structural pieces are the functional Junction and
+  Reinforced Bulkhead; `npm run test:structural-pieces` covers their contracts.
 
 ### Structural Graph
 
@@ -682,7 +689,10 @@ audited checklist with no unsupported checked claims.
 - [x] Measure disembark throughput.
 - [x] Identify door and Airlock choke points.
 - [x] Identify queue spill across arrival/boarding routes.
-- [ ] Measure boarding distance and duration.
+- [x] Measure boarding distance and duration.
+  Evidence: per-interface completed boarding totals now survive partial
+  accumulation, save/resume, and repeated reload in
+  `npm run test:interface-diagnosis`.
 - [x] Measure reachable service and seating capacity.
 - [x] Identify public/cargo route intersections.
 - [x] Measure freight staging/storage distance.
@@ -935,7 +945,10 @@ handoff below rather than being silently left unwired: `test:opening-economy-int
 - [ ] Provide the tools to improve that layout in world.
 - [x] Ensure sprites are enabled by default.
 - [x] Ensure panels can be hidden for visual inspection.
-- [ ] Preserve the user's quicksave separately from deterministic QA saves.
+- [x] Preserve the user's quicksave separately from deterministic QA saves.
+  Evidence: player and QA stores/autosaves use isolated persistence domains;
+  quota trimming and Continue exclusion are covered by
+  `npm run test:save-store-isolation`.
 - [ ] Record user feedback against exact checklist items.
 - [x] Reopen any checked item whose live behavior does not meet the requirement.
 
