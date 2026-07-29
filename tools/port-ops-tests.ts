@@ -507,7 +507,9 @@ function testSmallCraftEventuallyDepartsWhenOptionalServiceBlocks(): void {
   const { dock } = placeFuelPodDock(state);
   fuelTankNode(state).items.fuel = 0;
   const ship = admitSmallCraftAtDock(state, dock, 9450);
-  advance(state, 100);
+  // Observable Pod timing starts its bounded patience at docking and grants at
+  // least 120 seconds. Include approach/departure grace in this terminal check.
+  advance(state, 145);
   const refuel = ship.smallCraftVisit?.services.find((service) => service.kind === 'refuel');
   assert(refuel?.status === 'blocked', 'Missing fuel did not leave an inspectable blocked service result.');
   assert(refuel.blockedReason === 'no fuel in Fuel Tank', `Unexpected fuel block reason: ${refuel.blockedReason ?? 'none'}.`);

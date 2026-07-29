@@ -1532,6 +1532,12 @@ export interface SmallCraftService {
 
 export interface SmallCraftVisit {
   dockSourceKey: string;
+  /** Shared Approach Control/runtime commitment; zero preserves legacy timing. */
+  targetDurationSec: number;
+  /** The service stretched across the disclosed window; null for legacy visits. */
+  primaryServiceKind: SmallCraftServiceKind | null;
+  /** Set when physical docking completes; approach time never spends patience. */
+  dockedAt: number | null;
   startedAt: number;
   patienceExpiresAt: number;
   services: SmallCraftService[];

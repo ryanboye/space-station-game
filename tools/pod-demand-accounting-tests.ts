@@ -145,6 +145,9 @@ function testPodOutcomeSurvivesBoundedEventHistory(): void {
   assert(!state.serviceLog.recent.some((event) => event.id === completion.id), 'Service event did not age out of bounded history.');
   assert(!state.openingEconomy.ledger.recent.some((event) => event.id === revenue.id), 'Revenue event did not age out of bounded history.');
 
+  // Patience now begins at physical docking; force expiry only after that
+  // transition so the fixture cannot be overwritten by dock initialization.
+  advance(state, 3);
   visit.patienceExpiresAt = state.now;
   advance(state, 20);
   const outcome = state.openingEconomy.podDemand.recent.find((entry) => entry.visitId === ship.id);
@@ -180,6 +183,7 @@ function testFreightIsNotEngineeringDemand(): void {
   // Reset to the actual freight-only outcome before departure: it should not
   // report a Service Ships completion merely because shared logistics ran.
   visit.servedDemand.shipService = 0;
+  advance(state, 3);
   visit.patienceExpiresAt = state.now;
   advance(state, 20);
   const outcome = state.openingEconomy.podDemand.recent.find((entry) => entry.visitId === ship.id);

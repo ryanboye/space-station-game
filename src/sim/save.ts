@@ -821,6 +821,17 @@ function normalizeSmallCraftVisit(value: unknown): SmallCraftVisit | undefined {
   if (services.length === 0) return undefined;
   return {
     dockSourceKey: value.dockSourceKey,
+    // Missing fields are deliberately inert for saves made before observable
+    // Pod timing: their established durations and patience remain untouched.
+    targetDurationSec: typeof value.targetDurationSec === 'number' && Number.isFinite(value.targetDurationSec)
+      ? clamp(value.targetDurationSec, 70, 110)
+      : 0,
+    primaryServiceKind: isOneOf(value.primaryServiceKind, SMALL_CRAFT_SERVICE_KINDS)
+      ? value.primaryServiceKind
+      : null,
+    dockedAt: typeof value.dockedAt === 'number' && Number.isFinite(value.dockedAt)
+      ? Math.max(0, value.dockedAt)
+      : null,
     startedAt: Math.max(0, asFiniteNumber(value.startedAt, 0)),
     patienceExpiresAt: Math.max(0, asFiniteNumber(value.patienceExpiresAt, 0)),
     services,

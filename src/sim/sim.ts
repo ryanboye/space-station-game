@@ -24,7 +24,7 @@ import {
   selectRecurringNeed,
   serviceForRecurringNeed
 } from './occupant-demand';
-import { previewTrafficOffer } from './approach-control';
+import { podVisitTargetSeconds, previewTrafficOffer } from './approach-control';
 import {
   approachLaneAlignment,
   buildDockingSlotDescriptor,
@@ -926,7 +926,9 @@ const BERTH_BASE_PASSENGERS: Record<ShipSize, number> = {
 };
 const DOCK_POD_PASSENGER_MIN = 1;
 const DOCK_POD_PASSENGER_MAX = 2;
-const SMALL_CRAFT_PATIENCE_SEC = 80;
+const SMALL_CRAFT_MIN_DOCKED_SEC = 60;
+const SMALL_CRAFT_MIN_PATIENCE_SEC = 120;
+const SMALL_CRAFT_PATIENCE_MARGIN_SEC = 30;
 const SMALL_CRAFT_FUEL_UNITS = 4;
 const SMALL_CRAFT_FREIGHT_UNITS = 4;
 const SMALL_CRAFT_REPAIR_MATERIALS = 2;
@@ -15225,7 +15227,14 @@ function activePodFreightAtDock(state: StationState, dockId: number): PodFreight
   ) ?? null;
 }
 
-function createSmallCraftVisit(state: StationState, dock: DockEntity, shipId: number): SmallCraftVisit {
+function createSmallCraftVisit(
+  state: StationState,
+  dock: DockEntity,
+  shipId: number,
+  passengersTotal: number,
+  offer?: TrafficOffer
+): SmallCraftVisit {
+  const targetDurationSec = podVisitTargetSeconds(offer?.berthTimeSec ?? 60, passengersTotal);
   const services = [smallCraftService('passenger')];
   const advertised = dock.podCapabilities ?? [];
   if (advertised.length > 0) {
@@ -15294,14 +15303,34 @@ function createSmallCraftVisit(state: StationState, dock: DockEntity, shipId: nu
       services.push(smallCraftService(state.rng() * (fuelWeight + repairWeight) < fuelWeight ? 'refuel' : 'repair'));
     }
   }
+  const primaryService = passengersTotal > 0
+    ? services.find((service) => service.kind === 'passenger') ?? services[0]!
+    : services.find((service) => service.kind !== 'passenger') ?? services[0]!;
+  primaryService.durationSec = targetDurationSec;
   return {
     dockSourceKey: dock.sourceKey,
+    targetDurationSec,
+    primaryServiceKind: primaryService.kind,
+    dockedAt: null,
     startedAt: state.now,
-    patienceExpiresAt: state.now + SMALL_CRAFT_PATIENCE_SEC,
+    // The bounded patience window starts after physical docking. Zero is an
+    // explicit not-started sentinel that also survives an approach save.
+    patienceExpiresAt: 0,
     services,
     servedDemand: { food: 0, supplies: 0, shipService: 0 },
     earnedCredits: 0
   };
+}
+
+function startSmallCraftVisitAtDock(state: StationState, ship: ArrivingShip): void {
+  const visit = ship.smallCraftVisit;
+  if (!visit || visit.targetDurationSec <= 0 || visit.dockedAt !== null) return;
+  visit.dockedAt = state.now;
+  visit.startedAt = state.now;
+  visit.patienceExpiresAt = state.now + Math.max(
+    SMALL_CRAFT_MIN_PATIENCE_SEC,
+    visit.targetDurationSec + SMALL_CRAFT_PATIENCE_MARGIN_SEC
+  );
 }
 
 /** Records the engineering service families represented by Service Ships. */
@@ -15393,7 +15422,15 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
     if (service.kind === 'passenger') {
       service.elapsedSec = Math.min(service.durationSec, service.elapsedSec + dt);
       service.progress = Math.min(0.95, service.elapsedSec / service.durationSec);
-      if (ship.passengersSpawned >= ship.passengersTotal && activeVisitorsForShip(state, ship.id) === 0) {
+      const elapsedTarget =
+        visit.targetDurationSec <= 0 ||
+        visit.primaryServiceKind !== 'passenger' ||
+        service.elapsedSec + 0.001 >= visit.targetDurationSec;
+      if (
+        elapsedTarget &&
+        ship.passengersSpawned >= ship.passengersTotal &&
+        activeVisitorsForShip(state, ship.id) === 0
+      ) {
         completeSmallCraftService(state, ship, service, dock);
       }
       continue;
@@ -15429,7 +15466,14 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
       continue;
     }
 
-    const workRate = service.kind === 'repair' ? smallCraftMaintenanceRate(state) : 1;
+    const rawWorkRate = service.kind === 'repair' ? smallCraftMaintenanceRate(state) : 1;
+    // The declared primary repair is the visit players committed dock time
+    // to. Extra mechanics may keep secondary repairs from becoming the slow
+    // side of a mixed call, but cannot collapse that primary operation back
+    // into a sub-minute flash.
+    const workRate = service.kind === 'repair' && visit.primaryServiceKind === service.kind
+      ? Math.min(1, rawWorkRate)
+      : rawWorkRate;
     service.elapsedSec = Math.min(service.durationSec, service.elapsedSec + dt * workRate);
     service.progress = Math.min(1, service.elapsedSec / service.durationSec);
     if (service.elapsedSec + 0.001 < service.durationSec) continue;
@@ -15505,10 +15549,16 @@ function updateSmallCraftVisit(state: StationState, ship: ArrivingShip, dt: numb
   }
 }
 
-function smallCraftVisitResolved(ship: ArrivingShip): boolean {
-  return ship.smallCraftVisit?.services.every((service) =>
+function smallCraftVisitResolved(state: StationState, ship: ArrivingShip): boolean {
+  const visit = ship.smallCraftVisit;
+  if (!visit) return true;
+  const targetElapsed = visit.targetDurationSec <= 0 || (
+    visit.dockedAt !== null &&
+    state.now - visit.dockedAt + 0.001 >= Math.max(SMALL_CRAFT_MIN_DOCKED_SEC, visit.targetDurationSec)
+  );
+  return targetElapsed && visit.services.every((service) =>
     service.status === 'complete' || service.status === 'skipped'
-  ) ?? true;
+  );
 }
 
 function expireSmallCraftVisit(state: StationState, ship: ArrivingShip): void {
@@ -16113,11 +16163,15 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ship.stageTime = 0;
       ship.dockedAt = state.now;
       ship.visitPhase = 'secure';
+      startSmallCraftVisitAtDock(state, ship);
       releasePhysicalHoldingEntry(state, ship.id);
       beginPortTurnaround(state, ship);
     }
 
     if (ship.stage === 'docked' && ship.kind === 'transient') {
+      // Also covers a save hydrated on the first docked frame. Legacy visits
+      // carry targetDurationSec=0 and intentionally retain their old clocks.
+      startSmallCraftVisitAtDock(state, ship);
       if (ship.portContractId !== undefined) state.portOps.telemetry.berthOccupancySeconds += dt;
       updatePortTurnaround(state, ship, dt);
       updateSmallCraftVisit(state, ship, dt);
@@ -16163,7 +16217,11 @@ function updateArrivingShips(state: StationState, dt: number): void {
       ) {
         ship.visitPhase = 'boarding';
       }
-      if (ship.smallCraftVisit && state.now >= ship.smallCraftVisit.patienceExpiresAt) {
+      if (
+        ship.smallCraftVisit &&
+        ship.smallCraftVisit.patienceExpiresAt > 0 &&
+        state.now >= ship.smallCraftVisit.patienceExpiresAt
+      ) {
         expireSmallCraftVisit(state, ship);
         settlePortContract(state, ship);
         ship.visitPhase = 'depart';
@@ -16194,7 +16252,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         ship.visitPhase = 'depart';
         ship.stage = 'depart';
         ship.stageTime = 0;
-      } else if (transientShipVisitorsResolved(state, ship) && smallCraftVisitResolved(ship)) {
+      } else if (transientShipVisitorsResolved(state, ship) && smallCraftVisitResolved(state, ship)) {
         settlePortContract(state, ship);
         ship.visitPhase = 'depart';
         ship.stage = 'depart';
@@ -16378,7 +16436,7 @@ function spawnShipAtDock(
     manifestMix: 'manifestMix' in manifest ? manifest.manifestMix : manifest.mix,
     portManifest: trafficOffer ? { ...trafficOffer } : undefined,
     portContractId: trafficOffer ? portContractForShip(state, shipId)?.id : undefined,
-    smallCraftVisit: createSmallCraftVisit(state, dock, shipId),
+    smallCraftVisit: createSmallCraftVisit(state, dock, shipId, passengersTotal, trafficOffer),
     stayClass,
     visitPhase: 'announced',
     extensionUntil: null,

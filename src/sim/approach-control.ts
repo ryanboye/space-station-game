@@ -17,6 +17,21 @@ function roundedRange(value: number, spread: number, minimum = 0): { min: number
   return { min: Math.max(minimum, safe - delta), max: safe + delta };
 }
 
+/**
+ * Small-craft calls need enough dock time to read as an operation rather than
+ * a sprite flicker. Keep this derivation pure and shared by Approach Control
+ * and the runtime so the commitment shown to the player is the clock the pod
+ * actually uses. Passenger count adds a little transfer time while unusually
+ * long authored manifests retain some of their extra weight.
+ */
+export function podVisitTargetSeconds(berthTimeSec: number, passengersTotal: number): number {
+  const authored = Number.isFinite(berthTimeSec) ? Math.max(1, berthTimeSec) : 60;
+  const passengers = Number.isFinite(passengersTotal) ? Math.max(0, Math.floor(passengersTotal)) : 1;
+  return Math.max(70, Math.min(110, Math.round(
+    75 + (authored - 60) * 0.25 + Math.max(0, passengers - 1) * 4
+  )));
+}
+
 function serviceCuesFor(offer: TrafficOffer): string[] {
   const cues: string[] = [];
   const hospitality = offer.hospitalityDemand;
@@ -44,7 +59,15 @@ export function previewTrafficOffer(input: ApproachPreviewInput): TrafficOfferPr
   const free = matching.filter((entry) => entry.available);
   const reserved = matching.filter((entry) => !entry.available);
   const hospitality = offer.hospitalityDemand;
-  const staySeconds = Math.max(1, offer.berthTimeSec);
+  const staySeconds = kind === 'pod-dock'
+    ? podVisitTargetSeconds(offer.berthTimeSec, offer.passengersTotal)
+    : Math.max(1, offer.berthTimeSec);
+  const stayRange = kind === 'pod-dock'
+    ? {
+        min: Math.max(70, Math.round(staySeconds * 0.9)),
+        max: Math.min(110, Math.round(staySeconds * 1.1))
+      }
+    : roundedRange(staySeconds, 0.15, 1);
   const mealDemand = Math.max(0, hospitality?.meal ?? 0);
   const hygieneDemand = Math.max(0, (hospitality?.hygiene ?? 0) + (hospitality?.restroom ?? 0));
   const needsBed = offer.size !== 'small' && staySeconds >= 240 && offer.passengersTotal > 0;
@@ -61,7 +84,7 @@ export function previewTrafficOffer(input: ApproachPreviewInput): TrafficOfferPr
     offerId: offer.id,
     shipClass: kind === 'pod-dock' ? 'pod' : 'berth',
     partySize: roundedRange(offer.passengersTotal, 0.2),
-    staySeconds: roundedRange(staySeconds, 0.15, 1),
+    staySeconds: stayRange,
     serviceCues: serviceCuesFor(offer),
     compatibleInterface: {
       kind,

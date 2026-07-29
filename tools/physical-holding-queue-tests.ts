@@ -310,7 +310,11 @@ function testExactlyOnceSettlementAfterHeldSave(): string {
   pod.passengersTotal = 0;
   pod.passengersSpawned = 0;
   pod.passengersBoarded = 0;
-  pod.smallCraftVisit.patienceExpiresAt = state.now;
+  // Start the new dock-relative clock before forcing this fixture's terminal
+  // expiry; otherwise dock initialization correctly replaces a pre-dock
+  // patience value.
+  tick(state, 0);
+  pod.smallCraftVisit.patienceExpiresAt = state.now + 0.01;
   tick(state, 0.2);
   assert(Number(state.portOps.settlements.length) === 1, 'Berth settlement duplicated when Pod entered departure');
 
