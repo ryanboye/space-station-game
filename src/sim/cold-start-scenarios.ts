@@ -2785,6 +2785,14 @@ function stageLinearSpineScale(state: StationState): void {
       state.roomHousingPolicies[spineTile(state, x, y)] = 'crew';
     }
   }
+  // The detached Hygiene pod is deliberately public hospitality. Preserve
+  // the global crew-first default for player-built rooms, and stamp only this
+  // authored scenario's visitor-facing floor.
+  for (let tile = 0; tile < state.rooms.length; tile += 1) {
+    if (state.rooms[tile] === RoomType.Hygiene && state.zones[tile] === ZoneType.Public) {
+      state.roomHousingPolicies[tile] = 'visitor';
+    }
+  }
 
   tick(state, 0);
   installScaleDockInterfaces(state, 8);
@@ -3782,6 +3790,10 @@ function applyDemoStationOverlay(
   for (let index = 0; index < state.tiles.length; index++) {
     if (state.tiles[index] !== TileType.Floor && state.tiles[index] !== TileType.Door) continue;
     state.zones[index] = staffOnlyRooms.has(state.rooms[index]) ? ZoneType.Restricted : ZoneType.Public;
+    // The compact station's only Hygiene room is part of the public service
+    // band. Housing policy defaults remain crew-first globally, so author the
+    // visitor-facing fixture here instead of relying on its public zone alone.
+    if (state.rooms[index] === RoomType.Hygiene) state.roomHousingPolicies[index] = 'visitor';
   }
 
   // Room-specific floor variants

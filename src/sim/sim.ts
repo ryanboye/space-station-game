@@ -7533,10 +7533,15 @@ function passengerTransferStationTile(
   const candidates = adjacentWalkableTiles(state, accessTile)
     .filter((tile) => state.moduleOccupancyByTile[tile] === null)
     .sort((a, b) => {
-      const score = (tile: number): number =>
-        (berthTiles !== null && !berthTiles.has(tile) ? 32 : 0) +
-        (!tileTouchesSpace(state, tile) ? 12 : 0) +
-        (state.rooms[tile] !== RoomType.Berth ? 4 : 0);
+      const score = (tile: number): number => {
+        const onwardRoutes = adjacentWalkableTiles(state, tile).filter(
+          (next) => next !== accessTile && state.moduleOccupancyByTile[next] === null
+        ).length;
+        return onwardRoutes * 24 +
+          (berthTiles !== null && !berthTiles.has(tile) ? 32 : 0) +
+          (!tileTouchesSpace(state, tile) ? 12 : 0) +
+          (state.rooms[tile] !== RoomType.Berth ? 4 : 0);
+      };
       return score(b) - score(a) || a - b;
     });
   return candidates[0] ?? null;
@@ -7606,10 +7611,17 @@ function passengerTransferSlotsForShip(state: StationState, ship: ArrivingShip):
     .sort((a, b) => a.key.localeCompare(b.key))
     .map((slot) => {
       const room = state.rooms[slot.stationTile];
-      const chain = buildQueueChain(state, slot.stationTile, room, claimedQueueTiles);
+      // The collar/Gangway is the crossing, never a waiting position. Treat it
+      // as already claimed while deriving the station-side line; otherwise a
+      // pre-assembled follower can stand on the access tile and deadlock the
+      // head between `stationTile` and the ship.
+      const unavailable = new Set(claimedQueueTiles);
+      unavailable.add(slot.accessTile);
+      const chain = buildQueueChain(state, slot.stationTile, room, unavailable)
+        .filter((tile) => tile !== slot.accessTile);
       for (const tile of chain) claimedQueueTiles.add(tile);
       const fallback = adjacentWalkableTiles(state, slot.stationTile)
-        .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+        .filter((tile) => tile !== slot.accessTile && state.moduleOccupancyByTile[tile] === null)
         .sort((a, b) => a - b);
       return {
         ...slot,
@@ -7652,13 +7664,18 @@ function clearPassengerTransferState(state: StationState, visitor: Visitor): voi
   visitor.transferBlockedTile = null;
 }
 
-function queuePassengerTransfer(state: StationState, visitor: Visitor, direction: 'disembark' | 'boarding'): void {
+function queuePassengerTransfer(
+  state: StationState,
+  visitor: Visitor,
+  direction: 'disembark' | 'boarding',
+  options: { queuedAt?: number; preferredSlotKey?: string | null } = {}
+): void {
   const desired: PassengerTransferPhase = direction === 'disembark' ? 'disembark-queued' : 'boarding-queued';
   if (passengerTransferPhase(visitor) === desired || isPassengerTransferCrossing(visitor)) return;
   clearPassengerTransferReservation(state, visitor);
   visitor.transferPhase = desired;
-  visitor.transferSlotKey = null;
-  visitor.transferQueuedAt = state.now;
+  visitor.transferSlotKey = options.preferredSlotKey ?? null;
+  visitor.transferQueuedAt = options.queuedAt ?? state.now;
   visitor.transferQueueTile = null;
   visitor.transferAccessTile = null;
   visitor.transferStationTile = null;
@@ -7860,9 +7877,17 @@ function rebuildPassengerTransferQueues(state: StationState): void {
       // order, and survives save/resume because tile + queue intent are saved.
       let interfaceOccupant: Visitor | null = null;
       if (!activeBySlot.has(slot.key)) {
-        const interfaceOccupantIndex = queue.findIndex((visitor) =>
-          passengerTransferPhase(visitor) === 'boarding-queued' && visitor.tileIndex === slot.stationTile
+        // A queued actor already standing on the access tile must clear first;
+        // otherwise promoting the station-side occupant puts the two face to
+        // face across the exact edge neither can swap through.
+        const accessOccupantIndex = queue.findIndex((visitor) =>
+          passengerTransferPhase(visitor) === 'boarding-queued' && visitor.tileIndex === slot.accessTile
         );
+        const interfaceOccupantIndex = accessOccupantIndex >= 0
+          ? accessOccupantIndex
+          : queue.findIndex((visitor) =>
+              passengerTransferPhase(visitor) === 'boarding-queued' && visitor.tileIndex === slot.stationTile
+            );
         if (interfaceOccupantIndex >= 0) {
           [interfaceOccupant] = queue.splice(interfaceOccupantIndex, 1);
           queue.unshift(interfaceOccupant);
@@ -7870,6 +7895,7 @@ function rebuildPassengerTransferQueues(state: StationState): void {
       }
       let boardingRank = 0;
       let disembarkRank = 0;
+      const claimedAssemblyTiles = new Set<number>();
       for (const visitor of queue) {
         if (passengerTransferPhase(visitor) === 'disembark-queued') {
           visitor.transferQueueTile = null;
@@ -7878,24 +7904,28 @@ function rebuildPassengerTransferQueues(state: StationState): void {
           continue;
         }
         const rank = boardingRank++;
-        // The station-side Gangway tile is itself a valid head position. A
-        // cramped berth may have no additional spill tile, but that must not
-        // prevent the passenger already at the interface from boarding.
-        const queueTile = visitor === interfaceOccupant
-          ? slot.stationTile
-          : slot.queueTiles[rank] ?? (rank === 0 ? slot.stationTile : null);
-        visitor.transferQueueTile = queueTile;
+        const mayAdvanceToMouth = !activeBySlot.has(slot.key) && rank === 0;
+        let queueTile = mayAdvanceToMouth ? slot.stationTile : null;
+        if (!mayAdvanceToMouth) {
+          // Followers walk back concurrently instead of serializing their
+          // whole station route behind earlier crossings. Once assigned, each
+          // follower keeps its depicted assembly position as ranks advance;
+          // repeatedly compacting the line creates impossible actor swaps in
+          // a narrow Berth throat.
+          const existing = visitor.transferQueueTile;
+          if (existing != null && slot.queueTiles.includes(existing) && !claimedAssemblyTiles.has(existing)) {
+            queueTile = existing;
+          } else {
+            queueTile = slot.queueTiles.find((tile) => !claimedAssemblyTiles.has(tile)) ?? null;
+          }
+        }
         if (queueTile === null) {
+          visitor.transferQueueTile = null;
           clearPassengerTransferReservation(state, visitor);
-          // A cramped Berth may have no depicted spill positions beyond the
-          // head. Followers still need movement intent toward the interface;
-          // freezing them where recall found them can turn those actors into
-          // permanent obstacles on the head's only route. They make an
-          // unreserved approach to the station tile, while the exclusive head
-          // reservation + movement coordinator serialize the actual line.
-          passengerTransferPath(state, visitor, slot.stationTile);
           continue;
         }
+        if (queueTile !== slot.stationTile) claimedAssemblyTiles.add(queueTile);
+        visitor.transferQueueTile = queueTile;
         refreshPassengerTransferReservation(state, visitor, slot.key, queueTile);
         passengerTransferPath(state, visitor, queueTile);
       }
@@ -7905,6 +7935,11 @@ function rebuildPassengerTransferQueues(state: StationState): void {
       if (!head) continue;
       if (passengerTransferPhase(head) === 'disembark-queued') {
         if (passengerTransferAccessIsFree(state, slot, head)) activateDisembarkCrossing(state, head, slot);
+      } else if (head.tileIndex === slot.accessTile && passengerTransferAccessIsFree(state, slot, head)) {
+        // Recall can find a returning passenger already on the real interface.
+        // Their stamped FIFO priority lets the ordinary timed crossing begin
+        // in place instead of forcing them to back through the waiting line.
+        activateBoardingCrossing(state, head, slot);
       } else if (
         head.transferQueueTile !== null &&
         head.tileIndex === head.transferQueueTile &&
@@ -8034,7 +8069,11 @@ function updatePassengerTransferVisitor(
   return 'remove';
 }
 
-function queueVisitorForBoardingTransfer(state: StationState, visitor: Visitor): boolean {
+function queueVisitorForBoardingTransfer(
+  state: StationState,
+  visitor: Visitor,
+  options: { queuedAt?: number; preferredSlotKey?: string | null } = {}
+): boolean {
   const ship = originShipForVisitor(state, visitor);
   // A docked ship is a visitor's origin, not an open exit. Letting every
   // ToDock reroute enter this queue made long-stay contract crew disappear
@@ -8049,7 +8088,7 @@ function queueVisitorForBoardingTransfer(state: StationState, visitor: Visitor):
     ship?.stage === 'depart' ||
     legacySmallCraftBoarding;
   if (!ship || !boardingOpen || ship.stage !== 'docked' || passengerTransferSlotsForShip(state, ship).length === 0) return false;
-  if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding');
+  if (passengerTransferPhase(visitor) === 'station') queuePassengerTransfer(state, visitor, 'boarding', options);
   return true;
 }
 
@@ -13725,6 +13764,13 @@ function promisesForOffer(offer: TrafficOffer): PortPromiseComponent[] {
   return promises;
 }
 
+function passengerBoardingLeadSec(passengersTotal: number): number {
+  // Reserve enough of the published fixed stay for the cohort's actual walk,
+  // three-second assembly call, and serialized 0.8-second crossings. This
+  // moves recall earlier; it never moves or bypasses the hard departure.
+  return VISIT_TIMINGS.boardingLeadSec + Math.min(40, Math.max(0, passengersTotal) * 2);
+}
+
 function ensurePortContract(state: StationState, offer: TrafficOffer, berthAnchor: number): PortContract {
   const existing = state.portOps.contracts.find((contract) => contract.offerId === offer.id);
   if (existing) return existing;
@@ -13746,7 +13792,7 @@ function ensurePortContract(state: StationState, offer: TrafficOffer, berthAncho
     assignedBerthAnchor: berthAnchor,
     acceptedAt: state.now,
     arrivesAt: offer.arrivesAt,
-    boardingStartsAt: hardDepartureAt - VISIT_TIMINGS.boardingLeadSec,
+    boardingStartsAt: hardDepartureAt - passengerBoardingLeadSec(offer.passengersTotal),
     hardDepartureAt,
     status: 'accepted',
     promises: promisesForOffer(offer),
@@ -15743,7 +15789,7 @@ function beginPortTurnaround(state: StationState, ship: ArrivingShip): void {
   ship.visitPhase = 'visit-service';
   if (contract) {
     contract.arrivesAt = state.now;
-    contract.boardingStartsAt = hardDepartureAt - VISIT_TIMINGS.boardingLeadSec;
+    contract.boardingStartsAt = hardDepartureAt - passengerBoardingLeadSec(ship.passengersTotal);
     contract.hardDepartureAt = hardDepartureAt;
     contract.status = 'active';
     contract.stayClass = stayClass;
@@ -15801,7 +15847,7 @@ function releaseInboundCargo(state: StationState, ship: ArrivingShip): void {
   turn.loadingDeadlineAt = state.now + visitDurationForClass(ship.stayClass ?? 'shore', manifest.berthTimeSec);
   const contract = portContractForShip(state, ship.id);
   if (contract) {
-    contract.boardingStartsAt = turn.loadingDeadlineAt - VISIT_TIMINGS.boardingLeadSec;
+    contract.boardingStartsAt = turn.loadingDeadlineAt - passengerBoardingLeadSec(ship.passengersTotal);
     contract.hardDepartureAt = turn.loadingDeadlineAt;
     contract.plannedDepartureAt = turn.loadingDeadlineAt;
   }
@@ -15987,6 +16033,45 @@ function tryRecallFailedLongStay(state: StationState, ship: ArrivingShip, contra
   return true;
 }
 
+function recallRouteLengthToSlot(state: StationState, visitor: Visitor, slot: PassengerTransferSlot): number {
+  if (visitor.tileIndex === slot.stationTile) return 0;
+  // Queue positions are not equivalent: the person assembled at the head is
+  // readier than the person at the tail. Measure remaining route to the real
+  // crossing mouth so recall FIFO follows the physical line instead of actor
+  // id among a set of occupied assembly tiles.
+  return chooseNearestPath(state, visitor.tileIndex, [slot.stationTile], false, 'visitor', visitor.id)?.length ??
+    Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Rank a recall once, at the moment it is announced.
+ *
+ * Passengers who already reached a depicted assembly position lead those
+ * still walking, then the physically shortest remaining route wins. The
+ * resulting timestamps are durable FIFO; later queue rebuilds may restore
+ * paths and reservations, but never reconsider this product decision.
+ */
+function recallBoardingOrder(
+  state: StationState,
+  visitors: readonly Visitor[],
+  slots: readonly PassengerTransferSlot[]
+): Visitor[] {
+  const score = (visitor: Visitor): readonly [number, number, number] => {
+    const alreadyAtAccess = slots.some((slot) => slot.accessTile === visitor.tileIndex);
+    const alreadyReturning = visitor.state === VisitorState.ToDock && visitor.activeService === null;
+    const remaining = slots.reduce(
+      (best, slot) => Math.min(best, recallRouteLengthToSlot(state, visitor, slot)),
+      Number.POSITIVE_INFINITY
+    );
+    return [alreadyAtAccess ? -1 : alreadyReturning ? 0 : 1, remaining, visitor.id];
+  };
+  return [...visitors].sort((left, right) => {
+    const a = score(left);
+    const b = score(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  });
+}
+
 function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   if (ship.kind !== 'transient' || ship.stage !== 'docked') return;
   const contract = portContractForShip(state, ship.id);
@@ -15995,6 +16080,7 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
   ship.recallAt = state.now;
   if (contract) contract.recallAt = state.now;
   const cancelledShipSide = new Set<number>();
+  const stationSide: Visitor[] = [];
   for (const visitor of state.visitors) {
     if (visitor.originShipId !== ship.id) continue;
     const phase = passengerTransferPhase(visitor);
@@ -16007,10 +16093,13 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     // A passenger already crossing into the station owns the interface until
     // emergence, then joins the ordinary boarding queue from station-side.
     if (phase === 'disembark-crossing' || phase === 'boarding-queued' || phase === 'boarding-crossing') continue;
-    if (visitor.state === VisitorState.ToDock) {
-      queueVisitorForBoardingTransfer(state, visitor);
-      continue;
-    }
+    stationSide.push(visitor);
+  }
+  const slots = passengerTransferSlotsForShip(state, ship);
+  const slotLoad = new Map(slots.map((slot) => [slot.key, 0]));
+  const ordered = recallBoardingOrder(state, stationSide, slots);
+  for (let rank = 0; rank < ordered.length; rank += 1) {
+    const visitor = ordered[rank]!;
     visitor.state = VisitorState.ToDock;
     visitor.activeService = null;
     visitor.recurringNeedActive = null;
@@ -16021,7 +16110,20 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     visitor.reservedServingTile = null;
     releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
     removeVisitorFromQueues(state, visitor.id);
-    assignPathToDock(state, visitor);
+    const preferredSlot = [...slots].sort((left, right) => {
+      const loadDelta = (slotLoad.get(left.key) ?? 0) - (slotLoad.get(right.key) ?? 0);
+      if (loadDelta !== 0) return loadDelta;
+      return recallRouteLengthToSlot(state, visitor, left) - recallRouteLengthToSlot(state, visitor, right) ||
+        left.key.localeCompare(right.key);
+    })[0] ?? null;
+    if (preferredSlot) slotLoad.set(preferredSlot.key, (slotLoad.get(preferredSlot.key) ?? 0) + 1);
+    if (!queueVisitorForBoardingTransfer(state, visitor, {
+      // Tiny deterministic offsets encode FIFO without adding visible delay.
+      queuedAt: state.now + rank * 0.0001,
+      preferredSlotKey: preferredSlot?.key ?? null
+    })) {
+      assignPathToDock(state, visitor);
+    }
   }
   if (cancelledShipSide.size > 0) {
     state.visitors = state.visitors.filter((visitor) => !cancelledShipSide.has(visitor.id));
@@ -16910,6 +17012,11 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   const actors = movementActors(state);
   for (const { kind, actor } of actors) coordinator.kindByActor.set(actor, kind);
   const yieldingFor = assignMovementYieldPaths(state, actors, occupancyByTile);
+  const activePassengerInterfaceOwner = new Map<number, Visitor>();
+  for (const visitor of state.visitors) {
+    if (!isPassengerTransferCrossing(visitor) || visitor.transferAccessTile === null || visitor.transferAccessTile === undefined) continue;
+    activePassengerInterfaceOwner.set(visitor.transferAccessTile, visitor);
+  }
   for (const { actor } of actors) {
     if (actor.path.length === 0) {
       clearMovementWait(actor);
@@ -16933,6 +17040,11 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   for (const { kind, actor } of actors) {
     if (actor.path.length === 0) continue;
     const target = actor.path[0];
+    const interfaceOwner = activePassengerInterfaceOwner.get(target);
+    if (interfaceOwner && actor !== interfaceOwner) {
+      coordinator.blockedReasonByKey.set(movementActorKey(kind, actor), 'passenger transfer owns interface');
+      continue;
+    }
     const center = tileCenter(target, state.width);
     // The prepass only claims crossings that can happen this tick. A bulky
     // cart rolls more slowly and therefore cannot pre-claim a public tile
@@ -22907,8 +23019,15 @@ function repathVisitorToReservedCafeteriaTarget(state: StationState, visitor: Vi
 function visitorDockTargets(state: StationState, visitor: Visitor): number[] {
   if (visitor.originShipId !== null) {
     const ship = state.arrivingShips.find((s) => s.id === visitor.originShipId) ?? null;
-    if (ship && ship.stage === 'docked' && ship.bayTiles.length > 0) {
-      return ship.bayTiles;
+    if (ship && ship.stage === 'docked') {
+      // Before recall, assemble completed passengers at the same real
+      // station-side positions the transfer queue will use. Routing to an
+      // arbitrary Berth tile left the cohort scattered inside the bay and
+      // made the recall clock mostly measure avoidable cross-traffic.
+      const transferTargets = passengerTransferSlotsForShip(state, ship)
+        .flatMap((slot) => [slot.stationTile, ...slot.queueTiles]);
+      if (transferTargets.length > 0) return [...new Set(transferTargets)];
+      if (ship.bayTiles.length > 0) return ship.bayTiles;
     }
   }
   const visitorDockTiles = state.docks
@@ -22937,6 +23056,35 @@ function assignPathToDock(state: StationState, visitor: Visitor): void {
   visitor.commercialDrinkUnitId = null;
   visitor.optionalDrinkActive = false;
   if (queueVisitorForBoardingTransfer(state, visitor)) return;
+  const originShip = originShipForVisitor(state, visitor);
+  if (originShip?.stage === 'docked' && docks.length > 0) {
+    const assembly = chooseLeastLoadedPath(
+      state,
+      visitor.tileIndex,
+      docks,
+      false,
+      'visitor',
+      undefined,
+      visitor.id
+    );
+    if (assembly) {
+      const claim = tryCreateReservation(state, {
+        ownerKind: 'visitor',
+        ownerId: visitor.id,
+        kind: 'transfer-slot',
+        targetTile: assembly.target,
+        targetId: `departure-assembly:${originShip.id}:${assembly.target}`,
+        amount: 1,
+        capacity: 1,
+        ttlSec: 75,
+        replaceOwnerReservations: true
+      });
+      if (claim.ok) {
+        setVisitorPath(state, visitor, assembly.path);
+        return;
+      }
+    }
+  }
   setVisitorPath(state, visitor, chooseNearestPath(state, visitor.tileIndex, docks, false, 'visitor', visitor.id) ?? []);
 }
 
@@ -24519,8 +24667,12 @@ function assignOptionalRepeatDrink(state: StationState, visitor: Visitor): boole
 }
 
 function routeVisitorAfterLeisureStop(state: StationState, visitor: Visitor): void {
-  if (assignOptionalRepeatDrink(state, visitor)) return;
+  // A manifest passenger who completed the promised itinerary assembles for
+  // departure before considering optional spending. This is what lets the
+  // player see a ready return cohort instead of losing the final traveller to
+  // an unpromised drink at the far end of a short stay.
   if (routeContractVisitorToNextService(state, visitor)) return;
+  if (assignOptionalRepeatDrink(state, visitor)) return;
   if (!visitor.servedMeal && state.ops.cafeteriasActive > 0 && shouldTryMealAfterLeisure(state, visitor)) {
     visitor.state = VisitorState.ToCafeteria;
     assignPathToCafeteria(state, visitor);
@@ -25004,17 +25156,37 @@ function updateVisitorLogic(
           currentModule === ModuleType.Sink ||
           currentModule === ModuleType.WashBank) &&
         (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex);
+      const claimedServiceFixture =
+        visitor.activeService !== null &&
+        visitor.activeService !== 'meal' &&
+        visitor.reservedTargetTile === visitor.tileIndex &&
+        state.reservations.some(
+          (reservation) =>
+            reservation.releaseReason === null &&
+            reservation.expiresAt > state.now &&
+            reservation.ownerKind === 'visitor' &&
+            reservation.ownerId === visitor.id &&
+            (reservation.kind === 'provider-slot' || reservation.kind === 'seat-use-slot') &&
+            reservation.targetTile === visitor.tileIndex
+        ) &&
+        fixtureProvidesService(state.rooms[visitor.tileIndex], currentModule, visitor.activeService);
+      const mayStartOrdinaryLeisure =
+        visitor.activeService === null ||
+        visitor.activeService === 'meal' ||
+        claimedServiceFixture;
       if (
-        atLoungeModule ||
         atArrivalDesk ||
-        atMarketModule ||
-        atCheckoutBank ||
-        atTemporarySleep ||
-        atVendingModule ||
-        atCantinaModule ||
-        atObservatoryModule ||
-        atClinicModule ||
-        atHygieneService
+        (mayStartOrdinaryLeisure && (
+          atCheckoutBank ||
+          atMarketModule ||
+          atLoungeModule ||
+          atTemporarySleep ||
+          atVendingModule ||
+          atCantinaModule ||
+          atObservatoryModule ||
+          atClinicModule ||
+          atHygieneService
+        ))
       ) {
         visitor.state = VisitorState.Leisure;
         // Wonder bonus: Observatory contributes 2x rating boost vs Lounge.
@@ -25075,9 +25247,10 @@ function updateVisitorLogic(
                 : visitor.activeService === 'leisure'
                   ? 6.5
                   : null;
-        visitor.eatTimer =
-          (contractDwell ?? (atClinicModule ? 5.5 : atHygieneService ? 2.8 : baseDwell * dwellMult)) +
-          state.rng() * TASK_TIMINGS.visitorLeisureJitterSec;
+        visitor.eatTimer = contractDwell ?? (
+          (atClinicModule ? 5.5 : atHygieneService ? 2.8 : baseDwell * dwellMult) +
+          state.rng() * TASK_TIMINGS.visitorLeisureJitterSec
+        );
         applyVisitorCompletedRouteExperience(state, visitor);
         setVisitorPath(state, visitor, []);
       }

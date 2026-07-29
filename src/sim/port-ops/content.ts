@@ -43,7 +43,10 @@ export const PORT_ONBOARDING_OFFERS: readonly PortOfferTemplate[] = [
     outboundRequest: { rawMaterial: 0, meal: 0, tradeGood: 0 },
     requestedServices: ['cafeteria'],
     forecastSec: 18,
-    berthTimeSec: 82,
+    // Ten real crossings, eight meals, and five turns through the starter's
+    // one visitor Toilet fit inside this published fixed timetable without a
+    // post-acceptance extension.
+    berthTimeSec: 165,
     dockingFee: 70,
     projectedSpend: 150,
     riskLabel: 'low'
