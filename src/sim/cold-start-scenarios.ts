@@ -760,7 +760,7 @@ export const COLD_START_SCENARIOS: Record<string, Scenario> = {
     s.metrics.residentsConvertedLifetime = 3;
     s.metrics.credits = 5000;
     s.metrics.materials = 500;
-    applyDemoStationOverlay(s);
+    applyDemoStationOverlay(s, { broadCargoBerth: true });
   },
 
   // Focused visual fixture for the larger, slot-driven hospitality modules.
@@ -3603,7 +3603,10 @@ function planScenarioStructuralExpansion(
   if (!planned.ok) throw new Error(`Structural expansion fixture failed: ${planned.reason ?? 'unknown'}`);
 }
 
-function applyDemoStationOverlay(state: StationState): void {
+function applyDemoStationOverlay(
+  state: StationState,
+  options: { broadCargoBerth?: boolean } = {}
+): void {
   // Wipe a larger canvas so the starter's tiny central room doesn't conflict.
   for (let y = 3; y < 48; y++) {
     for (let x = 3; x < 80; x++) {
@@ -3667,6 +3670,40 @@ function applyDemoStationOverlay(state: StationState): void {
   paintRoom(state, 38, 31, 49, 42, RoomType.Brig, 'north');
   paintRoom(state, 68, 31, 76, 37, RoomType.Berth, 'west');
   paintRoom(state, 68, 37, 76, 43, RoomType.Berth, 'west');
+
+  // The two compact passenger bays remain useful, but the industrial repair
+  // tender in the opening freight offer needs four tiles of lateral hull
+  // clearance. Give it a genuinely broad cargo bay instead of pretending a
+  // tight passenger slot is compatible. A sealed service neck keeps the new
+  // berth connected to the operations deck without intruding on its approach.
+  if (options.broadCargoBerth) {
+    paintRoom(state, 68, 49, 76, 60, RoomType.Berth, 'west');
+    for (let y = 44; y <= 55; y++) {
+      for (let x = 64; x <= 67; x++) {
+        const idx = y * GRID_WIDTH + x;
+        const passage = (y <= 53 && x === 65) || (y === 54 && x >= 65);
+        const boundary = !passage;
+        setTile(state, idx, boundary ? TileType.Wall : TileType.Floor);
+        setRoom(state, idx, RoomType.None);
+        state.pressurized[idx] = !boundary;
+        state.zones[idx] = ZoneType.Restricted;
+      }
+    }
+    // Complete the rectangular Berth cluster behind the service-neck wall.
+    // Only the centre Airlock opens into the station; the other rear-bay tiles
+    // remain separated from the neck by the wall at x=67.
+    for (let y = 50; y <= 58; y++) {
+      const idx = y * GRID_WIDTH + 68;
+      setTile(state, idx, TileType.Floor);
+      setRoom(state, idx, RoomType.Berth);
+    }
+    const serviceNeckNorthDoor = 43 * GRID_WIDTH + 65;
+    setTile(state, serviceNeckNorthDoor, TileType.Door);
+    setRoom(state, serviceNeckNorthDoor, RoomType.None);
+    const cargoBerthAirlock = 54 * GRID_WIDTH + 68;
+    setTile(state, cargoBerthAirlock, TileType.Airlock);
+    setRoom(state, cargoBerthAirlock, RoomType.Berth);
+  }
 
   // Arrival corridor behind the exterior berths.
   for (let y = 31; y < 42; y++) {
@@ -3732,15 +3769,24 @@ function applyDemoStationOverlay(state: StationState): void {
     setTile(state, y * GRID_WIDTH + 76, TileType.Space);
     setRoom(state, y * GRID_WIDTH + 76, RoomType.None);
   }
+  if (options.broadCargoBerth) {
+    for (let y = 50; y <= 58; y++) {
+      paintFloorTile(state, 75, y, TileType.Floor);
+      setRoom(state, y * GRID_WIDTH + 75, RoomType.Berth);
+      setTile(state, y * GRID_WIDTH + 76, TileType.Space);
+      setRoom(state, y * GRID_WIDTH + 76, RoomType.None);
+    }
+  }
 
   // ---- modules ----
-  // Dorm
-  placeMod(state, 7, 8, ModuleType.Bed);
-  placeMod(state, 9, 8, ModuleType.Bed);
-  placeMod(state, 11, 8, ModuleType.Bed);
-  placeMod(state, 13, 8, ModuleType.Bed);
-  placeMod(state, 7, 12, ModuleType.Bed);
-  placeMod(state, 10, 12, ModuleType.Plant);
+  // Dorm. Five real four-position banks cover all eighteen crew with two
+  // spare slots for watch-change overlap. The previous five single beds made
+  // this visually dense showcase a hidden 5/18 housing failure.
+  placeFixture(state, ModuleType.BunkBank, 6, 7);
+  placeFixture(state, ModuleType.BunkBank, 9, 7);
+  placeFixture(state, ModuleType.BunkBank, 12, 7);
+  placeFixture(state, ModuleType.BunkBank, 6, 11, 90);
+  placeFixture(state, ModuleType.BunkBank, 10, 11, 90);
   // Cafeteria
   placeMod(state, 16, 8, ModuleType.Table);
   placeMod(state, 19, 8, ModuleType.Table);
@@ -3757,6 +3803,7 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 27, 10, ModuleType.Stove);
   placeMod(state, 30, 10, ModuleType.Stove);
   placeMod(state, 27, 12, ModuleType.WaterFountain);
+  placeFixture(state, ModuleType.ColdStore, 31, 12);
   // Hydroponics
   placeMod(state, 36, 8, ModuleType.GrowStation);
   placeMod(state, 39, 8, ModuleType.GrowStation);
@@ -3833,6 +3880,17 @@ function applyDemoStationOverlay(state: StationState): void {
   placeMod(state, 75, 40, ModuleType.Gangway);
   placeMod(state, 69, 40, ModuleType.CustomsCounter);
   placeMod(state, 73, 38, ModuleType.CargoArm);
+  // Modern medium-ship hardware in the broad cargo bay. Unlike the two
+  // legacy compact bays, this facility earns its compatibility from a real
+  // control unit, two clamps, a cargo interface, customs, and a gangway.
+  if (options.broadCargoBerth) {
+    placeFixture(state, ModuleType.BerthControl, 69, 50);
+    placeFixture(state, ModuleType.DockingClamp, 72, 50);
+    placeFixture(state, ModuleType.DockingClamp, 72, 58);
+    placeFixture(state, ModuleType.CargoArm, 74, 52);
+    placeFixture(state, ModuleType.CustomsCounter, 69, 55);
+    placeFixture(state, ModuleType.Gangway, 75, 54);
+  }
 
   // Demo starts with enough inventory for the Part 1 living-actors/job loop.
   state.crew.total = 18;
@@ -3842,8 +3900,28 @@ function applyDemoStationOverlay(state: StationState): void {
   state.metrics.waterStock = 180;
   state.metrics.airQuality = 95;
   state.controls.shipsPerCycle = 3;
-  buyRawFood(state, 0, 90);
   buyMaterials(state, 0, 120);
+
+  // Materialize the authored headcount before assigning the operating watch.
+  // The starter already owns one Cook; keep the same eighteen-person roster
+  // and put that real worker on Alpha Watch instead of masking the shortage
+  // with a scenario-only extra hire.
+  tick(state, 0);
+  const demoCook = state.crewMembers.find((crew) => crew.staffRole === 'cook');
+  if (!demoCook) throw new Error('demo-station requires the starter Cook role');
+  demoCook.shiftBucket = 0;
+  demoCook.resting = false;
+  demoCook.restSessionActive = false;
+  demoCook.recalledUntil = 0;
+
+  // Scenario starting stock is authored inventory, not a live procurement
+  // action. Seed the physical kitchen Cold Store directly so opening the demo
+  // does not silently accept a freight contract or consume the onboarding
+  // offer sequence merely to establish its baseline pantry.
+  const seededRawFood = seedItemNodeStock(state, 31, 12, 'rawMeal', 90);
+  if (seededRawFood !== 90) {
+    throw new Error(`demo-station expected 90 units of physical raw food, seeded ${seededRawFood}`);
+  }
 
   const seededMeals =
     seedItemNodeStock(state, 16, 13, 'meal', 24) +
