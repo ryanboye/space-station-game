@@ -67,6 +67,7 @@
     "test:phase9-save": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/phase9-save-migration-tests.js",
     "test:normal-scale-operation": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-operation-tests.js",
     "test:normal-scale-housing": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-housing-tests.js",
+    "test:normal-scale-sustainability": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/normal-scale-sustainability-tests.js",
     "test:local-air-contract": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/local-air-contract-tests.js",
     "test:short-stay-passenger-loop": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/short-stay-passenger-loop-tests.js",
     "test:distance-aware-recall": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/distance-aware-recall-tests.js",

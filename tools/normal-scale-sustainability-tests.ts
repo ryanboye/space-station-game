@@ -2,9 +2,17 @@ import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import {
   createInitialState,
   getCrewSustainabilitySummary,
+  runCriticalNeedJobYieldTestTick,
+  runJobAssignmentTestTick,
   tick
 } from '../src/sim/sim';
-import { ModuleType, type CrewMember, type StationState } from '../src/sim/types';
+import {
+  ModuleType,
+  TileType,
+  type CrewMember,
+  type StationState,
+  type TransportJob
+} from '../src/sim/types';
 
 const STEP = 1 / 15;
 const RUN_SECONDS = 600;
@@ -56,6 +64,153 @@ function snapshotCrew(crew: CrewMember): SelfCareSnapshot {
     drinking: crew.drinking,
     cleaning: crew.cleaning
   };
+}
+
+function testCriticalNeedJobYieldBoundary(): string {
+  const state = createInitialState({
+    seed: 915_559,
+    physicalStarterInventory: true,
+    manualTrafficAdmission: false
+  });
+  assert(applyColdStartScenario(state, 'normal-scale-50'), 'critical-yield fixture scenario is not registered');
+  const crew = state.crewMembers[0];
+  assert(crew, 'critical-yield fixture has no crew');
+  for (const other of state.crewMembers) other.resting = other !== crew;
+  state.jobs = [];
+  state.constructionSites = [];
+
+  const clearActor = (): void => {
+    crew.activeJobId = null;
+    crew.path = [];
+    crew.resting = false;
+    crew.eating = false;
+    crew.carryingMeal = false;
+    crew.eatSessionActive = false;
+    crew.cleaning = false;
+    crew.cleanSessionActive = false;
+    crew.toileting = false;
+    crew.toiletSessionActive = false;
+    crew.drinking = false;
+    crew.drinkSessionActive = false;
+    crew.evaSuit = false;
+    crew.carryingItemType = null;
+    crew.carryingAmount = 0;
+    crew.energy = 17;
+    crew.hunger = 90;
+    crew.hygiene = 90;
+    crew.bladder = 90;
+    crew.thirst = 90;
+    crew.needsStrainSec = 8;
+    crew.taskLockUntil = 0;
+  };
+  const assignJob = (job: TransportJob): void => {
+    state.jobs = [job];
+    crew.activeJobId = job.id;
+    crew.path = [job.fromTile, job.toTile];
+  };
+  const basicJob = (id: number, type: TransportJob['type'] = 'deliver'): TransportJob => ({
+    id,
+    type,
+    itemType: type === 'construct' ? 'rawMaterial' : 'tradeGood',
+    amount: 1,
+    fromTile: crew.tileIndex,
+    toTile: crew.tileIndex,
+    assignedCrewId: crew.id,
+    createdAt: state.now,
+    expiresAt: state.now + 90,
+    state: 'assigned',
+    pickedUpAmount: 0,
+    completedAt: null,
+    lastProgressAt: state.now,
+    stallReason: 'none'
+  });
+
+  clearActor();
+  const siteId = 915_559;
+  state.constructionSites.push({
+    id: siteId,
+    kind: 'tile',
+    tileIndex: crew.tileIndex,
+    targetTile: TileType.Floor,
+    requiredMaterials: 2,
+    deliveredMaterials: 2,
+    buildProgress: 3.5,
+    buildWorkRequired: 10,
+    requiresEva: false,
+    assignedCrewId: crew.id,
+    state: 'building',
+    blockedReason: null,
+    createdAt: state.now
+  });
+  const ordinary = {
+    ...basicJob(915_559, 'construct'),
+    constructionSiteId: siteId,
+    constructionMode: 'build' as const,
+    workProgress: 3.5,
+    workRequired: 10
+  };
+  assignJob(ordinary);
+  assert(runCriticalNeedJobYieldTestTick(state, crew.id), 'sustained true-critical crew did not yield ordinary work');
+  assert(!runCriticalNeedJobYieldTestTick(state, crew.id), 'one critical episode yielded the same job more than once');
+  assert(ordinary.state === 'pending' && ordinary.assignedCrewId === null, 'yield did not requeue the same job');
+  assert(ordinary.workProgress === 3.5, 'yield discarded partial job progress');
+  const site = state.constructionSites[0];
+  assert(
+    site.buildProgress === 3.5 && site.state === 'planned' && site.assignedCrewId === null,
+    'yield discarded or stranded construction-site state'
+  );
+  assert(crew.activeJobId === null && crew.path.length === 0, 'yield retained actor job ownership or path');
+  assert(crew.taskLockUntil > state.now, 'yield did not arm a bounded reassignment lock');
+  runJobAssignmentTestTick(state);
+  assert(crew.activeJobId === null, 'critical crew was immediately reassigned its yielded job');
+
+  const protectedCases: Array<{
+    label: string;
+    prepare?: () => void;
+    locks?: Parameters<typeof runCriticalNeedJobYieldTestTick>[2];
+  }> = [
+    {
+      label: 'carrying transport',
+      prepare: () => {
+        crew.carryingItemType = 'tradeGood';
+        crew.carryingAmount = 1;
+      }
+    },
+    {
+      label: 'active physical self-care session',
+      prepare: () => {
+        crew.drinking = true;
+        crew.drinkSessionActive = true;
+      }
+    },
+    { label: 'incident duty', locks: { incidentDutyLocked: true } },
+    { label: 'command duty', locks: { commandDutyLocked: true } },
+    { label: 'protected post', locks: { protectedDutyLocked: true } },
+    {
+      label: 'EVA',
+      prepare: () => {
+        crew.evaSuit = true;
+      }
+    }
+  ];
+  for (const [index, protectedCase] of protectedCases.entries()) {
+    clearActor();
+    const protectedJob = basicJob(915_560 + index);
+    assignJob(protectedJob);
+    protectedCase.prepare?.();
+    assert(
+      !runCriticalNeedJobYieldTestTick(state, crew.id, protectedCase.locks),
+      `${protectedCase.label} was preempted by critical self-care`
+    );
+    assert(
+      crew.activeJobId === protectedJob.id &&
+        protectedJob.state === 'assigned' &&
+        protectedJob.assignedCrewId === crew.id,
+      `${protectedCase.label} lost job custody`
+    );
+  }
+
+  return 'ordinary construction yielded once with progress intact; reassignment lock held; carrying, active-session, incident, command, protected-post, and EVA work retained custody';
 }
 
 function runScenario(scenario: ScenarioName, seed: number): {
@@ -175,6 +330,44 @@ function runScenario(scenario: ScenarioName, seed: number): {
   }
 
   const finalNeeds = getCrewSustainabilitySummary(state);
+  const finalCriticalCrew = state.crewMembers
+    .filter(
+      (crew) =>
+        crew.energy < 18 ||
+        crew.hunger < 18 ||
+        crew.hygiene < 18 ||
+        crew.bladder < 8 ||
+        crew.thirst < 8
+    )
+    .map((crew) => {
+      const job = crew.activeJobId === null
+        ? null
+        : state.jobs.find((candidate) => candidate.id === crew.activeJobId) ?? null;
+      return {
+        id: crew.id,
+        role: crew.staffRole,
+        watch: crew.shiftBucket,
+        needs: {
+          energy: Number(crew.energy.toFixed(1)),
+          hunger: Number(crew.hunger.toFixed(1)),
+          hygiene: Number(crew.hygiene.toFixed(1)),
+          bladder: Number(crew.bladder.toFixed(1)),
+          thirst: Number(crew.thirst.toFixed(1))
+        },
+        strainSec: Number(crew.needsStrainSec.toFixed(1)),
+        activeJob: job ? `${job.type}:${job.state}` : null,
+        selfCare: {
+          resting: crew.resting,
+          eating: crew.eating,
+          toileting: crew.toileting,
+          drinking: crew.drinking,
+          cleaning: crew.cleaning,
+          carryingMeal: crew.carryingMeal
+        },
+        idleReason: crew.idleReason,
+        pathLength: crew.path.length
+      };
+    });
   const finalDirtyReturn = dirtyReturns(state, returnTiles);
   const finalReady = readyServings(state, servingTiles);
   const crewMealsCompleted = state.serviceLog.lifetimeByService.meal -
@@ -227,6 +420,7 @@ function runScenario(scenario: ScenarioName, seed: number): {
         peakResignationNotices,
         peakCriticalAfterWarmup,
         finalCritical: finalNeeds.criticalNeedsCrew,
+        finalCriticalCrew,
         completedNeedSessions: {
           rest: completed.rest.size,
           meal: completed.meal.size,
@@ -261,11 +455,21 @@ function runScenario(scenario: ScenarioName, seed: number): {
 }
 
 function main(): void {
-  const runs = [
-    runScenario('normal-scale-50', 915_560),
-    runScenario('normal-scale-50-spine', 915_561)
-  ];
-  process.stdout.write(`${JSON.stringify({ runs: runs.map((run) => run.report) }, null, 2)}\n`);
+  const criticalYieldEvidence = testCriticalNeedJobYieldBoundary();
+  if (process.env.NORMAL_SCALE_YIELD_ONLY === '1') {
+    process.stdout.write(`${JSON.stringify({ criticalYieldEvidence }, null, 2)}\n`);
+    process.stdout.write('normal-scale-critical-yield-tests: ok\n');
+    return;
+  }
+  const requestedScenario = process.env.NORMAL_SCALE_SCENARIO as ScenarioName | undefined;
+  const scenarios: Array<[ScenarioName, number]> = requestedScenario
+    ? [[requestedScenario, requestedScenario === 'normal-scale-50' ? 915_560 : 915_561]]
+    : [
+        ['normal-scale-50', 915_560],
+        ['normal-scale-50-spine', 915_561]
+      ];
+  const runs = scenarios.map(([scenario, seed]) => runScenario(scenario, seed));
+  process.stdout.write(`${JSON.stringify({ criticalYieldEvidence, runs: runs.map((run) => run.report) }, null, 2)}\n`);
   const failures = runs.flatMap((run) =>
     run.failures.map((failure) => `${String(run.report.scenario)}: ${failure}`)
   );

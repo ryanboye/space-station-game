@@ -1039,6 +1039,12 @@ const CREW_REST_EMERGENCY_WAKE_MIN_ENERGY = 30;
 const CREW_REST_COOLDOWN_SEC = 12;
 const CREW_REST_LOCK_SEC = 10;
 const CREW_TASK_LOCK_SEC = 8;
+// Ordinary work gets a short opportunity to finish a bounded step after a
+// need first crosses its true critical floor. Past this grace, custody-free
+// work yields to physical self-care and stays off the same actor long enough
+// for the need router to take ownership.
+const CREW_CRITICAL_JOB_YIELD_GRACE_SEC = 8;
+const CREW_CRITICAL_JOB_YIELD_LOCK_SEC = 12;
 const CREW_SHIFT_BUCKET_COUNT = 3;
 export const OPERATING_WATCH_SEC = 135;
 const CREW_MAX_RESTING_RATIO = 0.35;
@@ -1046,6 +1052,22 @@ const CREW_EMERGENCY_WAKE_RATIO = 0.15;
 
 const WATCH_NAMES = ['ALPHA', 'BETA', 'GAMMA'] as const;
 const WATCH_BANKS: readonly TrafficBankKind[] = ['passenger-bank', 'cargo-bank', 'maintenance-window'];
+
+function crewHasTrueCriticalNeed(crew: CrewMember): boolean {
+  return crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD ||
+    crew.hunger < 18 ||
+    crew.hygiene < 18 ||
+    crew.bladder < 8 ||
+    crew.thirst < 8;
+}
+
+function crewHasActivePhysicalSelfCareSession(crew: CrewMember): boolean {
+  return (crew.resting && crew.restSessionActive) ||
+    (crew.eating && (crew.eatSessionActive || crew.carryingMeal)) ||
+    (crew.cleaning && crew.cleanSessionActive) ||
+    (crew.toileting && crew.toiletSessionActive) ||
+    (crew.drinking && crew.drinkSessionActive);
+}
 
 function cloneShiftTargets(targets: CrewShiftTargets): CrewShiftTargets {
   return { ...targets };
@@ -17723,12 +17745,6 @@ export function getCrewSustainabilitySummary(state: StationState): {
     const morale = crew.morale < 25 ? 0.72 : crew.morale < 45 ? 0.88 : 1;
     return fatigue * morale;
   };
-  const hasCriticalNeed = (crew: CrewMember): boolean =>
-    crew.energy < CREW_REST_CRITICAL_ENERGY_THRESHOLD ||
-    crew.hunger < 18 ||
-    crew.hygiene < 18 ||
-    crew.bladder < 8 ||
-    crew.thirst < 8;
   return {
     sleepSlots: targets.length,
     occupiedSleepSlots,
@@ -17752,7 +17768,7 @@ export function getCrewSustainabilitySummary(state: StationState): {
     // "critical" surface for crew who have crossed the actual severe-speed
     // and resignation-strain thresholds instead of alarming on every normal
     // restroom or meal trip.
-    criticalNeedsCrew: state.crewMembers.filter(hasCriticalNeed).length,
+    criticalNeedsCrew: state.crewMembers.filter(crewHasTrueCriticalNeed).length,
     averageMoveSpeedPct: state.crewMembers.length > 0
       ? Math.round(state.crewMembers.reduce((sum, crew) => sum + crewMoveMultiplier(crew), 0) / state.crewMembers.length * 100)
       : 100,
@@ -20704,9 +20720,9 @@ function assignJobToCrew(state: StationState, crew: CrewMember, job: StationStat
   }
 }
 
-function releaseCrewJobForCommandDuty(state: StationState, crew: CrewMember): void {
-  if (crew.activeJobId === null) return;
-  if (crew.carryingItemType !== null && crew.carryingAmount > 0) return;
+function releaseCrewJobForRequeue(state: StationState, crew: CrewMember): boolean {
+  if (crew.activeJobId === null) return false;
+  if (crew.carryingItemType !== null && crew.carryingAmount > 0) return false;
   const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
   if (job && job.state !== 'done' && job.state !== 'expired') {
     job.state = 'pending';
@@ -20724,6 +20740,53 @@ function releaseCrewJobForCommandDuty(state: StationState, crew: CrewMember): vo
   crew.activeJobId = null;
   setCrewPath(state, crew, []);
   releaseReservationsForOwner(state, 'crew', crew.id, 'replaced', ['actor-job']);
+  return true;
+}
+
+function releaseCrewJobForCommandDuty(state: StationState, crew: CrewMember): void {
+  releaseCrewJobForRequeue(state, crew);
+}
+
+type CriticalJobYieldLocks = {
+  incidentDutyLocked: boolean;
+  commandDutyLocked: boolean;
+  protectedDutyLocked: boolean;
+};
+
+function maybeYieldCrewJobForCriticalSelfCare(
+  state: StationState,
+  crew: CrewMember,
+  locks: CriticalJobYieldLocks
+): boolean {
+  if (crew.activeJobId === null || !crewHasTrueCriticalNeed(crew)) return false;
+  if (crew.needsStrainSec < CREW_CRITICAL_JOB_YIELD_GRACE_SEC) return false;
+  if (locks.incidentDutyLocked || locks.commandDutyLocked || locks.protectedDutyLocked) return false;
+  if (crew.evaSuit || crew.carryingMeal || crewHasActivePhysicalSelfCareSession(crew)) return false;
+  if (crew.carryingItemType !== null && crew.carryingAmount > 0.001) return false;
+  const job = state.jobs.find((candidate) => candidate.id === crew.activeJobId);
+  if (!job || (job.state !== 'assigned' && job.state !== 'in_progress')) return false;
+  // Fire response is incident work even if its incident record has just
+  // crossed a cadence boundary. It is never treated as ordinary maintenance.
+  if (job.type === 'extinguish') return false;
+  if (!releaseCrewJobForRequeue(state, crew)) return false;
+  crew.taskLockUntil = Math.max(crew.taskLockUntil, state.now + CREW_CRITICAL_JOB_YIELD_LOCK_SEC);
+  crew.idleReason = 'idle_waiting_reassign';
+  return true;
+}
+
+/** Focused regression hook for the critical-need job-yield boundary. */
+export function runCriticalNeedJobYieldTestTick(
+  state: StationState,
+  crewId: number,
+  locks: Partial<CriticalJobYieldLocks> = {}
+): boolean {
+  const crew = state.crewMembers.find((candidate) => candidate.id === crewId);
+  if (!crew) return false;
+  return maybeYieldCrewJobForCriticalSelfCare(state, crew, {
+    incidentDutyLocked: locks.incidentDutyLocked ?? false,
+    commandDutyLocked: locks.commandDutyLocked ?? false,
+    protectedDutyLocked: locks.protectedDutyLocked ?? false
+  });
 }
 
 function assignJobsToIdleCrew(state: StationState): void {
@@ -20859,6 +20922,8 @@ function assignJobsToIdleCrew(state: StationState): void {
       (crew) =>
         !crew.resting &&
         crew.activeJobId === null &&
+        state.now >= crew.taskLockUntil &&
+        !crewHasTrueCriticalNeed(crew) &&
         !crew.carryingMeal &&
         (crew.carryingItemType === null || crew.carryingAmount <= 0.001)
     )
@@ -21671,11 +21736,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     if (result === 'blocked') crew.blockedTicks = Math.min(crew.blockedTicks + 1, 9999);
     else if (result === 'moved') crew.blockedTicks = 0;
   };
-  const crewHasActivePhysicalSelfCareSession = (crew: CrewMember): boolean =>
-    (crew.eating && (crew.eatSessionActive || crew.carryingMeal)) ||
-    (crew.cleaning && crew.cleanSessionActive) ||
-    (crew.toileting && crew.toiletSessionActive) ||
-    (crew.drinking && crew.drinkSessionActive);
   const routeCrewToAssignedSleepBeforeCriticalFloor = (
     crew: CrewMember,
     preDrainEnergyFloor: number
@@ -21741,6 +21801,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     crew.needsStrainSec = criticalNeed
       ? Math.min(240, crew.needsStrainSec + dt)
       : Math.max(0, crew.needsStrainSec - dt * 1.6);
+    maybeYieldCrewJobForCriticalSelfCare(state, crew, {
+      incidentDutyLocked,
+      commandDutyLocked,
+      protectedDutyLocked
+    });
     const moraleTarget = crewMoraleTarget(state, crew, dormTargets.length > 0 ? quarters.averageQuality : 28);
     crew.morale = clamp(crew.morale + (moraleTarget - crew.morale) * Math.min(1, dt * 0.035), 0, 100);
     if (crew.resignationNoticeAt !== null && crew.missedPayrollCycles === 0 && crew.morale >= 55) {
