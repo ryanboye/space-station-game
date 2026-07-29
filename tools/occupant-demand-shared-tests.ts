@@ -278,6 +278,28 @@ function testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor(): void {
   assert(crew.path.length === 0, 'ordinary critical-rest handoff retained a stale route');
 }
 
+function testCrewBlockedSelfCarePathYieldsToCriticalSleep(): void {
+  const state = crewProductionState();
+  const toilet = fixtureTile(state, ModuleType.Toilet);
+  const crew = stageCrew(state, toilet, 18.2);
+  crew.toileting = true;
+  crew.idleReason = 'idle_no_path';
+  crew.path = [toilet + 1];
+  const old = tryCreateReservation(state, {
+    ownerKind: 'crew', ownerId: crew.id, kind: 'provider-slot', targetTile: toilet,
+    targetId: `toilet:${toilet}`, amount: 1, capacity: 1, ttlSec: 75
+  });
+  assert(old.ok, 'crew must obtain a real blocked toilet claim');
+
+  tick(state, 0.2);
+
+  assert(crew.resting, 'critically fatigued crew with a blocked self-care path did not begin sleep');
+  assert(crew.energy >= 18, `blocked self-care path crossed the hard energy floor: ${crew.energy}`);
+  assert(!crew.toileting && crew.path.length === 0, 'blocked self-care intent survived critical-sleep handoff');
+  assert(old.reservation.releaseReason === 'replaced',
+    `blocked self-care claim did not release once (${old.reservation.releaseReason})`);
+}
+
 function testCrewRestExitClearsLiveRestReason(): void {
   const state = crewProductionState();
   const serving = fixtureTile(state, ModuleType.ServingStation);
@@ -323,6 +345,7 @@ testResidentProductionPreemption();
 testPlannedVisitorServiceIsNotPreempted();
 testCrewStalledSelfCareYieldsToCriticalSleep();
 testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor();
+testCrewBlockedSelfCarePathYieldsToCriticalSleep();
 testCrewRestExitClearsLiveRestReason();
 testCrewActiveMealIsNeverPreempted();
 

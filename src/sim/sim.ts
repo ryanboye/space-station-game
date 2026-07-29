@@ -21284,7 +21284,11 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     const hasLiveClaim = reservationsForOwner(state, 'crew', crew.id)
       .some((reservation) => reservation.kind === 'provider-slot' || reservation.kind === 'seat-use-slot');
     const retryElapsedWithoutPath = crew.path.length === 0 && state.now >= crew.retargetAt;
-    const stalled = !hasLiveClaim || previousIdleReason === 'idle_waiting_fixture' || retryElapsedWithoutPath;
+    const stalled =
+      !hasLiveClaim ||
+      previousIdleReason === 'idle_waiting_fixture' ||
+      previousIdleReason === 'idle_no_path' ||
+      retryElapsedWithoutPath;
     if (!stalled) return false;
     // This is the one interruption boundary for a stalled intent. Completed
     // meals and live wash/toilet/drink sessions returned above untouched.
