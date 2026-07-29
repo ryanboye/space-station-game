@@ -15,6 +15,7 @@ import {
   tryPlaceModuleWithCredits,
   trySetTileWithCredits
 } from '../src/sim/index';
+import { findPath } from '../src/sim/sim';
 import { validateLiveStructuralInterfaces } from '../src/sim/structural-support';
 import {
   ModuleType,
@@ -24,7 +25,7 @@ import {
   type StationState
 } from '../src/sim/types';
 
-const STARTING_SAVINGS = 1_254;
+const STARTING_SAVINGS = 1_253;
 const STEP_SECONDS = 0.25;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -70,13 +71,13 @@ const core = fromIndex(state.core.centerTile, state.width);
 assertEqual(core.x, Math.floor(state.width / 2), 'starter core x-coordinate');
 assertEqual(core.y, Math.floor(state.height / 2), 'starter core y-coordinate');
 
-// Seal the north and south boundaries before opening the east hull. Each
-// conversion is the ordinary 1c Floor -> Wall credit-aware build action.
+// Seal the north and south boundaries before opening the east hull, leaving
+// the south-east tile as the Berth's station-side Door. Each wall conversion
+// is the ordinary 1c Floor -> Wall credit-aware build action.
 const sealingWalls = [
   tile(state, core.x + 9, core.y - 1),
   tile(state, core.x + 8, core.y + 4),
-  tile(state, core.x + 9, core.y + 4),
-  tile(state, core.x + 10, core.y + 4)
+  tile(state, core.x + 9, core.y + 4)
 ];
 for (const index of sealingWalls) {
   assertEqual(state.tiles[index], TileType.Floor, `sealing origin ${index} is not starter Floor`);
@@ -84,8 +85,21 @@ for (const index of sealingWalls) {
   assert(result.ok, `sealing wall ${index} failed: ${result.ok ? '' : result.reason}`);
   assertEqual(result.cost, 1, `sealing wall ${index} cost`);
 }
-assertEqual(state.metrics.credits, STARTING_SAVINGS - 4, 'cash after mandatory sealing');
+assertEqual(state.metrics.credits, STARTING_SAVINGS - 3, 'cash after mandatory sealing');
 assert(sealingWalls.every((index) => state.tiles[index] === TileType.Wall), 'sealing walls were not all completed');
+
+const southDoor = tile(state, core.x + 10, core.y + 4);
+assertEqual(state.tiles[southDoor], TileType.Floor, 'south Door origin is not starter Floor');
+const doorResult = trySetTileWithCredits(state, southDoor, TileType.Door);
+assert(doorResult.ok, `south Door failed: ${doorResult.ok ? '' : doorResult.reason}`);
+assertEqual(doorResult.cost, 0, 'south Door conversion cost');
+assertEqual(state.tiles[southDoor], TileType.Door, 'south access opening');
+
+// This existing Door was the tempting station-side pocket for the old north
+// Gangway. It deliberately remains in place so the live transfer assertion
+// below proves route selection, rather than making the old route impossible.
+const northPocket = tile(state, core.x + 10, core.y - 1);
+assertEqual(state.tiles[northPocket], TileType.Door, 'north comparison pocket');
 
 const exteriorWalls = [0, 1, 2, 3].map((dy) => tile(state, core.x + 11, core.y + dy));
 for (const index of exteriorWalls) {
@@ -113,7 +127,7 @@ assertEqual(berthCommit.anchorTile, berthAnchor, 'Medium Berth anchor');
 
 const hardware = [
   { type: ModuleType.BerthControl, origin: tile(state, core.x + 9, core.y + 1), cost: 210 },
-  { type: ModuleType.Gangway, origin: tile(state, core.x + 10, core.y), cost: 140 },
+  { type: ModuleType.Gangway, origin: tile(state, core.x + 10, core.y + 3), cost: 140 },
   { type: ModuleType.DockingClamp, origin: tile(state, core.x + 8, core.y), cost: 100 },
   { type: ModuleType.DockingClamp, origin: tile(state, core.x + 8, core.y + 3), cost: 100 }
 ] as const;
@@ -127,6 +141,16 @@ tick(state, 0);
 assertEqual(state.metrics.credits, 100, 'true working-capital reserve after the complete build');
 assertEqual(state.metrics.pressurizationPct, 100, 'sealed route pressurization');
 assertEqual(state.metrics.leakingTiles, 0, 'sealed route leak count');
+
+const liveInteriorTile = state.crewMembers[0]?.tileIndex;
+assert(liveInteriorTile !== undefined, 'starter has no crew tile to prove live interior access');
+assert(state.pressurized[liveInteriorTile], 'starter crew tile is not part of the live pressurized interior');
+const southInteriorPath = findPath(state, southDoor, liveInteriorTile, {
+  allowRestricted: false,
+  intent: 'visitor'
+});
+assert(southInteriorPath !== null, 'south Door has no visitor-allowed route to the live starter interior');
+assert(!southInteriorPath.includes(northPocket), 'south Door interior route detours through the north pocket');
 
 const facility = getBerthFacilityAt(state, berthAnchor);
 assert(facility, 'authored footprint did not derive a Berth facility');
@@ -182,8 +206,18 @@ assert(passengerShip, 'docked passenger ship disappeared');
 assertEqual(passengerShip.size, 'medium', 'docked passenger ship size');
 assertEqual(passengerShip.assignedBerthAnchor, berthAnchor, 'docked passenger ship Berth');
 
+const gangwayTile = tile(state, core.x + 10, core.y + 3);
+let observedSouthDoorTransfer = false;
+let observedNorthPocketTransfer = false;
 for (let elapsed = 0; elapsed < 90 && passengerShip.passengersSpawned < 10; elapsed += STEP_SECONDS) {
   tick(state, STEP_SECONDS);
+  for (const visitor of state.visitors) {
+    if (visitor.originShipId !== passengerShip.id) continue;
+    if (visitor.transferStationTile === northPocket) observedNorthPocketTransfer = true;
+    if (visitor.transferAccessTile === gangwayTile && visitor.transferStationTile === southDoor) {
+      observedSouthDoorTransfer = true;
+    }
+  }
 }
 assert(
   passengerShip.passengersSpawned === 10,
@@ -201,6 +235,8 @@ assertEqual(
   10,
   'physical visitors attributable to the accepted ship'
 );
+assert(observedSouthDoorTransfer, 'live passenger transfer did not select Gangway -> south Door');
+assert(!observedNorthPocketTransfer, 'live passenger transfer selected the north pocket');
 assertEqual(state.metrics.pressurizationPct, 100, 'operating station pressurization');
 assertEqual(state.metrics.leakingTiles, 0, 'operating station leak count');
 assert(state.commitment.committedBerthSeconds > 0, 'docked call lost committed Berth pressure');
@@ -208,8 +244,8 @@ assert(state.commitment.committedMeals > 0, 'docked call lost committed meal pre
 assert(state.commitment.committedStaffMinutes > 0, 'docked call lost committed staff pressure');
 
 console.log('FIRST BERTH AUTHORSHIP: PASS');
-console.log('  shell      +4c sealing before east-wall erasure; pressure 100%, leaks 0');
+console.log('  shell      +3c sealing + south Door before east-wall erasure; pressure 100%, leaks 0');
 console.log('  berth      x=coreX+8..10, y=coreY+0..3; Medium/east; structural support valid');
-console.log('  hardware   Control (coreX+9,coreY+1), Gangway (coreX+10,coreY), clamps west corners');
-console.log('  economy    1,254c - 4c sealing - 600c floor - 550c hardware = 100c reserve');
-console.log('  operation  onboarding passenger call admitted, docked, 10 visitors spawned');
+console.log('  hardware   Control (coreX+9,coreY+1), Gangway (coreX+10,coreY+3), clamps west corners');
+console.log('  economy    1,253c - 3c sealing - 600c floor - 550c hardware = 100c reserve');
+console.log('  operation  south Door selected over north pocket; passenger call docked 10/10');
