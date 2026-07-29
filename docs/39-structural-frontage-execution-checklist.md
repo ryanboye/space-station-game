@@ -351,7 +351,14 @@ audited checklist with no unsupported checked claims.
 ### Demand Discovery And Reception
 
 - [x] Stop exposing a complete pre-rolled itinerary at spawn.
-- [ ] Keep ship-level demand cues strong and learnable.
+- [x] Keep ship-level demand cues strong and learnable.
+  Evidence: frozen `demo-station` play presented the first three ships with
+  distinct silhouette/class, party and stay ranges, Meals/Hygiene versus cargo
+  badges, exact committed load, interface choice, risk, and revenue before
+  acceptance. After manually committing N-001, the same Approach Control surface
+  reviewed `Restroom visits fell short`, named the visitor-Toilet remedy, and
+  retained the original 5-visit commitment, directly teaching how the forecast
+  mapped to the observed turnaround.
 - [x] Reveal individual wants progressively through behavior.
 - [x] Add optional Reception/Customs processing slots.
 - [x] Make Reception reveal some demand earlier, never all of it.
@@ -934,7 +941,15 @@ audited checklist with no unsupported checked claims.
 ### Phase 9 Gate
 
 - [ ] Desired baseline station remains smooth and readable.
-- [ ] Two- to three-times scale remains operationally plausible.
+- [x] Two- to three-times scale remains operationally plausible.
+  Evidence: frozen production browser play on `normal-scale-50` remained
+  responsive at 4x while operating 50 crew, 58 simultaneous visitors, one mixed
+  Berth call and four Pod calls, 29 live work jobs, theft/trespass response, and
+  12 traveler services. The deterministic companion keeps both compact and
+  linear 50/50 geometries sealed with zero deaths for 240s. Interface cards
+  stack without overlap and can be hidden, although fit-view legibility and the
+  misleading `poorly supplied tiles` banner keep the separate baseline
+  readability row open.
 - [x] Multiple station geometries remain viable.
 - [x] Bad layouts create visible problems with more than one valid remedy.
 - [ ] No phase depends on invisible modifiers as its primary consequence.
