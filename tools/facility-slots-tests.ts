@@ -320,23 +320,84 @@ function testMarketBrowseToCheckoutFlow(): void {
   assert(getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id)?.kind === 'checkout', 'Expected checkout status.');
   const initialRegister = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
   assert(initialRegister?.kind === 'checkout' && initialRegister.activeRegisters === 1, `Steward must physically open one register before simulation (${JSON.stringify(initialRegister)} ${JSON.stringify(state.crewMembers[0])}).`);
+  assert(
+    initialRegister.capacity === initialRegister.registerCount,
+    `Every checkout must report one safe potential customer place while idle (${JSON.stringify(initialRegister)}).`
+  );
+  assert(
+    [...state.derived.queueTheater.chainsByAnchor.values()].every((chain) => chain.length === 0),
+    'Idle fixture readiness must not preallocate a phantom live queue chain.'
+  );
+  const idleReadiness = initialRegister.capacity;
+  const registerTiles = resolveFacilitySlots(fixture(state, ModuleType.CheckoutBank), state.width)
+    .filter((slot) => slot.role === 'checkout')
+    .map((slot) => slot.tileIndex);
   tick(state, 0.1);
   const afterFirstTick = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
   assert(afterFirstTick?.kind === 'checkout' && afterFirstTick.activeRegisters === 1, `Steward lost register after first simulation tick (${JSON.stringify(afterFirstTick)} ${JSON.stringify(state.crewMembers[0])}).`);
-  assert(afterFirstTick.capacity > 0, `CheckoutBank needs a physical queue chain (${JSON.stringify([...state.derived.queueTheater.chainsByAnchor.entries()])}).`);
   const creditsBefore = state.metrics.credits;
+  let peakLiveQueueCapacity = 0;
 
-  for (let elapsed = 0; elapsed < 40 && state.usageTotals.tradeGoodsSold < 1; elapsed += 0.1) tick(state, 0.1);
+  for (let elapsed = 0; elapsed < 40 && state.usageTotals.tradeGoodsSold < 1; elapsed += 0.1) {
+    tick(state, 0.1);
+    getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
+    const liveQueueCapacity = registerTiles.reduce(
+      (total, registerTile) => total + (state.derived.queueTheater.chainsByAnchor.get(registerTile)?.length ?? 0),
+      0
+    );
+    peakLiveQueueCapacity = Math.max(peakLiveQueueCapacity, liveQueueCapacity);
+  }
 
   assert(
     state.usageTotals.tradeGoodsSold === 1,
     `A shopper must browse stocked shelves and complete checkout (state ${visitor.state}, tile ${visitor.tileIndex}, target ${visitor.reservedTargetTile}, queue ${visitor.queueProviderTile}, wait ${visitor.movementWaitReason}, source ${visitor.marketTradeGoodSourceTile}, market ${JSON.stringify(getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id))}).`
+  );
+  assert(peakLiveQueueCapacity > 0, 'A shopper with a claimed good must create at least one live physical checkout place.');
+  const afterDemand = getMarketFixtureStatus(state, fixture(state, ModuleType.CheckoutBank).id);
+  assert(
+    afterDemand?.kind === 'checkout' && afterDemand.capacity === idleReadiness,
+    'Geometry readiness must survive a completed demand cycle.'
+  );
+  assert(
+    registerTiles.every((registerTile) => !state.derived.queueTheater.chainsByAnchor.has(registerTile)),
+    'A completed demand cycle must release every live checkout chain.'
   );
   assert(shelfNode.items.tradeGood === 0, 'The integrated checkout must consume the reserved shelf item.');
   assert(state.metrics.credits > creditsBefore, 'The integrated checkout must pay the station.');
   assert(
     !state.reservations.some((reservation) => reservation.ownerId === visitor.id && reservation.releaseReason === null),
     'A completed browse-to-checkout trip must release all visitor reservations.'
+  );
+}
+
+function testIdleReadinessTracksBlockedFrontage(): void {
+  const state = buildFacilityState();
+  const checkoutBank = fixture(state, ModuleType.CheckoutBank);
+  const registers = resolveFacilitySlots(checkoutBank, state.width).filter((slot) => slot.role === 'checkout');
+  const open = getMarketFixtureStatus(state, checkoutBank.id);
+  assert(
+    open?.kind === 'checkout' && open.capacity === registers.length,
+    'Open floor must provide one idle readiness place per checkout.'
+  );
+
+  for (const register of registers) {
+    for (const offset of [-1, 1, -state.width, state.width]) {
+      const neighbor = register.tileIndex + offset;
+      if (state.moduleOccupancyByTile[neighbor] !== null) continue;
+      state.tiles[neighbor] = TileType.Wall;
+      state.rooms[neighbor] = RoomType.None;
+    }
+  }
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+  const blocked = getMarketFixtureStatus(state, checkoutBank.id);
+  assert(
+    blocked?.kind === 'checkout' && blocked.capacity === 0,
+    `Fully blocked checkout frontage must report zero readiness (${JSON.stringify(blocked)}).`
+  );
+  assert(
+    [...state.derived.queueTheater.chainsByAnchor.values()].every((chain) => chain.length === 0),
+    'A blocked readiness probe must not fabricate live queue slots.'
   );
 }
 
@@ -347,20 +408,24 @@ function testMarketCheckoutFifoAndUnstaffedFeedback(): void {
   staffed.controls.paused = false;
   let sawLine = false;
   let sawTwoQueued = false;
+  let fifoSnapshot: number[] = [];
   for (let elapsed = 0; elapsed < 32 && !(sawTwoQueued && staffed.usageTotals.tradeGoodsSold >= 1); elapsed += 0.1) {
     tick(staffed, 0.1);
     const status = getMarketFixtureStatus(staffed, fixture(staffed, ModuleType.CheckoutBank).id);
     if (status?.kind === 'checkout' && status.queued > 0) sawLine = true;
-    if (status?.kind === 'checkout' && status.queued >= 2) sawTwoQueued = true;
+    if (status?.kind === 'checkout' && status.queued >= 2) {
+      sawTwoQueued = true;
+      fifoSnapshot = shoppers
+        .filter((visitor) => visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined)
+        .sort((a, b) => (a.queueJoinedAt ?? Infinity) - (b.queueJoinedAt ?? Infinity) || a.id - b.id)
+        .map((visitor) => visitor.id);
+    }
   }
   assert(sawLine, 'A large market must form a visible checkout line before sales complete.');
   assert(sawTwoQueued, 'One staffed register must serialize a bounded FIFO line under demand.');
   assert(staffed.usageTotals.tradeGoodsSold >= 1, 'A FIFO checkout line must eventually advance its head into exactly one sale.');
-  const liveQueue = shoppers
-    .filter((visitor) => visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined)
-    .sort((a, b) => (a.queueJoinedAt ?? Infinity) - (b.queueJoinedAt ?? Infinity) || a.id - b.id);
-  assert(liveQueue.length >= 2, 'The remaining shoppers must retain a physical FIFO order behind the active register.');
-  assert(liveQueue.map((visitor) => visitor.id).join('|') === [...liveQueue].sort((a, b) => a.id - b.id).map((visitor) => visitor.id).join('|'), 'Checkout line order must use joined-at time then visitor id as its deterministic FIFO tie-breaker.');
+  assert(fifoSnapshot.length >= 2, 'The active register must expose at least two simultaneous physical FIFO members.');
+  assert(fifoSnapshot.join('|') === [...fifoSnapshot].sort((a, b) => a - b).join('|'), 'Checkout line order must use joined-at time then visitor id as its deterministic FIFO tie-breaker.');
   const retailEvents = staffed.serviceLog.recent.filter((event) => event.service === 'retail');
   assert(retailEvents.length >= 1, 'Retail service log must record the completed checkout exactly once.');
   assert(
@@ -708,6 +773,7 @@ function main(): void {
   testSlotExclusivityAndCapacity();
   testStockAndCheckoutAccounting();
   testMarketBrowseToCheckoutFlow();
+  testIdleReadinessTracksBlockedFrontage();
   testMarketCheckoutFifoAndUnstaffedFeedback();
   testStaffedBankCapacityScales();
   testSecondRegisterImprovesMeasuredThroughput();

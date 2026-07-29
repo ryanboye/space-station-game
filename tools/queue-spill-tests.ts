@@ -3,6 +3,7 @@ import {
   queuePositionOf,
   runMovementCoordinatorTestTick,
   runQueueMaintenanceTestTick,
+  serviceQueueCandidateCapacitiesForTest,
   tick
 } from '../src/sim/sim';
 import { hydrateStateFromSave, parseAndMigrateSave, serializeSave } from '../src/sim/save';
@@ -254,6 +255,100 @@ function testProviderCapacityAndRecovery(): void {
   assert(recovered.has(follower) && recovered.get(follower) !== oldFollowerSlot, 'The following actor must advance into the released slot.');
 }
 
+function testPendingJoinSkipsUnusableFirstProvider(): void {
+  const { state, anchor } = queueFixture(true);
+  const secondAnchor = state.moduleInstances.find((module) => module.id === 701)?.originTile;
+  assert(secondAnchor !== undefined, 'Expected the second live Bar Counter provider.');
+  // Remove every customer-side head from the numerically first provider while
+  // leaving the neighbouring provider's geometry intact.
+  for (const tile of [at(state, 20, 11), at(state, 19, 10), at(state, 20, 9)]) {
+    state.tiles[tile] = TileType.Wall;
+    state.rooms[tile] = RoomType.None;
+  }
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+  const candidates = serviceQueueCandidateCapacitiesForTest(state, 'drink');
+  assert((candidates.get(anchor) ?? 0) === 0, 'The first keyed provider must expose no phantom slot without a safe head.');
+  assert((candidates.get(secondAnchor) ?? 0) === 1, 'The same pending join must still see one real slot at the usable neighbour.');
+}
+
+function routeExists(
+  state: StationState,
+  from: number,
+  targets: ReadonlySet<number>,
+  occupied: ReadonlySet<number>
+): boolean {
+  const pending = [from];
+  const visited = new Set(pending);
+  for (let cursor = 0; cursor < pending.length; cursor += 1) {
+    const tile = pending[cursor];
+    if (targets.has(tile)) return true;
+    const x = tile % state.width;
+    const candidates = [
+      x > 0 ? tile - 1 : -1,
+      x + 1 < state.width ? tile + 1 : -1,
+      tile >= state.width ? tile - state.width : -1,
+      tile + state.width < state.tiles.length ? tile + state.width : -1
+    ];
+    for (const next of candidates) {
+      if (next < 0 || visited.has(next) || occupied.has(next)) continue;
+      if (state.tiles[next] !== TileType.Floor && state.tiles[next] !== TileType.Door && state.tiles[next] !== TileType.Airlock) continue;
+      if (state.moduleOccupancyByTile[next] !== null) continue;
+      visited.add(next);
+      pending.push(next);
+    }
+  }
+  return false;
+}
+
+function testAuthoredMultiEntranceRoomKeepsOneDrain(): void {
+  const { state, anchor, door } = queueFixture();
+  // Both Doors deliberately belong to the Cantina cluster, matching authored
+  // paintRoom fixtures rather than the older roomless-door test geometry.
+  state.rooms[door] = RoomType.Cantina;
+  const branch = [at(state, 21, 11), at(state, 22, 11), at(state, 23, 11)];
+  for (const tile of branch) {
+    state.tiles[tile] = TileType.Floor;
+    state.rooms[tile] = RoomType.Cantina;
+    state.pressurized[tile] = true;
+  }
+  const secondDoor = at(state, 24, 11);
+  state.tiles[secondDoor] = TileType.Door;
+  state.rooms[secondDoor] = RoomType.Cantina;
+  state.pressurized[secondDoor] = true;
+  for (let x = 25; x <= 31; x += 1) {
+    const tile = at(state, x, 11);
+    state.tiles[tile] = TileType.Floor;
+    state.rooms[tile] = RoomType.None;
+    state.pressurized[tile] = true;
+  }
+  state.topologyVersion += 1;
+  state.roomVersion += 1;
+  state.visitors = Array.from({ length: 40 }, (_, index) =>
+    visitor(state, index + 1, anchor, index + 1, at(state, 20, 22))
+  );
+  runQueueMaintenanceTestTick(state);
+  const slots = queueSlots(state, anchor);
+  const occupied = new Set(slots.values());
+  const openDoors = new Set([door, secondDoor].filter((candidate) => !occupied.has(candidate)));
+  assert(openDoors.size >= 1, 'A real two-entrance room must retain at least one unoccupied Door under excess demand.');
+  const interiorCandidates = state.tiles
+    .map((_, tile) => tile)
+    .filter((tile) =>
+      state.rooms[tile] === RoomType.Cantina &&
+      state.moduleOccupancyByTile[tile] === null &&
+      !occupied.has(tile)
+    );
+  assert(
+    interiorCandidates.some((tile) => routeExists(state, tile, openDoors, occupied)),
+    'The protected Door must remain connected to unclaimed room circulation, not merely absent from the slot list.'
+  );
+  const unallocated = state.visitors.filter((candidate) =>
+    !queuePositionOf(state, candidate.id) && candidate.movementWaitReason === 'queue full: no safe floor slot'
+  );
+  assert(unallocated.length > 0, 'Demand beyond safe multi-entrance geometry must become visible queue-full pressure.');
+}
+
 function testBoundedBalkAndSaveRebuild(): void {
   const { state, anchor } = queueFixture();
   const queued = [visitor(state, 4, anchor, 1), visitor(state, 8, anchor, 2)];
@@ -289,6 +384,8 @@ const tests: Array<[string, () => void]> = [
   ['order-independent-physical-door-spill', testOrderIndependentPhysicalSlotsAndDoorSpill],
   ['door-throttle-second-route', testDoorThrottleAndSecondRoute],
   ['provider-capacity-recovery', testProviderCapacityAndRecovery],
+  ['pending-join-skips-unusable-provider', testPendingJoinSkipsUnusableFirstProvider],
+  ['authored-multi-entrance-protected-drain', testAuthoredMultiEntranceRoomKeepsOneDrain],
   ['bounded-balk-save-rebuild', testBoundedBalkAndSaveRebuild]
 ];
 

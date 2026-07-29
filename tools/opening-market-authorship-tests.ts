@@ -118,7 +118,11 @@ const checkout = state.moduleInstances.find((module) => module.type === ModuleTy
 assert(checkout, 'placed Checkout Bank disappeared');
 const beforeStaffing = getMarketFixtureStatus(state, checkout.id);
 assert(beforeStaffing?.kind === 'checkout', 'Checkout Bank has no physical fixture status');
-assertEqual(beforeStaffing.capacity, 7, 'east-apron checkout queue capacity');
+assertEqual(beforeStaffing.capacity, beforeStaffing.registerCount, 'each east-apron register needs one safe potential customer place');
+assert(
+  !progress.operationalReasons.some((reason) => reason.includes('open floor')),
+  `idle readiness incorrectly blocks the opening recipe: ${progress.operationalReasons.join(' | ')}`
+);
 
 const quote = quoteTravelSuppliesOrder(state);
 assert(quote.ok, quote.message);
@@ -158,7 +162,7 @@ const finalProgress = evaluateOpeningRecipes(state).find((recipe) => recipe.id =
 assert(finalProgress?.operational, `completed shop is not operational: ${finalProgress?.operationalReasons.join(' | ') ?? 'missing recipe'}`);
 const finalCheckout = getMarketFixtureStatus(state, checkout.id);
 assert(finalCheckout?.kind === 'checkout', 'staffed Checkout Bank lost its fixture status');
-assertEqual(finalCheckout.capacity, 7, 'queue capacity changed after staffing');
+assertEqual(finalCheckout.capacity, beforeStaffing.capacity, 'queue readiness changed after staffing and stock delivery');
 assert(finalCheckout.activeRegisters >= 1, 'starting Steward never staffed a register');
 assert(
   state.itemNodes.some((node) => node.tileIndex === shelfOrigin && (node.items.tradeGood ?? 0) > 0),
@@ -169,5 +173,5 @@ assertEqual(finalProgress.totalCostCredits, 236, 'recipe total does not match re
 console.log('OPENING MARKET AUTHORSHIP: PASS');
 console.log('  footprint  x58..60, y40..47 (24 PUBLIC Market tiles)');
 console.log('  fixtures   Checkout Bank (59,43), Shelf Aisle (58,40), rotation 0');
-console.log('  access     door (60,39), powered x60 trunk, queue capacity 7, Steward staffed');
+console.log(`  access     door (60,39), powered x60 trunk, ${beforeStaffing.capacity} ready registers, Steward staffed`);
 console.log('  economy    120c + 70c + 46c stock = 236c; 84c remains');

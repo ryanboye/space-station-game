@@ -137,9 +137,9 @@ function candidatesFor(
       };
     })
     .sort((a, b) =>
-      Number(a.circulationRisk) - Number(b.circulationRisk) ||
       Number(b.inProviderRoom) - Number(a.inProviderRoom) ||
-      a.distance - b.distance ||
+      (a.distance + (a.circulationRisk ? 4 : 0)) - (b.distance + (b.circulationRisk ? 4 : 0)) ||
+      Number(a.circulationRisk) - Number(b.circulationRisk) ||
       b.preference - a.preference ||
       a.tile - b.tile
     );
@@ -184,7 +184,6 @@ export function planQueueLayout(input: QueueLayoutInput): QueueLayoutPlan {
   const fixedProtected = new Set<number>();
   for (const requirement of requirements) {
     fixedProtected.add(requirement.from);
-    for (const destination of requirement.toAny) fixedProtected.add(destination);
   }
 
   const allocations = new Map<string, number[]>();
@@ -209,6 +208,10 @@ export function planQueueLayout(input: QueueLayoutInput): QueueLayoutPlan {
       for (const candidate of candidates.get(provider.key) ?? []) {
         const tile = byTile.get(candidate.tile);
         if (!traversable(tile) || claimed.has(candidate.tile) || fixedProtected.has(candidate.tile)) continue;
+        const growsFromOwnFrontier = result.length === 0
+          ? candidate.distance === 0
+          : (neighbors.get(candidate.tile) ?? []).some((neighbor) => result.includes(neighbor));
+        if (!growsFromOwnFrontier) continue;
         const withCandidate = new Set(claimed);
         withCandidate.add(candidate.tile);
         if (!requirements.every((requirement) => requirementStillOpen(requirement, withCandidate, byTile, neighbors))) {

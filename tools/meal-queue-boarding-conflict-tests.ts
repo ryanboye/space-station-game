@@ -190,6 +190,33 @@ function runConflict(seed: number, withDiningShip: boolean): RunOutcome {
     diner = waitForDock(state, dinerOffer);
     waitFor(
       state,
+      'dining ship substantial physical disembark',
+      () => diner!.passengersSpawned >= 12,
+      24
+    );
+    // The geometry-aware planner fairly splits ordinary demand across all
+    // four depicted pickup faces, so the old fixture's ambient eight-person
+    // line no longer reaches its distant Door. Concentrate a deliberate surge
+    // at the east pickup face to preserve this runner's one purpose: prove a
+    // sufficiently bad live line can still grow through the physical throat
+    // and interfere with boarding. Actors retain their real positions and
+    // must walk to planner-owned exclusive slots; nothing is teleported.
+    const throatSideProvider = 37 * state.width + 63;
+    const surge = visitorsFor(state, dinerOffer).slice(0, 12);
+    for (let index = 0; index < surge.length; index += 1) {
+      const visitor = surge[index];
+      visitor.state = VisitorState.Queueing;
+      visitor.activeService = 'meal';
+      visitor.carryingMeal = false;
+      visitor.queueProviderTile = throatSideProvider;
+      visitor.queueJoinedAt = state.now + index * 0.001;
+      visitor.reservedServingTile = null;
+      visitor.reservedTargetTile = null;
+      visitor.serviceBlockedSince = null;
+      visitor.path = [];
+    }
+    waitFor(
+      state,
       'dining ship physical disembark and real queue spilling through shared throat',
       () => {
         const reservations = queueReservationsFor(state, dinerOffer);
@@ -240,26 +267,32 @@ function runConflict(seed: number, withDiningShip: boolean): RunOutcome {
     );
   }
 
+  // Capture the hard-deadline outcome immediately. Stranded visitors remain
+  // ordinary actors and may later leave on other traffic while we wait for
+  // the congested diner line to recover and complete a canonical meal.
+  const strandedAtDeparture = state.visitors.filter((visitor) => visitor.strandedFromShipId === returnOffer).length;
+  const boardedAtDeparture = returning.passengersBoarded;
+  const deadlineDeparturesAtOutcome = state.portOps.telemetry.hardDeadlineDepartures;
+  const transferWaitAtOutcome = (state.portOps.telemetry.passengerTransferWaitSeconds ?? 0) - waitBefore;
+
   if (withDiningShip) {
     waitFor(
       state,
       'canonical meal service after the shared throat clears',
       () => state.serviceLog.recent.some((event) => event.service === 'meal' && event.shipId === dinerOffer),
-      30
+      90
     );
   }
 
-  const stranded = state.visitors.filter((visitor) => visitor.strandedFromShipId === returnOffer);
   const mealEvents = state.serviceLog.recent.filter((event) => event.service === 'meal' && event.shipId === dinerOffer).length;
-  const boarded = returning.passengersBoarded;
   const outcome = {
-    boardedBeforeDeadline: boarded,
-    deadlineDepartures: state.portOps.telemetry.hardDeadlineDepartures,
-    stranded: stranded.length,
+    boardedBeforeDeadline: boardedAtDeparture,
+    deadlineDepartures: deadlineDeparturesAtOutcome,
+    stranded: strandedAtDeparture,
     queueCount: queueCountAtThroat,
     throatOccupied: queuedDinerOccupiedThroat,
     transferBlocked,
-    transferWaitSeconds: (state.portOps.telemetry.passengerTransferWaitSeconds ?? 0) - waitBefore,
+    transferWaitSeconds: transferWaitAtOutcome,
     mealEvents
   };
 

@@ -1,6 +1,12 @@
 import { findPath as findPathCore } from './path';
 import { movementCrossSection, type MovementCrossSection } from './movement-capacity';
 import {
+  planQueueLayout,
+  type QueueCirculationRequirement,
+  type QueueProviderRequest,
+  type QueueTile
+} from './queue-layout';
+import {
   BERTH_CAPITAL_COST,
   repairServiceCost,
   BERTH_SIZE_MIN,
@@ -7661,7 +7667,7 @@ function passengerTransferSlotsForShip(state: StationState, ship: ArrivingShip):
       // head between `stationTile` and the ship.
       const unavailable = new Set(claimedQueueTiles);
       unavailable.add(slot.accessTile);
-      const chain = buildQueueChain(state, slot.stationTile, room, unavailable)
+      const chain = buildPassengerTransferQueueChain(state, slot.stationTile, room, unavailable)
         .filter((tile) => tile !== slot.accessTile);
       for (const tile of chain) claimedQueueTiles.add(tile);
       const fallback = adjacentWalkableTiles(state, slot.stationTile)
@@ -12855,8 +12861,10 @@ function pickQueueSpotPath(
 // and paths remain transient and rebuild after load or topology changes.
 // ---------------------------------------------------------------------------
 
-const QUEUE_CHAIN_MAX_LEN = 24;
-const QUEUE_CHAIN_MAX_SPILL = 6;
+// Passenger assembly remains a deliberately bounded transfer discipline. It
+// is not a service queue and must not expand across the station with demand.
+const PASSENGER_TRANSFER_QUEUE_MAX_LEN = 24;
+const PASSENGER_TRANSFER_QUEUE_MAX_SPILL = 6;
 const QUEUE_BALK_WAIT_SEC = 16;
 // A guest who made it into a physical line gets a materially longer attempt
 // than somebody waiting outside a full room. It is still finite: a stalled
@@ -12904,7 +12912,7 @@ function wallAdjacencyCount(state: StationState, tileIndex: number): number {
   return count;
 }
 
-function buildQueueChain(
+function buildPassengerTransferQueueChain(
   state: StationState,
   servingTile: number,
   room: RoomType = state.rooms[servingTile],
@@ -12938,7 +12946,7 @@ function buildQueueChain(
   let lastDx = 0;
   let lastDy = 0;
   let outsideCount = 0;
-  while (chain.length < QUEUE_CHAIN_MAX_LEN && outsideCount < QUEUE_CHAIN_MAX_SPILL) {
+  while (chain.length < PASSENGER_TRANSFER_QUEUE_MAX_LEN && outsideCount < PASSENGER_TRANSFER_QUEUE_MAX_SPILL) {
     const cp = fromIndex(current, state.width);
     let best: number | null = null;
     let bestScore = -Infinity;
@@ -12981,6 +12989,215 @@ function buildQueueChain(
   return chain;
 }
 
+type ServiceQueueProvider = {
+  key: string;
+  tile: number;
+  room: RoomType;
+  kind: 'meal' | 'drink' | 'market';
+  heads: number[];
+};
+
+type QueueTopologyCache = {
+  version: string;
+  tiles: QueueTile[];
+};
+
+const queueTopologyByState = new WeakMap<StationState, QueueTopologyCache>();
+
+type ServiceQueueReadinessCache = {
+  version: string;
+  capacityByProviderSet: Map<string, number>;
+};
+
+const serviceQueueReadinessByState = new WeakMap<StationState, ServiceQueueReadinessCache>();
+
+function serviceQueueProviders(state: StationState): ServiceQueueProvider[] {
+  return [
+    ...collectServingPickupTargets(state).map((tile) => ({ tile, room: RoomType.Cafeteria, kind: 'meal' as const })),
+    ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina, kind: 'drink' as const })),
+    ...enhancedMarketSlots(state, 'checkout').map((slot) => ({ tile: slot.tileIndex, room: RoomType.Market, kind: 'market' as const }))
+  ]
+    .map((provider) => ({
+      ...provider,
+      key: `${provider.kind}:${provider.tile}`,
+      heads: adjacentWalkableTiles(state, provider.tile)
+        .filter((tile) => state.moduleOccupancyByTile[tile] === null)
+        .sort((a, b) => a - b)
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function queueTopologyTiles(state: StationState): QueueTile[] {
+  const version = serviceTargetVersionKey(state);
+  const cached = queueTopologyByState.get(state);
+  if (cached?.version === version) return cached.tiles;
+  const tiles: QueueTile[] = [];
+  for (let tile = 0; tile < state.tiles.length; tile += 1) {
+    if (!isWalkable(state.tiles[tile])) continue;
+    const neighbors = adjacentWalkableTiles(state, tile).sort((a, b) => a - b);
+    const narrowKeys = neighbors
+      .filter((neighbor) => state.moduleOccupancyByTile[neighbor] === null)
+      .map((neighbor) => movementCrossSection(state, tile, neighbor))
+      .filter((section) => section.capacity <= 1)
+      .map((section) => section.key)
+      .sort();
+    tiles.push({
+      tile,
+      neighbors,
+      room: state.rooms[tile],
+      walkable: true,
+      moduleBlocked: state.moduleOccupancyByTile[tile] !== null,
+      door: state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock,
+      narrowSection: narrowKeys[0] ?? null,
+      queuePreference: wallAdjacencyCount(state, tile)
+    });
+  }
+  queueTopologyByState.set(state, { version, tiles });
+  return tiles;
+}
+
+function visitorHasQueueDemand(visitor: Visitor, kind: ServiceQueueProvider['kind']): boolean {
+  if (kind === 'meal') {
+    return !visitor.carryingMeal &&
+      (visitor.state === VisitorState.ToCafeteria || visitor.state === VisitorState.Queueing);
+  }
+  if (kind === 'drink') return visitorWaitingForCantinaPickup(visitor);
+  return visitor.marketTradeGoodSourceTile !== null && visitor.marketTradeGoodSourceTile !== undefined;
+}
+
+function serviceQueueDemand(
+  state: StationState,
+  providers: readonly ServiceQueueProvider[],
+  pendingKind: ServiceQueueProvider['kind'] | null = null
+): Map<string, number> {
+  const demand = new Map(providers.map((provider) => [provider.key, 0]));
+  const providerByTile = new Map(providers.map((provider) => [provider.tile, provider]));
+  for (const visitor of [...state.visitors].sort((a, b) => a.id - b.id)) {
+    const anchored = visitor.queueProviderTile === null || visitor.queueProviderTile === undefined
+      ? undefined
+      : providerByTile.get(visitor.queueProviderTile);
+    if (anchored && visitorHasQueueDemand(visitor, anchored.kind)) {
+      demand.set(anchored.key, (demand.get(anchored.key) ?? 0) + 1);
+    }
+  }
+  // An unanchored need is not yet a physical line: the provider may be
+  // restricted, unreachable, or unavailable. The join call contributes one
+  // explicit pending place only after it has selected this service category.
+  if (pendingKind !== null) {
+    const matching = providers.filter((provider) => provider.kind === pendingKind);
+    // Probe one transient place at every matching provider. An early keyed
+    // provider can have no safe frontage while its neighbour is usable; the
+    // ordinary join policy must see both physical candidates before choosing.
+    // Once anchored, the next rebuild collapses these probes to real demand.
+    for (const provider of matching) {
+      demand.set(provider.key, (demand.get(provider.key) ?? 0) + 1);
+    }
+  }
+  return demand;
+}
+
+/**
+ * A deliberately single-door room remains a consequential bad layout. Once a
+ * player provides two or more entrances to the same service room, however,
+ * that redundancy is an actual circulation promise: a full line may cover
+ * one route but must leave at least one way out of the room.
+ */
+function serviceQueueCirculation(
+  state: StationState,
+  providers: readonly ServiceQueueProvider[]
+): QueueCirculationRequirement[] {
+  const requirements = new Map<string, QueueCirculationRequirement>();
+  for (const provider of providers) {
+    const cluster = clusterForRoomTile(state, provider.room, provider.tile);
+    if (cluster.length === 0) continue;
+    const clusterSet = new Set(cluster);
+    const exits = new Set<number>();
+    for (const roomTile of cluster) {
+      if (
+        (state.tiles[roomTile] === TileType.Door || state.tiles[roomTile] === TileType.Airlock) &&
+        adjacentWalkableTiles(state, roomTile).some((neighbor) => !clusterSet.has(neighbor))
+      ) {
+        exits.add(roomTile);
+      }
+      for (const neighbor of adjacentWalkableTiles(state, roomTile)) {
+        if (clusterSet.has(neighbor)) continue;
+        if (state.tiles[neighbor] === TileType.Door || state.tiles[neighbor] === TileType.Airlock) exits.add(neighbor);
+      }
+    }
+    if (exits.size < 2) continue;
+    const providerHeads = new Set(
+      providers
+        .filter((candidate) => candidate.room === provider.room && clusterSet.has(candidate.tile))
+        .flatMap((candidate) => candidate.heads)
+    );
+    const from = cluster.find((tile) =>
+      state.moduleOccupancyByTile[tile] === null &&
+      !providerHeads.has(tile) &&
+      state.tiles[tile] !== TileType.Door &&
+      state.tiles[tile] !== TileType.Airlock
+    );
+    if (from === undefined) continue;
+    const key = `${provider.room}:${Math.min(...cluster)}`;
+    requirements.set(key, { key, from, toAny: [...exits].sort((a, b) => a - b) });
+  }
+  return [...requirements.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function serviceQueuePlan(
+  state: StationState,
+  providers: readonly ServiceQueueProvider[],
+  demand: ReadonlyMap<string, number>
+) {
+  const requests: QueueProviderRequest[] = providers.map((provider) => ({
+    key: provider.key,
+    servingTile: provider.tile,
+    room: provider.room,
+    requestedDemand: demand.get(provider.key) ?? 0,
+    headCandidates: provider.heads
+  }));
+  return planQueueLayout({
+    tiles: queueTopologyTiles(state),
+    providers: requests,
+    circulation: serviceQueueCirculation(state, providers)
+  });
+}
+
+/**
+ * Report whether each selected provider could accept one physical customer.
+ *
+ * Live chains remain demand-bound and are rebuilt only by ensureQueueChains.
+ * Fixture/readiness UI still needs stable geometry truth while a line is idle,
+ * so this runs the same pure planner as a non-mutating one-place probe. The
+ * round-robin planner also prevents adjacent providers from claiming the same
+ * potential floor tile.
+ */
+function serviceQueueReadinessCapacity(
+  state: StationState,
+  providerTiles: ReadonlySet<number>
+): number {
+  const providers = serviceQueueProviders(state).filter((provider) => providerTiles.has(provider.tile));
+  if (providers.length === 0) return 0;
+
+  const version = serviceTargetVersionKey(state);
+  let cache = serviceQueueReadinessByState.get(state);
+  if (!cache || cache.version !== version) {
+    cache = { version, capacityByProviderSet: new Map() };
+    serviceQueueReadinessByState.set(state, cache);
+  }
+  const providerSetKey = providers.map((provider) => provider.key).join('|');
+  const cached = cache.capacityByProviderSet.get(providerSetKey);
+  if (cached !== undefined) return cached;
+
+  const demand = new Map(providers.map((provider) => [provider.key, 1]));
+  const plan = serviceQueuePlan(state, providers, demand);
+  const capacity = providers.reduce(
+    (total, provider) => total + Math.min(1, plan.allocationsByProvider.get(provider.key)?.length ?? 0),
+    0
+  );
+  cache.capacityByProviderSet.set(providerSetKey, capacity);
+  return capacity;
+}
+
 /** Path a queue member to their slot. Queue slots are meant to be STOOD on,
  *  so occupancy costs must not veto the route: fall back to a bare
  *  geometric path, then to allowRestricted (visitors spawn inside
@@ -12993,51 +13210,20 @@ function findQueueSlotPath(state: StationState, from: number, slotTile: number, 
   );
 }
 
-function ensureQueueChains(state: StationState): void {
+function ensureQueueChains(state: StationState, pendingKind: ServiceQueueProvider['kind'] | null = null): void {
   const theater = state.derived.queueTheater;
-  const version = queueTargetVersionKey(state);
+  const queueProviders = serviceQueueProviders(state);
+  const demand = serviceQueueDemand(state, queueProviders, pendingKind);
+  const demandVersion = queueProviders
+    .map((provider) => `${provider.key}:${demand.get(provider.key) ?? 0}`)
+    .join('|');
+  const version = `${queueTargetVersionKey(state)}:${demandVersion}`;
   if (theater.chainsVersion !== version) {
     theater.chainsByAnchor.clear();
-    // Provider order is stable. Earlier providers own their physical line
-    // tiles, so two counters can never silently reserve the same corridor.
-    const claimed = new Set<number>();
-    const providers = [
-      ...collectServingPickupTargets(state).map((tile) => ({ tile, room: RoomType.Cafeteria })),
-      ...collectCantinaBarTargets(state).map((tile) => ({ tile, room: RoomType.Cantina })),
-      ...enhancedMarketSlots(state, 'checkout').map((slot) => ({ tile: slot.tileIndex, room: RoomType.Market }))
-    ].sort((a, b) => a.tile - b.tile || a.room.localeCompare(b.room));
-    const marketHeadCandidates = new Map<number, Set<number>>();
-    for (const provider of providers) {
-      if (provider.room !== RoomType.Market) continue;
-      const point = fromIndex(provider.tile, state.width);
-      const candidates = new Set<number>();
-      for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1]] as const) {
-        const x = point.x + dx;
-        const y = point.y + dy;
-        if (!inBounds(x, y, state.width, state.height)) continue;
-        const tileIndex = toIndex(x, y, state.width);
-        if (isWalkable(state.tiles[tileIndex]) && state.moduleOccupancyByTile[tileIndex] === null) candidates.add(tileIndex);
-      }
-      marketHeadCandidates.set(provider.tile, candidates);
-    }
-    for (let providerIndex = 0; providerIndex < providers.length; providerIndex += 1) {
-      const provider = providers[providerIndex];
-      const protectedLaterHeads = new Set<number>();
-      if (provider.room === RoomType.Market) {
-        for (const later of providers.slice(providerIndex + 1)) {
-          if (later.room !== RoomType.Market) continue;
-          for (const tileIndex of marketHeadCandidates.get(later.tile) ?? []) protectedLaterHeads.add(tileIndex);
-        }
-      }
-      const chain = buildQueueChain(state, provider.tile, provider.room, claimed, protectedLaterHeads);
-      // A CheckoutBank contains adjacent registers. Letting the numerically
-      // first register claim an entire 12-tile snake makes its neighbour look
-      // built but unusable. Four physical places per market register still
-      // reads as pressure while preserving a distinct FIFO line beside it.
-      if (provider.room === RoomType.Market && chain.length > 4) chain.length = 4;
-      if (chain.length === 0) continue;
-      theater.chainsByAnchor.set(provider.tile, chain);
-      for (const tile of chain) claimed.add(tile);
+    const plan = serviceQueuePlan(state, queueProviders, demand);
+    for (const provider of queueProviders) {
+      const chain = plan.allocationsByProvider.get(provider.key) ?? [];
+      if (chain.length > 0) theater.chainsByAnchor.set(provider.tile, [...chain]);
     }
     theater.chainsVersion = version;
   }
@@ -13047,7 +13233,7 @@ function ensureQueueChains(state: StationState): void {
   // edits and departures cannot leave a ghost standing in a slot.
   theater.membersByAnchor.clear();
   theater.slotByVisitorId.clear();
-  const providers = new Set(theater.chainsByAnchor.keys());
+  const providers = new Set(serviceQueueProviders(state).map((provider) => provider.tile));
   const ordered = state.visitors
     .filter((visitor) => {
       const provider = visitor.queueProviderTile;
@@ -13076,12 +13262,30 @@ function ensureQueueChains(state: StationState): void {
   }
   for (const visitor of ordered) {
     const provider = visitor.queueProviderTile!;
-    const chain = theater.chainsByAnchor.get(provider)!;
+    const chain = theater.chainsByAnchor.get(provider) ?? [];
     const members = theater.membersByAnchor.get(provider) ?? [];
-    if (members.length >= chain.length) continue;
+    if (members.length >= chain.length) {
+      visitor.serviceBlockedSince ??= state.now;
+      visitor.movementWaitReason = 'queue full: no safe floor slot';
+      continue;
+    }
     members.push(visitor.id);
     theater.membersByAnchor.set(provider, members);
   }
+}
+
+/** Focused transient evidence hook; production joins call the same pending seam. */
+export function serviceQueueCandidateCapacitiesForTest(
+  state: StationState,
+  kind: ServiceQueueProvider['kind']
+): Map<number, number> {
+  ensureQueueChains(state, kind);
+  const anchors = new Set(serviceQueueProviders(state).filter((provider) => provider.kind === kind).map((provider) => provider.tile));
+  return new Map(
+    [...state.derived.queueTheater.chainsByAnchor]
+      .filter(([anchor]) => anchors.has(anchor))
+      .map(([anchor, chain]) => [anchor, chain.length])
+  );
 }
 
 export function queuePositionOf(
@@ -13176,7 +13380,7 @@ function assignVisitorToQueue(state: StationState, visitor: Visitor, anchor: num
 /** Join the shortest physically valid serving line. A full line is a bounded
  * wait, not an instant rejection; failed-stay logic owns the eventual bail. */
 function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | 'no-queue' {
-  ensureQueueChains(state);
+  ensureQueueChains(state, 'meal');
   const theater = state.derived.queueTheater;
   const servingAnchors = new Set(collectServingPickupTargets(state));
   if (servingAnchors.size === 0) return 'no-queue';
@@ -13204,7 +13408,7 @@ function joinCafeteriaQueue(state: StationState, visitor: Visitor): 'joined' | '
 }
 
 function joinCantinaBarQueue(state: StationState, visitor: Visitor): 'joined' | 'balked' | 'no-queue' {
-  ensureQueueChains(state);
+  ensureQueueChains(state, 'drink');
   const theater = state.derived.queueTheater;
   const barAnchors = new Set(collectCantinaBarTargets(state));
   if (barAnchors.size === 0) return 'no-queue';
@@ -13237,7 +13441,7 @@ function joinCantinaBarQueue(state: StationState, visitor: Visitor): 'joined' | 
  * remains on the shopper from browse through this line, so a shelf unit can
  * never be double-sold while the customer waits. */
 function joinMarketCheckoutQueue(state: StationState, visitor: Visitor): boolean {
-  ensureQueueChains(state);
+  ensureQueueChains(state, 'market');
   const theater = state.derived.queueTheater;
   const anchors = marketCheckoutAnchors(state);
   if (anchors.size === 0) return false;
@@ -13297,7 +13501,7 @@ function joinMarketCheckoutQueue(state: StationState, visitor: Visitor): boolean
 /**
  * How much of each service line is standing outside its own room.
  *
- * `buildQueueChain` already permits a bounded spill through the door, so this
+ * The physical layout planner permits spill through the door, so this
  * is a census of the physical slots that pass just handed out: a member whose
  * claimed slot tile sits in a different room than its provider is physically
  * queueing in the corridor. Counted from the compacted slot map rather than
@@ -13343,12 +13547,12 @@ function maintainCafeteriaQueues(state: StationState): void {
       : MEAL_QUEUE_MAX_WAIT_SEC;
     if (state.now - joinedAt >= maxWait) balkFromServiceQueue(state, visitor);
   }
-  // A topology change can remove every physical slot while a visitor is
-  // already waiting. Treat that as the same bounded service failure as a
-  // full line, rather than leaving an invisible permanent queue state.
+  // Topology or excess demand can leave a queueing visitor without a physical
+  // slot. Treat that as the same bounded visible failure as a full line,
+  // rather than silently dropping the planner's unallocated demand.
   for (const visitor of state.visitors) {
     if (visitor.state !== VisitorState.Queueing) continue;
-    if (visitor.queueProviderTile !== null && visitor.queueProviderTile !== undefined) continue;
+    if (queuePositionOf(state, visitor.id) !== null) continue;
     if (visitor.serviceBlockedSince === null || visitor.serviceBlockedSince === undefined) continue;
     if (state.now - visitor.serviceBlockedSince >= QUEUE_BALK_WAIT_SEC) {
       balkFromServiceQueue(state, visitor);
@@ -24240,9 +24444,12 @@ export function getMarketFixtureStatus(
     ).length,
     0
   );
-  const capacity = registers.reduce(
-    (total, register) => total + (state.derived.queueTheater.chainsByAnchor.get(register.tileIndex)?.length ?? 0),
-    0
+  // `capacity` is fixture readiness, not current line length: an idle market
+  // must remain operational when each register has at least one safe potential
+  // customer place. The probe does not allocate phantom live queue chains.
+  const capacity = serviceQueueReadinessCapacity(
+    state,
+    new Set(registers.map((register) => register.tileIndex))
   );
   const activeRegisters = registers.filter((register) => marketRegisterIsStaffed(state, register)).length;
   return {

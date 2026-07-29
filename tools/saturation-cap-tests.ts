@@ -8,7 +8,7 @@ import {
   type FailureEpisode
 } from '../src/sim/failed-stay';
 import { findPath } from '../src/sim/path';
-import { createInitialState, runQueueMaintenanceTestTick, tick, tryPlaceModule } from '../src/sim/sim';
+import { createInitialState, queuePositionOf, runQueueMaintenanceTestTick, tick, tryPlaceModule } from '../src/sim/sim';
 import {
   ModuleType,
   RoomType,
@@ -145,15 +145,23 @@ function outsideSlots(fixture: { state: StationState; anchor: number }): number 
   ).length;
 }
 
-function testQueueChainAndSpillCaps(): string {
-  const below = queueState(23);
-  const atCap = queueState(24);
-  const above = queueState(25);
-  assert(admitted(below) === 23 && admitted(atCap) === 24 && admitted(above) === 24,
-    'Queue admission must rise to 24, then remain equal above the cap.');
-  assert(outsideSlots(below) === 5 && outsideSlots(atCap) === 6 && outsideSlots(above) === 6,
-    'Outside-room spill must rise to six, then remain equal above the cap.');
-  return 'queue chain 23<24=24; outside spill 5<6=6';
+function testQueueGeometryAndDemandBounds(): string {
+  const formerCap = queueState(23);
+  const beyondFormerCap = queueState(30);
+  const exhausted = queueState(40);
+  assert(admitted(formerCap) === 23 && admitted(beyondFormerCap) === 30,
+    'A live line must expand beyond the former universal length cap when physical floor exists.');
+  assert(admitted(exhausted) === 34,
+    `The cramped fixture must stop at its 34 real floor positions, not demand 40 (got ${admitted(exhausted)}).`);
+  assert(outsideSlots(formerCap) === 5 && outsideSlots(beyondFormerCap) === 12 && outsideSlots(exhausted) === 16,
+    'Outside-room spill must continue through reachable geometry rather than stopping at six.');
+  const unallocated = exhausted.state.visitors.filter((visitor) =>
+    visitor.queueProviderTile === exhausted.anchor &&
+    !queuePositionOf(exhausted.state, visitor.id) &&
+    visitor.movementWaitReason === 'queue full: no safe floor slot'
+  );
+  assert(unallocated.length === 6, `Six excess visitors must expose finite queue-full pressure (got ${unallocated.length}).`);
+  return 'geometry admits 23<30<34 of demand 40; spill 5<12<16; 6 explicitly unallocated';
 }
 
 function queueBalkAt(age: number): { queued: boolean; angry: boolean } {
@@ -296,7 +304,7 @@ function routeFixture(detourY = 24): { state: StationState; start: number; goal:
 }
 
 function pathAt(intent: PathOptions['intent'], occupancy: number): number[] {
-  const { state, start, goal, direct } = routeFixture(intent === 'security' ? 25 : 24);
+  const { state, start, goal, direct } = routeFixture(intent === 'security' ? 24 : 23);
   const occupancyByTile = new Map<number, number>();
   const occupiedTiles = intent === 'security' ? direct.slice(1, -1) : [direct[Math.floor(direct.length / 2)]];
   for (const tile of occupiedTiles) occupancyByTile.set(tile, occupancy);
@@ -313,7 +321,7 @@ function testIntentOccupancySaturation(): string {
     const atCap = pathAt(intent, 2);
     const above = pathAt(intent, 20);
     assert(signature(atCap) === signature(above), `${intent} path must be equal at and above occupancy saturation.`);
-    assert(signature(below) !== signature(atCap), `${intent} path must respond monotonically before saturation.`);
+    assert(signature(below) !== signature(atCap), `${intent} path must respond monotonically before saturation (below=${signature(below)} at=${signature(atCap)}).`);
   }
   const securityBelow = pathAt('security', 6);
   const securityAt = pathAt('security', 7);
@@ -458,7 +466,7 @@ function testRatingDisplayClampRetainsLedger(): string {
 }
 
 const tests: Array<[string, () => string]> = [
-  ['queue-chain-and-spill', testQueueChainAndSpillCaps],
+  ['queue-geometry-and-demand', testQueueGeometryAndDemandBounds],
   ['ordinary-queue-balk', testOrdinaryQueueBalkTimer],
   ['enhanced-market-unavailable', testEnhancedMarketUnavailableTimer],
   ['dock-queue-timeout', testDockQueueTimer],
