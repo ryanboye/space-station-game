@@ -139,22 +139,48 @@ audited checklist with no unsupported checked claims.
 
 - [ ] Frontage emerges from hull geometry, structure, construction, approach
   clearance, interior support, and exposure rather than a frontage currency.
-- [ ] Poor but physically legal layouts are allowed to open and fail visibly.
-- [ ] Physically impossible layouts are rejected with one actionable world-space
+- [x] Poor but physically legal layouts are allowed to open and fail visibly.
+  Evidence: `107b2ef`/`e78a12d` deliberately open the legal
+  `mess-line-choked` layout and measure its physical failure at 3/24 guests fed
+  with a peak queue of 21. The same six-crew station improves to 12 fed with
+  extra counters or 15 fed by rerouting, proving the bad arm is operating and
+  failing rather than being rejected by a hidden validity gate.
+- [x] Physically impossible layouts are rejected with one actionable world-space
   explanation.
+  Evidence: `d1abdb5` and `f5001b5` route the exact structural support rejection
+  to the blocked construction site and its world overlay (for example `span too
+  long: add a Junction` or `heavy berth needs a Bulkhead`).
+  `npm run test:structural-pieces` proves the refusal is non-mutating and names
+  one physical remedy; `fd9c3484` records the label at gameplay zoom.
 - [x] Routine traffic never becomes a permanent manifest-reading chore.
 - [x] Early manual Approach Control remains a meaningful portfolio decision.
 - [x] Player-authored automation replaces repetitive approvals as scale grows.
 - [x] Longer stays create recurring physical demand rather than passive timers.
 - [x] Immediate consequences are visible in actors, objects, queues, and work.
-- [ ] Rating and reputation summarize visible outcomes rather than replacing them.
+- [x] Rating and reputation summarize visible outcomes rather than replacing them.
+  Evidence: `796a2f7`/`107b2ef` make the Phase 8 causal runner require a real
+  meal completion in the service log and a visible failed-stay episode/event
+  before reconciling their +0.08/-0.77 rating contributions. The accumulated
+  rating ledger remains exact across save/load, so the summary cannot substitute
+  for the world event that created it.
 - [x] Every service capacity corresponds to depicted physical positions.
 - [x] Tile exclusivity is arbitrated with swap, yield and replan recovery. No
   hard occupancy cap gates pathing, and no naive universal cap is introduced.
 - [x] Congestion is physical, fair, recoverable, and deterministic.
-- [ ] Expansion reuses the existing construction, logistics, EVA, utility,
+- [x] Expansion reuses the existing construction, logistics, EVA, utility,
   maintenance, pressure, thermal, and save systems.
-- [ ] Catastrophic failure is forecastable, attributable, and mitigable.
+  Evidence: `3e902eb`, `f4be309`, `706d88b`, `796a2f7`, and `cf08204` exercise
+  one expansion through material debit and physical logistics delivery, EVA
+  work, seal/pressurization and atomic commissioning, utility/thermal response,
+  maintenance debt remap, and save/resume. `test:structural-expansion`,
+  `test:thermal-sink-expansion`, and `test:phase9-save-migration` verify those
+  production systems; no expansion-only substitute owns the outcome.
+- [x] Catastrophic failure is forecastable, attributable, and mitigable.
+  Evidence: `b88a2d`, `796a2f7`, and `efc46aa` expose exterior wear and named
+  heat/wear warnings before consequence, then prove a real breach vents the
+  station and an EVA patch consumes supplies and restores the seal. Focused
+  exterior-integrity and Phase 7 recovery runners also show truss baffling,
+  ventilation, and insulation measurably reduce the diagnosed hazard.
 - [x] The intended 50-crew, 50-plus-visitor station is a baseline, not a stress
   test.
   Evidence: both authored geometries sustain 50 crew and 50 visitors with mixed
@@ -312,7 +338,14 @@ audited checklist with no unsupported checked claims.
 - [x] Add a staff-side restock route.
 - [x] Add a real customer queue at checkout.
 - [x] Make a second checkout produce a visible throughput improvement.
-- [ ] Make shelf mix or goods category affect demand without creating a checklist.
+- [x] Make shelf mix or goods category affect demand without creating a checklist.
+  Evidence: `a5ea3c9` gives each Shelf Aisle and Display Cold Case an independent
+  Essentials/Gifts/Technical mix. `npm run test:display-cold-case` proves the
+  choice changes attraction (1.00 versus 0.60) and completed-sale value (6.36c
+  versus 10.30c) through the ordinary browse/checkout chain. Frozen production
+  browser play selected Technical at the physical Cold Case and verified the
+  anchored shop plus Selection panel both changed pressed state and explained
+  60% appeal / 162% margin; no task or completion checklist was introduced.
 - [x] Prevent `Great selection` feedback when no stock exists.
 
 ### Demand Discovery And Reception
@@ -335,7 +368,14 @@ audited checklist with no unsupported checked claims.
 - [x] Give Checkout Bank two staffed registers and two customer service slots.
 - [x] Implement tileable Shelf Aisle, initial target 1x4.
 - [x] Give Shelf Aisle three visible browsing positions.
-- [ ] Implement Display or Cold Case, initial target 1x3.
+- [x] Implement Display or Cold Case, initial target 1x3.
+  Evidence: `a5ea3c9` adds the production 3x1 rotatable Display Cold Case with
+  three exclusive south-facing browse bays, north-side restocking, 60-unit cold
+  storage, power/soil/wear, palette/unlock/save support, and curated
+  base/active/empty/dirty/damaged frames. Its six-check focused runner proves
+  rotation, physical receiving-to-checkout conservation, art truth, mix
+  economics, and save/load; frozen browser play verified the fixture and its
+  controls at gameplay zoom.
 - [x] Implement Backroom Stock Bank, initial target 2x3.
 - [x] Implement Service Bar, initial target 2x5.
 - [x] Give Service Bar a staff lane and four guest service positions.
@@ -392,7 +432,13 @@ audited checklist with no unsupported checked claims.
 - [x] Beds cannot be double-claimed.
 - [x] Reception helps without becoming mandatory.
 - [x] Two seeded runs differ while remaining inferable.
-- [ ] Playtest decides whether to proceed with deeper hidden demand.
+- [x] Playtest decides whether to proceed with deeper hidden demand.
+  Decision: stop at the current depth. Frozen market and Cold Case play made
+  lost demand, stockout, attraction, and margin consequences readable while
+  keeping individual wants discoverable through behavior. Adding a deeper
+  hidden goods taxonomy now would obscure a layout/operations problem that the
+  player can already diagnose and act on; revisit only if later user feedback
+  shows the three broad assortments are solved rather than expressive.
 
 ## Failed Stay And Stranding Contract
 
