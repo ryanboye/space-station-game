@@ -136,6 +136,32 @@ function constructionSiteCoversTile(state: StationState, site: ConstructionSite,
   return footprintTiles(state, site.tileIndex, footprint.width, footprint.height).includes(tileIndex);
 }
 
+/**
+ * Cancel Build can run between simulation ticks. Release the exact job and
+ * worker claim here instead of waiting for the general closed-job sweep: the
+ * cancellation path clears `assignedCrewId`, so that later sweep can no
+ * longer identify the worker reservation that belonged to this job.
+ */
+function releaseCancelledConstructionJobReservations(
+  state: StationState,
+  jobId: number,
+  assignedCrewId: number | null
+): void {
+  for (const reservation of state.reservations) {
+    if (reservation.releaseReason !== null) continue;
+    const belongsToJob = reservation.ownerKind === 'job' && reservation.ownerId === jobId;
+    const belongsToAssignment =
+      assignedCrewId !== null &&
+      reservation.ownerKind === 'crew' &&
+      reservation.ownerId === assignedCrewId &&
+      reservation.kind === 'actor-job' &&
+      reservation.targetId === String(jobId);
+    if (!belongsToJob && !belongsToAssignment) continue;
+    reservation.releaseReason = 'cleared';
+    reservation.expiresAt = state.now;
+  }
+}
+
 export function removeConstructionAtTile(state: StationState, tileIndex: number, refundMaterials = false): boolean {
   const removedSites = state.constructionSites.filter((site) => constructionSiteCoversTile(state, site, tileIndex));
   const structuralProjectId = removedSites.find((site) => site.structuralProjectId !== undefined)?.structuralProjectId;
@@ -175,8 +201,9 @@ export function removeConstructionAtTile(state: StationState, tileIndex: number,
   }
   for (const job of state.jobs) {
     if (job.constructionSiteId === undefined || !removedIds.has(job.constructionSiteId)) continue;
-    if (job.state === 'done' || job.state === 'expired') continue;
     const assignedCrewId = job.assignedCrewId;
+    releaseCancelledConstructionJobReservations(state, job.id, assignedCrewId);
+    if (job.state === 'done' || job.state === 'expired') continue;
     job.expiredFromState = job.state;
     job.state = 'expired';
     job.completedAt = state.now;
@@ -528,8 +555,33 @@ function markProjectBlocked(project: StructuralExpansionProject, sites: readonly
 }
 
 function updateProjectMaterialProgress(project: StructuralExpansionProject, sites: readonly ConstructionSite[]): void {
-  const delivered = sites.reduce((sum, site) => sum + Math.max(0, site.deliveredMaterials), 0);
-  project.deliveredMaterials = Math.min(project.requiredMaterials, Math.max(project.deliveredMaterials, delivered));
+  const activeStage = sites.some((site) => isSealCheckSite(site))
+    ? 'seal-check'
+    : sites.some((site) => site.structuralStage === 'interior')
+      ? 'interior'
+      : sites.some((site) => site.structuralStage === 'perimeter')
+        ? 'perimeter'
+        : null;
+  const perimeterMaterials = project.targets.reduce(
+    (sum, target) => sum + (target.targetTile === TileType.Floor ? 0 : Math.max(0, target.requiredMaterials)),
+    0
+  );
+  const currentStageDelivered = sites.reduce((sum, site) => {
+    if (activeStage !== null && site.structuralStage !== activeStage) return sum;
+    return sum + Math.max(0, site.deliveredMaterials);
+  }, 0);
+  // Completed sites are cleaned from the world between stages. Reconstruct
+  // their physical value from the durable target plan instead of taking the
+  // maximum of each stage: max() silently lost every interior delivery while
+  // the (usually larger) completed perimeter remained the high-water mark.
+  const delivered = activeStage === 'seal-check'
+    ? project.requiredMaterials
+    : activeStage === 'interior'
+      ? perimeterMaterials + currentStageDelivered
+      : activeStage === 'perimeter'
+        ? currentStageDelivered
+        : project.deliveredMaterials;
+  project.deliveredMaterials = Math.min(project.requiredMaterials, Math.max(0, delivered));
 }
 
 /**
@@ -626,6 +678,7 @@ export function cancelStructuralExpansionProject(state: StationState, projectId:
 
   for (const job of state.jobs) {
     if (job.constructionSiteId === undefined || !siteIds.has(job.constructionSiteId)) continue;
+    releaseCancelledConstructionJobReservations(state, job.id, job.assignedCrewId);
     if (job.state !== 'done' && job.state !== 'expired') {
       job.expiredFromState = job.state;
       job.state = 'expired';
