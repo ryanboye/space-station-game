@@ -883,7 +883,18 @@ audited checklist with no unsupported checked claims.
 - [x] Add Gangway and clamp deployment states.
 - [x] Add hull wear/damage/breach/repair states.
 - [x] Add door contention and late-boarding indicators.
-- [ ] Verify every asset at actual gameplay size in the live renderer.
+- [x] Verify every asset at actual gameplay size in the live renderer.
+  Evidence: the bundled frozen-browser pass inspected structural support and
+  construction-phase frames, every rotated fleet hull, the live bulky cart,
+  approach/Gangway/clamp indicators, all four hull-integrity states, and the
+  complete Gate F facility catalogue at ordinary play zoom. In particular,
+  `market-compact-conflict`, `display-cold-case`, `long-stay-guest-wing`, and
+  `reception-staffed` kept registers, three-bay displays, bar pieces, booths,
+  rails, serving line, Community Table, cabins, Wash Bank, and Arrival Desk
+  distinct at their depicted-position scale; `exterior-integrity-showcase`
+  visibly transitioned damaged/breached panels through EVA sparks to patched.
+  Companion `test:ship-fleet-visual`, `test:construction-phase-art`,
+  `test:facility-sprite-state`, and `sprites:validate:v1` pin the exact frames.
 
 ### Phase 8 Gate
 
