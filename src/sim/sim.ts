@@ -947,7 +947,8 @@ const JOB_ASSIGNMENT_LANE_PATH_BUDGET = 6;
 export const JOB_TTL_SEC = TASK_TIMINGS.jobTtlSec;
 const JOB_STALE_SEC = TASK_TIMINGS.jobStaleSec;
 const JOB_BOARD_CADENCE_SEC = 0.35;
-const DERIVED_METRICS_CADENCE_MS = 250;
+const DERIVED_METRICS_CADENCE_SEC = 0.25;
+const PAUSED_DERIVED_METRICS_TICK_CADENCE = 15;
 const ROOM_OPS_CADENCE_MS = 250;
 const LOCAL_AIR_CADENCE_MS = 250;
 const AIR_DISTRESS_THRESHOLD = 15;
@@ -2079,7 +2080,14 @@ type SimCadenceTimers = {
 };
 
 const simCadenceTimers = new WeakMap<StationState, SimCadenceTimers>();
-const nextDerivedMetricsAt = new WeakMap<StationState, number>();
+type DerivedMetricsCadence = {
+  nextSimAt: number;
+  lastSimAt: number;
+  pausedTicks: number;
+  pausedInputVersion: string;
+};
+
+const derivedMetricsCadenceByState = new WeakMap<StationState, DerivedMetricsCadence>();
 const roomOpsCadenceByState = new WeakMap<StationState, { nextAt: number; lastSimAt: number }>();
 const localAirCadenceByState = new WeakMap<StationState, { nextAt: number; lastSimAt: number }>();
 
@@ -2103,11 +2111,80 @@ function consumeCadence(now: number, nextAt: number, intervalSec: number): { due
   return { due: true, nextAt: now + intervalSec };
 }
 
+function pausedDerivedMetricsInputVersion(state: StationState): string {
+  // Paused worlds do not advance simulation time, but the player can still
+  // build, change policy, or satisfy a progression condition through a direct
+  // control action. Refresh immediately for the durable inputs owned by the
+  // progression/project evaluators, with a deterministic tick fallback for
+  // less common derived UI inputs.
+  const ledger = state.openingEconomy.ledger.lifetime;
+  return [
+    state.topologyVersion,
+    state.roomVersion,
+    state.moduleVersion,
+    state.dockVersion,
+    state.utilityUnderlay.version,
+    state.metrics.creditsEarnedLifetime,
+    state.metrics.mealsServedTotal,
+    state.metrics.turnaroundsCompletedLifetime,
+    state.metrics.actorsTreatedLifetime,
+    state.metrics.incidentsResolvedLifetime,
+    state.usageTotals.tradeGoodsSold,
+    Object.values(state.usageTotals.archetypesEverSeen).filter(Boolean).length,
+    state.residents.length,
+    ledger['dock-fee'].count,
+    ledger['fuel-sale'].count,
+    state.openingEconomy.podFreightOperations.filter((operation) => operation.status === 'complete').length,
+    state.openingEconomy.capitalProjects.active.map((entry) => entry.id).join(','),
+    state.openingEconomy.capitalProjects.completed.join(',')
+  ].join(':');
+}
+
 function shouldRefreshDerivedMetrics(state: StationState): boolean {
-  const now = perfNowMs();
-  const nextAt = nextDerivedMetricsAt.get(state) ?? Number.NEGATIVE_INFINITY;
-  if (now < nextAt) return false;
-  nextDerivedMetricsAt.set(state, now + DERIVED_METRICS_CADENCE_MS);
+  const pausedInputVersion = state.controls.paused ? pausedDerivedMetricsInputVersion(state) : '';
+  let cadence = derivedMetricsCadenceByState.get(state);
+  if (!cadence) {
+    cadence = {
+      nextSimAt: state.now + DERIVED_METRICS_CADENCE_SEC,
+      lastSimAt: state.now,
+      pausedTicks: 0,
+      pausedInputVersion
+    };
+    derivedMetricsCadenceByState.set(state, cadence);
+    return true;
+  }
+
+  // The desktop load path hydrates into the existing StationState object so
+  // render references remain stable. Loading an older save can therefore move
+  // simulation time backwards while this WeakMap entry survives; reset the
+  // cadence at that discontinuity instead of waiting for the old future time.
+  if (state.now + 1e-9 < cadence.lastSimAt) {
+    cadence.nextSimAt = state.now + DERIVED_METRICS_CADENCE_SEC;
+    cadence.lastSimAt = state.now;
+    cadence.pausedTicks = 0;
+    cadence.pausedInputVersion = pausedInputVersion;
+    return true;
+  }
+  cadence.lastSimAt = state.now;
+
+  if (!state.controls.paused) {
+    cadence.pausedTicks = 0;
+    cadence.pausedInputVersion = '';
+    if (state.now + 1e-9 < cadence.nextSimAt) return false;
+    cadence.nextSimAt = state.now + DERIVED_METRICS_CADENCE_SEC;
+    return true;
+  }
+
+  cadence.pausedTicks += 1;
+  if (
+    pausedInputVersion === cadence.pausedInputVersion &&
+    cadence.pausedTicks < PAUSED_DERIVED_METRICS_TICK_CADENCE
+  ) {
+    return false;
+  }
+  cadence.pausedTicks = 0;
+  cadence.pausedInputVersion = pausedInputVersion;
+  cadence.nextSimAt = state.now + DERIVED_METRICS_CADENCE_SEC;
   return true;
 }
 
@@ -2883,11 +2960,12 @@ function roomClusterAnchors(state: StationState, room: RoomType): number[] {
     .sort((a, b) => a - b);
 }
 
+const dockEntityRebuildInProgress = new WeakSet<StationState>();
+
 function ensureDockEntitiesUpToDate(state: StationState): void {
   const version = state.topologyVersion * 1_000_000 + state.moduleVersion;
   if (state.derived.cacheVersions.dockEntitiesTopologyVersion === version) return;
   rebuildDockEntities(state);
-  state.derived.cacheVersions.dockEntitiesTopologyVersion = version;
 }
 
 export function ensureDockByTileCache(state: StationState): void {
@@ -8108,6 +8186,25 @@ function ensureResidentPopulation(_state: StationState): void {
 }
 
 export function rebuildDockEntities(state: StationState): void {
+  if (dockEntityRebuildInProgress.has(state)) return;
+  dockEntityRebuildInProgress.add(state);
+  const rebuildVersion = state.topologyVersion * 1_000_000 + state.moduleVersion;
+  // Claim this version before walking the Dock tiles. Facing inference can
+  // consult getDockByTile(), which hydrates the tile cache and therefore
+  // re-enters ensureDockEntitiesUpToDate(). The claimed version makes that
+  // lookup read the pre-rebuild registry instead of recursively rebuilding.
+  state.derived.cacheVersions.dockEntitiesTopologyVersion = rebuildVersion;
+  try {
+    rebuildDockEntitiesNow(state);
+  } catch (error) {
+    state.derived.cacheVersions.dockEntitiesTopologyVersion = -1;
+    throw error;
+  } finally {
+    dockEntityRebuildInProgress.delete(state);
+  }
+}
+
+function rebuildDockEntitiesNow(state: StationState): void {
   const byAnyTile = new Map<number, DockEntity>();
   const bySourceKey = new Map<string, DockEntity>();
   const next: DockEntity[] = [];

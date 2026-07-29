@@ -143,24 +143,47 @@ function context(overrides: Partial<AdmissionContext> = {}): AdmissionContext {
   };
 }
 
+function metricShip(id: number, overrides: Partial<ArrivingShip>): ArrivingShip {
+  return {
+    id,
+    kind: 'transient',
+    size: 'small',
+    bayTiles: [],
+    bayCenterX: 0,
+    bayCenterY: 0,
+    shipType: 'tourist',
+    hullVariant: 'courier-pod',
+    lane: 'north',
+    originDockId: null,
+    assignedDockId: null,
+    assignedDockSourceKey: null,
+    queueState: 'none',
+    stage: 'approach',
+    stageTime: 0,
+    passengersTotal: 0,
+    passengersSpawned: 0,
+    passengersBoarded: 0,
+    minimumBoarding: 0,
+    spawnCarry: 0,
+    dockedAt: 0,
+    residentIds: [],
+    manifestDemand: { cafeteria: 0, market: 0, lounge: 0 },
+    manifestMix: { diner: 0, shopper: 0, lounger: 0, rusher: 0 },
+    approachCommitment: null,
+    ...overrides
+  };
+}
+
 function testVisitDurationAndApproachWait(): string {
   const state = fixture(77001);
   state.now = 100;
 
-  const active = {
-    id: 77001,
-    kind: 'transient',
-    stage: 'approach',
-    stageTime: 0,
+  const active = metricShip(77001, {
     approachCommitment: { slotId: 'gate-g-a', groupIds: ['shared-g'], phase: 'approach', status: 'active', queuedAt: 90 }
-  } as unknown as ArrivingShip;
-  const waiting = {
-    id: 77002,
-    kind: 'transient',
-    stage: 'approach',
-    stageTime: 0,
+  });
+  const waiting = metricShip(77002, {
     approachCommitment: { slotId: 'gate-g-b', groupIds: ['shared-g'], phase: 'approach', status: 'waiting', queuedAt: 91 }
-  } as unknown as ArrivingShip;
+  });
   state.arrivingShips = [active, waiting];
   tick(state, 0.2);
   const first = getCommitmentMetrics(state);
@@ -168,20 +191,14 @@ function testVisitDurationAndApproachWait(): string {
   near(first.approachGroupWaitSeconds, 0.2, 'A grouped waiter must accrue the same wait tick');
   assert(first.holdingShips === 1, 'The live holding gauge must report exactly one waiting ship.');
 
-  state.arrivingShips = [{
-    id: 77003,
-    kind: 'transient',
+  state.arrivingShips = [metricShip(77003, {
     stage: 'depart',
     stageTime: 2.01,
     dockedAt: 90,
     stayClass: 'contract',
     shipType: 'tourist',
-    size: 'small',
-    passengersTotal: 0,
-    passengersSpawned: 0,
-    passengersBoarded: 0,
     approachCommitment: { slotId: 'gate-g-c', groupIds: [], phase: 'depart', status: 'active', queuedAt: 100 }
-  } as unknown as ArrivingShip];
+  })];
   tick(state, 0.2);
   const second = getCommitmentMetrics(state);
   assert(second.visitsCompletedByClass.contract === 1, 'Exactly one contract visit must complete.');

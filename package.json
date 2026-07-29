@@ -24,6 +24,8 @@
     "test:opening-procurement": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/opening-procurement-tests.js",
     "test:pod-demand-accounting": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/pod-demand-accounting-tests.js",
     "test:berth-capital": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/berth-capital-tests.js",
+    "test:infrastructure-determinism": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/infrastructure-determinism-tests.js",
+    "test:camera-fit": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/camera-fit-tests.js",
     "balance:port-ops": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/port-ops-balance.js",
     "baseline:frontage": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/frontage-baseline.js",
     "test:occupant-loop": "tsc -p tsconfig.simtest.json && node tools/write-simtest-package.cjs && node .tmp/sim-tests/tools/occupant-loop-tests.js",

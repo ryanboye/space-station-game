@@ -81,6 +81,8 @@ test('an absent charter resolves to the neutral orbit', () => {
     JSON.stringify(forecast.economy) === JSON.stringify(deriveOpeningEconomyProfile()),
     'neutral forecast economy drifted from deriveOpeningEconomyProfile()'
   );
+  assert(!forecast.summary.includes('berths pays'), `charter summary has subject-verb disagreement: ${forecast.summary}`);
+  assert(forecast.summary.includes('deprioritize '), `charter summary lost its weakest-service recommendation: ${forecast.summary}`);
 });
 
 test('omitting SystemMap preserves the legacy forecast shape and ranking path', () => {

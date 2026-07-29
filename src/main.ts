@@ -31,6 +31,14 @@ import {
 import { sigilForFaction } from './sim/system-map';
 import { mountCharterScreen } from './ui/charter-screen';
 import { mountTitleScreen, type TitleContinueInfo } from './ui/title-screen';
+import {
+  fitBoundsToSafeViewport,
+  safeInsetsFromBlockers,
+  unionFitBounds,
+  type FitBlocker,
+  type FitBounds,
+  type FitSafeInsets
+} from './ui/camera-fit';
 import { mountOpeningEconomyPanels, type OpeningEconomyPanelView } from './ui/opening-economy-panels';
 import { marketPolicyEffect } from './sim/opening-economy';
 import { computeCharterOperatingForecast } from './sim/site-charter';
@@ -8258,7 +8266,7 @@ function centerViewportOnMapCenter(): void {
   centerViewportOnWorldPx(state.width * TILE_SIZE * 0.5, state.height * TILE_SIZE * 0.5);
 }
 
-const FACILITY_SHOWCASE_CAMERA_BOUNDS: Record<string, { minX: number; minY: number; maxX: number; maxY: number }> = {
+const FACILITY_SHOWCASE_CAMERA_BOUNDS: Record<string, FitBounds> = {
   'market-compact-conflict': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
   'market-improved-flow': { minX: 40, minY: 47, maxX: 60, maxY: 60 },
   'cantina-undersized': { minX: 40, minY: 47, maxX: 58, maxY: 60 },
@@ -8268,12 +8276,29 @@ const FACILITY_SHOWCASE_CAMERA_BOUNDS: Record<string, { minX: number; minY: numb
   'long-stay-guest-wing': { minX: 40, minY: 47, maxX: 88, maxY: 70 }
 };
 
-function scenarioCameraBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+function scenarioCameraBounds(): FitBounds | null {
   const scenarioName = new URLSearchParams(location.search).get('scenario');
   return scenarioName ? FACILITY_SHOWCASE_CAMERA_BOUNDS[scenarioName] ?? null : null;
 }
 
-function getStationBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
+function boundsForTiles(tiles: readonly number[]): FitBounds | null {
+  if (tiles.length === 0) return null;
+  let minX = state.width;
+  let minY = state.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (const index of tiles) {
+    if (!Number.isInteger(index) || index < 0 || index >= state.tiles.length) continue;
+    const tile = fromIndex(index, state.width);
+    minX = Math.min(minX, tile.x);
+    minY = Math.min(minY, tile.y);
+    maxX = Math.max(maxX, tile.x);
+    maxY = Math.max(maxY, tile.y);
+  }
+  return maxX < minX ? null : { minX, minY, maxX, maxY };
+}
+
+function getStationBounds(): FitBounds {
   // Facility scenarios intentionally coexist with the starter shell so their
   // authored comparisons do not destroy shared baseline state. In those
   // whitelisted showcases, Fit Station means the deliberate playtest stage;
@@ -8282,44 +8307,98 @@ function getStationBounds(): { minX: number; minY: number; maxX: number; maxY: n
   const showcaseBounds = scenarioCameraBounds();
   if (showcaseBounds) return showcaseBounds;
 
-  let minX = state.width;
-  let minY = state.height;
-  let maxX = -1;
-  let maxY = -1;
-
-  for (let i = 0; i < state.tiles.length; i++) {
-    if (state.tiles[i] === TileType.Space) continue;
-    const tile = fromIndex(i, state.width);
-    minX = Math.min(minX, tile.x);
-    minY = Math.min(minY, tile.y);
-    maxX = Math.max(maxX, tile.x);
-    maxY = Math.max(maxY, tile.y);
+  const extents: FitBounds[] = [];
+  const builtTiles: number[] = [];
+  for (let index = 0; index < state.tiles.length; index++) {
+    if (state.tiles[index] !== TileType.Space) builtTiles.push(index);
+  }
+  const structureBounds = boundsForTiles(builtTiles);
+  if (structureBounds) extents.push(structureBounds);
+  for (const module of state.moduleInstances) {
+    const bounds = boundsForTiles(module.tiles.length > 0 ? module.tiles : [module.originTile]);
+    if (bounds) extents.push(bounds);
+  }
+  for (const dock of state.docks) {
+    const bounds = boundsForTiles([...dock.tiles, ...dock.approachTiles]);
+    if (bounds) extents.push(bounds);
+  }
+  for (const ship of state.arrivingShips) {
+    const bay = boundsForTiles(ship.bayTiles);
+    if (bay) extents.push(bay);
+    // A queued or approaching ship can be centered beyond its bay tiles. Keep
+    // its hull in frame, but do not admit particles or arbitrary actors into
+    // the fit extent.
+    const hullRadius = ship.size === 'large' ? 6 : ship.size === 'medium' ? 4 : 2;
+    extents.push({
+      minX: ship.bayCenterX - hullRadius,
+      minY: ship.bayCenterY - hullRadius,
+      maxX: ship.bayCenterX + hullRadius,
+      maxY: ship.bayCenterY + hullRadius
+    });
   }
 
-  if (maxX < minX || maxY < minY) {
+  const combined = unionFitBounds(extents);
+  if (!combined) {
     const core = fromIndex(state.core.centerTile, state.width);
     return { minX: core.x, minY: core.y, maxX: core.x, maxY: core.y };
   }
+  return combined;
+}
 
-  return { minX, minY, maxX, maxY };
+function clippedFitBlocker(element: Element, edge: FitBlocker['edge']): FitBlocker | null {
+  if (uiPanelsHidden) return null;
+  const style = window.getComputedStyle(element);
+  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return null;
+  const wrap = gameWrap.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  const left = Math.max(wrap.left, rect.left);
+  const top = Math.max(wrap.top, rect.top);
+  const right = Math.min(wrap.right, rect.right);
+  const bottom = Math.min(wrap.bottom, rect.bottom);
+  if (right <= left || bottom <= top) return null;
+  return {
+    edge,
+    x: left - wrap.left,
+    y: top - wrap.top,
+    width: right - left,
+    height: bottom - top
+  };
+}
+
+function stationFitSafeInsets(): FitSafeInsets {
+  if (uiPanelsHidden) return { left: 0, right: 0, top: 0, bottom: 0 };
+  const blockers: FitBlocker[] = [];
+  for (const element of document.querySelectorAll('.left-stack > :not(.hidden)')) {
+    const blocker = clippedFitBlocker(element, 'left');
+    if (blocker) blockers.push(blocker);
+  }
+  const bottom = clippedFitBlocker(bottomDockEl, 'bottom');
+  if (bottom) blockers.push(bottom);
+  const palette = clippedFitBlocker(document.querySelector('#panel')!, 'right');
+  if (palette) blockers.push(palette);
+  const inspector = clippedFitBlocker(document.querySelector('#agent-side-panel')!, 'right');
+  if (inspector) blockers.push(inspector);
+  return safeInsetsFromBlockers(gameWrap.clientWidth, gameWrap.clientHeight, blockers);
 }
 
 function fitStationToViewport(): void {
   const bounds = getStationBounds();
-  const marginPx = FIT_STATION_MARGIN_TILES * TILE_SIZE;
-  const stationWidthPx = Math.max(TILE_SIZE, (bounds.maxX - bounds.minX + 1) * TILE_SIZE);
-  const stationHeightPx = Math.max(TILE_SIZE, (bounds.maxY - bounds.minY + 1) * TILE_SIZE);
-  const fitZoom = Math.min(
-    gameWrap.clientWidth / (stationWidthPx + marginPx * 2),
-    gameWrap.clientHeight / (stationHeightPx + marginPx * 2)
-  );
-  zoom = clamp(fitZoom, FIT_MIN_ZOOM, FIT_STATION_MAX_ZOOM);
+  const fit = fitBoundsToSafeViewport({
+    bounds,
+    tileSize: TILE_SIZE,
+    marginTiles: FIT_STATION_MARGIN_TILES,
+    viewportWidth: gameWrap.clientWidth,
+    viewportHeight: gameWrap.clientHeight,
+    safeInsets: stationFitSafeInsets(),
+    minZoom: FIT_MIN_ZOOM,
+    maxZoom: FIT_STATION_MAX_ZOOM
+  });
+  zoom = fit.zoom;
   applyCanvasSize();
   updateStageLayout();
-  centerViewportOnWorldPx(
-    (bounds.minX + bounds.maxX + 1) * TILE_SIZE * 0.5,
-    (bounds.minY + bounds.maxY + 1) * TILE_SIZE * 0.5
-  );
+  gameWrap.scrollLeft = mapContentOffsetX() + fit.worldCenterX * zoom - fit.viewportAnchorX;
+  gameWrap.scrollTop = mapContentOffsetY() + fit.worldCenterY * zoom - fit.viewportAnchorY;
+  clampViewportScroll();
 }
 
 function setZoomAtViewportPoint(nextZoom: number, viewportX: number, viewportY: number): void {

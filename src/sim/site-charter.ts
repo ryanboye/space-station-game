@@ -649,7 +649,7 @@ export function computeCharterOperatingForecast(site?: SiteCharter, system?: Sys
     : `${approachPhrase} · standard orbit`;
   const summary =
     `Lead with ${lead.label.toLowerCase()} (${lead.metric}) and back it with ${support.label.toLowerCase()}; `
-    + `${defer.label.toLowerCase()} pays least here. Solar yield ${percent(economy.solarYieldMultiplier)}%, `
+    + `deprioritize ${defer.label.toLowerCase()} here. Solar yield ${percent(economy.solarYieldMultiplier)}%, `
     + `expand toward the ${LANE_NAME[shelteredFace.lane]} face.`;
 
   const resourceLine = charter.resourceType
