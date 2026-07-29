@@ -33,21 +33,42 @@ assertCondition(roomTiles(fresh, RoomType.Reactor).length === 5, 'The starter re
 const starterPower = getPowerNetworkDiagnostics(fresh);
 assertCondition(starterPower.sourceCount === 1, 'Fresh starts should commission exactly one wired power source.');
 assertCondition(starterPower.poweredNetworkCount === 1, 'Fresh starter conduits should form one powered network.');
-for (const room of [RoomType.Cafeteria, RoomType.Market, RoomType.Hygiene]) {
+// OPEN-01 made the starter commercially empty, so the wired opening rooms are
+// the crew mess and the hygiene block. There is deliberately no Market: the
+// player chooses and builds the first business, and the reactor run has to
+// reach it afterwards.
+for (const room of [RoomType.Cafeteria, RoomType.Hygiene]) {
   const tiles = roomTiles(fresh, room);
   assertCondition(tiles.length > 0, `Fresh starter should contain ${room}.`);
   assertCondition(roomClusterHasLocalPower(fresh, room, tiles), `${room} should be powered at the start of play.`);
 }
-
-assertCondition(fresh.metrics.powerSupply > 0, 'The fresh reactor should contribute visible power supply.');
-const utilization = fresh.metrics.powerDemand / fresh.metrics.powerSupply;
+assertCondition(roomTiles(fresh, RoomType.Market).length === 0, 'The starter should ship no Market to power.');
 assertCondition(
-  utilization >= 0.65 && utilization <= 0.75,
-  `Starter utilization should be 65-75%, got ${(utilization * 100).toFixed(1)}%.`
+  fresh.ops.cafeteriasActive === 1 && fresh.ops.hygieneActive === 1,
+  `Starter service load should be exactly the crew mess and hygiene block (cafeteria ${fresh.ops.cafeteriasActive}, hygiene ${fresh.ops.hygieneActive}).`
 );
 assertCondition(
-  (fresh.metrics.powerDemand + 1.3) / fresh.metrics.powerSupply >= 0.75,
-  'One additional cafeteria-scale service load should noticeably pressure the starter reserve.'
+  fresh.ops.marketActive === 0 && fresh.ops.loungeActive === 0 && fresh.ops.cantinaActive === 0,
+  'The starter should carry no commercial power load at all.'
+);
+
+assertCondition(fresh.metrics.powerSupply > 0, 'The fresh reactor should contribute visible power supply.');
+// Re-baselined after OPEN-01: removing the starter Market dropped the opening
+// draw from 12.4 to 11.3 against the same 18-unit reactor, so the authored
+// starter now sits near 63% rather than the ~70% dfc9fa7 tuned for.
+const utilization = fresh.metrics.powerDemand / fresh.metrics.powerSupply;
+assertCondition(
+  utilization >= 0.55 && utilization <= 0.70,
+  `Starter utilization should be 55-70%, got ${(utilization * 100).toFixed(1)}%.`
+);
+// The player's first business is a powered public room (Market, Lounge or
+// Cantina all draw ~1.1). It fits under the starter reactor, but it visibly
+// spends the reserve rather than disappearing into it.
+const FIRST_BUSINESS_POWER_DRAW = 1.1;
+const withFirstBusiness = (fresh.metrics.powerDemand + FIRST_BUSINESS_POWER_DRAW) / fresh.metrics.powerSupply;
+assertCondition(
+  withFirstBusiness >= 0.65 && withFirstBusiness < 1,
+  `One opening business should pressure but not exceed the starter reserve, got ${(withFirstBusiness * 100).toFixed(1)}%.`
 );
 
 // A legacy state with no source remains on the fallback even if its player

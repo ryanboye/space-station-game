@@ -101,8 +101,16 @@ function buildHabitat(state: StationState): void {
     setTile(state, toIndex(x0, y, state.width), TileType.Wall);
     setTile(state, toIndex(x1, y, state.width), TileType.Wall);
   }
-  setTile(state, state.core.centerTile, TileType.Floor);
-  setTile(state, state.core.serviceTile, TileType.Floor);
+  // The fixture's station core has to live inside the fixture's station. The
+  // authored core sits outside this habitat box, so restoring it as floor left
+  // a walkable island in space: crew spawn on the floor tile nearest the core
+  // service tile (sim.ts `ensureCrewPool`) and were marooned there, and
+  // service reachability seeded from outside the hull.
+  const coreTile = toIndex(Math.floor((x0 + x1) / 2), Math.floor((y0 + y1) / 2), state.width);
+  state.core.centerTile = coreTile;
+  state.core.serviceTile = coreTile;
+  state.core.frameTiles = [coreTile];
+  setTile(state, coreTile, TileType.Floor);
 }
 
 function placeModule(state: StationState, module: ModuleType, x: number, y: number, rotation: ModuleRotation = 0): number {
@@ -262,6 +270,7 @@ function setupFoodRooms(state: StationState): {
   prep: number;
   stove: number;
   serving: number;
+  serving2: number;
   trayReturn: number;
   washer: number;
 } {
@@ -279,11 +288,14 @@ function setupFoodRooms(state: StationState): {
   placeModule(state, ModuleType.Sink, 24, 15);
   placeModule(state, ModuleType.FloorDrain, 20, 15);
   const serving = placeModule(state, ModuleType.ServingStation, 20, 19);
+  // Two counters and two tables is the public-cafeteria bar: a single counter
+  // plus a table is only the crew mess, which visitors are not served from.
+  const serving2 = placeModule(state, ModuleType.ServingStation, 25, 22);
   placeModule(state, ModuleType.Table, 23, 19);
   placeModule(state, ModuleType.Table, 27, 19);
   const trayReturn = placeModule(state, ModuleType.TrayReturn, 20, 22);
   tick(state, 0);
-  return { intake, cold, prep, stove, serving, trayReturn, washer };
+  return { intake, cold, prep, stove, serving, serving2, trayReturn, washer };
 }
 
 function setupCargoBerth(state: StationState): void {
@@ -642,6 +654,8 @@ function buildLivingStationShowcasePayload(): string {
   tick(state, 0);
   setItemAt(state, food.serving, 'meal', 18);
   setItemAt(state, food.serving, 'cleanTray', 24);
+  setItemAt(state, food.serving2, 'meal', 18);
+  setItemAt(state, food.serving2, 'cleanTray', 24);
   setItemAt(state, food.trayReturn, 'dirtyTray', 4);
   setItemAt(state, food.cold, 'rawMeal', 18);
   setItemAt(state, food.prep, 'rawMeal', 8);

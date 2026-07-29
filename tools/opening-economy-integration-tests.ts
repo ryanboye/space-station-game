@@ -70,7 +70,15 @@ function testFreshOpeningDefaults(): void {
   assert(marketPolicy(state) === 'standard', 'Fresh starts should use standard market pricing.');
   assert(state.openingEconomy.ledger.recent.length === 0, 'Fresh starts should have no economy history.');
   assert(state.openingEconomy.podFreightOperations.length === 0, 'Fresh starts should have no active pod freight.');
-  assert(stockAt(state, 'tradeGood') === 16, 'Fresh market should retain its starter Travel Supplies buffer.');
+  // OPEN-01 made the starter commercially empty: the player picks and builds
+  // the first business, so there is no authored Market and no Travel Supplies
+  // buffer to inherit. Every trade good in this runner has to be bought
+  // through the supplier loop below.
+  assert(
+    !state.moduleInstances.some((module) => module.type === 'market-stall' || module.type === 'shelf-aisle'),
+    'Fresh starts should ship no retail fixture.'
+  );
+  assert(stockAt(state, 'tradeGood') === 0, 'Fresh starts should hold no Travel Supplies stock.');
   assert(freightDock(state).sourceKind === 'pod-dock-module', 'Starter freight service should be attached to a Pod Dock.');
   assert(getOpeningCapitalProjects(state).every((project) => project.state === 'available'), 'Capital projects should begin optional and available.');
 }

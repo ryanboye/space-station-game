@@ -21,6 +21,8 @@ import { resolveFacilitySlots, type FacilitySlotRole } from './facility-descript
 import { buildSlotReservationRequest } from './facility-slots';
 import { createVisitorNeeds } from './occupant-demand';
 import { findPath } from './path';
+import { planStructuralPieceConstruction } from './construction';
+import { validateStructuralSupportPlan } from './structural-support';
 import { GRID_WIDTH, TileType, RoomType, ModuleType, VisitorState, ZoneType,
   type ModuleInstance,
   type ModuleRotation,
@@ -2287,8 +2289,32 @@ function seedScaleStorageReserve(state: StationState, freeCapacityTarget: number
 }
 
 function planScenarioStructuralExpansion(state: StationState, withAirlock: boolean): void {
-  let patch: number[] | null = null;
-  for (let y = 1; y < state.height - 2 && patch === null; y++) {
+  // A scaffold only plans if the finished wing can reach the existing core, so
+  // candidates must be tried from the hull outward. Scanning raw map order
+  // starts in deep space at the top-left corner, where every patch fails the
+  // walkable-hull-connection rule — which is how this fixture broke.
+  const touchesStation = (candidate: number[]): boolean => {
+    const owned = new Set(candidate);
+    for (const tile of candidate) {
+      const x = tile % state.width;
+      const y = Math.floor(tile / state.width);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= state.width || ny >= state.height) continue;
+        const neighbor = ny * state.width + nx;
+        if (owned.has(neighbor)) continue;
+        const tileType = state.tiles[neighbor];
+        if (tileType === TileType.Floor || tileType === TileType.Wall || tileType === TileType.Door) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const candidates: number[][] = [];
+  for (let y = 1; y < state.height - 2; y++) {
     for (let x = 1; x < state.width - 2; x++) {
       const candidate = [
         y * state.width + x,
@@ -2297,15 +2323,60 @@ function planScenarioStructuralExpansion(state: StationState, withAirlock: boole
         (y + 1) * state.width + x + 1
       ];
       if (candidate.some((tile) => state.tiles[tile] !== TileType.Space)) continue;
-      for (const tile of candidate) setTile(state, tile, TileType.Truss);
-      if (planStationExpansionOnTruss(state, candidate).ok) {
-        patch = candidate;
-        break;
-      }
-      for (const tile of candidate) setTile(state, tile, TileType.Space);
+      if (!touchesStation(candidate)) continue;
+      candidates.push(candidate);
     }
   }
-  if (!patch) throw new Error('Structural expansion fixture could not find a valid scaffold patch.');
+
+  // A 2x2 scaffold welded onto the hull always produces a degree-3 truss node,
+  // which the structural rules answer with a Truss Junction. Install the
+  // junctions the plan asks for -- the same piece the player would place --
+  // rather than hunting for a shape that dodges the rule.
+  const installRequiredJunctions = (candidate: number[]): void => {
+    const problems = validateStructuralSupportPlan(state).problems.filter(
+      (problem) => problem.reason === 'branch-requires-junction' && candidate.includes(problem.tile)
+    );
+    for (const problem of problems) {
+      const planned = planStructuralPieceConstruction(state, problem.tile, 'junction');
+      if (!planned.ok || planned.pieceId === undefined) continue;
+      const piece = state.structuralPieces.find((entry) => entry.id === planned.pieceId);
+      if (piece) piece.completed = true;
+      // The fixture seeds a station that already owns its junctions, so the
+      // scaffold work it stages is the expansion itself, not this prerequisite.
+      state.constructionSites = state.constructionSites.filter(
+        (site) => site.structuralPieceId !== planned.pieceId
+      );
+    }
+  };
+
+  let patch: number[] | null = null;
+  const rejections = new Map<string, number>();
+  const creditsBefore = state.metrics.credits;
+  state.metrics.credits = Math.max(creditsBefore, 500);
+  for (const candidate of candidates) {
+    for (const tile of candidate) setTile(state, tile, TileType.Truss);
+    let plan = planStationExpansionOnTruss(state, candidate);
+    if (!plan.ok && plan.reason.includes('branch-requires-junction')) {
+      installRequiredJunctions(candidate);
+      plan = planStationExpansionOnTruss(state, candidate);
+    }
+    if (plan.ok) {
+      patch = candidate;
+      break;
+    }
+    rejections.set(plan.reason, (rejections.get(plan.reason) ?? 0) + 1);
+    for (const tile of candidate) setTile(state, tile, TileType.Space);
+  }
+  state.metrics.credits = creditsBefore;
+  if (!patch) {
+    const detail = [...rejections.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, count]) => `${reason} x${count}`)
+      .join(', ');
+    throw new Error(
+      `Structural expansion fixture could not find a valid scaffold patch (${candidates.length} hull-adjacent candidates rejected: ${detail}).`
+    );
+  }
   if (withAirlock) {
     for (let tile = 0; tile < state.tiles.length; tile++) {
       if (state.tiles[tile] !== TileType.Wall) continue;

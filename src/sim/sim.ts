@@ -20160,6 +20160,10 @@ function purgeDeadCrewFromAir(state: StationState, dt: number, occupancyByTile: 
     const exposure = applyAirExposure(state, crew, suitAir, dt);
     if (exposure.died) {
       releaseCrewJobsOnDeath(state, crew.id);
+      // A corpse holds nothing. Free the stool/register/bed on the same tick,
+      // exactly as processCrewResignations does, instead of leaving the
+      // position blocked until the claim TTL runs out.
+      releaseReservationsForOwner(state, 'crew', crew.id, 'cleared');
       registerBodyDeathAtTile(state, crew.tileIndex, occupancyByTile);
       continue;
     }
@@ -23370,6 +23374,9 @@ function updateVisitorLogic(
     updateLongStayVisitorNeeds(state, visitor, dt);
     const exposure = applyAirExposure(state, visitor, operationalAirAt(state, visitor.tileIndex), dt);
     if (exposure.died) {
+      // A corpse holds nothing: free the claimed seat/register on the same
+      // tick rather than blocking it until the claim TTL runs out.
+      releaseReservationsForOwner(state, 'visitor', visitor.id, 'cleared');
       registerBodyDeathAtTile(state, visitor.tileIndex, occupancyByTile);
       continue;
     }
@@ -25014,6 +25021,8 @@ function failIncident(state: StationState, incident: IncidentEntity, occupancyBy
     const victim = participants.sort((a, b) => (b.stress + (b.agitation ?? 0)) - (a.stress + (a.agitation ?? 0)))[0];
     if (victim) {
       unlinkResidentFromShip(state, victim);
+      // A corpse holds nothing: free any claimed position on the same tick.
+      releaseReservationsForOwner(state, 'resident', victim.id, 'cleared');
       registerBodyDeathAtTile(state, victim.tileIndex, occupancyByTile);
       state.residents = state.residents.filter((resident) => resident.id !== victim.id);
       incident.outcome = 'fatality';
@@ -25249,6 +25258,9 @@ function updateResidentLogic(
     const exposure = applyAirExposure(state, resident, operationalAirAt(state, resident.tileIndex), dt);
     if (exposure.died) {
       unlinkResidentFromShip(state, resident);
+      // A corpse holds nothing: free the bed/seat on the same tick rather than
+      // blocking it until the claim TTL runs out.
+      releaseReservationsForOwner(state, 'resident', resident.id, 'cleared');
       registerBodyDeathAtTile(state, resident.tileIndex, occupancyByTile);
       continue;
     }
@@ -28281,8 +28293,15 @@ function supplierOrderDestinations(state: StationState, stockKind: SupplierOrder
   // them to the backroom and out to the shelves as visible bundles
   // (createMarketRestockJobs). Shelves stay the destination only for stations
   // with no receiving at all, so a small early shop still works.
+  // "Any back-of-house capacity" has to mean free capacity, not merely that a
+  // receiving node exists. The starter ships one Intake Pallet that begins full
+  // of starting supplies, so testing existence alone routed every travel-supply
+  // order into a 48/48 pallet and rejected it forever — which made the Sell
+  // Supplies opening business impossible to finish from a fresh station.
   const backOfHouse = stockKind === 'travel-supplies'
-    ? [...receivingOrigins(state), ...backroomOrigins(state)]
+    ? [...receivingOrigins(state), ...backroomOrigins(state)].filter(
+        (tileIndex) => itemNodeFreeCapacity(state, tileIndex) > 0
+      )
     : [];
   if (backOfHouse.length > 0) return backOfHouse;
   const shelfDestinations = shelfOrigins(state);

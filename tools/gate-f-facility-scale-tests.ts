@@ -37,6 +37,7 @@ import {
 import { resolveFacilitySlots } from '../src/sim/facility-descriptors';
 import {
   ModuleType,
+  ResidentState,
   RoomType,
   VisitorState,
   type StationState,
@@ -59,7 +60,12 @@ function advance(state: StationState, seconds: number, step = 0.2): void {
   for (let elapsed = 0; elapsed < seconds; elapsed += step) tick(state, step);
 }
 
-function claim(state: StationState, ownerId: number, slot: FacilitySlotTarget, ownerKind: 'visitor' | 'crew' = 'visitor'): boolean {
+function claim(
+  state: StationState,
+  ownerId: number,
+  slot: FacilitySlotTarget,
+  ownerKind: 'visitor' | 'crew' | 'resident' = 'visitor'
+): boolean {
   const request = buildSlotReservationRequest({ ownerKind, ownerId, slot });
   if (!request) return false;
   return tryCreateReservation(state, request).ok;
@@ -818,6 +824,149 @@ function testSaveLoadRebuildsFixtures(): string {
 }
 
 // ---------------------------------------------------------------------------
+// 12. A death hands the position back on the tick it happens
+// ---------------------------------------------------------------------------
+
+function testDeathFreesItsPositionSameTick(): string {
+  // A claim is a live hold on a physical position, not a lease a corpse gets to
+  // sit out. Every death path must return the position on the tick the actor
+  // dies; riding out the 70-120s claim TTL leaves a stool, a staff lane or a
+  // seat blocked long after anyone is using it, and the fixture reads full.
+  //
+  // Each case drives the real suffocation path: the actor's accumulated air
+  // exposure is pushed past any survivable limit, then one ordinary `tick` runs
+  // updateCrewLogic / updateVisitorLogic / updateResidentLogic, which call
+  // applyAirExposure and take the death branch themselves. Nothing here calls
+  // the release directly.
+  //
+  // Each case is run with a single actor of its kind on the station. A freed
+  // position is competitive: with the rest of the roster present a neighbour
+  // takes the stool on the very same tick, which is the right behaviour but
+  // would hide whether the corpse ever let go of it.
+  const LETHAL_EXPOSURE_SEC = 600;
+  const evidence: string[] = [];
+
+  const dieAndExpectPositionFreed = (
+    label: string,
+    state: StationState,
+    ownerKind: 'visitor' | 'crew' | 'resident',
+    ownerId: number,
+    slotTile: number
+  ): void => {
+    const claimBefore = facilityClaimFor(state, ownerKind, ownerId);
+    assert(claimBefore, `${label}: the actor must hold a live claim before it dies.`);
+    assert(slotIsOccupied(state, slotTile), `${label}: the claimed position must read as occupied first.`);
+    const ttlBefore = claimBefore.expiresAt - state.now;
+    assert(ttlBefore > 5, `${label}: the claim must start far from its TTL, had ${ttlBefore.toFixed(1)}s left.`);
+    const deathsBefore = state.metrics.deathsTotal;
+
+    state.controls.paused = false;
+    tick(state, 0.2);
+
+    assert(
+      state.metrics.deathsTotal === deathsBefore + 1,
+      `${label}: exactly one death must run through the production suffocation path (got ${state.metrics.deathsTotal - deathsBefore}).`
+    );
+    assert(!slotIsOccupied(state, slotTile), `${label}: a corpse must not keep occupying its position.`);
+    assert(
+      facilityClaimFor(state, ownerKind, ownerId) === null,
+      `${label}: a dead actor must hold no live claim.`
+    );
+    assert(
+      claimBefore.releaseReason === 'cleared',
+      `${label}: the claim must be explicitly released, got ${String(claimBefore.releaseReason)}.`
+    );
+    // The decisive part. The claim was still well inside its TTL when the
+    // position came back, so the death freed it — not the clock.
+    const ttlLeft = claimBefore.expiresAt - state.now;
+    assert(ttlLeft > 5, `${label}: the position came back only as the TTL lapsed (${ttlLeft.toFixed(1)}s left).`);
+    evidence.push(`${label} freed with ${ttlLeft.toFixed(0)}s of claim TTL unspent`);
+  };
+
+  // A guest suffocating on a bar stool.
+  const guestState = scenario('cantina-expanded');
+  const guest = guestState.visitors[0];
+  assert(guest, 'The expanded cantina must start with guests.');
+  const stool = freeSlotsOfRole(
+    guestState,
+    [ModuleType.ServiceBar, ModuleType.BarCorner, ModuleType.BarEnd],
+    'bar-service'
+  )[0];
+  assert(stool, 'The expanded bar must offer a free stool.');
+  putVisitorAt(guestState, guest, stool.tileIndex);
+  assert(claim(guestState, guest.id, stool), 'The guest must be able to take the stool.');
+  guest.airExposureSec = LETHAL_EXPOSURE_SEC;
+  guestState.visitors = [guest];
+  dieAndExpectPositionFreed('guest on a bar stool', guestState, 'visitor', guest.id, stool.tileIndex);
+  assert(
+    !guestState.visitors.some((entry) => entry.id === guest.id),
+    'The dead guest must leave the visitor roster.'
+  );
+
+  // A steward suffocating in the staff lane. The scenario staffs the bar
+  // itself, so this is a claim production code made, not one the test invented.
+  const crewState = scenario('cantina-expanded');
+  const steward = crewState.crewMembers.find((member) => facilityClaimFor(crewState, 'crew', member.id) !== null);
+  assert(steward, 'The expanded cantina must staff its bar before the check can run.');
+  const stewardClaim = facilityClaimFor(crewState, 'crew', steward.id);
+  assert(stewardClaim?.targetTile !== null && stewardClaim?.targetTile !== undefined, 'A staff claim must name a tile.');
+  steward.evaSuit = false;
+  steward.airExposureSec = LETHAL_EXPOSURE_SEC;
+  crewState.crewMembers = [steward];
+  crewState.visitors = [];
+  dieAndExpectPositionFreed('steward in the staff lane', crewState, 'crew', steward.id, stewardClaim.targetTile);
+  assert(
+    !crewState.crewMembers.some((member) => member.id === steward.id),
+    'The dead steward must leave the crew roster.'
+  );
+
+  // A resident suffocating in a Community Table seat.
+  const residentState = scenario('long-stay-guest-wing');
+  const seat = freeSlotsOfRole(residentState, [ModuleType.CommunityTable], 'seat')[0];
+  assert(seat, 'The guest wing must offer a free Community Table seat.');
+  const residentId = 97010;
+  residentState.residents.push({
+    id: residentId,
+    x: (seat.tileIndex % residentState.width) + 0.5,
+    y: Math.floor(seat.tileIndex / residentState.width) + 0.5,
+    tileIndex: seat.tileIndex,
+    path: [],
+    speed: 1.8,
+    hunger: 70,
+    energy: 70,
+    hygiene: 70,
+    social: 70,
+    safety: 70,
+    stress: 10,
+    routinePhase: 'errands',
+    role: 'none',
+    roleAffinity: {},
+    state: ResidentState.Idle,
+    actionTimer: 0,
+    retargetAt: 0,
+    reservedTargetTile: seat.tileIndex,
+    homeShipId: null,
+    homeDockId: null,
+    housingUnitId: null,
+    bedModuleId: null,
+    satisfaction: 70,
+    leaveIntent: 0,
+    blockedTicks: 0,
+    airExposureSec: LETHAL_EXPOSURE_SEC,
+    healthState: 'critical'
+  });
+  assert(claim(residentState, residentId, seat, 'resident'), 'The resident must be able to take the seat.');
+  residentState.visitors = [];
+  dieAndExpectPositionFreed('resident in a Community Table seat', residentState, 'resident', residentId, seat.tileIndex);
+  assert(
+    !residentState.residents.some((entry) => entry.id === residentId),
+    'The dead resident must leave the resident roster.'
+  );
+
+  return evidence.join('; ');
+}
+
+// ---------------------------------------------------------------------------
 
 const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '1 exclusive claims and cleanup', run: testExclusiveClaimsAndCleanup },
@@ -829,7 +978,8 @@ const TESTS: Array<{ name: string; run: () => string }> = [
   { name: '8 every depicted position reservable', run: testEveryDepictedPositionIsReservable },
   { name: '9 reception reveals without gating', run: testReceptionRevealsAndNeverGates },
   { name: '10 long-stay repeat sessions', run: testLongStayWingSupportsRepeatSessions },
-  { name: '11 save/load rebuilds fixtures', run: testSaveLoadRebuildsFixtures }
+  { name: '11 save/load rebuilds fixtures', run: testSaveLoadRebuildsFixtures },
+  { name: '12 death frees its position same tick', run: testDeathFreesItsPositionSameTick }
 ];
 
 function main(): void {

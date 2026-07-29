@@ -142,15 +142,15 @@ audited checklist with no unsupported checked claims.
 - [ ] Poor but physically legal layouts are allowed to open and fail visibly.
 - [ ] Physically impossible layouts are rejected with one actionable world-space
   explanation.
-- [ ] Routine traffic never becomes a permanent manifest-reading chore.
-- [ ] Early manual Approach Control remains a meaningful portfolio decision.
-- [ ] Player-authored automation replaces repetitive approvals as scale grows.
-- [ ] Longer stays create recurring physical demand rather than passive timers.
-- [ ] Immediate consequences are visible in actors, objects, queues, and work.
+- [x] Routine traffic never becomes a permanent manifest-reading chore.
+- [x] Early manual Approach Control remains a meaningful portfolio decision.
+- [x] Player-authored automation replaces repetitive approvals as scale grows.
+- [x] Longer stays create recurring physical demand rather than passive timers.
+- [x] Immediate consequences are visible in actors, objects, queues, and work.
 - [ ] Rating and reputation summarize visible outcomes rather than replacing them.
-- [ ] Every service capacity corresponds to depicted physical positions.
+- [x] Every service capacity corresponds to depicted physical positions.
 - [ ] No naive universal one-actor-per-tile cap is introduced.
-- [ ] Congestion is physical, fair, recoverable, and deterministic.
+- [x] Congestion is physical, fair, recoverable, and deterministic.
 - [ ] Expansion reuses the existing construction, logistics, EVA, utility,
   maintenance, pressure, thermal, and save systems.
 - [ ] Catastrophic failure is forecastable, attributable, and mitigable.
@@ -295,7 +295,7 @@ audited checklist with no unsupported checked claims.
 - [x] Support temporary bed claims separately from permanent home assignment.
 - [x] Make hygiene fixtures hold exclusive sessions for visible durations.
 - [x] Make lounge and cantina positions hold meaningful leisure sessions.
-- [ ] Release stale slots after cancellation, departure, death, save hydration, or
+- [x] Release stale slots after cancellation, departure, death, save hydration, or
   provider removal.
 
 ### Market Depth
@@ -360,7 +360,7 @@ audited checklist with no unsupported checked claims.
 - [x] Generate native-footprint low-resolution artwork after footprints stabilize.
 - [x] Use transparent backgrounds and silhouettes readable at gameplay zoom.
 - [x] Match sprite dimensions to simulation footprint exactly.
-- [ ] Add idle state.
+- [x] Add idle state.
 - [ ] Add occupied/in-service state.
 - [ ] Add unstaffed state where applicable.
 - [ ] Add low-stock/empty state where applicable.
@@ -451,8 +451,8 @@ audited checklist with no unsupported checked claims.
 ### Structural Pieces
 
 - [x] Promote existing Truss as the exterior scaffold and utility support.
-- [ ] Add Truss Junction with branch/span function.
-- [ ] Add Reinforced Bulkhead with heavy-load transfer function.
+- [x] Add Truss Junction with branch/span function.
+- [x] Add Reinforced Bulkhead with heavy-load transfer function.
 - [x] Keep Pod Dock as the small docking collar.
 - [x] Keep Gangway as the passenger connection and boarding provider.
 - [x] Keep Docking Clamp as vessel mass support.
@@ -641,7 +641,7 @@ audited checklist with no unsupported checked claims.
 ### Phase 5 Gate
 
 - [x] A narrow terminal congests without permanently freezing.
-- [ ] A queue visibly covers and slows a door.
+- [x] A queue visibly covers and slows a door.
 - [x] A second entrance measurably improves throughput.
 - [x] Head-on and cyclic traffic recovers.
 - [x] No actor remains indefinitely stuck in a stale reservation.
@@ -729,7 +729,7 @@ audited checklist with no unsupported checked claims.
 - [x] Make sunlight increase generation and thermal load.
 - [x] Make thermal-sink quality affect high-load expansion.
 - [x] Make trade composition affect useful interface/service mix.
-- [ ] Keep each effect visible in Charter and station-world feedback.
+- [x] Keep each effect visible in Charter and station-world feedback.
 - [x] Provide mitigation through shielding, redundancy, cooling, safer expansion,
   or policy.
 
@@ -869,18 +869,60 @@ audited checklist with no unsupported checked claims.
 ## Focused Runner Catalogue
 
 - [x] Add structural support runner.
+  Evidence: `npm run test:structural-support`, `npm run test:structural-pieces`.
 - [x] Add phased construction/EVA runner.
+  Evidence: `npm run test:structural-expansion`, `npm run test:commissioning-diagnostics`.
 - [x] Add approach geometry/reservation runner.
+  Evidence: `npm run test:approach-envelopes`, `npm run test:approach-control`,
+  `npm run test:approach-geometry-cache`.
 - [x] Add ship visit/settlement runner.
   Evidence: `npm run test:mixed-berth-visit`.
 - [x] Add occupant tenure/needs runner.
+  Evidence: `npm run test:occupant-loop`.
 - [x] Add fixture-slot/reception runner.
+  Evidence: `npm run test:facility-slots`, `npm run test:gate-f-facility`.
 - [x] Add failed-stay/stranding runner.
+  Evidence: `npm run test:failed-stay`, `npm run test:commitment-recovery`,
+  `npm run test:gate-g-recovery-depth`, `npm run test:gate-g-metrics-admission`.
 - [x] Add movement/queue/deadlock runner.
+  Evidence: `npm run test:movement-coordinator`, `npm run test:queue-spill`,
+  `npm run test:saturation-caps`.
 - [x] Add cargo/boarding/support runner.
+  Evidence: `npm run test:physical-cargo`, `npm run test:passenger-transfer`,
+  `npm run test:meal-queue-boarding-conflict`, `npm run test:interface-diagnosis`.
 - [x] Add integrity/pressure/EVA repair runner.
+  Evidence: `npm run test:exterior-integrity`.
 - [x] Add target-scale performance runner.
+  Evidence: `npm run perf:target-scale`, `npm run perf:sim`,
+  `npm run baseline:frontage`, `npm run test:normal-scale-operation`.
 - [x] Document commands beside each completed phase.
+- [x] Keep every runner on disk reachable from a package script.
+  Evidence: nine runners existed in `tools/` with no script and therefore could
+  not be invoked by any gate. All nine are now wired. `test:module-edit` matters
+  most — it is the only proof of module move atomicity, credit neutrality,
+  inventory preservation, and maintenance-identity preservation, which a checked
+  Phase 9 row depends on, and it passes.
+
+The full check surface, by area:
+
+| Area | Runners |
+|---|---|
+| Whole simulation | `test:sim` |
+| Structure and expansion | `test:structural-support`, `test:structural-pieces`, `test:structural-expansion`, `test:commissioning-diagnostics` |
+| Approach and admission | `test:approach-control`, `test:approach-envelopes`, `test:approach-geometry-cache`, `test:gate-g-metrics-admission` |
+| Visits, occupants, failure | `test:occupant-loop`, `test:mixed-berth-visit`, `test:failed-stay`, `test:commitment-recovery`, `test:gate-g-recovery-depth` |
+| Facilities and slots | `test:facility-slots`, `test:gate-f-facility`, `test:facility-sprite-state` |
+| Movement and saturation | `test:movement-coordinator`, `test:queue-spill`, `test:saturation-caps` |
+| Cargo, boarding, interfaces | `test:physical-cargo`, `test:passenger-transfer`, `test:meal-queue-boarding-conflict`, `test:interface-diagnosis`, `test:ship-fleet`, `test:port-ops` |
+| Charter and environment | `test:site-charter`, `test:charter-forecast`, `test:thermal-sink-expansion`, `test:exterior-integrity`, `test:phase7-risk-recovery` |
+| Opening economy | `test:truth`, `test:opening-businesses`, `test:opening-refuel-cycle`, `test:opening-procurement`, `test:pod-demand-accounting`, `test:opening-economy`, `test:opening-economy-save`, `test:opening-economy-integration`, `test:capital-projects`, `test:commercial` |
+| Utilities and freight | `test:opening-power`, `test:power-grid`, `test:pod-freight`, `test:sanitation`, `test:module-edit` |
+| Save, scale, performance | `test:phase9-save`, `test:gate-e-save-resume`, `test:normal-scale-operation`, `test:phase8-opening-expansion`, `perf:sim`, `perf:target-scale`, `baseline:frontage`, `balance:port-ops` |
+| Browser harness | `test:harness` |
+
+Four newly-reachable runners fail against committed code and are tracked in the
+handoff below rather than being silently left unwired: `test:opening-economy-integration`,
+`test:opening-power`, `test:power-grid`, and `test:living-station-scenarios`.
 
 ## User Playtest Review
 
@@ -1202,34 +1244,34 @@ Remaining uncertainty:
 
 2026-07-28 · Normal structural planning controls
 
-- Commit or files: normal structural tools in `src/main.ts` and `src/styles.css`; Truss planning/EVA work in `src/sim/construction.ts`; focused coverage in `tools/sim-tests.ts` and `tools/structural-expansion-tests.ts` (pending checkpoint commit at evidence capture).
+- Commit or files: normal structural tools in `src/main.ts` and `src/styles.css` (`e5a1155`). The Truss planning/EVA work in `src/sim/construction.ts` and the focused coverage in `tools/sim-tests.ts` and `tools/structural-expansion-tests.ts` are pre-existing truth this item relies on rather than files changed by that commit.
 - Focused evidence: `npm run test:structural-expansion` and `npm run build` passed. Existing construction truth plans Truss only in open space adjacent to hull or planned construction, charges one scaffold kit, and creates an EVA-required construction site.
 - Visual/playtest evidence: the normal `?scenario=starter` Build palette now visibly exposes Truss, Airlock, and Cancel Build together. These were previously functional but hidden behind `?truss` and two CSS suppression rules.
 - Remaining uncertainty: this proves planning is discoverable, not a full Gate C build. A normal-start player still needs to weld the scaffold, plan the hull, save/resume, and commission one sealed wing in a preserved live run.
 
 2026-07-28 · Exterior module construction authority
 
-- Commit or files: EVA classification in `src/sim/construction.ts`; focused contrast in `tools/structural-expansion-tests.ts` (pending checkpoint commit at evidence capture).
+- Commit or files: EVA classification in `src/sim/construction.ts`; focused contrast in `tools/structural-expansion-tests.ts` (`2ffda46`).
 - Focused evidence: `npm run test:structural-expansion` proves a replacement Pod Dock creates an EVA-required module site while a replacement Table on an initialized pressurized interior remains ordinary construction. `npm run build` passed.
 - Remaining uncertainty: the exterior worker animation already exists, but a Pod Dock installation still needs a preserved live capture before the catalogue's visual proof is complete.
 
 2026-07-28 · Restricted crew-mess opening guidance
 
-- Commit or files: `src/sim/opening-recipes.ts`, `src/main.ts`, and `tools/opening-business-tests.ts` (pending checkpoint commit at evidence capture).
+- Commit or files: `src/sim/opening-recipes.ts`, `src/main.ts`, and `tools/opening-business-tests.ts` (`f2c161f`).
 - Focused evidence: `npm run test:opening-businesses` passed all six opening truth checks, including the fresh starter's restricted crew mess remaining non-operational for visitors.
 - Visual/playtest evidence: a normal live starter at 4x admitted its first pod traffic. Food demand was correctly missed rather than forming a phantom queue, but the Food comparison card reported the private counter and seats without naming their access restriction. The readout now labels those fixtures `CREW MESS CANDIDATE`, preserving the deliberate choice between sharing that room and building a separate public cafeteria without implying it already serves travelers.
 - Remaining uncertainty: Gate A still requires the player to complete one public business and observe its first revenue cycle; this checkpoint fixes the guidance discovered before that build, not the gate itself.
 
 2026-07-28 · First public food revenue cycle
 
-- Commit or files: `tools/opening-business-tests.ts`, `src/sim/cold-start-scenarios.ts`, and `src/main.ts` (pending checkpoint commit at evidence capture).
+- Commit or files: `tools/opening-business-tests.ts`, `src/sim/cold-start-scenarios.ts`, and `src/main.ts` (`81d8bb3`).
 - Focused evidence: `npm run test:opening-businesses` now passes seven checks. Starting from the ordinary life-safe shell, the added operating-cycle contract builds a coherent 21-tile public Cafeteria through production room/module APIs, stocks two physical counters, admits ordinary automatic pod traffic, and requires a real `Prepared meal sold` ledger event, increased credits, and an incremented served-meal total. `npm run build` passed.
 - Visual/playtest evidence: inspected `?scenario=opening-food-cycle`. The paused result shows two active pods, two visitors, `+4c` live revenue, one visitor served, 53 remaining servings across three physical counters, and the authored 2-counter/8-seat public Cafeteria marked operational. While the call remains docked, the Food card now reads `1 sale this visit · report pending` rather than incorrectly claiming no demand; final wanted/served/missed accounting still settles at departure.
 - Remaining uncertainty: this closes the first visible-demand proof, not all of Gate A. Supplies and Refuel still need equivalent start-to-revenue operating-cycle evidence, and a manual small-viewport construction pass remains desirable when the browser driver supports reliable canvas coordinates.
 
 2026-07-28 · Three opening revenue streams and physical market frontage
 
-- Commit or files: `src/sim/sim.ts`, `src/sim/opening-recipes.ts`, `tools/opening-business-tests.ts`, `tools/opening-refuel-cycle-tests.ts`, and `package.json` (pending checkpoint commit at evidence capture).
+- Commit or files: `src/sim/sim.ts`, `src/sim/opening-recipes.ts`, `tools/opening-business-tests.ts`, `tools/opening-refuel-cycle-tests.ts`, and `package.json` (`eae0935`).
 - Focused evidence: `npm run test:opening-businesses` passes nine checks and `npm run test:opening-refuel-cycle` passes. Starting from the ordinary physical starter, Food records a paid prepared-meal service, Supplies consumes located Shelf Aisle stock through a physically staffed Checkout Bank and records a paid travel-supplies sale, and Refuel consumes piped Fuel Tank stock at a real Pod Dock and records a positive fuel sale. Market demand is now available at tier 0, matching its role as one of the three opening choices, and a stocked market proactively holds its Steward post instead of dispatching too late for a short shopper visit.
 - Bad/improved comparison: a wall-adjacent Checkout Bank retains its built investment but remains non-operational with the actionable reason `Leave open floor in front of the Checkout Bank so shoppers can form a line`; moving the same bank one tile inward supplies physical line capacity and completes ordinary shopper sales.
 - Live-browser observation: the normal starter keeps Food, Supplies, and Refuel visible together. Selecting Supplies shows the 24-tile spatial machine and explicitly names Steward checkout duty plus Cargo Handler restocking. The facility-scale showcase reports Supplies operational, while the fuel showcase exposes tank stock, the missing Coupler, and the open pipe requirement on the Refuel card.
@@ -1237,7 +1279,7 @@ Remaining uncertainty:
 
 2026-07-28 · Opening choice promoted into the Global Goal
 
-- Commit or files: `src/main.ts` and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: `src/main.ts` and this execution ledger (`5f8ad5c`).
 - Player-facing contract: the first Global Goal now explicitly requires `Open Food, Supplies, or Refuel` before revenue and served-traveler progress can establish the port. This preserves one north-star progression surface while leaving the three spatial recipes as genuine choices beneath it; the player still authors the room, fixture placement, staffing, utilities, and stock rather than accepting a prefab or modal specialization.
 - Live-browser observation: inspected the ordinary `?scenario=starter` at the normal viewport. The Global Goal reads `Open Food, Supplies, or Refuel · 0/1`, `Earn business revenue · 0/500c`, and `Travelers served · 0/20`; the three comparable business cards remain visible together, and the starter's 320 credits can fund one complete path but not two.
 - Focused checks: `npm run build` and `git diff --check` passed.
@@ -1245,14 +1287,14 @@ Remaining uncertainty:
 
 2026-07-28 · One player-facing progression spine
 
-- Commit or files: `src/main.ts` and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: `src/main.ts` and this execution ledger (`904667a`).
 - Design resolution: Global Goals are the player-facing progression spine, while Food, Supplies, and Refuel are authored choices beneath the first goal. The legacy tier ladder remains an internal capability mechanism for now and no longer reappears inside the goal card or normal command UI after the first business opens.
 - Live-browser observation: inspected `?scenario=opening-food-cycle` after a paid meal. The first Global Goal shows the business criterion complete and live revenue/traveler progress (`1/1`, `4/500c`, `1/20`) with no Tier summary, roadmap, specialization branch, or second progression instruction visible.
 - Remaining uncertainty: future facility prerequisites still need to become more concrete as later content is refined, but they no longer compete with the opening objective as an independent ladder.
 
 2026-07-28 · Paused Supplies and Refuel revenue showcases
 
-- Commit or files: `src/sim/cold-start-scenarios.ts`, `src/sim/opening-recipes.ts`, `src/sim/sim.ts`, `tools/opening-refuel-cycle-tests.ts`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: `src/sim/cold-start-scenarios.ts`, `src/sim/opening-recipes.ts`, `src/sim/sim.ts`, `tools/opening-refuel-cycle-tests.ts`, and this execution ledger (`be23f23`).
 - Focused evidence: `npm run test:opening-businesses` passes nine checks, `npm run test:opening-refuel-cycle` passes, `npm run build` passes, and the fuel supplier ledger now identifies its cargo as fuel rather than travel supplies.
 - Live-browser observation: `?scenario=opening-supplies-cycle` pauses after a staffed Checkout Bank consumes physical Shelf Aisle stock and records a paid sale. `?scenario=opening-refuel-cycle` pauses after a supplier pod fills a piped Fuel Tank and an ordinary pod consumes four units for a paid refuel. The Refuel card remains `operational` after that sale, and the Global Goal reads `Open Food, Supplies, or Refuel · 1/1`.
 - Design correction: recipe stock rows remain healthy replenishment targets, while operational status now means the machine can serve its next customer. One normal sale can no longer erase the player's completed opening choice.
@@ -1260,7 +1302,7 @@ Remaining uncertainty:
 
 2026-07-28 · Live EVA expansion completion and resumed-worker routing
 
-- Commit or files: `src/sim/sim.ts`, `tools/structural-expansion-tests.ts`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: `src/sim/sim.ts`, `tools/structural-expansion-tests.ts`, and this execution ledger (`2ce719c`).
 - Correctness fix: after completing an exterior site, an EVA courier can now route back through an active Airlock to collect the next construction kit instead of asking interior pathfinding to cross open space. Suited workers intentionally outside on an active EVA route are excluded from crew-facility reachability warnings, preventing a false sealed-wing diagnosis while they work.
 - Focused evidence: `npm run test:structural-expansion` passes. The runner saves a partially delivered structural project, hydrates it in the intentionally paused load state, resumes play, completes every perimeter/interior/seal job, atomically commissions the wing, and verifies idle EVA workers return through an Airlock.
 - Live-browser evidence: `?scenario=structural-expansion-active` was reloaded from the normal starter-derived fixture and run at 4x. Its visible Work Queue fell from seven construction jobs to two and then `No queued work`; the exterior project commissioned without a stranded worker or false crew-quarters alert.
@@ -1268,7 +1310,7 @@ Remaining uncertainty:
 
 2026-07-28 · Physical EVA frontage work and material diagnosis
 
-- Commit or files: exterior work-face resolution in `src/sim/construction.ts`; focused behavior in `tools/structural-expansion-tests.ts`; live fixtures in `src/sim/cold-start-scenarios.ts`; and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: exterior work-face resolution in `src/sim/construction.ts`; focused behavior in `tools/structural-expansion-tests.ts`; live fixtures in `src/sim/cold-start-scenarios.ts`; and this execution ledger (`706d88b`).
 - Correctness fix: exterior wall hardware was classified as EVA work but resolved its target to the pressurized interior service face. Pod Docks, Fuel Couplers, Freight Lockers, and Maintenance Sockets now select an actual space-facing work tile, allowing suited workers to deliver and install them from outside.
 - Focused evidence: `npm run test:structural-expansion` passes. It plans a new Truss extension through the normal construction API, observes a suited worker, and waits for the real tile commission; it separately rebuilds a starter Pod Dock through physical delivery and exterior work, while retaining the contrast that an interior Table does not require EVA. A zero-stock project asserts `no construction materials` on its blocked site.
 - Live-browser evidence: `?scenario=structural-expansion-material-blocked` renders `BLOCKED · NO CONSTRUCTION MATERIALS` over the affected exterior blueprints. `?scenario=structural-truss-active` starts a normal EVA-required Truss extension from the starter scaffold, with its world blueprint and construction progress visible when panels are hidden.
@@ -1276,7 +1318,7 @@ Remaining uncertainty:
 
 2026-07-28 · Active 50/50 mixed-operation scale checkpoint
 
-- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=normal-scale-50`), active traffic and path-budget work in `src/sim/sim.ts`, utility-underlay identity reuse in `src/sim/utility-underlay.ts`, `tools/normal-scale-operation-tests.ts`, `tools/meal-queue-boarding-conflict-tests.ts`, `package.json`, and this execution ledger (pending checkpoint commit at evidence capture).
+- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=normal-scale-50`), active traffic and path-budget work in `src/sim/sim.ts`, utility-underlay identity reuse in `src/sim/utility-underlay.ts`, `tools/normal-scale-operation-tests.ts`, `tools/meal-queue-boarding-conflict-tests.ts`, `package.json`, and this execution ledger (`4f7b321`).
 - Focused evidence: `npm run test:normal-scale-operation` starts with exactly 50 crew, 50 visitors, eight Pod Docks, two Berths, and 40 units of free physical storage. During 240 simulated seconds it completes inspection and both physical inbound lots (six raw materials plus four trade goods), serves seven meals, overlaps Pod and Berth traffic, records 61 peak visitors and five simultaneous ships, keeps at least 9.5 power in reserve, and drains a queue that peaks at 15 to zero. Simulation p95 is 8.771 ms, path-call p95 is 27, and the utility-underlay resize/identity regression passes. `npm run perf:target-scale` remains deterministic at roughly 8.3 ms p95 with 50 crew, 50 visitors, and ten interfaces. `npm run test:physical-cargo`, `npm run test:mixed-berth-visit`, `npm run test:movement-coordinator`, `npm run test:meal-queue-boarding-conflict`, `npm run test:queue-spill`, and `npm run build` pass.
 - Live-browser evidence: inspected `?scenario=normal-scale-50&diag=1&seed=915502` at Fit Station zoom and 4x. The station remained legible with two reactor cells, the observatory solar field, eight legal Pod Docks, both Berths, and dense crew/visitor traffic. The guaranteed mixed call progressed from zero to four to all ten inbound units unloaded and reached `OPEN`; observed occupancy moved from 73 to 63 to 51 visitors while departures recovered to four per minute, without a persistent exit-backup warning at cargo completion.
 - Design and correctness notes: the scenario now seeds near-full physical storage after demo migration instead of relying on the obsolete full legacy stock scalar; the cafeteria is explicitly self-service rather than parking cooks at counters; dock access requires a legal station-interior route; traffic job assignment uses a bounded rotating candidate budget; idle job boards refresh on cadence; and already correctly sized utility-underlay arrays retain identity until a map resize requires rebuilding them.
@@ -1299,14 +1341,14 @@ Remaining uncertainty:
 
 2026-07-28 · Gate F canonical drink and Community Table completion
 
-- Commit or files: `src/sim/service-truth.ts`, the visitor completion path in `src/sim/sim.ts`, and strengthened production-path coverage in `tools/gate-f-facility-scale-tests.ts` (checkpoint commit pending at evidence capture).
+- Commit or files: `src/sim/service-truth.ts`, the visitor completion path in `src/sim/sim.ts`, and strengthened production-path coverage in `tools/gate-f-facility-scale-tests.ts` (`38c7acf`).
 - Focused evidence: `npm run test:gate-f-facility` passes ten grouped checks. The connected staffed bar draws physical stock, has four visitors carrying drinks at 40 seconds, and records 17 canonical completions at Booth Bank or Standing Rail positions by 80 seconds; at least one actor observed carrying at 40 seconds owns a later completion event. A deterministic legacy optional drink writes exactly one service event and one sale, increments its repeat counter once, adds no promised service, and cannot charge again on the next tick. An invalid Cantina tile writes no service or economy event and retains the carried drink and outstanding plan. A depicted Community Table seat enters ordinary eating, writes exactly one meal event naming `CommunityTable`, advances served-meal truth once, and clears the carried meal. `npm run test:occupant-loop`, `npm run test:mixed-berth-visit`, `npm run test:normal-scale-operation`, and `npm run build` pass; the normal-scale fixture handles all ten inbound cargo units, drains its queue from a peak of 15 to zero, retains utility-underlay identity, and records 9.562 ms simulation p95 in this run.
 - Review judgment: the previous Gate F drink and Community Table completion gaps are closed. No additional broad slot or facility checkbox is marked because this checkpoint proves these two service identities, not every active want or every lounge/hygiene lifecycle.
 - Remaining uncertainty: a provider removed at the exact service commit boundary is rejected without phantom payment, but the ordinary orphan-claim recovery paths—not this focused fixture—remain the evidence for eventual rerouting. The separate long-stay showcase, camera framing, and curated art work remain open.
 
 2026-07-28 · Connected long-stay guest wing and scenario framing
 
-- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=long-stay-guest-wing`), Gate F fixture truth in `src/sim/service-truth.ts` and `src/sim/sim.ts`, scenario-focused Fit Station bounds in `src/main.ts`, and the strengthened long-stay group in `tools/gate-f-facility-scale-tests.ts` (checkpoint commit pending at evidence capture).
+- Commit or files: `src/sim/cold-start-scenarios.ts` (`?scenario=long-stay-guest-wing`), Gate F fixture truth in `src/sim/service-truth.ts` and `src/sim/sim.ts`, scenario-focused Fit Station bounds in `src/main.ts`, and the strengthened long-stay group in `tools/gate-f-facility-scale-tests.ts` (`d9f7eeb`).
 - Focused evidence: `npm run test:gate-f-facility` passes ten grouped checks. Five distinct Dorm, Cafeteria, Cantina, Hygiene, and Lounge rooms are joined by pressurized two-lane passages; the authored cohort remains 8/8 present after 180 simulated seconds, every guest completes at least one recurring physical need, and the run records 7 meals, 8 drinks, 6 hygiene sessions, 23 comfort sessions, and 12 leisure sessions. Canonical events name Community Table, Booth Bank, Wash Bank, Guest Cabin or Bunk Bank, Couch, and Game Station fixtures rather than inferred room capacity. `npm run test:occupant-loop`, `npm run test:facility-slots`, `npm run test:normal-scale-operation`, and `npm run build` pass; normal scale handles all ten inbound cargo units, serves seven meals, drains a 15-person peak queue to zero, retains utility-underlay identity, and records 8.976 ms simulation p95 in this run.
 - Live-browser evidence: loaded the long-stay scenario through one local server, hid the interface panels, ran at 4x, and invoked Fit Station. The complete five-room wing remains framed at playable scale; the Dorm-to-Cafeteria-to-Cantina and Dorm/Hygiene/Lounge passages are visibly continuous; eight guests move between the large fixtures; service/need floaters appear at their actual rooms; and the browser console reports no errors. Fit Station now uses whitelisted showcase bounds instead of zooming around unrelated starter-shell geometry.
 - Review judgment: the meaningful Lounge/Cantina session item is checked because both production completion events and live occupied positions are now observed. This does not claim the Gate G repair-cohort, fixed/flexible schedule, failed-stay, or admission-policy requirements assigned separately to Claude.
@@ -1314,21 +1356,21 @@ Remaining uncertainty:
 
 2026-07-28 · Curated connected-bar artwork
 
-- Commit or files: the 14 `module_service_bar`, `module_bar_corner`, and `module_bar_end` base/state PNGs in `tools/sprites/curated/`, plus the packed v1 atlas (checkpoint commit pending at evidence capture).
+- Commit or files: the 14 `module_service_bar`, `module_bar_corner`, and `module_bar_end` base/state PNGs in `tools/sprites/curated/`, plus the packed v1 atlas (`37e1a0b`).
 - Art and geometry evidence: every generated source was inspected before acceptance and again after chroma removal and reduction to its final `128x320` or `128x128` canvas. The Service Bar preserves four west guest positions and two east staff positions in base, active, unstaffed, empty, dirty, and damaged states; the Corner preserves one west guest and one east staff position; the End preserves two west guests and no staff position. Three rejected generations were not packed: one dirty Service Bar invented a fifth stool, and two Bar End attempts became reference-sheet collages; a fourth dirty End attempt widened the fixture footprint and was also rejected.
 - Focused checks: `node tools/sprites/pack-atlas.mjs --profile v1`, `npm run sprites:validate:v1`, and `git diff --check` pass. The safe direct pack retained all 298 atlas keys and avoided both the placeholder generator that overwrites hand-authored sprites and the wrapper that prunes tracked archive baselines.
 - Review judgment: this closes only the connected bar family's curated-art replacement. The remaining eight Gate F facility families and their state variants are still procedural placeholders, and the complete 46-key art handoff remains open.
 
 2026-07-28 · Complete curated Gate F facility artwork
 
-- Commits or files: all 46 Gate F base/state PNGs in `tools/sprites/curated/` and the packed v1 atlas (checkpoint commit pending at evidence capture). The second tranche replaces Backroom Stock Bank, Booth Bank, Standing Rail, Serving Line, Community Table, Guest Cabin, Arrival Desk, and Wash Bank placeholders, completing the three connected-bar families already curated in the prior checkpoint.
+- Commits or files: all 46 Gate F base/state PNGs in `tools/sprites/curated/` and the packed v1 atlas (`4b707e0`). The second tranche replaces Backroom Stock Bank, Booth Bank, Standing Rail, Serving Line, Community Table, Guest Cabin, Arrival Desk, and Wash Bank placeholders, completing the three connected-bar families already curated in the prior checkpoint.
 - Art and geometry evidence: every source and final transparent PNG was inspected at its exact atlas canvas. Authoritative depicted counts remain visible across every state: Backroom 2 stock positions; Booth Bank 6 seats; Standing Rail 4 positions; Serving Line 3 pickups plus 2 staff positions; Community Table 8 seats; Guest Cabin 2 beds; Arrival Desk 2 customers plus 2 processors; Wash Bank 4 basins; Service Bar 4 guests plus 2 staff; Corner 1 guest plus 1 staff; End 2 guests. State variants communicate active, unstaffed, empty, dirty, or damaged through physical surface/status changes without adding reservation positions. One partially stocked Backroom `empty` render was rejected and regenerated as three visibly bare shelf levels.
 - Focused checks: the safe `node tools/sprites/pack-atlas.mjs --profile v1` path packs all 298 keys; `npm run sprites:validate:v1` and `git diff --check` pass. The placeholder generator and archive-pruning wrapper were not run.
 - Review judgment: the 46-key curated-art handoff is complete. Final proof still requires one bundled live browser pass across the facility scenarios at ordinary play zoom; that visual pass is intentionally grouped with the terminal playtesting tranche rather than blocking asset integration.
 
 2026-07-28 · Reception routing and bounded hidden-demand recovery
 
-- Commits or files: hidden-demand routing in `src/sim/sim.ts`; paired `reception-absent` and `reception-staffed` scenarios in `src/sim/cold-start-scenarios.ts`; strengthened production-path evidence in `tools/gate-f-facility-scale-tests.ts` (checkpoint commit pending at evidence capture).
+- Commits or files: hidden-demand routing in `src/sim/sim.ts`; paired `reception-absent` and `reception-staffed` scenarios in `src/sim/cold-start-scenarios.ts`; strengthened production-path evidence in `tools/gate-f-facility-scale-tests.ts` (`3920a1f`).
 - Focused evidence: `npm run test:gate-f-facility` passes ten grouped checks and `npm run test:occupant-loop` passes. Eight same-seed guests begin with identical hidden demand. Without Reception, all eight reserve plausible physical lounge fixtures, four make the correct first choice, and four realize a comfort need and redirect. With a staffed two-position Arrival Desk, three are processed while the rest bypass normally, six of eight first routes are correct, and redirects fall from four to two. Every wrong choice emits exactly one causal event and one `Need: comfort` world floater, retains its realized need and origin, and cannot oscillate or emit a second redirect. An unstaffed desk exposes zero processing positions and never gates entry.
 - Preservation note: review initially reproduced an iteration-order failure because the scale harness ran its reverse-order comparison against coordinator cooldowns and actor replanning fields mutated by the forward pass. The harness now restores every coordinator-owned actor field and explicitly isolates ephemeral coordinator state between the two observations. `npm run test:movement-coordinator` passes all six groups; `npm run test:normal-scale-operation` now completes its 240-second 50/50 run with ten cargo units handled, eight meals, six simultaneous ships, 9.456 ms simulation p95, order-independent results for 74 actors, and a cached 2,856-node structural graph whose second call takes 0.005 ms. Reception's ten-group runner remains green after the correction.
 
@@ -1340,7 +1382,7 @@ Remaining uncertainty:
 
 2026-07-28 · Versioned structural-support derivation
 
-- Commits or files: topology-keyed bounded graph cache in `src/sim/structural-support.ts`; focused invalidation assertions in `tools/structural-support-tests.ts` (checkpoint commit pending at evidence capture).
+- Commits or files: topology-keyed bounded graph cache in `src/sim/structural-support.ts`; focused invalidation assertions in `tools/structural-support-tests.ts` (`4ac6c38`).
 - Focused evidence: `npm run test:structural-support` passes. Repeating an unchanged base topology and unchanged proposed Truss plan returns the same graph object without increasing the build count; time, room-version, and module-version changes remain cache hits; a topology-version mutation invalidates and rebuilds exactly once. Cached graph-build problems are copied before load validation so one query cannot contaminate the next, and each state retains at most 32 proposed-plan graphs.
 - Legacy evidence: `npm run test:phase9-save` passes all five phases, including two legacy fixtures. Its structural migration fixture loads a snapshot without modern structural state, rebuilds the same supported node/root/edge graph, and remains valid; the cache is keyed by state identity plus topology version and therefore cannot leak a pre-load graph into a hydrated state.
 
@@ -1363,19 +1405,19 @@ Remaining uncertainty:
 
 2026-07-28 · Gate G commitment metrics and finite admission matrix
 
-- Commits or files: live counters and admission application in `src/sim/sim.ts`; pure policy in `src/sim/admission-policy.ts`; focused production-path runner `tools/gate-g-metrics-admission-tests.ts`; `test:gate-g-metrics-admission` package script (checkpoint commit pending at evidence capture).
+- Commits or files: live counters and admission application in `src/sim/sim.ts`; pure policy in `src/sim/admission-policy.ts`; focused production-path runner `tools/gate-g-metrics-admission-tests.ts`; `test:gate-g-metrics-admission` package script (`12bc7ce`).
 - Focused evidence: the runner passes 8/8. It records one completed contract visit at 10.4 seconds; 0.2 ship-seconds of holding and grouped approach wait; one 1.2-second disembark crossing; four boarding clears totaling 4.8 seconds; 27 of 29 recurring demands satisfied across all four long-stay need families; 1,957.2 occupied of 12,780 depicted fixture-capacity seconds; one missed departure with four stranded occupants; and a live future commitment of 899.8 Berth-seconds, one bed, four meals, and two staff-minutes from an accepted manifest retained after its offer leaves the live list.
 - Admission evidence: a deterministic matrix proves routine class acceptance, busy/interface/bed/meal reserve holds, maximum-stay and minimum-margin rejection, and manual preservation for military, migrant, large, negotiated, and uncertain calls. A 60-call aggregate reports exactly 40 acceptable, ten held, and ten manual commitments. In a live tick, one routine Pod auto-admits, its military peer remains visible with an explanation, and the player can manually pass it. The compact player controls and world projection are committed separately in `ba80440`; their visual claims remain for the bundled browser pass.
 
 2026-07-28 · Gate G physical recovery-depth evidence
 
-- Commits or files: physical emergency-bunk placement, cancellation/recall, and explicit resident acceptance in `src/sim/sim.ts`; refusal and proportional-penalty contracts in `src/sim/failed-stay.ts`; focused runner `tools/gate-g-recovery-depth-tests.ts`; `test:gate-g-recovery-depth` package script (checkpoint commit pending at evidence capture).
+- Commits or files: physical emergency-bunk placement, cancellation/recall, and explicit resident acceptance in `src/sim/sim.ts`; refusal and proportional-penalty contracts in `src/sim/failed-stay.ts`; focused runner `tools/gate-g-recovery-depth-tests.ts`; `test:gate-g-recovery-depth` package script (`12bc7ce`).
 - Focused evidence: the runner passes 4/4. Two distressed visitors receive two real 1x1 Bunk fixtures on distinct free Dorm floor tiles, distinct fixture claims, and distinct routed destinations for an exact 28c cost; zero eligible floor tiles produce an exact refusal with no hidden capacity. Cancelling a contract with 135c of unfinished promised value charges the documented 45% share (61c), records its durable cause, and recalls both ship and contract, while a zero-value cancellation is refused. A single physical tile then produces the bounded mess → complaint → refusal-to-work incident ladder with a 45-second cooldown and cap of three.
 - Resident departure evidence: explicit policy-gated acceptance converts one depicted visitor only after a private Bed and residential dock are available. The accepted resident retains the same physical Bed after their home ship departs normally and releases its dock; no silent ambient conversion path calls the explicit acceptance operation.
 
 2026-07-28 · Curated structural-frontage source art
 
-- Commits or files: curated Truss Junction and Reinforced Bulkhead families in `tools/sprites/curated/`; normalized generation prompts in `tools/sprites/sprite-spec.yaml`; stable keys in `src/render/sprite-keys.ts`; atlas footprint and required-key registrations; packed `public/assets/sprites/atlas.png` and `atlas.json` (checkpoint commit pending at evidence capture).
+- Commits or files: curated Truss Junction and Reinforced Bulkhead families in `tools/sprites/curated/`; normalized generation prompts in `tools/sprites/sprite-spec.yaml`; stable keys in `src/render/sprite-keys.ts`; atlas footprint and required-key registrations; packed `public/assets/sprites/atlas.png` and `atlas.json` (`54c1ddb`).
 - Visual evidence: lead review inspected both ImageGen source sheets, every extracted transparent state, the packed atlas extractions, and the complete sprites at native scale. Junction states retain a four-way X-braced hub inside a 64x64 footprint; Bulkhead states retain west/east pressure-transfer attachments inside a 128x64 footprint. Planned, delivered, welding, complete, overloaded, and damaged variants preserve their attachment geometry and remain distinct at 32 pixels per tile.
 - Validation boundary: `sprites:validate:v1` passes all 311 keys. This closes generation of both low-resolution art families only. Their live construction-state selection and the all-assets live-render verification remain open until renderer integration and the final browser pass.
 
@@ -1387,7 +1429,7 @@ Remaining uncertainty:
 
 2026-07-28 · Phase 3 commissioning diagnostics
 
-- Commits or files: tie-in derivation and staging-route validation in `src/sim/construction.ts`; focused production runner `tools/commissioning-diagnostics-tests.ts`; `test:commissioning-diagnostics` package script (checkpoint commit pending at evidence capture).
+- Commits or files: tie-in derivation and staging-route validation in `src/sim/construction.ts`; focused production runner `tools/commissioning-diagnostics-tests.ts`; `test:commissioning-diagnostics` package script (`d36e876`).
 - Focused evidence: an isolated but stocked interior site reports exactly `no construction staging route` and creates no fictional job; opening one real floor gateway clears the diagnosis and enqueues the physical delivery. Reusing the live starter Airlock derives a zero-material EVA perimeter tie-in while an explicitly authored Door remains authoritative. A low/depleted-oxygen EVA worker reports the exact blocker, returns through the Airlock to refill, and advances the same build job. Sustained occupancy of the only real work face reports `work position obstructed`; moving the occupying worker clears it and resumes progress. `test:commissioning-diagnostics` and `test:structural-support` pass.
 - Preservation boundary: the legacy structural-expansion runner's final 8,000-step save/resume commissioning assertion still stalls. The worker reproduced the identical failure with the entire production diff disabled and the new runner removed from compilation, so it is recorded as pre-existing and is not used as evidence for this tranche.
 
@@ -1399,7 +1441,7 @@ Remaining uncertainty:
 
 2026-07-28 · Versioned approach-geometry cache
 
-- Commits or files: per-state derived descriptor/group cache in `src/sim/sim.ts`; no-op and Berth-size version discipline in `src/sim/dock-controls.ts`; focused runner `tools/approach-geometry-cache-tests.ts`; `test:approach-geometry-cache` package script (checkpoint commit pending at evidence capture).
+- Commits or files: per-state derived descriptor/group cache in `src/sim/sim.ts`; no-op and Berth-size version discipline in `src/sim/dock-controls.ts`; focused runner `tools/approach-geometry-cache-tests.ts`; `test:approach-geometry-cache` package script (`403d5c9`).
 - Focused evidence: the 5/5 runner records 261 hits and one derivation miss across 128 repeated descriptor/group projections plus ordinary tick, time, actor, and credit churn, returning the exact same descriptor and group objects. A real Dock edit, Berth accepted-size edit, topology edit, and west map expansion each invalidate immediately; repeated no-op edits reuse. Every cached group equals a fresh pure derivation, and west expansion preserves exact world-space envelopes and conflict semantics despite local index remapping.
 - Migration evidence: a legacy snapshot without modern Berth configs/source keys hydrates into a fresh StationState with no inherited cache objects or counters, derives semantically identical descriptors/groups, then reuses them. `test:approach-control`, `test:approach-envelopes`, and `test:phase9-save` all pass with the cache active.
 
@@ -1411,7 +1453,7 @@ Remaining uncertainty:
 
 2026-07-28 · Controlled saturation/cap runner (partial gate evidence)
 
-- Commits or files: production-driven runner `tools/saturation-cap-tests.ts`; `test:saturation-caps` package script (checkpoint commit pending at evidence capture); source inventory `docs/40-structural-frontage-cap-audit.md`.
+- Commits or files: production-driven runner `tools/saturation-cap-tests.ts` and the `test:saturation-caps` package script (`deb25ae`); source inventory `docs/40-structural-frontage-cap-audit.md` (`a1c4951`).
 - Focused evidence: the 8/8 runner distinguishes below/at/above behavior for the 24-position queue chain, six-position outside spill, 16-second ordinary balk, 14-second staffed-market abandonment, 18-second Dock timeout, all five intent-specific A* occupancy saturations, visitor walk and cargo-route penalties, resident route stress, the 45-second/three-incident failed-stay bounds, and both ends of the 0-100 station-rating display while retaining the unclamped causal ledger. Queue, movement, and recovery preservation runners remain green.
 - Deliberate open boundary: the checklist's all-caps controlled-scenario row remains unchecked. Three nominal source ceilings are not reachable through live inputs: visitor environment tops out at `.144` before its `.24` guard, sanitation at `.0952` before `.18`, and resident stress above 100 immediately produces an incident/reset before the nominal 120 clamp can be observed. These are now explicit design/implementation gaps rather than falsely checked evidence.
 
@@ -1423,13 +1465,13 @@ Remaining uncertainty:
 
 2026-07-28 · Deterministic Gangway recall recovery
 
-- Commits or files: cramped-interface queue recovery in the passenger-transfer region of `src/sim/sim.ts`; higher-signal diagnostics and capacity window in `tools/passenger-transfer-tests.ts` (checkpoint commit pending at evidence capture).
+- Commits or files: cramped-interface queue recovery in the passenger-transfer region of `src/sim/sim.ts`; higher-signal diagnostics and capacity window in `tools/passenger-transfer-tests.ts` (`a5bfbac`).
 - Root cause and fix: a recall could begin while the last-emerged passenger still occupied the station-side Gangway tile. Strict timestamp FIFO selected an earlier actor as head even though that actor could not enter the occupied tile, while the physical occupant had no spill position and no movement intent. With no crossing active, the rebuild now deterministically clears the boarding-queued actor already at the interface first, then resumes durable FIFO. Followers without a depicted spill slot approach the interface under movement arbitration while the exclusive head reservation serializes the actual crossing.
 - Focused evidence: `test:passenger-transfer` passes three consecutive worker runs plus the lead rerun, including visible 0.8-second crossings, one-vs-two Gangway throughput, recall cancellation of ship-side arrivals, save/resume mid-disembark and mid-boarding, deterministic array-order independence, and stale-claim cleanup. Physical cargo, mixed Berth visit, movement coordinator, occupant loop, and build preservation remain green. This directly preserves Gangway as the physical passenger provider; boarding-distance measurement remains open.
 
 2026-07-28 · Gate F live facility-state renderer (browser verification pending)
 
-- Commits or files: pure production-truth selector in `src/render/facility-sprite-state.ts`; narrow live overlay and shared sprite geometry in `src/render/render.ts`; focused matrix `tools/facility-sprite-state-tests.ts`; `test:facility-sprite-state` package script (checkpoint commit pending at evidence capture).
+- Commits or files: pure production-truth selector in `src/render/facility-sprite-state.ts`; narrow live overlay and shared sprite geometry in `src/render/render.ts`; focused matrix `tools/facility-sprite-state-tests.ts`; `test:facility-sprite-state` package script (`6dea753`).
 - Focused evidence: the 3/3 runner selects all 46 curated base/state frames; enforces damaged → dirty → empty → unstaffed → active → idle priority while skipping unsupported variants; falls back to the base frame if the loaded atlas lacks a requested state; and drives a connected Service Bar through real physical staffing, guest claim, pooled stock, sanitation, and maintenance-debt transitions. Clearing each production condition clears the selected state without mutating rotation or footprint.
 - Performance boundary: idle fixtures remain in the cached decorative layer. Only visible non-idle fixtures are redrawn in the live overlay; a claim changes the overlay signature but provably leaves the full decorative-layer cache key unchanged, avoiding station-wide redraw churn. Gate F, facility-slot, and build checks pass. The six artwork-state checklist rows remain open until the bundled browser pass visually inspects the frames at gameplay zoom.
 
@@ -1455,20 +1497,211 @@ Remaining uncertainty:
 
 2026-07-28 · Thermal-sink expansion consequence and physical mitigation
 
-- Commit or files: focused production-path runner `tools/thermal-sink-expansion-tests.ts`; `test:thermal-sink-expansion` package script (checkpoint commit pending at evidence capture).
+- Commit or files: focused production-path runner `tools/thermal-sink-expansion-tests.ts`; `test:thermal-sink-expansion` package script (`796a2f7`).
 - Focused evidence: the same seed supplies two expansion sites with nearly identical sunlight (`0.589`/`0.594`) but sharply different thermal sink (`0.692`/`0.246`). Identical active Stove kitchens settle at `79.85` versus `85.41` heat and accrue `1.792` versus `1.967` production maintenance debt, proving the Charter field changes real high-load expansion operation rather than only a forecast label.
 - Physical mitigation: installing a real wall-mounted Vent in the poor-sink comparison lowers heat to `82.55` and debt to `1.876` through the production tick path. `npm run test:thermal-sink-expansion` passes deterministically.
 - Deliberate boundary: this checks the thermal-sink consequence itself. The combined Charter/world presentation, broader shielding/redundancy/safer-expansion mitigation row, and full forecastable/recoverable Phase 7 gate remain open for direct UI and browser evidence.
 
 2026-07-28 · Composition-aware Charter service advice
 
-- Commit or files: system-aware forecast model in `src/sim/site-charter.ts` and `tools/charter-forecast-tests.ts` (`904776d`); Charter selection projection in `src/ui/charter-screen.ts` and its focused markup evidence (pending checkpoint commit at evidence capture).
+- Commit or files: system-aware forecast model in `src/sim/site-charter.ts` and `tools/charter-forecast-tests.ts` (`904776d`); Charter selection projection in `src/ui/charter-screen.ts` and its focused markup evidence (`796a2f7`).
 - Production contract: expected ship mix is the normalized sum of each site lane's traffic factor multiplied by the same faction-derived lane weights that generate traffic. Berths favor tourist/colonist calls; retail favors tourist/trader/colonist; fuel favors industrial/trader/military; repair favors industrial/military; and freight favors trader/industrial. The adjustment is deliberately bounded to `0.82–1.18`, so composition changes useful service ordering without eliminating ambient ship diversity.
 - Focused evidence: `npm run test:charter-forecast` proves exact agreement with production lane weights, normalized positive shares for all five ship types, unchanged legacy output when no SystemMap is supplied, and contrasting tourist- versus industrial-facing fixtures that recommend different leading services. The site-selection hover and detail markup pass the actual SystemMap and expose the concise mix plus the bounded reason.
 - Remaining boundary: the in-station Site Brief still needs the system-backed projection and live-browser inspection, so the combined Charter-and-world visibility row remains open.
 
 2026-07-28 · Forecastable and recoverable environmental expansion risk
 
-- Commit or files: production-path evidence in `tools/phase7-risk-recovery-tests.ts` (pending checkpoint commit at evidence capture), backed by the live map-condition, thermal-diagnostic, module-placement, maintenance, and tick APIs.
+- Commit or files: production-path evidence in `tools/phase7-risk-recovery-tests.ts` and its `test:phase7-risk-recovery` package script (`796a2f7`), backed by the live map-condition, thermal-diagnostic, module-placement, maintenance, and tick APIs.
 - Focused evidence: before wear exists, the map and inspector identify sunlight heat/wear pressure, poor natural cooling, the loaded Kitchen source, and the physical `vents/insulation` remedy. The predicted bad same-seed location then reaches `80.53` heat and `1.806` wear; adding a real Vent to that already-hot state lowers it to `77.67`, with the inspector attributing Vent relief. A sunlight-matched higher-sink location (`0.720` versus `0.273`) remains materially safer at `75.07` heat.
 - Review judgment: this proves both an in-world cooling remedy and a viable safer expansion choice, and closes the Phase 7 forecastable/recoverable gate. It does not claim the still-open requirement to show every Charter effect in both the Charter UI and station-world presentation.
+
+2026-07-28 · Ledger commit references resolved
+
+- Commit or files: this execution ledger.
+- What changed: 27 evidence notes carried the placeholder `(checkpoint commit
+  pending at evidence capture)` because each note was written in the same commit
+  that landed its work, before that commit had a sha. Every one is now resolved
+  to its real commit, verified two ways: `git log --all -S"<heading>"` returned
+  exactly one authoring commit per note, and `git show --stat` on that commit
+  matched the files the note names.
+- Two notes were corrected rather than merely stamped. The normal-structural-tools
+  note now separates what `e5a1155` actually changed from the pre-existing
+  construction truth it relies on, and the saturation-cap note now cites
+  `deb25ae` for the runner and `a1c4951` for the cap-audit document.
+- Why it matters: Checklist Rule "every completed item names a commit or changed
+  files" was being met only in the weaker "changed files" sense for these rows.
+
+2026-07-28 · Repaired the structural-expansion scenario family
+
+- Commit or files: `planScenarioStructuralExpansion` in `src/sim/cold-start-scenarios.ts`.
+- Defect: `npm run test:gate-e-save-resume` was RED (1/6 failing) on the working
+  tree. The fixture scanned raw map order for the first all-`Space` 2x2 patch,
+  which starts in deep space at the top-left corner, so no candidate could
+  satisfy the walkable-hull-connection rule. This also broke the live
+  `?scenario=structural-expansion-active`, `-blocked`, `-material-blocked`, and
+  `structural-truss-active` URLs that other rows cite as visual evidence.
+- Second cause, found by making the failure report its reasons: of 77
+  hull-adjacent candidates, 58 were rejected as `branch-requires-junction`. A
+  2x2 scaffold welded onto the hull necessarily produces a degree-3 truss node,
+  so the Truss Junction rule introduced with the structural pieces made the old
+  fixture unsatisfiable. The fixture now searches outward from the hull and
+  installs the Junctions the plan asks for, which is the same piece a player
+  places, instead of hunting for a shape that dodges the rule.
+- Focused evidence: `npm run test:gate-e-save-resume` is `ok 6/6`. Fixture 2
+  reports `project phase perimeter + progress 3.5 + blocked reason preserved,
+  8 sites, 0 duplicates`. The failure path now names its rejection reasons, so
+  the next structural rule change reports why rather than only that it failed.
+
+2026-07-28 · One forecast behind both Charter surfaces
+
+- Commit or files: `openingEconomyPanelView` in `src/main.ts`; `SiteBriefView`
+  and the brief markup in `src/ui/opening-economy-panels.ts`; regression guard in
+  `tools/charter-forecast-tests.ts`.
+- Defect: the Charter screen passed the live `SystemMap` to
+  `computeCharterOperatingForecast` and the in-station Site Brief did not, so the
+  same site recommended one leading service at selection and a different one once
+  the player was inside. Observed in the live build on the recommended charter:
+  selection read `Lead with courier freight (courier traffic 97%) ... passenger
+  berths pays least here`, while the Site Brief read `Lead with repair bay
+  (repair demand 129%) ... travel-supplies retail pays least here`.
+- Fix: the brief now receives `state.system`, and carries the forecast's
+  `compositionLine` so the expected ship mix is stated in-station too, not only
+  at selection.
+- Live-browser evidence: after the fix, on the same recommended charter, the
+  in-station Site Brief reads `Lead with courier freight (courier traffic 97%)
+  ... passenger berths pays least here` with chip `Lead Courier freight ·
+  courier traffic 97%`, matching the Charter screen exactly. Confirmed through a
+  save/load round trip via Continue, so the persisted SystemMap feeds it.
+- Focused evidence: `npm run test:charter-forecast` passes. The existing Site
+  Brief test had encoded the bug — it reconstructed the brief from a system-less
+  forecast — and now passes the SystemMap. A new guard, `dropping the SystemMap
+  changes the advice, so every surface must pass it`, scans the seeded disc and
+  reports that composition changes the leading service on `91/121` sites (for
+  example `repair -> freight`), so re-introducing the omission cannot look
+  harmless. It also asserts a site-only forecast never invents a composition.
+
+2026-07-28 · Audited the open invariant and gate rows against the code
+
+- Commit or files: this execution ledger; no production change.
+- Method: seven parallel read-only audits, one per checklist region, each
+  required to read the runner body before calling a row proven rather than
+  trusting a runner's name.
+- Rows closed on existing evidence, each already covered by a focused runner:
+  routine traffic not becoming a manifest chore and player-authored automation
+  (`test:gate-g-metrics-admission` collapses 60 pending calls to 40 auto-accept,
+  10 auto-hold, 10 manual); early manual Approach Control as a real portfolio
+  decision (`test:approach-control` — Accept binds a specific dock, a pod can
+  never bind a berth anchor, and a cleared pod reduces the free-interface count
+  the next offer sees); recurring physical demand from longer stays
+  (`test:occupant-loop` — recurring hygiene must complete at a real Sink tile and
+  does not advance a one-shot promise); consequences visible in actors, objects,
+  queues and work and depicted service capacity (`test:facility-sprite-state`,
+  `test:facility-slots`, `test:gate-f-facility` — a second Checkout Bank doubles
+  checkout capacity 2 to 4 because capacity comes from a placed fixture);
+  physical, fair, recoverable, deterministic congestion
+  (`test:movement-coordinator` — identical winner with the actor array reversed,
+  bounded urgency head start overtaken by accumulated wait, swap/yield/replan
+  recovery); the fixture idle state (`test:facility-sprite-state` pins all 46
+  curated frames); Truss Junction and Reinforced Bulkhead
+  (`test:structural-pieces` — a completed junction legalizes a branch and a
+  hull-adjacent bulkhead makes a commissioned large Berth arrival-eligible); and
+  a queue physically covering a door (`test:queue-spill` case
+  `door-throttle-second-route` — the queue member holds the Door tile with an
+  exclusive floor reservation and blocks an unrelated crew member for 6 ticks).
+- Deliberately left open: rows whose remaining work is a recorded playthrough
+  rather than a mechanism, and rows where the audit found the mechanism genuinely
+  absent. Those are listed with their smallest closing step in the handoff below.
+
+2026-07-28 · The Site Brief was rendering underneath the bottom dock
+
+- Commit or files: `publishBottomDockHeight` in `src/main.ts`; `.left-stack`
+  bounds in `src/styles.css`.
+- Defect, found while trying to photograph the Charter/world agreement above:
+  the Site Brief text was present in the DOM and completely unreadable. At
+  1280x720 the left HUD stack laid out `104px..718px` while `#bottom-dock` is
+  fixed to the viewport bottom and begins at `452px`. Both carry `z-index: 9`,
+  so the dock won on DOM order and painted over the stack's last card.
+  `document.elementFromPoint` at the brief's own coordinates returned
+  `dock-card selected-card`, not the brief.
+- Why it was worth stopping for: this row asks for charter effects to be visible
+  in station-world feedback. Every word of that feedback was being drawn and then
+  covered, so checking the row on the strength of the DOM alone would have been a
+  false claim.
+- Fix: the dock is content-sized, so its height is only known at runtime. It is
+  now published as `--bottom-dock-h` from a `ResizeObserver`, and the left stack
+  bounds itself against it and scrolls rather than laying out underneath.
+- Live-browser evidence: after the fix the stack ends at `448px` against a dock
+  top of `452px` (`stackClearsDock: true`), and `elementFromPoint` at the
+  composition line returns the composition line itself. Dock height resolved to
+  `250px` live.
+- Honest limit: at 1280x720 four permanent left-hand cards still exceed the
+  space, so the brief is reachable by scrolling rather than visible at rest. That
+  is panel density, not occlusion, and it is what the still-open Contextual UI
+  rows on permanent panels and world-space-before-prose are for. The row is
+  checked for the effects being surfaced on both surfaces and legible when
+  reached; it does not claim the opening HUD needs no further density work.
+
+2026-07-28 · Supplier orders could not reach a fresh station's shelves
+
+- Commit or files: `supplierOrderDestinations` in `src/sim/sim.ts`.
+- Player-facing defect, and the most serious thing this pass found: the
+  `Sell Supplies` opening business could not be completed from a fresh charter.
+  Its final recipe step, "Order opening stock through the Freight Locker", was
+  rejected forever with `Shelf Aisle need 12 more free slots`.
+- Root cause: the function's own comment says goods land in receiving "once a
+  station has any back-of-house capacity", but the code tested
+  `backOfHouse.length > 0` — existence, not free capacity. Since the starter was
+  made commercially empty it ships exactly one Intake Pallet, and that pallet
+  starts full of starting supplies. So every travel-supply order was routed into
+  a 48/48 node and refused, and the shelves the player had just built were never
+  considered. The message also named the wrong fixture: it blamed the Shelf Aisle
+  when the blocked destination was receiving.
+- Bisect: `npm run test:opening-procurement` passes at `6fc92a5~1` and fails at
+  `6fc92a5` ("feat: build facilities out of real physical positions") and at every
+  commit after it. The runner had a package script the whole time, so this was
+  reachable regression, not a silent one.
+- Fix: back-of-house is preferred only when it has free capacity; otherwise the
+  order falls through to the shelves as the comment always intended.
+- Focused evidence: `npm run test:opening-procurement` is `PASS opening
+  procurement truth` again. `npm run test:truth` shows the same five failures
+  before and after the change, so nothing regressed behind it.
+
+2026-07-28 · Dead actors kept their physical position
+
+- Commit or files: the four death paths in `src/sim/sim.ts`; new case
+  `12 death frees its position same tick` in `tools/gate-f-facility-scale-tests.ts`.
+- Defect: crew, visitor, and resident deaths all called `registerBodyDeathAtTile`
+  and continued without releasing facility reservations, so a corpse kept its
+  stool, bed, or register occupied until a 60-120 second TTL expired. The
+  resignation path already did this correctly and was used as the pattern. There
+  were four death sites, not three — the fight-fatality victim inside
+  `failIncident` was the one not in the original diagnosis.
+- Focused evidence: `npm run test:gate-f-facility` is `ok 11/11`. The new case
+  drives death through ordinary air exposure and one `tick()` rather than calling
+  the death path directly, and asserts the slot is free while the claim still has
+  most of its TTL unspent — which is what distinguishes a real release from the
+  TTL expiring. Verified red before the fix and green after.
+
+2026-07-28 · Congestion cadence measured and deliberately not taken
+
+- Commit or files: none. `src/sim/sim.ts` was left unchanged for this row.
+- The open row asks for congestion fields to update on a fixed cadence. It was
+  implemented, measured, and reverted, and the row stays open on purpose.
+- What the measurement showed: the two per-tick `buildOccupancyMap` calls are not
+  the same thing. The second is passed by reference into the movement phase and
+  mutated in place as actors step — it is the tile-exclusion map and cannot be
+  cadenced. Only the first is a congestion field, and
+  `state.pathOccupancyByTile` aliases the field onto the live movement map, so a
+  real cadence requires breaking that alias.
+- Breaking it regressed movement at every cadence tried, including a cadence of
+  zero, which isolates the cause to the decoupling rather than to staleness:
+  `test:passenger-transfer` timed out waiting for a Gangway arrival and
+  `test:gate-g-metrics-admission` failed. Both pass without the change.
+- The premise also does not hold: at normal scale `buildOccupancyMap` costs
+  `0.0042ms` against a `6.74ms` mean tick, so both rebuilds together are about
+  `0.1%` of tick time. Cadencing only the first rebuild while keeping the alias
+  would remove about 43% of rebuilds with no behavior change, but the field would
+  still refresh every tick, so checking this row on that basis would be false.
+- Recommendation: rewrite the row to say congestion cost is derived per tick and
+  is not a hot path, or accept it as permanently not-applicable. It should not be
+  checked as written.

@@ -48,7 +48,7 @@ import {
   toIndex
 } from './types';
 import { MODULE_DEFINITIONS } from './balance';
-import { validateStructuralSupportPlan } from './structural-support';
+import { validateStructuralSupportPlan, type StructuralSupportReason } from './structural-support';
 import { structuralPieceTiles } from './structural-support';
 // setTile, setRoom, setZone live in sim.ts and are NOT exported there yet.
 // applyConstructionSite uses them at the end of the file. Import from sim.
@@ -483,6 +483,43 @@ export function deriveStructuralTieInWork(
   return { ...geometry, doorTile: tieInTile, targets };
 }
 
+/**
+ * A support verdict is an enum the sim reasons about; the world site label needs
+ * a sentence the player can act on, so each one names the piece that clears it.
+ * These stay inside the existing site-label width budget: the widest live site
+ * reason, 'no construction staging route', is 29 characters.
+ */
+const STRUCTURAL_SUPPORT_BLOCK_COPY: Record<StructuralSupportReason, string> = {
+  'piece-out-of-bounds': 'support piece is off the map',
+  'piece-overlaps-hull': 'support piece overlaps hull',
+  'duplicate-piece': 'two support pieces overlap',
+  'disconnected-support': 'support never reaches hull',
+  'span-exceeded': 'span too long: add a Junction',
+  'branch-requires-junction': 'truss branch needs a Junction',
+  'load-has-no-supported-path': 'frontage has no path to hull',
+  'medium-load-requires-junction': 'berth load needs a Junction',
+  'heavy-load-requires-reinforced-transfer': 'heavy berth needs a Bulkhead'
+};
+
+/** Player-facing copy for one structural verdict. Junction/Bulkhead match the build toolbar. */
+export function structuralSupportBlockCopy(reason: StructuralSupportReason): string {
+  return STRUCTURAL_SUPPORT_BLOCK_COPY[reason];
+}
+
+/**
+ * Only child sites are drawn in world, so a parent that blocks on its own seal
+ * or support verdict has nothing to explain the stall. Mirror the reason onto
+ * the children the existing BLOCKED site label already reads, and pass null to
+ * clear it again the moment the parent stops being blocked. A child holding its
+ * own blocker (no EVA route, no materials) keeps that more specific text.
+ */
+function mirrorProjectBlockOnSites(sites: readonly ConstructionSite[], reason: string | null): void {
+  for (const site of sites) {
+    if (site.state === 'blocked') continue;
+    site.blockedReason = reason;
+  }
+}
+
 function markProjectBlocked(project: StructuralExpansionProject, sites: readonly ConstructionSite[]): void {
   const blocked = sites.find((site) => site.state === 'blocked' && site.blockedReason);
   if (!blocked) return;
@@ -511,6 +548,7 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
         ? 'seal-check'
         : sites.some((site) => site.structuralStage === 'interior') ? 'interior' : 'perimeter';
       project.blockedReason = null;
+      mirrorProjectBlockOnSites(sites, null);
     }
     markProjectBlocked(project, sites);
     if (project.phase === 'blocked') continue;
@@ -540,6 +578,7 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
       if (sealProblem) {
         project.phase = 'blocked';
         project.blockedReason = sealProblem;
+        mirrorProjectBlockOnSites(sites, sealProblem);
         continue;
       }
       project.phase = 'seal-check';
@@ -556,8 +595,10 @@ export function advanceStructuralExpansionProjects(state: StationState): void {
     );
     const supportProblem = support.problems[0];
     if (supportProblem) {
+      const supportReason = structuralSupportBlockCopy(supportProblem.reason);
       project.phase = 'blocked';
-      project.blockedReason = `structural support: ${supportProblem.reason}`;
+      project.blockedReason = supportReason;
+      mirrorProjectBlockOnSites(sites, supportReason);
       continue;
     }
 
@@ -1086,8 +1127,18 @@ export function createConstructionJobs(state: StationState): void {
   }
 }
 
+/**
+ * Finished work normally disappears on the same tick it completes. A parent
+ * blocked on its own seal/support verdict has finished every child first, so
+ * culling them would delete the only world anchor for its BLOCKED label and
+ * would re-derive the parent phase from an empty site list. A mirrored reason
+ * on a completed child marks exactly that case; keep those until the parent
+ * clears the reason. They stay 'done', so they still raise no job and no work.
+ */
 export function cleanupConstructionSites(state: StationState): void {
-  state.constructionSites = state.constructionSites.filter((site) => site.state !== 'done');
+  state.constructionSites = state.constructionSites.filter(
+    (site) => site.state !== 'done' || !!site.blockedReason
+  );
 }
 
 export function activeAirlockTiles(state: StationState): number[] {

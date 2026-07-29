@@ -1196,7 +1196,11 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
 });
 
 function openingEconomyPanelView(): OpeningEconomyPanelView {
-  const siteForecast = computeCharterOperatingForecast(state.site);
+  // Pass the live SystemMap so the in-station Site Brief reads the same
+  // composition-aware forecast the Charter screen showed at selection. Without
+  // it the brief silently falls back to the legacy site-only model and can
+  // recommend a different leading service than the one the player chose on.
+  const siteForecast = computeCharterOperatingForecast(state.site, state.system ?? undefined);
   const profile = siteForecast.economy;
   const policy = marketPolicyEffect(state.openingEconomy.marketPricingPolicy);
   const summary = getOpeningEconomySummary(state, 120);
@@ -1262,6 +1266,7 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
       title: siteForecast.chartered ? 'Chartered site' : 'Standard orbit',
       primary: siteForecast.headline,
       secondary: siteForecast.summary,
+      composition: siteForecast.compositionLine,
       traits: siteForecast.chips.map((chip) => ({
         label: chip.label,
         detail: chip.detail,
@@ -1813,6 +1818,21 @@ const toggleBerthOpsBtn = document.querySelector<HTMLButtonElement>('#toggle-ber
 const settlementSummaryEl = document.querySelector<HTMLElement>('#settlement-summary')!;
 const settlementCardEl = document.querySelector<HTMLElement>('#settlement-card')!;
 const bottomDockEl = document.querySelector<HTMLElement>('#bottom-dock')!;
+
+// The bottom dock is fixed to the viewport bottom, is content-sized, and shares
+// a z-index with the left HUD stack — so whatever the stack lays out below the
+// dock's top edge is painted over and unreadable. The dock's height is only
+// known at runtime, so publish it and let the stack bound itself against it.
+function publishBottomDockHeight(): void {
+  const height = bottomDockEl.getBoundingClientRect().height;
+  document.documentElement.style.setProperty('--bottom-dock-h', `${Math.round(height)}px`);
+}
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(publishBottomDockHeight).observe(bottomDockEl);
+}
+window.addEventListener('resize', publishBottomDockHeight);
+publishBottomDockHeight();
+
 const cargoArmStatusEl = document.querySelector<HTMLElement>('#cargo-arm-status')!;
 const fuelStatusEl = document.querySelector<HTMLElement>('#fuel-status')!;
 const buyPreparedMealsBtn = document.querySelector<HTMLButtonElement>('#buy-prepared-meals')!;

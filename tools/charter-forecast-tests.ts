@@ -445,7 +445,8 @@ test('mitigations name systems that exist today', () => {
 
 test('the Site Brief projection is the forecast, not a restatement', () => {
   const site = computeSiteProfile(system, 0.5, 0.34);
-  const forecast = computeCharterOperatingForecast(site);
+  // main.ts passes the live SystemMap, exactly as the charter screen does.
+  const forecast = computeCharterOperatingForecast(site, system);
   // What main.ts hands the Site Brief.
   const brief = {
     primary: forecast.headline,
@@ -462,6 +463,44 @@ test('the Site Brief projection is the forecast, not a restatement', () => {
     );
     assert(trait.detail.length > 0, `chip "${trait.label}" has no detail`);
   }
+});
+
+test('dropping the SystemMap changes the advice, so every surface must pass it', () => {
+  // Regression guard. The in-station Site Brief used to call the forecast
+  // without the SystemMap while the charter screen passed it, so the same site
+  // recommended one leading service at selection and a different one once the
+  // player was inside the station. Prove that omission is observable rather
+  // than cosmetic, so it cannot be reintroduced as a harmless-looking default.
+  let divergent = 0;
+  let sampled = 0;
+  let example = '';
+  for (let ix = 1; ix < 12; ix++) {
+    for (let iy = 1; iy < 12; iy++) {
+      const site = computeSiteProfile(system, ix / 12, iy / 12);
+      const withSystem = computeCharterOperatingForecast(site, system);
+      const withoutSystem = computeCharterOperatingForecast(site);
+      sampled += 1;
+      assert(
+        withSystem.compositionLine !== undefined && withSystem.expectedShipMix !== undefined,
+        'a system-aware forecast must carry the composition it derived'
+      );
+      assert(
+        withoutSystem.compositionLine === undefined,
+        'a site-only forecast must not invent a composition it cannot know'
+      );
+      if (withSystem.services[0].id !== withoutSystem.services[0].id) {
+        divergent += 1;
+        if (!example) {
+          example = `${withoutSystem.services[0].id} -> ${withSystem.services[0].id}`;
+        }
+      }
+    }
+  }
+  assert(
+    divergent > 0,
+    `composition never changed the leading service across ${sampled} sites, so this guard proves nothing`
+  );
+  console.log(`     composition changed the lead on ${divergent}/${sampled} sites (e.g. ${example})`);
 });
 
 const filter = process.env.CHARTER_FORECAST_TEST_FILTER ?? '';

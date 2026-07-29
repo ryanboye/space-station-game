@@ -2565,6 +2565,16 @@ h2 {
   width: min(980px, calc(100vw - 400px));
   display: grid;
   gap: 10px;
+  /* Stop at the bottom dock instead of laying out underneath it. The dock is
+     fixed to the viewport bottom, is content-sized, and shares this z-index, so
+     anything the stack places below the dock's top edge is painted over. Its
+     height arrives from main.ts; the fallback matches a typical dock. Without
+     this the last card in the stack — the Site Brief — is in the DOM but
+     unreadable. */
+  max-height: calc(100vh - 104px - var(--bottom-dock-h, 280px) - 22px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 .station-goal-card {

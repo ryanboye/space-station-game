@@ -7332,15 +7332,19 @@ export function renderWorld(
     const delivered = site.requiredMaterials > 0 ? site.deliveredMaterials / site.requiredMaterials : 1;
     const built = site.buildWorkRequired > 0 ? site.buildProgress / site.buildWorkRequired : 0;
     const progress = Math.max(0, Math.min(1, site.state === 'building' ? built : delivered));
+    // A structural child can be finished yet still held by a parent stalled on
+    // its own seal/support verdict, so the reason — not the site state — is
+    // what marks the whole shell as stalled.
+    const stalled = site.state === 'blocked' || !!site.blockedReason;
     ctx.fillStyle = site.requiresEva ? 'rgba(111, 216, 255, 0.28)' : 'rgba(255, 207, 110, 0.24)';
     ctx.fillRect(px + Math.round(2 * PX), py + Math.round(2 * PX), TILE_SIZE - Math.round(4 * PX), TILE_SIZE - Math.round(4 * PX));
-    ctx.strokeStyle = site.state === 'blocked' ? '#ff7676' : site.requiresEva ? '#6fd8ff' : '#ffcf6e';
+    ctx.strokeStyle = stalled ? '#ff7676' : site.requiresEva ? '#6fd8ff' : '#ffcf6e';
     ctx.setLineDash([Math.round(4 * PX), Math.round(3 * PX)]);
     ctx.strokeRect(px + Math.round(2.5 * PX), py + Math.round(2.5 * PX), TILE_SIZE - Math.round(5 * PX), TILE_SIZE - Math.round(5 * PX));
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(7, 12, 18, 0.86)';
     ctx.fillRect(px + Math.round(4 * PX), py + TILE_SIZE - Math.round(8 * PX), TILE_SIZE - Math.round(8 * PX), Math.round(4 * PX));
-    ctx.fillStyle = site.state === 'blocked' ? '#ff7676' : '#6edb8f';
+    ctx.fillStyle = stalled ? '#ff7676' : '#6edb8f';
     ctx.fillRect(
       px + Math.round(4 * PX),
       py + TILE_SIZE - Math.round(8 * PX),
@@ -7356,7 +7360,7 @@ export function renderWorld(
       : site.requiresEva ? 'EVA' : site.kind === 'module' ? 'MOD' : 'BLD';
     ctx.fillText(constructionLabel, px + TILE_SIZE * 0.5, py + TILE_SIZE * 0.45);
 
-    if (site.state === 'blocked' && site.blockedReason) {
+    if (stalled && site.blockedReason) {
       const labelKey = site.structuralProjectId ?? -site.id;
       if (!labeledBlockedConstruction.has(labelKey)) {
         labeledBlockedConstruction.add(labelKey);

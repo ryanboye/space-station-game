@@ -58,6 +58,8 @@ export interface SiteBriefView {
   title?: string;
   primary: string;
   secondary?: string;
+  /** Expected ship mix, present only when the forecast knew the SystemMap. */
+  composition?: string;
   traits: Array<{
     label: string;
     detail: string;
@@ -542,7 +544,7 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
           ${projects ? `<button type="button" class="oe-site-action" data-oe-open-projects><span>Capital projects</span><b>${projects.activeCount}/${projects.maxActive} active</b></button>` : ''}
         </div>`
       : '';
-    const content = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
+    const content = `<span class="oe-site-kicker">${escapeHtml(brief.title ?? 'Site brief')}</span><strong class="oe-site-title">${escapeHtml(brief.primary)}</strong>${brief.secondary ? `<p class="oe-site-detail">${escapeHtml(brief.secondary)}</p>` : ''}${brief.composition ? `<p class="oe-site-detail oe-site-composition">${escapeHtml(brief.composition)}</p>` : ''}<div class="oe-traits">${brief.traits.map((trait) => `<span class="oe-trait ${trait.tone ?? 'neutral'}"><strong>${escapeHtml(trait.label)}</strong> ${escapeHtml(trait.detail)}</span>`).join('')}</div>${actions}`;
     if (content === renderedSiteBrief) return;
     // Replacing a hovered button between pointerdown and click makes the
     // control flash and drops the click. Defer live-value refreshes until the
