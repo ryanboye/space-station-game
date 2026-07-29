@@ -863,7 +863,13 @@ audited checklist with no unsupported checked claims.
 - [x] Price Truss, hull, modules, labor, and maintenance coherently.
 - [ ] Make first Berth a major but attainable capital achievement.
 - [x] Keep capabilities visible rather than hidden behind arbitrary unlocks.
-- [ ] Use rating to attract more valuable traffic.
+- [x] Use rating to attract more valuable traffic.
+  Evidence: `npm run test:rating-traffic-value` generates 64 paired routine
+  offers through the production scheduler at rating 5 and 85. Mean projected
+  call value rises 397.0c -> 496.5c (+25.1%) and tourist/luxury share rises
+  40.6% -> 54.7% (+14.1 percentage points), while the paired lane and both
+  district prestige/notoriety pull metrics remain identical. Authored tutorial
+  and procurement templates bypass the rating factor.
 - [x] Use Capital Projects as optional subsidies, not exclusive gates.
 - [x] Reconcile global goal, business path, and legacy tier messaging.
 - [x] Preserve a visible cumulative station rating with causal breakdown.
@@ -2953,3 +2959,19 @@ bugfixing phase.
   pre-field save that retains its old duration and is not forced through the new
   physical floor. Lead review reran `test:physical-holding-queue` (5/5) and
   `test:gate-e-save-resume` (6/6).
+
+2026-07-29 · Station rating now changes the routine traffic market
+
+- Commit or files: `a02a00e`; the station-wide quality curve in the routine
+  offer-weight and value seams of `src/sim/sim.ts`;
+  `tools/rating-traffic-value-tests.ts`.
+- The global rating and local district reputation now have separate jobs.
+  District prestige/notoriety continues to describe where and what kind of
+  local space pulls traffic; station rating independently raises tourist weight
+  and the projected value of generated calls. Authored onboarding, rescue, and
+  procurement offers retain their published values exactly.
+- Lead review reran `npm run test:rating-traffic-value`: across 64 paired seeds,
+  rating 5 -> 85 moved mean docking fee plus projected spend from 397.0c to
+  496.5c (+25.1%) and premium traffic from 40.6% to 54.7% (+14.1 points). Every
+  pair retained its lane and identical district premium/risky pull metrics, so
+  the result is not district prestige silently changing under another name.
