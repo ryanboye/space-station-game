@@ -4,6 +4,7 @@
 import { applyColdStartScenario } from '../src/sim/cold-start-scenarios';
 import {
   FACILITY_SPRITE_VARIANTS,
+  PENDING_FACILITY_SPRITE_FRAMES,
   deriveFacilitySpriteTruth,
   facilitySpriteKeyForModule,
   facilitySpriteRenderSignature,
@@ -14,7 +15,8 @@ import {
 import { MODULE_SPRITE_KEYS } from '../src/render/sprite-keys';
 import { decorativeLayerCacheKey } from '../src/render/render';
 import { barGroupAtTile } from '../src/sim/facility-machines';
-import { buildSlotReservationRequest, type FacilitySlotTarget } from '../src/sim/facility-slots';
+import { FACILITY_FIXTURE_DESCRIPTORS } from '../src/sim/facility-descriptors';
+import { buildSlotReservationRequest, slotsOnModule, type FacilitySlotTarget } from '../src/sim/facility-slots';
 import { createInitialState, tick, tryCreateReservation } from '../src/sim/sim';
 import { ModuleType, type ModuleInstance, type StationState } from '../src/sim/types';
 
@@ -78,6 +80,16 @@ function testPriorityAndFallback(): string {
     selectFacilitySpriteKey(ModuleType.BoothBank, truthFor('active'), (key) => missingActive.has(key)) === 'module.booth_bank',
     'An authored state missing from the loaded atlas must safely fall back to idle.'
   );
+  const missingDirty = new Set(registered);
+  missingDirty.delete('module.booth_bank.dirty');
+  assert(
+    selectFacilitySpriteKey(
+      ModuleType.BoothBank,
+      { ...CLEAR, dirty: true, active: true },
+      (key) => missingDirty.has(key)
+    ) === 'module.booth_bank.active',
+    'A missing higher-priority frame must degrade to the next drawable state, not hide an occupied fixture.'
+  );
   assert(
     selectFacilitySpriteKey(ModuleType.Table, all, has) === MODULE_SPRITE_KEYS[ModuleType.Table],
     'A non-Gate-F fixture must retain its ordinary base key.'
@@ -85,11 +97,114 @@ function testPriorityAndFallback(): string {
   return 'PASS deterministic priority and missing-frame fallback';
 }
 
+/**
+ * The art gap is an explicit, checked manifest rather than a comment: every
+ * entry must be a real Gate F fixture with a real public face whose art has not
+ * been drawn, and no entry may overlap the authored set.
+ */
+function testPendingArtManifest(): string {
+  let pending = 0;
+  for (const [rawType, variants] of Object.entries(PENDING_FACILITY_SPRITE_FRAMES)) {
+    const moduleType = rawType as ModuleType;
+    const descriptor = FACILITY_FIXTURE_DESCRIPTORS[moduleType];
+    assert(descriptor, `${moduleType} must be a Gate F fixture to appear in the pending art manifest.`);
+    assert(
+      descriptor.publicUseFace !== null,
+      `${moduleType} is listed as needing occupied art but declares no public use face.`
+    );
+    assert(
+      FACILITY_SPRITE_VARIANTS[moduleType] === undefined,
+      `${moduleType} has authored art; move its states out of the pending manifest.`
+    );
+    assert((variants ?? []).includes('active'), `${moduleType} owns public positions, so it must want occupied art.`);
+    pending += (variants ?? []).length;
+  }
+  assert(pending === 8, `Expected 8 outstanding Gate F frames, manifest lists ${pending}.`);
+  return `PASS pending art manifest (${pending} frames outstanding, 46 authored)`;
+}
+
 function cantinaState(): StationState {
   const state = createInitialState({ seed: 91811, physicalStarterInventory: true, manualTrafficAdmission: true });
   assert(applyColdStartScenario(state, 'cantina-expanded'), 'Expected cantina-expanded scenario.');
   tick(state, 0);
   return state;
+}
+
+function scenarioState(scenario: string): StationState {
+  const state = createInitialState({ seed: 91811, physicalStarterInventory: true, manualTrafficAdmission: true });
+  assert(applyColdStartScenario(state, scenario), `Expected ${scenario} scenario.`);
+  tick(state, 0);
+  return state;
+}
+
+function moduleOfType(state: StationState, type: ModuleType): ModuleInstance {
+  const module = state.moduleInstances.find((candidate) => candidate.type === type);
+  assert(module, `Scenario must include a ${type}.`);
+  return module;
+}
+
+/**
+ * The three frontage fixtures that own real public positions but have no state
+ * art yet. Their condition must still be derived correctly from production
+ * truth, and selection must still resolve to the idle frame — an unpainted
+ * state may never be claimed as depicted.
+ */
+function testUnpaintedFrontageTruth(): string {
+  const keys = registeredKeys();
+  const has = (key: string): boolean => keys.has(key);
+  const market = scenarioState('market-improved-flow');
+  const checkout = moduleOfType(market, ModuleType.CheckoutBank);
+  const shelf = moduleOfType(market, ModuleType.ShelfAisle);
+  clearClaims(market);
+
+  assert(
+    deriveFacilitySpriteTruth(market, checkout).unstaffed,
+    'A register bank nobody is holding open must derive unstaffed truth.'
+  );
+  const staffSlots = slotsOnModule(market, checkout, 'checkout-staff');
+  assert(staffSlots.length === 2, `Checkout Bank must declare two staff positions, found ${staffSlots.length}.`);
+  claim(market, staffSlots[0], 'crew', 75001);
+  assert(
+    !deriveFacilitySpriteTruth(market, checkout).unstaffed,
+    'A Steward physically holding one register must clear unstaffed truth.'
+  );
+  assert(!deriveFacilitySpriteTruth(market, checkout).active, 'An open but empty register is not in service.');
+  claim(market, slotsOnModule(market, checkout, 'checkout')[0], 'visitor', 76001);
+  assert(deriveFacilitySpriteTruth(market, checkout).active, 'A shopper at the counter must derive in-service truth.');
+  assert(
+    facilitySpriteKeyForModule(market, checkout, has) === 'module.checkout_bank',
+    'Checkout Bank has no state art, so every condition must still resolve to the idle frame.'
+  );
+
+  const shelfNode = market.itemNodes.find((candidate) => candidate.tileIndex === shelf.originTile);
+  assert(shelfNode, 'Shelf Aisle must own a stock node.');
+  assert(!deriveFacilitySpriteTruth(market, shelf).empty, 'A stocked shelf must not derive empty truth.');
+  shelfNode.items.tradeGood = 0;
+  assert(deriveFacilitySpriteTruth(market, shelf).empty, 'A shelf with nothing to buy must derive empty truth.');
+  shelfNode.items.tradeGood = 6;
+  assert(!deriveFacilitySpriteTruth(market, shelf).empty, 'Restocking the shelf must clear empty truth.');
+  claim(market, slotsOnModule(market, shelf, 'browse')[0], 'visitor', 76002);
+  assert(deriveFacilitySpriteTruth(market, shelf).active, 'A shopper browsing must derive in-service truth.');
+  market.dirtByTile[shelf.tiles[0]] = 40;
+  assert(deriveFacilitySpriteTruth(market, shelf).dirty, 'Sanitation dirt on the aisle must derive dirty truth.');
+  assert(
+    facilitySpriteKeyForModule(market, shelf, has) === 'module.shelf_aisle',
+    'Shelf Aisle has no state art, so every condition must still resolve to the idle frame.'
+  );
+
+  const wing = scenarioState('long-stay-guest-wing');
+  const bunks = moduleOfType(wing, ModuleType.BunkBank);
+  clearClaims(wing);
+  assert(!deriveFacilitySpriteTruth(wing, bunks).active, 'An unclaimed bunk bank is idle.');
+  const beds = slotsOnModule(wing, bunks, 'temporary-sleep');
+  assert(beds.length === 4, `Bunk Bank must declare four sleeping positions, found ${beds.length}.`);
+  claim(wing, beds[0], 'visitor', 77001);
+  assert(deriveFacilitySpriteTruth(wing, bunks).active, 'A claimed bunk must derive occupied truth.');
+  assert(
+    facilitySpriteKeyForModule(wing, bunks, has) === 'module.bunk_bank',
+    'Bunk Bank has no state art, so occupancy must still resolve to the idle frame.'
+  );
+  return 'PASS unpainted frontage derives occupied, unstaffed, empty, and dirty truth';
 }
 
 function clearClaims(state: StationState): void {
@@ -185,6 +300,12 @@ function testProductionTruthClears(): string {
   return 'PASS production transitions, live-overlay cache isolation, and geometry preservation';
 }
 
-const results = [testCuratedMatrix(), testPriorityAndFallback(), testProductionTruthClears()];
+const results = [
+  testCuratedMatrix(),
+  testPendingArtManifest(),
+  testPriorityAndFallback(),
+  testProductionTruthClears(),
+  testUnpaintedFrontageTruth()
+];
 for (const result of results) console.log(result);
 console.log(`PASS facility sprite state (${results.length}/${results.length})`);

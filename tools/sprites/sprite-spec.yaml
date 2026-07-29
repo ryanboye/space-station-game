@@ -322,11 +322,35 @@ sprites:
   module.checkout_bank:
     prompt: "Top-down low-resolution pixel art station module: long market checkout bank. 2x5 footprint, two distinct cyan registers on the public side and a staff lane on the reverse, transparent background, readable at 36x90."
     rotation: 0
+  module.checkout_bank.active:
+    prompt: "Top-down low-resolution pixel art station module: long market checkout bank, ACTIVE state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY TWO registers on the WEST public side and the staff lane EAST, both registers lit and working with goods on the belt, plus a bright green operating frame and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.checkout_bank.unstaffed:
+    prompt: "Top-down low-resolution pixel art station module: long market checkout bank, UNSTAFFED state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY TWO registers still present WEST, but the EAST staff lane is stripped of its duty posts and marked with a large grey dashed box and a bold grey cross, register screens dark. Desaturated palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.checkout_bank.dirty:
+    prompt: "Top-down low-resolution pixel art station module: long market checkout bank, DIRTY state. 2x5 footprint (128x320 authored, readable at 64x160). EXACTLY TWO registers WEST, staff lane EAST, overlaid with large olive-green spill blobs, scattered litter and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.shelf_aisle:
     prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle. 1x4 footprint, three distinct stocked browsing bays, transparent background, readable at 18x72."
     rotation: 0
+  module.shelf_aisle.active:
+    prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, ACTIVE state. 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE stocked browsing bays, goods pulled forward and picked over, plus a bright green operating frame and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.shelf_aisle.empty:
+    prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, EMPTY state (nothing left to buy). 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE browsing bays still present but completely bare - no coloured goods on any shelf - with a large dashed hollow outline over the unit. Cold, drained palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.shelf_aisle.dirty:
+    prompt: "Top-down low-resolution pixel art station module: narrow retail shelf aisle, DIRTY state. 1x4 footprint (64x256 authored, readable at 32x128). EXACTLY THREE stocked browsing bays overlaid with large olive-green spill blobs, dropped packaging and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
   module.bunk_bank:
     prompt: "Top-down low-resolution pixel art station module: temporary bunk bank. 2x4 footprint, four unmistakable separate sleeping positions, transparent background, readable at 36x72."
+    rotation: 0
+  module.bunk_bank.active:
+    prompt: "Top-down low-resolution pixel art station module: temporary bunk bank, OCCUPIED state. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY FOUR separate sleeping positions - two plus two - with occupied bedding, rumpled covers and stowed kit, plus a bright green operating frame and a warmed palette. Transparent background, no text, at least 3px clear margin on every edge."
+    rotation: 0
+  module.bunk_bank.dirty:
+    prompt: "Top-down low-resolution pixel art station module: temporary bunk bank, DIRTY state. 2x4 footprint (128x256 authored, readable at 64x128). EXACTLY FOUR separate sleeping positions with soiled bedding, overlaid with large olive-green stain blobs and a muddied yellow-green frame. Transparent background, no text, at least 3px clear margin on every edge."
     rotation: 0
   module.intake_pallet:
     prompt: "Top-down pixel art station module sprite: intake pallet. 2x2 footprint,

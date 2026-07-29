@@ -59,8 +59,19 @@ const MODULE_FOOTPRINT_BY_KEY = {
   'module.water_valve': { w: 1, h: 1 },
   'module.market_stall': { w: 2, h: 1 },
   'module.checkout_bank': { w: 2, h: 5 },
+  // Gate F condition frames for the three frontage fixtures that still render
+  // idle in every state. Sized ahead of the art so a delivered PNG only has to
+  // be dropped into `curated` and listed in `required-keys-v1.json`.
+  'module.checkout_bank.active': { w: 2, h: 5 },
+  'module.checkout_bank.unstaffed': { w: 2, h: 5 },
+  'module.checkout_bank.dirty': { w: 2, h: 5 },
   'module.shelf_aisle': { w: 1, h: 4 },
+  'module.shelf_aisle.active': { w: 1, h: 4 },
+  'module.shelf_aisle.empty': { w: 1, h: 4 },
+  'module.shelf_aisle.dirty': { w: 1, h: 4 },
   'module.bunk_bank': { w: 2, h: 4 },
+  'module.bunk_bank.active': { w: 2, h: 4 },
+  'module.bunk_bank.dirty': { w: 2, h: 4 },
   'module.intake_pallet': { w: 2, h: 2 },
   'module.intake_pallet.empty': { w: 2, h: 2 },
   'module.intake_pallet.light': { w: 2, h: 2 },

@@ -2245,3 +2245,49 @@ separated, hull damage recovered, admission automation switched on, and the
 50-crew / 50-visitor scale. Each underlying capability is already proven
 deterministically by a focused runner — the gap is play, not mechanism. They stay
 open honestly rather than being checked on the strength of their runners.
+
+2026-07-28 · Fixture art: what is derivable, what needs an artist
+
+- Commit or files: `src/render/facility-sprite-state.ts`,
+  `tools/facility-sprite-state-tests.ts`, prompts and frame sizes in
+  `tools/sprites/`.
+- **Sprite generation is not possible in this repository any more.** The AI
+  generator scripts were deleted in `30fc12c` ("revert(sprites): restore curated
+  baseline atlas, rip out generator pipelines"), the `sprites:generate:*` scripts
+  every `sprites:build:*` depends on no longer exist, and there are no
+  credentials. Faking the frames was ruled out on inspection rather than on
+  principle: the curated variants are independent renders, not tints — 63-79% of
+  pixels differ between a base frame and its `.active`/`.dirty`/`.unstaffed` — and
+  the house style expresses state through depicted content (meals appearing on
+  pads, goods removed, staff posts replaced). A procedural composite would read
+  as worse than idle.
+- What was closed instead: the *truth derivation* for the three fixtures that had
+  none. `CheckoutBank` now derives `unstaffed` from the same per-bank staffing the
+  market chain uses, `ShelfAisle` derives `empty` from the same `< 0.95 tradeGood`
+  threshold the chain calls `no-stock`, and `active` needed no new code for any of
+  the three because `publicInUse > 0` already covers checkout, browse and
+  temporary-sleep positions. Facility scope is now decided by
+  `facilityDescriptorFor` — exactly the 14 Gate F fixtures — rather than by
+  whether an artist has drawn a condition. Whether a fixture *is* a facility and
+  whether its condition is *painted* are now separate questions.
+- **A real renderer bug was fixed on the way.** The missing-frame fallback
+  returned the base frame on the first true-and-authored variant whose frame was
+  absent, so a fixture that was both dirty and occupied, with the dirty frame
+  missing, rendered idle — hiding an `active` frame that existed. It now degrades
+  to the next drawable state and reaches idle only when nothing else is true.
+- Deliberate restraint: the three fixtures were **not** added to
+  `FACILITY_SPRITE_VARIANTS`. Listing them would claim a state is depicted when it
+  would render idle, and would fail key validation. Instead
+  `PENDING_FACILITY_SPRITE_FRAMES` records the 8 outstanding frames as a checked
+  manifest, and a test asserts each pending entry is a real Gate F fixture with a
+  real public face and no authored art. Frame sizes and generation prompts are
+  staged in `tools/sprites/` so delivered art is drop-in.
+- Rows 364, 365, 366, 367 and 368 therefore stay **open**, with the work reduced
+  to eight named PNGs. `npm run test:facility-sprite-state` is 5/5 and still pins
+  46 authored frames.
+- Blocking dependency recorded for `damaged`: it is unreachable in production for
+  every Gate F fixture — including the eight that already have damaged art —
+  because `MODULE_MAINTENANCE_ROOMS` contains no Gate F fixture, so none can ever
+  accrue a debt carrying its module id. That also explains why "charge larger
+  fixtures through ... maintenance" is only partly true. Requested as a small
+  addition from the agent holding `src/sim/sim.ts`.

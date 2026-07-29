@@ -1,5 +1,6 @@
 import { ModuleType, fromIndex, type ModuleInstance, type StationState } from '../sim/types';
 import { fixtureCapacityReport, barGroupAtTile, barGroupStatus } from '../sim/facility-machines';
+import { facilityDescriptorFor } from '../sim/facility-descriptors';
 import { getSanitationTileDiagnostic, itemStockAtNode } from '../sim/sim';
 import { MODULE_SPRITE_KEYS } from './sprite-keys';
 
@@ -13,7 +14,17 @@ export interface FacilitySpriteTruth {
   active: boolean;
 }
 
-/** Only variants actually authored for each Gate F fixture. */
+/**
+ * Only variants actually authored for each Gate F fixture, i.e. the frames that
+ * exist in `tools/sprites/curated` and are gated by `required-keys-v1.json`.
+ *
+ * This is deliberately NOT the same thing as the set of conditions the
+ * simulation can derive: `deriveFacilitySpriteTruth` reads live truth for every
+ * fixture with a facility descriptor, and a fixture whose art has not been
+ * drawn yet simply keeps its idle frame. Adding a variant here without shipping
+ * the matching frame would make the fixture render idle while claiming the
+ * state is depicted, so this list may only grow alongside real art.
+ */
 export const FACILITY_SPRITE_VARIANTS: Readonly<Partial<Record<ModuleType, readonly FacilitySpriteVariant[]>>> = {
   [ModuleType.BackroomStockBank]: ['damaged', 'dirty', 'empty'],
   [ModuleType.ServiceBar]: ['damaged', 'dirty', 'empty', 'unstaffed', 'active'],
@@ -26,6 +37,26 @@ export const FACILITY_SPRITE_VARIANTS: Readonly<Partial<Record<ModuleType, reado
   [ModuleType.GuestCabin]: ['dirty', 'active'],
   [ModuleType.ArrivalDesk]: ['dirty', 'unstaffed', 'active'],
   [ModuleType.WashBank]: ['damaged', 'dirty', 'active']
+};
+
+/**
+ * States whose truth the simulation derives today but whose art has never been
+ * drawn. Each entry is a real, reachable condition on a fixture with real
+ * public positions, so the fixture currently renders idle while occupied,
+ * unstaffed, out of stock, or dirty.
+ *
+ * Closing one means: author `tools/sprites/curated/<key with dots as
+ * underscores>.png` at the fixture's native footprint, add the key to
+ * `tools/sprites/required-keys-v1.json`, add the variant to
+ * `FACILITY_SPRITE_VARIANTS` above, and repack the atlas. Prompts and pipeline
+ * frame sizes for every key below are already declared in `tools/sprites`.
+ */
+export const PENDING_FACILITY_SPRITE_FRAMES: Readonly<
+  Partial<Record<ModuleType, readonly FacilitySpriteVariant[]>>
+> = {
+  [ModuleType.CheckoutBank]: ['dirty', 'unstaffed', 'active'],
+  [ModuleType.ShelfAisle]: ['dirty', 'empty', 'active'],
+  [ModuleType.BunkBank]: ['dirty', 'active']
 };
 
 const FACILITY_VARIANT_PRIORITY: readonly FacilitySpriteVariant[] = [
@@ -46,8 +77,10 @@ const EMPTY_TRUTH: FacilitySpriteTruth = {
 
 /**
  * Pure priority selector. Unsupported conditions are skipped because the art
- * deliberately does not depict every condition on every fixture. Once an
- * authored condition wins, a missing atlas frame safely falls back to idle.
+ * deliberately does not depict every condition on every fixture. A condition
+ * whose frame is missing from the loaded atlas degrades to the next authored
+ * condition that is actually present, and to idle only when nothing else is
+ * true — a half-loaded atlas must never hide a state it can still draw.
  */
 export function selectFacilitySpriteKey(
   moduleType: ModuleType,
@@ -60,7 +93,7 @@ export function selectFacilitySpriteKey(
   for (const variant of FACILITY_VARIANT_PRIORITY) {
     if (!truth[variant] || !supported.includes(variant)) continue;
     const candidate = `${baseKey}.${variant}`;
-    return isRegistered(candidate) ? candidate : baseKey;
+    if (isRegistered(candidate)) return candidate;
   }
   return baseKey;
 }
@@ -79,12 +112,20 @@ function isDamagedModule(state: StationState, moduleId: number): boolean {
   return state.maintenanceDebts.some((debt) => debt.moduleId === moduleId && debt.debt >= 60);
 }
 
-/** Read the fixture's visual facts from authoritative production state. */
+/**
+ * Read the fixture's visual facts from authoritative production state.
+ *
+ * Scoped to fixtures that own a facility descriptor — that is exactly the Gate F
+ * set — rather than to fixtures that happen to have art. A fixture is either a
+ * real facility with real positions, in which case its condition is knowable, or
+ * it is not a facility at all; whether an artist has drawn the condition yet is a
+ * separate question answered by `FACILITY_SPRITE_VARIANTS`.
+ */
 export function deriveFacilitySpriteTruth(
   state: StationState,
   module: ModuleInstance
 ): FacilitySpriteTruth {
-  if (!FACILITY_SPRITE_VARIANTS[module.type]) return EMPTY_TRUTH;
+  if (!facilityDescriptorFor(module.type)) return EMPTY_TRUTH;
   const report = fixtureCapacityReport(state, module);
   let empty = false;
   let unstaffed = false;
@@ -111,6 +152,15 @@ export function deriveFacilitySpriteTruth(
     unstaffed = (report?.staffSlots ?? 0) > 0 && (report?.staffed ?? 0) <= 0;
   } else if (module.type === ModuleType.ArrivalDesk) {
     unstaffed = (report?.staffSlots ?? 0) > 0 && (report?.staffed ?? 0) <= 0;
+  } else if (module.type === ModuleType.CheckoutBank) {
+    // Mirrors `marketChainStatus`'s 'no-staff' block, per register bank: a
+    // Steward has to physically hold a checkout-staff position to open it, and
+    // a shopper facing an unheld bank waits on 'market register unstaffed'.
+    unstaffed = (report?.staffSlots ?? 0) > 0 && (report?.staffed ?? 0) <= 0;
+  } else if (module.type === ModuleType.ShelfAisle) {
+    // The shelf is the only stock a shopper can actually buy from, and uses the
+    // same threshold as the market chain's 'no-stock' block.
+    empty = itemStockAtNode(state, module.originTile, 'tradeGood') < 0.95;
   }
 
   return {
@@ -122,12 +172,17 @@ export function deriveFacilitySpriteTruth(
   };
 }
 
+/**
+ * Null for anything that is not a Gate F fixture. A fixture whose condition has
+ * no authored frame resolves to its own base key, which the overlay pass reads
+ * as "nothing to redraw" — the idle art already sits in the cached decor layer.
+ */
 export function facilitySpriteKeyForModule(
   state: StationState,
   module: ModuleInstance,
   isRegistered: (key: string) => boolean
 ): string | null {
-  if (!FACILITY_SPRITE_VARIANTS[module.type]) return null;
+  if (!facilityDescriptorFor(module.type)) return null;
   return selectFacilitySpriteKey(module.type, deriveFacilitySpriteTruth(state, module), isRegistered);
 }
 
