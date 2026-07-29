@@ -249,6 +249,18 @@ const starterLayoutEditorMode = startupParams.get('starter-editor') === '1';
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root not found');
 
+const MEDIUM_BERTH_FLOOR_COST = berthCapitalCostForArea(BERTH_SIZE_MIN.medium);
+const BASIC_PASSENGER_BERTH_HARDWARE_COST =
+  MODULE_DEFINITIONS[ModuleType.BerthControl].capitalCost! +
+  2 * MODULE_DEFINITIONS[ModuleType.DockingClamp].capitalCost! +
+  MODULE_DEFINITIONS[ModuleType.Gangway].capitalCost!;
+const CONTRACT_READY_MEDIUM_BERTH_COST = MEDIUM_BERTH_FLOOR_COST + BASIC_PASSENGER_BERTH_HARDWARE_COST;
+const RECOMMENDED_MEDIUM_BERTH_SAVINGS = CONTRACT_READY_MEDIUM_BERTH_COST + 100;
+const MEDIUM_BERTH_SAVINGS_COPY =
+  `${MEDIUM_BERTH_FLOOR_COST}c floor · +${BASIC_PASSENGER_BERTH_HARDWARE_COST}c basic passenger hardware · ` +
+  `${CONTRACT_READY_MEDIUM_BERTH_COST.toLocaleString()}c contract-ready · recommended savings ` +
+  `${RECOMMENDED_MEDIUM_BERTH_SAVINGS.toLocaleString()}c incl. 100c working capital`;
+
 app.innerHTML = `
   <div id="topbar">
     <div class="station-brand">
@@ -590,7 +602,7 @@ app.innerHTML = `
         <button class="tool-btn" data-tool-room="clinic" title="Build Clinic (Y)"><span class="tool-key">Y</span>Clinic</button>
         <button class="tool-btn" data-tool-room="brig" title="Build Brig (J)"><span class="tool-key">J</span>Brig</button>
         <button class="tool-btn" data-tool-room="rec-hall" title="Build Rec Hall (A)"><span class="tool-key">A</span>Rec Hall</button>
-        <button class="tool-btn" data-tool-room="berth" title="Build Berth (E) — dock-migration v0"><span class="tool-key">E</span>Berth</button>
+        <button class="tool-btn" data-tool-room="berth" title="Build Berth (E) — medium: ${MEDIUM_BERTH_SAVINGS_COPY}; large floor ${berthCapitalCostForArea(BERTH_SIZE_MIN.large).toLocaleString()}c, service hardware varies"><span class="tool-key">E</span>Berth</button>
         <button class="tool-btn" data-tool-room="cantina" title="Build Cantina — drinks bar, social leisure for crew/visitors/residents"><span class="tool-key">·</span>Cantina</button>
         <button class="tool-btn" data-tool-room="commercial-unit" title="Designate an enclosed commercial shell, then invite tenant proposals"><span class="tool-key">·</span>Commercial</button>
         <button class="tool-btn" data-tool-room="observatory" title="Build Observatory (T3+) — premium leisure with wonder bonus"><span class="tool-key">·</span>Observ.</button>
@@ -2870,7 +2882,7 @@ function selectRoomTool(room: RoomType): void {
   // bay at once. Say the price up front rather than letting the player discover
   // it by being refused at the end of a drag.
   toolLockMessage = room === RoomType.Berth
-    ? `Berth commissioning: ${berthCapitalCostForArea(BERTH_SIZE_MIN.medium)}c medium, ${berthCapitalCostForArea(BERTH_SIZE_MIN.large)}c large. Drag the whole bay.`
+    ? `Medium Berth: ${MEDIUM_BERTH_SAVINGS_COPY}. Large floor: ${berthCapitalCostForArea(BERTH_SIZE_MIN.large).toLocaleString()}c; service hardware varies. Drag the whole bay.`
     : '';
 }
 
