@@ -1106,7 +1106,13 @@ handoff below rather than being silently left unwired: `test:opening-economy-int
 - [x] Provide a URL that opens the correct scenario/save.
 - [x] Provide a short list of new interactions to try.
 - [x] Provide one deliberately bad layout to observe.
-- [ ] Provide the tools to improve that layout in world.
+- [x] Provide the tools to improve that layout in world.
+  Evidence: frozen production-browser play on `mess-line-choked` opened the
+  live Build palette, selected the ordinary Door tool, and cut two additional
+  entrances through the mess hall's shared wall under the existing counters.
+  The same authored crowd then used the three visible physical crossings into
+  the cafeteria; `baseline:frontage` supplies the deterministic bad/rerouted
+  throughput comparison without substituting a scenario-only repair control.
 - [x] Ensure sprites are enabled by default.
 - [x] Ensure panels can be hidden for visual inspection.
 - [x] Preserve the user's quicksave separately from deterministic QA saves.
