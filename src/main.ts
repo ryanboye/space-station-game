@@ -7611,7 +7611,7 @@ function recipeStepAttributes(step: RecipeStepProgress): string {
 function recipeStepDetail(recipeId: string, step: RecipeStepProgress): string {
   const have = Math.min(step.have, step.count);
   const remaining = Math.max(0, step.count - have);
-  const progress = `${have}/${step.count}`;
+  const progress = `${formatRecipeAmount(have)}/${formatRecipeAmount(step.count)}`;
 
   if (step.satisfied) return `${progress} · ready`;
 
@@ -7627,6 +7627,11 @@ function recipeStepDetail(recipeId: string, step: RecipeStepProgress): string {
 
   if (step.kind === 'utility') return `${progress} · draw the connection`;
   return `${progress} · ${remaining} more`;
+}
+
+function formatRecipeAmount(value: number): string {
+  const rounded = Math.round(value);
+  return Math.abs(value - rounded) < 0.05 ? `${rounded}` : value.toFixed(1);
 }
 
 function shouldShowCapitalProjects(): boolean {
@@ -7651,7 +7656,7 @@ function recipeMachineReadout(recipe: ReturnType<typeof evaluateOpeningRecipes>[
   const step = (module: ModuleType) => recipe.steps.find((candidate) => candidate.module === module);
   const stock = recipe.steps.find((candidate) => candidate.kind === 'stock');
   const count = (module: ModuleType) => `${Math.min(step(module)?.have ?? 0, step(module)?.count ?? 0)}/${step(module)?.count ?? 0}`;
-  const ready = `${Math.min(stock?.have ?? 0, stock?.count ?? 0)}/${stock?.count ?? 0}`;
+  const ready = `${formatRecipeAmount(Math.min(stock?.have ?? 0, stock?.count ?? 0))}/${formatRecipeAmount(stock?.count ?? 0)}`;
   if (recipe.id === 'feed-travelers') {
     const tables = Math.min(step(ModuleType.Table)?.have ?? 0, step(ModuleType.Table)?.count ?? 0);
     const access = recipe.candidateAccess === 'restricted' ? 'CREW MESS CANDIDATE · ' : '';
