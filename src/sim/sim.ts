@@ -17317,7 +17317,29 @@ export function requeueInterruptedTransportJob(
   const carriedAmount = crew?.carryingItemType === job.itemType
     ? Math.max(0, crew.carryingAmount)
     : Math.max(0, job.pickedUpAmount);
-  if (carriedAmount > 0) returnCarriedTransportToSource(state, job, job.itemType, carriedAmount, warnings);
+  const returnedAmount = carriedAmount > 0
+    ? returnCarriedTransportToSource(state, job, job.itemType, carriedAmount, warnings)
+    : 0;
+  const retainedAmount = Math.max(0, carriedAmount - returnedAmount);
+  if (retainedAmount > 0.001) {
+    // Both endpoints can fill while cargo is in motion. Until one accepts the
+    // stack, custody remains explicit: preferably on the actual carrier, or on
+    // the in-progress job when its actor has already been detached. Clearing
+    // either here would turn a capacity conflict into silent inventory loss.
+    if (crew && crew.carryingItemType === job.itemType) {
+      crew.carryingAmount = retainedAmount;
+      crew.activeJobId = job.id;
+      job.assignedCrewId = crew.id;
+    } else {
+      job.assignedCrewId = null;
+    }
+    job.pickedUpAmount = retainedAmount;
+    job.state = 'in_progress';
+    job.expiresAt = Math.max(job.expiresAt, state.now + JOB_TTL_SEC);
+    markJobStall(state, job, 'stalled_unreachable_dropoff');
+    if (crew) setCrewPath(state, crew, []);
+    return;
+  }
   if (crew) {
     crew.carryingItemType = null;
     crew.carryingAmount = 0;
@@ -20425,6 +20447,18 @@ function requeueStalledJobs(state: StationState): void {
   for (const job of state.jobs) {
     if (job.state !== 'assigned' && job.state !== 'in_progress') continue;
     if (state.now - job.lastProgressAt < JOB_STALE_SEC) continue;
+    if (isLiveTransportJob(job)) {
+      const crew =
+        job.assignedCrewId === null
+          ? null
+          : state.crewMembers.find((candidate) => candidate.id === job.assignedCrewId) ?? null;
+      // Use the same exactly-once custody path as expiry, death, and save
+      // hydration. A congested route can make a source fill while its carrier
+      // is away; source-only return used to drop every non-material stack in
+      // that case before clearing the worker and requeueing the job.
+      requeueInterruptedTransportJob(state, job, crew);
+      continue;
+    }
     if (job.assignedCrewId !== null) {
       const crew = state.crewMembers.find((c) => c.id === job.assignedCrewId);
       if (crew && crew.activeJobId === job.id) {
@@ -20454,6 +20488,11 @@ function requeueStalledJobs(state: StationState): void {
     job.lastProgressAt = state.now;
     markJobStall(state, job, 'none');
   }
+}
+
+/** Focused regression hook for transport-custody interruption checks. */
+export function runStalledJobRequeueTestTick(state: StationState): void {
+  requeueStalledJobs(state);
 }
 
 function refreshJobMetrics(state: StationState): void {
