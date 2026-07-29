@@ -735,8 +735,20 @@ audited checklist with no unsupported checked claims.
 
 - [x] Give doors one crossing resource and crossing time.
 - [x] Give Airlocks explicit crossing capacity.
-- [ ] Give narrow corridors low directional capacity.
-- [ ] Give open concourses greater capacity.
+- [x] Give narrow corridors low directional capacity.
+  Evidence: commit `27ac676` added the topology-derived cross-section contract
+  in `src/sim/movement-capacity.ts` and narrow-direction arbitration/yield
+  recovery in `src/sim/sim.ts`. `npm run test:spatial-capacity` drains six
+  opposed actors through the one-tile passage in 45 ticks with 25 explicit
+  `opposing traffic in narrow corridor` waits, bounded blocking, and maximum
+  tile occupancy one; reciprocal actors cannot ghost through a one-wide choke.
+- [x] Give open concourses greater capacity.
+  Evidence: the same `tools/spatial-capacity-tests.ts` fixture changes only the
+  passage from one lane to two and drains the same opposed cohorts in 23 ticks
+  with no capacity waits. Reversing actor-array order is identical, open-floor
+  safe swaps remain valid, and module, service, Door, and Airlock edges remain
+  serialized. `npm run test:movement-coordinator` preserves all eight existing
+  swap, yield, fairness, replan, save, and stale-blocker groups.
 - [x] Make carts/bulky cargo consume more movement capacity.
 - [x] Preserve exclusive service/work/seat reservations.
 
@@ -1026,7 +1038,9 @@ audited checklist with no unsupported checked claims.
   panel showed the shared visitor, logistics, fixture-wait, blocked-actor, and
   work-queue pressure. The mixed call's later `0/6` return failure is recorded
   as a separate live defect and is not concealed by this narrower concurrency
-  claim.
+  claim. The authored benchmark and its deterministic companion live in
+  `src/sim/cold-start-scenarios.ts` and
+  `tools/normal-scale-operation-tests.ts`.
 - [x] Separate a harmful public/cargo route.
   Evidence: the persisted `baseline:frontage` comparison records one shared
   public/cargo tile and `public_cargo_crossing=1` in the bad layout versus zero
