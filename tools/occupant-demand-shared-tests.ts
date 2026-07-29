@@ -300,6 +300,28 @@ function testCrewBlockedSelfCarePathYieldsToCriticalSleep(): void {
     `blocked self-care claim did not release once (${old.reservation.releaseReason})`);
 }
 
+function testCrewProgressingSelfCarePathYieldsBeforeCriticalFloor(): void {
+  const state = crewProductionState();
+  const toilet = fixtureTile(state, ModuleType.Toilet);
+  const crew = stageCrew(state, toilet, 18.2);
+  crew.toileting = true;
+  crew.idleReason = 'idle_available';
+  crew.path = [toilet + 1];
+  const old = tryCreateReservation(state, {
+    ownerKind: 'crew', ownerId: crew.id, kind: 'provider-slot', targetTile: toilet,
+    targetId: `toilet:${toilet}`, amount: 1, capacity: 1, ttlSec: 75
+  });
+  assert(old.ok, 'crew must obtain a real progressing toilet claim');
+
+  tick(state, 0.2);
+
+  assert(crew.resting, 'critical sleep did not preempt a progressing pre-session self-care path');
+  assert(crew.energy >= 18, `progressing self-care path crossed the hard energy floor: ${crew.energy}`);
+  assert(!crew.toileting && crew.path.length === 0, 'progressing self-care path survived critical-sleep handoff');
+  assert(old.reservation.releaseReason === 'replaced',
+    `progressing self-care claim did not release once (${old.reservation.releaseReason})`);
+}
+
 function testCrewRestExitClearsLiveRestReason(): void {
   const state = crewProductionState();
   const serving = fixtureTile(state, ModuleType.ServingStation);
@@ -346,6 +368,7 @@ testPlannedVisitorServiceIsNotPreempted();
 testCrewStalledSelfCareYieldsToCriticalSleep();
 testCrewOrdinaryIdleRestsBeforeProjectedDutyFloor();
 testCrewBlockedSelfCarePathYieldsToCriticalSleep();
+testCrewProgressingSelfCarePathYieldsBeforeCriticalFloor();
 testCrewRestExitClearsLiveRestReason();
 testCrewActiveMealIsNeverPreempted();
 

@@ -21272,26 +21272,18 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     (crew.cleaning && crew.cleanSessionActive) ||
     (crew.toileting && crew.toiletSessionActive) ||
     (crew.drinking && crew.drinkSessionActive);
-  const routeStalledCrewToAssignedSleep = (
+  const routeCrewToAssignedSleepBeforeCriticalFloor = (
     crew: CrewMember,
-    previousIdleReason: CrewIdleReason,
     preDrainEnergyFloor: number
   ): boolean => {
     if (crew.energy > preDrainEnergyFloor || crew.resting || crew.activeJobId !== null) return false;
     if (crewHasActivePhysicalSelfCareSession(crew)) return false;
     const selfCareIntent = crew.eating || crew.cleaning || crew.toileting || crew.drinking || crew.leisure;
     if (!selfCareIntent) return false;
-    const hasLiveClaim = reservationsForOwner(state, 'crew', crew.id)
-      .some((reservation) => reservation.kind === 'provider-slot' || reservation.kind === 'seat-use-slot');
-    const retryElapsedWithoutPath = crew.path.length === 0 && state.now >= crew.retargetAt;
-    const stalled =
-      !hasLiveClaim ||
-      previousIdleReason === 'idle_waiting_fixture' ||
-      previousIdleReason === 'idle_no_path' ||
-      retryElapsedWithoutPath;
-    if (!stalled) return false;
-    // This is the one interruption boundary for a stalled intent. Completed
-    // meals and live wash/toilet/drink sessions returned above untouched.
+    // This is the one interruption boundary before a physical session starts.
+    // A long walk to food, hygiene, or a toilet must yield when sleep would
+    // otherwise cross the hard floor; a live wash/toilet/drink/meal session
+    // returned above remains untouched and completes physically.
     releaseCrewUsageTarget(state, crew, 'replaced');
     crew.eating = false;
     crew.carryingMeal = false;
@@ -21319,7 +21311,6 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
     return true;
   };
   for (const crew of state.crewMembers) {
-    const previousIdleReason = crew.idleReason;
     crew.idleReason = 'idle_available';
     const watchStatus: CrewWatchStatus = getCrewWatchStatus(state, crew);
     const routineSelfCareAllowed = watchStatus !== 'on-duty';
@@ -21470,9 +21461,8 @@ function updateCrewLogic(state: StationState, dt: number, occupancyByTile: Map<n
       // public interference is known here, so this bounded one-step margin
       // prevents a sampled crew energy value from slipping under the hard 18
       // floor merely because it crossed between two ticks.
-      routeStalledCrewToAssignedSleep(
+      routeCrewToAssignedSleepBeforeCriticalFloor(
         crew,
-        previousIdleReason,
         CREW_REST_CRITICAL_ENERGY_THRESHOLD + CREW_REST_PREEMPTION_MARGIN +
           dt * (0.24 + publicInterference * CREW_PUBLIC_CROWD_DRAIN) + 0.001
       )
