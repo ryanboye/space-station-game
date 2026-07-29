@@ -264,11 +264,11 @@ audited checklist with no unsupported checked claims.
 
 ### World Feedback
 
-- [ ] Show ship purpose and visit phase beside the physical interface.
-- [ ] Show likely cohort-size and stay ranges without full itinerary disclosure.
+- [x] Show ship purpose and visit phase beside the physical interface.
+- [x] Show likely cohort-size and stay ranges without full itinerary disclosure.
 - [x] Show recall and boarding physically.
 - [x] Show early departure and extension reasons.
-- [ ] Keep ship details hideable on small screens.
+- [x] Keep ship details hideable on small screens.
 
 ### Phase 1A Save And Checks
 
@@ -512,7 +512,7 @@ audited checklist with no unsupported checked claims.
 - [x] Derive floor-plate blueprints.
 - [x] Derive perimeter wall/bulkhead blueprints.
 - [x] Derive tie-in and doorway/airlock work.
-- [ ] Preserve editable plans before work completes.
+- [x] Preserve editable plans before work completes.
 - [x] Preserve cancellation and define material salvage/refund.
 - [x] Preserve module movement and resale.
 
@@ -567,7 +567,7 @@ audited checklist with no unsupported checked claims.
 - [x] Keep compact craft useful where frontage or approach clearance is constrained.
 - [x] Show the same silhouette in Approach Control, holding orbit, approach, docking,
   and departure.
-- [ ] Verify every fleet sprite at actual gameplay zoom and on every lane rotation.
+- [x] Verify every fleet sprite at actual gameplay zoom and on every lane rotation.
 
 ### World-Space Envelopes
 
@@ -804,7 +804,7 @@ audited checklist with no unsupported checked claims.
 - [x] Generate low-resolution Truss Junction art.
 - [x] Generate low-resolution Reinforced Bulkhead art.
 - [x] Add planned/delivered/welding/complete/overloaded structural states.
-- [ ] Add scaffold/floor/wall/seal/pressurizing states.
+- [x] Add scaffold/floor/wall/seal/pressurizing states.
 - [x] Add approach reservation animation.
 - [x] Add carried resource sprites.
 - [x] Add Gangway and clamp deployment states.
@@ -2783,3 +2783,25 @@ bugfixing phase.
   power class rates, the per-position soil rates and the 41% Community Table
   premium, the `4c + 0.18c` maintenance price, and the 2.5x-8x ladder band. All
   four are documented in place with their derivation.
+
+2026-07-28 · Interface disclosure, editable plans, fleet rotation, and construction states
+
+- Live browser play in `market-compact-conflict` showed each active call beside
+  its assigned Pod Dock with a coarse purpose, current phase, cohort range and
+  stay range. The persistent Show/Hide control collapses the operational detail,
+  and the cards default collapsed below 760px. Commit `37a28ca` implements the
+  disclosure; `9654d7b` prevents nearby live cards from painting over one another.
+- `npm run test:editable-construction-plans` passes four production-path cases:
+  ordinary floor, a 2x2 module cancelled from a covered tile, a multi-tile
+  structural piece, and a staged expansion both before delivery and during its
+  second stage. It proves exact once-only recovery, immediate cancel-to-replan,
+  synchronous reservation cleanup, and completed-work immutability (`a26215e`).
+- `npm run test:ship-fleet-visual` renders and verifies all eight hull variants
+  in all four lane rotations at the production 32px-per-tile zoom. The 32-frame
+  contact sheet was inspected for facing, clipping and silhouette distinction;
+  `npm run test:ship-fleet` separately preserves deterministic identity through
+  save/load (`d743675`).
+- `npm run test:construction-phase-art` and `npm run sprites:validate:v1` pass
+  for the five native-scale scaffold, floor, wall, seal and pressurizing frames.
+  The live `structural-expansion-active` browser scenario showed the scaffold
+  state on the actual exterior footprint while work advanced (`ee0cee0`).
