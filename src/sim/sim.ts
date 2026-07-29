@@ -1,4 +1,5 @@
 import { findPath as findPathCore } from './path';
+import { movementCrossSection, type MovementCrossSection } from './movement-capacity';
 import {
   BERTH_CAPITAL_COST,
   repairServiceCost,
@@ -16740,6 +16741,7 @@ type MovementIntent = {
   origin: number;
   target: number;
   narrowTiles: number[];
+  crossSection: MovementCrossSection;
   priority: number;
 };
 
@@ -16749,6 +16751,8 @@ type MovementCoordinator = {
   narrowCooldownUntil: Map<number, number>;
   /** Tiles a hand cart is physically clearing; this is a real short-lived corridor claim. */
   bulkyCooldownUntil: Map<number, number>;
+  /** Ephemeral right-of-way while opposed cohorts still occupy one choke. */
+  narrowDirectionBySection: Map<string, number>;
   kindByActor: Map<MovementActor, MovementActorKind>;
 };
 
@@ -17012,6 +17016,129 @@ function assignMovementYieldPaths(
   return relievedInbound;
 }
 
+function movementCrossSectionForActor(
+  state: StationState,
+  actor: MovementActor,
+  origin: number,
+  target: number
+): MovementCrossSection {
+  const section = movementCrossSection(state, origin, target);
+  if (!isServiceTarget(actor, origin) && !isServiceTarget(actor, target)) return section;
+  return {
+    ...section,
+    key: `service:${Math.min(origin, target)}:${Math.max(origin, target)}`,
+    capacity: 1,
+    lane: 0,
+    forcedSingle: true
+  };
+}
+
+/**
+ * A reciprocal exchange in a one-lane corridor is not a valid pass. After a
+ * visible bounded wait, the lower-priority traveler backs into a real empty
+ * floor tile and the other traveler advances. No hidden occupancy or durable
+ * reservation is introduced: this is the existing yield/replan mechanism
+ * applied to an ordinary topological choke.
+ */
+function assignNarrowOppositionYieldPaths(
+  state: StationState,
+  actors: Array<{ kind: MovementActorKind; actor: MovementActor }>,
+  occupancyByTile: Map<number, number>,
+  narrowDirectionBySection: Map<string, number>
+): Set<MovementActor> {
+  const protectedFromReplan = new Set<MovementActor>();
+  const byTile = new Map<number, { kind: MovementActorKind; actor: MovementActor }>();
+  for (const entry of actors) {
+    // Duplicate occupancy is invalid physics and cannot be repaired safely by
+    // choosing one of several occupants here.
+    if ((occupancyByTile.get(entry.actor.tileIndex) ?? 0) === 1) byTile.set(entry.actor.tileIndex, entry);
+  }
+  const handled = new Set<MovementActor>();
+  const ordered = [...actors].sort(
+    (a, b) =>
+      movementActorPriority(b.actor, b.kind) - movementActorPriority(a.actor, a.kind) ||
+      a.kind.localeCompare(b.kind) ||
+      a.actor.id - b.actor.id
+  );
+  for (const entry of ordered) {
+    const { actor } = entry;
+    if (handled.has(actor) || actor.path.length === 0) continue;
+    const opposed = byTile.get(actor.path[0]);
+    if (!opposed || opposed.actor.path[0] !== actor.tileIndex || handled.has(opposed.actor)) continue;
+    const section = movementCrossSectionForActor(state, actor, actor.tileIndex, actor.path[0]);
+    if (section.capacity > 1 || section.forcedSingle) continue;
+    handled.add(actor);
+    handled.add(opposed.actor);
+    if (Math.max(actor.blockedTicks, opposed.actor.blockedTicks) < MOVEMENT_REPLAN_BLOCKED_TICKS - 1) continue;
+
+    const pair = [entry, opposed].sort(
+      (a, b) =>
+        movementActorPriority(b.actor, b.kind) - movementActorPriority(a.actor, a.kind) ||
+        a.kind.localeCompare(b.kind) ||
+        a.actor.id - b.actor.id
+    );
+    const claimedDirection = narrowDirectionBySection.get(section.key);
+    const entryDirection = Math.sign(actor.path[0] - actor.tileIndex);
+    const advancingFirst = claimedDirection === entryDirection
+      ? entry
+      : claimedDirection === -entryDirection
+        ? opposed
+        : pair[0];
+    const yieldingFirst = advancingFirst === entry ? opposed : entry;
+    const attempts: Array<[
+      { kind: MovementActorKind; actor: MovementActor },
+      { kind: MovementActorKind; actor: MovementActor }
+    ]> = [[yieldingFirst, advancingFirst], [advancingFirst, yieldingFirst]];
+    for (const [yielding, advancing] of attempts) {
+      const awayDelta = yielding.actor.tileIndex - advancing.actor.tileIndex;
+      const chain: Array<{ kind: MovementActorKind; actor: MovementActor }> = [yielding];
+      let cursor = yielding.actor.tileIndex;
+      let emptyBackoff: number | null = null;
+      while (true) {
+        const backoff = cursor + awayDelta;
+        if (
+          backoff < 0 ||
+          backoff >= state.width * state.height ||
+          (Math.abs(awayDelta) === 1 && Math.floor(backoff / state.width) !== Math.floor(cursor / state.width)) ||
+          !isWalkable(state.tiles[backoff]) ||
+          state.moduleOccupancyByTile[backoff] !== null ||
+          isMovementHazard(state, backoff)
+        ) break;
+        const count = occupancyByTile.get(backoff) ?? 0;
+        if (count === 0) {
+          emptyBackoff = backoff;
+          break;
+        }
+        if (count !== 1) break;
+        const follower = byTile.get(backoff);
+        if (!follower || follower.actor === advancing.actor || isServiceTarget(follower.actor, follower.actor.tileIndex)) break;
+        const followsQueue = follower.actor.path[0] === cursor;
+        if (!followsQueue && !canYieldMovementTile(state, follower.kind, follower.actor)) break;
+        chain.push(follower);
+        cursor = backoff;
+      }
+      if (emptyBackoff === null) continue;
+      // Repoint the whole losing queue one tile away from the confrontation.
+      // Dependency approval then commits the physical chain tail-first into
+      // the one real empty tile; no actor is ever layered onto another.
+      for (let index = chain.length - 1; index >= 0; index -= 1) {
+        const member = chain[index];
+        const backoff = member.actor.tileIndex + awayDelta;
+        member.actor.path = [backoff];
+        member.actor.movementWaitReason = 'yielding to opposing traffic';
+        member.actor.movementReplanCooldownUntil = Math.max(
+          member.actor.movementReplanCooldownUntil ?? 0,
+          state.now + MOVEMENT_REPLAN_COOLDOWN_SEC
+        );
+        protectedFromReplan.add(member.actor);
+      }
+      protectedFromReplan.add(advancing.actor);
+      break;
+    }
+  }
+  return protectedFromReplan;
+}
+
 function beginMovementCoordinator(state: StationState, dt: number, occupancyByTile: Map<number, number>): void {
   const previous = movementCoordinatorByState.get(state);
   const coordinator: MovementCoordinator = {
@@ -17019,6 +17146,7 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     blockedReasonByKey: new Map<string, string>(),
     narrowCooldownUntil: new Map(),
     bulkyCooldownUntil: new Map(),
+    narrowDirectionBySection: new Map(previous?.narrowDirectionBySection ?? []),
     kindByActor: new Map()
   };
   for (const [tile, until] of previous?.narrowCooldownUntil ?? []) {
@@ -17031,6 +17159,9 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   const actors = movementActors(state);
   for (const { kind, actor } of actors) coordinator.kindByActor.set(actor, kind);
   const yieldingFor = assignMovementYieldPaths(state, actors, occupancyByTile);
+  for (const actor of assignNarrowOppositionYieldPaths(state, actors, occupancyByTile, coordinator.narrowDirectionBySection)) {
+    yieldingFor.add(actor);
+  }
   const activePassengerInterfaceOwner = new Map<number, Visitor>();
   for (const visitor of state.visitors) {
     if (!isPassengerTransferCrossing(visitor) || visitor.transferAccessTile === null || visitor.transferAccessTile === undefined) continue;
@@ -17080,6 +17211,7 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     const narrowTiles = [actor.tileIndex, target].filter(
       (tile, index, values) => values.indexOf(tile) === index && (state.tiles[tile] === TileType.Door || state.tiles[tile] === TileType.Airlock)
     );
+    const crossSection = movementCrossSectionForActor(state, actor, actor.tileIndex, target);
     intents.push({
       actor,
       kind,
@@ -17087,12 +17219,43 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
       origin: actor.tileIndex,
       target,
       narrowTiles,
+      crossSection,
       priority: movementActorPriority(actor, kind)
     });
   }
 
   const compare = (a: MovementIntent, b: MovementIntent): number =>
     b.priority - a.priority || a.kind.localeCompare(b.kind) || a.actor.id - b.actor.id;
+  const byCapacitySection = new Map<string, MovementIntent[]>();
+  for (const intent of intents) {
+    if (intent.crossSection.capacity > 1 || intent.crossSection.forcedSingle) continue;
+    const bucket = byCapacitySection.get(intent.crossSection.key) ?? [];
+    bucket.push(intent);
+    byCapacitySection.set(intent.crossSection.key, bucket);
+  }
+  const activeCapacitySections = new Set<string>();
+  for (const [sectionKey, bucket] of byCapacitySection) {
+    const directions = new Set(bucket.map((intent) => Math.sign(intent.target - intent.origin)));
+    if (directions.size < 2) {
+      const soleDirection = directions.values().next().value as number | undefined;
+      if (soleDirection !== undefined && coordinator.narrowDirectionBySection.get(sectionKey) === soleDirection) {
+        activeCapacitySections.add(sectionKey);
+      } else {
+        coordinator.narrowDirectionBySection.delete(sectionKey);
+      }
+      continue;
+    }
+    activeCapacitySections.add(sectionKey);
+    const priorDirection = coordinator.narrowDirectionBySection.get(sectionKey);
+    const winner = [...bucket].sort(compare)[0];
+    const allowedDirection = priorDirection && directions.has(priorDirection)
+      ? priorDirection
+      : Math.sign(winner.target - winner.origin);
+    coordinator.narrowDirectionBySection.set(sectionKey, allowedDirection);
+  }
+  for (const sectionKey of [...coordinator.narrowDirectionBySection.keys()]) {
+    if (!activeCapacitySections.has(sectionKey)) coordinator.narrowDirectionBySection.delete(sectionKey);
+  }
   const byTarget = new Map<number, MovementIntent[]>();
   for (const intent of intents) {
     const bucket = byTarget.get(intent.target) ?? [];
@@ -17102,8 +17265,21 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   const candidates = new Set<MovementIntent>();
   for (const bucket of byTarget.values()) {
     bucket.sort(compare);
-    candidates.add(bucket[0]);
-    for (const loser of bucket.slice(1)) coordinator.blockedReasonByKey.set(loser.key, 'yielding to another traveler');
+    const eligible = bucket.filter((intent) => {
+      const allowedDirection = coordinator.narrowDirectionBySection.get(intent.crossSection.key);
+      return allowedDirection === undefined || Math.sign(intent.target - intent.origin) === allowedDirection;
+    });
+    if (eligible[0]) candidates.add(eligible[0]);
+    for (const loser of bucket) {
+      if (loser === eligible[0]) continue;
+      const allowedDirection = coordinator.narrowDirectionBySection.get(loser.crossSection.key);
+      coordinator.blockedReasonByKey.set(
+        loser.key,
+        allowedDirection !== undefined && Math.sign(loser.target - loser.origin) !== allowedDirection
+          ? 'opposing traffic in narrow corridor'
+          : 'yielding to another traveler'
+      );
+    }
   }
 
   // A door/airlock is a single simulation-time crossing, even when one actor
@@ -17145,6 +17321,11 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
   const canSwap = (a: MovementIntent, b: MovementIntent): boolean => {
     if (a.origin !== b.target || a.target !== b.origin) return false;
     if (a.narrowTiles.length > 0 || b.narrowTiles.length > 0) return false;
+    if (a.crossSection.capacity <= 1 || b.crossSection.capacity <= 1) {
+      coordinator.blockedReasonByKey.set(a.key, 'opposing traffic in narrow corridor');
+      coordinator.blockedReasonByKey.set(b.key, 'opposing traffic in narrow corridor');
+      return false;
+    }
     if (isServiceTarget(a.actor, a.target) || isServiceTarget(b.actor, b.target)) return false;
     if (state.modules[a.target] !== ModuleType.None || state.modules[b.target] !== ModuleType.None) return false;
     if (isMovementHazard(state, a.origin) || isMovementHazard(state, a.target)) return false;

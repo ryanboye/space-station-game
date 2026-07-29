@@ -225,7 +225,7 @@ function testIdleBlockerMakesRoom(): void {
   assert(idle.tileIndex !== blockedTile && idle.tileIndex !== origin, 'The idle blocker should sidestep to a distinct free tile.');
 }
 
-function testInitialCrewAndCorridorExchange(): void {
+function testInitialCrewAndCorridorNoGhost(): void {
   const initial = createInitialState({ seed: 5051, physicalStarterInventory: true });
   assert(
     new Set(initial.crewMembers.map((crew) => crew.tileIndex)).size === initial.crewMembers.length,
@@ -238,6 +238,7 @@ function testInitialCrewAndCorridorExchange(): void {
   for (const tile of [at(state, 40, 39), at(state, 40, 41), at(state, 41, 39), at(state, 41, 41), at(state, 42, 40)]) {
     state.tiles[tile] = TileType.Wall;
   }
+  state.topologyVersion += 1;
   const courier = placeCrew(state, 1, origin, [blockedTile], {
     carryingItemType: 'rawMaterial',
     carryingAmount: 1,
@@ -246,7 +247,10 @@ function testInitialCrewAndCorridorExchange(): void {
   const idle = placeCrew(state, 2, blockedTile, []);
   state.crewMembers = [courier, idle];
   runMovementCoordinatorTestTick(state, 0.2);
-  assert(courier.tileIndex === blockedTile && idle.tileIndex === origin, 'A pathless blocker should exchange places with a hand courier in a one-tile corridor.');
+  assert(
+    courier.tileIndex !== blockedTile && courier.tileIndex !== idle.tileIndex,
+    'A terminal one-tile corridor must not resolve a physical impasse by ghosting actors through each other.'
+  );
 }
 
 const tests: Array<[string, () => void]> = [
@@ -257,7 +261,7 @@ const tests: Array<[string, () => void]> = [
   ['idle-cleaner-door-sidestep', testIdleCleanerSidestepsHeadOnDoorTraffic],
   ['congestion-replan-save', testCongestionReplanAndSave],
   ['idle-blocker-yields', testIdleBlockerMakesRoom],
-  ['initial-spawn-corridor-exchange', testInitialCrewAndCorridorExchange]
+  ['initial-spawn-corridor-no-ghost', testInitialCrewAndCorridorNoGhost]
 ];
 
 for (const [name, test] of tests) {

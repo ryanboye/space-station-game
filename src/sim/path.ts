@@ -1,3 +1,4 @@
+import { movementCapacityRoutePenalty } from './movement-capacity';
 import { RoomType, ZoneType, isWalkable, type PathOptions, type StationState } from './types';
 
 const CARDINAL_DELTAS: Array<[number, number]> = [
@@ -285,7 +286,8 @@ export function findPath(
       if (closed[next]) continue;
       const occupancyPenalty = occupancyPenaltyForIntent(options, occupancyByTile?.get(next) ?? 0);
       const routeCost = routeIntentTileCost(state, next, goal, options);
-      const tentativeG = currentG + 1 + occupancyPenalty + routeCost + routeVariationCost(next, options);
+      const capacityCost = movementCapacityRoutePenalty(state, current, next);
+      const tentativeG = currentG + 1 + occupancyPenalty + routeCost + capacityCost + routeVariationCost(next, options);
       if (tentativeG >= gScore[next]) continue;
       cameFrom[next] = current;
       gScore[next] = tentativeG;
