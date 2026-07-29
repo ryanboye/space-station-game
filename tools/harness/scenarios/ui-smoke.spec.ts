@@ -1,18 +1,18 @@
 /**
- * ui-smoke — click through every top-bar button and modal.
+ * ui-smoke — click through the currently player-visible chrome and palettes.
  *
- * Ensures every UI surface opens without throwing a runtime error.
+ * Ensures every active chrome surface opens without throwing a runtime error.
  * No state assertions — this is purely a crash-catch for UI code paths
  * that test:sim never exercises (it's headless, no DOM).
  *
  * Pass criteria:
  *   - Zero pageerror events throughout
- *   - Every panel/modal opens (element visible after click)
+ *   - Every active panel/modal opens (element visible after click)
  *   - Zero console.errors containing 'TypeError' or 'is not a function'
- *   - All topbar buttons are present in the DOM
+ *   - Active chrome and overlay controls are present in the DOM
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'node:url';
@@ -35,23 +35,28 @@ test.beforeEach(async ({ page }) => {
   // Attach to page context so afterEach can read it
   (page as unknown as Record<string, unknown>)._harnessErrors = errors;
 
-  await page.goto('/');
+  // A named scenario bypasses the title screen and guarantees every test
+  // begins in the same live station rather than depending on local saves.
+  await page.goto('/?scenario=starter');
   await page.waitForFunction(() => window.__harnessReady === true, { timeout: 15_000 });
   // Pause sim so UI interactions aren't racing against tick updates
   await page.evaluate(() => window.__harnessPauseAndFlush());
 });
 
-test('ui-smoke: all topbar buttons exist in DOM', async ({ page }) => {
+async function openOverlaysPalette(page: Page): Promise<void> {
+  await page.locator('button.palette-tab[data-palette-target="overlays"]').click();
+  await expect(page.locator('[data-palette-section="overlays"]')).toHaveClass(/active/);
+}
+
+test('ui-smoke: active chrome and palette controls exist', async ({ page }) => {
   const buttons = [
     '#open-save-modal',
-    '#open-market',
-    '#open-expansion-modal',
-    '#open-progression-modal',
+    '#open-rating-modal',
+    '#open-economy-ledger',
+    '#open-port-dispatch',
     '#toggle-zones',
     '#toggle-service-nodes',
     '#toggle-inventory-overlay',
-    '#toggle-sprites',
-    '#toggle-sprite-fallback',
     '#camera-reset',
   ];
 
@@ -64,54 +69,51 @@ test('ui-smoke: all topbar buttons exist in DOM', async ({ page }) => {
 
 test('ui-smoke: save/load modal opens and closes', async ({ page }) => {
   await page.click('#open-save-modal');
-  // Modal should appear — look for a dialog or overlay with save-related content
-  const modal = page.locator('.modal, [role="dialog"], #save-modal, .save-modal').first();
-  // If the modal selector doesn't match, take a screenshot to debug
-  const count = await modal.count();
-  if (count === 0) {
-    await page.screenshot({ path: path.join(RUN_DIR, 'save-modal-debug.png') });
-    // Don't hard-fail here — take a screenshot and note it, let the error log catch real issues
-    console.warn('[ui-smoke] save modal element not found by generic selector — check screenshot');
-  } else {
-    await expect(modal).toBeVisible();
-  }
+  await expect(page.locator('#save-modal')).toBeVisible();
 
   // Close via escape or a close button
   await page.keyboard.press('Escape');
+  await expect(page.locator('#save-modal')).toBeHidden();
   await page.screenshot({ path: path.join(RUN_DIR, 'save-modal-closed.png') });
 });
 
-test('ui-smoke: market modal opens and closes', async ({ page }) => {
-  await page.click('#open-market');
-  await page.waitForTimeout(300); // brief settle
-  await page.screenshot({ path: path.join(RUN_DIR, 'market-open.png') });
-  await page.keyboard.press('Escape');
+test('ui-smoke: operating ledger opens and closes', async ({ page }) => {
+  await page.click('#open-economy-ledger');
+  const ledger = page.getByRole('dialog', { name: 'Credits and cash flow' });
+  await expect(ledger).toBeVisible();
+  await page.screenshot({ path: path.join(RUN_DIR, 'economy-ledger-open.png') });
+  await page.locator('[data-oe-close="ledger"]').click();
+  await expect(ledger).toBeHidden();
 });
 
-test('ui-smoke: expansion modal opens and closes', async ({ page }) => {
-  await page.click('#open-expansion-modal');
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: path.join(RUN_DIR, 'expansion-open.png') });
-  await page.keyboard.press('Escape');
+test('ui-smoke: station rating opens and closes', async ({ page }) => {
+  await page.click('#open-rating-modal');
+  const rating = page.locator('#rating-modal');
+  await expect(rating).toBeVisible();
+  await page.screenshot({ path: path.join(RUN_DIR, 'rating-open.png') });
+  await page.locator('#close-rating-modal').click();
+  await expect(rating).toBeHidden();
 });
 
-test('ui-smoke: progression modal opens and closes', async ({ page }) => {
-  await page.click('#open-progression-modal');
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: path.join(RUN_DIR, 'progression-open.png') });
-  await page.keyboard.press('Escape');
+test('ui-smoke: approach control opens and closes', async ({ page }) => {
+  await page.click('#open-port-dispatch');
+  const dispatch = page.locator('#port-dispatch-modal');
+  await expect(dispatch).toBeVisible();
+  await page.screenshot({ path: path.join(RUN_DIR, 'approach-control-open.png') });
+  await page.locator('#close-port-dispatch').click();
+  await expect(dispatch).toBeHidden();
 });
 
 test('ui-smoke: toggle buttons cycle without errors', async ({ page }) => {
+  await openOverlaysPalette(page);
   const toggles = [
     '#toggle-zones',
     '#toggle-service-nodes',
     '#toggle-inventory-overlay',
-    '#toggle-sprites',
-    '#toggle-sprite-fallback',
   ];
 
   for (const selector of toggles) {
+    await expect(page.locator(selector)).toBeVisible();
     // Click on, click off
     await page.click(selector);
     await page.click(selector);
@@ -133,12 +135,13 @@ test('ui-smoke: zero pageerrors across all interactions', async ({ page }) => {
   // Run a quick tour of all top-bar actions in one page session
   await page.click('#open-save-modal');
   await page.keyboard.press('Escape');
-  await page.click('#open-market');
-  await page.keyboard.press('Escape');
-  await page.click('#open-expansion-modal');
-  await page.keyboard.press('Escape');
-  await page.click('#open-progression-modal');
-  await page.keyboard.press('Escape');
+  await page.click('#open-economy-ledger');
+  await page.locator('[data-oe-close="ledger"]').click();
+  await page.click('#open-rating-modal');
+  await page.locator('#close-rating-modal').click();
+  await page.click('#open-port-dispatch');
+  await page.locator('#close-port-dispatch').click();
+  await openOverlaysPalette(page);
   await page.click('#toggle-zones');
   await page.click('#toggle-zones');
   await page.click('#camera-reset');
