@@ -1,4 +1,4 @@
-import { ModuleType, RoomType, type BerthSizeClass, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type SanitationSource, type ShipType } from './types';
+import { ModuleType, RoomType, type BerthSizeClass, type FacilityActivityKind, type RoomDefinition, type RoomEnvironmentTraits, type SanitationSource, type ShipType, type VisitStayClass } from './types';
 
 export type ModuleDefinition = {
   width: number;
@@ -1074,16 +1074,49 @@ export const TASK_TIMINGS = {
 } as const;
 
 /**
- * Share of arriving passengers who check a bag into station custody.
+ * Who checks a bag into station custody.
  *
  * Every checked bag is two crew haul jobs — inbound to the claim desk, outbound
  * back to the ship — so binding one to every passenger turned a 17-seat liner
  * into 34 haul jobs and a 30-seat one into 60. No plausible cargo crew clears
  * that inside a visit window, and an unreturned bag blocks boarding, so the
- * overflow converted directly into stranded passengers. Most travellers keep
- * their bag in hand; only a minority check one.
+ * overflow converted directly into stranded passengers.
+ *
+ * The odds come from who the traveller actually is rather than a flat rate, so
+ * baggage labour becomes a readable consequence of the traffic mix a station
+ * courts: a colonist berth is a real haulage commitment, a military errand is
+ * not. Length of stay is the strongest predictor and sets the base.
  */
-export const CHECKED_LUGGAGE_SHARE = 0.2;
+export const CHECKED_LUGGAGE_BASE_BY_STAY: Record<VisitStayClass, number> = {
+  errand: 0.02,
+  shore: 0.14,
+  contract: 0.34,
+  extended: 0.62,
+  permanent: 0.88
+};
+
+/** Colonists move households; working hulls keep their kit aboard. */
+export const CHECKED_LUGGAGE_SHIP_FACTOR: Record<ShipType, number> = {
+  colonist: 1.6,
+  tourist: 1.3,
+  trader: 0.8,
+  industrial: 0.55,
+  military: 0.45
+};
+
+/** Ceiling so no traffic mix can recreate the bag-per-passenger flood. */
+export const CHECKED_LUGGAGE_MAX_SHARE = 0.7;
+
+/**
+ * Spare berths a departing hull will sell to someone stranded on the station.
+ *
+ * A stranded passenger is a person trying to get home, not a station fixture.
+ * They keep living on the station — sleeping, eating, spending, and answerable
+ * to Security like any other guest — and take the first outbound hull with room
+ * for them. A ship can squeeze in a few beyond its manifest, so passage does not
+ * depend on a departure that happens to be under-booked.
+ */
+export const STRANDED_OVERSTOCK_SHARE = 0.15;
 
 /** Visit clocks are centralized so Phase 1A can be tuned without touching port logic. */
 export const VISIT_TIMINGS = {

@@ -21,7 +21,10 @@ import {
   SERVICE_CAPACITY,
   TASK_TIMINGS,
   VISIT_TIMINGS,
-  CHECKED_LUGGAGE_SHARE
+  CHECKED_LUGGAGE_BASE_BY_STAY,
+  CHECKED_LUGGAGE_SHIP_FACTOR,
+  CHECKED_LUGGAGE_MAX_SHARE,
+  STRANDED_OVERSTOCK_SHARE
 } from './balance';
 import {
   createVisitorNeeds,
@@ -7789,12 +7792,25 @@ function reachableArrivalDeskClaimTile(state: StationState, handoffTile: number)
 /**
  * Whether this passenger checked a bag, stable for the life of the visitor.
  *
- * Hashed from the id rather than drawn from the RNG so a save/resume cannot
- * change who owns a bag mid-visit and orphan a live custody row.
+ * The odds are drawn from who the traveller is — how long they are staying and
+ * what hull they came in on — so a colonist berth is a real haulage commitment
+ * and a military errand costs the station almost nothing. Two travellers off the
+ * same ship still differ, because the roll is per passenger.
+ *
+ * Hashed from the id rather than taken from state.rng() so a save/resume cannot
+ * change who owns a bag mid-visit and orphan a live custody row. The hash is the
+ * roll; the odds it is compared against come from the traveller.
  */
-function passengerChecksBag(visitorId: number): boolean {
+function passengerChecksBag(
+  visitorId: number,
+  stayClass: VisitStayClass | undefined,
+  shipType: ShipType | undefined
+): boolean {
+  const base = CHECKED_LUGGAGE_BASE_BY_STAY[stayClass ?? 'shore'];
+  const factor = shipType === undefined ? 1 : CHECKED_LUGGAGE_SHIP_FACTOR[shipType];
+  const odds = Math.min(CHECKED_LUGGAGE_MAX_SHARE, Math.max(0, base * factor));
   const hash = Math.imul(visitorId ^ 0x9e3779b9, 2654435761) >>> 0;
-  return (hash % 1000) / 1000 < CHECKED_LUGGAGE_SHARE;
+  return (hash % 10000) / 10000 < odds;
 }
 
 function bindVisitorLuggage(
@@ -7804,8 +7820,9 @@ function bindVisitorLuggage(
   handoffTile: number
 ): void {
   // Only checked bags enter station custody; the rest travel in hand and cost
-  // the station no haul work. See CHECKED_LUGGAGE_SHARE for why this is gated.
-  if (!passengerChecksBag(visitor.id)) return;
+  // the station no haul work. See CHECKED_LUGGAGE_BASE_BY_STAY for why.
+  const ship = state.arrivingShips.find((candidate) => candidate.id === shipId);
+  if (!passengerChecksBag(visitor.id, ship?.stayClass, ship?.shipType)) return;
   const id = luggageIdentity(shipId, visitor.id);
   const claimTile = reachableArrivalDeskClaimTile(state, handoffTile);
   state.luggageCustody = ensureManifestLuggage(state.luggageCustody, {
@@ -16605,6 +16622,24 @@ function beginShipRecall(state: StationState, ship: ArrivingShip): void {
     if (phase === 'disembark-crossing' || phase === 'boarding-queued' || phase === 'boarding-crossing') continue;
     stationSide.push(visitor);
   }
+  // Anyone stranded here is trying to get home. Rather than routing them through
+  // a bespoke flow, they join this hull's ordinary boarding queue: same recall
+  // ordering, same slots, same crossing. A ship carries a few beyond its manifest
+  // so passage does not depend on finding an under-booked departure, and no
+  // player action is required to make it happen.
+  const overstockSeats = Math.max(1, Math.floor(ship.passengersTotal * STRANDED_OVERSTOCK_SHARE));
+  const walkOns = state.visitors
+    .filter((visitor) => visitorIsStranded(visitor) && passengerTransferPhase(visitor) === 'station')
+    .sort((a, b) => (a.strandedAt ?? Number.POSITIVE_INFINITY) - (b.strandedAt ?? Number.POSITIVE_INFINITY) || a.id - b.id)
+    .slice(0, overstockSeats);
+  for (const visitor of walkOns) {
+    visitor.originShipId = ship.id;
+    visitor.strandedFromShipId = null;
+    visitor.strandedAt = null;
+    visitor.reliefEligibleAt = null;
+    state.commitment.strandedOccupants = Math.max(0, state.commitment.strandedOccupants - 1);
+    stationSide.push(visitor);
+  }
   const slots = passengerTransferSlotsForShip(state, ship);
   const slotLoad = new Map(slots.map((slot) => [slot.key, 0]));
   const ordered = recallBoardingOrder(state, stationSide, slots);
@@ -16739,15 +16774,17 @@ function purgeDepartedShipLuggage(state: StationState, shipId: number): void {
   };
 }
 
-function strandedReliefCost(visitor: Visitor): number {
-  const surcharge = visitor.serviceFailureStage === 'disruptive'
-    ? 50
-    : visitor.serviceFailureStage === 'distressed'
-      ? 30
-      : visitor.serviceFailureStage === 'balking'
-        ? 15
-        : 0;
-  return clamp(STRANDED_RELIEF_BASE_COST + surcharge, STRANDED_RELIEF_BASE_COST, 120);
+/**
+ * Arranging passage costs nothing.
+ *
+ * Charging for relief made a baggage-labour shortfall convert directly into
+ * permanent bankruptcy: passengers stranded, the bill grew with their mood, and
+ * the only lever cost money the station had stopped earning. Outbound hulls now
+ * pick them up on their own (see STRANDED_OVERSTOCK_SHARE), so this remains only
+ * as an immediate opt-out for a player who does not want to wait for one.
+ */
+function strandedReliefCost(_visitor: Visitor): number {
+  return 0;
 }
 
 /** Read-only transfer terms for a stranded passenger. */
