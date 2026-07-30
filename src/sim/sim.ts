@@ -7801,28 +7801,43 @@ function reachableArrivalDeskClaimTile(state: StationState, handoffTile: number)
  * change who owns a bag mid-visit and orphan a live custody row. The hash is the
  * roll; the odds it is compared against come from the traveller.
  */
-function passengerChecksBag(
-  visitorId: number,
-  stayClass: VisitStayClass | undefined,
-  shipType: ShipType | undefined
-): boolean {
-  const base = CHECKED_LUGGAGE_BASE_BY_STAY[stayClass ?? 'shore'];
-  const factor = shipType === undefined ? 1 : CHECKED_LUGGAGE_SHIP_FACTOR[shipType];
-  const odds = Math.min(CHECKED_LUGGAGE_MAX_SHARE, Math.max(0, base * factor));
-  const hash = Math.imul(visitorId ^ 0x9e3779b9, 2654435761) >>> 0;
-  return (hash % 10000) / 10000 < odds;
+function shipCheckedBagQuota(ship: ArrivingShip): number {
+  const base = CHECKED_LUGGAGE_BASE_BY_STAY[ship.stayClass ?? 'shore'];
+  const odds = Math.min(CHECKED_LUGGAGE_MAX_SHARE, Math.max(0, base * CHECKED_LUGGAGE_SHIP_FACTOR[ship.shipType]));
+  const total = Math.max(0, Math.floor(ship.passengersTotal));
+  if (total <= 0 || odds <= 0) return 0;
+  // At least one bag off any crewed manifest. A hull that lands a dozen people
+  // and hands over nothing at all reads as the baggage system being broken
+  // rather than as light packing, and it leaves the claim desk untested.
+  return Math.max(1, Math.min(total, Math.round(total * odds)));
+}
+
+function passengerChecksBag(ship: ArrivingShip | undefined, passengerIndex: number): boolean {
+  // No manifest behind this passenger — the focused test seam, or a visitor
+  // bound outside a ship. Custody was asked for explicitly, so honour it.
+  if (!ship) return true;
+  const total = Math.max(1, Math.floor(ship.passengersTotal));
+  const quota = shipCheckedBagQuota(ship);
+  if (quota <= 0) return false;
+  const index = ((Math.floor(passengerIndex) % total) + total) % total;
+  // Spread the quota evenly across manifest positions. Selecting each passenger
+  // by an independent roll let a small hull land on zero bags — or on every
+  // passenger carrying one — so the haulage bill did not match the stated odds.
+  // This yields exactly `quota` bags per manifest, every time.
+  return Math.floor(((index + 1) * quota) / total) > Math.floor((index * quota) / total);
 }
 
 function bindVisitorLuggage(
   state: StationState,
   visitor: Visitor,
   shipId: number,
-  handoffTile: number
+  handoffTile: number,
+  passengerIndex = 0
 ): void {
   // Only checked bags enter station custody; the rest travel in hand and cost
   // the station no haul work. See CHECKED_LUGGAGE_BASE_BY_STAY for why.
   const ship = state.arrivingShips.find((candidate) => candidate.id === shipId);
-  if (!passengerChecksBag(visitor.id, ship?.stayClass, ship?.shipType)) return;
+  if (!passengerChecksBag(ship, passengerIndex)) return;
   const id = luggageIdentity(shipId, visitor.id);
   const claimTile = reachableArrivalDeskClaimTile(state, handoffTile);
   state.luggageCustody = ensureManifestLuggage(state.luggageCustody, {
@@ -7839,9 +7854,10 @@ export function bindVisitorLuggageForTest(
   state: StationState,
   visitor: Visitor,
   shipId: number,
-  handoffTile: number
+  handoffTile: number,
+  passengerIndex = 0
 ): void {
-  bindVisitorLuggage(state, visitor, shipId, handoffTile);
+  bindVisitorLuggage(state, visitor, shipId, handoffTile, passengerIndex);
 }
 
 function refreshPassengerTransferReservation(state: StationState, visitor: Visitor, slotKey: string, targetTile: number): void {
@@ -16953,7 +16969,7 @@ function updateArrivingShips(state: StationState, dt: number): void {
         spawnVisitor(state, transferSlot.accessTile, ship, passengerIndex);
         const visitor = state.visitors[state.visitors.length - 1];
         if (visitor) {
-          bindVisitorLuggage(state, visitor, ship.id, transferSlot.stationTile);
+          bindVisitorLuggage(state, visitor, ship.id, transferSlot.stationTile, passengerIndex);
           queuePassengerTransfer(state, visitor, 'disembark', { preferredSlotKey: transferSlot.key });
         }
         ship.spawnCarry -= 1;
