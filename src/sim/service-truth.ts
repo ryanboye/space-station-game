@@ -97,6 +97,15 @@ export const SERVICE_FIXTURE_RULES: Record<ServiceKind, ServiceFixtureRule> = {
     rooms: [RoomType.Cantina, RoomType.CommercialUnit],
     modules: [
       ModuleType.BarCounter,
+      // The facility-scale bar run. Omitting these deadlocked every drink: a
+      // guest stood on a Service Bar stool holding a valid drink-pickup
+      // reservation, but because this table said the fixture could not serve
+      // drinks they never entered the Leisure state that ticks the service
+      // timer — so the pickup that would have cleared the wait was never
+      // evaluated. Pouring is gated on this table, so the run belongs in it.
+      ModuleType.ServiceBar,
+      ModuleType.BarCorner,
+      ModuleType.BarEnd,
       ModuleType.Tap,
       ModuleType.Bench,
       ModuleType.Couch,
