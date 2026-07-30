@@ -85,6 +85,22 @@ export type DiagnosticOverlay =
   // are overloaded or unsupported. Backed by structural-support.ts.
   | 'structural';
 
+/**
+ * How much in-world text the renderer may draw.
+ *
+ * `all` narrates every state including the healthy ones, `alerts` spends words
+ * only on subjects that want the player and collapses the rest to pips, and
+ * `off` leaves the world clear so it can be built in.
+ */
+export type WorldLabelDetail = 'off' | 'alerts' | 'all';
+
+/**
+ * Whether a world label is reporting a steady state, a passing outcome, or
+ * something that needs the player. Only `alert` survives `alerts` detail as
+ * text; the rest collapse to pips until their subject is hovered.
+ */
+export type WorldLabelSeverity = 'info' | 'notice' | 'alert';
+
 export type DriftSeverity = 'none' | 'low' | 'warning' | 'active' | 'severe';
 export type MapConditionKind = 'sunlight' | 'debris-risk' | 'thermal-sink';
 export type UtilityUnderlayKind =
@@ -2892,6 +2908,15 @@ export interface Controls {
   /** Earned workforce policy: shift minimums rebalance against live operational pressure. */
   crewAutoStaffEnabled: boolean;
   diagnosticOverlay: DiagnosticOverlay;
+  /**
+   * How much the world is allowed to narrate itself.
+   *
+   * Steady-state labels ("interface ok", "tenant", "service 40%") are the bulk
+   * of world text and almost never ask anything of the player, so `alerts`
+   * keeps them as pips and spends words only on the things that are stuck.
+   * `off` clears the world entirely for building.
+   */
+  worldLabelDetail: WorldLabelDetail;
   showZones: boolean;
   showServiceNodes: boolean;
   showInventoryOverlay: boolean;

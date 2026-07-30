@@ -74,6 +74,7 @@ import {
   rebuildDockEntities,
   orderFuelDetailed,
   quoteTravelSuppliesOrder,
+  quoteFuelOrder,
   admitTrafficOffer,
   acceptCommercialOffer,
   buyRawFoodDetailed,
@@ -180,7 +181,7 @@ import {
   validateDockPlacement
 } from './sim';
 import { MODULE_UNLOCK_TIER, ROOM_UNLOCK_TIER } from './sim/content/unlocks';
-import { BERTH_SIZE_MIN, MODULE_DEFINITIONS } from './sim/balance';
+import { BERTH_SIZE_MIN, MODULE_DEFINITIONS, OPENING_BALANCE } from './sim/balance';
 import {
   applyColdStartScenario,
   COLD_START_SCENARIO_NAMES
@@ -234,10 +235,15 @@ import {
 } from './sim/types';
 import { SHELF_MIXES, shelfMixOf } from './sim/facility-machines';
 
-// Temporary playtest valve: construction/EVA remains implemented, but the
-// primary build tools place immediately so other station systems can be tested
-// without early expansion bottlenecking on haul/build jobs.
-const INSTANT_BUILD_PLAYTEST = true;
+// Playtest valve: construction/EVA is fully implemented, but the primary build
+// tools can place immediately so other station systems can be tested without
+// early expansion bottlenecking on haul/build jobs.
+//
+// This is runtime-mutable via the Admin palette so a session can A/B the same
+// station: instant build for laying out a test, real construction for feeling
+// the structural-support, material, and EVA gates that `planTileConstruction`
+// enforces. Turning it off is what makes truss/junction rules bite.
+let INSTANT_BUILD_PLAYTEST = true;
 const startupParams = new URLSearchParams(window.location.search);
 let activeSaveStorageScope: SaveStorageScope = saveStorageScopeFromSearchParams(startupParams);
 const STRUCTURAL_EXPANSION_ENABLED = true;
@@ -552,6 +558,7 @@ app.innerHTML = `
       <button class="palette-tab" data-palette-target="modules">Modules</button>
       <button class="palette-tab" data-palette-target="crew">Crew</button>
       <button class="palette-tab" data-palette-target="overlays">Overlays</button>
+      <button class="palette-tab" data-palette-target="admin">Admin</button>
     </div>
     <div id="toolbar" aria-label="Build tools">
       <div class="tool-row palette-section active" data-palette-section="businesses">
@@ -717,6 +724,7 @@ app.innerHTML = `
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="structural" title="Show which frontage is structurally supported, planned, overloaded, or unsupported">Structural Support</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="route-pressure" title="Show visitor, crew, and freight routes plus conflicts">Foot Traffic</button>
         <button class="tool-btn diagnostic-toggle" data-diagnostic-overlay="reputation" title="Show local control, notoriety, value, and crime pressure">Security & Risk</button>
+        <button id="toggle-world-labels" class="tool-btn overlay-toggle" title="How much the station narrates itself in-world. Alerts only shows what needs you; Off clears the view for building. Hotkey: F6">World Labels: ALERTS</button>
         <button id="toggle-inventory-overlay" class="tool-btn overlay-toggle">Storage: OFF</button>
         <button id="toggle-service-nodes" class="tool-btn overlay-toggle">Service Reach: OFF</button>
         <button id="toggle-zones" class="tool-btn overlay-toggle">Zones: OFF</button>
@@ -724,6 +732,13 @@ app.innerHTML = `
         <button id="toggle-glow" class="tool-btn overlay-toggle legacy-ui">Glow: ON</button>
         <button id="toggle-sprites" class="tool-btn overlay-toggle legacy-ui">Sprites: OFF</button>
         <button id="toggle-sprite-fallback" class="tool-btn overlay-toggle legacy-ui">Force Fallback: OFF</button>
+      </div>
+      <div class="tool-row palette-section" data-palette-section="admin">
+        <span class="tool-row-label">Admin &amp; debug controls</span>
+        <button id="toggle-instant-build" class="tool-btn overlay-toggle" title="ON places tiles and modules immediately for layout testing. OFF routes every placement through planTileConstruction, which enforces structural support, materials, EVA, and build phases.">Instant Build: ON</button>
+        <small class="diagnostic-readout" id="instant-build-note">Instant build skips structural support, material, and EVA gates. Turn it off to feel truss/junction rules.</small>
+        <button id="admin-relieve-all-stranded" class="tool-btn overlay-toggle" title="Pay the relief transfer for every eligible stranded passenger at once">Relieve Stranded: none</button>
+        <small class="diagnostic-readout" id="admin-stranded-note">Stranded passengers never board a later ship on their own.</small>
       </div>
     </div>
   </aside>
@@ -1226,8 +1241,21 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
   siteBriefHost: document.querySelector<HTMLElement>('.left-stack'),
   onAction: (action) => {
     if (action.type === 'order-stock') {
-      const result = buyImportedTradeGoodsDetailed(state);
+      // Price and size come from the same view the player just read, so the
+      // charge always matches the number shown on the button.
+      const forecast = computeCharterOperatingForecast(state.site, state.system ?? undefined).economy;
+      const unitCost = supplierUnitCost(shopAnchorKind, forecast);
+      const free = shopAnchorKind === 'fuel'
+        ? (() => { const totals = fuelDepotTotals(); return totals.capacity - totals.stock; })()
+        : marketStockFreeCapacity();
+      const units = clampSupplierOrderUnits(shopAnchorKind, free);
+      const creditCost = Math.round(unitCost * units);
+      const result = shopAnchorKind === 'fuel'
+        ? orderFuelDetailed(state, creditCost, units)
+        : buyImportedTradeGoodsDetailed(state, creditCost, units);
       toolLockMessage = result.message;
+    } else if (action.type === 'set-order-units') {
+      supplierOrderUnits.set(shopAnchorKind, Math.max(1, Math.round(action.units)));
     } else if (action.type === 'set-pricing-policy') {
       setMarketPricingPolicy(state, action.policy);
     } else if (action.type === 'set-shelf-mix') {
@@ -1242,6 +1270,48 @@ const openingEconomyPanels = mountOpeningEconomyPanels({
     refreshOpeningEconomyPanels();
   }
 });
+
+/**
+ * Which consumable the anchored supplier panel is buying.
+ *
+ * A retail fixture sells travel supplies; a Fuel Tank sells propellant. Both use
+ * the same panel because the decision is identical: how many units, at what
+ * landed cost, into how much free capacity.
+ */
+type SupplierPanelKind = 'travel-supplies' | 'fuel';
+
+/** Player-chosen order size, kept per consumable across panel open/close. */
+const supplierOrderUnits = new Map<SupplierPanelKind, number>();
+
+function supplierBatch(kind: SupplierPanelKind): { units: number; costCredits: number } {
+  return kind === 'fuel' ? OPENING_BALANCE.fuelLot : OPENING_BALANCE.travelSupplyBatch;
+}
+
+/**
+ * Landed cost per unit at this site.
+ *
+ * The base batch price divided by its units gives the default rate; the site's
+ * wholesale multiplier is what makes a belt-adjacent station genuinely cheaper
+ * to resupply than a bare orbit.
+ */
+function supplierUnitCost(
+  kind: SupplierPanelKind,
+  economy: { supplyWholesaleMultiplier: number; fuelWholesaleMultiplier: number }
+): number {
+  const batch = supplierBatch(kind);
+  const multiplier = kind === 'fuel'
+    ? economy.fuelWholesaleMultiplier
+    : economy.supplyWholesaleMultiplier;
+  return (batch.costCredits / Math.max(1, batch.units)) * Math.max(0.01, multiplier);
+}
+
+/** Selected order size, clamped to remaining storage and defaulted to one batch. */
+function clampSupplierOrderUnits(kind: SupplierPanelKind, freeCapacity: number): number {
+  const batch = supplierBatch(kind);
+  const ceiling = Math.max(1, Math.floor(freeCapacity > 0 ? freeCapacity : batch.units));
+  const requested = supplierOrderUnits.get(kind) ?? batch.units;
+  return Math.max(1, Math.min(ceiling, Math.round(requested)));
+}
 
 function openingEconomyPanelView(): OpeningEconomyPanelView {
   // Pass the live SystemMap so the in-station Site Brief reads the same
@@ -1269,9 +1339,27 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
   );
   const recentUnitsSold = recentRetail.length;
   const recentMargin = recentRetail.reduce((sum, event) => sum + event.credits - event.costBasis, 0);
-  const travelSupplyQuote = quoteTravelSuppliesOrder(state);
-  const wholesaleUnitCost = travelSupplyQuote.creditCost / Math.max(1, travelSupplyQuote.requestedAmount);
+  // Local costs are real. The Site Brief already advertises "supplies N%
+  // wholesale / fuel feedstock N%", so the order path prices against the same
+  // multipliers instead of charging a flat batch rate the brief contradicts.
+  const supplyUnitCost = supplierUnitCost('travel-supplies', profile);
+  const fuelUnitCost = supplierUnitCost('fuel', profile);
+  const supplyUnits = clampSupplierOrderUnits('travel-supplies', capacity - stock);
+  const travelSupplyQuote = quoteTravelSuppliesOrder(
+    state,
+    Math.round(supplyUnitCost * supplyUnits),
+    supplyUnits
+  );
+  const wholesaleUnitCost = supplyUnitCost;
   const saleUnitPrice = 1.15 * 5.5 * policy.salePriceMultiplier * profile.retailDemandMultiplier;
+  const fuelTotals = fuelDepotTotals();
+  const fuelUnits = clampSupplierOrderUnits('fuel', fuelTotals.capacity - fuelTotals.stock);
+  const fuelQuote = quoteFuelOrder(state, Math.round(fuelUnitCost * fuelUnits), fuelUnits);
+  const recentFuel = state.openingEconomy.ledger.recent.filter(
+    (event) => event.kind === 'fuel-sale' && event.at >= state.now - 120
+  );
+  const recentFuelUnitsSold = recentFuel.length;
+  const recentFuelMargin = recentFuel.reduce((sum, event) => sum + event.credits - event.costBasis, 0);
   const grouped = [
     { label: 'Travelers and docking', credits: summary.byKind['dock-fee'].net + summary.byKind['passenger-service'].net },
     { label: 'Meals and retail', credits: summary.byKind['retail-sale'].net },
@@ -1312,26 +1400,69 @@ function openingEconomyPanelView(): OpeningEconomyPanelView {
         at: Math.max(0, state.now - event.at)
       }))
     },
-    shop: {
-      stock,
-      capacity,
-      wholesaleUnitCost,
-      saleUnitPrice,
-      recentUnitsSold,
-      recentMargin,
-      demandLabel: profile.trafficLabel,
-      demandDetail: `${state.openingEconomy.marketPricingPolicy} pricing · ${Math.round(profile.retailDemandMultiplier * policy.demandMultiplier * 100)}% local demand`,
-      pricingPolicy: state.openingEconomy.marketPricingPolicy,
-      canOrderStock: travelSupplyQuote.ok,
-      orderLabel: travelSupplyQuote.reason === 'delivery_pending'
-        ? 'Supplier pod en route'
-        : `Order ${travelSupplyQuote.requestedAmount} supplies by pod`,
-      orderCost: travelSupplyQuote.creditCost,
-      emptyStockMessage: travelSupplyQuote.ok
-        ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
-        : travelSupplyQuote.message,
-      assortment
-    },
+    shop: shopAnchorKind === 'fuel'
+      ? {
+          kind: 'fuel',
+          title: 'Fuel Depot',
+          unitNoun: 'fuel',
+          stock: fuelTotals.stock,
+          capacity: fuelTotals.capacity,
+          wholesaleUnitCost: fuelUnitCost,
+          // Refuel work is a service sale, so the comparison price is what a
+          // ship pays per unit rather than a shelf markup.
+          saleUnitPrice: fuelUnitCost * (profile.fuelSaleMultiplier / Math.max(0.01, profile.fuelWholesaleMultiplier)),
+          recentUnitsSold: recentFuelUnitsSold,
+          recentMargin: recentFuelMargin,
+          demandLabel: profile.trafficLabel,
+          demandDetail: `${Math.round(profile.fuelSaleMultiplier * 100)}% local fuel sale rate`,
+          canOrderStock: fuelQuote.ok,
+          orderLabel: fuelQuote.reason === 'delivery_pending'
+            ? 'Supplier pod en route'
+            : `Order ${fuelQuote.requestedAmount} fuel by pod`,
+          orderCost: fuelQuote.creditCost,
+          emptyStockMessage: fuelQuote.ok
+            ? 'No fuel in the tanks. Order a supplier pod or ships cannot refuel.'
+            : fuelQuote.message,
+          order: {
+            units: fuelUnits,
+            step: OPENING_BALANCE.fuelLot.units,
+            maxUnits: Math.max(1, Math.floor(fuelTotals.capacity - fuelTotals.stock)),
+            affordableUnits: Math.max(1, Math.floor(state.metrics.credits / Math.max(0.01, fuelUnitCost))),
+            unitCost: fuelUnitCost,
+            priceBasis: `${Math.round(profile.fuelWholesaleMultiplier * 100)}% feedstock at this site`
+          }
+        }
+      : {
+          kind: 'travel-supplies',
+          title: 'Travel Supplies Shop',
+          unitNoun: 'supplies',
+          stock,
+          capacity,
+          wholesaleUnitCost,
+          saleUnitPrice,
+          recentUnitsSold,
+          recentMargin,
+          demandLabel: profile.trafficLabel,
+          demandDetail: `${state.openingEconomy.marketPricingPolicy} pricing · ${Math.round(profile.retailDemandMultiplier * policy.demandMultiplier * 100)}% local demand`,
+          pricingPolicy: state.openingEconomy.marketPricingPolicy,
+          canOrderStock: travelSupplyQuote.ok,
+          orderLabel: travelSupplyQuote.reason === 'delivery_pending'
+            ? 'Supplier pod en route'
+            : `Order ${travelSupplyQuote.requestedAmount} supplies by pod`,
+          orderCost: travelSupplyQuote.creditCost,
+          emptyStockMessage: travelSupplyQuote.ok
+            ? 'Out of travel supplies. Order a supplier pod or travelers cannot shop.'
+            : travelSupplyQuote.message,
+          order: {
+            units: supplyUnits,
+            step: OPENING_BALANCE.travelSupplyBatch.units,
+            maxUnits: Math.max(1, Math.floor(capacity - stock)),
+            affordableUnits: Math.max(1, Math.floor(state.metrics.credits / Math.max(0.01, supplyUnitCost))),
+            unitCost: supplyUnitCost,
+            priceBasis: `${Math.round(profile.supplyWholesaleMultiplier * 100)}% wholesale at this site`
+          },
+          assortment
+        },
     // Same shared forecast the Charter screen rendered before the game
     // started, so the site reading stays recognizable after opening.
     siteBrief: {
@@ -1383,12 +1514,47 @@ const MARKET_FIXTURE_TYPES = new Set<ModuleType>([
 /** Origin tile the shop panel is currently pinned to, or null when closed. */
 let shopAnchorTile: number | null = null;
 
+/** Which consumable the pinned panel is buying. A Fuel Tank anchors the fuel view. */
+let shopAnchorKind: SupplierPanelKind = 'travel-supplies';
+
 /** The clicked tile's market fixture, reported by its origin tile. */
 function marketFixtureOriginAtTile(tileIndex: number): number | null {
   const moduleId = state.moduleOccupancyByTile[tileIndex] ?? -1;
   if (moduleId < 0) return null;
   const module = state.moduleInstances.find((entry) => entry.id === moduleId);
   return module && MARKET_FIXTURE_TYPES.has(module.type) ? module.originTile : null;
+}
+
+/** The clicked tile's Fuel Tank, reported by its origin tile. */
+function fuelTankOriginAtTile(tileIndex: number): number | null {
+  const moduleId = state.moduleOccupancyByTile[tileIndex] ?? -1;
+  if (moduleId < 0) return null;
+  const module = state.moduleInstances.find((entry) => entry.id === moduleId);
+  return module && module.type === ModuleType.FuelTank ? module.originTile : null;
+}
+
+/** Free travel-supplies capacity across every retail fixture. */
+function marketStockFreeCapacity(): number {
+  const tiles = new Set(
+    state.moduleInstances.filter((module) => MARKET_FIXTURE_TYPES.has(module.type)).map((module) => module.originTile)
+  );
+  const nodes = state.itemNodes.filter((node) => tiles.has(node.tileIndex));
+  const stock = nodes.reduce((sum, node) => sum + Math.max(0, node.items.tradeGood ?? 0), 0);
+  const capacity = nodes.reduce((sum, node) => sum + Math.max(0, node.capacity), 0);
+  return capacity - stock;
+}
+
+/** Fuel on hand and tank capacity across every Fuel Tank on the station. */
+function fuelDepotTotals(): { stock: number; capacity: number } {
+  let stock = 0;
+  let capacity = 0;
+  for (const module of state.moduleInstances) {
+    if (module.type !== ModuleType.FuelTank) continue;
+    const node = state.itemNodes.find((entry) => entry.tileIndex === module.originTile);
+    stock += Math.max(0, node?.items.fuel ?? 0);
+    capacity += Math.max(0, node?.capacity ?? 0);
+  }
+  return { stock, capacity };
 }
 
 function firstMarketFixtureTile(): number | null {
@@ -1402,8 +1568,9 @@ function firstMarketFixtureTile(): number | null {
  * Shelf Aisle exists so the player can price the opening order — there is
  * nothing to anchor to and the panel falls back to the centered layout.
  */
-function openMarketSurface(anchorTile: number | null): void {
+function openMarketSurface(anchorTile: number | null, kind: SupplierPanelKind = 'travel-supplies'): void {
   shopAnchorTile = anchorTile;
+  shopAnchorKind = kind;
   refreshOpeningEconomyPanels();
   if (anchorTile === null) {
     openingEconomyPanels.open('shop');
@@ -1422,7 +1589,10 @@ function syncAnchoredShopPanel(): void {
   }
   // Selling or demolishing the fixture takes its operating surface with it,
   // rather than leaving a shop card pointing at empty floor.
-  if (marketFixtureOriginAtTile(shopAnchorTile) === null) {
+  const anchorStillThere = shopAnchorKind === 'fuel'
+    ? fuelTankOriginAtTile(shopAnchorTile) !== null
+    : marketFixtureOriginAtTile(shopAnchorTile) !== null;
+  if (!anchorStillThere) {
     shopAnchorTile = null;
     openingEconomyPanels.close();
     return;
@@ -1432,60 +1602,19 @@ function syncAnchoredShopPanel(): void {
 }
 
 function drawOpeningDockFeedback(renderViewport: RenderViewport | null): void {
+  if (state.controls.worldLabelDetail === 'off') {
+    dockEconomyFeedback.clear();
+    return;
+  }
   const podShips = state.arrivingShips.filter((ship) => ship.smallCraftVisit);
   const liveShipIds = new Set(podShips.filter((ship) => ship.stage !== 'depart').map((ship) => ship.id));
-  const arrivals = podShips
-    .filter((ship) => ship.stage !== 'depart' && ship.assignedDockId !== null)
-    .flatMap((ship) => {
-      const dock = state.docks.find((candidate) => candidate.id === ship.assignedDockId);
-      if (!dock) return [];
-      const dockTile = dock.moduleId === undefined
-        ? dock.tiles[0]
-        : state.moduleInstances.find((module) => module.id === dock.moduleId)?.originTile ?? dock.tiles[0];
-      const freightOperation = state.openingEconomy.podFreightOperations.find((operation) =>
-        operation.dockId === dock.id &&
-        operation.status !== 'complete' &&
-        operation.status !== 'cancelled' &&
-        operation.status !== 'expired'
-      );
-      const wants: string[] = [];
-      if (ship.manifestDemand.cafeteria >= 0.3) wants.push('food');
-      if (ship.manifestDemand.market >= 0.22) wants.push('supplies');
-      for (const service of ship.smallCraftVisit?.services ?? []) {
-        if (service.kind === 'refuel') wants.push('fuel');
-        if (service.kind === 'freight') wants.push('cargo');
-        if (service.kind === 'repair') wants.push('repair');
-      }
-      // OPEN-02 asks the chip to show request, current operation, and result.
-      // The middle one comes from whatever service is physically running now.
-      const runningService = ship.smallCraftVisit?.services.find((service) => service.status === 'active');
-      const activeOperation = runningService
-        ? `${runningService.kind} ${Math.round(clamp(runningService.progress, 0, 1) * 100)}%`
-        : ship.smallCraftVisit?.services.find((service) => service.status === 'blocked')
-          ? `blocked: ${ship.smallCraftVisit.services.find((service) => service.status === 'blocked')?.blockedReason ?? 'no facility'}`
-          : '';
-      const remainingFreight = freightOperation?.kind === 'supplier-delivery'
-        ? Math.max(0, freightOperation.orderedUnits - freightOperation.unloadedUnits)
-        : freightOperation?.kind === 'courier-handling'
-          ? Math.max(0, freightOperation.consignedUnits - freightOperation.completedUnits)
-          : 0;
-      return [{
-        visitId: ship.id,
-        dockTileIndex: dockTile,
-        label: freightOperation?.kind === 'supplier-delivery'
-          ? 'Supplier delivery'
-          : freightOperation?.kind === 'courier-handling'
-            ? 'Courier handling'
-            : `Pod ${ship.id}`,
-        demand: freightOperation?.kind === 'supplier-delivery'
-          ? `${remainingFreight} travel supplies for your shop`
-          : freightOperation?.kind === 'courier-handling'
-            ? `${freightOperation.direction} · ${remainingFreight} consigned crates`
-            : `${ship.passengersTotal} traveler${ship.passengersTotal === 1 ? '' : 's'} · ${[...new Set(wants)].join(' + ') || 'quick stop'}${
-              activeOperation ? ` · now: ${activeOperation}` : ''
-            }`
-      }];
-    });
+  // Live pods are narrated by their own anchored operations card, which is
+  // collapsible, clickable, and carries the full manifest. This canvas layer
+  // used to draw a second card over the same dock describing the same visit
+  // from a different surface, so the two could never avoid each other. It now
+  // draws departures only: the payout an operations card cannot show, because
+  // by then the ship it belonged to is gone.
+  const arrivals: never[] = [];
 
   const eventsByShip = new Map<number, typeof state.openingEconomy.ledger.recent>();
   for (const event of state.openingEconomy.ledger.recent) {
@@ -1978,6 +2107,10 @@ const playBtn = document.querySelector<HTMLButtonElement>('#play')!;
 const pauseBtn = document.querySelector<HTMLButtonElement>('#pause')!;
 const speedUpBtn = document.querySelector<HTMLButtonElement>('#speed-up')!;
 const speedLabel = document.querySelector<HTMLSpanElement>('#speed-label')!;
+const toggleInstantBuildBtn = document.querySelector<HTMLButtonElement>('#toggle-instant-build')!;
+const relieveAllStrandedBtn = document.querySelector<HTMLButtonElement>('#admin-relieve-all-stranded')!;
+const adminStrandedNoteEl = document.querySelector<HTMLElement>('#admin-stranded-note')!;
+const toggleWorldLabelsBtn = document.querySelector<HTMLButtonElement>('#toggle-world-labels')!;
 const toggleZonesBtn = document.querySelector<HTMLButtonElement>('#toggle-zones')!;
 const toggleServiceNodesBtn = document.querySelector<HTMLButtonElement>('#toggle-service-nodes')!;
 const toggleInventoryOverlayBtn = document.querySelector<HTMLButtonElement>('#toggle-inventory-overlay')!;
@@ -3951,6 +4084,18 @@ function refreshTrafficOffers(): void {
         : progress < 100 && patienceLeft <= 20
           ? 'late'
           : null;
+      // Cards narrate work, not travel. A pod still flying its approach has 0%
+      // of everything and nothing the player can act on, and the inbound hull is
+      // already drawn in the world — so six inbound pods used to mean six
+      // stacked chips saying "APPROACH 0%". At `alerts` the card waits until the
+      // pod is actually alongside, or until it needs something.
+      if (
+        state.controls.worldLabelDetail === 'alerts' &&
+        ship.stage === 'approach' &&
+        attention === null
+      ) {
+        return '';
+      }
       return `<article class="traffic-offer port-turnaround small-craft-turnaround berth-ops-anchor${collapsed ? ' is-collapsed' : ''}${berthOpsAttentionClass(attention)}" data-berth-ops-tile="${anchorTile}" data-berth-ops-ship="${ship.id}">
         ${berthOpsChip(ship.id, ship.portManifest?.callsign ?? `POD ${ship.id}`, `${ship.stage.toUpperCase()} · ${progress}%`, attention, collapsed)}
         <div class="berth-ops-detail">
@@ -3992,9 +4137,13 @@ function refreshTrafficOffers(): void {
       </div>
     </article>`;
   }).join('');
-  if (activeHtml !== renderedBerthOpsHtml) {
-    renderedBerthOpsHtml = activeHtml;
-    berthOpsAnchorsEl.innerHTML = activeHtml;
+  // Anchored operations cards are the DOM half of the world's narration, so the
+  // world-label control has to reach them too — otherwise "off" would clear the
+  // canvas labels and leave a screen still covered in pod chips.
+  const anchoredHtml = state.controls.worldLabelDetail === 'off' ? '' : activeHtml;
+  if (anchoredHtml !== renderedBerthOpsHtml) {
+    renderedBerthOpsHtml = anchoredHtml;
+    berthOpsAnchorsEl.innerHTML = anchoredHtml;
   }
   syncBerthOpsAnchors();
   if (!state.controls.manualTrafficAdmission) {
@@ -5378,6 +5527,9 @@ function refreshAlertsCardVisibility(): void {
 function refreshAlertPanel(): void {
   renderAlertPanel();
   refreshAlertsCardVisibility();
+  // The stranded backlog changes as ships depart, not when a button is clicked,
+  // so the Admin quote rides the alert cadence rather than the click-time sync.
+  syncAdminControls();
 }
 
 function renderAlertPanel(): void {
@@ -9348,12 +9500,25 @@ function refreshRoomModal(): void {
     if (housing) {
       // Opening ticket 11: report slots against demand and name the fixtures
       // behind them, so the inspector matches both the artwork and the alert.
-      roomModalHousingEl.textContent =
-        `Housing: ${housing.bedsAssigned}/${housing.bedsTotal} sleep slots assigned ` +
-        `across ${housing.bedModuleCount} fixture${housing.bedModuleCount === 1 ? '' : 's'} | ` +
-        `hygiene targets ${housing.hygieneTargets} | ` +
-        `${housing.validPrivateHousing ? 'valid private loop' : 'private loop incomplete'}`;
-      roomModalHousingEl.style.color = housing.validPrivateHousing ? '#6edb8f' : '#ffcf6e';
+      const fixtures = `${housing.bedModuleCount} fixture${housing.bedModuleCount === 1 ? '' : 's'}`;
+      if (housing.policy === 'visitor') {
+        // A guest dorm is never part of the private-resident loop, so reporting
+        // "private loop incomplete" here read as a fault the player could not
+        // clear no matter what they built. Guest housing is judged on the guest
+        // beds it actually offers.
+        roomModalHousingEl.textContent =
+          `Guest housing: ${housing.bedsTotal} guest sleep slot${housing.bedsTotal === 1 ? '' : 's'} ` +
+          `across ${fixtures}` +
+          `${housing.bedsTotal > 0 ? ' | open to visitors' : ' | add Guest Cabins or Bunk Banks'}`;
+        roomModalHousingEl.style.color = housing.bedsTotal > 0 ? '#6edb8f' : '#ffcf6e';
+      } else {
+        roomModalHousingEl.textContent =
+          `Housing: ${housing.bedsAssigned}/${housing.bedsTotal} sleep slots assigned ` +
+          `across ${fixtures} | ` +
+          `hygiene targets ${housing.hygieneTargets} | ` +
+          `${housing.validPrivateHousing ? 'valid private loop' : 'private loop incomplete'}`;
+        roomModalHousingEl.style.color = housing.validPrivateHousing ? '#6edb8f' : '#ffcf6e';
+      }
     } else {
       roomModalHousingEl.textContent = 'Housing: n/a';
       roomModalHousingEl.style.color = '#8ea2bd';
@@ -10383,6 +10548,24 @@ canvas.addEventListener('mouseup', (e) => {
         paintCurrent = null;
         return;
       }
+      // A Fuel Tank is the same kind of surface as the shelves: clicking the
+      // hardware that holds the stock is a request to restock it.
+      const fuelTank = fuelTankOriginAtTile(clickedTile);
+      if (fuelTank !== null) {
+        selectedAgent = null;
+        selectedDockId = null;
+        selectedRoomTile = null;
+        selectedIncidentId = null;
+        agentModal.classList.add('hidden');
+        dockModal.classList.add('hidden');
+        roomModal.classList.add('hidden');
+        openMarketSurface(fuelTank, 'fuel');
+        refreshSelectionSummary();
+        isPainting = false;
+        paintStart = null;
+        paintCurrent = null;
+        return;
+      }
       const dock = getDockByTile(state, clickedTile);
       if (dock) {
         selectedDockId = dock.id;
@@ -10643,6 +10826,13 @@ window.addEventListener('keydown', (e) => {
       } else {
         systemMapModal.classList.add('hidden');
       }
+      break;
+    case 'F6':
+      // World-label density. Every letter key is already a tool, so this rides
+      // the same F-key convention as the F2/F3 view toggles. F5 is skipped
+      // because the browser owns it.
+      e.preventDefault();
+      cycleWorldLabelDetail();
       break;
     case '8':
       currentTool = { kind: 'zone', zone: ZoneType.Public };
@@ -11034,7 +11224,37 @@ speedUpBtn.addEventListener('click', () => {
 // Button-label sync runs at click-time, not per-frame — these labels
 // only change on click, and the frame() loop reassigning ~5 textContent
 // props each tick was pure waste (~60Hz × 5 DOM writes).
+/** Every stranded passenger, oldest first — the order relief is offered in. */
+function strandedVisitorIds(): number[] {
+  return state.visitors
+    .filter((visitor) => visitor.strandedFromShipId !== null && visitor.strandedFromShipId !== undefined)
+    .sort((a, b) => (a.strandedAt ?? Number.POSITIVE_INFINITY) - (b.strandedAt ?? Number.POSITIVE_INFINITY) || a.id - b.id)
+    .map((visitor) => visitor.id);
+}
+
+function syncAdminControls(): void {
+  toggleInstantBuildBtn.textContent = `Instant Build: ${INSTANT_BUILD_PLAYTEST ? 'ON' : 'OFF'}`;
+  // The world alert only ever offers the single oldest stranded passenger, so a
+  // station with nineteen of them read as an unfixable problem: each click
+  // cleared one and the counter barely moved. Quote the whole backlog here.
+  const ids = strandedVisitorIds();
+  const quotes = ids.map((id) => getStrandedReliefQuote(state, id)).filter((quote) => quote !== null);
+  const eligible = quotes.filter((quote) => quote!.eligible);
+  const total = eligible.reduce((sum, quote) => sum + quote!.cost, 0);
+  relieveAllStrandedBtn.textContent = ids.length === 0
+    ? 'Relieve Stranded: none'
+    : eligible.length === 0
+      ? `Relieve Stranded: ${ids.length} waiting`
+      : `Relieve Stranded: ${eligible.length} for ${Math.round(total)}c`;
+  relieveAllStrandedBtn.disabled = eligible.length === 0 || state.metrics.credits < total;
+  adminStrandedNoteEl.textContent = ids.length === 0
+    ? 'Stranded passengers never board a later ship on their own.'
+    : `${ids.length} stranded · ${eligible.length} eligible now · relief surcharge grows as their stay sours.`;
+}
+
 function syncToggleLabels(): void {
+  syncAdminControls();
+  toggleWorldLabelsBtn.textContent = `World Labels: ${state.controls.worldLabelDetail.toUpperCase()}`;
   toggleZonesBtn.textContent = state.controls.showZones ? 'Zones: ON' : 'Zones: OFF';
   toggleServiceNodesBtn.textContent = state.controls.showServiceNodes ? 'Service Reach: ON' : 'Service Reach: OFF';
   toggleInventoryOverlayBtn.textContent = state.controls.showInventoryOverlay
@@ -11067,6 +11287,48 @@ function openAirCoverageOverlay(): void {
 
 hudAirControlEl.addEventListener('click', openAirCoverageOverlay);
 airEmergencyIndicatorEl.addEventListener('click', openAirCoverageOverlay);
+
+/** Cycle alerts -> all -> off, so one control covers both "tell me more" and "get out of my way". */
+function cycleWorldLabelDetail(): void {
+  state.controls.worldLabelDetail = state.controls.worldLabelDetail === 'alerts'
+    ? 'all'
+    : state.controls.worldLabelDetail === 'all'
+      ? 'off'
+      : 'alerts';
+  syncToggleLabels();
+  // Anchored operations cards are DOM, not canvas, so they need an explicit
+  // re-sync: nothing else repaints them when only the policy changed.
+  refreshTrafficOffers();
+}
+
+toggleWorldLabelsBtn.addEventListener('click', cycleWorldLabelDetail);
+
+toggleInstantBuildBtn.addEventListener('click', () => {
+  INSTANT_BUILD_PLAYTEST = !INSTANT_BUILD_PLAYTEST;
+  toolLockMessage = INSTANT_BUILD_PLAYTEST
+    ? 'Instant build ON — placements skip construction, materials, and structural support.'
+    : 'Instant build OFF — placements now need materials, crew, EVA, and structural support.';
+  syncToggleLabels();
+});
+
+relieveAllStrandedBtn.addEventListener('click', () => {
+  let cleared = 0;
+  let spent = 0;
+  // Re-quote per passenger: the surcharge is per-visitor, and paying for the
+  // earlier ones can leave the balance short for the rest.
+  for (const visitorId of strandedVisitorIds()) {
+    const quote = getStrandedReliefQuote(state, visitorId);
+    if (!quote || !quote.eligible || state.metrics.credits < quote.cost) continue;
+    if (!transferStrandedVisitor(state, visitorId)) continue;
+    cleared += 1;
+    spent += quote.cost;
+  }
+  toolLockMessage = cleared === 0
+    ? 'No stranded passenger is eligible for relief yet.'
+    : `Relief arranged for ${cleared} stranded passenger${cleared === 1 ? '' : 's'} (-${Math.round(spent)}c).`;
+  syncToggleLabels();
+  refreshAlertPanel();
+});
 
 toggleZonesBtn.addEventListener('click', () => {
   state.controls.showZones = !state.controls.showZones;

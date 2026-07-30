@@ -39,7 +39,16 @@ export interface OperatingLedgerView {
   events: OpeningEconomyEvent[];
 }
 
+/** Which consumable a supplier panel is buying. Fuel and retail stock share the panel. */
+export type SupplierShopKind = 'travel-supplies' | 'fuel';
+
 export interface TravelSuppliesShopView {
+  /** Defaults to travel supplies so existing callers and checks stay valid. */
+  kind?: SupplierShopKind;
+  /** Panel heading, e.g. "Travel Supplies Shop" or "Fuel Depot". */
+  title?: string;
+  /** Plural noun for the thing being bought, e.g. "supplies", "fuel". */
+  unitNoun?: string;
   stock: number;
   capacity: number;
   wholesaleUnitCost: number;
@@ -48,11 +57,29 @@ export interface TravelSuppliesShopView {
   recentMargin: number;
   demandLabel: string;
   demandDetail?: string;
-  pricingPolicy: MarketPricingPolicy;
+  /** Retail-only. Omitted for fuel, which has no shelf pricing policy. */
+  pricingPolicy?: MarketPricingPolicy;
   canOrderStock: boolean;
   orderLabel?: string;
   orderCost?: number;
   emptyStockMessage?: string;
+  /**
+   * Player-chosen order size. Present whenever the panel offers a quantity
+   * control; absent falls back to a single fixed-batch button.
+   */
+  order?: {
+    units: number;
+    /** Increment for the -/+ controls, normally one supplier batch. */
+    step: number;
+    /** Ceiling from remaining storage capacity. */
+    maxUnits: number;
+    /** Largest order the current credit balance covers, for the "Max" control. */
+    affordableUnits: number;
+    /** Site-adjusted landed cost per unit. */
+    unitCost: number;
+    /** How local costs move the price, e.g. "96% wholesale at this site". */
+    priceBasis?: string;
+  };
   /** Present only when the panel is anchored to an assortment-bearing display. */
   assortment?: {
     fixtureLabel: string;
@@ -111,6 +138,7 @@ export interface OpeningEconomyPanelView {
 
 export type OpeningEconomyPanelAction =
   | { type: 'order-stock' }
+  | { type: 'set-order-units'; units: number }
   | { type: 'set-pricing-policy'; policy: MarketPricingPolicy }
   | { type: 'set-shelf-mix'; mix: RetailAssortmentMix }
   | { type: 'accept-project'; projectId: string }
@@ -404,6 +432,39 @@ const STYLE_TEXT = `
   font: 10px Consolas, Menlo, Monaco, monospace;
 }
 .oe-policy:hover, .oe-policy:focus-visible { border-color: #a8cbd6; background: #1d3445; }
+
+.oe-qty-row { display: flex; align-items: stretch; gap: 6px; margin-top: 5px; }
+.oe-qty-step, .oe-qty-preset {
+  flex: 0 0 auto;
+  min-width: 32px;
+  padding: 6px 9px;
+  color: #cfe3ec;
+  background: #16293a;
+  border: 1px solid #49677d;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.oe-qty-preset { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.oe-qty-step:hover:not(:disabled), .oe-qty-preset:hover,
+.oe-qty-step:focus-visible, .oe-qty-preset:focus-visible { border-color: #a8cbd6; background: #1d3445; }
+.oe-qty-step:disabled { opacity: 0.4; cursor: default; }
+.oe-qty-value { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.oe-qty-value input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  color: #eff7ff;
+  background: rgba(6, 13, 19, 0.62);
+  border: 1px solid #49677d;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 13px;
+  text-align: center;
+}
+.oe-qty-value input:focus-visible { border-color: #a8cbd6; outline: none; }
+.oe-qty-value small { color: #8fadbd; font-size: 10px; text-align: center; }
 .oe-policy.active { border-color: #dfb75f; background: rgba(92, 66, 22, 0.48); color: #f4d78e; }
 .oe-primary-action {
   width: 100%;
@@ -513,14 +574,40 @@ function renderLedger(view: OperatingLedgerView): string {
 
 /** Pure markup seam used by focused UI checks as well as the mounted panel. */
 export function renderTravelSuppliesShop(view: TravelSuppliesShopView): string {
+  const isFuel = view.kind === 'fuel';
+  const title = view.title ?? (isFuel ? 'Fuel Depot' : 'Travel Supplies Shop');
+  const kicker = isFuel ? 'Ship services' : 'Station retail';
+  const noun = view.unitNoun ?? (isFuel ? 'fuel' : 'supplies');
   const orderText = view.orderLabel ?? 'Order stock';
   const orderCost = view.orderCost === undefined ? '' : ` (${credits(-Math.abs(view.orderCost))})`;
-  const stockout = view.stock <= 0 ? `<p class="oe-stockout">${escapeHtml(view.emptyStockMessage ?? 'The shop is out of stock. Travelers cannot buy supplies until a delivery arrives.')}</p>` : '';
+  const stockout = view.stock <= 0
+    ? `<p class="oe-stockout">${escapeHtml(view.emptyStockMessage ?? (isFuel
+        ? 'No fuel in the tanks. Order a supplier pod or ships cannot refuel.'
+        : 'The shop is out of stock. Travelers cannot buy supplies until a delivery arrives.'))}</p>`
+    : '';
+  // Quantity control. The order size is the player's decision, so the panel
+  // shows the landed unit cost, the running total, and what the local site does
+  // to the price rather than committing a hidden fixed batch.
+  const order = view.order;
+  const quantity = order
+    ? `
+        <div class="oe-policy-label">Order size${order.priceBasis ? ` <small>${escapeHtml(order.priceBasis)}</small>` : ''}</div>
+        <div class="oe-qty-row" aria-label="Order quantity">
+          <button type="button" class="oe-qty-step" data-oe-order-units="${Math.max(1, order.units - order.step)}" ${order.units <= 1 ? 'disabled' : ''} aria-label="Decrease order by ${order.step}">&minus;</button>
+          <label class="oe-qty-value">
+            <input type="number" inputmode="numeric" min="1" max="${Math.max(1, order.maxUnits)}" step="1" value="${order.units}" data-oe-order-input aria-label="Units of ${escapeHtml(noun)} to order">
+            <small>${escapeHtml(noun)} &middot; ${credits(order.unitCost)}/unit</small>
+          </label>
+          <button type="button" class="oe-qty-step" data-oe-order-units="${Math.min(order.maxUnits, order.units + order.step)}" ${order.units >= order.maxUnits ? 'disabled' : ''} aria-label="Increase order by ${order.step}">+</button>
+          <button type="button" class="oe-qty-preset" data-oe-order-units="${Math.max(1, Math.min(order.maxUnits, order.affordableUnits))}" title="Largest order your credits cover">Max</button>
+          <button type="button" class="oe-qty-preset" data-oe-order-units="${Math.max(1, order.maxUnits)}" title="Fill remaining storage">Fill</button>
+        </div>`
+    : '';
   return `
     <section class="oe-panel" role="dialog" aria-modal="true" aria-labelledby="oe-shop-title">
       <header class="oe-panel-head">
-        <div><span class="oe-panel-kicker">Station retail</span><h2 id="oe-shop-title">Travel Supplies Shop</h2></div>
-        <button class="oe-close" type="button" data-oe-close="shop" aria-label="Close travel supplies shop" title="Close">&times;</button>
+        <div><span class="oe-panel-kicker">${escapeHtml(kicker)}</span><h2 id="oe-shop-title">${escapeHtml(title)}</h2></div>
+        <button class="oe-close" type="button" data-oe-close="shop" aria-label="Close ${escapeHtml(title)}" title="Close">&times;</button>
       </header>
       <div class="oe-panel-body">
         <div class="oe-shop-hero">
@@ -532,10 +619,13 @@ export function renderTravelSuppliesShop(view: TravelSuppliesShopView): string {
           <div class="oe-shop-stat"><span class="oe-metric-label">Baseline sale</span><strong class="good">${credits(view.saleUnitPrice)} / unit</strong></div>
           <div class="oe-shop-stat"><span class="oe-metric-label">Recent margin</span><strong class="${view.recentMargin >= 0 ? 'good' : 'warn'}">${credits(view.recentMargin)} <small>(${Math.max(0, Math.round(view.recentUnitsSold))} sold)</small></strong></div>
         </div>
+        ${quantity}
+        ${view.pricingPolicy ? `
         <div class="oe-policy-label">Pricing policy</div>
         <div class="oe-policy-row" aria-label="Travel supplies pricing policy">
           ${(['budget', 'standard', 'premium'] as const).map((policy) => `<button type="button" class="oe-policy${view.pricingPolicy === policy ? ' active' : ''}" data-oe-policy="${policy}" aria-pressed="${view.pricingPolicy === policy}">${policy[0].toUpperCase()}${policy.slice(1)}</button>`).join('')}
         </div>
+        ` : ''}
         ${view.assortment ? `
           <div class="oe-policy-label">${escapeHtml(view.assortment.fixtureLabel)} assortment</div>
           <div class="oe-policy-row" aria-label="Fixture goods category">
@@ -736,12 +826,27 @@ export function mountOpeningEconomyPanels(options: OpeningEconomyPanelsOptions):
       emit({ type: 'set-shelf-mix', mix });
       return;
     }
+    const orderUnits = target.closest<HTMLButtonElement>('[data-oe-order-units]')?.dataset.oeOrderUnits;
+    if (orderUnits !== undefined) {
+      const units = Number.parseInt(orderUnits, 10);
+      if (Number.isFinite(units)) emit({ type: 'set-order-units', units });
+      return;
+    }
     if (target.closest('[data-oe-order-stock]')) {
       emit({ type: 'order-stock' });
       return;
     }
     const projectId = target.closest<HTMLButtonElement>('[data-oe-accept-project]')?.dataset.oeAcceptProject;
     if (projectId) emit({ type: 'accept-project', projectId });
+  });
+
+  // Typed quantities commit on change rather than per keystroke, so a partially
+  // typed number never re-renders the panel out from under the caret.
+  root.addEventListener('change', (event: Event) => {
+    const input = (event.target as HTMLElement | null)?.closest<HTMLInputElement>('[data-oe-order-input]');
+    if (!input) return;
+    const units = Number.parseInt(input.value, 10);
+    if (Number.isFinite(units)) emit({ type: 'set-order-units', units });
   });
 
   return {

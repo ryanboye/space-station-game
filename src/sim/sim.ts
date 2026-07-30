@@ -20,7 +20,8 @@ import {
   SHIP_SERVICE_WEIGHT_BY_TYPE,
   SERVICE_CAPACITY,
   TASK_TIMINGS,
-  VISIT_TIMINGS
+  VISIT_TIMINGS,
+  CHECKED_LUGGAGE_SHARE
 } from './balance';
 import {
   createVisitorNeeds,
@@ -692,15 +693,19 @@ function restockCommercialUnit(state: StationState, unit: CommercialUnit): void 
   if (!offer) return;
   const modules = state.moduleInstances.filter((module) => unit.fittedModuleIds.includes(module.id));
   for (const module of modules) {
-    if (module.type === ModuleType.MarketStall) {
+    // A tenant restocks whatever it was fitted with. Listing only the three
+    // legacy fixtures meant a unit fitted with facility-scale hardware — Shelf
+    // Aisle, Serving Line, Service Bar — was leased, opened, and staffed while
+    // its stock never arrived, so the shop looked open and sold nothing.
+    if (module.type === ModuleType.MarketStall || RETAIL_STOCK_MODULES.has(module.type)) {
       const stock = itemStockAtNode(state, module.originTile, 'tradeGood');
       if (stock < 8) addItemStockAtNode(state, module.originTile, 'tradeGood', 16 - stock);
-    } else if (module.type === ModuleType.ServingStation) {
+    } else if (module.type === ModuleType.ServingStation || module.type === ModuleType.ServingLine) {
       const meals = itemStockAtNode(state, module.originTile, 'meal');
       const trays = itemStockAtNode(state, module.originTile, 'cleanTray');
       if (meals < 18) addItemStockAtNode(state, module.originTile, 'meal', 24 - meals);
       if (trays < 18) addItemStockAtNode(state, module.originTile, 'cleanTray', 24 - trays);
-    } else if (module.type === ModuleType.BarCounter) {
+    } else if (CANTINA_BAR_MODULES.has(module.type)) {
       const drinks = itemStockAtNode(state, module.originTile, 'rawMaterial');
       if (drinks < 5) addItemStockAtNode(state, module.originTile, 'rawMaterial', 9 - drinks);
     }
@@ -2493,7 +2498,7 @@ export function collectServiceTargets(state: StationState, room: RoomType): numb
   const out = new Set<number>();
   for (const moduleType of serviceModules) {
     const tiles =
-      room === RoomType.Cantina && moduleType === ModuleType.BarCounter
+      room === RoomType.Cantina && CANTINA_BAR_MODULES.has(moduleType)
         ? collectModuleUsageTargets(state, moduleType, room)
         : collectModuleAnchors(state, moduleType, room);
     for (const tile of tiles) out.add(tile);
@@ -2646,6 +2651,17 @@ const CANTINA_BAR_MODULES = new Set<ModuleType>([
   ModuleType.ServiceBar,
   ModuleType.BarCorner,
   ModuleType.BarEnd
+]);
+
+/**
+ * Retail fixtures that hold sellable trade goods on their own item node.
+ *
+ * Checkout Bank is deliberately absent: it takes payment and holds no stock.
+ */
+const RETAIL_STOCK_MODULES = new Set<ModuleType>([
+  ModuleType.ShelfAisle,
+  ModuleType.DisplayColdCase,
+  ModuleType.BackroomStockBank
 ]);
 
 function isCantinaBarServiceTile(state: StationState, tileIndex: number): boolean {
@@ -7770,12 +7786,26 @@ function reachableArrivalDeskClaimTile(state: StationState, handoffTile: number)
   return candidates[0]?.tile ?? null;
 }
 
+/**
+ * Whether this passenger checked a bag, stable for the life of the visitor.
+ *
+ * Hashed from the id rather than drawn from the RNG so a save/resume cannot
+ * change who owns a bag mid-visit and orphan a live custody row.
+ */
+function passengerChecksBag(visitorId: number): boolean {
+  const hash = Math.imul(visitorId ^ 0x9e3779b9, 2654435761) >>> 0;
+  return (hash % 1000) / 1000 < CHECKED_LUGGAGE_SHARE;
+}
+
 function bindVisitorLuggage(
   state: StationState,
   visitor: Visitor,
   shipId: number,
   handoffTile: number
 ): void {
+  // Only checked bags enter station custody; the rest travel in hand and cost
+  // the station no haul work. See CHECKED_LUGGAGE_SHARE for why this is gated.
+  if (!passengerChecksBag(visitor.id)) return;
   const id = luggageIdentity(shipId, visitor.id);
   const claimTile = reachableArrivalDeskClaimTile(state, handoffTile);
   state.luggageCustody = ensureManifestLuggage(state.luggageCustody, {
@@ -8254,7 +8284,7 @@ function planVisitorLeisureLegs(state: StationState, archetype: VisitorArchetype
     activeModuleTargets(state, [ModuleType.MarketStall, ModuleType.CheckoutBank], [RoomType.Market]).length > 0,
     activeModuleTargets(state, [ModuleType.Couch, ModuleType.GameStation, ModuleType.Bench], [RoomType.Lounge]).length > 0 ||
       activeModuleTargets(state, [ModuleType.RecUnit, ModuleType.Bench], [RoomType.RecHall]).length > 0,
-    activeModuleTargets(state, [ModuleType.BarCounter], [RoomType.Cantina]).length > 0,
+    activeModuleTargets(state, [...CANTINA_BAR_MODULES], [RoomType.Cantina]).length > 0,
     activeModuleTargets(state, [ModuleType.Telescope], [RoomType.Observatory]).length > 0
   ].filter(Boolean).length;
   const cap = Math.max(0, Math.min(availableKinds, 3));
@@ -9631,7 +9661,20 @@ export function resolvePhysicalHoldingQueue(state: StationState): void {
   const activeByGroup = new Map<string, number>();
   for (const [groupId, entries] of groups.entries()) {
     entries.sort((a, b) => (a.queuedAt - b.queuedAt) || a.shipId - b.shipId);
-    activeByGroup.set(groupId, entries[0]!.shipId);
+    // Seniority still decides the lane, but a leader that physically cannot move
+    // does not get to hold the group behind it.
+    //
+    // Ranking on seniority alone deadlocks a shared corridor: the senior entry
+    // is an arrival whose mooring is still occupied, and the ship occupying that
+    // mooring is a departure sitting further down the same queue. The arrival
+    // can never move because the mooring is full, the departure can never move
+    // because it is not the leader, and the whole chain stalls indefinitely.
+    // Passing leadership to the first entry that can actually use the lane frees
+    // the mooring and lets the queue drain. Note this only skips entries that are
+    // physically stuck — a ship genuinely mid-approach keeps its corridor rather
+    // than being preempted by a departure that queued later.
+    const movable = entries.filter((entry) => !blockedByDockedMooring.has(entry.shipId));
+    activeByGroup.set(groupId, (movable[0] ?? entries[0]!).shipId);
   }
   for (const entry of committed) {
     if (!descriptorByShip.has(entry.shipId)) continue;
@@ -11876,7 +11919,14 @@ function providerKindForModule(module: ModuleType, room: RoomType): ProviderSumm
     case ModuleType.MarketStall:
     case ModuleType.CheckoutBank:
       return 'market';
+    // Every bar module in CANTINA_BAR_MODULES is a drink provider. Listing only
+    // BarCounter here made a Cantina built from the facility-scale bar pieces
+    // serve nothing: the room existed, the slots existed, but no module in it
+    // was classified as serving drinks.
     case ModuleType.BarCounter:
+    case ModuleType.ServiceBar:
+    case ModuleType.BarCorner:
+    case ModuleType.BarEnd:
     case ModuleType.WaterFountain:
       return 'drink';
     case ModuleType.Toilet:
@@ -11907,7 +11957,7 @@ function providerKindForModule(module: ModuleType, room: RoomType): ProviderSumm
 
 function providerCapacityFor(state: StationState, module: ModuleType, tileIndex: number): number {
   if (module === ModuleType.ServingStation) return 1;
-  if (module === ModuleType.BarCounter && state.rooms[tileIndex] === RoomType.Cantina) return CANTINA_PICKUP_PROVIDER_CAPACITY;
+  if (CANTINA_BAR_MODULES.has(module) && state.rooms[tileIndex] === RoomType.Cantina) return CANTINA_PICKUP_PROVIDER_CAPACITY;
   if (
     module === ModuleType.Stove ||
     module === ModuleType.PrepCounter ||
@@ -12436,7 +12486,9 @@ export function getRoomInspectorAt(state: StationState, tileIndex: number): Room
   }
   if (room === RoomType.Cantina) {
     ensureQueueChains(state);
-    const barCounters = collectModuleAnchors(state, ModuleType.BarCounter, RoomType.Cantina).filter((t) => clusterSet.has(t));
+    const barCounters = [...CANTINA_BAR_MODULES]
+      .flatMap((barModule) => collectModuleAnchors(state, barModule, RoomType.Cantina))
+      .filter((t) => clusterSet.has(t));
     const pickupSlots = collectCantinaBarTargets(state).filter((t) => clusterSet.has(t));
     const barAnchorSet = new Set(barCounters);
     const seatTargets = collectModuleUsageTargets(state, ModuleType.Bench, RoomType.Cantina).filter((t) => clusterSet.has(t));
@@ -17735,7 +17787,16 @@ function beginMovementCoordinator(state: StationState, dt: number, occupancyByTi
     b.priority - a.priority || a.kind.localeCompare(b.kind) || a.actor.id - b.actor.id;
   const byCapacitySection = new Map<string, MovementIntent[]>();
   for (const intent of intents) {
-    if (intent.crossSection.capacity > 1 || intent.crossSection.forcedSingle) continue;
+    if (intent.crossSection.capacity > 1) continue;
+    // A door used to be excluded from direction arbitration because it is
+    // `forcedSingle`, which deadlocked single-wide doorways: A steps onto the
+    // door heading east, B stands east of it heading west, so A's target is B's
+    // tile and B's target is A's. Neither could move and a 1-wide corridor left
+    // no room to step aside, so the only player fix was widening every door.
+    // A passage now arbitrates direction like any other single-lane cut; the
+    // loser is told to yield instead of both freezing. Fixture/service edges
+    // stay exempt — two actors reaching a table from opposite sides is normal.
+    if (intent.crossSection.forcedSingle && !intent.crossSection.passage) continue;
     const bucket = byCapacitySection.get(intent.crossSection.key) ?? [];
     bucket.push(intent);
     byCapacitySection.set(intent.crossSection.key, bucket);
@@ -26082,7 +26143,7 @@ function updateVisitorLogic(
       const atCantinaModule =
         collectingDrink ||
         (!needsDrinkPickup &&
-          (state.modules[visitor.tileIndex] === ModuleType.BarCounter ||
+          (CANTINA_BAR_MODULES.has(state.modules[visitor.tileIndex]) ||
             state.modules[visitor.tileIndex] === ModuleType.Tap ||
             (state.rooms[visitor.tileIndex] === RoomType.Cantina &&
               (visitor.reservedTargetTile === null || visitor.reservedTargetTile === visitor.tileIndex))));
@@ -28483,9 +28544,38 @@ function computeMetrics(state: StationState): void {
   let solarSupply = 0;
   let activeSolarPanels = 0;
   let solarSunlightSum = 0;
-  for (const module of state.moduleInstances) {
-    if (module.type !== ModuleType.SolarPanel) continue;
-    if (powerGrid.gridMode && !hasUtilityUnderlay(state, 'power-conduit', module.originTile)) continue;
+  const solarPanels = state.moduleInstances.filter((module) => module.type === ModuleType.SolarPanel);
+  // A solar array energizes as a farm, not tile by tile.
+  //
+  // Requiring a conduit under every 1x1 panel meant a 33-panel array silently
+  // produced nothing unless the player wired each individual cell — busywork
+  // with no decision in it, and no feedback when it was missed. Connecting the
+  // array to the grid is still a real choice: one conduit run has to reach it.
+  // From there, power spreads through panels that are physically contiguous, so
+  // a farm behaves like the single piece of infrastructure it looks like.
+  const energizedPanelTiles = new Set<number>();
+  if (powerGrid.gridMode) {
+    const panelTiles = new Set(solarPanels.map((module) => module.originTile));
+    const reachesConduit = (tile: number): boolean =>
+      hasUtilityUnderlay(state, 'power-conduit', tile) ||
+      neighborTiles(state, tile).some((neighbor) => hasUtilityUnderlay(state, 'power-conduit', neighbor));
+    const frontier: number[] = [];
+    for (const tile of panelTiles) {
+      if (!reachesConduit(tile)) continue;
+      energizedPanelTiles.add(tile);
+      frontier.push(tile);
+    }
+    while (frontier.length > 0) {
+      const tile = frontier.pop()!;
+      for (const neighbor of neighborTiles(state, tile)) {
+        if (!panelTiles.has(neighbor) || energizedPanelTiles.has(neighbor)) continue;
+        energizedPanelTiles.add(neighbor);
+        frontier.push(neighbor);
+      }
+    }
+  }
+  for (const module of solarPanels) {
+    if (powerGrid.gridMode && !energizedPanelTiles.has(module.originTile)) continue;
     activeSolarPanels += 1;
     solarSunlightSum += mapConditionAt(state, 'sunlight', module.originTile);
   }
@@ -29770,16 +29860,23 @@ export function getHousingInspectorAt(state: StationState, tileIndex: number): H
   // `beds 0/0` while the shortage alert correctly said 8/10. Artwork and
   // simulation capacity must agree (shared contract C3), so count every
   // sleeping fixture and report the slots they actually provide.
+  // A Guest Cabin is a sleeping fixture on the same claim machinery as a Bunk
+  // Bank (see temporarySleepSlots), so omitting it here reported a fully built
+  // guest dorm as "0/0 sleep slots across 0 fixtures" while visitors were
+  // actually claiming its beds. The service-node validator already listed it.
   const bedModules =
     room === RoomType.Dorm
       ? state.moduleInstances.filter(
           (m) =>
-            (m.type === ModuleType.Bed || m.type === ModuleType.Bunk || m.type === ModuleType.BunkBank) &&
+            (m.type === ModuleType.Bed ||
+              m.type === ModuleType.Bunk ||
+              m.type === ModuleType.BunkBank ||
+              m.type === ModuleType.GuestCabin) &&
             tiles.includes(m.originTile)
         )
       : [];
   const slotsFor = (module: (typeof bedModules)[number]): number =>
-    module.type === ModuleType.BunkBank
+    module.type === ModuleType.BunkBank || module.type === ModuleType.GuestCabin
       ? resolveFacilitySlots(module, state.width).filter((slot) => slot.role === 'temporary-sleep').length
       : Math.max(1, MODULE_DEFINITIONS[module.type].residentCapacity ?? 1);
   const bedsTotal = bedModules.reduce((sum, module) => sum + slotsFor(module), 0);

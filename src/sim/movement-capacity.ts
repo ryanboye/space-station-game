@@ -10,6 +10,14 @@ export type MovementCrossSection = {
   axis: 'horizontal' | 'vertical';
   /** Doors, airlocks, and fixture/service edges are deliberately serialized. */
   forcedSingle: boolean;
+  /**
+   * True for a door or airlock: a serialized *passage* along a route, as
+   * opposed to a fixture/service edge where two actors approaching from
+   * opposite sides is normal and must not be arbitrated into one direction.
+   *
+   * Passages need head-on direction arbitration; service edges do not.
+   */
+  passage: boolean;
 };
 
 type CapacityCache = {
@@ -28,12 +36,13 @@ function edgeKey(a: number, b: number): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
+/** A door or airlock: serialized, but still a through-route rather than a service edge. */
+function isPassageTile(state: StationState, tileIndex: number): boolean {
+  return state.tiles[tileIndex] === TileType.Door || state.tiles[tileIndex] === TileType.Airlock;
+}
+
 function isForcedSingleTile(state: StationState, tileIndex: number): boolean {
-  return (
-    state.tiles[tileIndex] === TileType.Door ||
-    state.tiles[tileIndex] === TileType.Airlock ||
-    state.moduleOccupancyByTile[tileIndex] !== null
-  );
+  return isPassageTile(state, tileIndex) || state.moduleOccupancyByTile[tileIndex] !== null;
 }
 
 function isOrdinaryCapacityTile(state: StationState, tileIndex: number): boolean {
@@ -69,7 +78,8 @@ function buildCapacityCache(state: StationState, buildCount: number): CapacityCa
           capacity,
           lane: row - start,
           axis: 'horizontal',
-          forcedSingle: false
+          forcedSingle: false,
+          passage: false
         });
       }
       y += 1;
@@ -101,7 +111,8 @@ function buildCapacityCache(state: StationState, buildCount: number): CapacityCa
           capacity,
           lane: column - start,
           axis: 'vertical',
-          forcedSingle: false
+          forcedSingle: false,
+          passage: false
         });
       }
       x += 1;
@@ -181,7 +192,8 @@ export function movementCrossSection(state: StationState, origin: number, target
       capacity: 1,
       lane: 0,
       axis,
-      forcedSingle: true
+      forcedSingle: true,
+      passage: isPassageTile(state, origin) || isPassageTile(state, target)
     };
   }
   return capacityCache(state).byEdge.get(edgeKey(origin, target)) ?? {
@@ -189,7 +201,8 @@ export function movementCrossSection(state: StationState, origin: number, target
     capacity: 1,
     lane: 0,
     axis,
-    forcedSingle: false
+    forcedSingle: false,
+    passage: false
   };
 }
 

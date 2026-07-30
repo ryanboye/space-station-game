@@ -977,6 +977,7 @@ export function createInitialState(options?: {
       portAutoAdmitPolicy: 'cautious',
       crewAutoStaffEnabled: false,
       diagnosticOverlay: 'none',
+      worldLabelDetail: 'alerts',
       showZones: false,
       showServiceNodes: false,
       showInventoryOverlay: false,

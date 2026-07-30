@@ -1073,6 +1073,18 @@ export const TASK_TIMINGS = {
   residentCleanSec: 2.2
 } as const;
 
+/**
+ * Share of arriving passengers who check a bag into station custody.
+ *
+ * Every checked bag is two crew haul jobs — inbound to the claim desk, outbound
+ * back to the ship — so binding one to every passenger turned a 17-seat liner
+ * into 34 haul jobs and a 30-seat one into 60. No plausible cargo crew clears
+ * that inside a visit window, and an unreturned bag blocks boarding, so the
+ * overflow converted directly into stranded passengers. Most travellers keep
+ * their bag in hand; only a minority check one.
+ */
+export const CHECKED_LUGGAGE_SHARE = 0.2;
+
 /** Visit clocks are centralized so Phase 1A can be tuned without touching port logic. */
 export const VISIT_TIMINGS = {
   shoreMinSec: 105,

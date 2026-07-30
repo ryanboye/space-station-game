@@ -3566,6 +3566,23 @@ function drawDockedBerthShip(ctx: CanvasRenderingContext2D, state: StationState,
   if (ship.stage === 'docked') drawDockingCollar(ctx, contact.point, palette.engine, Math.max(3, TILE_SIZE * 0.16));
 }
 
+/**
+ * World-label policy. Three producers used to narrate the same pod from three
+ * surfaces, so the fix is fewer labels rather than cleverer placement: these
+ * predicates decide which labels are allowed to spend words this frame.
+ *
+ * `off` clears the world so it can be built in, `alerts` spends text only on
+ * subjects that want the player, and `all` restores full narration.
+ */
+function worldLabelsEnabled(state: StationState): boolean {
+  return state.controls.worldLabelDetail !== 'off';
+}
+
+/** True only at `all` detail: labels that report healthy, expected states. */
+function worldLabelsShowSteadyState(state: StationState): boolean {
+  return state.controls.worldLabelDetail === 'all';
+}
+
 interface BerthChipRect {
   x: number;
   y: number;
@@ -3739,7 +3756,10 @@ function drawApproachWaitingChips(
   // The held reservation is a live claim on shared space, so the chip is sized
   // from a fixed template and animated instead of redrawn at a new width every
   // second — a jittering chip would move under the berth it belongs to.
-  const widthTemplate = 'WAITING 000S: APPROACH OCCUPIED';
+  // Naming the ship that is waiting ties this chip to its own operations card.
+  // The old text ("APPROACH OCCUPIED") named a condition with no owner and no
+  // verb, so it read as a duplicate of the pod's progress chip.
+  const widthTemplate = 'POD 0000 HOLDING 000S - LANE BUSY';
   const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.29));
   const height = Math.max(18, Math.round(TILE_SIZE * 0.78));
   const padding = Math.max(9, Math.round(TILE_SIZE * 0.42));
@@ -3778,7 +3798,12 @@ function drawApproachWaitingChips(
     ctx.fillStyle = '#fff0bd';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`WAITING ${Math.min(999, heldSec)}S: APPROACH OCCUPIED`, rect.x + padding, rect.y + rect.h * 0.5);
+    const callsign = ship.portManifest?.callsign ?? `POD ${ship.id}`;
+    ctx.fillText(
+      `${callsign} HOLDING ${Math.min(999, heldSec)}S - LANE BUSY`,
+      rect.x + padding,
+      rect.y + rect.h * 0.5
+    );
   }
   ctx.restore();
 }
@@ -4247,44 +4272,6 @@ function drawFuelCouplerConnectionIndicators(
           ? 'COUPLER: LINE OK, TANK EMPTY'
           : `COUPLER: READY · ${Math.floor(fuelStock)} FUEL`;
     drawModuleStatusLabel(ctx, label, socketX, socketY + TILE_SIZE * 0.35, color);
-  }
-  ctx.restore();
-}
-
-function drawPodDockInformationChips(
-  ctx: CanvasRenderingContext2D,
-  state: StationState,
-  occupied: BerthChipRect[]
-): void {
-  const fontSize = Math.max(7, Math.round(TILE_SIZE * 0.31));
-  const chipHeight = Math.max(20, TILE_SIZE * 0.92);
-  const horizontalPadding = Math.max(10, TILE_SIZE * 0.48);
-  ctx.save();
-  ctx.font = `bold ${fontSize}px monospace`;
-  for (const dock of state.docks) {
-    if (dock.sourceKind !== 'pod-dock-module' || dock.occupiedByShipId === null) continue;
-    const ship = state.arrivingShips.find((entry) => entry.id === dock.occupiedByShipId);
-    if (!ship) continue;
-    const callsign = ship.portManifest?.callsign ?? `POD ${ship.id}`;
-    const services = [
-      'PAX',
-      ...(dock.podCapabilities?.includes('fuel') ? ['FUEL'] : []),
-      ...(dock.podCapabilities?.includes('freight') ? ['CARGO'] : []),
-      ...(dock.podCapabilities?.includes('maintenance') ? ['REPAIR'] : [])
-    ].join(' ');
-    const status = ship.stage === 'approach'
-      ? 'DOCKING'
-      : ship.stage === 'depart'
-        ? 'DEPARTING'
-        : `SERVICE ${Math.round(shipServiceCompletion(state, ship) * 100)}%`;
-    const topLine = `${callsign} | ${ship.shipType.toUpperCase()}`;
-    const bottomLine = `${status} | ${services}`;
-    const width = Math.max(
-      TILE_SIZE * 3.6,
-      Math.min(TILE_SIZE * 7.2, Math.max(ctx.measureText(topLine).width, ctx.measureText(bottomLine).width) + horizontalPadding)
-    );
-    const rect = placeBerthChip(state, dock.tiles, width, chipHeight, occupied);
-    if (rect) drawBerthChip(ctx, rect, topLine, bottomLine, ship.stage === 'depart' ? '#ffd36a' : '#72dff2', 0.94);
   }
   ctx.restore();
 }
@@ -8459,10 +8446,17 @@ export function renderWorld(
 
   drawLocalAirWarnings(ctx, state, spriteAtlas, useSprites, visibleTiles);
   drawPasteStampGhost(ctx, state, currentTool, hoveredTile, visibleTiles);
+  // Incident markers survive every detail level: an incident is the one world
+  // label that is always strictly about something going wrong.
   drawIncidentMarkers(ctx, state, visibleTiles);
-  drawCommercialUnitStatusChips(ctx, state, visibleTiles);
-  drawMarketFixtureFeedback(ctx, state, visibleTiles);
-  drawFacilityFixtureChips(ctx, state, visibleTiles);
+  // Steady-state commerce narration ("TENANT", "OPEN", "BAR 0/3") is the bulk
+  // of world text and asks nothing of the player, so it only draws when the
+  // player has asked to see everything.
+  if (worldLabelsShowSteadyState(state)) {
+    drawCommercialUnitStatusChips(ctx, state, visibleTiles);
+    drawMarketFixtureFeedback(ctx, state, visibleTiles);
+    drawFacilityFixtureChips(ctx, state, visibleTiles);
+  }
 
   const actorInVisibleRange = (x: number, y: number, marginTiles = 2): boolean =>
     x >= visibleTiles.minX - marginTiles &&
@@ -8518,6 +8512,11 @@ export function renderWorld(
   const thoughtWindowOpen = (id: number, urgent: boolean): boolean =>
     urgent || (Math.floor(state.now / 3) + id * 3) % 7 === 0;
   const shouldDrawThought = (id: number, cx: number, cy: number, urgent: boolean): boolean => {
+    // Ambient chatter ("I'm hungry" from a visitor already walking to a served
+    // counter) is the single largest source of world text. At `alerts` detail
+    // only an urgent thought — one describing an unmet need — earns a bubble.
+    if (!worldLabelsEnabled(state)) return false;
+    if (!urgent && !worldLabelsShowSteadyState(state)) return false;
     if (!thoughtWindowOpen(id, urgent)) return false;
     if (visibleThoughts >= 5) return false;
     if (thoughtAnchors.some((anchor) => Math.abs(anchor.x - cx) < TILE_SIZE * 5 && Math.abs(anchor.y - cy) < TILE_SIZE * 3)) return false;
@@ -8825,9 +8824,16 @@ export function renderWorld(
   }
 
   drawDoorContentionIndicators(ctx, state, visibleTiles);
-  drawGangwayStatusLabels(ctx, state, visibleTiles);
-  const occupiedInfrastructureChips = drawBerthInformationChips(ctx, state);
-  drawApproachWaitingChips(ctx, state, occupiedInfrastructureChips);
+  // Berth narration is the densest text in the world. A holding ship is an
+  // alert (it is losing patience in a queue), so it keeps its chip whenever
+  // labels are on; the steady per-berth progress card only draws at `all`.
+  if (worldLabelsEnabled(state)) {
+    const occupiedInfrastructureChips = worldLabelsShowSteadyState(state)
+      ? drawBerthInformationChips(ctx, state)
+      : [];
+    if (worldLabelsShowSteadyState(state)) drawGangwayStatusLabels(ctx, state, visibleTiles);
+    drawApproachWaitingChips(ctx, state, occupiedInfrastructureChips);
+  }
   // Pod demand and transaction summaries are drawn by the opening-economy
   // layer after renderWorld so one chip owns the complete visit story.
   drawPortCargoLots(ctx, state);
